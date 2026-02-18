@@ -16,7 +16,7 @@ const app: Application = express();
 app.set("trust proxy", 1);
 // Security middleware
 app.use(helmet());
-//app.use(cors({ origin: config.cors.allowedOrigins, credentials: true }));
+
 app.use(corsMiddleware);
 // Body parsing middleware
 app.use(express.json({ limit: "10mb" }));
