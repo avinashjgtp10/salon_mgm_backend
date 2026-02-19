@@ -2,23 +2,37 @@ import { Request, Response, NextFunction } from "express";
 import { authService } from "./auth.service";
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
-import { recordLoginFail, resetLoginFails } from "../../middleware/rate-limit.middleware";
+import {
+  recordLoginFail,
+  resetLoginFails,
+} from "../../middleware/rate-limit.middleware";
 import logger from "../../config/logger";
 
 export const authController = {
 
+  // ================= REGISTER =================
   async register(req: Request, res: Response, next: NextFunction) {
     try {
       const body = req.body;
 
       logger.info("Register request received", {
         email: body?.email,
-        ip: req.ip
+        ip: req.ip,
       });
 
-      if (!body.email || !body.password || !body.first_name || !body.role) {
+      // ✅ Validate required fields (NEW STRUCTURE)
+      if (!body?.email || !body?.password || !body?.fullName) {
         logger.warn("Register validation failed", { body });
         throw new AppError(400, "Missing required fields", "VALIDATION_ERROR");
+      }
+
+      // ✅ Terms required
+      if (body?.terms !== true) {
+        throw new AppError(
+          400,
+          "Terms must be accepted",
+          "TERMS_NOT_ACCEPTED"
+        );
       }
 
       const user = await authService.register(body);
@@ -32,8 +46,11 @@ export const authController = {
     }
   },
 
+  // ================= LOGIN =================
   async login(req: Request, res: Response, next: NextFunction) {
-    const email = String(req.body?.email || "").toLowerCase().trim();
+    const email = String(req.body?.email || "")
+      .toLowerCase()
+      .trim();
     const password = String(req.body?.password || "");
     const ip = String((req as any).ip || "");
 
@@ -42,7 +59,11 @@ export const authController = {
 
       if (!email || !password) {
         logger.warn("Login validation failed", { email });
-        throw new AppError(400, "Email and password required", "VALIDATION_ERROR");
+        throw new AppError(
+          400,
+          "Email and password required",
+          "VALIDATION_ERROR"
+        );
       }
 
       const data = await authService.login({ email, password });
@@ -52,10 +73,13 @@ export const authController = {
       logger.info("Login successful", { email, ip });
 
       return sendSuccess(res, 200, data, "Login successful");
-
     } catch (error: any) {
 
-      if (error instanceof AppError && error.code === "INVALID_CREDENTIALS") {
+      // ✅ Rate limit handling
+      if (
+        error instanceof AppError &&
+        error.code === "INVALID_CREDENTIALS"
+      ) {
         logger.warn("Invalid login credentials", { email, ip });
 
         try {
@@ -92,6 +116,7 @@ export const authController = {
     }
   },
 
+  // ================= REFRESH TOKEN =================
   async refresh(req: Request, res: Response, next: NextFunction) {
     try {
       const refreshToken = String(req.body?.refreshToken || "");
@@ -99,22 +124,30 @@ export const authController = {
       logger.info("Token refresh request", { ip: req.ip });
 
       if (!refreshToken) {
-        logger.warn("Refresh token missing");
-        throw new AppError(400, "refreshToken required", "VALIDATION_ERROR");
+        throw new AppError(
+          400,
+          "refreshToken required",
+          "VALIDATION_ERROR"
+        );
       }
 
       const data = await authService.refresh(refreshToken);
 
       logger.info("Token refreshed successfully");
 
-      return sendSuccess(res, 200, data, "Token refreshed successfully");
-
+      return sendSuccess(
+        res,
+        200,
+        data,
+        "Token refreshed successfully"
+      );
     } catch (error) {
       logger.error("Refresh token error", { error });
       return next(error);
     }
   },
 
+  // ================= LOGOUT =================
   async logout(req: Request, res: Response, next: NextFunction) {
     try {
       const refreshToken = String(req.body?.refreshToken || "");
@@ -122,8 +155,11 @@ export const authController = {
       logger.info("Logout request received", { ip: req.ip });
 
       if (!refreshToken) {
-        logger.warn("Logout failed - refreshToken missing");
-        throw new AppError(400, "refreshToken required", "VALIDATION_ERROR");
+        throw new AppError(
+          400,
+          "refreshToken required",
+          "VALIDATION_ERROR"
+        );
       }
 
       const data = await authService.logout(refreshToken);
@@ -131,7 +167,6 @@ export const authController = {
       logger.info("User logged out successfully");
 
       return sendSuccess(res, 200, data, "Logged out successfully");
-
     } catch (error) {
       logger.error("Logout error", { error });
       return next(error);
