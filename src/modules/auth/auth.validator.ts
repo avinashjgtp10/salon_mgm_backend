@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { Request, Response, NextFunction } from "express";
 import { AppError } from "../../middleware/error.middleware";
 
@@ -81,3 +82,13 @@ export const validateRefresh = (
 
   next();
 };
+
+export const googleCallbackQuerySchema = z.object({
+  code: z.string().min(1, "code required"),
+  state: z.string().min(1, "state required"),
+});
+
+export const googleStartQuerySchema = z.object({
+  returnTo: z.string().optional(),
+});
+

@@ -183,4 +183,58 @@ export const authRepository = {
   async deleteAllRefreshTokensForUser(userId: string) {
     await pool.query(`DELETE FROM refresh_tokens WHERE user_id = $1`, [userId]);
   },
+
+  // ===================== GOOGLE IDENTITIES =====================
+
+  async findGoogleIdentity(providerUserId: string) {
+    const { rows } = await pool.query(
+      `SELECT u.*
+       FROM user_identities ui
+       JOIN users u ON u.id = ui.user_id
+       WHERE ui.provider='google' AND ui.provider_user_id=$1
+       LIMIT 1`,
+      [providerUserId],
+    );
+    return rows[0] || null;
+  },
+
+  async createUserFromGoogle(profile: { email: string | null; fullName: string | null; avatarUrl: string | null }) {
+    const full = profile.fullName?.trim() || "";
+    const first = full ? full.split(" ")[0] : null;
+    const last = full ? full.split(" ").slice(1).join(" ") || null : null;
+
+    const { rows } = await pool.query(
+      `INSERT INTO users(email, full_name, first_name, last_name, avatar_url, is_verified, role, password_hash)
+       VALUES($1,$2,$3,$4,$5,TRUE,'client','')
+       RETURNING *`,
+      [profile.email, profile.fullName, first, last, profile.avatarUrl],
+    );
+    return rows[0];
+  },
+
+  async attachGoogleIdentity(userId: string, profile: { providerUserId: string; email: string | null }) {
+    const { rows } = await pool.query(
+      `INSERT INTO user_identities(user_id, provider, provider_user_id, email)
+       VALUES($1,'google',$2,$3)
+       ON CONFLICT (provider, provider_user_id) DO NOTHING
+       RETURNING *`,
+      [userId, profile.providerUserId, profile.email],
+    );
+    return rows[0] || null;
+  },
+
+  async updateUserBasics(userId: string, profile: { fullName: string | null; avatarUrl: string | null; email: string | null }) {
+    const { rows } = await pool.query(
+      `UPDATE users
+       SET full_name = COALESCE($1, full_name),
+           avatar_url = COALESCE($2, avatar_url),
+           email = COALESCE($3, email),
+           is_verified = TRUE,
+           updated_at = NOW()
+       WHERE id=$4
+       RETURNING *`,
+      [profile.fullName, profile.avatarUrl, profile.email, userId],
+    );
+    return rows[0];
+  },
 };

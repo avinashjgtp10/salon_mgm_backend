@@ -36,3 +36,23 @@ export type RefreshBody = {
 export type LogoutBody = {
   refreshToken: string;
 };
+
+
+// ===================== GOOGLE OAUTH =====================
+
+export type OAuthProvider = "google";
+
+export type GoogleOAuthProfile = {
+  provider: "google";
+  providerUserId: string; // google sub
+  email: string | null;
+  fullName: string | null;
+  avatarUrl: string | null;
+  emailVerified: boolean;
+};
+
+export type GoogleStatePayload = {
+  codeVerifier: string;
+  returnTo?: string;
+  createdAt: number;
+};
