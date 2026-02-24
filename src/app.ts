@@ -8,6 +8,10 @@ import logger from "./config/logger";
 import { errorHandler } from "./middleware/error.middleware";
 import usersRoutes from "./modules/users/users.routes";
 import authRoutes from "./modules/auth/auth.routes";
+import categoriesRoutes from "./modules/categories/categories.routes";
+import salonsRoutes from "./modules/salons/salons.routes";
+import branchesRoutes from "./modules/branches/branches.routes";
+import staffRoutes from "./modules/staff/staff.routes";
 import { corsMiddleware } from "./middleware/cors.middleware";
 const app: Application = express();
 
@@ -48,6 +52,10 @@ app.get("/health", (_req, res) => {
 // ✅ API ROUTES (MUST be before 404)
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/users", usersRoutes);
+app.use("/api/v1/categories", categoriesRoutes);
+app.use("/api/v1/salons", salonsRoutes);
+app.use("/api/v1/branches", branchesRoutes);
+app.use("/api/v1/staff", staffRoutes);
 
 // 404 handler (after all routes)
 app.use((_req, res) => {

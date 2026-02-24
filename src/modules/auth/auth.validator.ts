@@ -16,11 +16,11 @@ export const validateRegister = (
     return next(new AppError(400, "Email is required", "VALIDATION_ERROR"));
   }
 
-  if (!password || password.length < 6) {
+  if (!password || password.length < 8) {
     return next(
       new AppError(
         400,
-        "Password must be at least 6 characters",
+        "Password must be at least 8 characters",
         "VALIDATION_ERROR",
       ),
     );
