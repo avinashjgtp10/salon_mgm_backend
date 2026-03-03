@@ -1,0 +1,4718 @@
+{
+  "info": {
+    "_postman_id": "3bde35fa-59af-4782-8c69-6a61ceeda3e4",
+    "name": "salon",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "47147771",
+    "_collection_link": "https://go.postman.co/collection/47147771-3bde35fa-59af-4782-8c69-6a61ceeda3e4?source=collection_link"
+  },
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "registration",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n  \"fullName\": \"Rutuja Pagale\",\r\n  \"businessName\": \"Rutuja Salon\",\r\n  \"address\": \"Pune\",\r\n  \"email\": \"sai.pagale123@gmail.com\",\r\n  \"country\": \"India\",\r\n  \"countryCode\": \"+91\",\r\n  \"phone\": \"7654567895\",\r\n  \"password\": \"Test@1234\",\r\n  \"terms\": true\r\n}\r\n",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3000/health",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "health"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "login",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n  \"email\": \"sai.pagale123@gmail.com\",\r\n  \"password\": \"Test@1234\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://localhost:3000/api/v1/auth/login",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "login"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "refresh",
+          "request": {
+            "method": "GET",
+            "header": []
+          },
+          "response": []
+        },
+        {
+          "name": "logout",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n  \"refreshToken\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI1YWMzZjJkYy04MDk2LTRmYWYtYjEyYi02MGJhYmZkOTkxZDYiLCJpYXQiOjE3NzE5MDI4NDMsImV4cCI6MTc3MjUwNzY0M30.0mDjBFdCyvvcG-YCO8miwsQG-i1ZPK7y-aoJfd9Z8FY\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/logout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "logout"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "send-email-otp",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n  \"email\": \"sai.pagale12@gmail.com\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://localhost:3000/api/v1/auth/send-email-otp",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "send-email-otp"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "verify-email-otp",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n  \"email\": \"sai.pagale12@gmail.com\",\r\n  \"otp\": \"833670\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://localhost:3000/api/v1/auth/verify-email-otp",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "verify-email-otp"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "send-phone-otp-exotel",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n  \"email\": \"pagalerutuja763@gmail.com\",\r\n  \"phone\": \"+917559185753\"\r\n}\r\n",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://localhost:3000/api/v1/auth/send-phone-otp-exotel",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "send-phone-otp-exotel"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "verify-phone-otp-exotel",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n  \"email\": \"pagalerutuja763@gmail.com.com\",\r\n  \"otp\": \"\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://localhost:3000/api/v1/auth/verify-phone-otp-exotel",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "verify-phone-otp-exotel"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "google",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3000/api/v1/auth/google/start",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "google",
+                "start"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "users",
+      "item": [
+        {
+          "name": "me",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiJhMmEzNDQzYS04OTA4LTQ2OGYtYTY1Zi1iMjM1MDQwNWJiZmIiLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NzEzMDIwOTgsImV4cCI6MTc3MTMwMjk5OH0.kZMGd8-hCb1aAgvi6gbU6L-xxaw00-Pt14luVZoAlBs",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "me"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "id",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI1YWMzZjJkYy04MDk2LTRmYWYtYjEyYi02MGJhYmZkOTkxZDYiLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NzE5MDMyNjksImV4cCI6MTc3MTkwNDE2OX0.gjHt4r1uyBvIz6seQs2zmOecin-4LXAvopxUXuOeDeE",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3000/api/v1/users/5ac3f2dc-8096-4faf-b12b-60babfd991d6",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "5ac3f2dc-8096-4faf-b12b-60babfd991d6"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "delete by id",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI1YWMzZjJkYy04MDk2LTRmYWYtYjEyYi02MGJhYmZkOTkxZDYiLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NzE5MDM1NjUsImV4cCI6MTc3MTkwNDQ2NX0.uN0dCmsz-u3jkX7lqvIz3-Fs_wiVndxEJtahA6dgdNY",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3000/api/v1/users/5ac3f2dc-8096-4faf-b12b-60babfd991d6",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "5ac3f2dc-8096-4faf-b12b-60babfd991d6"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "update_role",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI1YWMzZjJkYy04MDk2LTRmYWYtYjEyYi02MGJhYmZkOTkxZDYiLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NzE5MDM3MTMsImV4cCI6MTc3MTkwNDYxM30.1JTMifjHKj5BfL7q0DYxy8g46GCdkyei9jkldx-rlq4",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n  \"role\": \"admin\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://localhost:3000/api/v1/users/5ac3f2dc-8096-4faf-b12b-60babfd991d6/role",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "5ac3f2dc-8096-4faf-b12b-60babfd991d6",
+                "role"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "category",
+      "item": [
+        {
+          "name": "Create Category",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI1YWMzZjJkYy04MDk2LTRmYWYtYjEyYi02MGJhYmZkOTkxZDYiLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NzE5MDM3OTcsImV4cCI6MTc3MTkwNDY5N30.YAy_-w8WDOTjbz2F0kCqKCW9L9ka5ikTTx8mUx2KjhQ",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n  \"name\": \"Hair Styling\",\r\n  \"description\": \"All hair services\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://localhost:3000/api/v1/categories",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "v1",
+                "categories"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "id",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI1YWMzZjJkYy04MDk2LTRmYWYtYjEyYi02MGJhYmZkOTkxZDYiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzE4MjE4MjQsImV4cCI6MTc3MTgyMjcyNH0.LjvxvIpRjsLS4cJEYYr89Xf-JrghJoTw2vwBimXsGQ0",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3000/api/v1/categories/{817c11a8-4254-48e9-b181-924f548f10b6}",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "v1",
+                "categories",
+                "{817c11a8-4254-48e9-b181-924f548f10b6}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "update",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI1YWMzZjJkYy04MDk2LTRmYWYtYjEyYi02MGJhYmZkOTkxZDYiLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NzE4NDM5MDgsImV4cCI6MTc3MTg0NDgwOH0.qXV_gp8k83maXcw6SvjeAhH4oxVUMZmBlvIgPR8oKZk",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n  \"description\": \"Updated description\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://localhost:3000/api/v1/categories/{817c11a8-4254-48e9-b181-924f548f10b6}",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "v1",
+                "categories",
+                "{817c11a8-4254-48e9-b181-924f548f10b6}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "delete",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI1YWMzZjJkYy04MDk2LTRmYWYtYjEyYi02MGJhYmZkOTkxZDYiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzE4MjE4MjQsImV4cCI6MTc3MTgyMjcyNH0.LjvxvIpRjsLS4cJEYYr89Xf-JrghJoTw2vwBimXsGQ0",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3000/api/v1/categories/{817c11a8-4254-48e9-b181-924f548f10b6}",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "v1",
+                "categories",
+                "{817c11a8-4254-48e9-b181-924f548f10b6}"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "salon",
+      "item": [
+        {
+          "name": "Create Salon",
+          "request": {
+            "method": "GET",
+            "header": []
+          },
+          "response": []
+        },
+        {
+          "name": "My Salon",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI1YWMzZjJkYy04MDk2LTRmYWYtYjEyYi02MGJhYmZkOTkxZDYiLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NzE5MDQyNzAsImV4cCI6MTc3MTkwNTE3MH0._YMYJ-I9zLCOAZBbqZ8lkymYDFSXG7mwUjwC0PIwm9s",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/salons/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "salons",
+                "me"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get by ID",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI1YWMzZjJkYy04MDk2LTRmYWYtYjEyYi02MGJhYmZkOTkxZDYiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzE4MjQ3MDQsImV4cCI6MTc3MTgyNTYwNH0.yxlXWIxNVYN3UYwTEW8IvJjws9QitmCnFLR1sDnJ-9Q",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/salons/{{id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "salons",
+                "{{id}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI1YWMzZjJkYy04MDk2LTRmYWYtYjEyYi02MGJhYmZkOTkxZDYiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzE4MjY0MDYsImV4cCI6MTc3MTgyNzMwNn0.eG_d7ZUfYdKnLc_tlK3ncCKiKnzlJ6l2iGrqwFgWxuA",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n  \"description\": \"Updated from Postman\",\r\n  \"is_active\": true\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/salons/{{salonId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "salons",
+                "{{salonId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "List all (admin)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI1YWMzZjJkYy04MDk2LTRmYWYtYjEyYi02MGJhYmZkOTkxZDYiLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NzE4Mzk2MDgsImV4cCI6MTc3MTg0MDUwOH0.w2P36-4Oddo3CN-YjTr09-wFT2H0X5fNncLp-3b7Big",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/salons",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "salons"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "branches",
+      "item": [
+        {
+          "name": "create branch",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzIxNTMxOTMsImV4cCI6MTc3MjE1NDA5M30.ixGmZVOcRPVSc9nbfulzxZ-XUCquYZ8qg2k0cD9Bf3M",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n  \r\n  \"name\": \"lakme acadomy\",\r\n  \"address_line1\": \"Shop 12, MG Road\",\r\n  \"address_line2\": \"Near City Mall\",\r\n  \"city\": \"Pune\",\r\n  \"state\": \"Maharashtra\",\r\n  \"pincode\": \"411001\",\r\n  \"country\": \"India\",\r\n  \"latitude\": 18.5204,\r\n  \"longitude\": 73.8567,\r\n  \"phone\": \"9876543210\",\r\n  \"email\": \"mainbranch@test.com\",\r\n  \"is_main\": true,\r\n  \"opening_time\": \"10:00\",\r\n  \"closing_time\": \"20:00\",\r\n  \"is_active\": true\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/branches",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "branches"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "LIST BRANCHES BY SALON",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI1YWMzZjJkYy04MDk2LTRmYWYtYjEyYi02MGJhYmZkOTkxZDYiLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NzE5MDg0MjMsImV4cCI6MTc3MTkwOTMyM30.E1N33YPDyDC7ylftroc4d7jvhz9YbcQKUtmL2FsoSmg",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3000/api/v1/branches/by-salon/88914c1d-185d-42a0-bbac-0c27f395fe2a",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "v1",
+                "branches",
+                "by-salon",
+                "88914c1d-185d-42a0-bbac-0c27f395fe2a"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET BRANCH BY ID",
+          "request": {
+            "method": "GET",
+            "header": []
+          },
+          "response": []
+        },
+        {
+          "name": "timings",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI1YWMzZjJkYy04MDk2LTRmYWYtYjEyYi02MGJhYmZkOTkxZDYiLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NzE5MDk2NTQsImV4cCI6MTc3MTkxMDU1NH0.0nxQbneLkp7nXEcfr6g4j91b64kghpiTOf5mgIQY3lY",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3000/api/v1/branches/3b6270cd-c776-4af0-8758-854309f6b227/timings",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "v1",
+                "branches",
+                "3b6270cd-c776-4af0-8758-854309f6b227",
+                "timings"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "SET WEEKLY TIMINGS",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI1YWMzZjJkYy04MDk2LTRmYWYtYjEyYi02MGJhYmZkOTkxZDYiLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NzE5MTA2OTgsImV4cCI6MTc3MTkxMTU5OH0.PZ7BwUBz6TB8_vXpMthZBEVdXbrUY7eM9Q9cdz_6kf8",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n  \"days\": [\r\n    { \"day_of_week\": 1, \"opening_time\": \"09:00\", \"closing_time\": \"20:00\", \"is_closed\": false },\r\n    { \"day_of_week\": 2, \"opening_time\": \"09:00\", \"closing_time\": \"20:00\", \"is_closed\": false },\r\n    { \"day_of_week\": 3, \"opening_time\": \"09:00\", \"closing_time\": \"20:00\", \"is_closed\": false },\r\n    { \"day_of_week\": 4, \"opening_time\": \"09:00\", \"closing_time\": \"20:00\", \"is_closed\": false },\r\n    { \"day_of_week\": 5, \"opening_time\": \"09:00\", \"closing_time\": \"20:00\", \"is_closed\": false },\r\n    { \"day_of_week\": 6, \"opening_time\": \"10:00\", \"closing_time\": \"18:00\", \"is_closed\": false },\r\n    { \"day_of_week\": 0, \"is_closed\": true }\r\n  ]\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://localhost:3000/api/v1/branches/3b6270cd-c776-4af0-8758-854309f6b227/timings",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "v1",
+                "branches",
+                "3b6270cd-c776-4af0-8758-854309f6b227",
+                "timings"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "UPDATE BRANCH",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI1YWMzZjJkYy04MDk2LTRmYWYtYjEyYi02MGJhYmZkOTkxZDYiLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NzE5MDk2NTQsImV4cCI6MTc3MTkxMDU1NH0.0nxQbneLkp7nXEcfr6g4j91b64kghpiTOf5mgIQY3lY",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n  \"phone\": \"9999999999\",\r\n  \"city\": \"Mumbai\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://localhost:3000/api/v1/branches/3b6270cd-c776-4af0-8758-854309f6b227",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "v1",
+                "branches",
+                "3b6270cd-c776-4af0-8758-854309f6b227"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "LIST HOLIDAYS",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI1YWMzZjJkYy04MDk2LTRmYWYtYjEyYi02MGJhYmZkOTkxZDYiLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NzE5MTExMDcsImV4cCI6MTc3MTkxMjAwN30.kYSMNIjKsxx3SXzPK1wP4CwGcc301S4CcMWg9614RhM",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3000/api/v1/branches/3b6270cd-c776-4af0-8758-854309f6b227/holidays?from=2026-01-01&to=2026-12-31",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "v1",
+                "branches",
+                "3b6270cd-c776-4af0-8758-854309f6b227",
+                "holidays"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-01-01"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-12-31"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE HOLIDAY",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI1YWMzZjJkYy04MDk2LTRmYWYtYjEyYi02MGJhYmZkOTkxZDYiLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NzE5MTExMDcsImV4cCI6MTc3MTkxMjAwN30.kYSMNIjKsxx3SXzPK1wP4CwGcc301S4CcMWg9614RhM",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3000/api/v1/branches/holidays/ddeec1a8-a824-4481-85df-f04ed0947cf8",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "v1",
+                "branches",
+                "holidays",
+                "ddeec1a8-a824-4481-85df-f04ed0947cf8"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "CREATE HOLIDAY",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI1YWMzZjJkYy04MDk2LTRmYWYtYjEyYi02MGJhYmZkOTkxZDYiLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NzE5MTIxNDksImV4cCI6MTc3MTkxMzA0OX0.57kA7M4x9zWt_ztKV4LfXo2cmQnyno1zcs6zPtwL8TY",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n  \"holiday_date\": \"2026-03-08\",\r\n  \"reason\": \"Holi Festival\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://localhost:3000/api/v1/branches/3b6270cd-c776-4af0-8758-854309f6b227/holidays",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "v1",
+                "branches",
+                "3b6270cd-c776-4af0-8758-854309f6b227",
+                "holidays"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "update weekly time",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI1YWMzZjJkYy04MDk2LTRmYWYtYjEyYi02MGJhYmZkOTkxZDYiLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NzE5MTI0MDQsImV4cCI6MTc3MTkxMzMwNH0.nrIMo5v1brdwz1p-42CE4DBSKtCvtnz9OOvEJeIgKug",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n  \"days\": [\r\n    { \"day_of_week\": 1, \"opening_time\": \"09:00\", \"closing_time\": \"20:00\", \"is_closed\": false },\r\n    { \"day_of_week\": 2, \"opening_time\": \"09:00\", \"closing_time\": \"20:00\", \"is_closed\": false },\r\n    { \"day_of_week\": 3, \"opening_time\": \"09:00\", \"closing_time\": \"20:00\", \"is_closed\": false },\r\n    { \"day_of_week\": 4, \"opening_time\": \"09:00\", \"closing_time\": \"20:00\", \"is_closed\": false },\r\n    { \"day_of_week\": 5, \"opening_time\": \"09:00\", \"closing_time\": \"20:00\", \"is_closed\": false },\r\n    { \"day_of_week\": 6, \"opening_time\": \"10:00\", \"closing_time\": \"18:00\", \"is_closed\": false },\r\n    { \"day_of_week\": 0, \"is_closed\": true }\r\n  ]\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://localhost:3000/api/v1/branches/555df3c8-8fe1-4057-8801-48698e0623f7/timings",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "v1",
+                "branches",
+                "555df3c8-8fe1-4057-8801-48698e0623f7",
+                "timings"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "client",
+      "item": [
+        {
+          "name": "List Clients",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzIyNDM5NDQsImV4cCI6MTc3MjI0NDg0NH0.oXL4FZHNcQFBaALarVLPHDzzAMHSATdajCCG_DEPnus",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3000/api/v1/clients?offset=0&limit=10&search=john&sort_by=created_at&sort_order=desc&inactive=false",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "v1",
+                "clients"
+              ],
+              "query": [
+                {
+                  "key": "offset",
+                  "value": "0"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "search",
+                  "value": "john"
+                },
+                {
+                  "key": "sort_by",
+                  "value": "created_at"
+                },
+                {
+                  "key": "sort_order",
+                  "value": "desc"
+                },
+                {
+                  "key": "inactive",
+                  "value": "false"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create Client",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzIyNDczNzYsImV4cCI6MTc3MjI0ODI3Nn0.9Fdfr8GhbgtmSHJc27gk3y6ABcRusGHM20jjOg9qAsY",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n  \"first_name\": \"John\",\r\n  \"last_name\": \"Hancock\",\r\n  \"email\": \"john@domain.com\",\r\n  \"phone_country_code\": \"+91\",\r\n  \"phone_number\": \"9876543210\",\r\n  \"additional_email\": \"john.secondary@domain.com\",\r\n  \"additional_phone_country_code\": \"+91\",\r\n  \"additional_phone_number\": \"9000000001\",\r\n  \"birthday_day_month\": \"05-12\",\r\n  \"birthday_year\": 1996,\r\n  \"gender\": \"male\",\r\n  \"pronouns\": \"he_him\",\r\n  \"client_source\": \"walk_in\",\r\n  \"preferred_language\": \"en\",\r\n  \"occupation\": \"Engineer\",\r\n  \"country\": \"IN\",\r\n  \"avatar_url\": \"https://example.com/avatar.jpg\",\r\n  \"addresses\": [\r\n    {\r\n      \"type\": \"home\",\r\n      \"address_name\": \"Home\",\r\n      \"address_line1\": \"221B Baker Street\",\r\n      \"address_line2\": null,\r\n      \"apt_suite\": \"A-12\",\r\n      \"district\": \"Shivaji Nagar\",\r\n      \"city\": \"Pune\",\r\n      \"region\": \"Maharashtra\",\r\n      \"postcode\": \"411005\",\r\n      \"country\": \"IN\"\r\n    }\r\n  ],\r\n  \"emergency_contacts\": [\r\n    {\r\n      \"type\": \"primary\",\r\n      \"full_name\": \"Jane Doe\",\r\n      \"relationship\": \"Parent\",\r\n      \"email\": \"jane@domain.com\",\r\n      \"phone_country_code\": \"+91\",\r\n      \"phone_number\": \"9000000000\"\r\n    }\r\n  ]\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://localhost:3000/api/v1/clients",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "v1",
+                "clients"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Client By ID",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzIyNDE4MzEsImV4cCI6MTc3MjI0MjczMX0.n49soJsavlrK06ZchMMadRrFwGpkRw6s6NsS-Wo7KnU",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3000/api/v1/clients/{{CLIENT_ID}}?include=addresses,emergency_contacts",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "v1",
+                "clients",
+                "{{CLIENT_ID}}"
+              ],
+              "query": [
+                {
+                  "key": "include",
+                  "value": "addresses,emergency_contacts"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update Client",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzIyNDE4MzEsImV4cCI6MTc3MjI0MjczMX0.n49soJsavlrK06ZchMMadRrFwGpkRw6s6NsS-Wo7KnU",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n  \"preferred_language\": \"en\",\r\n  \"occupation\": \"Senior Engineer\",\r\n  \"is_active\": true,\r\n  \"addresses\": [\r\n    {\r\n      \"type\": \"home\",\r\n      \"address_name\": \"Updated Home\",\r\n      \"city\": \"Mumbai\",\r\n      \"country\": \"IN\"\r\n    }\r\n  ],\r\n  \"emergency_contacts\": [\r\n    {\r\n      \"type\": \"primary\",\r\n      \"full_name\": \"Jane Updated\",\r\n      \"relationship\": \"Mother\",\r\n      \"phone_country_code\": \"+91\",\r\n      \"phone_number\": \"9999999999\"\r\n    }\r\n  ]\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://localhost:3000/api/v1/clients/{{CLIENT_ID}}",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "v1",
+                "clients",
+                "{{CLIENT_ID}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Archive Client",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzIyNDczNzYsImV4cCI6MTc3MjI0ODI3Nn0.9Fdfr8GhbgtmSHJc27gk3y6ABcRusGHM20jjOg9qAsY",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3000/api/v1/clients/{{CLIENT_ID}}?hard=false",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "v1",
+                "clients",
+                "{{CLIENT_ID}}"
+              ],
+              "query": [
+                {
+                  "key": "hard",
+                  "value": "false"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Hard Delete Client",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzIyNDc1MjQsImV4cCI6MTc3MjI0ODQyNH0.pONHsK-c8CWrlSVl1PGuOJeyLcdd8ujChK3Ct9619n0",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3000/api/v1/clients/{{CLIENT_ID}}?hard=true",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "v1",
+                "clients",
+                "{{CLIENT_ID}}"
+              ],
+              "query": [
+                {
+                  "key": "hard",
+                  "value": "true"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Merge Clients",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzIyNDI5NzIsImV4cCI6MTc3MjI0Mzg3Mn0.lgMJaUCNYxCqQ0pmPlKvhMQVpwr1B1EHLSCw3V_KttA",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n  \"target_client_id\": \"7aa57a6d-0c87-414d-8474-8efc66e77d0a\",\r\n  \"source_client_ids\": [\r\n    \"ac58aa25-d860-403b-899e-914f12465086\"\r\n    ],\r\n  \"strategy\": \"fill_missing_from_sources\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://localhost:3000/api/v1/clients/merge",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "v1",
+                "clients",
+                "merge"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Export Clients (CSV)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzIyNDI5NzIsImV4cCI6MTc3MjI0Mzg3Mn0.lgMJaUCNYxCqQ0pmPlKvhMQVpwr1B1EHLSCw3V_KttA",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3000/api/v1/clients/export?format=csv&search=john",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "v1",
+                "clients",
+                "export"
+              ],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "csv"
+                },
+                {
+                  "key": "search",
+                  "value": "john"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Export Clients (Excel)",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzIyNDM5NDQsImV4cCI6MTc3MjI0NDg0NH0.oXL4FZHNcQFBaALarVLPHDzzAMHSATdajCCG_DEPnus",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "uuid": "29ff3c03-f100-4268-a794-a15cb5969e5c",
+                  "src": "/C:/Users/HP/Desktop/clients_export.xlsx"
+                }
+              ]
+            },
+            "url": {
+              "raw": "http://localhost:3000/api/v1/clients/export?format=excel",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "v1",
+                "clients",
+                "export"
+              ],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "excel"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Import Clients",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzIyNDUxNzQsImV4cCI6MTc3MjI0NjA3NH0.Jr9VOocxa5NbeAvI31U4IwdbAupkcWTnlWGF6pX3zX8",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "uuid": "bd4d6683-392e-41fb-9c50-1e46cb2b8815",
+                  "src": "/C:/Users/HP/Desktop/clients_export.xlsx"
+                }
+              ]
+            },
+            "url": {
+              "raw": "http://localhost:3000/api/v1/clients/import?file=",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "v1",
+                "clients",
+                "import"
+              ],
+              "query": [
+                {
+                  "key": "file",
+                  "value": ""
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "staff",
+      "item": [
+        {
+          "name": "Staff Addresses",
+          "item": [
+            {
+              "name": "List Addresses",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0MDk0NjgsImV4cCI6MTc3MjQxMDM2OH0.c6qgr7jmBdbCxz9JsgHcKqmwYXhGr5jKrNZXShs6v38",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/staff/{{staffId}}/addresses",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff",
+                    "{{staffId}}",
+                    "addresses"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Create Address",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0MTA0MzQsImV4cCI6MTc3MjQxMTMzNH0.v9Oz0m3iSM6_5gdFFdUmHR4H1xXkScYB3EMWhHnhV_M",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"address_name\": \"Home\",\n  \"address\": \"123 Main Street, Mumbai, Maharashtra 400001\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/staff/{{staffId}}/addresses",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff",
+                    "{{staffId}}",
+                    "addresses"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Update Address",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0MTA0MzQsImV4cCI6MTc3MjQxMTMzNH0.v9Oz0m3iSM6_5gdFFdUmHR4H1xXkScYB3EMWhHnhV_M",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"address_name\": \"Office\",\n  \"address\": \"456 Park Avenue, Mumbai, Maharashtra 400002\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/staff/{{staffId}}/addresses/{{recordId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff",
+                    "{{staffId}}",
+                    "addresses",
+                    "{{recordId}}"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Delete Address",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0MTA0MzQsImV4cCI6MTc3MjQxMTMzNH0.v9Oz0m3iSM6_5gdFFdUmHR4H1xXkScYB3EMWhHnhV_M",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "DELETE",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/staff/{{staffId}}/addresses/{{recordId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff",
+                    "{{staffId}}",
+                    "addresses",
+                    "{{recordId}}"
+                  ]
+                }
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "Staff Invitations",
+          "item": [
+            {
+              "name": "Verify Invitation Token (Public)",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/staff/invite/{{inviteToken}}/verify",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff",
+                    "invite",
+                    "{{inviteToken}}",
+                    "verify"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Accept Invitation (Public)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"token\": \"{{inviteToken}}\",\n  \"first_name\": \"Jane\",\n  \"last_name\": \"Doe\",\n  \"password\": \"SecurePass123\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/staff/invite/accept",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff",
+                    "invite",
+                    "accept"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Resend Invitation",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"salon_name\": \"My Salon\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/staff/{{staffId}}/resend-invite",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff",
+                    "{{staffId}}",
+                    "resend-invite"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Cancel Invitation",
+              "request": {
+                "method": "DELETE",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/staff/{{staffId}}/cancel-invite",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff",
+                    "{{staffId}}",
+                    "cancel-invite"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "New Request",
+              "request": {
+                "method": "GET",
+                "header": []
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "Staff Emergency Contacts",
+          "item": [
+            {
+              "name": "List Emergency Contacts",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0MTA0MzQsImV4cCI6MTc3MjQxMTMzNH0.v9Oz0m3iSM6_5gdFFdUmHR4H1xXkScYB3EMWhHnhV_M",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/staff/{{staffId}}/emergency-contacts",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff",
+                    "{{staffId}}",
+                    "emergency-contacts"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Create Emergency Contact",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0MTA3OTUsImV4cCI6MTc3MjQxMTY5NX0.nZl30Jld0QZfJTDqK7UWWwRjaabXZJ3LaC9YbJsRM1M",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"full_name\": \"John Doe\",\n  \"relationship\": \"spouse\",\n  \"phone_number\": \"9876543210\",\n  \"phone_country_code\": \"+91\",\n  \"email\": \"john.doe@example.com\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/staff/{{staffId}}/emergency-contacts",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff",
+                    "{{staffId}}",
+                    "emergency-contacts"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Update Emergency Contact",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0MTA3OTUsImV4cCI6MTc3MjQxMTY5NX0.nZl30Jld0QZfJTDqK7UWWwRjaabXZJ3LaC9YbJsRM1M",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"full_name\": \"John Doe\",\n  \"relationship\": \"parent\",\n  \"phone_number\": \"9111111111\",\n  \"phone_country_code\": \"+91\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/staff/{{staffId}}/emergency-contacts/{{recordId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff",
+                    "{{staffId}}",
+                    "emergency-contacts",
+                    "{{recordId}}"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Delete Emergency Contact",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0MTA5NDcsImV4cCI6MTc3MjQxMTg0N30.0KTwXU_FMNxPRDXmaisIxQbLT5d1Wg_3c6MJh2a8inc",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "DELETE",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/staff/{{staffId}}/emergency-contacts/{{recordId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff",
+                    "{{staffId}}",
+                    "emergency-contacts",
+                    "{{recordId}}"
+                  ]
+                }
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "Staff Wages",
+          "item": [
+            {
+              "name": "Get Wage Settings",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0MTA5NDcsImV4cCI6MTc3MjQxMTg0N30.0KTwXU_FMNxPRDXmaisIxQbLT5d1Wg_3c6MJh2a8inc",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/staff/{{staffId}}/wages",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff",
+                    "{{staffId}}",
+                    "wages"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Update Wage Settings (Upsert)",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"wages_enabled\": true,\n  \"compensation_type\": \"hourly\",\n  \"hourly_rate\": 250.00,\n  \"salary_amount\": null,\n  \"location_restriction\": \"workspace_default\",\n  \"auto_clock_in\": \"enabled\",\n  \"auto_clock_out\": \"enabled\",\n  \"automated_breaks\": \"workspace_default\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/staff/{{staffId}}/wages",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff",
+                    "{{staffId}}",
+                    "wages"
+                  ]
+                }
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "Staff Commissions",
+          "item": [
+            {
+              "name": "Get Commission Settings",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/staff/{{staffId}}/commissions",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff",
+                    "{{staffId}}",
+                    "commissions"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Upsert Commission - Services",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"category\": \"services\",\n  \"is_enabled\": true,\n  \"commission_kind\": \"percentage\",\n  \"default_rate\": 15,\n  \"use_default_calculation\": true,\n  \"pass_cancellation_fee_late\": false,\n  \"pass_cancellation_fee_noshow\": false\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/staff/{{staffId}}/commissions",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff",
+                    "{{staffId}}",
+                    "commissions"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Upsert Commission - Products",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"category\": \"products\",\n  \"is_enabled\": true,\n  \"commission_kind\": \"percentage\",\n  \"default_rate\": 10,\n  \"use_default_calculation\": false,\n  \"pass_cancellation_fee_late\": false,\n  \"pass_cancellation_fee_noshow\": false\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/staff/{{staffId}}/commissions",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff",
+                    "{{staffId}}",
+                    "commissions"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Upsert Commission - Cancellation",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"category\": \"cancellation\",\n  \"is_enabled\": true,\n  \"commission_kind\": \"fixed_rate\",\n  \"default_rate\": 200,\n  \"use_default_calculation\": false,\n  \"pass_cancellation_fee_late\": true,\n  \"pass_cancellation_fee_noshow\": true\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/staff/{{staffId}}/commissions",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff",
+                    "{{staffId}}",
+                    "commissions"
+                  ]
+                }
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "Staff Pay Runs",
+          "item": [
+            {
+              "name": "Get Pay Run Settings",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/staff/{{staffId}}/pay-runs",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff",
+                    "{{staffId}}",
+                    "pay-runs"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Update Pay Run Settings (Upsert)",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"pay_runs_enabled\": true,\n  \"payment_method\": \"bank_transfer\",\n  \"calculation_type\": \"automatic\",\n  \"deduct_payment_processing_fees\": false,\n  \"deduct_new_client_fees\": false,\n  \"record_cash_advances\": true\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/staff/{{staffId}}/pay-runs",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff",
+                    "{{staffId}}",
+                    "pay-runs"
+                  ]
+                }
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "Staff Scheduled",
+          "item": [
+            {
+              "name": "List Weekly Schedules",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/staff/{{staffId}}/scheduled",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff",
+                    "{{staffId}}",
+                    "scheduled"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Upsert Weekly Schedules (Full Week)",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"items\": [\n    { \"day_of_week\": 0, \"is_available\": false },\n    { \"day_of_week\": 1, \"is_available\": true, \"start_time\": \"10:00:00\", \"end_time\": \"19:00:00\" },\n    { \"day_of_week\": 2, \"is_available\": true, \"start_time\": \"10:00:00\", \"end_time\": \"19:00:00\" },\n    { \"day_of_week\": 3, \"is_available\": true, \"start_time\": \"10:00:00\", \"end_time\": \"19:00:00\" },\n    { \"day_of_week\": 4, \"is_available\": true, \"start_time\": \"10:00:00\", \"end_time\": \"19:00:00\" },\n    { \"day_of_week\": 5, \"is_available\": true, \"start_time\": \"09:00:00\", \"end_time\": \"18:00:00\" },\n    { \"day_of_week\": 6, \"is_available\": false }\n  ]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/staff/{{staffId}}/scheduled",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff",
+                    "{{staffId}}",
+                    "scheduled"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Upsert Weekly Schedules (Partial)",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"items\": [\n    { \"day_of_week\": 1, \"is_available\": true, \"start_time\": \"09:00:00\", \"end_time\": \"17:00:00\", \"notes\": \"Early shift\" },\n    { \"day_of_week\": 3, \"is_available\": false }\n  ]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/staff/{{staffId}}/scheduled",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff",
+                    "{{staffId}}",
+                    "scheduled"
+                  ]
+                }
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "Staff Leaves",
+          "item": [
+            {
+              "name": "List Staff Leaves",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/staff/{{staffId}}/leaves?from=2026-03-01&to=2026-03-31",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff",
+                    "{{staffId}}",
+                    "leaves"
+                  ],
+                  "query": [
+                    {
+                      "key": "from",
+                      "value": "2026-03-01"
+                    },
+                    {
+                      "key": "to",
+                      "value": "2026-03-31"
+                    }
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Create Staff Leave",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"start_date\": \"2026-03-10\",\n  \"end_date\": \"2026-03-12\",\n  \"leave_type\": \"annual_leave\",\n  \"status\": \"pending\",\n  \"reason\": \"Family vacation\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/staff/{{staffId}}/leaves",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff",
+                    "{{staffId}}",
+                    "leaves"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Update Staff Leave",
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"start_date\": \"2026-03-11\",\n  \"end_date\": \"2026-03-13\",\n  \"status\": \"approved\",\n  \"reason\": \"Family vacation (updated)\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/staff/{{staffId}}/leaves/{{recordId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff",
+                    "{{staffId}}",
+                    "leaves",
+                    "{{recordId}}"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Delete Staff Leave",
+              "request": {
+                "method": "DELETE",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/staff/{{staffId}}/leaves/{{recordId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff",
+                    "{{staffId}}",
+                    "leaves",
+                    "{{recordId}}"
+                  ]
+                }
+              },
+              "response": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "service",
+      "item": [
+        {
+          "name": "Services",
+          "item": [
+            {
+              "name": "List Services (filters + pagination)",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/services?category_id={{categoryId}}&search={{search}}&status={{status}}&type={{type}}&team_member_id={{teamMemberId}}&online_booking={{onlineBooking}}&commissions={{commissions}}&resource_requirements={{resourceRequirements}}&page={{page}}&limit={{limit}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "services"
+                  ],
+                  "query": [
+                    {
+                      "key": "category_id",
+                      "value": "{{categoryId}}",
+                      "description": "UUID"
+                    },
+                    {
+                      "key": "search",
+                      "value": "{{search}}",
+                      "description": "string"
+                    },
+                    {
+                      "key": "status",
+                      "value": "{{status}}",
+                      "description": "active | inactive"
+                    },
+                    {
+                      "key": "type",
+                      "value": "{{type}}",
+                      "description": "single | bundle (only if you store it)"
+                    },
+                    {
+                      "key": "team_member_id",
+                      "value": "{{teamMemberId}}",
+                      "description": "UUID"
+                    },
+                    {
+                      "key": "online_booking",
+                      "value": "{{onlineBooking}}",
+                      "description": "enabled | disabled | all"
+                    },
+                    {
+                      "key": "commissions",
+                      "value": "{{commissions}}",
+                      "description": "enabled | disabled | all"
+                    },
+                    {
+                      "key": "resource_requirements",
+                      "value": "{{resourceRequirements}}",
+                      "description": "required | not_required | all"
+                    },
+                    {
+                      "key": "page",
+                      "value": "{{page}}",
+                      "description": "integer >= 1"
+                    },
+                    {
+                      "key": "limit",
+                      "value": "{{limit}}",
+                      "description": "integer 1..200"
+                    }
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Create Service",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Haircut\",\n  \"category_id\": \"{{categoryId}}\",\n  \"treatment_type\": \"standard\",\n  \"description\": \"Basic haircut\",\n  \"price_type\": \"fixed\",\n  \"price\": 299,\n  \"duration\": 30,\n  \"online_booking\": true,\n  \"commission_enabled\": false,\n  \"resource_required\": false,\n  \"team_member_ids\": [\"{{teamMemberId}}\"]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/services",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "services"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Update Service",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTM2NTgsImV4cCI6MTc3MjQ5NDU1OH0.l9UNFMSSS7IER_cGsDaf4GAB11IGotHKCqc2F45L-ZE",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Haircut (Updated)\",\n  \"price\": 349,\n  \"duration\": 35,\n  \"online_booking\": true,\n  \"commission_enabled\": true,\n  \"resource_required\": false,\n  \"is_active\": true,\n  \"team_member_ids\": [\"{{teamMemberId}}\"]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/services/{{serviceId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "services",
+                    "{{serviceId}}"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Delete Service",
+              "request": {
+                "method": "DELETE",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/services/{{serviceId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "services",
+                    "{{serviceId}}"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "get service by id",
+              "request": {
+                "method": "GET",
+                "header": []
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "Add-on Groups",
+          "item": [
+            {
+              "name": "List Add-on Groups (with options)",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/services/{{serviceId}}/add-on-groups",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "services",
+                    "{{serviceId}}",
+                    "add-on-groups"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Create Add-on Group",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Extras\",\n  \"prompt_to_client\": \"Select an option\",\n  \"min_quantity\": 0,\n  \"max_quantity\": 2,\n  \"allow_multiple_same\": false\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/services/{{serviceId}}/add-on-groups",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "services",
+                    "{{serviceId}}",
+                    "add-on-groups"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Update Add-on Group",
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Extras (Updated)\",\n  \"prompt_to_client\": \"Choose extras\",\n  \"min_quantity\": 0,\n  \"max_quantity\": 3,\n  \"allow_multiple_same\": true\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/services/{{serviceId}}/add-on-groups/{{groupId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "services",
+                    "{{serviceId}}",
+                    "add-on-groups",
+                    "{{groupId}}"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Delete Add-on Group",
+              "request": {
+                "method": "DELETE",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/services/{{serviceId}}/add-on-groups/{{groupId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "services",
+                    "{{serviceId}}",
+                    "add-on-groups",
+                    "{{groupId}}"
+                  ]
+                }
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "Add-on Options",
+          "item": [
+            {
+              "name": "Create Add-on Option",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Beard Trim\",\n  \"description\": \"Trim with haircut\",\n  \"additional_price\": 99,\n  \"additional_duration\": 10\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/services/{{serviceId}}/add-on-groups/{{groupId}}/options",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "services",
+                    "{{serviceId}}",
+                    "add-on-groups",
+                    "{{groupId}}",
+                    "options"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Update Add-on Option",
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Beard Trim (Updated)\",\n  \"description\": \"Updated description\",\n  \"additional_price\": 129,\n  \"additional_duration\": 15\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/services/{{serviceId}}/add-on-groups/{{groupId}}/options/{{optionId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "services",
+                    "{{serviceId}}",
+                    "add-on-groups",
+                    "{{groupId}}",
+                    "options",
+                    "{{optionId}}"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Delete Add-on Option",
+              "request": {
+                "method": "DELETE",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/services/{{serviceId}}/add-on-groups/{{groupId}}/options/{{optionId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "services",
+                    "{{serviceId}}",
+                    "add-on-groups",
+                    "{{groupId}}",
+                    "options",
+                    "{{optionId}}"
+                  ]
+                }
+              },
+              "response": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "{{baseUrl}}/services/{{serviceId}}/add-on-groups",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTYzOTAsImV4cCI6MTc3MjQ5NzI5MH0.WDDilLPuKGJayIPEaertA74lh9ihfmQ1Rxy0NrMBgOA",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/services/{{serviceId}}/add-on-groups",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services",
+            "{{serviceId}}",
+            "add-on-groups"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services/{{serviceId}}/add-on-groups",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTYzOTAsImV4cCI6MTc3MjQ5NzI5MH0.WDDilLPuKGJayIPEaertA74lh9ihfmQ1Rxy0NrMBgOA",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/services/{{serviceId}}/add-on-groups",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services",
+            "{{serviceId}}",
+            "add-on-groups"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services/{{serviceId}}/add-on-groups",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTYzOTAsImV4cCI6MTc3MjQ5NzI5MH0.WDDilLPuKGJayIPEaertA74lh9ihfmQ1Rxy0NrMBgOA",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/services/{{serviceId}}/add-on-groups",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services",
+            "{{serviceId}}",
+            "add-on-groups"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services/{{serviceId}}/add-on-groups",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTY0ODUsImV4cCI6MTc3MjQ5NzM4NX0.r4dehfiIlWT4lF7uEMWLC4U5TxjlIcYrpdnYAjHchWw",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Extras\",\n  \"prompt_to_client\": \"Select an option\",\n  \"min_quantity\": 0,\n  \"max_quantity\": 2,\n  \"allow_multiple_same\": false\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/services/{{serviceId}}/add-on-groups",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services",
+            "{{serviceId}}",
+            "add-on-groups"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services/{{serviceId}}/add-on-groups",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTY0ODUsImV4cCI6MTc3MjQ5NzM4NX0.r4dehfiIlWT4lF7uEMWLC4U5TxjlIcYrpdnYAjHchWw",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Extras\",\n  \"prompt_to_client\": \"Select an option\",\n  \"min_quantity\": 0,\n  \"max_quantity\": 2,\n  \"allow_multiple_same\": false\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/services/{{serviceId}}/add-on-groups",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services",
+            "{{serviceId}}",
+            "add-on-groups"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:3000/api/v1/auth/login",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n  \"email\": \"sai.pagale123@gmail.com\",\r\n  \"password\": \"Test@1234\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:3000/api/v1/auth/login",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "3000",
+          "path": [
+            "api",
+            "v1",
+            "auth",
+            "login"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services/{{serviceId}}/add-on-groups",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Extras\",\n  \"prompt_to_client\": \"Select an option\",\n  \"min_quantity\": 0,\n  \"max_quantity\": 2,\n  \"allow_multiple_same\": false\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/services/{{serviceId}}/add-on-groups",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services",
+            "{{serviceId}}",
+            "add-on-groups"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services/{{serviceId}}/add-on-groups",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTYzOTAsImV4cCI6MTc3MjQ5NzI5MH0.WDDilLPuKGJayIPEaertA74lh9ihfmQ1Rxy0NrMBgOA",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/services/{{serviceId}}/add-on-groups",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services",
+            "{{serviceId}}",
+            "add-on-groups"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:3000/api/v1/auth/login",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n  \"email\": \"sai.pagale123@gmail.com\",\r\n  \"password\": \"Test@1234\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:3000/api/v1/auth/login",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "3000",
+          "path": [
+            "api",
+            "v1",
+            "auth",
+            "login"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services/{{serviceId}}/add-on-groups",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/services/{{serviceId}}/add-on-groups",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services",
+            "{{serviceId}}",
+            "add-on-groups"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services/ab14272b-f3fc-429b-8fca-8708dd4f365e",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTYxOTAsImV4cCI6MTc3MjQ5NzA5MH0.LOU4U2pPnRwDalbyy0b-NLsibsGRQ_EgEEoDtQfLpnw",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/services/ab14272b-f3fc-429b-8fca-8708dd4f365e",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services",
+            "ab14272b-f3fc-429b-8fca-8708dd4f365e"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTU5NDksImV4cCI6MTc3MjQ5Njg0OX0.88k3uc02_gXuLIZGeOu6CHTAt5iJND2j6x9GJDL0UOg",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Haircut\",\n  \"category_id\": \"f26b1fbd-47ad-4fb7-911b-d7b6f53aff34\",\n  \"treatment_type\": \"standard\",\n  \"description\": \"Basic haircut\",\n  \"price_type\": \"fixed\",\n  \"price\": 299,\n  \"duration\": 30,\n  \"online_booking\": true,\n  \"commission_enabled\": false,\n  \"resource_required\": false,\n  \"staff_id\": [\"{{teamMemberId}}\"]\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/services",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTU5NDksImV4cCI6MTc3MjQ5Njg0OX0.88k3uc02_gXuLIZGeOu6CHTAt5iJND2j6x9GJDL0UOg",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Haircut\",\n  \"category_id\": \"f26b1fbd-47ad-4fb7-911b-d7b6f53aff34\",\n  \"treatment_type\": \"standard\",\n  \"description\": \"Basic haircut\",\n  \"price_type\": \"fixed\",\n  \"price\": 299,\n  \"duration\": 30,\n  \"online_booking\": true,\n  \"commission_enabled\": false,\n  \"resource_required\": false,\n  \"staff_id\": [\"{{teamMemberId}}\"]\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/services",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services/ab14272b-f3fc-429b-8fca-8708dd4f365e",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTYxOTAsImV4cCI6MTc3MjQ5NzA5MH0.LOU4U2pPnRwDalbyy0b-NLsibsGRQ_EgEEoDtQfLpnw",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/services/ab14272b-f3fc-429b-8fca-8708dd4f365e",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services",
+            "ab14272b-f3fc-429b-8fca-8708dd4f365e"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services/ab14272b-f3fc-429b-8fca-8708dd4f365e",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTYxOTAsImV4cCI6MTc3MjQ5NzA5MH0.LOU4U2pPnRwDalbyy0b-NLsibsGRQ_EgEEoDtQfLpnw",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/services/ab14272b-f3fc-429b-8fca-8708dd4f365e",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services",
+            "ab14272b-f3fc-429b-8fca-8708dd4f365e"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTU5NDksImV4cCI6MTc3MjQ5Njg0OX0.88k3uc02_gXuLIZGeOu6CHTAt5iJND2j6x9GJDL0UOg",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Haircut\",\n  \"category_id\": \"f26b1fbd-47ad-4fb7-911b-d7b6f53aff34\",\n  \"treatment_type\": \"standard\",\n  \"description\": \"Basic haircut\",\n  \"price_type\": \"fixed\",\n  \"price\": 299,\n  \"duration\": 30,\n  \"online_booking\": true,\n  \"commission_enabled\": false,\n  \"resource_required\": false,\n  \"staff_id\": [\"{{teamMemberId}}\"]\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/services",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services/f9e54873-5967-4f84-9533-0bfed0706826",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTYxOTAsImV4cCI6MTc3MjQ5NzA5MH0.LOU4U2pPnRwDalbyy0b-NLsibsGRQ_EgEEoDtQfLpnw",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/services/f9e54873-5967-4f84-9533-0bfed0706826",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services",
+            "f9e54873-5967-4f84-9533-0bfed0706826"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:3000/api/v1/auth/login",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n  \"email\": \"sai.pagale123@gmail.com\",\r\n  \"password\": \"Test@1234\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:3000/api/v1/auth/login",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "3000",
+          "path": [
+            "api",
+            "v1",
+            "auth",
+            "login"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services/f9e54873-5967-4f84-9533-0bfed0706826",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/services/f9e54873-5967-4f84-9533-0bfed0706826",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services",
+            "f9e54873-5967-4f84-9533-0bfed0706826"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services/{{serviceId}}",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTU5OTAsImV4cCI6MTc3MjQ5Njg5MH0.NhkNLz6XOGk9S5CBrRrQk5s-O2xpjA11XMeZTiIl4VA",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "DELETE",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/services/{{serviceId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services",
+            "{{serviceId}}"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:3000/api/v1/auth/login",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n  \"email\": \"sai.pagale123@gmail.com\",\r\n  \"password\": \"Test@1234\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:3000/api/v1/auth/login",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "3000",
+          "path": [
+            "api",
+            "v1",
+            "auth",
+            "login"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services/{{serviceId}}",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "f9e54873-5967-4f84-9533-0bfed0706826",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "DELETE",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/services/{{serviceId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services",
+            "{{serviceId}}"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTU5NDksImV4cCI6MTc3MjQ5Njg0OX0.88k3uc02_gXuLIZGeOu6CHTAt5iJND2j6x9GJDL0UOg",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Haircut\",\n  \"category_id\": \"f26b1fbd-47ad-4fb7-911b-d7b6f53aff34\",\n  \"treatment_type\": \"standard\",\n  \"description\": \"Basic haircut\",\n  \"price_type\": \"fixed\",\n  \"price\": 299,\n  \"duration\": 30,\n  \"online_booking\": true,\n  \"commission_enabled\": false,\n  \"resource_required\": false,\n  \"staff_id\": [\"{{teamMemberId}}\"]\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/services",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:3000/api/v1/auth/login",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n  \"email\": \"sai.pagale123@gmail.com\",\r\n  \"password\": \"Test@1234\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:3000/api/v1/auth/login",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "3000",
+          "path": [
+            "api",
+            "v1",
+            "auth",
+            "login"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTM1OTIsImV4cCI6MTc3MjQ5NDQ5Mn0.EMFuXGoJqM_8L6-MGdxoukOvjFinpKwfx4fyF4tn15w",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Haircut\",\n  \"category_id\": \"f26b1fbd-47ad-4fb7-911b-d7b6f53aff34\",\n  \"treatment_type\": \"standard\",\n  \"description\": \"Basic haircut\",\n  \"price_type\": \"fixed\",\n  \"price\": 299,\n  \"duration\": 30,\n  \"online_booking\": true,\n  \"commission_enabled\": false,\n  \"resource_required\": false,\n  \"staff_id\": [\"{{teamMemberId}}\"]\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/services",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services/{{serviceId}}",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTU4OTIsImV4cCI6MTc3MjQ5Njc5Mn0.PdfkGOzwu9RI6prkosXeE3TW2KJL_9UupR1DCfK44x0",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "DELETE",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/services/{{serviceId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services",
+            "{{serviceId}}"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services/{{serviceId}}",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTU4OTIsImV4cCI6MTc3MjQ5Njc5Mn0.PdfkGOzwu9RI6prkosXeE3TW2KJL_9UupR1DCfK44x0",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "DELETE",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/services/{{serviceId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services",
+            "{{serviceId}}"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:3000/api/v1/auth/login",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n  \"email\": \"sai.pagale123@gmail.com\",\r\n  \"password\": \"Test@1234\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:3000/api/v1/auth/login",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "3000",
+          "path": [
+            "api",
+            "v1",
+            "auth",
+            "login"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services/{{serviceId}}",
+      "request": {
+        "method": "DELETE",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/services/{{serviceId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services",
+            "{{serviceId}}"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:3000/api/v1/auth/login",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n  \"email\": \"sai.pagale123@gmail.com\",\r\n  \"password\": \"Test@1234\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:3000/api/v1/auth/login",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "3000",
+          "path": [
+            "api",
+            "v1",
+            "auth",
+            "login"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTM1OTIsImV4cCI6MTc3MjQ5NDQ5Mn0.EMFuXGoJqM_8L6-MGdxoukOvjFinpKwfx4fyF4tn15w",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Haircut\",\n  \"category_id\": \"f26b1fbd-47ad-4fb7-911b-d7b6f53aff34\",\n  \"treatment_type\": \"standard\",\n  \"description\": \"Basic haircut\",\n  \"price_type\": \"fixed\",\n  \"price\": 299,\n  \"duration\": 30,\n  \"online_booking\": true,\n  \"commission_enabled\": false,\n  \"resource_required\": false,\n  \"staff_id\": [\"{{teamMemberId}}\"]\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/services",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services/{{serviceId}}",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTU3NjcsImV4cCI6MTc3MjQ5NjY2N30.hv-11ooYQEvHZTwxVj0VHm0wUXF7G4fQgeAiLSwPQRo",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Haircut (Updated)\",\n  \"price\": 349,\n  \"duration\": 35,\n  \"online_booking\": true,\n  \"commission_enabled\": true,\n  \"resource_required\": false,\n  \"is_active\": true,\n  \"team_member_ids\": [\"{{teamMemberId}}\"]\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/services/{{serviceId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services",
+            "{{serviceId}}"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:3000/api/v1/auth/login",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n  \"email\": \"sai.pagale123@gmail.com\",\r\n  \"password\": \"Test@1234\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:3000/api/v1/auth/login",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "3000",
+          "path": [
+            "api",
+            "v1",
+            "auth",
+            "login"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services/{{serviceId}}",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTM2NTgsImV4cCI6MTc3MjQ5NDU1OH0.l9UNFMSSS7IER_cGsDaf4GAB11IGotHKCqc2F45L-ZE",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Haircut (Updated)\",\n  \"price\": 349,\n  \"duration\": 35,\n  \"online_booking\": true,\n  \"commission_enabled\": true,\n  \"resource_required\": false,\n  \"is_active\": true,\n  \"team_member_ids\": [\"{{teamMemberId}}\"]\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/services/{{serviceId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services",
+            "{{serviceId}}"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services/{{serviceId}}",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTM2NTgsImV4cCI6MTc3MjQ5NDU1OH0.l9UNFMSSS7IER_cGsDaf4GAB11IGotHKCqc2F45L-ZE",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Haircut (Updated)\",\n  \"price\": 349,\n  \"duration\": 35,\n  \"online_booking\": true,\n  \"commission_enabled\": true,\n  \"resource_required\": false,\n  \"is_active\": true,\n  \"team_member_ids\": [\"{{teamMemberId}}\"]\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/services/{{serviceId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services",
+            "{{serviceId}}"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services/{{serviceId}}",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTM2NTgsImV4cCI6MTc3MjQ5NDU1OH0.l9UNFMSSS7IER_cGsDaf4GAB11IGotHKCqc2F45L-ZE",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Haircut (Updated)\",\n  \"price\": 349,\n  \"duration\": 35,\n  \"online_booking\": true,\n  \"commission_enabled\": true,\n  \"resource_required\": false,\n  \"is_active\": true,\n  \"team_member_ids\": [\"{{teamMemberId}}\"]\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/services/{{serviceId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services",
+            "{{serviceId}}"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services/{{serviceId}}",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTM2NTgsImV4cCI6MTc3MjQ5NDU1OH0.l9UNFMSSS7IER_cGsDaf4GAB11IGotHKCqc2F45L-ZE",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Haircut (Updated)\",\n  \"price\": 349,\n  \"duration\": 35,\n  \"online_booking\": true,\n  \"commission_enabled\": true,\n  \"resource_required\": false,\n  \"is_active\": true,\n  \"team_member_ids\": [\"{{teamMemberId}}\"]\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/services/{{serviceId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services",
+            "{{serviceId}}"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services/{{serviceId}}",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTM2NTgsImV4cCI6MTc3MjQ5NDU1OH0.l9UNFMSSS7IER_cGsDaf4GAB11IGotHKCqc2F45L-ZE",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Haircut (Updated)\",\n  \"price\": 349,\n  \"duration\": 35,\n  \"online_booking\": true,\n  \"commission_enabled\": true,\n  \"resource_required\": false,\n  \"is_active\": true,\n  \"team_member_ids\": [\"{{teamMemberId}}\"]\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/services/{{serviceId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services",
+            "{{serviceId}}"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services/{{serviceId}}",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTM2NTgsImV4cCI6MTc3MjQ5NDU1OH0.l9UNFMSSS7IER_cGsDaf4GAB11IGotHKCqc2F45L-ZE",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Haircut (Updated)\",\n  \"price\": 349,\n  \"duration\": 35,\n  \"online_booking\": true,\n  \"commission_enabled\": true,\n  \"resource_required\": false,\n  \"is_active\": true,\n  \"team_member_ids\": [\"{{teamMemberId}}\"]\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/services/{{serviceId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services",
+            "{{serviceId}}"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services/{{serviceId}}",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTM2NTgsImV4cCI6MTc3MjQ5NDU1OH0.l9UNFMSSS7IER_cGsDaf4GAB11IGotHKCqc2F45L-ZE",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Haircut (Updated)\",\n  \"price\": 349,\n  \"duration\": 35,\n  \"online_booking\": true,\n  \"commission_enabled\": true,\n  \"resource_required\": false,\n  \"is_active\": true,\n  \"team_member_ids\": [\"{{teamMemberId}}\"]\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/services/{{serviceId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services",
+            "{{serviceId}}"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services/{{serviceId}}",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTM2NTgsImV4cCI6MTc3MjQ5NDU1OH0.l9UNFMSSS7IER_cGsDaf4GAB11IGotHKCqc2F45L-ZE",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Haircut (Updated)\",\n  \"price\": 349,\n  \"duration\": 35,\n  \"online_booking\": true,\n  \"commission_enabled\": true,\n  \"resource_required\": false,\n  \"is_active\": true,\n  \"team_member_ids\": [\"{{teamMemberId}}\"]\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/services/{{serviceId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services",
+            "{{serviceId}}"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTM1OTIsImV4cCI6MTc3MjQ5NDQ5Mn0.EMFuXGoJqM_8L6-MGdxoukOvjFinpKwfx4fyF4tn15w",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Haircut\",\n  \"category_id\": \"f26b1fbd-47ad-4fb7-911b-d7b6f53aff34\",\n  \"treatment_type\": \"standard\",\n  \"description\": \"Basic haircut\",\n  \"price_type\": \"fixed\",\n  \"price\": 299,\n  \"duration\": 30,\n  \"online_booking\": true,\n  \"commission_enabled\": false,\n  \"resource_required\": false,\n  \"staff_id\": [\"{{teamMemberId}}\"]\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/services",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services/{{serviceId}}",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTM2NTgsImV4cCI6MTc3MjQ5NDU1OH0.l9UNFMSSS7IER_cGsDaf4GAB11IGotHKCqc2F45L-ZE",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Haircut (Updated)\",\n  \"price\": 349,\n  \"duration\": 35,\n  \"online_booking\": true,\n  \"commission_enabled\": true,\n  \"resource_required\": false,\n  \"is_active\": true,\n  \"team_member_ids\": [\"{{teamMemberId}}\"]\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/services/{{serviceId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services",
+            "{{serviceId}}"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services/{{serviceId}}",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTM2NTgsImV4cCI6MTc3MjQ5NDU1OH0.l9UNFMSSS7IER_cGsDaf4GAB11IGotHKCqc2F45L-ZE",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Haircut (Updated)\",\n  \"price\": 349,\n  \"duration\": 35,\n  \"online_booking\": true,\n  \"commission_enabled\": true,\n  \"resource_required\": false,\n  \"is_active\": true,\n  \"team_member_ids\": [\"{{teamMemberId}}\"]\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/services/{{serviceId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services",
+            "{{serviceId}}"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services/{{serviceId}}",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTM2NTgsImV4cCI6MTc3MjQ5NDU1OH0.l9UNFMSSS7IER_cGsDaf4GAB11IGotHKCqc2F45L-ZE",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Haircut (Updated)\",\n  \"price\": 349,\n  \"duration\": 35,\n  \"online_booking\": true,\n  \"commission_enabled\": true,\n  \"resource_required\": false,\n  \"is_active\": true,\n  \"team_member_ids\": [\"{{teamMemberId}}\"]\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/services/{{serviceId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services",
+            "{{serviceId}}"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services/{{serviceId}}",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTM2NTgsImV4cCI6MTc3MjQ5NDU1OH0.l9UNFMSSS7IER_cGsDaf4GAB11IGotHKCqc2F45L-ZE",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Haircut (Updated)\",\n  \"price\": 349,\n  \"duration\": 35,\n  \"online_booking\": true,\n  \"commission_enabled\": true,\n  \"resource_required\": false,\n  \"is_active\": true,\n  \"team_member_ids\": [\"{{teamMemberId}}\"]\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/services/{{serviceId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services",
+            "{{serviceId}}"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:3000/api/v1/auth/login",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n  \"email\": \"sai.pagale123@gmail.com\",\r\n  \"password\": \"Test@1234\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:3000/api/v1/auth/login",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "3000",
+          "path": [
+            "api",
+            "v1",
+            "auth",
+            "login"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTM1OTIsImV4cCI6MTc3MjQ5NDQ5Mn0.EMFuXGoJqM_8L6-MGdxoukOvjFinpKwfx4fyF4tn15w",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Haircut\",\n  \"category_id\": \"f26b1fbd-47ad-4fb7-911b-d7b6f53aff34\",\n  \"treatment_type\": \"standard\",\n  \"description\": \"Basic haircut\",\n  \"price_type\": \"fixed\",\n  \"price\": 299,\n  \"duration\": 30,\n  \"online_booking\": true,\n  \"commission_enabled\": false,\n  \"resource_required\": false,\n  \"staff_id\": [\"{{teamMemberId}}\"]\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/services",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:3000/api/v1/auth/login",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n  \"email\": \"sai.pagale123@gmail.com\",\r\n  \"password\": \"Test@1234\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:3000/api/v1/auth/login",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "3000",
+          "path": [
+            "api",
+            "v1",
+            "auth",
+            "login"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/services",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0NDAzNjIsImV4cCI6MTc3MjQ0MTI2Mn0.v5gye374XLLTe_XGtpkjtXtJnvGSrVVQuPWr5xM37aw",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Haircut\",\n  \"category_id\": \"f26b1fbd-47ad-4fb7-911b-d7b6f53aff34\",\n  \"treatment_type\": \"standard\",\n  \"description\": \"Basic haircut\",\n  \"price_type\": \"fixed\",\n  \"price\": 299,\n  \"duration\": 30,\n  \"online_booking\": true,\n  \"commission_enabled\": false,\n  \"resource_required\": false,\n  \"staff_id\": [\"{{teamMemberId}}\"]\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/services",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "services"
+          ]
+        }
+      },
+      "response": []
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "packages": {},
+        "requests": {},
+        "exec": [
+          ""
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "packages": {},
+        "requests": {},
+        "exec": [
+          ""
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": ""
+    }
+  ]
+}
