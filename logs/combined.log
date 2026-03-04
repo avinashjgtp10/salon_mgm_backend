@@ -2707,3 +2707,8 @@
 {"level":"info","message":"🌐 API: http://localhost:3000/api/v1","service":"salon-backend","timestamp":"2026-02-24 05:31:33"}
 {"level":"info","message":"✅ Redis connection successful","service":"salon-backend","timestamp":"2026-02-24 05:31:33"}
 {"level":"info","message":"✅ Database connection successful","service":"salon-backend","timestamp":"2026-02-24 05:31:33"}
+{"level":"info","message":"🚀 Server running on port 3000","service":"salon-backend","timestamp":"2026-03-04 05:17:43"}
+{"level":"info","message":"📍 Environment: development","service":"salon-backend","timestamp":"2026-03-04 05:17:43"}
+{"level":"info","message":"🌐 API: http://localhost:3000/api/v1","service":"salon-backend","timestamp":"2026-03-04 05:17:43"}
+{"level":"info","message":"✅ Redis connection successful","service":"salon-backend","timestamp":"2026-03-04 05:17:43"}
+{"level":"info","message":"✅ Database connection successful","service":"salon-backend","timestamp":"2026-03-04 05:17:44"}
