@@ -1,5 +1,4 @@
 import { Request, Response, NextFunction } from "express";
-import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { marketplaceService } from "./marketplace.service";
