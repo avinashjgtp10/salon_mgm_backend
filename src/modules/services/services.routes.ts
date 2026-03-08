@@ -1,101 +1,46 @@
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
-import { servicesController } from "./services.controller";
+import { bundlesController, servicesController } from "./services.controller";
+import { downloadCatalogueCsv, downloadCatalogueExcel, downloadCataloguePdf } from "./services.download.controller.ts";
 import {
-  validateCreateCategory,
-  validateCreateService,
-  validateUpdateCategory,
-  validateUpdateService,
+  validateCreateAddOnGroup, validateCreateAddOnOption,
+  validateCreateBundle, validateCreateService,
+  validateUpdateAddOnGroup, validateUpdateAddOnOption,
+  validateUpdateBundle, validateUpdateService,
 } from "./services.validator";
 
 const router = Router();
+const auth = [authMiddleware, roleMiddleware("salon_owner", "admin", "staff")];
 
-// Categories
-router.post(
-  "/salons/:salonId/categories",
-  authMiddleware,
-  roleMiddleware("salon_owner", "admin"),
-  validateCreateCategory,
-  servicesController.createCategory
-);
+// ─── Downloads (before /:id to avoid conflicts) ───────────────────────────────
+router.get("/download/pdf",   ...auth, downloadCataloguePdf);
+router.get("/download/excel", ...auth, downloadCatalogueExcel);
+router.get("/download/csv",   ...auth, downloadCatalogueCsv);
 
-router.get(
-  "/salons/:salonId/categories",
-  authMiddleware,
-  servicesController.listCategories
-);
+// ─── Services CRUD ────────────────────────────────────────────────────────────
+router.get("/",    ...auth, servicesController.list);
+router.post("/",   ...auth, validateCreateService, servicesController.create);
+router.get("/:id", ...auth, servicesController.getById);
+router.patch("/:id", ...auth, validateUpdateService, servicesController.update);
+router.delete("/:id", ...auth, servicesController.remove);
 
-router.patch(
-  "/categories/:id",
-  authMiddleware,
-  roleMiddleware("salon_owner", "admin"),
-  validateUpdateCategory,
-  servicesController.updateCategory
-);
+// ─── Add-on groups ────────────────────────────────────────────────────────────
+router.get("/:id/add-on-groups",          ...auth, servicesController.listAddOnGroups);
+router.post("/:id/add-on-groups",         ...auth, validateCreateAddOnGroup, servicesController.createAddOnGroup);
+router.patch("/:id/add-on-groups/:groupId",  ...auth, validateUpdateAddOnGroup, servicesController.updateAddOnGroup);
+router.delete("/:id/add-on-groups/:groupId", ...auth, servicesController.deleteAddOnGroup);
 
-router.delete(
-  "/categories/:id",
-  authMiddleware,
-  roleMiddleware("salon_owner", "admin"),
-  servicesController.deleteCategory
-);
+// ─── Add-on options ───────────────────────────────────────────────────────────
+router.post("/:id/add-on-groups/:groupId/options",            ...auth, validateCreateAddOnOption, servicesController.createAddOnOption);
+router.patch("/:id/add-on-groups/:groupId/options/:optionId", ...auth, validateUpdateAddOnOption, servicesController.updateAddOnOption);
+router.delete("/:id/add-on-groups/:groupId/options/:optionId",...auth, servicesController.deleteAddOnOption);
 
-// Services
-router.post(
-  "/salons/:salonId/services",
-  authMiddleware,
-  roleMiddleware("salon_owner", "admin"),
-  validateCreateService,
-  servicesController.createService
-);
-
-router.get(
-  "/salons/:salonId/services",
-  authMiddleware,
-  servicesController.listServices
-);
-
-router.get(
-  "/services/:id",
-  authMiddleware,
-  servicesController.getServiceById
-);
-
-router.patch(
-  "/services/:id",
-  authMiddleware,
-  roleMiddleware("salon_owner", "admin"),
-  validateUpdateService,
-  servicesController.updateService
-);
-
-router.delete(
-  "/services/:id",
-  authMiddleware,
-  roleMiddleware("salon_owner", "admin"),
-  servicesController.deleteService
-);
-
-// Staff ↔ Services mapping
-router.post(
-  "/staff/:staffId/services/:serviceId",
-  authMiddleware,
-  roleMiddleware("salon_owner", "admin"),
-  servicesController.assignStaffService
-);
-
-router.delete(
-  "/staff/:staffId/services/:serviceId",
-  authMiddleware,
-  roleMiddleware("salon_owner", "admin"),
-  servicesController.unassignStaffService
-);
-
-router.get(
-  "/staff/:staffId/services",
-  authMiddleware,
-  servicesController.listStaffServices
-);
+// ─── Bundles CRUD ─────────────────────────────────────────────────────────────
+router.get("/bundles",    ...auth, bundlesController.list);
+router.post("/bundles",   ...auth, validateCreateBundle, bundlesController.create);
+router.get("/bundles/:id", ...auth, bundlesController.getById);
+router.patch("/bundles/:id", ...auth, validateUpdateBundle, bundlesController.update);
+router.delete("/bundles/:id", ...auth, bundlesController.remove);
 
 export default router;

@@ -7,7 +7,7 @@ import {
   resetLoginFails,
 } from "../../middleware/rate-limit.middleware";
 import logger from "../../config/logger";
-import { googleCallbackQuerySchema, googleStartQuerySchema } from "./auth.validator";
+import { googleStartQuerySchema } from "./auth.validator";
 
 function redirectToFrontend(res: Response, accessToken: string, refreshToken: string, returnTo?: string) {
   // Try mapping frontend from env based on typical setups, fallback if missing
@@ -249,7 +249,7 @@ export const authController = {
     }
   },
 
-  async googleCallback(req: Request, res: Response, next: NextFunction) {
+  async googleCallback(req: Request, res: Response, _next: NextFunction) {
     try {
       const code = String(req.query.code || "");
       const state = String(req.query.state || "");

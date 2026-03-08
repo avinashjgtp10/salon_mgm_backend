@@ -1,62 +1,105 @@
 import { NextFunction, Request, Response } from "express";
 import { AppError } from "../../middleware/error.middleware";
+import {
+    CalendarColor,
+    CommissionCategory,
+    CommissionKind,
+    CompensationType,
+    EmergencyRelationship,
+    EmploymentType,
+    PayRunCalculation,
+    PaymentMethod,
+    TimesheetAutomation,
+} from "./staff.types";
 
-const isNonEmptyString = (v: unknown) => typeof v === "string" && v.trim().length > 0;
-const isOptionalString = (v: unknown) => v === undefined || typeof v === "string";
-const isOptionalBoolean = (v: unknown) => v === undefined || typeof v === "boolean";
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const isOptionalStringArray = (v: unknown) =>
-    v === undefined || (Array.isArray(v) && v.every((x) => typeof x === "string"));
+const UUID_RE =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-const isUUID = (v: unknown) =>
-    typeof v === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
-
+const isUUID = (v: unknown) => typeof v === "string" && UUID_RE.test(v);
 const isOptionalUUID = (v: unknown) => v === undefined || isUUID(v);
+const isNonEmptyString = (v: unknown) =>
+    typeof v === "string" && v.trim().length > 0;
+const isOptionalString = (v: unknown) =>
+    v === undefined || typeof v === "string";
+const isOptionalInt = (v: unknown) =>
+    v === undefined ||
+    (typeof v === "number" && Number.isInteger(v) && v >= 0);
+const isOptionalNumber = (v: unknown) =>
+    v === undefined ||
+    v === null ||
+    (typeof v === "number" && Number.isFinite(v));
+const isOptionalBool = (v: unknown) =>
+    v === undefined || typeof v === "boolean";
+const isOptionalStringArray = (v: unknown) =>
+    v === undefined ||
+    (Array.isArray(v) && v.every((x) => typeof x === "string"));
+const isOptionalISODate = (v: unknown) => {
+    if (v === undefined) return true;
+    if (typeof v !== "string") return false;
+    return !Number.isNaN(new Date(v).getTime());
+};
 
-const isDateString = (v: unknown) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
-const isOptionalDateString = (v: unknown) => v === undefined || isDateString(v);
+const VALID_CALENDAR_COLORS: CalendarColor[] = [
+    "light_blue", "blue", "dark_blue", "purple", "violet", "pink", "hot_pink", "rose",
+    "orange", "yellow", "lime", "green", "teal", "cyan",
+];
+const VALID_EMPLOYMENT_TYPES: EmploymentType[] = [
+    "full_time", "part_time", "contract", "intern", "freelance",
+];
+const VALID_COMPENSATION_TYPES: CompensationType[] = [
+    "none", "hourly", "salary", "commission",
+];
+const VALID_COMMISSION_KINDS: CommissionKind[] = ["fixed_rate", "percentage"];
+const VALID_COMMISSION_CATEGORIES: CommissionCategory[] = [
+    "services", "products", "memberships", "gift_cards", "cancellation",
+];
+const VALID_TIMESHEET_AUTOMATIONS: TimesheetAutomation[] = [
+    "workspace_default", "enabled", "disabled",
+];
+const VALID_PAY_RUN_CALCULATIONS: PayRunCalculation[] = ["automatic", "manual"];
+const VALID_PAYMENT_METHODS: PaymentMethod[] = ["pay_manually", "bank_transfer"];
+const VALID_RELATIONSHIPS: EmergencyRelationship[] = [
+    "spouse", "parent", "sibling", "child", "friend", "colleague", "other",
+];
 
-const isTimeString = (v: unknown) => typeof v === "string" && /^\d{2}:\d{2}(:\d{2})?$/.test(v);
-const isOptionalTimeString = (v: unknown) => v === undefined || isTimeString(v);
+const isOptionalEnum = <T extends string>(v: unknown, allowed: T[]) =>
+    v === undefined || (typeof v === "string" && (allowed as string[]).includes(v));
 
-// ------------------------------
-// STAFF
-// ------------------------------
-export const validateCreateStaff = (req: Request, _res: Response, next: NextFunction) => {
+// ─── Staff ────────────────────────────────────────────────────────────────────
+
+export const validateCreateStaff = (
+    req: Request, _res: Response, next: NextFunction
+) => {
     try {
         const b = req.body;
 
-        // required
-        if (!isUUID(b.user_id)) throw new AppError(400, "user_id is required (uuid)", "VALIDATION_ERROR");
-        if (!isUUID(b.salon_id)) throw new AppError(400, "salon_id is required (uuid)", "VALIDATION_ERROR");
+        if (!isNonEmptyString(b.first_name))
+            throw new AppError(400, "first_name is required and must be a non-empty string", "VALIDATION_ERROR");
 
-        // optional
-        if (!isOptionalUUID(b.branch_id)) throw new AppError(400, "branch_id must be uuid", "VALIDATION_ERROR");
-        if (!isOptionalString(b.designation)) throw new AppError(400, "designation must be string", "VALIDATION_ERROR");
+        if (!isNonEmptyString(b.email) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(b.email))
+            throw new AppError(400, "email is required and must be a valid email address", "VALIDATION_ERROR");
+
+        for (const f of ["last_name", "phone", "phone_country_code", "additional_phone", "country", "job_title", "staff_external_id", "employee_code"]) {
+            if (!isOptionalString(b[f]))
+                throw new AppError(400, `${f} must be a string`, "VALIDATION_ERROR");
+        }
+
+        if (!isOptionalEnum(b.calendar_color, VALID_CALENDAR_COLORS))
+            throw new AppError(400, `calendar_color must be one of: ${VALID_CALENDAR_COLORS.join(", ")}`, "VALIDATION_ERROR");
+
+        if (!isOptionalEnum(b.employment_type, VALID_EMPLOYMENT_TYPES))
+            throw new AppError(400, `employment_type must be one of: ${VALID_EMPLOYMENT_TYPES.join(", ")}`, "VALIDATION_ERROR");
+
+        if (!isOptionalUUID(b.branch_id))
+            throw new AppError(400, "branch_id must be a UUID", "VALIDATION_ERROR");
+
+        if (!isOptionalInt(b.experience_years) || (b.experience_years !== undefined && b.experience_years > 100))
+            throw new AppError(400, "experience_years must be an integer between 0 and 100", "VALIDATION_ERROR");
+
         if (!isOptionalStringArray(b.specialization))
-            throw new AppError(400, "specialization must be string[]", "VALIDATION_ERROR");
-
-        if (b.experience_years !== undefined) {
-            if (typeof b.experience_years !== "number" || !Number.isInteger(b.experience_years) || b.experience_years < 0) {
-                throw new AppError(400, "experience_years must be a non-negative integer", "VALIDATION_ERROR");
-            }
-        }
-
-        if (!isOptionalString(b.commission_type))
-            throw new AppError(400, "commission_type must be string", "VALIDATION_ERROR");
-
-        // allow number or numeric string for commission_value (because many clients send as string)
-        if (b.commission_value !== undefined) {
-            const ok =
-                (typeof b.commission_value === "number" && Number.isFinite(b.commission_value)) ||
-                (typeof b.commission_value === "string" && b.commission_value.trim() !== "" && !Number.isNaN(Number(b.commission_value)));
-            if (!ok) throw new AppError(400, "commission_value must be a number", "VALIDATION_ERROR");
-        }
-
-        if (!isOptionalBoolean(b.is_active)) throw new AppError(400, "is_active must be boolean", "VALIDATION_ERROR");
-        if (!isOptionalDateString(b.joined_date))
-            throw new AppError(400, "joined_date must be YYYY-MM-DD", "VALIDATION_ERROR");
+            throw new AppError(400, "specialization must be an array of strings", "VALIDATION_ERROR");
 
         return next();
     } catch (err) {
@@ -64,40 +107,37 @@ export const validateCreateStaff = (req: Request, _res: Response, next: NextFunc
     }
 };
 
-export const validateUpdateStaff = (req: Request, _res: Response, next: NextFunction) => {
+export const validateUpdateStaff = (
+    req: Request, _res: Response, next: NextFunction
+) => {
     try {
         const b = req.body;
 
-        const optionalUUIDFields = ["user_id", "salon_id", "branch_id"] as const;
-        for (const f of optionalUUIDFields) {
-            if (b[f] !== undefined && !isUUID(b[f])) {
-                throw new AppError(400, `${f} must be uuid`, "VALIDATION_ERROR");
-            }
+        if (b.first_name !== undefined && !isNonEmptyString(b.first_name))
+            throw new AppError(400, "first_name must be a non-empty string", "VALIDATION_ERROR");
+
+        if (b.email !== undefined && (typeof b.email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(b.email)))
+            throw new AppError(400, "email must be a valid email address", "VALIDATION_ERROR");
+
+        for (const f of ["last_name", "phone", "phone_country_code", "additional_phone", "country", "job_title", "staff_external_id", "employee_code"]) {
+            if (!isOptionalString(b[f]))
+                throw new AppError(400, `${f} must be a string`, "VALIDATION_ERROR");
         }
 
-        if (!isOptionalString(b.designation)) throw new AppError(400, "designation must be string", "VALIDATION_ERROR");
+        if (!isOptionalEnum(b.calendar_color, VALID_CALENDAR_COLORS))
+            throw new AppError(400, `calendar_color must be one of: ${VALID_CALENDAR_COLORS.join(", ")}`, "VALIDATION_ERROR");
+
+        if (!isOptionalEnum(b.employment_type, VALID_EMPLOYMENT_TYPES))
+            throw new AppError(400, `employment_type must be one of: ${VALID_EMPLOYMENT_TYPES.join(", ")}`, "VALIDATION_ERROR");
+
+        if (!isOptionalUUID(b.branch_id))
+            throw new AppError(400, "branch_id must be a UUID", "VALIDATION_ERROR");
+
+        if (!isOptionalInt(b.experience_years) || (b.experience_years !== undefined && b.experience_years > 100))
+            throw new AppError(400, "experience_years must be an integer between 0 and 100", "VALIDATION_ERROR");
+
         if (!isOptionalStringArray(b.specialization))
-            throw new AppError(400, "specialization must be string[]", "VALIDATION_ERROR");
-
-        if (b.experience_years !== undefined) {
-            if (typeof b.experience_years !== "number" || !Number.isInteger(b.experience_years) || b.experience_years < 0) {
-                throw new AppError(400, "experience_years must be a non-negative integer", "VALIDATION_ERROR");
-            }
-        }
-
-        if (!isOptionalString(b.commission_type))
-            throw new AppError(400, "commission_type must be string", "VALIDATION_ERROR");
-
-        if (b.commission_value !== undefined) {
-            const ok =
-                (typeof b.commission_value === "number" && Number.isFinite(b.commission_value)) ||
-                (typeof b.commission_value === "string" && b.commission_value.trim() !== "" && !Number.isNaN(Number(b.commission_value)));
-            if (!ok) throw new AppError(400, "commission_value must be a number", "VALIDATION_ERROR");
-        }
-
-        if (!isOptionalBoolean(b.is_active)) throw new AppError(400, "is_active must be boolean", "VALIDATION_ERROR");
-        if (!isOptionalDateString(b.joined_date))
-            throw new AppError(400, "joined_date must be YYYY-MM-DD", "VALIDATION_ERROR");
+            throw new AppError(400, "specialization must be an array of strings", "VALIDATION_ERROR");
 
         return next();
     } catch (err) {
@@ -105,119 +145,276 @@ export const validateUpdateStaff = (req: Request, _res: Response, next: NextFunc
     }
 };
 
-// ------------------------------
-// STAFF SCHEDULES
-// ------------------------------
-export const validateCreateStaffSchedule = (req: Request, _res: Response, next: NextFunction) => {
+// ─── Address ──────────────────────────────────────────────────────────────────
+
+export const validateCreateStaffAddress = (
+    req: Request, _res: Response, next: NextFunction
+) => {
     try {
         const b = req.body;
-
-        if (!isUUID(b.staff_id)) throw new AppError(400, "staff_id is required (uuid)", "VALIDATION_ERROR");
-
-        if (typeof b.day_of_week !== "number" || !Number.isInteger(b.day_of_week) || b.day_of_week < 0 || b.day_of_week > 6) {
-            throw new AppError(400, "day_of_week must be integer 0-6", "VALIDATION_ERROR");
-        }
-
-        if (!isTimeString(b.start_time)) throw new AppError(400, "start_time is required (HH:MM)", "VALIDATION_ERROR");
-        if (!isTimeString(b.end_time)) throw new AppError(400, "end_time is required (HH:MM)", "VALIDATION_ERROR");
-
-        if (!isOptionalBoolean(b.is_available))
-            throw new AppError(400, "is_available must be boolean", "VALIDATION_ERROR");
-
+        if (!isNonEmptyString(b.address_name))
+            throw new AppError(400, "address_name is required and must be a non-empty string", "VALIDATION_ERROR");
+        if (!isNonEmptyString(b.address))
+            throw new AppError(400, "address is required and must be a non-empty string", "VALIDATION_ERROR");
         return next();
-    } catch (err) {
-        return next(err);
-    }
+    } catch (err) { return next(err); }
 };
 
-export const validateUpdateStaffSchedule = (req: Request, _res: Response, next: NextFunction) => {
+export const validateUpdateStaffAddress = (
+    req: Request, _res: Response, next: NextFunction
+) => {
     try {
         const b = req.body;
-
-        if (b.staff_id !== undefined && !isUUID(b.staff_id))
-            throw new AppError(400, "staff_id must be uuid", "VALIDATION_ERROR");
-
-        if (b.day_of_week !== undefined) {
-            if (typeof b.day_of_week !== "number" || !Number.isInteger(b.day_of_week) || b.day_of_week < 0 || b.day_of_week > 6) {
-                throw new AppError(400, "day_of_week must be integer 0-6", "VALIDATION_ERROR");
-            }
-        }
-
-        if (!isOptionalTimeString(b.start_time))
-            throw new AppError(400, "start_time must be HH:MM", "VALIDATION_ERROR");
-
-        if (!isOptionalTimeString(b.end_time))
-            throw new AppError(400, "end_time must be HH:MM", "VALIDATION_ERROR");
-
-        if (!isOptionalBoolean(b.is_available))
-            throw new AppError(400, "is_available must be boolean", "VALIDATION_ERROR");
-
+        if (!isOptionalString(b.address_name))
+            throw new AppError(400, "address_name must be a string", "VALIDATION_ERROR");
+        if (!isOptionalString(b.address))
+            throw new AppError(400, "address must be a string", "VALIDATION_ERROR");
         return next();
-    } catch (err) {
-        return next(err);
-    }
+    } catch (err) { return next(err); }
 };
 
-// ------------------------------
-// STAFF LEAVES
-// ------------------------------
-export const validateCreateStaffLeave = (req: Request, _res: Response, next: NextFunction) => {
+// ─── Emergency Contact ────────────────────────────────────────────────────────
+
+export const validateCreateEmergencyContact = (
+    req: Request, _res: Response, next: NextFunction
+) => {
     try {
         const b = req.body;
 
-        if (!isUUID(b.staff_id)) throw new AppError(400, "staff_id is required (uuid)", "VALIDATION_ERROR");
-        if (!isDateString(b.start_date)) throw new AppError(400, "start_date is required (YYYY-MM-DD)", "VALIDATION_ERROR");
-        if (!isDateString(b.end_date)) throw new AppError(400, "end_date is required (YYYY-MM-DD)", "VALIDATION_ERROR");
+        if (!isNonEmptyString(b.full_name))
+            throw new AppError(400, "full_name is required and must be a non-empty string", "VALIDATION_ERROR");
 
-        if (b.reason !== undefined && !isNonEmptyString(b.reason) && typeof b.reason !== "string") {
-            // allow empty string? usually no; but if they pass it, treat as string validation
-            throw new AppError(400, "reason must be string", "VALIDATION_ERROR");
-        }
+        if (!b.relationship || !(VALID_RELATIONSHIPS as string[]).includes(b.relationship))
+            throw new AppError(400, `relationship is required and must be one of: ${VALID_RELATIONSHIPS.join(", ")}`, "VALIDATION_ERROR");
 
-        if (!isOptionalString(b.leave_type)) throw new AppError(400, "leave_type must be string", "VALIDATION_ERROR");
-        if (!isOptionalString(b.status)) throw new AppError(400, "status must be string", "VALIDATION_ERROR");
+        if (!isNonEmptyString(b.phone_number))
+            throw new AppError(400, "phone_number is required and must be a non-empty string", "VALIDATION_ERROR");
 
-        // basic range validation (optional but helpful)
-        const sd = new Date(b.start_date);
-        const ed = new Date(b.end_date);
-        if (!Number.isNaN(sd.getTime()) && !Number.isNaN(ed.getTime()) && ed < sd) {
-            throw new AppError(400, "end_date cannot be before start_date", "VALIDATION_ERROR");
-        }
+        if (b.email !== undefined && (typeof b.email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(b.email)))
+            throw new AppError(400, "email must be a valid email address", "VALIDATION_ERROR");
+
+        if (!isOptionalString(b.phone_country_code))
+            throw new AppError(400, "phone_country_code must be a string", "VALIDATION_ERROR");
 
         return next();
-    } catch (err) {
-        return next(err);
-    }
+    } catch (err) { return next(err); }
 };
 
-export const validateUpdateStaffLeave = (req: Request, _res: Response, next: NextFunction) => {
+export const validateUpdateEmergencyContact = (
+    req: Request, _res: Response, next: NextFunction
+) => {
     try {
         const b = req.body;
 
-        if (b.staff_id !== undefined && !isUUID(b.staff_id))
-            throw new AppError(400, "staff_id must be uuid", "VALIDATION_ERROR");
+        if (b.full_name !== undefined && !isNonEmptyString(b.full_name))
+            throw new AppError(400, "full_name must be a non-empty string", "VALIDATION_ERROR");
 
-        if (!isOptionalDateString(b.start_date))
-            throw new AppError(400, "start_date must be YYYY-MM-DD", "VALIDATION_ERROR");
+        if (!isOptionalEnum(b.relationship, VALID_RELATIONSHIPS))
+            throw new AppError(400, `relationship must be one of: ${VALID_RELATIONSHIPS.join(", ")}`, "VALIDATION_ERROR");
 
-        if (!isOptionalDateString(b.end_date))
-            throw new AppError(400, "end_date must be YYYY-MM-DD", "VALIDATION_ERROR");
+        if (b.phone_number !== undefined && !isNonEmptyString(b.phone_number))
+            throw new AppError(400, "phone_number must be a non-empty string", "VALIDATION_ERROR");
 
-        if (!isOptionalString(b.reason)) throw new AppError(400, "reason must be string", "VALIDATION_ERROR");
-        if (!isOptionalString(b.leave_type)) throw new AppError(400, "leave_type must be string", "VALIDATION_ERROR");
-        if (!isOptionalString(b.status)) throw new AppError(400, "status must be string", "VALIDATION_ERROR");
+        if (b.email !== undefined && (typeof b.email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(b.email)))
+            throw new AppError(400, "email must be a valid email address", "VALIDATION_ERROR");
 
-        // if both provided, validate range
-        if (b.start_date && b.end_date) {
-            const sd = new Date(b.start_date);
-            const ed = new Date(b.end_date);
-            if (!Number.isNaN(sd.getTime()) && !Number.isNaN(ed.getTime()) && ed < sd) {
-                throw new AppError(400, "end_date cannot be before start_date", "VALIDATION_ERROR");
-            }
+        if (!isOptionalString(b.phone_country_code))
+            throw new AppError(400, "phone_country_code must be a string", "VALIDATION_ERROR");
+
+        return next();
+    } catch (err) { return next(err); }
+};
+
+// ─── Wages ────────────────────────────────────────────────────────────────────
+
+export const validateUpdateWageSettings = (
+    req: Request, _res: Response, next: NextFunction
+) => {
+    try {
+        const b = req.body;
+
+        if (!isOptionalBool(b.wages_enabled))
+            throw new AppError(400, "wages_enabled must be a boolean", "VALIDATION_ERROR");
+
+        if (!isOptionalEnum(b.compensation_type, VALID_COMPENSATION_TYPES))
+            throw new AppError(400, `compensation_type must be one of: ${VALID_COMPENSATION_TYPES.join(", ")}`, "VALIDATION_ERROR");
+
+        if (!isOptionalNumber(b.hourly_rate) || (b.hourly_rate != null && b.hourly_rate < 0))
+            throw new AppError(400, "hourly_rate must be a non-negative number or null", "VALIDATION_ERROR");
+
+        if (!isOptionalNumber(b.salary_amount) || (b.salary_amount != null && b.salary_amount < 0))
+            throw new AppError(400, "salary_amount must be a non-negative number or null", "VALIDATION_ERROR");
+
+        for (const f of ["location_restriction", "auto_clock_in", "auto_clock_out", "automated_breaks"] as const) {
+            if (!isOptionalEnum(b[f], VALID_TIMESHEET_AUTOMATIONS))
+                throw new AppError(400, `${f} must be one of: ${VALID_TIMESHEET_AUTOMATIONS.join(", ")}`, "VALIDATION_ERROR");
         }
 
         return next();
-    } catch (err) {
-        return next(err);
-    }
+    } catch (err) { return next(err); }
+};
+
+// ─── Commission ───────────────────────────────────────────────────────────────
+
+export const validateUpdateCommission = (
+    req: Request, _res: Response, next: NextFunction
+) => {
+    try {
+        const b = req.body;
+
+        if (!b.category || !(VALID_COMMISSION_CATEGORIES as string[]).includes(b.category))
+            throw new AppError(400, `category is required and must be one of: ${VALID_COMMISSION_CATEGORIES.join(", ")}`, "VALIDATION_ERROR");
+
+        if (!isOptionalBool(b.is_enabled))
+            throw new AppError(400, "is_enabled must be a boolean", "VALIDATION_ERROR");
+
+        if (!isOptionalEnum(b.commission_kind, VALID_COMMISSION_KINDS))
+            throw new AppError(400, `commission_kind must be one of: ${VALID_COMMISSION_KINDS.join(", ")}`, "VALIDATION_ERROR");
+
+        if (b.default_rate !== undefined && (typeof b.default_rate !== "number" || b.default_rate < 0))
+            throw new AppError(400, "default_rate must be a non-negative number", "VALIDATION_ERROR");
+
+        for (const f of ["use_default_calculation", "pass_cancellation_fee_late", "pass_cancellation_fee_noshow"] as const) {
+            if (!isOptionalBool(b[f]))
+                throw new AppError(400, `${f} must be a boolean`, "VALIDATION_ERROR");
+        }
+
+        return next();
+    } catch (err) { return next(err); }
+};
+
+// ─── Pay Runs ─────────────────────────────────────────────────────────────────
+
+export const validateUpdatePayRun = (
+    req: Request, _res: Response, next: NextFunction
+) => {
+    try {
+        const b = req.body;
+
+        if (!isOptionalBool(b.pay_runs_enabled))
+            throw new AppError(400, "pay_runs_enabled must be a boolean", "VALIDATION_ERROR");
+
+        if (!isOptionalEnum(b.payment_method, VALID_PAYMENT_METHODS))
+            throw new AppError(400, `payment_method must be one of: ${VALID_PAYMENT_METHODS.join(", ")}`, "VALIDATION_ERROR");
+
+        if (!isOptionalEnum(b.calculation_type, VALID_PAY_RUN_CALCULATIONS))
+            throw new AppError(400, `calculation_type must be one of: ${VALID_PAY_RUN_CALCULATIONS.join(", ")}`, "VALIDATION_ERROR");
+
+        for (const f of ["deduct_payment_processing_fees", "deduct_new_client_fees", "record_cash_advances"] as const) {
+            if (!isOptionalBool(b[f]))
+                throw new AppError(400, `${f} must be a boolean`, "VALIDATION_ERROR");
+        }
+
+        return next();
+    } catch (err) { return next(err); }
+};
+
+// ─── Schedules ────────────────────────────────────────────────────────────────
+
+export const validateUpsertStaffSchedules = (
+    req: Request, _res: Response, next: NextFunction
+) => {
+    try {
+        const b = req.body;
+
+        if (!Array.isArray(b.items) || b.items.length === 0 || b.items.length > 7)
+            throw new AppError(400, "items must be an array of 1 to 7 schedule entries", "VALIDATION_ERROR");
+
+        for (let i = 0; i < b.items.length; i++) {
+            const item = b.items[i];
+
+            if (typeof item.day_of_week !== "number" || !Number.isInteger(item.day_of_week) || item.day_of_week < 0 || item.day_of_week > 6)
+                throw new AppError(400, `items[${i}].day_of_week must be an integer between 0 and 6`, "VALIDATION_ERROR");
+
+            if (typeof item.is_available !== "boolean")
+                throw new AppError(400, `items[${i}].is_available is required and must be a boolean`, "VALIDATION_ERROR");
+
+            if (!isOptionalString(item.start_time))
+                throw new AppError(400, `items[${i}].start_time must be a string e.g. "10:00:00"`, "VALIDATION_ERROR");
+
+            if (!isOptionalString(item.end_time))
+                throw new AppError(400, `items[${i}].end_time must be a string e.g. "19:00:00"`, "VALIDATION_ERROR");
+
+            if (item.notes !== undefined && (typeof item.notes !== "string" || item.notes.length > 255))
+                throw new AppError(400, `items[${i}].notes must be a string max 255 chars`, "VALIDATION_ERROR");
+        }
+
+        return next();
+    } catch (err) { return next(err); }
+};
+
+// ─── Leaves ───────────────────────────────────────────────────────────────────
+
+export const validateCreateStaffLeave = (
+    req: Request, _res: Response, next: NextFunction
+) => {
+    try {
+        const b = req.body;
+
+        if (!b.start_date || !isOptionalISODate(b.start_date))
+            throw new AppError(400, "start_date is required and must be a valid date (YYYY-MM-DD)", "VALIDATION_ERROR");
+
+        if (!b.end_date || !isOptionalISODate(b.end_date))
+            throw new AppError(400, "end_date is required and must be a valid date (YYYY-MM-DD)", "VALIDATION_ERROR");
+
+        if (!isNonEmptyString(b.leave_type))
+            throw new AppError(400, "leave_type is required and must be a non-empty string", "VALIDATION_ERROR");
+
+        if (!isOptionalString(b.status))
+            throw new AppError(400, "status must be a string", "VALIDATION_ERROR");
+
+        if (b.reason !== undefined && (typeof b.reason !== "string" || b.reason.length > 255))
+            throw new AppError(400, "reason must be a string max 255 chars", "VALIDATION_ERROR");
+
+        return next();
+    } catch (err) { return next(err); }
+};
+
+export const validateUpdateStaffLeave = (
+    req: Request, _res: Response, next: NextFunction
+) => {
+    try {
+        const b = req.body;
+
+        if (b.start_date !== undefined && !isOptionalISODate(b.start_date))
+            throw new AppError(400, "start_date must be a valid date (YYYY-MM-DD)", "VALIDATION_ERROR");
+
+        if (b.end_date !== undefined && !isOptionalISODate(b.end_date))
+            throw new AppError(400, "end_date must be a valid date (YYYY-MM-DD)", "VALIDATION_ERROR");
+
+        if (!isOptionalString(b.leave_type))
+            throw new AppError(400, "leave_type must be a string", "VALIDATION_ERROR");
+
+        if (!isOptionalString(b.status))
+            throw new AppError(400, "status must be a string", "VALIDATION_ERROR");
+
+        if (b.reason !== undefined && (typeof b.reason !== "string" || b.reason.length > 255))
+            throw new AppError(400, "reason must be a string max 255 chars", "VALIDATION_ERROR");
+
+        return next();
+    } catch (err) { return next(err); }
+};
+
+// ─── Accept Invitation ────────────────────────────────────────────────────────
+
+export const validateAcceptInvitation = (
+    req: Request, _res: Response, next: NextFunction
+) => {
+    try {
+        const b = req.body;
+
+        if (!isNonEmptyString(b.token))
+            throw new AppError(400, "token is required", "VALIDATION_ERROR");
+
+        if (!isNonEmptyString(b.first_name))
+            throw new AppError(400, "first_name is required and must be a non-empty string", "VALIDATION_ERROR");
+
+        if (typeof b.password !== "string" || b.password.length < 8)
+            throw new AppError(400, "password is required and must be at least 8 characters", "VALIDATION_ERROR");
+
+        if (!isOptionalString(b.last_name))
+            throw new AppError(400, "last_name must be a string", "VALIDATION_ERROR");
+
+        return next();
+    } catch (err) { return next(err); }
 };

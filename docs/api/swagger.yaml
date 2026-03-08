@@ -1,0 +1,2290 @@
+openapi: 3.0.3
+
+info:
+  title: Salon Management API
+  version: 1.0.0
+  description: Combined API documentation for Salon Management System (Auth, Branches, Categories, Salons, Staff)
+
+servers:
+  - url: http://localhost:3000/api/v1
+    description: Local Development Server
+
+tags:
+  - name: Auth
+    description: Authentication operations
+  - name: Salons
+    description: Salon management
+  - name: Branches
+    description: Branch management, timings and holidays
+  - name: Categories
+    description: Manage service categories for salon
+  - name: Staff
+    description: Staff management, schedules, leaves, and attendance
+  - name: Users
+    description: User profile and admin user management
+
+paths:
+  # ===================== AUTH =====================
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Register new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: User registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Login user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Login success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Refresh access token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshRequest"
+      responses:
+        "200":
+          description: New access token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RefreshResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Logout user
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /auth/send-email-otp:
+    post:
+      tags: [Auth]
+      summary: Send Email OTP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendEmailOtpRequest"
+      responses:
+        "200":
+          description: OTP sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /auth/verify-email-otp:
+    post:
+      tags: [Auth]
+      summary: Verify Email OTP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VerifyEmailOtpRequest"
+      responses:
+        "200":
+          description: Email verified
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /auth/send-phone-otp-exotel:
+    post:
+      tags: [Auth]
+      summary: Send Phone OTP via Exotel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendPhoneOtpExotelRequest"
+      responses:
+        "200":
+          description: OTP sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /auth/verify-phone-otp-exotel:
+    post:
+      tags: [Auth]
+      summary: Verify Phone OTP via Exotel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VerifyPhoneOtpExotelRequest"
+      responses:
+        "200":
+          description: Phone verified
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /auth/google/start:
+    get:
+      tags: [Auth]
+      summary: Start Google OAuth
+      responses:
+        "302":
+          description: Redirect to Google OAuth
+
+  /auth/google/callback:
+    get:
+      tags: [Auth]
+      summary: Google OAuth Callback
+      responses:
+        "200":
+          description: OAuth completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+
+  # ===================== SALONS =====================
+  /salons:
+    post:
+      tags: [Salons]
+      summary: Create salon
+      description: Only salon_owner or admin can create a salon.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSalonRequest"
+      responses:
+        "201":
+          description: Salon created successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessSalonResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    get:
+      tags: [Salons]
+      summary: List all salons (admin)
+      description: Only admin can list all salons.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Salons list fetched successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessSalonListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /salons/me:
+    get:
+      tags: [Salons]
+      summary: Get my salon
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Salon fetched successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessSalonResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /salons/{id}:
+    get:
+      tags: [Salons]
+      summary: Get salon by id
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/SalonIdParam"
+      responses:
+        "200":
+          description: Salon fetched successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessSalonResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    patch:
+      tags: [Salons]
+      summary: Update salon by id (owner/admin)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/SalonIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSalonRequest"
+      responses:
+        "200":
+          description: Salon updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessSalonResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ===================== BRANCHES =====================
+  /branches:
+    post:
+      tags: [Branches]
+      summary: Create a new branch
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBranchRequest"
+      responses:
+        "201":
+          description: Branch created successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Branch"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /branches/by-salon/{salonId}:
+    get:
+      tags: [Branches]
+      summary: List branches by salonId
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/SalonIdParamBySalon"
+      responses:
+        "200":
+          description: Branch list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Branch"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /branches/{id}:
+    get:
+      tags: [Branches]
+      summary: Get branch by id
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/BranchIdParam"
+      responses:
+        "200":
+          description: Branch details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Branch"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    patch:
+      tags: [Branches]
+      summary: Update branch by id (partial update)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/BranchIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateBranchRequest"
+      responses:
+        "200":
+          description: Branch updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Branch"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /branches/{id}/timings:
+    post:
+      tags: [Branches]
+      summary: Set timings (upsert by day_of_week)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/BranchIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TimingUpsertRequest"
+      responses:
+        "200":
+          description: Timings saved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BranchTimingListResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    get:
+      tags: [Branches]
+      summary: Get branch timings
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/BranchIdParam"
+      responses:
+        "200":
+          description: Timings list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BranchTimingListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    put:
+      tags: [Branches]
+      summary: Replace full week timings
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/BranchIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TimingReplaceRequest"
+      responses:
+        "200":
+          description: Timings replaced successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BranchTimingListResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /branches/{id}/holidays:
+    post:
+      tags: [Branches]
+      summary: Create a holiday for a branch
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/BranchIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHolidayRequest"
+      responses:
+        "201":
+          description: Holiday created successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BranchHoliday"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    get:
+      tags: [Branches]
+      summary: List holidays for a branch (optional date range)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/BranchIdParam"
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+          example: "2026-01-01"
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+          example: "2026-12-31"
+      responses:
+        "200":
+          description: Holiday list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BranchHoliday"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /branches/holidays/{holidayId}:
+    delete:
+      tags: [Branches]
+      summary: Delete holiday by holidayId
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/HolidayIdParam"
+      responses:
+        "200":
+          description: Holiday deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteHolidayResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ===================== CATEGORIES =====================
+  /categories:
+    post:
+      tags: [Categories]
+      summary: Create category
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCategoryRequest"
+      responses:
+        "201":
+          description: Category created successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessSingleCategoryResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+    get:
+      tags: [Categories]
+      summary: List categories for my salon
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Categories fetched successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessCategoryListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /categories/{id}:
+    get:
+      tags: [Categories]
+      summary: Get category by id
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/CategoryIdParam"
+      responses:
+        "200":
+          description: Category fetched successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessSingleCategoryResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    patch:
+      tags: [Categories]
+      summary: Update category (partial)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/CategoryIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCategoryRequest"
+      responses:
+        "200":
+          description: Category updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessSingleCategoryResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    delete:
+      tags: [Categories]
+      summary: Delete category
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/CategoryIdParam"
+      responses:
+        "200":
+          description: Category deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDeleteResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ===================== STAFF =====================
+  /staff:
+    post:
+      tags: [Staff]
+      summary: Create staff
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateStaffRequest"
+      responses:
+        "201":
+          description: Staff created successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessStaffResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+    get:
+      tags: [Staff]
+      summary: List staff by salon
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: salon_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: inactive
+          in: query
+          required: false
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: Staff list fetched successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessStaffListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /staff/{id}:
+    get:
+      tags: [Staff]
+      summary: Get staff by id
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/StaffIdParam"
+      responses:
+        "200":
+          description: Staff fetched successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessStaffResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    patch:
+      tags: [Staff]
+      summary: Update staff
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/StaffIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateStaffRequest"
+      responses:
+        "200":
+          description: Staff updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessStaffResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    delete:
+      tags: [Staff]
+      summary: Delete staff
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/StaffIdParam"
+      responses:
+        "200":
+          description: Staff deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDeleteResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ===================== STAFF SCHEDULES =====================
+  /staff/{id}/schedules:
+    get:
+      tags: [Staff]
+      summary: Get staff schedules
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/StaffIdParam"
+      responses:
+        "200":
+          description: Schedules fetched successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessStaffScheduleListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+    post:
+      tags: [Staff]
+      summary: Create or update schedule
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/StaffIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpsertStaffScheduleRequest"
+      responses:
+        "201":
+          description: Schedule saved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessStaffScheduleResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ===================== STAFF LEAVES =====================
+  /staff/{id}/leaves:
+    get:
+      tags: [Staff]
+      summary: Get staff leaves
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/StaffIdParam"
+      responses:
+        "200":
+          description: Leaves fetched successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessStaffLeaveListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+    post:
+      tags: [Staff]
+      summary: Create leave
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/StaffIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateStaffLeaveRequest"
+      responses:
+        "201":
+          description: Leave created successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessStaffLeaveResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /staff/leaves/{leaveId}:
+    patch:
+      tags: [Staff]
+      summary: Update leave
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/LeaveIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateStaffLeaveRequest"
+      responses:
+        "200":
+          description: Leave updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessStaffLeaveResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    delete:
+      tags: [Staff]
+      summary: Delete leave
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/LeaveIdParam"
+      responses:
+        "200":
+          description: Leave deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDeleteResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ===================== STAFF ATTENDANCE =====================
+  /staff/{id}/attendance:
+    get:
+      tags: [Staff]
+      summary: Get staff attendance
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/StaffIdParam"
+      responses:
+        "200":
+          description: Attendance fetched successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessStaffAttendanceListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /staff/{id}/attendance/upload:
+    post:
+      tags: [Staff]
+      summary: Upload attendance CSV
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/StaffIdParam"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "200":
+          description: Attendance uploaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ===================== USERS (ADDED AT END) =====================
+  /users/me:
+    get:
+      tags: [Users]
+      summary: Get my profile
+      description: Returns the logged-in user's profile.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: User profile fetched successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessUserResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /users:
+    get:
+      tags: [Users]
+      summary: List all users (admin)
+      description: Admin-only endpoint to list all users.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Users fetched successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessUserListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /users/{id}:
+    get:
+      tags: [Users]
+      summary: Get user by id (admin or salon_owner)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/UserIdParam"
+      responses:
+        "200":
+          description: User fetched successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessUserResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    patch:
+      tags: [Users]
+      summary: Update user (partial)
+      description: Updates user fields. (Controller passes req.body to service.update)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/UserIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUserRequest"
+      responses:
+        "200":
+          description: User updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessUserResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    delete:
+      tags: [Users]
+      summary: Delete user (admin)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/UserIdParam"
+      responses:
+        "200":
+          description: User deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessDeleteUserResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /users/{id}/role:
+    patch:
+      tags: [Users]
+      summary: Update user role (admin)
+      description: Admin-only. Updates ONLY the role field.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/UserIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRoleRequest"
+            examples:
+              makeAdmin:
+                summary: Make admin
+                value:
+                  role: admin
+              makeSalonOwner:
+                summary: Make salon owner
+                value:
+                  role: salon_owner
+      responses:
+        "200":
+          description: User role updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessUserResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    BranchIdParam:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    SalonIdParamBySalon:
+      name: salonId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    HolidayIdParam:
+      name: holidayId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    CategoryIdParam:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    SalonIdParam:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    StaffIdParam:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    LeaveIdParam:
+      name: leaveId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    UserIdParam:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    BadRequest:
+      description: Validation error / Bad request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+    Unauthorized:
+      description: Missing/invalid access token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+    Forbidden:
+      description: Not allowed (role not permitted)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: "Validation error"
+        code:
+          type: string
+          example: "VALIDATION_ERROR"
+
+    MessageResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: "OK"
+
+    # -------- AUTH --------
+    RegisterRequest:
+      type: object
+      required: [email, password, fullName, terms]
+      properties:
+        email:
+          type: string
+          format: email
+          example: test@gmail.com
+        password:
+          type: string
+          example: "Password@123"
+        fullName:
+          type: string
+          example: "John Doe"
+        phone:
+          type: string
+          nullable: true
+        businessName:
+          type: string
+          nullable: true
+        address:
+          type: string
+          nullable: true
+        country:
+          type: string
+          nullable: true
+        countryCode:
+          type: string
+          nullable: true
+        terms:
+          type: boolean
+          example: true
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+
+    RefreshRequest:
+      type: object
+      required: [refreshToken]
+      properties:
+        refreshToken:
+          type: string
+
+    RefreshResponse:
+      type: object
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+
+    SendEmailOtpRequest:
+      type: object
+      required: [email]
+      properties:
+        email:
+          type: string
+          format: email
+
+    VerifyEmailOtpRequest:
+      type: object
+      required: [email, otp]
+      properties:
+        email:
+          type: string
+          format: email
+        otp:
+          type: string
+
+    SendPhoneOtpExotelRequest:
+      type: object
+      required: [email, phone]
+      properties:
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+
+    VerifyPhoneOtpExotelRequest:
+      type: object
+      required: [email, otp]
+      properties:
+        email:
+          type: string
+          format: email
+        otp:
+          type: string
+
+    AuthResponse:
+      type: object
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        user:
+          $ref: "#/components/schemas/User"
+
+    # Unified user schema (used by Auth + Users)
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+          nullable: true
+        full_name:
+          type: string
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        role:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+        updated_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    # -------- SALONS --------
+    SuccessSalonResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: "Salon fetched successfully"
+        data:
+          $ref: "#/components/schemas/Salon"
+
+    SuccessSalonListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: "Salons list fetched successfully"
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Salon"
+
+    Salon:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        owner_id:
+          type: string
+          format: uuid
+        business_name:
+          type: string
+        business_type:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        logo_url:
+          type: string
+          nullable: true
+        banner_url:
+          type: string
+          nullable: true
+        email:
+          type: string
+          format: email
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        website_url:
+          type: string
+          nullable: true
+        gst_number:
+          type: string
+          nullable: true
+        pan_number:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateSalonRequest:
+      type: object
+      required: [business_name]
+      properties:
+        business_name:
+          type: string
+        business_type:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        logo_url:
+          type: string
+          nullable: true
+        banner_url:
+          type: string
+          nullable: true
+        email:
+          type: string
+          format: email
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        website_url:
+          type: string
+          nullable: true
+        gst_number:
+          type: string
+          nullable: true
+        pan_number:
+          type: string
+          nullable: true
+
+    UpdateSalonRequest:
+      type: object
+      description: Partial update
+      properties:
+        business_name:
+          type: string
+        business_type:
+          type: string
+          nullable: true
+        slug:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        logo_url:
+          type: string
+          nullable: true
+        banner_url:
+          type: string
+          nullable: true
+        email:
+          type: string
+          format: email
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        website_url:
+          type: string
+          nullable: true
+        gst_number:
+          type: string
+          nullable: true
+        pan_number:
+          type: string
+          nullable: true
+
+    # -------- BRANCHES --------
+    Branch:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        salon_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        address_line1:
+          type: string
+        address_line2:
+          type: string
+          nullable: true
+        city:
+          type: string
+        state:
+          type: string
+        pincode:
+          type: string
+        country:
+          type: string
+        latitude:
+          type: number
+          nullable: true
+        longitude:
+          type: number
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        email:
+          type: string
+          format: email
+          nullable: true
+        is_main:
+          type: boolean
+        opening_time:
+          type: string
+          nullable: true
+        closing_time:
+          type: string
+          nullable: true
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateBranchRequest:
+      type: object
+      required: [name, address_line1, city, state, pincode]
+      properties:
+        name:
+          type: string
+        address_line1:
+          type: string
+        address_line2:
+          type: string
+          nullable: true
+        city:
+          type: string
+        state:
+          type: string
+        pincode:
+          type: string
+        country:
+          type: string
+          nullable: true
+        latitude:
+          type: number
+          nullable: true
+        longitude:
+          type: number
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        email:
+          type: string
+          format: email
+          nullable: true
+        is_main:
+          type: boolean
+          nullable: true
+        opening_time:
+          type: string
+          nullable: true
+        closing_time:
+          type: string
+          nullable: true
+        is_active:
+          type: boolean
+          nullable: true
+
+    UpdateBranchRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        address_line1:
+          type: string
+        address_line2:
+          type: string
+          nullable: true
+        city:
+          type: string
+        state:
+          type: string
+        pincode:
+          type: string
+        country:
+          type: string
+        latitude:
+          type: number
+          nullable: true
+        longitude:
+          type: number
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        email:
+          type: string
+          format: email
+          nullable: true
+        is_main:
+          type: boolean
+        opening_time:
+          type: string
+          nullable: true
+        closing_time:
+          type: string
+          nullable: true
+        is_active:
+          type: boolean
+
+    TimingDayInput:
+      type: object
+      required: [day_of_week]
+      properties:
+        day_of_week:
+          type: integer
+          minimum: 0
+          maximum: 6
+        opening_time:
+          type: string
+          nullable: true
+        closing_time:
+          type: string
+          nullable: true
+        is_closed:
+          type: boolean
+          example: false
+
+    TimingUpsertRequest:
+      type: object
+      required: [days]
+      properties:
+        days:
+          type: array
+          items:
+            $ref: "#/components/schemas/TimingDayInput"
+
+    TimingReplaceRequest:
+      type: object
+      required: [days]
+      properties:
+        days:
+          type: array
+          items:
+            $ref: "#/components/schemas/TimingDayInput"
+
+    BranchTiming:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        branch_id:
+          type: string
+          format: uuid
+        day_of_week:
+          type: integer
+        opening_time:
+          type: string
+          nullable: true
+        closing_time:
+          type: string
+          nullable: true
+        is_closed:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    BranchTimingListResponse:
+      type: object
+      properties:
+        timings:
+          type: array
+          items:
+            $ref: "#/components/schemas/BranchTiming"
+
+    BranchHoliday:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        branch_id:
+          type: string
+          format: uuid
+        holiday_date:
+          type: string
+          format: date
+        reason:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    CreateHolidayRequest:
+      type: object
+      required: [holiday_date]
+      properties:
+        holiday_date:
+          type: string
+          format: date
+        reason:
+          type: string
+          nullable: true
+
+    DeleteHolidayResponse:
+      type: object
+      properties:
+        message:
+          type: string
+
+    # -------- CATEGORIES --------
+    ServiceCategory:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        salon_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        display_order:
+          type: integer
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    SuccessSingleCategoryResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        data:
+          $ref: "#/components/schemas/ServiceCategory"
+
+    SuccessCategoryListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/ServiceCategory"
+
+    SuccessDeleteResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        data:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+
+    CreateCategoryRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        display_order:
+          type: number
+        is_active:
+          type: boolean
+
+    UpdateCategoryRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        display_order:
+          type: number
+        is_active:
+          type: boolean
+
+    # -------- STAFF --------
+    Staff:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        salon_id:
+          type: string
+          format: uuid
+        branch_id:
+          type: string
+          format: uuid
+          nullable: true
+        designation:
+          type: string
+          nullable: true
+        specialization:
+          type: array
+          items:
+            type: string
+        experience_years:
+          type: integer
+          nullable: true
+        commission_type:
+          type: string
+          nullable: true
+        commission_value:
+          type: number
+          nullable: true
+        is_active:
+          type: boolean
+        joined_date:
+          type: string
+          format: date
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateStaffRequest:
+      type: object
+      required: [user_id, salon_id]
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        salon_id:
+          type: string
+          format: uuid
+        branch_id:
+          type: string
+          format: uuid
+        designation:
+          type: string
+        specialization:
+          type: array
+          items:
+            type: string
+        experience_years:
+          type: integer
+        commission_type:
+          type: string
+        commission_value:
+          type: number
+        is_active:
+          type: boolean
+        joined_date:
+          type: string
+          format: date
+
+    UpdateStaffRequest:
+      type: object
+      description: Partial update
+      properties:
+        branch_id:
+          type: string
+          format: uuid
+        designation:
+          type: string
+        specialization:
+          type: array
+          items:
+            type: string
+        experience_years:
+          type: integer
+        commission_type:
+          type: string
+        commission_value:
+          type: number
+        is_active:
+          type: boolean
+        joined_date:
+          type: string
+          format: date
+
+    SuccessStaffResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: "OK"
+        data:
+          $ref: "#/components/schemas/Staff"
+
+    SuccessStaffListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: "OK"
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Staff"
+
+    StaffSchedule:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        staff_id:
+          type: string
+          format: uuid
+        day_of_week:
+          type: integer
+          minimum: 0
+          maximum: 6
+        start_time:
+          type: string
+          example: "10:00"
+        end_time:
+          type: string
+          example: "19:00"
+        is_available:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    UpsertStaffScheduleRequest:
+      type: object
+      required: [day_of_week, start_time, end_time]
+      properties:
+        day_of_week:
+          type: integer
+          minimum: 0
+          maximum: 6
+        start_time:
+          type: string
+          example: "10:00"
+        end_time:
+          type: string
+          example: "19:00"
+        is_available:
+          type: boolean
+
+    SuccessStaffScheduleResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: "OK"
+        data:
+          $ref: "#/components/schemas/StaffSchedule"
+
+    SuccessStaffScheduleListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: "OK"
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/StaffSchedule"
+
+    StaffLeave:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        staff_id:
+          type: string
+          format: uuid
+        start_date:
+          type: string
+          format: date
+        end_date:
+          type: string
+          format: date
+        reason:
+          type: string
+          nullable: true
+        leave_type:
+          type: string
+          nullable: true
+        status:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    CreateStaffLeaveRequest:
+      type: object
+      required: [start_date, end_date]
+      properties:
+        start_date:
+          type: string
+          format: date
+        end_date:
+          type: string
+          format: date
+        reason:
+          type: string
+        leave_type:
+          type: string
+        status:
+          type: string
+
+    UpdateStaffLeaveRequest:
+      type: object
+      description: Partial update
+      properties:
+        start_date:
+          type: string
+          format: date
+        end_date:
+          type: string
+          format: date
+        reason:
+          type: string
+        leave_type:
+          type: string
+        status:
+          type: string
+
+    SuccessStaffLeaveResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: "OK"
+        data:
+          $ref: "#/components/schemas/StaffLeave"
+
+    SuccessStaffLeaveListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: "OK"
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/StaffLeave"
+
+    StaffAttendance:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        staff_id:
+          type: string
+          format: uuid
+        attendance_date:
+          type: string
+          format: date
+        check_in:
+          type: string
+          nullable: true
+        check_out:
+          type: string
+          nullable: true
+        status:
+          type: string
+          nullable: true
+
+    SuccessStaffAttendanceListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: "OK"
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/StaffAttendance"
+
+    # -------- USERS WRAPPERS + REQUESTS --------
+    SuccessUserResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: "User fetched successfully"
+        data:
+          $ref: "#/components/schemas/User"
+
+    SuccessUserListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: "Users fetched successfully"
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/User"
+
+    DeleteResult:
+      type: object
+      properties:
+        deleted:
+          type: boolean
+          example: true
+
+    SuccessDeleteUserResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: "User deleted successfully"
+        data:
+          $ref: "#/components/schemas/DeleteResult"
+
+    UpdateRoleRequest:
+      type: object
+      required: [role]
+      properties:
+        role:
+          type: string
+          description: New role value
+          example: admin
+
+    UpdateUserRequest:
+      type: object
+      description: Partial user update payload (fields depend on your users table)
+      additionalProperties: true
+      example:
+        full_name: "John Doe"
+        phone: "+919999999999"
