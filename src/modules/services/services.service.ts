@@ -1,126 +1,214 @@
 import logger from "../../config/logger";
-import pool from "../../config/database";
 import { AppError } from "../../middleware/error.middleware";
-import { servicesRepository } from "./services.repository";
-import { CreateCategoryBody, CreateServiceBody, UpdateCategoryBody, UpdateServiceBody } from "./services.types";
-
-async function assertSalonOwnerOrAdmin(params: {
-  salonId: string;
-  requesterUserId: string;
-  requesterRole?: string;
-}) {
-  if (params.requesterRole === "admin") return;
-
-  const { rows } = await pool.query(`SELECT owner_id FROM salons WHERE id = $1`, [params.salonId]);
-  const salon = rows[0];
-
-  if (!salon) throw new AppError(404, "Salon not found", "NOT_FOUND");
-  if (salon.owner_id !== params.requesterUserId) throw new AppError(403, "Forbidden", "FORBIDDEN");
-}
+import { bundlesRepository, servicesRepository } from "./services.repository";
+import {
+  BundleDetail,
+  BundleListResponse,
+  CreateAddOnGroupBody,
+  CreateAddOnOptionBody,
+  CreateBundleBody,
+  CreateServiceBody,
+  ListBundlesQuery,
+  ListServicesQuery,
+  Service,
+  ServiceDetail,
+  ServiceListResponse,
+  UpdateAddOnGroupBody,
+  UpdateAddOnOptionBody,
+  UpdateBundleBody,
+  UpdateServiceBody,
+} from "./services.types";
 
 export const servicesService = {
-  // Categories
-  async createCategory(salonId: string, requester: { userId: string; role?: string }, body: CreateCategoryBody) {
-    logger.info("servicesService.createCategory", { salonId, userId: requester.userId });
-    await assertSalonOwnerOrAdmin({ salonId, requesterUserId: requester.userId, requesterRole: requester.role });
-    return servicesRepository.createCategory(salonId, body);
+  async list(query: ListServicesQuery): Promise<ServiceListResponse> {
+    return servicesRepository.list(query);
   },
 
-  async listCategories(salonId: string) {
-    return servicesRepository.listCategories(salonId);
-  },
-
-  async updateCategory(categoryId: string, requester: { userId: string; role?: string }, patch: UpdateCategoryBody) {
-    const cat = await servicesRepository.findCategoryById(categoryId);
-    if (!cat) throw new AppError(404, "Category not found", "NOT_FOUND");
-
-    await assertSalonOwnerOrAdmin({ salonId: cat.salon_id, requesterUserId: requester.userId, requesterRole: requester.role });
-    return servicesRepository.updateCategory(categoryId, patch);
-  },
-
-  async deleteCategory(categoryId: string, requester: { userId: string; role?: string }) {
-    const cat = await servicesRepository.findCategoryById(categoryId);
-    if (!cat) throw new AppError(404, "Category not found", "NOT_FOUND");
-
-    await assertSalonOwnerOrAdmin({ salonId: cat.salon_id, requesterUserId: requester.userId, requesterRole: requester.role });
-    return servicesRepository.deleteCategory(categoryId);
-  },
-
-  // Services
-  async createService(salonId: string, requester: { userId: string; role?: string }, body: CreateServiceBody) {
-    await assertSalonOwnerOrAdmin({ salonId, requesterUserId: requester.userId, requesterRole: requester.role });
-
-    if (body.category_id) {
-      const cat = await servicesRepository.findCategoryById(body.category_id);
-      if (!cat || cat.salon_id !== salonId) {
-        throw new AppError(400, "Invalid category_id for this salon", "VALIDATION_ERROR");
-      }
+  async create(params: {
+    requesterUserId: string;
+    requesterRole?: string;
+    body: CreateServiceBody;
+  }): Promise<Service> {
+    const { requesterUserId, requesterRole, body } = params;
+    logger.info("servicesService.create", { requesterUserId, requesterRole });
+    const created = await servicesRepository.create(body);
+    if (body.staff_ids?.length) {
+      await servicesRepository.replaceStaff(created.id, body.staff_ids);
     }
-
-    return servicesRepository.createService(salonId, body);
+    logger.info("servicesService.create success", { serviceId: created.id });
+    return created;
   },
 
-  async listServices(salonId: string, categoryId?: string) {
-    return servicesRepository.listServices(salonId, categoryId);
+  async getById(serviceId: string): Promise<ServiceDetail> {
+    const detail = await servicesRepository.getDetailById(serviceId);
+    if (!detail) throw new AppError(404, "Service not found", "NOT_FOUND");
+    return detail;
   },
 
-  async getServiceById(id: string) {
-    const svc = await servicesRepository.findServiceById(id);
-    if (!svc) throw new AppError(404, "Service not found", "NOT_FOUND");
-    return svc;
-  },
-
-  async updateService(serviceId: string, requester: { userId: string; role?: string }, patch: UpdateServiceBody) {
-    const svc = await servicesRepository.findServiceById(serviceId);
-    if (!svc) throw new AppError(404, "Service not found", "NOT_FOUND");
-
-    await assertSalonOwnerOrAdmin({ salonId: svc.salon_id, requesterUserId: requester.userId, requesterRole: requester.role });
-
-    if (patch.category_id) {
-      const cat = await servicesRepository.findCategoryById(patch.category_id);
-      if (!cat || cat.salon_id !== svc.salon_id) {
-        throw new AppError(400, "Invalid category_id for this salon", "VALIDATION_ERROR");
-      }
+  async update(params: {
+    serviceId: string;
+    requesterUserId: string;
+    requesterRole?: string;
+    patch: UpdateServiceBody;
+  }): Promise<Service> {
+    const { serviceId, requesterUserId, requesterRole, patch } = params;
+    logger.info("servicesService.update", { serviceId, requesterUserId, requesterRole });
+    const existing = await servicesRepository.findById(serviceId);
+    if (!existing) throw new AppError(404, "Service not found", "NOT_FOUND");
+    const staffIds =
+      patch.staff_ids ??
+      ((patch as Record<string, unknown>).team_member_ids as string[] | undefined);
+    const updated = await servicesRepository.update(serviceId, patch);
+    if (staffIds !== undefined) {
+      await servicesRepository.replaceStaff(serviceId, staffIds);
     }
-
-    return servicesRepository.updateService(serviceId, patch);
+    logger.info("servicesService.update success", { serviceId });
+    return updated;
   },
 
-  async deleteService(serviceId: string, requester: { userId: string; role?: string }) {
-    const svc = await servicesRepository.findServiceById(serviceId);
-    if (!svc) throw new AppError(404, "Service not found", "NOT_FOUND");
-
-    await assertSalonOwnerOrAdmin({ salonId: svc.salon_id, requesterUserId: requester.userId, requesterRole: requester.role });
-    return servicesRepository.deleteService(serviceId);
+  async remove(serviceId: string): Promise<void> {
+    const existing = await servicesRepository.findById(serviceId);
+    if (!existing) throw new AppError(404, "Service not found", "NOT_FOUND");
+    await servicesRepository.delete(serviceId);
   },
 
-  // Staff mapping
-  async assignStaffService(staffId: string, serviceId: string, requester: { userId: string; role?: string }) {
-    const svc = await servicesRepository.findServiceById(serviceId);
-    if (!svc) throw new AppError(404, "Service not found", "NOT_FOUND");
-
-    await assertSalonOwnerOrAdmin({ salonId: svc.salon_id, requesterUserId: requester.userId, requesterRole: requester.role });
-
-    const assigned = await servicesRepository.assignStaffToService(staffId, serviceId);
-    if (!assigned) throw new AppError(409, "Staff already assigned to this service", "CONFLICT");
-
-    return assigned;
+  async listAddOnGroups(serviceId: string) {
+    const existing = await servicesRepository.findById(serviceId);
+    if (!existing) throw new AppError(404, "Service not found", "NOT_FOUND");
+    return servicesRepository.listAddOnGroupsWithOptions(serviceId);
   },
 
-  async unassignStaffService(staffId: string, serviceId: string, requester: { userId: string; role?: string }) {
-    const svc = await servicesRepository.findServiceById(serviceId);
-    if (!svc) throw new AppError(404, "Service not found", "NOT_FOUND");
-
-    await assertSalonOwnerOrAdmin({ salonId: svc.salon_id, requesterUserId: requester.userId, requesterRole: requester.role });
-    return servicesRepository.unassignStaffFromService(staffId, serviceId);
+  async createAddOnGroup(params: {
+    serviceId: string;
+    requesterUserId: string;
+    requesterRole?: string;
+    body: CreateAddOnGroupBody;
+  }) {
+    const existing = await servicesRepository.findById(params.serviceId);
+    if (!existing) throw new AppError(404, "Service not found", "NOT_FOUND");
+    return servicesRepository.createAddOnGroup(params.serviceId, params.body);
   },
 
-  async listStaffServices(staffId: string, requester: { userId: string; role?: string }) {
-    const isAdmin = requester.role === "admin";
-    const isSelf = staffId === requester.userId;
+  async updateAddOnGroup(params: {
+    serviceId: string;
+    groupId: string;
+    requesterUserId: string;
+    requesterRole?: string;
+    patch: UpdateAddOnGroupBody;
+  }) {
+    const existing = await servicesRepository.findById(params.serviceId);
+    if (!existing) throw new AppError(404, "Service not found", "NOT_FOUND");
+    const groups = await servicesRepository.listAddOnGroupsWithOptions(params.serviceId);
+    if (!groups.some((g) => g.id === params.groupId))
+      throw new AppError(404, "Add-on group not found for this service", "NOT_FOUND");
+    return servicesRepository.updateAddOnGroup(params.groupId, params.patch);
+  },
 
-    if (!isAdmin && !isSelf) throw new AppError(403, "Forbidden", "FORBIDDEN");
+  async deleteAddOnGroup(params: { serviceId: string; groupId: string }) {
+    const existing = await servicesRepository.findById(params.serviceId);
+    if (!existing) throw new AppError(404, "Service not found", "NOT_FOUND");
+    const groups = await servicesRepository.listAddOnGroupsWithOptions(params.serviceId);
+    if (!groups.some((g) => g.id === params.groupId))
+      throw new AppError(404, "Add-on group not found for this service", "NOT_FOUND");
+    await servicesRepository.deleteAddOnGroup(params.groupId);
+  },
 
-    return servicesRepository.listStaffServices(staffId);
+  async createAddOnOption(params: {
+    serviceId: string;
+    groupId: string;
+    requesterUserId: string;
+    requesterRole?: string;
+    body: CreateAddOnOptionBody;
+  }) {
+    const existing = await servicesRepository.findById(params.serviceId);
+    if (!existing) throw new AppError(404, "Service not found", "NOT_FOUND");
+    const groups = await servicesRepository.listAddOnGroupsWithOptions(params.serviceId);
+    if (!groups.some((g) => g.id === params.groupId))
+      throw new AppError(404, "Add-on group not found for this service", "NOT_FOUND");
+    return servicesRepository.createAddOnOption(params.groupId, params.body);
+  },
+
+  async updateAddOnOption(params: {
+    serviceId: string;
+    groupId: string;
+    optionId: string;
+    requesterUserId: string;
+    requesterRole?: string;
+    patch: UpdateAddOnOptionBody;
+  }) {
+    const existing = await servicesRepository.findById(params.serviceId);
+    if (!existing) throw new AppError(404, "Service not found", "NOT_FOUND");
+    const groups = await servicesRepository.listAddOnGroupsWithOptions(params.serviceId);
+    const group = groups.find((g) => g.id === params.groupId);
+    if (!group) throw new AppError(404, "Add-on group not found for this service", "NOT_FOUND");
+    if (!group.options.some((o) => o.id === params.optionId))
+      throw new AppError(404, "Add-on option not found for this group", "NOT_FOUND");
+    return servicesRepository.updateAddOnOption(params.optionId, params.patch);
+  },
+
+  async deleteAddOnOption(params: {
+    serviceId: string;
+    groupId: string;
+    optionId: string;
+  }) {
+    const existing = await servicesRepository.findById(params.serviceId);
+    if (!existing) throw new AppError(404, "Service not found", "NOT_FOUND");
+    const groups = await servicesRepository.listAddOnGroupsWithOptions(params.serviceId);
+    const group = groups.find((g) => g.id === params.groupId);
+    if (!group) throw new AppError(404, "Add-on group not found for this service", "NOT_FOUND");
+    if (!group.options.some((o) => o.id === params.optionId))
+      throw new AppError(404, "Add-on option not found for this group", "NOT_FOUND");
+    await servicesRepository.deleteAddOnOption(params.optionId);
+  },
+};
+
+export const bundlesService = {
+  async list(query: ListBundlesQuery): Promise<BundleListResponse> {
+    return bundlesRepository.list(query);
+  },
+
+  async create(params: {
+    requesterUserId: string;
+    requesterRole?: string;
+    body: CreateBundleBody;
+  }): Promise<BundleDetail> {
+    const { requesterUserId, requesterRole, body } = params;
+    logger.info("bundlesService.create", { requesterUserId, requesterRole });
+    const created = await bundlesRepository.create(body);
+    if (body.service_ids?.length) {
+      await bundlesRepository.replaceServices(created.id, body.service_ids);
+    }
+    logger.info("bundlesService.create success", { bundleId: created.id });
+    return bundlesRepository.getDetailById(created.id) as Promise<BundleDetail>;
+  },
+
+  async getById(bundleId: string): Promise<BundleDetail> {
+    const detail = await bundlesRepository.getDetailById(bundleId);
+    if (!detail) throw new AppError(404, "Bundle not found", "NOT_FOUND");
+    return detail;
+  },
+
+  async update(params: {
+    bundleId: string;
+    requesterUserId: string;
+    requesterRole?: string;
+    patch: UpdateBundleBody;
+  }): Promise<BundleDetail> {
+    const { bundleId, requesterUserId, requesterRole, patch } = params;
+    logger.info("bundlesService.update", { bundleId, requesterUserId, requesterRole });
+    const existing = await bundlesRepository.findById(bundleId);
+    if (!existing) throw new AppError(404, "Bundle not found", "NOT_FOUND");
+    await bundlesRepository.update(bundleId, patch);
+    if (patch.service_ids !== undefined) {
+      await bundlesRepository.replaceServices(bundleId, patch.service_ids);
+    }
+    logger.info("bundlesService.update success", { bundleId });
+    return bundlesRepository.getDetailById(bundleId) as Promise<BundleDetail>;
+  },
+
+  async remove(bundleId: string): Promise<void> {
+    const existing = await bundlesRepository.findById(bundleId);
+    if (!existing) throw new AppError(404, "Bundle not found", "NOT_FOUND");
+    await bundlesRepository.delete(bundleId);
   },
 };

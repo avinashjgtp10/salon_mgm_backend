@@ -1,53 +1,263 @@
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+export type InvitationStatus = "pending" | "accepted" | "expired" | "cancelled";
+
+export type CalendarColor =
+    | "light_blue"
+    | "blue"
+    | "dark_blue"
+    | "purple"
+    | "violet"
+    | "pink"
+    | "hot_pink"
+    | "rose"
+    | "orange"
+    | "yellow"
+    | "lime"
+    | "green"
+    | "teal"
+    | "cyan";
+
+export type EmploymentType =
+    | "full_time"
+    | "part_time"
+    | "contract"
+    | "intern"
+    | "freelance";
+
+export type CompensationType = "none" | "hourly" | "salary" | "commission";
+
+export type CommissionKind = "fixed_rate" | "percentage";
+
+export type CommissionCategory =
+    | "services"
+    | "products"
+    | "memberships"
+    | "gift_cards"
+    | "cancellation";
+
+export type TimesheetAutomation = "workspace_default" | "enabled" | "disabled";
+
+export type PayRunCalculation = "automatic" | "manual";
+
+export type PaymentMethod = "pay_manually" | "bank_transfer";
+
+export type EmergencyRelationship =
+    | "spouse"
+    | "parent"
+    | "sibling"
+    | "child"
+    | "friend"
+    | "colleague"
+    | "other";
+
+// ─── Staff ────────────────────────────────────────────────────────────────────
+
 export type Staff = {
     id: string;
-    user_id: string;
+    user_id: string | null;
     salon_id: string;
     branch_id: string | null;
+    employee_code: string | null;
     designation: string | null;
-    specialization: string[] | null;
+    specialization: string[];
     experience_years: number | null;
-    commission_type: string | null;
-    commission_value: string | null;
+    commission_type: CommissionKind | null;
+    commission_value: number | null;
     is_active: boolean;
     joined_date: string | null;
     created_at: string;
     updated_at: string;
+    first_name: string | null;
+    last_name: string | null;
+    email: string;
+    phone: string | null;
+    phone_country_code: string | null;
+    avatar_url: string | null;
+    additional_phone: string | null;
+    country: string | null;
+    birthday_day: number | null;
+    birthday_month: number | null;
+    calendar_color: CalendarColor;
+    notes: string | null;
+    invitation_status: InvitationStatus;
+    start_date_day: number | null;
+    start_date_month: number | null;
+    start_year: number | null;
+    end_date_day: number | null;
+    end_date_month: number | null;
+    end_year: number | null;
+    employment_type: EmploymentType | null;
+    staff_external_id: string | null;
 };
 
 export type CreateStaffBody = {
-    user_id: string;
-    salon_id: string;
+    first_name: string;
+    email: string;
+    last_name?: string;
+    phone?: string;
+    phone_country_code?: string;
+    additional_phone?: string;
+    country?: string;
+    calendar_color?: CalendarColor;
+    job_title?: string;
+    staff_external_id?: string;
+    employment_type?: EmploymentType;
     branch_id?: string;
-    designation?: string;
-    specialization?: string[];
+    employee_code?: string;
     experience_years?: number;
-    commission_type?: string;
-    commission_value?: number | string;
-    is_active?: boolean;
-    joined_date?: string;
+    specialization?: string[];
 };
 
 export type UpdateStaffBody = Partial<CreateStaffBody>;
 
+// ─── Address ──────────────────────────────────────────────────────────────────
+
+export type StaffAddress = {
+    id: string;
+    staff_id: string;
+    address_name: string;
+    address: string;
+    created_at: string;
+    updated_at: string;
+};
+
+export type CreateStaffAddressBody = {
+    address_name: string;
+    address: string;
+};
+
+export type UpdateStaffAddressBody = Partial<CreateStaffAddressBody>;
+
+// ─── Emergency Contact ────────────────────────────────────────────────────────
+
+export type StaffEmergencyContact = {
+    id: string;
+    staff_id: string;
+    full_name: string;
+    relationship: EmergencyRelationship;
+    email: string | null;
+    phone_country_code: string | null;
+    phone_number: string;
+    created_at: string;
+    updated_at: string;
+};
+
+export type CreateEmergencyContactBody = {
+    full_name: string;
+    relationship: EmergencyRelationship;
+    phone_number: string;
+    email?: string;
+    phone_country_code?: string;
+};
+
+export type UpdateEmergencyContactBody = Partial<CreateEmergencyContactBody>;
+
+// ─── Wage Settings ────────────────────────────────────────────────────────────
+
+export type StaffWageSettings = {
+    id: string;
+    staff_id: string;
+    wages_enabled: boolean;
+    compensation_type: CompensationType;
+    hourly_rate: number | null;
+    salary_amount: number | null;
+    location_restriction: TimesheetAutomation;
+    auto_clock_in: TimesheetAutomation;
+    auto_clock_out: TimesheetAutomation;
+    automated_breaks: TimesheetAutomation;
+    created_at: string;
+    updated_at: string;
+};
+
+export type UpdateWageSettingsBody = {
+    wages_enabled?: boolean;
+    compensation_type?: CompensationType;
+    hourly_rate?: number | null;
+    salary_amount?: number | null;
+    location_restriction?: TimesheetAutomation;
+    auto_clock_in?: TimesheetAutomation;
+    auto_clock_out?: TimesheetAutomation;
+    automated_breaks?: TimesheetAutomation;
+};
+
+// ─── Commission Settings ──────────────────────────────────────────────────────
+
+export type StaffCommissionSettings = {
+    id: string;
+    staff_id: string;
+    category: CommissionCategory;
+    is_enabled: boolean;
+    commission_kind: CommissionKind;
+    default_rate: number;
+    use_default_calculation: boolean;
+    pass_cancellation_fee_late: boolean;
+    pass_cancellation_fee_noshow: boolean;
+    created_at: string;
+    updated_at: string;
+};
+
+export type UpdateCommissionBody = {
+    category: CommissionCategory;
+    is_enabled?: boolean;
+    commission_kind?: CommissionKind;
+    default_rate?: number;
+    use_default_calculation?: boolean;
+    pass_cancellation_fee_late?: boolean;
+    pass_cancellation_fee_noshow?: boolean;
+};
+
+// ─── Pay Run Settings ─────────────────────────────────────────────────────────
+
+export type StaffPayRunSettings = {
+    id: string;
+    staff_id: string;
+    pay_runs_enabled: boolean;
+    payment_method: PaymentMethod;
+    calculation_type: PayRunCalculation;
+    deduct_payment_processing_fees: boolean;
+    deduct_new_client_fees: boolean;
+    record_cash_advances: boolean;
+    created_at: string;
+    updated_at: string;
+};
+
+export type UpdatePayRunBody = {
+    pay_runs_enabled?: boolean;
+    payment_method?: PaymentMethod;
+    calculation_type?: PayRunCalculation;
+    deduct_payment_processing_fees?: boolean;
+    deduct_new_client_fees?: boolean;
+    record_cash_advances?: boolean;
+};
+
+// ─── Schedule ─────────────────────────────────────────────────────────────────
+
 export type StaffSchedule = {
     id: string;
     staff_id: string;
-    day_of_week: number;
-    start_time: string;
-    end_time: string;
+    day_of_week: number; // 0=Sun ... 6=Sat
+    start_time: string | null;
+    end_time: string | null;
     is_available: boolean;
+    notes: string | null;
     created_at: string;
+    updated_at: string;
 };
 
-export type CreateStaffScheduleBody = {
-    staff_id: string;
+export type UpsertScheduleItem = {
     day_of_week: number;
-    start_time: string;
-    end_time: string;
-    is_available?: boolean;
+    is_available: boolean;
+    start_time?: string | null;
+    end_time?: string | null;
+    notes?: string;
 };
 
-export type UpdateStaffScheduleBody = Partial<CreateStaffScheduleBody>;
+export type UpsertStaffSchedulesBody = {
+    items: UpsertScheduleItem[];
+};
+
+// ─── Leave ────────────────────────────────────────────────────────────────────
 
 export type StaffLeave = {
     id: string;
@@ -55,18 +265,51 @@ export type StaffLeave = {
     start_date: string;
     end_date: string;
     reason: string | null;
-    leave_type: string | null;
+    leave_type: string;
     status: string;
     created_at: string;
 };
 
 export type CreateStaffLeaveBody = {
-    staff_id: string;
     start_date: string;
     end_date: string;
-    reason?: string;
-    leave_type?: string;
+    leave_type: string;
     status?: string;
+    reason?: string;
 };
 
 export type UpdateStaffLeaveBody = Partial<CreateStaffLeaveBody>;
+
+// ─── Invitation ───────────────────────────────────────────────────────────────
+
+export type StaffInvitation = {
+    id: string;
+    staff_id: string;
+    token: string;
+    email: string;
+    expires_at: string;
+    status: InvitationStatus;
+    accepted_at: string | null;
+    created_at: string;
+};
+
+export type AcceptInvitationBody = {
+    token: string;
+    first_name: string;
+    password: string;
+    last_name?: string;
+};
+
+// ─── Pagination ───────────────────────────────────────────────────────────────
+
+export type StaffListQuery = {
+    page?: number;
+    limit?: number;
+    search?: string;
+    invitation_status?: InvitationStatus;
+    employment_type?: EmploymentType;
+    is_active?: boolean;
+    branch_id?: string;
+    sort_by?: "first_name" | "last_name" | "email" | "created_at" | "invitation_status" | "designation";
+    sort_order?: "ASC" | "DESC";
+};
