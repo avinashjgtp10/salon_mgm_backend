@@ -70,12 +70,12 @@ export const salesRepository = {
             const sale = saleResult.rows[0];
 
             for (const item of data.items) {
-                const itemSubtotal = item.quantity * parseFloat(item.unit_price);
+                const item_total_price = item.quantity * parseFloat(item.unit_price);
                 await client.query(
                     `INSERT INTO sale_items (
-                        sale_id, item_type, item_id, name, quantity, unit_price, subtotal
+                        sale_id, item_type, item_id, name, quantity, unit_price, total_price
                     ) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-                    [sale.id, item.item_type, item.item_id || null, item.name, item.quantity, item.unit_price, itemSubtotal.toString()]
+                    [sale.id, item.item_type, item.item_id || null, item.name, item.quantity, item.unit_price, item_total_price.toString()]
                 );
             }
 

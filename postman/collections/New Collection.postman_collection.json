@@ -88,14 +88,6 @@
           "response": []
         },
         {
-          "name": "refresh",
-          "request": {
-            "method": "GET",
-            "header": []
-          },
-          "response": []
-        },
-        {
           "name": "logout",
           "request": {
             "method": "POST",
@@ -119,6 +111,14 @@
                 "logout"
               ]
             }
+          },
+          "response": []
+        },
+        {
+          "name": "refresh",
+          "request": {
+            "method": "GET",
+            "header": []
           },
           "response": []
         },
@@ -558,6 +558,14 @@
                 "{817c11a8-4254-48e9-b181-924f548f10b6}"
               ]
             }
+          },
+          "response": []
+        },
+        {
+          "name": "get all category",
+          "request": {
+            "method": "GET",
+            "header": []
           },
           "response": []
         }
@@ -1492,6 +1500,46 @@
             }
           },
           "response": []
+        },
+        {
+          "name": "import Clients",
+          "request": {
+            "method": "GET",
+            "header": []
+          },
+          "response": []
+        },
+        {
+          "name": "export csv",
+          "request": {
+            "method": "GET",
+            "header": []
+          },
+          "response": []
+        },
+        {
+          "name": "filter",
+          "request": {
+            "method": "GET",
+            "header": []
+          },
+          "response": []
+        },
+        {
+          "name": "filter female",
+          "request": {
+            "method": "GET",
+            "header": []
+          },
+          "response": []
+        },
+        {
+          "name": "filter male",
+          "request": {
+            "method": "GET",
+            "header": []
+          },
+          "response": []
         }
       ]
     },
@@ -1785,14 +1833,6 @@
                     "cancel-invite"
                   ]
                 }
-              },
-              "response": []
-            },
-            {
-              "name": "New Request",
-              "request": {
-                "method": "GET",
-                "header": []
               },
               "response": []
             }
@@ -2511,6 +2551,244 @@
               "response": []
             }
           ]
+        },
+        {
+          "name": "create staff",
+          "item": [
+            {
+              "name": "List Staff",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/staff?page=1&limit=20&sort_by=created_at&sort_order=DESC",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff"
+                  ],
+                  "query": [
+                    {
+                      "key": "page",
+                      "value": "1"
+                    },
+                    {
+                      "key": "limit",
+                      "value": "20"
+                    },
+                    {
+                      "key": "search",
+                      "value": "",
+                      "disabled": true
+                    },
+                    {
+                      "key": "invitation_status",
+                      "value": "",
+                      "description": "pending | accepted | expired | cancelled",
+                      "disabled": true
+                    },
+                    {
+                      "key": "employment_type",
+                      "value": "",
+                      "description": "full_time | part_time | contract | intern | freelance",
+                      "disabled": true
+                    },
+                    {
+                      "key": "is_active",
+                      "value": "true",
+                      "disabled": true
+                    },
+                    {
+                      "key": "branch_id",
+                      "value": "",
+                      "disabled": true
+                    },
+                    {
+                      "key": "sort_by",
+                      "value": "created_at",
+                      "description": "first_name | last_name | email | created_at | invitation_status | designation"
+                    },
+                    {
+                      "key": "sort_order",
+                      "value": "DESC",
+                      "description": "ASC | DESC"
+                    }
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Create Staff",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"first_name\": \"Jane\",\n  \"last_name\": \"Doe\",\n  \"email\": \"jane.doe@example.com\",\n  \"phone\": \"9876543210\",\n  \"phone_country_code\": \"+91\",\n  \"employment_type\": \"full_time\",\n  \"calendar_color\": \"blue\",\n  \"job_title\": \"Senior Stylist\",\n  \"employee_code\": \"EMP001\",\n  \"experience_years\": 5,\n  \"specialization\": [\"haircut\", \"coloring\"],\n  \"country\": \"IN\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/staff",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Get Staff by ID",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/staff/{{staffId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff",
+                    "{{staffId}}"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Update Staff",
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"first_name\": \"Jane\",\n  \"last_name\": \"Smith\",\n  \"phone\": \"9999999999\",\n  \"employment_type\": \"part_time\",\n  \"calendar_color\": \"green\",\n  \"experience_years\": 6,\n  \"specialization\": [\"haircut\", \"coloring\", \"spa\"]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/staff/{{staffId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff",
+                    "{{staffId}}"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Deactivate Staff",
+              "request": {
+                "method": "DELETE",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/staff/{{staffId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff",
+                    "{{staffId}}"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "exel download",
+              "request": {
+                "method": "GET",
+                "header": []
+              },
+              "response": []
+            },
+            {
+              "name": "csv",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI1MzY1NjgsImV4cCI6MTc3MjUzNzQ2OH0.g7w21e7wbJDWjw8iDg2RpTVYavZ9bYyDrPAHtL5ovXc",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/staff/export/csv",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "staff",
+                    "export",
+                    "csv"
+                  ]
+                }
+              },
+              "response": []
+            }
+          ]
         }
       ]
     },
@@ -2597,6 +2875,16 @@
             {
               "name": "Create Service",
               "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI0OTkwOTAsImV4cCI6MTc3MjQ5OTk5MH0.OeFFx4dC_mRecKxbbDY9A8OBmcjg3BD38Rh1RGBrNqg",
+                      "type": "string"
+                    }
+                  ]
+                },
                 "method": "POST",
                 "header": [
                   {
@@ -2917,6 +3205,1642 @@
               "response": []
             }
           ]
+        },
+        {
+          "name": "Bundles",
+          "item": [
+            {
+              "name": "2. Create Bundle",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}",
+                    "type": "text"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Bridal Package\",\n  \"category_id\": \"{{category_id}}\",\n  \"description\": \"Full bridal preparation package\",\n  \"schedule_type\": \"sequence\",\n  \"price_type\": \"fixed\",\n  \"retail_price\": 150,\n  \"online_booking\": true,\n  \"commission_enabled\": false,\n  \"resource_required\": false,\n  \"available_for\": \"female\",\n  \"service_ids\": [\n    \"{{service_id_1}}\",\n    \"{{service_id_2}}\"\n  ]\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{base_url}}/services/bundles",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "services",
+                    "bundles"
+                  ]
+                },
+                "description": "Create a new bundle. schedule_type: sequence|parallel. price_type: service_pricing|fixed|free. available_for: all|male|female|other."
+              },
+              "response": [
+                {
+                  "name": "201 Created - Bundle",
+                  "originalRequest": {
+                    "method": "POST",
+                    "header": [],
+                    "url": {
+                      "raw": ""
+                    }
+                  },
+                  "status": "Created",
+                  "code": 201,
+                  "_postman_previewlanguage": "Text",
+                  "header": [],
+                  "cookie": [],
+                  "body": "{\n  \"success\": true,\n  \"message\": \"Bundle created successfully\",\n  \"data\": {\n    \"id\": \"new-bundle-uuid\",\n    \"name\": \"Bridal Package\",\n    \"category_id\": \"uuid\",\n    \"category_name\": \"Bridal\",\n    \"description\": \"Full bridal preparation package\",\n    \"schedule_type\": \"sequence\",\n    \"price_type\": \"fixed\",\n    \"retail_price\": \"150.00\",\n    \"online_booking\": true,\n    \"commission_enabled\": false,\n    \"resource_required\": false,\n    \"available_for\": \"female\",\n    \"is_active\": true,\n    \"services\": [\n      {\n        \"service_id\": \"uuid-1\",\n        \"name\": \"Hair Wash\",\n        \"price\": \"20.00\",\n        \"duration\": 30,\n        \"price_type\": \"fixed\",\n        \"sort_order\": 1\n      }\n    ],\n    \"created_at\": \"2024-01-01T00:00:00.000Z\",\n    \"updated_at\": \"2024-01-01T00:00:00.000Z\"\n  }\n}"
+                },
+                {
+                  "name": "400 Bad Request",
+                  "originalRequest": {
+                    "method": "POST",
+                    "header": [],
+                    "url": {
+                      "raw": ""
+                    }
+                  },
+                  "status": "Bad Request",
+                  "code": 400,
+                  "_postman_previewlanguage": "Text",
+                  "header": [],
+                  "cookie": [],
+                  "body": "{\n  \"message\": \"name is required\",\n  \"code\": \"VALIDATION_ERROR\"\n}"
+                }
+              ]
+            },
+            {
+              "name": "3. Get Bundle by ID",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/services/bundles/{{bundle_id}}",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "services",
+                    "bundles",
+                    "{{bundle_id}}"
+                  ]
+                },
+                "description": "Get a single bundle with all linked services."
+              },
+              "response": [
+                {
+                  "name": "200 OK - Bundle Detail",
+                  "originalRequest": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": ""
+                    }
+                  },
+                  "status": "OK",
+                  "code": 200,
+                  "_postman_previewlanguage": "Text",
+                  "header": [],
+                  "cookie": [],
+                  "body": "{\n  \"success\": true,\n  \"message\": \"Bundle fetched successfully\",\n  \"data\": {\n    \"id\": \"bundle-uuid\",\n    \"name\": \"Bridal Package\",\n    \"category_id\": \"uuid\",\n    \"category_name\": \"Bridal\",\n    \"description\": \"Full bridal preparation package\",\n    \"schedule_type\": \"sequence\",\n    \"price_type\": \"fixed\",\n    \"retail_price\": \"150.00\",\n    \"online_booking\": true,\n    \"commission_enabled\": false,\n    \"resource_required\": false,\n    \"available_for\": \"female\",\n    \"is_active\": true,\n    \"services\": [\n      {\n        \"service_id\": \"uuid-1\",\n        \"name\": \"Hair Wash\",\n        \"price\": \"20.00\",\n        \"duration\": 30,\n        \"price_type\": \"fixed\",\n        \"sort_order\": 1\n      },\n      {\n        \"service_id\": \"uuid-2\",\n        \"name\": \"Blowdry\",\n        \"price\": \"30.00\",\n        \"duration\": 45,\n        \"price_type\": \"fixed\",\n        \"sort_order\": 2\n      }\n    ],\n    \"created_at\": \"2024-01-01T00:00:00.000Z\",\n    \"updated_at\": \"2024-01-01T00:00:00.000Z\"\n  }\n}"
+                },
+                {
+                  "name": "404 Not Found",
+                  "originalRequest": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": ""
+                    }
+                  },
+                  "status": "Not Found",
+                  "code": 404,
+                  "_postman_previewlanguage": "Text",
+                  "header": [],
+                  "cookie": [],
+                  "body": "{\n  \"message\": \"Bundle not found\",\n  \"code\": \"NOT_FOUND\"\n}"
+                }
+              ]
+            },
+            {
+              "name": "4. Update Bundle",
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}",
+                    "type": "text"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Updated Bridal Package\",\n  \"description\": \"Premium bridal preparation\",\n  \"retail_price\": 200,\n  \"schedule_type\": \"parallel\",\n  \"price_type\": \"fixed\",\n  \"online_booking\": true,\n  \"commission_enabled\": true,\n  \"resource_required\": false,\n  \"available_for\": \"all\",\n  \"is_active\": true,\n  \"service_ids\": [\n    \"{{service_id_1}}\",\n    \"{{service_id_2}}\"\n  ]\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{base_url}}/services/bundles/{{bundle_id}}",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "services",
+                    "bundles",
+                    "{{bundle_id}}"
+                  ]
+                },
+                "description": "Partially update a bundle. All fields are optional. Providing service_ids replaces all linked services."
+              },
+              "response": [
+                {
+                  "name": "200 OK - Updated Bundle",
+                  "originalRequest": {
+                    "method": "PATCH",
+                    "header": [],
+                    "url": {
+                      "raw": ""
+                    }
+                  },
+                  "status": "OK",
+                  "code": 200,
+                  "_postman_previewlanguage": "Text",
+                  "header": [],
+                  "cookie": [],
+                  "body": "{\n  \"success\": true,\n  \"message\": \"Bundle updated successfully\",\n  \"data\": {\n    \"id\": \"bundle-uuid\",\n    \"name\": \"Updated Bridal Package\",\n    \"retail_price\": \"200.00\",\n    \"is_active\": true,\n    \"services\": [],\n    \"updated_at\": \"2024-01-02T00:00:00.000Z\"\n  }\n}"
+                }
+              ]
+            },
+            {
+              "name": "5. Delete Bundle",
+              "request": {
+                "method": "DELETE",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/services/bundles/{{bundle_id}}",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "services",
+                    "bundles",
+                    "{{bundle_id}}"
+                  ]
+                },
+                "description": "Delete a bundle permanently. Returns 204 No Content."
+              },
+              "response": [
+                {
+                  "name": "204 No Content",
+                  "originalRequest": {
+                    "method": "DELETE",
+                    "header": [],
+                    "url": {
+                      "raw": ""
+                    }
+                  },
+                  "status": "No Content",
+                  "code": 204,
+                  "_postman_previewlanguage": "Text",
+                  "header": [],
+                  "cookie": [],
+                  "body": ""
+                },
+                {
+                  "name": "404 Not Found",
+                  "originalRequest": {
+                    "method": "DELETE",
+                    "header": [],
+                    "url": {
+                      "raw": ""
+                    }
+                  },
+                  "status": "Not Found",
+                  "code": 404,
+                  "_postman_previewlanguage": "Text",
+                  "header": [],
+                  "cookie": [],
+                  "body": "{\n  \"message\": \"Bundle not found\",\n  \"code\": \"NOT_FOUND\"\n}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Downloads",
+          "item": [
+            {
+              "name": "6. Download PDF",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/services/download/pdf",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "services",
+                    "download",
+                    "pdf"
+                  ],
+                  "query": [
+                    {
+                      "key": "category_id",
+                      "value": "",
+                      "disabled": true
+                    },
+                    {
+                      "key": "search",
+                      "value": "",
+                      "disabled": true
+                    },
+                    {
+                      "key": "status",
+                      "value": "active",
+                      "disabled": true
+                    },
+                    {
+                      "key": "team_member_id",
+                      "value": "",
+                      "disabled": true
+                    },
+                    {
+                      "key": "online_booking",
+                      "value": "enabled",
+                      "disabled": true
+                    },
+                    {
+                      "key": "commissions",
+                      "value": "enabled",
+                      "disabled": true
+                    },
+                    {
+                      "key": "resource_requirements",
+                      "value": "required",
+                      "disabled": true
+                    },
+                    {
+                      "key": "available_for",
+                      "value": "all",
+                      "disabled": true
+                    }
+                  ]
+                },
+                "description": "Download all services + bundles as a PDF file. Use 'Send and Download' button in Postman to save the file. All query params are optional — omit them to export everything."
+              },
+              "response": [
+                {
+                  "name": "200 OK - PDF File",
+                  "originalRequest": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": ""
+                    }
+                  },
+                  "status": "OK",
+                  "code": 200,
+                  "_postman_previewlanguage": "Text",
+                  "header": [
+                    {
+                      "key": "Content-Type",
+                      "value": "application/pdf"
+                    },
+                    {
+                      "key": "Content-Disposition",
+                      "value": "attachment; filename=\"catalogue.pdf\""
+                    }
+                  ],
+                  "cookie": [],
+                  "body": "(binary PDF content)"
+                }
+              ]
+            },
+            {
+              "name": "7. Download Excel",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/services/download/excel",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "services",
+                    "download",
+                    "excel"
+                  ],
+                  "query": [
+                    {
+                      "key": "category_id",
+                      "value": "",
+                      "disabled": true
+                    },
+                    {
+                      "key": "search",
+                      "value": "",
+                      "disabled": true
+                    },
+                    {
+                      "key": "status",
+                      "value": "active",
+                      "disabled": true
+                    },
+                    {
+                      "key": "team_member_id",
+                      "value": "",
+                      "disabled": true
+                    },
+                    {
+                      "key": "online_booking",
+                      "value": "enabled",
+                      "disabled": true
+                    },
+                    {
+                      "key": "commissions",
+                      "value": "enabled",
+                      "disabled": true
+                    },
+                    {
+                      "key": "resource_requirements",
+                      "value": "required",
+                      "disabled": true
+                    },
+                    {
+                      "key": "available_for",
+                      "value": "all",
+                      "disabled": true
+                    }
+                  ]
+                },
+                "description": "Download all services + bundles as an Excel (.xlsx) file. Use 'Send and Download' in Postman. All query params are optional."
+              },
+              "response": [
+                {
+                  "name": "200 OK - Excel File",
+                  "originalRequest": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": ""
+                    }
+                  },
+                  "status": "OK",
+                  "code": 200,
+                  "_postman_previewlanguage": "Text",
+                  "header": [
+                    {
+                      "key": "Content-Type",
+                      "value": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    },
+                    {
+                      "key": "Content-Disposition",
+                      "value": "attachment; filename=\"catalogue.xlsx\""
+                    }
+                  ],
+                  "cookie": [],
+                  "body": "(binary Excel content)"
+                }
+              ]
+            },
+            {
+              "name": "8. Download CSV",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/services/download/csv",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "services",
+                    "download",
+                    "csv"
+                  ],
+                  "query": [
+                    {
+                      "key": "category_id",
+                      "value": "",
+                      "disabled": true
+                    },
+                    {
+                      "key": "search",
+                      "value": "",
+                      "disabled": true
+                    },
+                    {
+                      "key": "status",
+                      "value": "active",
+                      "disabled": true
+                    },
+                    {
+                      "key": "team_member_id",
+                      "value": "",
+                      "disabled": true
+                    },
+                    {
+                      "key": "online_booking",
+                      "value": "enabled",
+                      "disabled": true
+                    },
+                    {
+                      "key": "commissions",
+                      "value": "enabled",
+                      "disabled": true
+                    },
+                    {
+                      "key": "resource_requirements",
+                      "value": "required",
+                      "disabled": true
+                    },
+                    {
+                      "key": "available_for",
+                      "value": "all",
+                      "disabled": true
+                    }
+                  ]
+                },
+                "description": "Download all services + bundles as a CSV file. Use 'Send and Download' in Postman. All query params are optional."
+              },
+              "response": [
+                {
+                  "name": "200 OK - CSV File",
+                  "originalRequest": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": ""
+                    }
+                  },
+                  "status": "OK",
+                  "code": 200,
+                  "_postman_previewlanguage": "Text",
+                  "header": [
+                    {
+                      "key": "Content-Type",
+                      "value": "text/csv"
+                    },
+                    {
+                      "key": "Content-Disposition",
+                      "value": "attachment; filename=\"catalogue.csv\""
+                    }
+                  ],
+                  "cookie": [],
+                  "body": "Type,Name,Category,Description,Price Type,Price / Retail Price,Duration (min),Treatment Type,Schedule Type,Available For,Online Booking,Commission,Resource Required,Status,Created At\nService,Haircut,Hair,,fixed,25,30,Hair,—,—,Yes,No,No,Yes,1/1/2024\nBundle,Bridal Package,Bridal,Full bridal package,fixed,150,—,—,sequence,female,Yes,No,No,Yes,1/1/2024"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "marketplace",
+      "item": [
+        {
+          "name": "1. Full Profile",
+          "item": [
+            {
+              "name": "GET Full Profile",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI0ZjVkNzlmYy04MGY5LTRjNzUtYWMwMC01ZWFiNWRmMDdmZWMiLCJyb2xlIjoic2Fsb25fb3duZXIiLCJpYXQiOjE3NzI1NDA2ODcsImV4cCI6MTc3MjU0MTU4N30.-Rj81bfWyRj6j5qXDI2rkdBgYQzQyZstLW3PpbdoMIs",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/marketplace/profile",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "marketplace",
+                    "profile"
+                  ]
+                },
+                "description": "Returns full aggregated profile including location, opening hours, images, amenities, highlights, values."
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "2. Venue Essentials",
+          "item": [
+            {
+              "name": "PUT Save Essentials",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"display_name\": \"My Salon\",\n  \"business_phone\": \"7428730894\",\n  \"business_phone_country_code\": \"+91\",\n  \"business_email\": \"mysalon@example.com\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/marketplace/essentials",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "marketplace",
+                    "essentials"
+                  ]
+                },
+                "description": "MUST be called first. Creates or updates display name, phone, email."
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "3. About",
+          "item": [
+            {
+              "name": "PUT Save Venue Description",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"venue_description\": \"At this vibrant hair salon, clients experience a transformative journey tailored to their individual style. Whether a fresh haircut, stunning hair color, or luxurious blow dry, skilled stylists deliver exceptional results.\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/marketplace/about",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "marketplace",
+                    "about"
+                  ]
+                }
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "4. Business Location",
+          "item": [
+            {
+              "name": "GET Business Location",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/marketplace/location",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "marketplace",
+                    "location"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "PUT Save Location (Full)",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"address_line\": \"Shridharnagar, Balaji Nagar, Pune - Satara Road\",\n  \"city\": \"Pune\",\n  \"state\": \"Maharashtra\",\n  \"country\": \"India\",\n  \"postal_code\": \"411046\",\n  \"latitude\": 18.4655,\n  \"longitude\": 73.8533\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/marketplace/location",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "marketplace",
+                    "location"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "PUT Save Location (Address Only)",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"address_line\": \"Vivek Nagar, Pune, India\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/marketplace/location",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "marketplace",
+                    "location"
+                  ]
+                },
+                "description": "Only address_line is required."
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "5. Opening Hours",
+          "item": [
+            {
+              "name": "GET Opening Hours",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/marketplace/working-hours",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "marketplace",
+                    "working-hours"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "PUT Save Full Week",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"days\": [\n    {\n      \"day_of_week\": 0,\n      \"is_open\": false,\n      \"slots\": []\n    },\n    {\n      \"day_of_week\": 1,\n      \"is_open\": true,\n      \"slots\": [\n        {\n          \"open_time\": \"10:00:00\",\n          \"close_time\": \"19:00:00\"\n        }\n      ]\n    },\n    {\n      \"day_of_week\": 2,\n      \"is_open\": true,\n      \"slots\": [\n        {\n          \"open_time\": \"10:00:00\",\n          \"close_time\": \"19:00:00\"\n        }\n      ]\n    },\n    {\n      \"day_of_week\": 3,\n      \"is_open\": true,\n      \"slots\": [\n        {\n          \"open_time\": \"10:00:00\",\n          \"close_time\": \"19:00:00\"\n        }\n      ]\n    },\n    {\n      \"day_of_week\": 4,\n      \"is_open\": true,\n      \"slots\": [\n        {\n          \"open_time\": \"10:00:00\",\n          \"close_time\": \"19:00:00\"\n        }\n      ]\n    },\n    {\n      \"day_of_week\": 5,\n      \"is_open\": true,\n      \"slots\": [\n        {\n          \"open_time\": \"10:00:00\",\n          \"close_time\": \"19:00:00\"\n        }\n      ]\n    },\n    {\n      \"day_of_week\": 6,\n      \"is_open\": true,\n      \"slots\": [\n        {\n          \"open_time\": \"10:00:00\",\n          \"close_time\": \"17:00:00\"\n        }\n      ]\n    }\n  ]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/marketplace/working-hours",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "marketplace",
+                    "working-hours"
+                  ]
+                },
+                "description": "day_of_week: 0=Sunday, 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday"
+              },
+              "response": []
+            },
+            {
+              "name": "PUT Save Split Shifts (Mon)",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"days\": [\n    {\n      \"day_of_week\": 1,\n      \"is_open\": true,\n      \"slots\": [\n        {\n          \"open_time\": \"09:00:00\",\n          \"close_time\": \"13:00:00\"\n        },\n        {\n          \"open_time\": \"15:00:00\",\n          \"close_time\": \"20:00:00\"\n        }\n      ]\n    }\n  ]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/marketplace/working-hours",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "marketplace",
+                    "working-hours"
+                  ]
+                },
+                "description": "Multiple slots per day = split shift. Only days provided are updated."
+              },
+              "response": []
+            },
+            {
+              "name": "PUT Close a Day (Sunday)",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"days\": [\n    {\n      \"day_of_week\": 0,\n      \"is_open\": false,\n      \"slots\": []\n    }\n  ]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/marketplace/working-hours",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "marketplace",
+                    "working-hours"
+                  ]
+                }
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "6. Venue Images",
+          "item": [
+            {
+              "name": "GET All Images",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/marketplace/images",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "marketplace",
+                    "images"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "POST Add Image",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"image_url\": \"https://your-cdn.com/images/salon-interior.jpg\",\n  \"is_cover\": false\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/marketplace/images",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "marketplace",
+                    "images"
+                  ]
+                },
+                "description": "Maximum 10 images allowed per profile."
+              },
+              "response": []
+            },
+            {
+              "name": "POST Add Cover Image",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"image_url\": \"https://your-cdn.com/images/salon-cover.jpg\",\n  \"is_cover\": true\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/marketplace/images",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "marketplace",
+                    "images"
+                  ]
+                },
+                "description": "Auto-unsets previous cover image."
+              },
+              "response": []
+            },
+            {
+              "name": "PATCH Set Cover Image",
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/marketplace/images/{{imageId}}/cover",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "marketplace",
+                    "images",
+                    "{{imageId}}",
+                    "cover"
+                  ]
+                },
+                "description": "Marks existing image as cover. Auto-unsets previous cover."
+              },
+              "response": []
+            },
+            {
+              "name": "PATCH Reorder Images",
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"image_ids\": [\n    \"uuid-image-1\",\n    \"uuid-image-2\",\n    \"uuid-image-3\"\n  ]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/marketplace/images/reorder",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "marketplace",
+                    "images",
+                    "reorder"
+                  ]
+                },
+                "description": "Provide all image IDs in desired display order (index 0 = first)."
+              },
+              "response": []
+            },
+            {
+              "name": "DELETE Image",
+              "request": {
+                "method": "DELETE",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/marketplace/images/{{imageId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "marketplace",
+                    "images",
+                    "{{imageId}}"
+                  ]
+                }
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "7. Amenities and Highlights",
+          "item": [
+            {
+              "name": "GET Features",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/marketplace/features",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "marketplace",
+                    "features"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "PUT Save All Features",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"amenities\": [\n    \"parking_available\",\n    \"near_public_transport\",\n    \"showers\"\n  ],\n  \"highlights\": [\n    \"pet_friendly\",\n    \"kid_friendly\",\n    \"wheelchair_accessible\"\n  ],\n  \"values\": [\n    \"organic_products_only\",\n    \"woman_owned\",\n    \"environmentally_friendly\"\n  ]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/marketplace/features",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "marketplace",
+                    "features"
+                  ]
+                },
+                "description": "Valid amenities: parking_available, near_public_transport, showers, lockers, bath_towels, swimming_pool, sauna\nValid highlights: pet_friendly, adults_only, kid_friendly, wheelchair_accessible\nValid values: organic_products_only, vegan_products_only, environmentally_friendly, lgbtq_plus, black_owned, woman_owned, asian_owned, hispanic_owned, indigenous_owned"
+              },
+              "response": []
+            },
+            {
+              "name": "PUT Update Only Amenities",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"amenities\": [\n    \"parking_available\",\n    \"near_public_transport\",\n    \"lockers\"\n  ]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/marketplace/features",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "marketplace",
+                    "features"
+                  ]
+                },
+                "description": "Partial update - only amenities replaced. Highlights and values unchanged."
+              },
+              "response": []
+            },
+            {
+              "name": "PUT Update Only Highlights",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"highlights\": [\n    \"adults_only\",\n    \"wheelchair_accessible\"\n  ]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/marketplace/features",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "marketplace",
+                    "features"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "PUT Update Only Values",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"values\": [\n    \"lgbtq_plus\",\n    \"black_owned\",\n    \"woman_owned\",\n    \"asian_owned\"\n  ]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/marketplace/features",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "marketplace",
+                    "features"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "PUT Clear All Features",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"amenities\": [],\n  \"highlights\": [],\n  \"values\": []\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/marketplace/features",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "marketplace",
+                    "features"
+                  ]
+                }
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "8. Publish",
+          "item": [
+            {
+              "name": "POST Publish Profile",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/marketplace/publish",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "marketplace",
+                    "publish"
+                  ]
+                },
+                "description": "Makes the profile publicly visible on the marketplace."
+              },
+              "response": []
+            },
+            {
+              "name": "POST Unpublish Profile",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{token}}"
+                  },
+                  {
+                    "key": "x-salon-id",
+                    "value": "{{salonId}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/marketplace/unpublish",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "marketplace",
+                    "unpublish"
+                  ]
+                }
+              },
+              "response": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "membership",
+      "item": [
+        {
+          "name": "1. Create Membership (Limited Sessions)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.data && json.data.id) {",
+                  "  pm.collectionVariables.set('membershipId', json.data.id);",
+                  "  console.log('✅ membershipId saved:', json.data.id);",
+                  "}",
+                  "pm.test('Status is 201', () => pm.response.to.have.status(201));",
+                  "pm.test('Has id', () => pm.expect(json.data.id).to.be.a('string'));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Gold Monthly Plan\",\n  \"description\": \"Premium access to top salon services.\",\n  \"includedServices\": [\n    {\n      \"serviceId\": \"a1b2c3d4-0000-0000-0000-000000000001\",\n      \"serviceName\": \"Haircut\"\n    },\n    {\n      \"serviceId\": \"a1b2c3d4-0000-0000-0000-000000000002\",\n      \"serviceName\": \"Beard Trim\"\n    }\n  ],\n  \"sessionType\": \"limited\",\n  \"numberOfSessions\": 5,\n  \"validFor\": \"1 month\",\n  \"price\": 1999,\n  \"taxRate\": 18,\n  \"colour\": \"blue\",\n  \"enableOnlineSales\": false,\n  \"enableOnlineRedemption\": true,\n  \"termsAndConditions\": \"Sessions must be used within validity period. No refunds.\"\n}"
+            },
+            "url": {
+              "raw": ""
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "2. Create Membership (Unlimited Sessions)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 201', () => pm.response.to.have.status(201));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Platinum Annual Plan\",\n  \"description\": \"Unlimited access to all services for a full year.\",\n  \"includedServices\": [\n    {\n      \"serviceId\": \"a1b2c3d4-0000-0000-0000-000000000003\",\n      \"serviceName\": \"Hair Colour\"\n    },\n    {\n      \"serviceId\": \"a1b2c3d4-0000-0000-0000-000000000004\",\n      \"serviceName\": \"Facial\"\n    }\n  ],\n  \"sessionType\": \"unlimited\",\n  \"validFor\": \"12 months\",\n  \"price\": 9999,\n  \"taxRate\": 18,\n  \"colour\": \"purple\",\n  \"enableOnlineSales\": false,\n  \"enableOnlineRedemption\": true,\n  \"termsAndConditions\": \"Valid for 12 months from date of purchase.\"\n}"
+            },
+            "url": {
+              "raw": ""
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3. Create Membership (Normalize Test - Mixed Case)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 201', () => pm.response.to.have.status(201));",
+                  "pm.test('sessionType normalized', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.data.sessionType).to.eql('limited');",
+                  "});",
+                  "pm.test('colour normalized', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.data.colour).to.eql('green');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Silver Plan\",\n  \"description\": \"Basic access plan.\",\n  \"includedServices\": [\n    {\n      \"serviceId\": \"a1b2c3d4-0000-0000-0000-000000000001\",\n      \"serviceName\": \"Haircut\"\n    }\n  ],\n  \"sessionType\": \"Limited\",\n  \"numberOfSessions\": 3,\n  \"validFor\": \"3 Months\",\n  \"price\": 799,\n  \"taxRate\": 18,\n  \"colour\": \"GREEN\",\n  \"enableOnlineSales\": false,\n  \"enableOnlineRedemption\": true\n}"
+            },
+            "url": {
+              "raw": ""
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "4. Get All Memberships",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": ""
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "5. Get All - Filter by sessionType",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "?sessionType=limited",
+              "query": [
+                {
+                  "key": "sessionType",
+                  "value": "limited"
+                },
+                {
+                  "key": "colour",
+                  "value": "blue",
+                  "disabled": true
+                },
+                {
+                  "key": "validFor",
+                  "value": "1 month",
+                  "disabled": true
+                },
+                {
+                  "key": "page",
+                  "value": "1",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "10",
+                  "disabled": true
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "6. Get Membership By ID",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('ID matches', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.data.id).to.eql(pm.collectionVariables.get('membershipId'));",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": ""
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "7. Update Membership",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Price updated', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.data.price).to.eql(2499);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Gold Plan Updated\",\n  \"price\": 2499,\n  \"numberOfSessions\": 8,\n  \"colour\": \"green\",\n  \"includedServices\": [\n    {\n      \"serviceId\": \"a1b2c3d4-0000-0000-0000-000000000001\",\n      \"serviceName\": \"Haircut\"\n    },\n    {\n      \"serviceId\": \"a1b2c3d4-0000-0000-0000-000000000003\",\n      \"serviceName\": \"Hair Colour\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": ""
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "8. Delete Membership",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Deleted message', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.message).to.include('deleted');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": ""
+            }
+          },
+          "response": []
         }
       ]
     },
@@ -4681,6 +6605,14 @@
             "services"
           ]
         }
+      },
+      "response": []
+    },
+    {
+      "name": "New Request",
+      "request": {
+        "method": "GET",
+        "header": []
       },
       "response": []
     }

@@ -13,10 +13,19 @@ import salonsRoutes from "./modules/salons/salons.routes";
 import branchesRoutes from "./modules/branches/branches.routes";
 import staffRoutes from "./modules/staff/staff.routes";
 import clientsRoutes from "./modules/clients/clients.routes";
-import servicesRoutes from "./modules/services/services.routes";  
+import servicesRoutes from "./modules/services/services.routes";
 import { corsMiddleware } from "./middleware/cors.middleware";
 import marketplaceRoutes from "./modules/marketplace/marketplace.routes";
 import membershipsRoutes from "./modules/memberships/memberships.routes";
+import productsRoutes from "./modules/products/products.routes";
+import brandsRoutes from "./modules/products/products.routes";
+import appointmentsRoutes from "./modules/appointments/appointments.routes";
+import calendarRoutes from "./modules/calendar/calendar.routes";
+import salesRoutes from "./modules/sales/sales.routes";
+import inventoryRoutes from "./modules/inventory/inventory.routes";
+import billingRoutes from "./modules/billing/billing.routes";
+
+
 import swaggerUi from "swagger-ui-express";
 import YAML from "yamljs";
 import path from "path";
@@ -68,7 +77,16 @@ app.use("/api/v1/staff", staffRoutes);
 app.use("/api/v1/clients", clientsRoutes);
 app.use("/api/v1/services", servicesRoutes);
 app.use("/api/v1/marketplace", marketplaceRoutes);
-app.use("/api/v1/memberships",membershipsRoutes);
+app.use("/api/v1/memberships", membershipsRoutes);
+app.use("/api/v1/products", productsRoutes);
+app.use("/api/v1/brands", brandsRoutes);
+app.use("/api/v1/appointments", appointmentsRoutes);
+app.use("/api/v1/calendar", calendarRoutes);
+app.use("/api/v1/sales", salesRoutes);
+app.use("/api/v1/inventory", inventoryRoutes);
+app.use("/api/v1/billing", billingRoutes);
+
+
 
 // Swagger Documentation
 const swaggerDocument = YAML.load(path.join(__dirname, "../docs/api/swagger.yaml"));

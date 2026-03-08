@@ -66,21 +66,34 @@ export const appointmentsRepository = {
         return rows.length > 0;
     },
 
-    async create(data: CreateAppointmentBody, createdBy: string | null): Promise<Appointment> {
+    async create(data: CreateAppointmentBody, createdBy: string): Promise<Appointment> {
         const { rows } = await pool.query(
             `INSERT INTO appointments (
-                salon_id, client_id, staff_id, service_id,
-                scheduled_at, duration_minutes, status, notes, created_by
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+      salon_id, branch_id, client_id, staff_id, service_id,
+      title, notes, status,
+      scheduled_at, duration_minutes,
+      ends_at,
+      colour, created_by
+    )
+    VALUES (
+      $1, $2, $3, $4, $5,
+      $6, $7, 'booked',
+      $8, $9,
+      ($8::timestamptz + ($9::integer * INTERVAL '1 minute')),
+      $10, $11
+    )
+    RETURNING *`,
             [
                 data.salon_id,
+                data.branch_id ?? null,
                 data.client_id ?? null,
                 data.staff_id ?? null,
                 data.service_id ?? null,
+                data.title ?? "Appointment",
+                data.notes ?? null,
                 data.scheduled_at,
                 data.duration_minutes,
-                data.status ?? "booked",
-                data.notes ?? null,
+                data.colour ?? null,
                 createdBy,
             ]
         );

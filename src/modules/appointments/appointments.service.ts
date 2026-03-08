@@ -16,14 +16,20 @@ export const appointmentsService = {
     }): Promise<Appointment> {
         const { requesterUserId, body } = params;
 
-        if (body.staff_id) {
+        // Only check conflict if staff_id is provided
+        if (body.staff_id && body.staff_id.trim().length > 0) {
             const conflict = await appointmentsRepository.hasConflict({
                 staffId: body.staff_id,
                 scheduledAt: body.scheduled_at,
                 durationMinutes: body.duration_minutes,
             });
-            if (conflict)
-                throw new AppError(409, "Staff member already has an appointment at this time", "CONFLICT");
+            if (conflict) {
+                throw new AppError(
+                    409,
+                    "Staff member already has an appointment at this time",
+                    "CONFLICT"
+                );
+            }
         }
 
         const appointment = await appointmentsRepository.create(body, requesterUserId);

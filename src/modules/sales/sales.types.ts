@@ -31,7 +31,7 @@ export type SaleItem = {
     name: string;
     quantity: number;
     unit_price: string;
-    subtotal: string;
+    total_price: string;
 };
 
 export type CreateSaleBody = {
