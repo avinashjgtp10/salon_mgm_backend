@@ -77,6 +77,7 @@ export type CancelAppointmentBody = {
 
 export type CheckoutAppointmentBody = {
     items: CheckoutItem[];
+    payment_method?: "Cash" | "Card" | "UPI";
     discount_amount?: number;
     tip_amount?: number;
     tax_amount?: number;
