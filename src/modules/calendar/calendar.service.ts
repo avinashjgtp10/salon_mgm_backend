@@ -159,38 +159,43 @@ export const calendarService = {
         try {
             await client.query("BEGIN");
 
+            const invoiceNumber = `INV-${Date.now()}`;
+
             const { rows: saleRows } = await client.query(
                 `INSERT INTO sales (
-          salon_id, branch_id, client_id, appointment_id,
-          status,
+          salon_id, client_id, appointment_id, staff_id,
+          status, payment_method,
           subtotal, discount_amount, tip_amount, tax_amount, total_amount,
-          notes, created_by
+          notes, invoice_number, created_by
         )
-        VALUES ($1, $2, $3, $4, 'paid', $5, $6, $7, $8, $9, $10, $11)
+        VALUES ($1, $2, $3, $4, 'completed', $5, $6, $7, $8, $9, $10, $11, $12, $13)
         RETURNING *`,
                 [
                     appt.salon_id,
-                    appt.branch_id ?? null,
                     appt.client_id ?? null,
                     appointmentId,
+                    appt.staff_id ?? null,
+                    body.payment_method?.toLowerCase() ?? null,
                     subtotal,
                     body.discount_amount ?? 0,
                     body.tip_amount ?? 0,
                     body.tax_amount ?? 0,
                     total,
                     body.notes ?? null,
+                    invoiceNumber,
                     requesterUserId,
                 ]
             );
             sale = saleRows[0];
 
             for (const item of body.items) {
+                const itemTotalPrice = (item.unit_price * item.quantity - (item.discount_amount ?? 0)).toString();
                 await client.query(
                     `INSERT INTO sale_items (
             sale_id, item_type, item_id, name,
-            quantity, unit_price, discount_amount, staff_id
+            quantity, unit_price, total_price
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
                     [
                         sale.id,
                         item.item_type,
@@ -198,8 +203,7 @@ export const calendarService = {
                         item.name,
                         item.quantity,
                         item.unit_price,
-                        item.discount_amount ?? 0,
-                        item.staff_id ?? null,
+                        itemTotalPrice,
                     ]
                 );
             }

@@ -24,6 +24,7 @@ import calendarRoutes from "./modules/calendar/calendar.routes";
 import salesRoutes from "./modules/sales/sales.routes";
 import inventoryRoutes from "./modules/inventory/inventory.routes";
 import billingRoutes from "./modules/billing/billing.routes";
+import subscriptionsRoutes from "./modules/subscriptions/subscriptions.routes";
 
 
 import swaggerUi from "swagger-ui-express";
@@ -31,10 +32,6 @@ import YAML from "yamljs";
 import path from "path";
 
 const app: Application = express();
-
-
-
-
 app.set("trust proxy", 1);
 // Security middleware
 app.use(helmet());
@@ -85,6 +82,7 @@ app.use("/api/v1/calendar", calendarRoutes);
 app.use("/api/v1/sales", salesRoutes);
 app.use("/api/v1/inventory", inventoryRoutes);
 app.use("/api/v1/billing", billingRoutes);
+app.use("/api/v1/subscriptions", subscriptionsRoutes);
 
 
 
