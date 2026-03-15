@@ -5,8 +5,9 @@
   "main": "src/server.ts",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
-    "start": "ts-node src/server.ts",
-    "start:prod": "NODE_ENV=production ts-node src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "start:prod": "NODE_ENV=production node dist/server.js",
     "lint": "eslint src/**/*.ts",
     "lint:fix": "eslint src/**/*.ts --fix",
     "format": "prettier --write \"src/**/*.ts\"",

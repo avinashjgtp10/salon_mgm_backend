@@ -11027,3 +11027,13 @@
 {"level":"info","message":"🌐 API: http://localhost:3000/api/v1","service":"salon-backend","timestamp":"2026-03-15 00:51:10"}
 {"level":"info","message":"✅ Redis connection successful","service":"salon-backend","timestamp":"2026-03-15 00:51:10"}
 {"level":"info","message":"✅ Database connection successful","service":"salon-backend","timestamp":"2026-03-15 00:51:13"}
+{"level":"info","message":"🚀 Server running on port 3000","service":"salon-backend","timestamp":"2026-03-15 01:02:28"}
+{"level":"info","message":"📍 Environment: development","service":"salon-backend","timestamp":"2026-03-15 01:02:28"}
+{"level":"info","message":"🌐 API: http://localhost:3000/api/v1","service":"salon-backend","timestamp":"2026-03-15 01:02:28"}
+{"level":"info","message":"✅ Redis connection successful","service":"salon-backend","timestamp":"2026-03-15 01:02:28"}
+{"level":"info","message":"✅ Database connection successful","service":"salon-backend","timestamp":"2026-03-15 01:02:29"}
+{"level":"info","message":"🚀 Server running on port 3000","service":"salon-backend","timestamp":"2026-03-15 01:08:11"}
+{"level":"info","message":"📍 Environment: development","service":"salon-backend","timestamp":"2026-03-15 01:08:11"}
+{"level":"info","message":"🌐 API: http://localhost:3000/api/v1","service":"salon-backend","timestamp":"2026-03-15 01:08:11"}
+{"level":"info","message":"✅ Redis connection successful","service":"salon-backend","timestamp":"2026-03-15 01:08:11"}
+{"level":"info","message":"✅ Database connection successful","service":"salon-backend","timestamp":"2026-03-15 01:08:13"}
