@@ -9,6 +9,7 @@ import {
     validateUpdateClient,
     validateClientsListQuery,
     validateMergeClients,
+    validateBlockClients,
 } from "./clients.validator";
 
 const router = Router();
@@ -29,8 +30,27 @@ router.post(
     clientsController.import
 );
 
+// GET  /api/v1/clients/duplicates?phone_number=...
+router.get(
+    "/duplicates",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin"),
+    clientsController.findDuplicates
+);
+
 // MERGE
 router.post("/merge", authMiddleware, roleMiddleware("salon_owner", "admin"), validateMergeClients, clientsController.merge);
+
+router.post(
+    "/merge-duplicates",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin"),
+    clientsController.mergeAllDuplicates
+);
+
+// BLOCK
+router.post("/block", authMiddleware, roleMiddleware("salon_owner", "admin"), validateBlockClients, clientsController.block);
+router.patch("/block", authMiddleware, roleMiddleware("salon_owner", "admin"), validateBlockClients, clientsController.block);
 
 // GET/UPDATE/DELETE by id
 router.get("/:clientId", authMiddleware, roleMiddleware("salon_owner", "admin"), clientsController.getById);

@@ -148,7 +148,9 @@ export const clientsRepository = {
         birthday_day_month,birthday_year,
         gender,pronouns,
         client_source,referred_by_client_id,
-        preferred_language,occupation,country,avatar_url
+        preferred_language,occupation,country,avatar_url,
+        email_notifications,sms_notifications,whatsapp_notifications,
+        email_marketing,sms_marketing,whatsapp_marketing
       ) VALUES (
         $1,$2,$3,
         $4,$5,$6,
@@ -156,7 +158,9 @@ export const clientsRepository = {
         $10,$11,
         $12,$13,
         $14,$15,
-        $16,$17,$18,$19
+        $16,$17,$18,$19,
+        $20,$21,$22,
+        $23,$24,$25
       ) RETURNING *`,
             [
                 body.first_name.trim(),
@@ -168,8 +172,8 @@ export const clientsRepository = {
                 body.additional_email ?? null,
                 body.additional_phone_country_code ?? null,
                 body.additional_phone_number ?? null,
-                body.birthday_day_month ?? null,
-                body.birthday_year ?? null,
+                body.birthday_day_month || null,
+                body.birthday_year || null,
                 body.gender ?? null,
                 body.pronouns ?? null,
                 body.client_source ?? null,
@@ -178,6 +182,12 @@ export const clientsRepository = {
                 body.occupation ?? null,
                 body.country ?? null,
                 body.avatar_url ?? null,
+                body.email_notifications ?? true,
+                body.sms_notifications ?? true,
+                body.whatsapp_notifications ?? true,
+                body.email_marketing ?? false,
+                body.sms_marketing ?? false,
+                body.whatsapp_marketing ?? false,
             ]
         );
 
@@ -220,8 +230,8 @@ export const clientsRepository = {
             else if (k === "additional_email") add("additional_email", patch.additional_email ?? null);
             else if (k === "additional_phone_country_code") add("additional_phone_country_code", patch.additional_phone_country_code ?? null);
             else if (k === "additional_phone_number") add("additional_phone_number", patch.additional_phone_number ?? null);
-            else if (k === "birthday_day_month") add("birthday_day_month", patch.birthday_day_month ?? null);
-            else if (k === "birthday_year") add("birthday_year", patch.birthday_year ?? null);
+            else if (k === "birthday_day_month") add("birthday_day_month", patch.birthday_day_month || null);
+            else if (k === "birthday_year") add("birthday_year", patch.birthday_year || null);
             else if (k === "gender") add("gender", patch.gender ?? null);
             else if (k === "pronouns") add("pronouns", patch.pronouns ?? null);
             else if (k === "client_source") add("client_source", patch.client_source ?? null);
@@ -231,6 +241,13 @@ export const clientsRepository = {
             else if (k === "country") add("country", patch.country ?? null);
             else if (k === "avatar_url") add("avatar_url", patch.avatar_url ?? null);
             else if (k === "is_active") add("is_active", patch.is_active ?? true);
+            else if (k === "block_reason") add("block_reason", patch.block_reason ?? null);
+            else if (k === "email_notifications") add("email_notifications", patch.email_notifications ?? true);
+            else if (k === "sms_notifications") add("sms_notifications", patch.sms_notifications ?? true);
+            else if (k === "whatsapp_notifications") add("whatsapp_notifications", patch.whatsapp_notifications ?? true);
+            else if (k === "email_marketing") add("email_marketing", patch.email_marketing ?? false);
+            else if (k === "sms_marketing") add("sms_marketing", patch.sms_marketing ?? false);
+            else if (k === "whatsapp_marketing") add("whatsapp_marketing", patch.whatsapp_marketing ?? false);
         }
 
         if (full_name !== undefined) add("full_name", full_name);
@@ -328,6 +345,13 @@ export const clientsRepository = {
         await pool.query(`DELETE FROM clients WHERE id = $1`, [clientId]);
     },
 
+    async blockClients(ids: string[], reason: string) {
+        await pool.query(
+            `UPDATE clients SET is_active = false, block_reason = $1, updated_at = NOW() WHERE id = ANY($2::uuid[])`,
+            [reason, ids]
+        );
+    },
+
     // ---------------- IMPORT HELPERS ----------------
     async findExistingByEmailOrPhone(params: { email?: string | null; phone_country_code?: string | null; phone_number?: string | null }) {
         const email = params.email ? String(params.email).trim() : null;
@@ -347,35 +371,63 @@ export const clientsRepository = {
         return null;
     },
 
-    // ---------------- MERGE ----------------
+    // ── Find duplicates by phone ──────────────────────────────────────────────────
+    async findDuplicatesByPhone(phone_number: string): Promise<Client[]> {
+        const { rows } = await pool.query(
+            `SELECT * FROM clients
+             WHERE TRIM(phone_number) = $1
+             AND is_active = true
+             ORDER BY created_at ASC`,
+            [phone_number.trim()]
+        );
+        return rows as Client[];
+    },
+
+    // ── Merge ─────────────────────────────────────────────────────────────────────
     async mergeClients(params: {
-        targetId: string;
+        targetId:  string;
         sourceIds: string[];
-        strategy: MergeStrategy;
-    }): Promise<{ target_client_id: string; merged_source_client_ids: string[]; archived_source_client_ids: string[]; updated_fields: string[] }> {
+        strategy:  MergeStrategy;
+    }): Promise<{
+        target_client_id:           string;
+        merged_source_client_ids:   string[];
+        archived_source_client_ids: string[];
+        updated_fields:             string[];
+    }> {
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
 
-            const targetRes = await client.query(`SELECT * FROM clients WHERE id = $1 FOR UPDATE`, [params.targetId]);
+            // Lock target row
+            const targetRes = await client.query(
+                `SELECT * FROM clients WHERE id = $1 FOR UPDATE`,
+                [params.targetId]
+            );
             const target = targetRes.rows[0] as any;
-            if (!target) throw new Error("Target not found");
+            if (!target) throw new Error("Target client not found");
 
-            const sourcesRes = await client.query(`SELECT * FROM clients WHERE id = ANY($1::uuid[]) FOR UPDATE`, [params.sourceIds]);
+            // Lock all source rows
+            const sourcesRes = await client.query(
+                `SELECT * FROM clients WHERE id = ANY($1::uuid[]) FOR UPDATE`,
+                [params.sourceIds]
+            );
             const sources = sourcesRes.rows as any[];
-            if (sources.length !== params.sourceIds.length) throw new Error("One or more source clients not found");
+            if (sources.length !== params.sourceIds.length)
+                throw new Error("One or more source clients not found");
 
+            // ── Apply merge strategy ──────────────────────────────────────────────
             const updated_fields: string[] = [];
+
+            const isEmpty = (v: any) =>
+                v === null || v === undefined || (typeof v === "string" && !v.trim());
 
             const apply = (field: string, value: any) => {
                 target[field] = value;
                 updated_fields.push(field);
             };
 
-            const isEmpty = (v: any) => v === null || v === undefined || (typeof v === "string" && !v.trim());
-
             if (params.strategy === "prefer_source") {
-                // last source wins if has value
+                // Last source value wins when it has a value
                 for (const s of sources) {
                     for (const f of Object.keys(s)) {
                         if (["id", "created_at", "updated_at"].includes(f)) continue;
@@ -383,25 +435,26 @@ export const clientsRepository = {
                     }
                 }
             } else if (params.strategy === "fill_missing_from_sources") {
+                // Only fill fields that are empty on the target
                 for (const s of sources) {
                     for (const f of Object.keys(s)) {
                         if (["id", "created_at", "updated_at"].includes(f)) continue;
                         if (isEmpty(target[f]) && !isEmpty(s[f])) apply(f, s[f]);
                     }
                 }
-            } else {
-                // prefer_target: do nothing to fields
             }
+            // prefer_target → no field changes, target data wins as-is
 
-            // recompute full_name (safety)
-            const full_name = buildFullName(target.first_name, target.last_name);
+            // Always recompute full_name for safety
+            const full_name =
+                `${String(target.first_name || "").trim()} ${String(target.last_name || "").trim()}`.trim();
             if (target.full_name !== full_name) apply("full_name", full_name);
 
-            // update target
+            // ── Update target fields ──────────────────────────────────────────────
             const fieldsToUpdate = Array.from(new Set(updated_fields));
             if (fieldsToUpdate.length) {
                 const setParts: string[] = [];
-                const values: any[] = [];
+                const values:   any[]    = [];
                 let i = 1;
                 for (const f of fieldsToUpdate) {
                     setParts.push(`${f} = $${i++}`);
@@ -409,29 +462,70 @@ export const clientsRepository = {
                 }
                 setParts.push(`updated_at = NOW()`);
                 values.push(params.targetId);
-
-                await client.query(`UPDATE clients SET ${setParts.join(", ")} WHERE id = $${values.length}`, values);
+                await client.query(
+                    `UPDATE clients SET ${setParts.join(", ")} WHERE id = $${values.length}`,
+                    values
+                );
             } else {
-                await client.query(`UPDATE clients SET updated_at = NOW() WHERE id = $1`, [params.targetId]);
+                // No field changes but still touch updated_at
+                await client.query(
+                    `UPDATE clients SET updated_at = NOW() WHERE id = $1`,
+                    [params.targetId]
+                );
             }
 
-            // move relations to target
-            await client.query(`UPDATE client_addresses SET client_id = $1 WHERE client_id = ANY($2::uuid[])`, [params.targetId, params.sourceIds]);
-            await client.query(`UPDATE client_emergency_contacts SET client_id = $1 WHERE client_id = ANY($2::uuid[])`, [
-                params.targetId,
-                params.sourceIds,
-            ]);
+            // ── Move all relations to target ──────────────────────────────────────
+            await client.query(
+                `UPDATE client_addresses
+                 SET client_id = $1
+                 WHERE client_id = ANY($2::uuid[])`,
+                [params.targetId, params.sourceIds]
+            );
 
-            // archive sources
-            await client.query(`UPDATE clients SET is_active = false, updated_at = NOW() WHERE id = ANY($1::uuid[])`, [params.sourceIds]);
+            // 1. Delete source contacts that conflict with target's existing types
+            await client.query(
+                `DELETE FROM client_emergency_contacts
+                 WHERE client_id = ANY($1::uuid[])
+                 AND type IN (SELECT type FROM client_emergency_contacts WHERE client_id = $2)`,
+                [params.sourceIds, params.targetId]
+            );
+
+            // 2. Deduplicate BETWEEN sources (if multiple sources have same type, keep oldest)
+            await client.query(
+                `DELETE FROM client_emergency_contacts
+                 WHERE id IN (
+                     SELECT id FROM (
+                         SELECT id, ROW_NUMBER() OVER (PARTITION BY type ORDER BY created_at ASC) as rn
+                         FROM client_emergency_contacts
+                         WHERE client_id = ANY($1::uuid[])
+                     ) t WHERE rn > 1
+                 )`,
+                [params.sourceIds]
+            );
+
+            // 3. Move remaining unique contacts
+            await client.query(
+                `UPDATE client_emergency_contacts
+                 SET client_id = $1
+                 WHERE client_id = ANY($2::uuid[])`,
+                [params.targetId, params.sourceIds]
+            );
+
+            // ── Archive source clients ────────────────────────────────────────────
+            await client.query(
+                `UPDATE clients
+                 SET is_active = false, updated_at = NOW()
+                 WHERE id = ANY($1::uuid[])`,
+                [params.sourceIds]
+            );
 
             await client.query("COMMIT");
 
             return {
-                target_client_id: params.targetId,
-                merged_source_client_ids: params.sourceIds,
+                target_client_id:           params.targetId,
+                merged_source_client_ids:   params.sourceIds,
                 archived_source_client_ids: params.sourceIds,
-                updated_fields: fieldsToUpdate,
+                updated_fields:             fieldsToUpdate,
             };
         } catch (e) {
             await client.query("ROLLBACK");
@@ -439,5 +533,34 @@ export const clientsRepository = {
         } finally {
             client.release();
         }
+    },
+
+    // Find all groups of clients sharing the same phone number
+    async findAllDuplicateGroups(): Promise<Record<string, Client[]>> {
+        const { rows } = await pool.query(
+            `SELECT * FROM clients
+             WHERE phone_number IS NOT NULL
+             AND TRIM(phone_number) != ''
+             AND is_active = true
+             AND phone_number IN (
+                 SELECT phone_number
+                 FROM clients
+                 WHERE phone_number IS NOT NULL
+                 AND TRIM(phone_number) != ''
+                 AND is_active = true
+                 GROUP BY phone_number
+                 HAVING COUNT(*) > 1
+             )
+             ORDER BY phone_number, created_at ASC`
+        );
+
+        // Group by phone_number
+        const groups: Record<string, Client[]> = {};
+        for (const row of rows) {
+            const phone = row.phone_number.trim();
+            if (!groups[phone]) groups[phone] = [];
+            groups[phone].push(row as Client);
+        }
+        return groups;
     },
 };

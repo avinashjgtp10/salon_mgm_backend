@@ -71,6 +71,10 @@ export const clientsController = {
             const clientId = String(req.params.clientId || "").trim();
             if (!clientId) throw new AppError(400, "clientId is required", "VALIDATION_ERROR");
 
+            // Validate UUID format to prevent database syntax errors
+            const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clientId);
+            if (!isUUID) throw new AppError(400, "Invalid clientId format", "VALIDATION_ERROR");
+
             const include = req.query.include ? String(req.query.include) : "";
             const data = await clientsService.getById(clientId, include);
             return sendSuccess(res, 200, data, "Client fetched successfully");
@@ -85,6 +89,10 @@ export const clientsController = {
             const clientId = String(req.params.clientId || "").trim();
             if (!clientId) throw new AppError(400, "clientId is required", "VALIDATION_ERROR");
 
+            // Validate UUID format to prevent database syntax errors
+            const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clientId);
+            if (!isUUID) throw new AppError(400, "Invalid clientId format", "VALIDATION_ERROR");
+
             const patch = req.body as UpdateClientBody;
             const updated = await clientsService.update(clientId, patch);
             return sendSuccess(res, 200, updated, "Client updated successfully");
@@ -98,6 +106,10 @@ export const clientsController = {
         try {
             const clientId = String(req.params.clientId || "").trim();
             if (!clientId) throw new AppError(400, "clientId is required", "VALIDATION_ERROR");
+
+            // Validate UUID format to prevent database syntax errors
+            const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clientId);
+            if (!isUUID) throw new AppError(400, "Invalid clientId format", "VALIDATION_ERROR");
 
             const hard = String(req.query.hard || "").toLowerCase() === "true";
             await clientsService.remove(clientId, hard);
@@ -131,11 +143,60 @@ export const clientsController = {
         }
     },
 
+    // GET /api/v1/clients/duplicates?phone_number=+91XXXXXXXXXX
+    async findDuplicates(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const phone_number = req.query.phone_number
+                ? String(req.query.phone_number).trim()
+                : "";
+
+            if (!phone_number)
+                throw new AppError(
+                    400,
+                    "phone_number query param is required",
+                    "VALIDATION_ERROR"
+                );
+
+            const duplicates = await clientsService.findDuplicatesByPhone(phone_number);
+            return sendSuccess(res, 200, duplicates, "Duplicates fetched successfully");
+        } catch (e) {
+            return next(e);
+        }
+    },
+
     // POST /api/v1/clients/merge
     async merge(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const result = await clientsService.mergeClients(req.body);
             return sendSuccess(res, 200, result, "Clients merged successfully");
+        } catch (e) {
+            return next(e);
+        }
+    },
+
+    // POST /api/v1/clients/merge-duplicates
+    async mergeAllDuplicates(_req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const result = await clientsService.mergeAllDuplicates();
+            return sendSuccess(
+                res,
+                200,
+                result,
+                result.total_groups === 0
+                    ? "No duplicate clients found"
+                    : `Merged ${result.total_merged} duplicate groups, archived ${result.total_archived} clients`
+            );
+        } catch (e) {
+            return next(e);
+        }
+    },
+
+    // POST /api/v1/clients/block
+    async block(req: Request, res: Response, next: NextFunction) {
+        try {
+            const { client_ids, reason } = req.body;
+            await clientsService.blockClients(client_ids, reason);
+            return sendSuccess(res, 200, {}, "Clients blocked");
         } catch (e) {
             return next(e);
         }
@@ -189,6 +250,13 @@ export const clientsController = {
                 reviews_avg: c.reviews_avg,
                 reviews_count: c.reviews_count,
                 is_active: c.is_active,
+                block_reason: c.block_reason,
+                email_notifications: c.email_notifications,
+                sms_notifications: c.sms_notifications,
+                whatsapp_notifications: c.whatsapp_notifications,
+                email_marketing: c.email_marketing,
+                sms_marketing: c.sms_marketing,
+                whatsapp_marketing: c.whatsapp_marketing,
                 created_at: c.created_at,
                 updated_at: c.updated_at,
             }));
