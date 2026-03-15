@@ -66,6 +66,8 @@ app.get("/health", (_req, res) => {
 
 // ✅ API ROUTES (MUST be before 404)
 app.use("/api/v1/auth", authRoutes);
+// Alias: Google OAuth console uses /api/v1/oauth/google/callback as redirect URI
+app.use("/api/v1/oauth", authRoutes);
 app.use("/api/v1/users", usersRoutes);
 app.use("/api/v1/categories", categoriesRoutes);
 app.use("/api/v1/salons", salonsRoutes);

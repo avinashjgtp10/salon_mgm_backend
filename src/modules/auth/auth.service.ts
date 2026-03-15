@@ -219,32 +219,41 @@ export const authService = {
   },
 
   // ================= EMAIL OTP =================
+
+  // Redis key for pre-registration OTP (user doesn't exist yet)
+  _preRegOtpKey(email: string) {
+    return `otp:email:${email}`;
+  },
+
   async sendEmailOtp(emailRaw: string) {
     const email = String(emailRaw || "").trim().toLowerCase();
     logger.info("[authService.sendEmailOtp] Start", { email });
 
     if (!email) throw new AppError(400, "Email is required", "VALIDATION_ERROR");
 
-    const user = await authRepository.findUserByEmail(email);
-    if (!user) {
-      logger.warn("[authService.sendEmailOtp] User not found", { email });
-      throw new AppError(404, "User not found", "USER_NOT_FOUND");
-    }
-
     const otp = generateOtp();
     const otpHash = await hashOtp(otp);
-    logger.info("[authService.sendEmailOtp] OTP generated, saving to DB", { userId: user.id });
 
-    await authRepository.createOtpVerification({
-      user_id: user.id,
-      otp_code: otpHash,
-      purpose: "email_verification",
-      expires_at: otpExpiry(10),
-    });
+    const user = await authRepository.findUserByEmail(email);
+
+    if (user) {
+      // Existing user: store OTP in the DB (original flow)
+      logger.info("[authService.sendEmailOtp] Existing user — saving OTP to DB", { userId: user.id });
+      await authRepository.createOtpVerification({
+        user_id: user.id,
+        otp_code: otpHash,
+        purpose: "email_verification",
+        expires_at: otpExpiry(10),
+      });
+    } else {
+      // Pre-registration: store OTP hash in Redis keyed by email (10 min TTL)
+      logger.info("[authService.sendEmailOtp] Pre-registration — saving OTP to Redis", { email });
+      await redis.set(this._preRegOtpKey(email), otpHash, "EX", 10 * 60);
+    }
 
     logger.info("[authService.sendEmailOtp] Sending OTP email", { email });
     try {
-      await emailService.sendOtpEmail(user.email, otp);
+      await emailService.sendOtpEmail(email, otp);
       logger.info("[authService.sendEmailOtp] Email sent successfully", { email });
     } catch (emailErr: any) {
       logger.error("[authService.sendEmailOtp] Failed to send email", {
@@ -266,11 +275,32 @@ export const authService = {
     if (!email || !otp) throw new AppError(400, "Email and OTP required", "VALIDATION_ERROR");
 
     const user = await authRepository.findUserByEmail(email);
+
     if (!user) {
-      logger.warn("[authService.verifyEmailOtp] User not found", { email });
-      throw new AppError(404, "User not found", "USER_NOT_FOUND");
+      // Pre-registration flow: verify against Redis
+      logger.info("[authService.verifyEmailOtp] Pre-registration — checking OTP from Redis", { email });
+      const storedHash = await redis.get(this._preRegOtpKey(email));
+      if (!storedHash) {
+        logger.warn("[authService.verifyEmailOtp] Redis OTP not found or expired", { email });
+        throw new AppError(400, "OTP not found or expired", "OTP_NOT_FOUND");
+      }
+
+      const ok = await compareOtp(otp, storedHash);
+      if (!ok) {
+        logger.warn("[authService.verifyEmailOtp] OTP mismatch (pre-registration)", { email });
+        throw new AppError(400, "Invalid OTP", "OTP_INVALID");
+      }
+
+      // Mark it used by deleting from Redis
+      await redis.del(this._preRegOtpKey(email));
+      // Store a verified marker so register endpoint can confirm email was verified
+      await redis.set(`otp:email:verified:${email}`, "1", "EX", 30 * 60);
+
+      logger.info("[authService.verifyEmailOtp] Pre-registration email verified", { email });
+      return { message: "Email verified successfully", success: true };
     }
 
+    // Existing user: check DB (original flow)
     const latest = await authRepository.findLatestOtp(user.id, "email_verification");
     if (!latest) {
       logger.warn("[authService.verifyEmailOtp] No OTP record found", { userId: user.id });
@@ -297,7 +327,7 @@ export const authService = {
     await authRepository.markUserVerified(user.id);
 
     logger.info("[authService.verifyEmailOtp] Email verified successfully", { email, userId: user.id });
-    return { message: "Email verified successfully" };
+    return { message: "Email verified successfully", success: true };
   },
 
   // ================= EXOTEL PHONE OTP =================

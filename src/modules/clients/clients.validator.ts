@@ -14,11 +14,12 @@ const isOptionalNumber = (v: unknown) => v === undefined || v === null || (typeo
 const isDateString = (v: unknown) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
 const isOptionalDateString = (v: unknown) => v === undefined || v === null || isDateString(v);
 
-const isMMDD = (v: unknown) => typeof v === "string" && /^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(v);
-const isOptionalMMDD = (v: unknown) => v === undefined || v === null || isMMDD(v);
+// Supports DD-MM, DD-MM-YYYY, MM-DD, and YYYY-MM-DD (HTML5 date picker)
+const isMMDD = (v: unknown) => typeof v === "string" && (/^(\d{1,2})-(\d{1,2})(-\d{4})?$/.test(v) || /^\d{4}-\d{2}-\d{2}$/.test(v));
+const isOptionalMMDD = (v: unknown) => v === undefined || v === null || v === "" || isMMDD(v);
 
 const validateAddressesArray = (arr: any, allowId: boolean) => {
-    if (arr === undefined) return;
+    if (arr === undefined || arr === null) return;
     if (!Array.isArray(arr)) throw new AppError(400, "addresses must be array", "VALIDATION_ERROR");
     for (const a of arr) {
         if (allowId && a.id !== undefined && a.id !== null && !isUUID(a.id)) {
@@ -45,7 +46,7 @@ const validateAddressesArray = (arr: any, allowId: boolean) => {
 };
 
 const validateEmergencyContactsArray = (arr: any, allowId: boolean) => {
-    if (arr === undefined) return;
+    if (arr === undefined || arr === null) return;
     if (!Array.isArray(arr)) throw new AppError(400, "emergency_contacts must be array", "VALIDATION_ERROR");
     for (const e of arr) {
         if (allowId && e.id !== undefined && e.id !== null && !isUUID(e.id)) {
@@ -88,15 +89,28 @@ export const validateCreateClient = (req: Request, _res: Response, next: NextFun
             "avatar_url",
         ] as const;
 
+        const optionalBooleanFields = [
+            "email_notifications",
+            "sms_notifications",
+            "whatsapp_notifications",
+            "email_marketing",
+            "sms_marketing",
+            "whatsapp_marketing",
+        ] as const;
+
         for (const f of optionalStringFields) {
             if (!isOptionalString(b[f])) throw new AppError(400, `${f} must be string`, "VALIDATION_ERROR");
+        }
+
+        for (const f of optionalBooleanFields) {
+            if (!isOptionalBoolean(b[f])) throw new AppError(400, `${f} must be boolean`, "VALIDATION_ERROR");
         }
 
         if (b.referred_by_client_id !== undefined && b.referred_by_client_id !== null && !isUUID(b.referred_by_client_id)) {
             throw new AppError(400, "referred_by_client_id must be uuid", "VALIDATION_ERROR");
         }
 
-        if (!isOptionalMMDD(b.birthday_day_month)) throw new AppError(400, "birthday_day_month must be MM-DD", "VALIDATION_ERROR");
+        if (!isOptionalMMDD(b.birthday_day_month)) throw new AppError(400, "birthday_day_month is invalid", "VALIDATION_ERROR");
         if (!isOptionalNumber(b.birthday_year)) throw new AppError(400, "birthday_year must be number", "VALIDATION_ERROR");
 
         validateAddressesArray(b.addresses, false);
@@ -128,20 +142,33 @@ export const validateUpdateClient = (req: Request, _res: Response, next: NextFun
             "occupation",
             "country",
             "avatar_url",
+            "block_reason",
+        ] as const;
+
+        const optionalBooleanFields = [
+            "is_active",
+            "email_notifications",
+            "sms_notifications",
+            "whatsapp_notifications",
+            "email_marketing",
+            "sms_marketing",
+            "whatsapp_marketing",
         ] as const;
 
         for (const f of optionalStringFields) {
             if (!isOptionalString(b[f])) throw new AppError(400, `${f} must be string`, "VALIDATION_ERROR");
         }
 
+        for (const f of optionalBooleanFields) {
+            if (!isOptionalBoolean(b[f])) throw new AppError(400, `${f} must be boolean`, "VALIDATION_ERROR");
+        }
+
         if (b.referred_by_client_id !== undefined && b.referred_by_client_id !== null && !isUUID(b.referred_by_client_id)) {
             throw new AppError(400, "referred_by_client_id must be uuid", "VALIDATION_ERROR");
         }
 
-        if (!isOptionalMMDD(b.birthday_day_month)) throw new AppError(400, "birthday_day_month must be MM-DD", "VALIDATION_ERROR");
+        if (!isOptionalMMDD(b.birthday_day_month)) throw new AppError(400, "birthday_day_month is invalid", "VALIDATION_ERROR");
         if (!isOptionalNumber(b.birthday_year)) throw new AppError(400, "birthday_year must be number", "VALIDATION_ERROR");
-
-        if (!isOptionalBoolean(b.is_active)) throw new AppError(400, "is_active must be boolean", "VALIDATION_ERROR");
 
         validateAddressesArray(b.addresses, true);
         validateEmergencyContactsArray(b.emergency_contacts, true);
@@ -217,6 +244,26 @@ export const validateMergeClients = (req: Request, _res: Response, next: NextFun
             if (!["prefer_target", "prefer_source", "fill_missing_from_sources"].includes(s))
                 throw new AppError(400, "strategy invalid", "VALIDATION_ERROR");
         }
+
+        return next();
+    } catch (e) {
+        return next(e);
+    }
+};
+
+export const validateBlockClients = (req: Request, _res: Response, next: NextFunction) => {
+    try {
+        const b = req.body;
+
+        if (!Array.isArray(b.client_ids) || b.client_ids.length < 1)
+            throw new AppError(400, "client_ids must be non-empty uuid array", "VALIDATION_ERROR");
+
+        for (const id of b.client_ids) {
+            if (!isUUID(id)) throw new AppError(400, "client_ids must be uuid array", "VALIDATION_ERROR");
+        }
+
+        if (!isString(b.reason) || !b.reason.trim())
+            throw new AppError(400, "reason is required", "VALIDATION_ERROR");
 
         return next();
     } catch (e) {

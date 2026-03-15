@@ -2,6 +2,7 @@
 import { AppError } from "../../middleware/error.middleware";
 import { clientsRepository } from "./clients.repository";
 import {
+    Client,
     ClientWithRelations,
     CreateClientBody,
     UpdateClientBody,
@@ -91,6 +92,11 @@ export const clientsService = {
         else await clientsRepository.softDelete(clientId);
     },
 
+    async blockClients(ids: string[], reason: string): Promise<void> {
+        if (!ids?.length) return;
+        await clientsRepository.blockClients(ids, reason);
+    },
+
     // ---------------- IMPORT ----------------
     async importClients(params: {
         rows: Array<any>;
@@ -108,23 +114,23 @@ export const clientsService = {
         // basic mapping: expects columns like:
         // first_name,last_name,email,phone_country_code,phone_number,client_source,country,birthday_day_month,birthday_year
         const toBody = (r: any): CreateClientBody => ({
-            first_name: String(r.first_name ?? r["First Name"] ?? r["first name"] ?? "").trim(),
-            last_name: String(r.last_name ?? r["Last Name"] ?? r["last name"] ?? "").trim(),
-            email: r.email ?? r["Email"] ?? null,
-            phone_country_code: r.phone_country_code ?? r["Phone Country Code"] ?? r["country_code"] ?? null,
-            phone_number: r.phone_number ?? r["Phone"] ?? r["phone"] ?? null,
-            additional_email: r.additional_email ?? r["Additional Email"] ?? null,
-            additional_phone_country_code: r.additional_phone_country_code ?? r["Additional Phone Country Code"] ?? null,
-            additional_phone_number: r.additional_phone_number ?? r["Additional Phone"] ?? null,
-            birthday_day_month: r.birthday_day_month ?? r["Birthday Day Month"] ?? r["birthday_mmdd"] ?? null,
-            birthday_year: r.birthday_year ? Number(r.birthday_year) : r["Birthday Year"] ? Number(r["Birthday Year"]) : null,
-            client_source: r.client_source ?? r["Client Source"] ?? null,
-            preferred_language: r.preferred_language ?? r["Preferred Language"] ?? null,
-            occupation: r.occupation ?? r["Occupation"] ?? null,
-            country: r.country ?? r["Country"] ?? null,
-            gender: r.gender ?? r["Gender"] ?? null,
-            pronouns: r.pronouns ?? r["Pronouns"] ?? null,
-            avatar_url: r.avatar_url ?? r["Avatar URL"] ?? null,
+            first_name: String(r.firstName ?? "").trim(),
+            last_name:  String(r.lastName  ?? "").trim(),
+            email:      r.email    ? String(r.email).trim()  : null,
+            phone_country_code:  null, // not in FRESHA_COLUMNS — stays null unless you add it
+            phone_number:        r.mobile  ? String(r.mobile).trim()  : null,
+            additional_email:    null,
+            additional_phone_country_code: null,
+            additional_phone_number: null,
+            birthday_day_month:  r.birthday ? String(r.birthday).trim() : null,
+            birthday_year:       null,
+            client_source:       null,
+            preferred_language:  null,
+            occupation:          null,
+            country:             null,
+            gender:              r.gender ? String(r.gender).trim() : null,
+            pronouns:            null,
+            avatar_url:          null,
         });
 
         for (let i = 0; i < params.rows.length; i++) {
@@ -132,9 +138,9 @@ export const clientsService = {
             try {
                 const body = normalizeCreateBody(toBody(params.rows[i]));
 
-                if (!body.first_name || !body.last_name) {
+                if (!body.first_name) {
                     result.skipped += 1;
-                    result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: "first_name and last_name are required" });
+                    result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: "first_name is required" });
                     continue;
                 }
 
@@ -176,17 +182,106 @@ export const clientsService = {
         return result;
     },
 
-    // ---------------- MERGE ----------------
+    // ── Find duplicates by phone (called by GET /duplicates) ──────────────────────
+    async findDuplicatesByPhone(phone_number: string): Promise<Client[]> {
+        const cleaned = String(phone_number || "").trim();
+        if (!cleaned)
+            throw new AppError(400, "phone_number is required", "VALIDATION_ERROR");
+
+        const duplicates = await clientsRepository.findDuplicatesByPhone(cleaned);
+        return duplicates;
+    },
+
+    // ── Merge clients ─────────────────────────────────────────────────────────────
     async mergeClients(body: ClientsMergeBody) {
-        const target = await clientsRepository.findById(body.target_client_id);
-        if (!target) throw new AppError(404, "Target client not found", "NOT_FOUND");
+        // Collect all IDs (target + sources) and find the oldest automatically
+        const allIds = [body.target_client_id, ...body.source_client_ids];
+
+        // Remove duplicates
+        const uniqueIds = Array.from(new Set(allIds));
+        if (uniqueIds.length < 2)
+            throw new AppError(400, "At least 2 unique client IDs are required to merge", "VALIDATION_ERROR");
+
+        // Fetch all clients and validate they exist
+        const clients: Client[] = [];
+        for (const id of uniqueIds) {
+            const c = await clientsRepository.findById(id);
+            if (!c) throw new AppError(404, `Client ${id} not found`, "NOT_FOUND");
+            clients.push(c);
+        }
+
+        // Sort by created_at ASC — oldest is always the target
+        clients.sort(
+            (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        );
+
+        const targetId  = clients[0].id;
+        const sourceIds = clients.slice(1).map((c) => c.id);
 
         const strategy: MergeStrategy = body.strategy ?? "fill_missing_from_sources";
 
-        return clientsRepository.mergeClients({
-            targetId: body.target_client_id,
-            sourceIds: body.source_client_ids,
-            strategy,
-        });
+        return clientsRepository.mergeClients({ targetId, sourceIds, strategy });
+    },
+
+    async mergeAllDuplicates(): Promise<{
+        total_groups:  number;
+        total_merged:  number;
+        total_archived: number;
+        results: Array<{
+            phone_number: string;
+            target_client_id: string;
+            archived_client_ids: string[];
+            updated_fields: string[];
+        }>;
+        errors: Array<{
+            phone_number: string;
+            message: string;
+        }>;
+    }> {
+        // Get all duplicate groups
+        const groups = await clientsRepository.findAllDuplicateGroups();
+        const phoneNumbers = Object.keys(groups);
+
+        const result = {
+            total_groups:   phoneNumbers.length,
+            total_merged:   0,
+            total_archived: 0,
+            results: [] as any[],
+            errors:  [] as any[],
+        };
+
+        if (phoneNumbers.length === 0) return result;
+
+        // Process each duplicate group one by one
+        for (const phone of phoneNumbers) {
+            const clients = groups[phone];
+            try {
+                // Oldest client (index 0 since ordered by created_at ASC) = target
+                const targetId  = clients[0].id;
+                const sourceIds = clients.slice(1).map((c) => c.id);
+
+                const merged = await clientsRepository.mergeClients({
+                    targetId,
+                    sourceIds,
+                    strategy: "fill_missing_from_sources",
+                });
+
+                result.total_merged   += 1;
+                result.total_archived += sourceIds.length;
+                result.results.push({
+                    phone_number:        phone,
+                    target_client_id:    merged.target_client_id,
+                    archived_client_ids: merged.archived_source_client_ids,
+                    updated_fields:      merged.updated_fields,
+                });
+            } catch (e: any) {
+                result.errors.push({
+                    phone_number: phone,
+                    message:      e?.message || "Unknown error",
+                });
+            }
+        }
+
+        return result;
     },
 };

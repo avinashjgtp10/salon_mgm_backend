@@ -35,6 +35,15 @@ export type Client = {
     reviews_count: number;
 
     is_active: boolean;
+    block_reason: string | null;
+
+    email_notifications: boolean;
+    sms_notifications: boolean;
+    whatsapp_notifications: boolean;
+
+    email_marketing: boolean;
+    sms_marketing: boolean;
+    whatsapp_marketing: boolean;
 
     created_at: string;
     updated_at: string;
@@ -43,7 +52,7 @@ export type Client = {
 export type ClientAddress = {
     id: string;
     client_id: string;
-    type: string; // home/work/other
+    type: string; // home/work/otr
     address_name: string | null;
     address_line1: string | null;
     address_line2: string | null;
@@ -110,10 +119,19 @@ export type CreateClientBody = {
 
     addresses?: CreateClientAddressInput[];
     emergency_contacts?: CreateEmergencyContactInput[];
+
+    email_notifications?: boolean;
+    sms_notifications?: boolean;
+    whatsapp_notifications?: boolean;
+
+    email_marketing?: boolean;
+    sms_marketing?: boolean;
+    whatsapp_marketing?: boolean;
 };
 
 export type UpdateClientBody = Partial<CreateClientBody> & {
     is_active?: boolean;
+    block_reason?: string | null;
     addresses?: UpsertClientAddressInput[];
     emergency_contacts?: UpsertEmergencyContactInput[];
 };
@@ -156,7 +174,6 @@ export type ClientsImportResult = {
 };
 
 export type MergeStrategy = "prefer_target" | "prefer_source" | "fill_missing_from_sources";
-
 export type ClientsMergeBody = {
     target_client_id: string;
     source_client_ids: string[];
