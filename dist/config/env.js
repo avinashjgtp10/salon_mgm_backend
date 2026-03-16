@@ -41,13 +41,9 @@ const config = {
         keepAliveInitialDelayMillis: 10000,
     },
 
-    // REDIS - strictly from environment variables
+    // REDIS - single URL (Upstash)
     redis: {
-        host: required("REDIS_HOST"),
-        port: parseInt(required("REDIS_PORT")),
-        password: required("REDIS_PASSWORD"),
-        db: parseInt(process.env.REDIS_DB || '0'),
-        tls: process.env.NODE_ENV === 'production' ? {} : undefined,
+        url: required("REDIS_URL"),
     },
 
     // JWT
