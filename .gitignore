@@ -8,4 +8,6 @@ logs
 
 # environment files
 
-
+.env.local
+.env
+!.env.example
