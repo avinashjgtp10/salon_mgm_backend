@@ -9,7 +9,6 @@ const router = Router();
 router.post(
     "/",
     authMiddleware,
-    roleMiddleware("salon_owner", "admin"),
     validateCreateSalon,
     salonsController.create
 );
@@ -17,7 +16,6 @@ router.post(
 router.get(
     "/me",
     authMiddleware,
-    roleMiddleware("salon_owner", "admin"),
     salonsController.mySalon
 );
 
