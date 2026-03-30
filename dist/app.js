@@ -30,6 +30,7 @@ const sales_routes_1 = __importDefault(require("./modules/sales/sales.routes"));
 const inventory_routes_1 = __importDefault(require("./modules/inventory/inventory.routes"));
 const billing_routes_1 = __importDefault(require("./modules/billing/billing.routes"));
 const subscriptions_routes_1 = __importDefault(require("./modules/subscriptions/subscriptions.routes"));
+const whatsapp_routes_1 = __importDefault(require("./modules/marketing/whatsapp/whatsapp.routes"));
 const swagger_ui_express_1 = __importDefault(require("swagger-ui-express"));
 const yamljs_1 = __importDefault(require("yamljs"));
 const path_1 = __importDefault(require("path"));
@@ -81,6 +82,7 @@ app.use("/api/v1/sales", sales_routes_1.default);
 app.use("/api/v1/inventory", inventory_routes_1.default);
 app.use("/api/v1/billing", billing_routes_1.default);
 app.use("/api/v1/subscriptions", subscriptions_routes_1.default);
+app.use("/api/v1/marketing/whatsapp", whatsapp_routes_1.default);
 // Swagger Documentation
 const swaggerDocument = yamljs_1.default.load(path_1.default.join(__dirname, "../docs/api/swagger.yaml"));
 app.use("/api-docs", swagger_ui_express_1.default.serve, swagger_ui_express_1.default.setup(swaggerDocument));

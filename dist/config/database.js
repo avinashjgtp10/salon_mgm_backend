@@ -5,14 +5,33 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const pg_1 = require("pg");
 const dotenv_1 = __importDefault(require("dotenv"));
+const fs_1 = __importDefault(require("fs"));
+const path_1 = __importDefault(require("path"));
 dotenv_1.default.config({ path: '.env.local' });
+const sslConfig = (() => {
+    if (process.env.DB_SSL !== 'true')
+        return false;
+    const caPath = process.env.DB_CA_PATH;
+    if (caPath) {
+        try {
+            return {
+                rejectUnauthorized: false,
+                ca: fs_1.default.readFileSync(path_1.default.resolve(caPath)).toString(),
+            };
+        }
+        catch {
+            console.warn('⚠️  Could not read DB_CA_PATH, using SSL without CA cert');
+        }
+    }
+    return { rejectUnauthorized: false };
+})();
 const pool = new pg_1.Pool({
     host: process.env.DB_HOST,
     port: parseInt(process.env.DB_PORT || '5432'),
     database: process.env.DB_NAME,
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
-    ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
+    ssl: sslConfig,
     min: parseInt(process.env.DB_POOL_MIN || '2'),
     max: parseInt(process.env.DB_POOL_MAX || '10'),
     idleTimeoutMillis: 30000,

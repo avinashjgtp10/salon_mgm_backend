@@ -1,8 +1,10 @@
+import './modules/marketing/whatsapp/queue/campaign.processor'
 import app from './app';
 import config from './config/env';
 import logger from './config/logger';
 import db from './config/database';
 import redis from './config/redis';
+
 
 const PORT = config.port;
 
