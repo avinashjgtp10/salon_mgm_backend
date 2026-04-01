@@ -122,7 +122,7 @@ exports.authService = {
             throw new error_middleware_1.AppError(401, "Invalid credentials", "INVALID_CREDENTIALS");
         }
         await auth_repository_1.authRepository.updateLastLogin(user.id);
-        const accessToken = signAccessToken({ userId: user.id, role: user.role });
+        const accessToken = signAccessToken({ userId: user.id, role: user.role, salonId: user.salon_id });
         const refreshToken = signRefreshToken({ userId: user.id });
         await auth_repository_1.authRepository.saveRefreshToken({
             user_id: user.id,
@@ -173,7 +173,7 @@ exports.authService = {
             logger_1.default.warn("[authService.refresh] User is inactive", { userId });
             throw new error_middleware_1.AppError(403, "User is inactive", "USER_INACTIVE");
         }
-        const newAccessToken = signAccessToken({ userId: user.id, role: user.role });
+        const newAccessToken = signAccessToken({ userId: user.id, role: user.role, salonId: user.salon_id });
         logger_1.default.info("[authService.refresh] New access token issued", { userId });
         return { accessToken: newAccessToken };
     },
@@ -455,7 +455,7 @@ exports.authService = {
             user = await auth_repository_1.authRepository.createUserFromGoogle(profile);
             await auth_repository_1.authRepository.attachGoogleIdentity(user.id, profile);
         }
-        const accessToken = signAccessToken({ userId: user.id, role: user.role });
+        const accessToken = signAccessToken({ userId: user.id, role: user.role, salonId: user.salon_id });
         const refreshToken = signRefreshToken({ userId: user.id });
         await auth_repository_1.authRepository.saveRefreshToken({
             user_id: user.id,

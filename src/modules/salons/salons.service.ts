@@ -2,6 +2,25 @@ import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { salonsRepository } from "./salons.repository";
 import { CreateSalonBody, UpdateSalonBody, Salon } from "./salons.types";
+import { authRepository } from "../auth/auth.repository";
+import jwt, { Secret, SignOptions } from "jsonwebtoken";
+
+// ── token helpers (mirrors auth.service.ts) ───────────────────────────────────
+const ACCESS_SECRET: Secret  = process.env.JWT_ACCESS_SECRET  || "";
+const REFRESH_SECRET: Secret = process.env.JWT_REFRESH_SECRET || "";
+
+const accessOptions:  SignOptions = { expiresIn: (process.env.JWT_ACCESS_EXPIRES_IN  || "15m") as any };
+const refreshOptions: SignOptions = { expiresIn: (process.env.JWT_REFRESH_EXPIRES_IN || "30d") as any };
+
+const signAccessToken  = (p: { userId: string; role: string; salonId: string }) =>
+  jwt.sign(p, ACCESS_SECRET, accessOptions);
+
+const signRefreshToken = (p: { userId: string }) =>
+  jwt.sign(p, REFRESH_SECRET, refreshOptions);
+
+const refreshExpiryDate = () =>
+  new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+// ─────────────────────────────────────────────────────────────────────────────
 
 const slugify = (text: string) =>
     text
@@ -11,7 +30,7 @@ const slugify = (text: string) =>
         .replace(/(^-|-$)+/g, "");
 
 export const salonsService = {
-    async create(ownerId: string, body: CreateSalonBody): Promise<Salon> {
+    async create(ownerId: string, body: CreateSalonBody) {
         logger.info("salonsService.create called", { ownerId });
 
         const existing = await salonsRepository.findByOwnerId(ownerId);
@@ -34,15 +53,44 @@ export const salonsService = {
         }
 
         try {
-            const created = await salonsRepository.create(ownerId, { ...body, slug: finalSlug });
+            const salon = await salonsRepository.create(ownerId, { ...body, slug: finalSlug });
+
+            // Fetch user so we can embed the correct role in the new token
+            const user = await authRepository.findUserById(ownerId);
+            if (!user) throw new AppError(404, "User not found", "USER_NOT_FOUND");
+
+            // Promote to salon_owner if they came in as a client (e.g. Google OAuth)
+            if (user.role !== "salon_owner") {
+                await authRepository.upgradeToSalonOwner(ownerId);
+                user.role = "salon_owner";
+                logger.info("salonsService.create — user promoted to salon_owner", { ownerId });
+            }
+
+            // Re-issue tokens now that salonId exists and role is correct
+            const accessToken  = signAccessToken({ userId: ownerId, role: user.role, salonId: salon.id });
+            const refreshToken = signRefreshToken({ userId: ownerId });
+
+            await authRepository.saveRefreshToken({
+                user_id:    ownerId,
+                token:      refreshToken,
+                expires_at: refreshExpiryDate(),
+            });
+
+            // Mark onboarding complete
+            await authRepository.markOnboardingComplete(ownerId);
 
             logger.info("salonsService.create success", {
                 ownerId,
-                salonId: created.id,
-                slug: created.slug,
+                salonId: salon.id,
+                slug: salon.slug,
             });
 
-            return created;
+            return {
+                salon,
+                accessToken,
+                refreshToken,
+                isOnboardingComplete: true,
+            };
         } catch (e: any) {
             if (e?.code === "23505") {
                 throw new AppError(409, "Slug already exists", "SLUG_EXISTS");

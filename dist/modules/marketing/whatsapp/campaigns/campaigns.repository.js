@@ -1,0 +1,65 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.campaignsRepo = void 0;
+const database_1 = __importDefault(require("../../../../config/database"));
+const uuid_1 = require("uuid");
+exports.campaignsRepo = {
+    async findAll(salonId) {
+        const { rows } = await database_1.default.query(`
+      SELECT c.*, t.name as template_name FROM wa_campaigns c
+      JOIN wa_templates t ON t.id = c.template_id WHERE c.salon_id=$1 ORDER BY c.created_at DESC
+    `, [salonId]);
+        return rows;
+    },
+    async findById(id, salonId) {
+        const { rows } = await database_1.default.query(`
+      SELECT c.*, t.name as template_name, t.body_text as template_body FROM wa_campaigns c
+      JOIN wa_templates t ON t.id = c.template_id WHERE c.id=$1 AND c.salon_id=$2
+    `, [id, salonId]);
+        return rows[0] || null;
+    },
+    async create(salonId, templateId, name, batchSize, totalContacts) {
+        const campaignId = (0, uuid_1.v4)();
+        await database_1.default.query(`
+      INSERT INTO wa_campaigns (id, salon_id, template_id, name, status, batch_size, total_contacts, started_at)
+      VALUES ($1,$2,$3,$4,'SENDING',$5,$6,NOW())
+    `, [campaignId, salonId, templateId, name, batchSize, totalContacts]);
+        return campaignId;
+    },
+    async bulkInsertContacts(campaignId, contacts) {
+        const chunkSize = 500;
+        for (let i = 0; i < contacts.length; i += chunkSize) {
+            const chunk = contacts.slice(i, i + chunkSize);
+            const vals = chunk.map((_, j) => { const b = j * 5; return `($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5}::jsonb)`; }).join(',');
+            const params = chunk.flatMap((c) => [(0, uuid_1.v4)(), campaignId, c.phone, c.name || null, JSON.stringify(c.variables || {})]);
+            await database_1.default.query(`INSERT INTO wa_campaign_contacts (id, campaign_id, phone, name, variables) VALUES ${vals}`, params);
+        }
+    },
+    async getContactIds(campaignId) {
+        const { rows } = await database_1.default.query(`SELECT id FROM wa_campaign_contacts WHERE campaign_id=$1`, [campaignId]);
+        return rows.map((r) => r.id);
+    },
+    async getPendingContactIds(campaignId) {
+        const { rows } = await database_1.default.query(`SELECT id FROM wa_campaign_contacts WHERE campaign_id=$1 AND status='PENDING'`, [campaignId]);
+        return rows.map((r) => r.id);
+    },
+    async updateStatus(id, status) {
+        const { rows } = await database_1.default.query(`UPDATE wa_campaigns SET status=$2 WHERE id=$1 RETURNING *`, [id, status]);
+        return rows[0];
+    },
+    async getContacts(campaignId, status) {
+        const { rows } = await database_1.default.query(`
+      SELECT * FROM wa_campaign_contacts WHERE campaign_id=$1 ${status ? `AND status=$2` : ''} ORDER BY created_at ASC
+    `, status ? [campaignId, status] : [campaignId]);
+        return rows;
+    },
+    async getReport(campaignId, type) {
+        const statusMap = { successful: ['DELIVERED', 'READ'], failed: ['FAILED'], blocked: ['BLOCKED'] };
+        const { rows } = await database_1.default.query(`SELECT * FROM wa_campaign_contacts WHERE campaign_id=$1 AND status=ANY($2::text[])`, [campaignId, statusMap[type] || []]);
+        return rows;
+    },
+};
+//# sourceMappingURL=campaigns.repository.js.map

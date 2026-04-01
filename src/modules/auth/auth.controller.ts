@@ -9,13 +9,19 @@ import {
 import logger from "../../config/logger";
 import { googleStartQuerySchema } from "./auth.validator";
 
-function redirectToFrontend(res: Response, accessToken: string, refreshToken: string, returnTo?: string) {
-  // Try mapping frontend from env based on typical setups, fallback if missing
+function redirectToFrontend(
+  res: Response,
+  accessToken: string,
+  refreshToken: string,
+  isOnboardingComplete: boolean,
+  returnTo?: string,
+) {
   const frontendUrl = process.env.APP_BASE_URL || process.env.FRONTEND_URL || "http://localhost:5173";
   const base = new URL(frontendUrl);
   base.pathname = "/oauth/success";
   base.searchParams.set("token", accessToken);
-  base.searchParams.set("refreshToken", refreshToken); // Included just in case the client needs it
+  base.searchParams.set("refreshToken", refreshToken);
+  base.searchParams.set("isOnboardingComplete", String(isOnboardingComplete));
   if (returnTo) base.searchParams.set("returnTo", returnTo);
   res.redirect(base.toString());
 }
@@ -207,6 +213,40 @@ export const authController = {
     }
   },
 
+  // ================= FORGOT PASSWORD =================
+  async sendPasswordResetOtp(req: Request, res: Response, next: NextFunction) {
+    try {
+      const email = String(req.body?.email || "").trim().toLowerCase();
+      const data = await authService.forgotPasswordSendOtp(email);
+      return sendSuccess(res, 200, data, "Password reset request processed");
+    } catch (e) {
+      return next(e);
+    }
+  },
+
+  async verifyPasswordResetOtp(req: Request, res: Response, next: NextFunction) {
+    try {
+      const email = String(req.body?.email || "").trim().toLowerCase();
+      const otp = String(req.body?.otp || "").trim();
+      const data = await authService.forgotPasswordVerifyOtp(email, otp);
+      return sendSuccess(res, 200, data, "OTP verified");
+    } catch (e) {
+      return next(e);
+    }
+  },
+
+  async resetPassword(req: Request, res: Response, next: NextFunction) {
+    try {
+      const email = String(req.body?.email || "").trim().toLowerCase();
+      const otp = String(req.body?.otp || "").trim();
+      const newPassword = String(req.body?.newPassword || "");
+      const data = await authService.resetPassword(email, otp, newPassword);
+      return sendSuccess(res, 200, data, "Password reset successfully");
+    } catch (e) {
+      return next(e);
+    }
+  },
+
   // ================= EXOTEL PHONE OTP =================
   async sendPhoneOtpExotel(req: Request, res: Response, next: NextFunction) {
     try {
@@ -269,10 +309,10 @@ export const authController = {
       const tokens = await authService.googleExchangeCode(code, st.codeVerifier);
       const profile = await authService.googleGetProfile(tokens.access_token);
 
-      const { accessToken, refreshToken } = await authService.signInWithGoogle(profile);
+      const { accessToken, refreshToken, isOnboardingComplete } = await authService.signInWithGoogle(profile);
 
-      // We redirect directly to frontend and pass the token(s) instead of cookies
-      return redirectToFrontend(res, accessToken, refreshToken, st.returnTo);
+      // Redirect to frontend with tokens + onboarding flag in query string
+      return redirectToFrontend(res, accessToken, refreshToken, isOnboardingComplete, st.returnTo);
     } catch (err: any) {
       console.error("GOOGLE CALLBACK ERROR:", err?.response?.data || err?.message || err);
       // Send JSON so the browser shows exactly what went wrong

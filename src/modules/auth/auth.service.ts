@@ -31,7 +31,7 @@ function assertEnv() {
   }
 }
 
-function signAccessToken(payload: { userId: string; role: string }) {
+function signAccessToken(payload: { userId: string; role: string; salonId?: string | null }) {
   return jwt.sign(payload, ACCESS_SECRET, accessOptions);
 }
 
@@ -115,8 +115,31 @@ export const authService = {
       country_code: body.countryCode?.trim() ? body.countryCode.trim() : null,
     } as any);
 
-    logger.info("[authService.register] User created successfully", { email, userId: user?.id, role });
-    return user;
+    const salonId = await authRepository.findSalonIdByUserId(user.id);
+    const accessToken = signAccessToken({ userId: user.id, role: user.role, salonId });
+    const refreshToken = signRefreshToken({ userId: user.id });
+
+    await authRepository.saveRefreshToken({
+      user_id: user.id,
+      token: refreshToken,
+      expires_at: refreshExpiryDate(),
+    });
+
+    logger.info("[authService.register] User created successfully", { email, userId: user?.id, role, salonId });
+
+    return {
+      accessToken,
+      refreshToken,
+      isOnboardingComplete: false,
+      user: {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        salonId,
+      },
+    };
   },
 
   async login(body: LoginBody) {
@@ -145,7 +168,8 @@ export const authService = {
 
     await authRepository.updateLastLogin(user.id);
 
-    const accessToken = signAccessToken({ userId: user.id, role: user.role });
+    const salonId = await authRepository.findSalonIdByUserId(user.id);
+    const accessToken = signAccessToken({ userId: user.id, role: user.role, salonId });
     const refreshToken = signRefreshToken({ userId: user.id });
 
     await authRepository.saveRefreshToken({
@@ -154,17 +178,19 @@ export const authService = {
       expires_at: refreshExpiryDate(),
     });
 
-    logger.info("[authService.login] Login successful", { email, userId: user.id, role: user.role });
+    logger.info("[authService.login] Login successful", { email, userId: user.id, role: user.role, salonId });
 
     return {
       accessToken,
       refreshToken,
+      isOnboardingComplete: user.is_onboarding_complete ?? false,
       user: {
         id: user.id,
         email: user.email,
         role: user.role,
         first_name: user.first_name,
         last_name: user.last_name,
+        salonId,
       },
     };
   },
@@ -206,8 +232,9 @@ export const authService = {
       throw new AppError(403, "User is inactive", "USER_INACTIVE");
     }
 
-    const newAccessToken = signAccessToken({ userId: user.id, role: user.role });
-    logger.info("[authService.refresh] New access token issued", { userId });
+    const salonId = await authRepository.findSalonIdByUserId(user.id);
+    const newAccessToken = signAccessToken({ userId: user.id, role: user.role, salonId });
+    logger.info("[authService.refresh] New access token issued", { userId, salonId });
     return { accessToken: newAccessToken };
   },
 
@@ -328,6 +355,120 @@ export const authService = {
 
     logger.info("[authService.verifyEmailOtp] Email verified successfully", { email, userId: user.id });
     return { message: "Email verified successfully", success: true };
+  },
+
+  // ================= FORGOT PASSWORD =================
+  async forgotPasswordSendOtp(emailRaw: string) {
+    const email = String(emailRaw || "").trim().toLowerCase();
+    logger.info("[authService.forgotPasswordSendOtp] Start", { email });
+
+    if (!email) throw new AppError(400, "Email is required", "VALIDATION_ERROR");
+
+    const user = await authRepository.findUserByEmail(email);
+    if (!user) {
+      // Return success anyway to avoid email enumeration attacks
+      logger.info("[authService.forgotPasswordSendOtp] User not found, pretending success", { email });
+      return { message: "If an account exists, an OTP has been sent." };
+    }
+
+    const otp = generateOtp();
+    const otpHash = await hashOtp(otp);
+
+    await authRepository.createOtpVerification({
+      user_id: user.id,
+      otp_code: otpHash,
+      purpose: "password_reset",
+      expires_at: otpExpiry(10),
+    });
+
+    logger.info("[authService.forgotPasswordSendOtp] Sending password reset OTP", { email });
+    try {
+      await emailService.sendPasswordResetOtpEmail(email, otp);
+      logger.info("[authService.forgotPasswordSendOtp] Email sent successfully", { email });
+    } catch (emailErr: any) {
+      logger.error("[authService.forgotPasswordSendOtp] Failed to send email", {
+        email,
+        error: emailErr?.message,
+      });
+      throw new AppError(500, "Failed to send reset email", "EMAIL_SEND_FAILED");
+    }
+
+    return { message: "If an account exists, an OTP has been sent." };
+  },
+
+  async forgotPasswordVerifyOtp(emailRaw: string, otpRaw: string) {
+    const email = String(emailRaw || "").trim().toLowerCase();
+    const otp = String(otpRaw || "").trim();
+    logger.info("[authService.forgotPasswordVerifyOtp] Start", { email });
+
+    if (!email || !otp) throw new AppError(400, "Email and OTP required", "VALIDATION_ERROR");
+
+    const user = await authRepository.findUserByEmail(email);
+    if (!user) {
+      throw new AppError(400, "Invalid OTP", "OTP_INVALID");
+    }
+
+    const latest = await authRepository.findLatestOtp(user.id, "password_reset");
+    if (!latest) {
+      throw new AppError(400, "OTP not found", "OTP_NOT_FOUND");
+    }
+
+    if (latest.is_used) {
+      throw new AppError(400, "OTP already used", "OTP_USED");
+    }
+
+    if (new Date(latest.expires_at).getTime() < Date.now()) {
+      throw new AppError(400, "OTP expired", "OTP_EXPIRED");
+    }
+
+    const ok = await compareOtp(otp, latest.otp_code);
+    if (!ok) {
+      throw new AppError(400, "Invalid OTP", "OTP_INVALID");
+    }
+
+    return { message: "OTP is valid", success: true };
+  },
+
+  async resetPassword(emailRaw: string, otpRaw: string, newPasswordRaw: string) {
+    const email = String(emailRaw || "").trim().toLowerCase();
+    const otp = String(otpRaw || "").trim();
+    const newPassword = String(newPasswordRaw || "");
+    
+    logger.info("[authService.resetPassword] Start", { email });
+
+    if (!email || !otp || !newPassword) {
+      throw new AppError(400, "Email, OTP, and new password are required", "VALIDATION_ERROR");
+    }
+
+    if (newPassword.length < 8) {
+      throw new AppError(400, "Password must be at least 8 characters", "VALIDATION_ERROR");
+    }
+
+    const user = await authRepository.findUserByEmail(email);
+    if (!user) {
+      throw new AppError(400, "Invalid OTP", "OTP_INVALID");
+    }
+
+    const latest = await authRepository.findLatestOtp(user.id, "password_reset");
+    if (!latest || latest.is_used || new Date(latest.expires_at).getTime() < Date.now()) {
+      throw new AppError(400, "OTP invalid or expired", "OTP_INVALID");
+    }
+
+    const ok = await compareOtp(otp, latest.otp_code);
+    if (!ok) {
+      throw new AppError(400, "Invalid OTP", "OTP_INVALID");
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    
+    await authRepository.updatePassword(user.id, passwordHash);
+    await authRepository.markOtpUsed(latest.id);
+    
+    // Log out of all sessions for security
+    await authRepository.deleteAllRefreshTokensForUser(user.id);
+
+    logger.info("[authService.resetPassword] Password reset successfully", { email, userId: user.id });
+    return { message: "Password reset successful" };
   },
 
   // ================= EXOTEL PHONE OTP =================
@@ -545,7 +686,8 @@ export const authService = {
       await authRepository.attachGoogleIdentity(user.id, profile);
     }
 
-    const accessToken = signAccessToken({ userId: user.id, role: user.role });
+    const salonId = await authRepository.findSalonIdByUserId(user.id);
+    const accessToken = signAccessToken({ userId: user.id, role: user.role, salonId });
     const refreshToken = signRefreshToken({ userId: user.id });
 
     await authRepository.saveRefreshToken({
@@ -554,7 +696,7 @@ export const authService = {
       expires_at: refreshExpiryDate(),
     });
 
-    return { user, accessToken, refreshToken };
+    return { user, accessToken, refreshToken, salonId, isOnboardingComplete: user.is_onboarding_complete ?? false };
   },
 
   googleMakePkce() {

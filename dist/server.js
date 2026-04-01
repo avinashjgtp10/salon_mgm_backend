@@ -8,6 +8,7 @@ const env_1 = __importDefault(require("./config/env"));
 const logger_1 = __importDefault(require("./config/logger"));
 const database_1 = __importDefault(require("./config/database"));
 const redis_1 = __importDefault(require("./config/redis"));
+require("./modules/marketing/whatsapp/campaign.processor");
 const PORT = env_1.default.port;
 // Test database connection
 database_1.default.query('SELECT NOW()')

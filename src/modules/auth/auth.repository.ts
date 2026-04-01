@@ -92,6 +92,40 @@ export const authRepository = {
     );
   },
 
+  /**
+   * Update password
+   */
+  async updatePassword(userId: string, passwordHash: string) {
+    await pool.query(
+      `UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2`,
+      [passwordHash, userId],
+    );
+  },
+
+  /**
+   * Promote a user to salon_owner (used when a client creates their first salon)
+   */
+  async upgradeToSalonOwner(userId: string) {
+    const { rows } = await pool.query(
+      `UPDATE users SET role = 'salon_owner', updated_at = NOW()
+       WHERE id = $1 AND role != 'salon_owner'
+       RETURNING id, role`,
+      [userId],
+    );
+    return rows[0] ?? null; // null if already salon_owner (no-op)
+  },
+
+  /**
+   * Get the salon ID owned by this user (null if none)
+   */
+  async findSalonIdByUserId(userId: string): Promise<string | null> {
+    const { rows } = await pool.query(
+      `SELECT id FROM salons WHERE owner_id = $1 ORDER BY created_at DESC LIMIT 1`,
+      [userId],
+    );
+    return rows[0]?.id ?? null;
+  },
+
   // ===================== OTP VERIFICATIONS =====================
 
   /**
@@ -182,6 +216,18 @@ export const authRepository = {
    */
   async deleteAllRefreshTokensForUser(userId: string) {
     await pool.query(`DELETE FROM refresh_tokens WHERE user_id = $1`, [userId]);
+  },
+
+  // ===================== ONBOARDING =====================
+
+  /**
+   * Mark onboarding as complete for a user
+   */
+  async markOnboardingComplete(userId: string) {
+    await pool.query(
+      `UPDATE users SET is_onboarding_complete = true WHERE id = $1`,
+      [userId],
+    );
   },
 
   // ===================== GOOGLE IDENTITIES =====================

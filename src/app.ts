@@ -25,7 +25,12 @@ import salesRoutes from "./modules/sales/sales.routes";
 import inventoryRoutes from "./modules/inventory/inventory.routes";
 import billingRoutes from "./modules/billing/billing.routes";
 import subscriptionsRoutes from "./modules/subscriptions/subscriptions.routes";
-
+import marketingDashboardRoutes from './modules/marketing/whatsapp/dashboard/dashboard.routes'
+import marketingTemplatesRoutes from './modules/marketing/whatsapp/templates/templates.routes'
+import marketingCampaignsRoutes from './modules/marketing/whatsapp/campaigns/campaigns.routes'
+import marketingConfigRoutes    from './modules/marketing/whatsapp/config/config.routes'
+import marketingUsersRoutes     from './modules/marketing/whatsapp/users/users.routes'
+import marketingWebhooksRoutes  from './modules/marketing/whatsapp/webhooks/webhooks.routes'
 
 import swaggerUi from "swagger-ui-express";
 import YAML from "yamljs";
@@ -85,7 +90,12 @@ app.use("/api/v1/sales", salesRoutes);
 app.use("/api/v1/inventory", inventoryRoutes);
 app.use("/api/v1/billing", billingRoutes);
 app.use("/api/v1/subscriptions", subscriptionsRoutes);
-
+app.use('/api/v1/dashboard', marketingDashboardRoutes)
+app.use('/api/v1/templates', marketingTemplatesRoutes)
+app.use('/api/v1/campaigns', marketingCampaignsRoutes)
+app.use('/api/v1/wa-config', marketingConfigRoutes)
+app.use('/api/v1/users',     marketingUsersRoutes)
+app.use('/api/v1/webhooks',  marketingWebhooksRoutes)
 
 
 // Swagger Documentation
