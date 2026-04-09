@@ -10,6 +10,7 @@ const router = Router();
 
 router.post("/", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), validateCreateAppointment, appointmentsController.create);
 router.get("/", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), appointmentsController.list);
+router.get("/export", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), appointmentsController.exportAppointments);
 router.get("/:id", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), appointmentsController.getById);
 router.patch("/:id", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), validateUpdateAppointment, appointmentsController.update);
 router.post("/:id/confirm", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), appointmentsController.confirm);

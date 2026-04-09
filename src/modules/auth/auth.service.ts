@@ -605,13 +605,17 @@ export const authService = {
   async googleCreateState(payload: Omit<GoogleStatePayload, "createdAt">) {
     const state = randomString(24);
     const full: GoogleStatePayload = { ...payload, createdAt: Date.now() };
-    await redis.set(`${STATE_PREFIX}${state}`, JSON.stringify(full), "EX", STATE_TTL_SECONDS);
+    const key = `${STATE_PREFIX}${state}`;
+    await redis.set(key, JSON.stringify(full), "EX", STATE_TTL_SECONDS);
+    console.log(`[OAuth DEBUG] State STORED: ${key}`);
     return state;
   },
 
   async googleConsumeState(state: string) {
     const key = `${STATE_PREFIX}${state}`;
+    console.log(`[OAuth DEBUG] State LOOKUP: ${key}`);
     const raw = await redis.get(key);
+    console.log(`[OAuth DEBUG] State FOUND: ${!!raw}`);
     if (!raw) return null;
     await redis.del(key);
     return JSON.parse(raw) as GoogleStatePayload;

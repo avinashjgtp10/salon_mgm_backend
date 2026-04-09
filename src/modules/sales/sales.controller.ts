@@ -76,5 +76,19 @@ export const salesController = {
             });
             return sendSuccess(res, 200, sale, "Sale checked out successfully");
         } catch (err) { return next(err); }
+    },
+
+    async exportSales(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const format = (req.query.format as string) === "excel" ? "excel" : "csv";
+            const { buffer, contentType, filename } = await salesService.exportSales({
+                salon_id: req.query.salon_id as string | undefined,
+                status: req.query.status as string | undefined,
+                format,
+            });
+            res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+            res.setHeader("Content-Type", contentType);
+            return res.send(buffer);
+        } catch (err) { return next(err); }
     }
 };

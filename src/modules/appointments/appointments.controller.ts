@@ -112,4 +112,20 @@ export const appointmentsController = {
             return sendSuccess(res, 200, result, "Appointment checked out and sale created");
         } catch (err) { return next(err); }
     },
+
+    async exportAppointments(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const format = (req.query.format as string) === "excel" ? "excel" : "csv";
+            const { buffer, contentType, filename } = await appointmentsService.exportAppointments({
+                salon_id: req.query.salon_id as string | undefined,
+                status: req.query.status as string | undefined,
+                start_date: req.query.start_date as string | undefined,
+                end_date: req.query.end_date as string | undefined,
+                format,
+            });
+            res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+            res.setHeader("Content-Type", contentType);
+            return res.send(buffer);
+        } catch (err) { return next(err); }
+    },
 };

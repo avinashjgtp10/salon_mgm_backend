@@ -26,15 +26,15 @@ export const salonsController = {
             if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
 
             const body = req.body as CreateSalonBody;
-            const salon = await salonsService.create(userId, body);
+            const result = await salonsService.create(userId, body);
 
             logger.info("POST /salons success", {
                 userId,
-                salonId: salon.id,
-                slug: salon.slug,
+                salonId: result.salon.id,
+                slug: result.salon.slug,
             });
 
-            return sendSuccess(res, 201, salon, "Salon created successfully");
+            return sendSuccess(res, 201, result, "account  created successfully");
         } catch (err) {
             logger.error("POST /salons error", { err });
             return next(err);

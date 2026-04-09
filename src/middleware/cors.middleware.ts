@@ -2,12 +2,16 @@ import cors, { CorsOptionsDelegate } from "cors";
 import { Request } from "express";
 import logger from "../config/logger";
 
-const allowedOrigins: string[] =
-process.env.CORS_ALLOWED_ORIGINS?.split(",").map(origin => origin.trim()) || [];
-
 const corsOptions: CorsOptionsDelegate<Request> = (req, callback) => {
-const origin = req.header("Origin");
+  const originHeader = req.header("Origin");
+  
+  // Normalize origin (remove trailing slash if any)
+  const origin = originHeader ? originHeader.replace(/\/$/, "") : undefined;
 
+  // Retrieve dynamically to ensure env lets it load even if imported early
+  const allowedOrigins: string[] = process.env.CORS_ALLOWED_ORIGINS
+    ? process.env.CORS_ALLOWED_ORIGINS.split(",").map((o) => o.trim().replace(/\/$/, ""))
+    : [];
 
   // Log incoming request origin
   logger.info(`CORS check - Incoming Origin: ${origin || "No Origin (Postman/Mobile)"}`);
@@ -28,11 +32,11 @@ const origin = req.header("Origin");
       origin: true,
       credentials: true,
       methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-      allowedHeaders: ["Content-Type", "Authorization"],
+      allowedHeaders: ["Content-Type", "Authorization", "x-api-key", "x-timezone", "x-currency"],
     });
 
   } else {
-    logger.warn(`CORS blocked for origin: ${origin}`);
+    logger.warn(`CORS blocked for origin: ${origin}. Allowed origins: ${allowedOrigins.join(", ")}`);
     callback(new Error("Not allowed by CORS"));
   }
 };
