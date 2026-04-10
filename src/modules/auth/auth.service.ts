@@ -366,9 +366,8 @@ export const authService = {
 
     const user = await authRepository.findUserByEmail(email);
     if (!user) {
-      // Return success anyway to avoid email enumeration attacks
-      logger.info("[authService.forgotPasswordSendOtp] User not found, pretending success", { email });
-      return { message: "If an account exists, an OTP has been sent." };
+      logger.warn("[authService.forgotPasswordSendOtp] User not found", { email });
+      throw new AppError(404, "Email does not exist", "USER_NOT_FOUND");
     }
 
     const otp = generateOtp();

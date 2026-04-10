@@ -80,10 +80,14 @@ export const salesController = {
 
     async exportSales(req: AuthRequest, res: Response, next: NextFunction) {
         try {
-            const format = (req.query.format as string) === "excel" ? "excel" : "csv";
+            const rawFormat = req.query.format as string;
+            const format: "csv" | "excel" | "pdf" =
+                rawFormat === "pdf" ? "pdf" : rawFormat === "excel" ? "excel" : "csv";
+
             const { buffer, contentType, filename } = await salesService.exportSales({
                 salon_id: req.query.salon_id as string | undefined,
                 status: req.query.status as string | undefined,
+                date: req.query.date as string | undefined,
                 format,
             });
             res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
