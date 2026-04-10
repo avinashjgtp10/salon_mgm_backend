@@ -1,3 +1,4 @@
+import ExcelJS from "exceljs";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { appointmentsRepository } from "./appointments.repository";
@@ -143,5 +144,58 @@ export const appointmentsService = {
 
         const appointment = await appointmentsRepository.linkSale(appointmentId, sale.id);
         return { appointment, saleId: sale.id };
+    },
+
+    async exportAppointments(filters: {
+        salon_id?: string;
+        status?: string;
+        start_date?: string;
+        end_date?: string;
+        format: "csv" | "excel";
+    }): Promise<{ buffer: Buffer; contentType: string; filename: string }> {
+        const appointments = await appointmentsRepository.exportList({
+            salon_id: filters.salon_id,
+            status: filters.status,
+            start_date: filters.start_date,
+            end_date: filters.end_date,
+        });
+
+        const headers = ["ID", "Title", "Status", "Client ID", "Staff ID", "Service ID", "Scheduled At", "Duration (min)", "Ends At", "Sale ID", "Created At"];
+        const rows = appointments.map(a => [
+            a.id,
+            a.title ?? "",
+            a.status,
+            a.client_id ?? "Walk-in",
+            a.staff_id ?? "",
+            a.service_id ?? "",
+            new Date(a.scheduled_at).toLocaleString("en-GB"),
+            a.duration_minutes,
+            a.ends_at ? new Date(a.ends_at).toLocaleString("en-GB") : "",
+            a.sale_id ?? "",
+            new Date(a.created_at).toLocaleDateString("en-GB"),
+        ]);
+
+        if (filters.format === "csv") {
+            const csvLines = [headers.join(","), ...rows.map(r => r.join(","))];
+            return {
+                buffer: Buffer.from(csvLines.join("\n"), "utf-8"),
+                contentType: "text/csv",
+                filename: "appointments.csv",
+            };
+        }
+
+        // Excel via ExcelJS
+        const workbook = new ExcelJS.Workbook();
+        const sheet = workbook.addWorksheet("Appointments");
+        sheet.addRow(headers).font = { bold: true };
+        rows.forEach(r => sheet.addRow(r));
+        sheet.columns.forEach(col => { col.width = 20; });
+
+        const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+        return {
+            buffer,
+            contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            filename: "appointments.xlsx",
+        };
     },
 };

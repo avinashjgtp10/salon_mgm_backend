@@ -118,5 +118,20 @@ export const salesRepository = {
             [id, params.payment_method, params.payment_reference || null, params.status || 'completed']
         );
         return rows[0];
+    },
+
+    async exportList(filters: { salon_id?: string; status?: string; date?: string }): Promise<Sale[]> {
+        const conditions: string[] = [];
+        const values: any[] = [];
+        let idx = 1;
+
+        if (filters.salon_id) { conditions.push(`salon_id = $${idx++}`);          values.push(filters.salon_id); }
+        if (filters.status)   { conditions.push(`status = $${idx++}`);             values.push(filters.status);   }
+        if (filters.date)     { conditions.push(`DATE(created_at) = $${idx++}`);   values.push(filters.date);     }
+
+        const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+        const query = `SELECT * FROM sales ${whereClause} ORDER BY created_at DESC`;
+        const { rows } = await pool.query(query, values);
+        return rows;
     }
 };
