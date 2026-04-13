@@ -1,13 +1,22 @@
-/node_modules
-node_modules
-
+node_modules/
 
 # logs
-logs
+logs/
 *.log
 
 # environment files
-
-.env.local
 .env
+.env.local
 !.env.example
+
+# build output
+dist/
+
+# uploaded files
+uploads/
+
+# ssl certs / pem files
+*.pem
+
+# test files
+test-db.js
