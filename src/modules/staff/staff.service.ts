@@ -45,6 +45,9 @@ export const staffService = {
         const { salonId, requesterUserId, requesterRole, body } = params;
         logger.info("staffService.create", { salonId, requesterUserId, requesterRole, email: body.email });
 
+        const existing = await staffRepository.findByEmail(salonId, body.email);
+        if (existing) throw new AppError(409, "A staff member with this email already exists", "DUPLICATE_EMAIL");
+
         const staff = await staffRepository.create(salonId, body);
         const invitation = await staffInvitationRepository.create(staff.id, staff.email);
 
@@ -163,6 +166,23 @@ export const staffInvitationService = {
 
         await staffInvitationRepository.markCancelled(staffId);
         logger.info("cancelInvitation success", { staffId });
+    },
+
+    async getInvitationStatus(params: { staffId: string; salonId: string }) {
+        const { staffId, salonId } = params;
+        const staff = await staffRepository.findById(staffId, salonId);
+        if (!staff) throw new AppError(404, "Staff not found", "NOT_FOUND");
+
+        const invitation = await staffInvitationRepository.findByStaffId(staffId);
+
+        return {
+            staff_id: staff.id,
+            email: staff.email,
+            invitation_status: staff.invitation_status,
+            invitation_accepted_at: invitation?.accepted_at || null,
+            invitation_expires_at: invitation?.expires_at || null,
+            is_active: staff.is_active,
+        };
     },
 };
 

@@ -263,6 +263,15 @@ export const staffInvitationController = {
     } catch (err) { return next(err); }
   },
 
+  async getInvitationStatus(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = getSalonId(req);
+      const staffId = String(req.params.id);
+      const result = await staffInvitationService.getInvitationStatus({ staffId, salonId });
+      return sendSuccess(res, 200, result, "Invitation status fetched");
+    } catch (err) { return next(err); }
+  },
+
   async resendInvitation(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = getSalonId(req);

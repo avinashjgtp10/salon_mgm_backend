@@ -58,7 +58,7 @@ export const emailService = {
     salonName: string;
   }) {
     const { to, token, staffFirstName, salonName } = params;
-    const inviteLink = `${config.frontend.url}/staff/accept-invite?token=${token}`;
+    const inviteLink = `${config.frontend.url}/accept-invite?token=${token}`;
 
     await transporter.sendMail({
       from: config.smtp.from,

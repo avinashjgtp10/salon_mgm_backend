@@ -65,6 +65,14 @@ export const staffRepository = {
         return { data, total: countRows[0].total };
     },
 
+    async findByEmail(salonId: string, email: string): Promise<Staff | null> {
+        const { rows } = await pool.query(
+            `SELECT * FROM staff WHERE salon_id = $1 AND email = $2`,
+            [salonId, email]
+        );
+        return rows[0] || null;
+    },
+
     async create(salonId: string, data: CreateStaffBody): Promise<Staff> {
         const { rows } = await pool.query(
             `INSERT INTO staff (
