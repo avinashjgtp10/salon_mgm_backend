@@ -44,12 +44,18 @@ exports.whatsappMetaApi = {
         });
         return res.data;
     },
-    async getTemplateStatus(accessToken, templateId) {
-        const res = await axios_1.default.get(`${WA_BASE_URL}/${WA_API_VERSION}/${templateId}`, { headers: { Authorization: `Bearer ${accessToken}` } });
+    async getTemplateStatus(accessToken, metaTemplateId) {
+        const res = await axios_1.default.get(`${WA_BASE_URL}/${WA_API_VERSION}/${metaTemplateId}`, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+            params: { fields: 'id,name,status,quality_score,rejected_reason' },
+        });
         return res.data;
     },
     async testConnection(phoneNumberId, accessToken) {
-        const res = await axios_1.default.get(`${WA_BASE_URL}/${WA_API_VERSION}/${phoneNumberId}`, { headers: { Authorization: `Bearer ${accessToken}` } });
+        const res = await axios_1.default.get(`${WA_BASE_URL}/${WA_API_VERSION}/${phoneNumberId}`, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+            params: { fields: 'display_phone_number,quality_rating,messaging_limit_tier' },
+        });
         return res.data;
     },
 };

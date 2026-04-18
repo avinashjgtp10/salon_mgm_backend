@@ -1,6 +1,11 @@
 import { CreateSalonBody, UpdateSalonBody, Salon } from "./salons.types";
 export declare const salonsService: {
-    create(ownerId: string, body: CreateSalonBody): Promise<Salon>;
+    create(ownerId: string, body: CreateSalonBody): Promise<{
+        salon: Salon;
+        accessToken: string;
+        refreshToken: string;
+        isOnboardingComplete: boolean;
+    }>;
     mySalon(ownerId: string): Promise<Salon>;
     getById(id: string): Promise<Salon>;
     listAll(): Promise<Salon[]>;

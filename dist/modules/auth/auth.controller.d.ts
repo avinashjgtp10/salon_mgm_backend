@@ -6,6 +6,9 @@ export declare const authController: {
     logout(req: Request, res: Response, next: NextFunction): Promise<void | Response<any, Record<string, any>>>;
     sendEmailOtp(req: Request, res: Response, next: NextFunction): Promise<void | Response<any, Record<string, any>>>;
     verifyEmailOtp(req: Request, res: Response, next: NextFunction): Promise<void | Response<any, Record<string, any>>>;
+    sendPasswordResetOtp(req: Request, res: Response, next: NextFunction): Promise<void | Response<any, Record<string, any>>>;
+    verifyPasswordResetOtp(req: Request, res: Response, next: NextFunction): Promise<void | Response<any, Record<string, any>>>;
+    resetPassword(req: Request, res: Response, next: NextFunction): Promise<void | Response<any, Record<string, any>>>;
     sendPhoneOtpExotel(req: Request, res: Response, next: NextFunction): Promise<void | Response<any, Record<string, any>>>;
     verifyPhoneOtpExotel(req: Request, res: Response, next: NextFunction): Promise<void | Response<any, Record<string, any>>>;
     googleStart(req: Request, res: Response, next: NextFunction): Promise<void>;

@@ -36,6 +36,21 @@ export declare const usersController: {
      * Protected
      */
     remove(req: Request, res: Response, next: NextFunction): Promise<void | Response<any, Record<string, any>>>;
+    /**
+     * PATCH /api/v1/users/me
+     * The authenticated user updates their own profile
+     */
+    updateMe(req: AuthRequest, res: Response, next: NextFunction): Promise<void | Response<any, Record<string, any>>>;
+    /**
+     * POST /api/v1/users/me/change-password
+     * Authenticated user changes their own password.
+     */
+    changePassword(req: AuthRequest, res: Response, next: NextFunction): Promise<void | Response<any, Record<string, any>>>;
+    /**
+     * POST /api/v1/users/me/avatar
+     * Upload profile picture — file processed by multer, then stored to S3 (or local)
+     */
+    uploadAvatar(req: AuthRequest, res: Response, next: NextFunction): Promise<void | Response<any, Record<string, any>>>;
 };
 export {};
 //# sourceMappingURL=users.controller.d.ts.map

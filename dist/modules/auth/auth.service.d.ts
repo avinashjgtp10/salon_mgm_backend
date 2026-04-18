@@ -1,16 +1,30 @@
 import type { RegisterBody, LoginBody } from "./auth.types";
 import type { GoogleOAuthProfile, GoogleStatePayload } from "./auth.types";
 export declare const authService: {
-    register(body: RegisterBody): Promise<any>;
-    login(body: LoginBody): Promise<{
+    register(body: RegisterBody): Promise<{
         accessToken: string;
         refreshToken: string;
+        isOnboardingComplete: boolean;
         user: {
             id: any;
             email: any;
             role: any;
             first_name: any;
             last_name: any;
+            salonId: string | null;
+        };
+    }>;
+    login(body: LoginBody): Promise<{
+        accessToken: string;
+        refreshToken: string;
+        isOnboardingComplete: any;
+        user: {
+            id: any;
+            email: any;
+            role: any;
+            first_name: any;
+            last_name: any;
+            salonId: string | null;
         };
     }>;
     refresh(refreshToken: string): Promise<{
@@ -26,6 +40,16 @@ export declare const authService: {
     verifyEmailOtp(emailRaw: string, otpRaw: string): Promise<{
         message: string;
         success: boolean;
+    }>;
+    forgotPasswordSendOtp(emailRaw: string): Promise<{
+        message: string;
+    }>;
+    forgotPasswordVerifyOtp(emailRaw: string, otpRaw: string): Promise<{
+        message: string;
+        success: boolean;
+    }>;
+    resetPassword(emailRaw: string, otpRaw: string, newPasswordRaw: string): Promise<{
+        message: string;
     }>;
     sendPhoneOtpExotel(emailRaw: string, phoneRaw: string): Promise<{
         message: string;
@@ -49,6 +73,8 @@ export declare const authService: {
         user: any;
         accessToken: string;
         refreshToken: string;
+        salonId: string | null;
+        isOnboardingComplete: any;
     }>;
     googleMakePkce(): {
         codeVerifier: string;

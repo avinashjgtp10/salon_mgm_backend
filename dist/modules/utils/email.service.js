@@ -35,6 +35,23 @@ exports.emailService = {
       `,
         });
     },
+    async sendPasswordResetOtpEmail(email, otp) {
+        await transporter.sendMail({
+            from: env_1.default.smtp.from,
+            to: email,
+            subject: "Password Reset Request",
+            html: `
+        <div style="font-family: Arial, sans-serif, max-width: 600px; margin: 0 auto; padding: 20px;">
+          <h2 style="color: #333;">Password Reset Verification</h2>
+          <p style="color: #666; font-size: 16px;">We received a request to reset your password. Here is your verification code:</p>
+          <div style="background-color: #f4f4f7; padding: 20px; border-radius: 8px; text-align: center; margin: 20px 0;">
+            <h1 style="letter-spacing: 6px; color: #6366f1; margin: 0; font-size: 32px;">${otp}</h1>
+          </div>
+          <p style="color: #666; font-size: 14px;">This code expires in ${env_1.default.otp.expMinutes} minutes. If you did not request a password reset, please ignore this email.</p>
+        </div>
+      `,
+        });
+    },
     async sendStaffInvitation(params) {
         const { to, token, staffFirstName, salonName } = params;
         const inviteLink = `${env_1.default.frontend.url}/staff/accept-invite?token=${token}`;

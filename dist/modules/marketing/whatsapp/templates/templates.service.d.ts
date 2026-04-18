@@ -1,8 +1,9 @@
+import { CreateTemplateBody } from './templates.types';
 export declare const templatesService: {
-    getAll(salonId: string): Promise<any[]>;
-    getById(id: string, salonId: string): Promise<any>;
-    create(salonId: string, data: any): Promise<any>;
-    syncStatus(id: string, salonId: string): Promise<any>;
+    getAll(salonId: string): Promise<import("./templates.types").WATemplate[]>;
+    getById(id: string, salonId: string): Promise<import("./templates.types").WATemplate>;
+    create(salonId: string, body: CreateTemplateBody): Promise<import("./templates.types").WATemplate>;
+    syncStatus(id: string, salonId: string): Promise<import("./templates.types").WATemplate>;
     delete(id: string, salonId: string): Promise<{
         message: string;
     }>;

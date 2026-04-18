@@ -33,5 +33,15 @@ export declare const salesService: {
         requesterRole?: string;
         body: CheckoutSaleBody;
     }): Promise<Sale>;
+    exportSales(filters: {
+        salon_id?: string;
+        status?: string;
+        date?: string;
+        format: "csv" | "excel" | "pdf";
+    }): Promise<{
+        buffer: Buffer;
+        contentType: string;
+        filename: string;
+    }>;
 };
 //# sourceMappingURL=sales.service.d.ts.map

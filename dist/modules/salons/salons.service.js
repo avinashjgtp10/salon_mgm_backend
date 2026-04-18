@@ -7,6 +7,17 @@ exports.salonsService = void 0;
 const logger_1 = __importDefault(require("../../config/logger"));
 const error_middleware_1 = require("../../middleware/error.middleware");
 const salons_repository_1 = require("./salons.repository");
+const auth_repository_1 = require("../auth/auth.repository");
+const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
+// ── token helpers (mirrors auth.service.ts) ───────────────────────────────────
+const ACCESS_SECRET = process.env.JWT_ACCESS_SECRET || "";
+const REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || "";
+const accessOptions = { expiresIn: (process.env.JWT_ACCESS_EXPIRES_IN || "15m") };
+const refreshOptions = { expiresIn: (process.env.JWT_REFRESH_EXPIRES_IN || "30d") };
+const signAccessToken = (p) => jsonwebtoken_1.default.sign(p, ACCESS_SECRET, accessOptions);
+const signRefreshToken = (p) => jsonwebtoken_1.default.sign(p, REFRESH_SECRET, refreshOptions);
+const refreshExpiryDate = () => new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+// ─────────────────────────────────────────────────────────────────────────────
 const slugify = (text) => text
     .toLowerCase()
     .trim()
@@ -34,13 +45,38 @@ exports.salonsService = {
             finalSlug = `${slug}-${i}`;
         }
         try {
-            const created = await salons_repository_1.salonsRepository.create(ownerId, { ...body, slug: finalSlug });
+            const salon = await salons_repository_1.salonsRepository.create(ownerId, { ...body, slug: finalSlug });
+            // Fetch user so we can embed the correct role in the new token
+            const user = await auth_repository_1.authRepository.findUserById(ownerId);
+            if (!user)
+                throw new error_middleware_1.AppError(404, "User not found", "USER_NOT_FOUND");
+            // Promote to salon_owner if they came in as a client (e.g. Google OAuth)
+            if (user.role !== "salon_owner") {
+                await auth_repository_1.authRepository.upgradeToSalonOwner(ownerId);
+                user.role = "salon_owner";
+                logger_1.default.info("salonsService.create — user promoted to salon_owner", { ownerId });
+            }
+            // Re-issue tokens now that salonId exists and role is correct
+            const accessToken = signAccessToken({ userId: ownerId, role: user.role, salonId: salon.id });
+            const refreshToken = signRefreshToken({ userId: ownerId });
+            await auth_repository_1.authRepository.saveRefreshToken({
+                user_id: ownerId,
+                token: refreshToken,
+                expires_at: refreshExpiryDate(),
+            });
+            // Mark onboarding complete
+            await auth_repository_1.authRepository.markOnboardingComplete(ownerId);
             logger_1.default.info("salonsService.create success", {
                 ownerId,
-                salonId: created.id,
-                slug: created.slug,
+                salonId: salon.id,
+                slug: salon.slug,
             });
-            return created;
+            return {
+                salon,
+                accessToken,
+                refreshToken,
+                isOnboardingComplete: true,
+            };
         }
         catch (e) {
             if (e?.code === "23505") {

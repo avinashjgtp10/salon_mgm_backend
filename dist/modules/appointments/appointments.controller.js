@@ -137,5 +137,23 @@ exports.appointmentsController = {
             return next(err);
         }
     },
+    async exportAppointments(req, res, next) {
+        try {
+            const format = req.query.format === "excel" ? "excel" : "csv";
+            const { buffer, contentType, filename } = await appointments_service_1.appointmentsService.exportAppointments({
+                salon_id: req.query.salon_id,
+                status: req.query.status,
+                start_date: req.query.start_date,
+                end_date: req.query.end_date,
+                format,
+            });
+            res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+            res.setHeader("Content-Type", contentType);
+            return res.send(buffer);
+        }
+        catch (err) {
+            return next(err);
+        }
+    },
 };
 //# sourceMappingURL=appointments.controller.js.map

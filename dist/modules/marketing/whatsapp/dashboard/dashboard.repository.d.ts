@@ -1,6 +1,6 @@
-export declare const dashboardRepo: {
-    getStats(salonId: string): Promise<any>;
-    getDailyVolume(salonId: string): Promise<any[]>;
-    getWAConfig(salonId: string): Promise<any>;
+import { WADashboardStats, WARecentCampaign } from './dashboard.types';
+export declare const dashboardRepository: {
+    getStats(salonId: string): Promise<WADashboardStats>;
+    getRecentCampaigns(salonId: string): Promise<WARecentCampaign[]>;
 };
 //# sourceMappingURL=dashboard.repository.d.ts.map

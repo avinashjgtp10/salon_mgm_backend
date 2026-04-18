@@ -8,6 +8,7 @@ const appointments_validator_1 = require("./appointments.validator");
 const router = (0, express_1.Router)();
 router.post("/", auth_middleware_1.authMiddleware, (0, role_middleware_1.roleMiddleware)("salon_owner", "admin", "staff"), appointments_validator_1.validateCreateAppointment, appointments_controller_1.appointmentsController.create);
 router.get("/", auth_middleware_1.authMiddleware, (0, role_middleware_1.roleMiddleware)("salon_owner", "admin", "staff"), appointments_controller_1.appointmentsController.list);
+router.get("/export", auth_middleware_1.authMiddleware, (0, role_middleware_1.roleMiddleware)("salon_owner", "admin", "staff"), appointments_controller_1.appointmentsController.exportAppointments);
 router.get("/:id", auth_middleware_1.authMiddleware, (0, role_middleware_1.roleMiddleware)("salon_owner", "admin", "staff"), appointments_controller_1.appointmentsController.getById);
 router.patch("/:id", auth_middleware_1.authMiddleware, (0, role_middleware_1.roleMiddleware)("salon_owner", "admin", "staff"), appointments_validator_1.validateUpdateAppointment, appointments_controller_1.appointmentsController.update);
 router.post("/:id/confirm", auth_middleware_1.authMiddleware, (0, role_middleware_1.roleMiddleware)("salon_owner", "admin", "staff"), appointments_controller_1.appointmentsController.confirm);

@@ -3,12 +3,12 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+require("./modules/marketing/whatsapp/queue/campaign.processor");
 const app_1 = __importDefault(require("./app"));
 const env_1 = __importDefault(require("./config/env"));
 const logger_1 = __importDefault(require("./config/logger"));
 const database_1 = __importDefault(require("./config/database"));
 const redis_1 = __importDefault(require("./config/redis"));
-require("./modules/marketing/whatsapp/campaign.processor");
 const PORT = env_1.default.port;
 // Test database connection
 database_1.default.query('SELECT NOW()')

@@ -16,6 +16,10 @@ router.post("/logout", auth_controller_1.authController.logout);
 // Email OTP
 router.post("/send-email-otp", auth_controller_1.authController.sendEmailOtp);
 router.post("/verify-email-otp", auth_controller_1.authController.verifyEmailOtp);
+// Forgot Password
+router.post("/forgot-password/send-otp", auth_controller_1.authController.sendPasswordResetOtp);
+router.post("/forgot-password/verify-otp", auth_controller_1.authController.verifyPasswordResetOtp);
+router.post("/forgot-password/reset", auth_controller_1.authController.resetPassword);
 // Exotel Phone OTP
 router.post("/send-phone-otp-exotel", auth_controller_1.authController.sendPhoneOtpExotel);
 router.post("/verify-phone-otp-exotel", auth_controller_1.authController.verifyPhoneOtpExotel);

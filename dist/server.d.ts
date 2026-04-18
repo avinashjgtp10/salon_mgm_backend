@@ -1,2 +1,2 @@
-import './modules/marketing/whatsapp/campaign.processor';
+import './modules/marketing/whatsapp/queue/campaign.processor';
 //# sourceMappingURL=server.d.ts.map

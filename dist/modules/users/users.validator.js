@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.updateUserSchema = exports.refreshSchema = exports.loginSchema = exports.registerSchema = void 0;
+exports.changePasswordSchema = exports.updateUserSchema = exports.refreshSchema = exports.loginSchema = exports.registerSchema = void 0;
 const zod_1 = require("zod");
 /**
  * Common reusable fields
@@ -53,11 +53,28 @@ exports.refreshSchema = zod_1.z.object({
 exports.updateUserSchema = zod_1.z.object({
     body: zod_1.z.object({
         firstName: zod_1.z.string().trim().min(1).max(50).optional(),
-        lastName: zod_1.z.string().trim().max(50).optional(),
+        lastName: zod_1.z.string().trim().max(50).optional().nullable(),
         phone: phoneSchema,
         avatarUrl: zod_1.z.string().url().optional().nullable(),
         isActive: zod_1.z.boolean().optional(),
         role: zod_1.z.enum(["salon_owner", "staff", "client", "admin"]).optional(),
+        // Profile fields
+        businessName: zod_1.z.string().trim().max(255).optional().nullable(),
+        address: zod_1.z.string().trim().max(500).optional().nullable(),
+        country: zod_1.z.string().trim().max(100).optional().nullable(),
+        countryCode: zod_1.z.string().trim().max(10).optional().nullable(),
     }),
+});
+/**
+ * Change Password Schema (authenticated user)
+ */
+exports.changePasswordSchema = zod_1.z.object({
+    currentPassword: zod_1.z.string().min(1, "Current password is required"),
+    newPassword: zod_1.z
+        .string()
+        .min(8, "Password must be at least 8 characters")
+        .regex(/[A-Z]/, "Must contain at least one uppercase letter")
+        .regex(/[a-z]/, "Must contain at least one lowercase letter")
+        .regex(/[0-9]/, "Must contain at least one number"),
 });
 //# sourceMappingURL=users.validator.js.map

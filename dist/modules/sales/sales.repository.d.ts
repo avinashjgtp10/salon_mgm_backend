@@ -18,5 +18,10 @@ export declare const salesRepository: {
         payment_reference?: string;
         status?: "completed";
     }): Promise<Sale>;
+    exportList(filters: {
+        salon_id?: string;
+        status?: string;
+        date?: string;
+    }): Promise<Sale[]>;
 };
 //# sourceMappingURL=sales.repository.d.ts.map

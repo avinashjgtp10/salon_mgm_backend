@@ -41,5 +41,16 @@ export declare const appointmentsService: {
         appointment: Appointment;
         saleId: string;
     }>;
+    exportAppointments(filters: {
+        salon_id?: string;
+        status?: string;
+        start_date?: string;
+        end_date?: string;
+        format: "csv" | "excel";
+    }): Promise<{
+        buffer: Buffer;
+        contentType: string;
+        filename: string;
+    }>;
 };
 //# sourceMappingURL=appointments.service.d.ts.map

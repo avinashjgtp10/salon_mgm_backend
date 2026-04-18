@@ -15,6 +15,7 @@ export declare const appointmentsController: {
     cancel(req: AuthRequest, res: Response, next: NextFunction): Promise<void | Response<any, Record<string, any>>>;
     noShow(req: AuthRequest, res: Response, next: NextFunction): Promise<void | Response<any, Record<string, any>>>;
     checkout(req: AuthRequest, res: Response, next: NextFunction): Promise<void | Response<any, Record<string, any>>>;
+    exportAppointments(req: AuthRequest, res: Response, next: NextFunction): Promise<void | Response<any, Record<string, any>>>;
 };
 export {};
 //# sourceMappingURL=appointments.controller.d.ts.map

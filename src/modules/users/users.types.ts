@@ -4,12 +4,12 @@ export type AccessTokenPayload = {
     userId: string;
     email: string;
     role: UserRole;
-    salonId?: string | null; // you can add later
+    salonId?: string | null;
 };
 
 export type RefreshTokenPayload = {
     userId: string;
-    tokenId: string; // refresh_tokens.id
+    tokenId: string;
 };
 
 export type SafeUser = {
@@ -18,6 +18,7 @@ export type SafeUser = {
     phone: string | null;
     firstName: string;
     lastName: string | null;
+    fullName: string;
     role: UserRole;
     avatarUrl: string | null;
     isVerified: boolean;
@@ -25,6 +26,12 @@ export type SafeUser = {
     lastLogin: string | null;
     createdAt: string;
     updatedAt: string;
+    // Extended profile fields
+    businessName: string | null;
+    address: string | null;
+    country: string | null;
+    countryCode: string | null;
+    isOnboardingComplete: boolean;
 };
 
 export type { UpdateUserInput } from "./users.validator";

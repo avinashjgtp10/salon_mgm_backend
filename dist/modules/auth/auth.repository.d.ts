@@ -31,6 +31,18 @@ export declare const authRepository: {
      */
     updateLastLogin(userId: string): Promise<void>;
     /**
+     * Update password
+     */
+    updatePassword(userId: string, passwordHash: string): Promise<void>;
+    /**
+     * Promote a user to salon_owner (used when a client creates their first salon)
+     */
+    upgradeToSalonOwner(userId: string): Promise<any>;
+    /**
+     * Get the salon ID owned by this user (null if none)
+     */
+    findSalonIdByUserId(userId: string): Promise<string | null>;
+    /**
      * Create OTP verification entry
      * (Store HASHED OTP in otp_code column for security)
      */
@@ -68,6 +80,10 @@ export declare const authRepository: {
      * Delete all refresh tokens for user (optional security feature)
      */
     deleteAllRefreshTokensForUser(userId: string): Promise<void>;
+    /**
+     * Mark onboarding as complete for a user
+     */
+    markOnboardingComplete(userId: string): Promise<void>;
     findGoogleIdentity(providerUserId: string): Promise<any>;
     createUserFromGoogle(profile: {
         email: string | null;

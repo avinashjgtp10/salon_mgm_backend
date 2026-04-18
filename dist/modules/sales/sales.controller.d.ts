@@ -12,6 +12,7 @@ export declare const salesController: {
     getDailySummary(req: AuthRequest, res: Response, next: NextFunction): Promise<void | Response<any, Record<string, any>>>;
     update(req: AuthRequest, res: Response, next: NextFunction): Promise<void | Response<any, Record<string, any>>>;
     checkout(req: AuthRequest, res: Response, next: NextFunction): Promise<void | Response<any, Record<string, any>>>;
+    exportSales(req: AuthRequest, res: Response, next: NextFunction): Promise<void | Response<any, Record<string, any>>>;
 };
 export {};
 //# sourceMappingURL=sales.controller.d.ts.map

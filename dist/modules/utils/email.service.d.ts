@@ -1,6 +1,7 @@
 export declare const emailService: {
     verifyConnection(): Promise<void>;
     sendOtpEmail(email: string, otp: string): Promise<void>;
+    sendPasswordResetOtpEmail(email: string, otp: string): Promise<void>;
     sendStaffInvitation(params: {
         to: string;
         token: string;

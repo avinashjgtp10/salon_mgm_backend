@@ -97,6 +97,6 @@ exports.campaignWorker = new bullmq_1.Worker('wa-campaign-messages', async (job)
          WHERE id=$1`, [campaignId]);
     }
 }, { connection: campaign_queue_1.redisConnection, concurrency: 1 });
-exports.campaignWorker.on('completed', (j) => console.log(`✅ WA Job ${j.id} completed`));
+exports.campaignWorker.on('completed', j => console.log(`✅ WA Job ${j.id} completed`));
 exports.campaignWorker.on('failed', (j, e) => console.error(`❌ WA Job ${j?.id} failed:`, e.message));
 //# sourceMappingURL=campaign.processor.js.map

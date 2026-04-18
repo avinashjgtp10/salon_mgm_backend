@@ -1,37 +1,41 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.templatesService = void 0;
+const error_middleware_1 = require("../../../../middleware/error.middleware");
 const templates_repository_1 = require("./templates.repository");
 const config_repository_1 = require("../config/config.repository");
-const whatsapp_service_1 = require("../whatsapp.service");
+const whatsapp_api_1 = require("../shared/whatsapp.api");
 exports.templatesService = {
-    async getAll(salonId) { return templates_repository_1.templatesRepo.findAll(salonId); },
+    async getAll(salonId) {
+        return templates_repository_1.templatesRepository.findAll(salonId);
+    },
     async getById(id, salonId) {
-        const t = await templates_repository_1.templatesRepo.findById(id, salonId);
+        const t = await templates_repository_1.templatesRepository.findById(id, salonId);
         if (!t)
-            throw { statusCode: 404, message: 'Template not found' };
+            throw new error_middleware_1.AppError(404, 'Template not found', 'NOT_FOUND');
         return t;
     },
-    async create(salonId, data) {
-        const config = await config_repository_1.configRepo.findBySalonId(salonId);
+    async create(salonId, body) {
+        const config = await config_repository_1.configRepository.findBySalonId(salonId);
         if (!config)
-            throw { statusCode: 400, message: 'WhatsApp not configured' };
+            throw new error_middleware_1.AppError(400, 'WhatsApp not configured for this salon', 'WA_NOT_CONFIGURED');
         const components = [];
-        if (data.headerType && data.headerType !== 'none') {
-            if (data.headerType === 'text' && data.headerText) {
-                components.push({ type: 'HEADER', format: 'TEXT', text: data.headerText });
+        if (body.header_type && body.header_type !== 'none') {
+            if (body.header_type === 'text' && body.header_text) {
+                components.push({ type: 'HEADER', format: 'TEXT', text: body.header_text });
             }
-            else if (['image', 'video', 'document'].includes(data.headerType)) {
-                components.push({ type: 'HEADER', format: data.headerType.toUpperCase() });
+            else if (['image', 'video', 'document'].includes(body.header_type)) {
+                components.push({ type: 'HEADER', format: body.header_type.toUpperCase() });
             }
         }
-        components.push({ type: 'BODY', text: data.bodyText });
-        if (data.footerText)
-            components.push({ type: 'FOOTER', text: data.footerText });
-        if (data.buttons?.length > 0) {
+        components.push({ type: 'BODY', text: body.body_text });
+        if (body.footer_text) {
+            components.push({ type: 'FOOTER', text: body.footer_text });
+        }
+        if (body.buttons && body.buttons.length > 0) {
             components.push({
                 type: 'BUTTONS',
-                buttons: data.buttons.map((b) => {
+                buttons: body.buttons.map(b => {
                     if (b.type === 'quick_reply')
                         return { type: 'QUICK_REPLY', text: b.text };
                     if (b.type === 'url')
@@ -45,41 +49,47 @@ exports.templatesService = {
         let metaTemplateId;
         let status = 'PENDING';
         try {
-            const metaRes = await whatsapp_service_1.whatsappService.submitTemplate({
-                wabaId: config.waba_id, accessToken: config.access_token,
-                name: data.name, category: data.category, language: data.language, components,
+            const meta = await whatsapp_api_1.whatsappMetaApi.submitTemplate({
+                wabaId: config.waba_id,
+                accessToken: config.access_token,
+                name: body.name,
+                category: body.category,
+                language: body.language,
+                components,
             });
-            metaTemplateId = metaRes.id;
-            status = metaRes.status || 'PENDING';
+            metaTemplateId = meta.id;
+            status = meta.status ?? 'PENDING';
         }
-        catch { }
-        return templates_repository_1.templatesRepo.create(salonId, {
-            name: data.name, category: data.category, language: data.language,
-            header_type: data.headerType || 'none', header_text: data.headerText,
-            body_text: data.bodyText, footer_text: data.footerText,
-            buttons: data.buttons || [], meta_template_id: metaTemplateId, status,
+        catch {
+            // Save locally even if Meta submission fails
+        }
+        return templates_repository_1.templatesRepository.create(salonId, {
+            ...body,
+            meta_template_id: metaTemplateId,
+            status,
         });
     },
     async syncStatus(id, salonId) {
-        const template = await templates_repository_1.templatesRepo.findById(id, salonId);
+        const template = await templates_repository_1.templatesRepository.findById(id, salonId);
         if (!template)
-            throw { statusCode: 404, message: 'Template not found' };
-        const config = await config_repository_1.configRepo.findBySalonId(salonId);
-        if (!config || !template.meta_template_id)
-            return templates_repository_1.templatesRepo.updateStatus(id, 'APPROVED');
+            throw new error_middleware_1.AppError(404, 'Template not found', 'NOT_FOUND');
+        const config = await config_repository_1.configRepository.findBySalonId(salonId);
+        if (!config || !template.meta_template_id) {
+            return templates_repository_1.templatesRepository.updateStatus(id, 'APPROVED');
+        }
         try {
-            const meta = await whatsapp_service_1.whatsappService.getTemplateStatus(config.access_token, template.meta_template_id);
-            return templates_repository_1.templatesRepo.updateStatus(id, meta.status, template.meta_template_id, meta.rejected_reason);
+            const meta = await whatsapp_api_1.whatsappMetaApi.getTemplateStatus(config.access_token, template.meta_template_id);
+            return templates_repository_1.templatesRepository.updateStatus(id, meta.status, template.meta_template_id, meta.rejected_reason ?? null);
         }
         catch {
-            return templates_repository_1.templatesRepo.updateStatus(id, 'APPROVED');
+            return templates_repository_1.templatesRepository.updateStatus(id, 'APPROVED');
         }
     },
     async delete(id, salonId) {
-        const deleted = await templates_repository_1.templatesRepo.delete(id, salonId);
+        const deleted = await templates_repository_1.templatesRepository.delete(id, salonId);
         if (!deleted)
-            throw { statusCode: 404, message: 'Template not found' };
-        return { message: 'Template deleted' };
+            throw new error_middleware_1.AppError(404, 'Template not found', 'NOT_FOUND');
+        return { message: 'Template deleted successfully' };
     },
 };
 //# sourceMappingURL=templates.service.js.map

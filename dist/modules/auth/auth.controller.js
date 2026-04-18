@@ -10,13 +10,13 @@ const response_util_1 = require("../utils/response.util");
 const rate_limit_middleware_1 = require("../../middleware/rate-limit.middleware");
 const logger_1 = __importDefault(require("../../config/logger"));
 const auth_validator_1 = require("./auth.validator");
-function redirectToFrontend(res, accessToken, refreshToken, returnTo) {
-    // Try mapping frontend from env based on typical setups, fallback if missing
+function redirectToFrontend(res, accessToken, refreshToken, isOnboardingComplete, returnTo) {
     const frontendUrl = process.env.APP_BASE_URL || process.env.FRONTEND_URL || "http://localhost:5173";
     const base = new URL(frontendUrl);
     base.pathname = "/oauth/success";
     base.searchParams.set("token", accessToken);
-    base.searchParams.set("refreshToken", refreshToken); // Included just in case the client needs it
+    base.searchParams.set("refreshToken", refreshToken);
+    base.searchParams.set("isOnboardingComplete", String(isOnboardingComplete));
     if (returnTo)
         base.searchParams.set("returnTo", returnTo);
     res.redirect(base.toString());
@@ -143,6 +143,40 @@ exports.authController = {
             return next(e);
         }
     },
+    // ================= FORGOT PASSWORD =================
+    async sendPasswordResetOtp(req, res, next) {
+        try {
+            const email = String(req.body?.email || "").trim().toLowerCase();
+            const data = await auth_service_1.authService.forgotPasswordSendOtp(email);
+            return (0, response_util_1.sendSuccess)(res, 200, data, "Password reset request processed");
+        }
+        catch (e) {
+            return next(e);
+        }
+    },
+    async verifyPasswordResetOtp(req, res, next) {
+        try {
+            const email = String(req.body?.email || "").trim().toLowerCase();
+            const otp = String(req.body?.otp || "").trim();
+            const data = await auth_service_1.authService.forgotPasswordVerifyOtp(email, otp);
+            return (0, response_util_1.sendSuccess)(res, 200, data, "OTP verified");
+        }
+        catch (e) {
+            return next(e);
+        }
+    },
+    async resetPassword(req, res, next) {
+        try {
+            const email = String(req.body?.email || "").trim().toLowerCase();
+            const otp = String(req.body?.otp || "").trim();
+            const newPassword = String(req.body?.newPassword || "");
+            const data = await auth_service_1.authService.resetPassword(email, otp, newPassword);
+            return (0, response_util_1.sendSuccess)(res, 200, data, "Password reset successfully");
+        }
+        catch (e) {
+            return next(e);
+        }
+    },
     // ================= EXOTEL PHONE OTP =================
     async sendPhoneOtpExotel(req, res, next) {
         try {
@@ -196,9 +230,9 @@ exports.authController = {
             }
             const tokens = await auth_service_1.authService.googleExchangeCode(code, st.codeVerifier);
             const profile = await auth_service_1.authService.googleGetProfile(tokens.access_token);
-            const { accessToken, refreshToken } = await auth_service_1.authService.signInWithGoogle(profile);
-            // We redirect directly to frontend and pass the token(s) instead of cookies
-            return redirectToFrontend(res, accessToken, refreshToken, st.returnTo);
+            const { accessToken, refreshToken, isOnboardingComplete } = await auth_service_1.authService.signInWithGoogle(profile);
+            // Redirect to frontend with tokens + onboarding flag in query string
+            return redirectToFrontend(res, accessToken, refreshToken, isOnboardingComplete, st.returnTo);
         }
         catch (err) {
             console.error("GOOGLE CALLBACK ERROR:", err?.response?.data || err?.message || err);

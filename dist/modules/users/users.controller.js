@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -232,6 +265,98 @@ exports.usersController = {
         }
         catch (error) {
             logger_1.default.error("DELETE /users/:id error", {
+                method: req.method,
+                path: req.originalUrl,
+                error,
+            });
+            return next(error);
+        }
+    },
+    /**
+     * PATCH /api/v1/users/me
+     * The authenticated user updates their own profile
+     */
+    async updateMe(req, res, next) {
+        try {
+            const userId = req.user?.userId;
+            logger_1.default.info("PATCH /users/me called", {
+                userId,
+                method: req.method,
+                path: req.originalUrl,
+            });
+            if (!userId) {
+                throw new error_middleware_1.AppError(401, "Unauthorized", "UNAUTHORIZED");
+            }
+            const updated = await users_service_1.usersService.update(userId, req.body);
+            logger_1.default.info("PATCH /users/me success", {
+                userId,
+                method: req.method,
+                path: req.originalUrl,
+            });
+            return (0, response_util_1.sendSuccess)(res, 200, updated, "Profile updated successfully");
+        }
+        catch (error) {
+            logger_1.default.error("PATCH /users/me error", {
+                method: req.method,
+                path: req.originalUrl,
+                error,
+            });
+            return next(error);
+        }
+    },
+    /**
+     * POST /api/v1/users/me/change-password
+     * Authenticated user changes their own password.
+     */
+    async changePassword(req, res, next) {
+        try {
+            const userId = req.user?.userId;
+            logger_1.default.info("POST /users/me/change-password called", { userId });
+            if (!userId)
+                throw new error_middleware_1.AppError(401, "Unauthorized", "UNAUTHORIZED");
+            const { currentPassword, newPassword } = req.body;
+            await users_service_1.usersService.changePassword(userId, currentPassword, newPassword);
+            logger_1.default.info("POST /users/me/change-password success", { userId });
+            return (0, response_util_1.sendSuccess)(res, 200, null, "Password changed successfully");
+        }
+        catch (error) {
+            logger_1.default.error("POST /users/me/change-password error", { error });
+            return next(error);
+        }
+    },
+    /**
+     * POST /api/v1/users/me/avatar
+     * Upload profile picture — file processed by multer, then stored to S3 (or local)
+     */
+    async uploadAvatar(req, res, next) {
+        try {
+            const userId = req.user?.userId;
+            logger_1.default.info("POST /users/me/avatar called", {
+                userId,
+                method: req.method,
+                path: req.originalUrl,
+            });
+            if (!userId) {
+                throw new error_middleware_1.AppError(401, "Unauthorized", "UNAUTHORIZED");
+            }
+            const file = req.file;
+            if (!file) {
+                throw new error_middleware_1.AppError(400, "No image file provided", "FILE_REQUIRED");
+            }
+            const { uploadAvatarToS3 } = await Promise.resolve().then(() => __importStar(require("../utils/avatar.upload")));
+            const avatarUrl = await uploadAvatarToS3(file.path, userId, file.mimetype);
+            // Persist the URL in the DB
+            const updated = await users_service_1.usersService.update(userId, { avatarUrl });
+            logger_1.default.info("POST /users/me/avatar success", {
+                userId,
+                avatarUrl,
+                method: req.method,
+                path: req.originalUrl,
+            });
+            return (0, response_util_1.sendSuccess)(res, 200, { avatarUrl: updated.avatarUrl }, "Avatar updated successfully");
+        }
+        catch (error) {
+            logger_1.default.error("POST /users/me/avatar error", {
                 method: req.method,
                 path: req.originalUrl,
                 error,

@@ -1,4 +1,5 @@
+import { WADashboardStats } from './dashboard.types';
 export declare const dashboardService: {
-    getDashboard(salonId: string): Promise<any>;
+    getStats(salonId: string): Promise<WADashboardStats>;
 };
 //# sourceMappingURL=dashboard.service.d.ts.map

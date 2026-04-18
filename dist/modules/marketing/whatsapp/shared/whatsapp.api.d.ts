@@ -6,11 +6,7 @@ export declare const whatsappMetaApi: {
         templateName: string;
         language: string;
         components: any[];
-    }): Promise<{
-        messages: Array<{
-            id: string;
-        }>;
-    }>;
+    }): Promise<any>;
     submitTemplate(params: {
         wabaId: string;
         accessToken: string;
@@ -18,18 +14,8 @@ export declare const whatsappMetaApi: {
         category: string;
         language: string;
         components: any[];
-    }): Promise<{
-        id: string;
-        status?: string;
-    }>;
-    getTemplateStatus(accessToken: string, templateId: string): Promise<{
-        status: string;
-        rejected_reason?: string;
-    }>;
-    testConnection(phoneNumberId: string, accessToken: string): Promise<{
-        display_phone_number: string;
-        quality_rating?: string;
-        messaging_limit_tier?: number;
-    }>;
+    }): Promise<any>;
+    getTemplateStatus(accessToken: string, metaTemplateId: string): Promise<any>;
+    testConnection(phoneNumberId: string, accessToken: string): Promise<any>;
 };
 //# sourceMappingURL=whatsapp.api.d.ts.map

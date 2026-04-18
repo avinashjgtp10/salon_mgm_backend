@@ -99,8 +99,28 @@ exports.authService = {
             country: body.country?.trim() ? body.country.trim() : null,
             country_code: body.countryCode?.trim() ? body.countryCode.trim() : null,
         });
-        logger_1.default.info("[authService.register] User created successfully", { email, userId: user?.id, role });
-        return user;
+        const salonId = await auth_repository_1.authRepository.findSalonIdByUserId(user.id);
+        const accessToken = signAccessToken({ userId: user.id, role: user.role, salonId });
+        const refreshToken = signRefreshToken({ userId: user.id });
+        await auth_repository_1.authRepository.saveRefreshToken({
+            user_id: user.id,
+            token: refreshToken,
+            expires_at: refreshExpiryDate(),
+        });
+        logger_1.default.info("[authService.register] User created successfully", { email, userId: user?.id, role, salonId });
+        return {
+            accessToken,
+            refreshToken,
+            isOnboardingComplete: false,
+            user: {
+                id: user.id,
+                email: user.email,
+                role: user.role,
+                first_name: user.first_name,
+                last_name: user.last_name,
+                salonId,
+            },
+        };
     },
     async login(body) {
         logger_1.default.info("[authService.login] Start", { email: body?.email });
@@ -122,23 +142,26 @@ exports.authService = {
             throw new error_middleware_1.AppError(401, "Invalid credentials", "INVALID_CREDENTIALS");
         }
         await auth_repository_1.authRepository.updateLastLogin(user.id);
-        const accessToken = signAccessToken({ userId: user.id, role: user.role, salonId: user.salon_id });
+        const salonId = await auth_repository_1.authRepository.findSalonIdByUserId(user.id);
+        const accessToken = signAccessToken({ userId: user.id, role: user.role, salonId });
         const refreshToken = signRefreshToken({ userId: user.id });
         await auth_repository_1.authRepository.saveRefreshToken({
             user_id: user.id,
             token: refreshToken,
             expires_at: refreshExpiryDate(),
         });
-        logger_1.default.info("[authService.login] Login successful", { email, userId: user.id, role: user.role });
+        logger_1.default.info("[authService.login] Login successful", { email, userId: user.id, role: user.role, salonId });
         return {
             accessToken,
             refreshToken,
+            isOnboardingComplete: user.is_onboarding_complete ?? false,
             user: {
                 id: user.id,
                 email: user.email,
                 role: user.role,
                 first_name: user.first_name,
                 last_name: user.last_name,
+                salonId,
             },
         };
     },
@@ -173,8 +196,9 @@ exports.authService = {
             logger_1.default.warn("[authService.refresh] User is inactive", { userId });
             throw new error_middleware_1.AppError(403, "User is inactive", "USER_INACTIVE");
         }
-        const newAccessToken = signAccessToken({ userId: user.id, role: user.role, salonId: user.salon_id });
-        logger_1.default.info("[authService.refresh] New access token issued", { userId });
+        const salonId = await auth_repository_1.authRepository.findSalonIdByUserId(user.id);
+        const newAccessToken = signAccessToken({ userId: user.id, role: user.role, salonId });
+        logger_1.default.info("[authService.refresh] New access token issued", { userId, salonId });
         return { accessToken: newAccessToken };
     },
     async logout(refreshToken) {
@@ -276,6 +300,96 @@ exports.authService = {
         await auth_repository_1.authRepository.markUserVerified(user.id);
         logger_1.default.info("[authService.verifyEmailOtp] Email verified successfully", { email, userId: user.id });
         return { message: "Email verified successfully", success: true };
+    },
+    // ================= FORGOT PASSWORD =================
+    async forgotPasswordSendOtp(emailRaw) {
+        const email = String(emailRaw || "").trim().toLowerCase();
+        logger_1.default.info("[authService.forgotPasswordSendOtp] Start", { email });
+        if (!email)
+            throw new error_middleware_1.AppError(400, "Email is required", "VALIDATION_ERROR");
+        const user = await auth_repository_1.authRepository.findUserByEmail(email);
+        if (!user) {
+            logger_1.default.warn("[authService.forgotPasswordSendOtp] User not found", { email });
+            throw new error_middleware_1.AppError(404, "Email does not exist", "USER_NOT_FOUND");
+        }
+        const otp = (0, otp_util_1.generateOtp)();
+        const otpHash = await (0, otp_util_1.hashOtp)(otp);
+        await auth_repository_1.authRepository.createOtpVerification({
+            user_id: user.id,
+            otp_code: otpHash,
+            purpose: "password_reset",
+            expires_at: (0, otp_util_1.otpExpiry)(10),
+        });
+        logger_1.default.info("[authService.forgotPasswordSendOtp] Sending password reset OTP", { email });
+        try {
+            await email_service_1.emailService.sendPasswordResetOtpEmail(email, otp);
+            logger_1.default.info("[authService.forgotPasswordSendOtp] Email sent successfully", { email });
+        }
+        catch (emailErr) {
+            logger_1.default.error("[authService.forgotPasswordSendOtp] Failed to send email", {
+                email,
+                error: emailErr?.message,
+            });
+            throw new error_middleware_1.AppError(500, "Failed to send reset email", "EMAIL_SEND_FAILED");
+        }
+        return { message: "If an account exists, an OTP has been sent." };
+    },
+    async forgotPasswordVerifyOtp(emailRaw, otpRaw) {
+        const email = String(emailRaw || "").trim().toLowerCase();
+        const otp = String(otpRaw || "").trim();
+        logger_1.default.info("[authService.forgotPasswordVerifyOtp] Start", { email });
+        if (!email || !otp)
+            throw new error_middleware_1.AppError(400, "Email and OTP required", "VALIDATION_ERROR");
+        const user = await auth_repository_1.authRepository.findUserByEmail(email);
+        if (!user) {
+            throw new error_middleware_1.AppError(400, "Invalid OTP", "OTP_INVALID");
+        }
+        const latest = await auth_repository_1.authRepository.findLatestOtp(user.id, "password_reset");
+        if (!latest) {
+            throw new error_middleware_1.AppError(400, "OTP not found", "OTP_NOT_FOUND");
+        }
+        if (latest.is_used) {
+            throw new error_middleware_1.AppError(400, "OTP already used", "OTP_USED");
+        }
+        if (new Date(latest.expires_at).getTime() < Date.now()) {
+            throw new error_middleware_1.AppError(400, "OTP expired", "OTP_EXPIRED");
+        }
+        const ok = await (0, otp_util_1.compareOtp)(otp, latest.otp_code);
+        if (!ok) {
+            throw new error_middleware_1.AppError(400, "Invalid OTP", "OTP_INVALID");
+        }
+        return { message: "OTP is valid", success: true };
+    },
+    async resetPassword(emailRaw, otpRaw, newPasswordRaw) {
+        const email = String(emailRaw || "").trim().toLowerCase();
+        const otp = String(otpRaw || "").trim();
+        const newPassword = String(newPasswordRaw || "");
+        logger_1.default.info("[authService.resetPassword] Start", { email });
+        if (!email || !otp || !newPassword) {
+            throw new error_middleware_1.AppError(400, "Email, OTP, and new password are required", "VALIDATION_ERROR");
+        }
+        if (newPassword.length < 8) {
+            throw new error_middleware_1.AppError(400, "Password must be at least 8 characters", "VALIDATION_ERROR");
+        }
+        const user = await auth_repository_1.authRepository.findUserByEmail(email);
+        if (!user) {
+            throw new error_middleware_1.AppError(400, "Invalid OTP", "OTP_INVALID");
+        }
+        const latest = await auth_repository_1.authRepository.findLatestOtp(user.id, "password_reset");
+        if (!latest || latest.is_used || new Date(latest.expires_at).getTime() < Date.now()) {
+            throw new error_middleware_1.AppError(400, "OTP invalid or expired", "OTP_INVALID");
+        }
+        const ok = await (0, otp_util_1.compareOtp)(otp, latest.otp_code);
+        if (!ok) {
+            throw new error_middleware_1.AppError(400, "Invalid OTP", "OTP_INVALID");
+        }
+        const passwordHash = await bcrypt_1.default.hash(newPassword, 10);
+        await auth_repository_1.authRepository.updatePassword(user.id, passwordHash);
+        await auth_repository_1.authRepository.markOtpUsed(latest.id);
+        // Log out of all sessions for security
+        await auth_repository_1.authRepository.deleteAllRefreshTokensForUser(user.id);
+        logger_1.default.info("[authService.resetPassword] Password reset successfully", { email, userId: user.id });
+        return { message: "Password reset successful" };
     },
     // ================= EXOTEL PHONE OTP =================
     async sendPhoneOtpExotel(emailRaw, phoneRaw) {
@@ -385,12 +499,16 @@ exports.authService = {
     async googleCreateState(payload) {
         const state = randomString(24);
         const full = { ...payload, createdAt: Date.now() };
-        await redis_1.default.set(`${STATE_PREFIX}${state}`, JSON.stringify(full), "EX", STATE_TTL_SECONDS);
+        const key = `${STATE_PREFIX}${state}`;
+        await redis_1.default.set(key, JSON.stringify(full), "EX", STATE_TTL_SECONDS);
+        console.log(`[OAuth DEBUG] State STORED: ${key}`);
         return state;
     },
     async googleConsumeState(state) {
         const key = `${STATE_PREFIX}${state}`;
+        console.log(`[OAuth DEBUG] State LOOKUP: ${key}`);
         const raw = await redis_1.default.get(key);
+        console.log(`[OAuth DEBUG] State FOUND: ${!!raw}`);
         if (!raw)
             return null;
         await redis_1.default.del(key);
@@ -455,14 +573,15 @@ exports.authService = {
             user = await auth_repository_1.authRepository.createUserFromGoogle(profile);
             await auth_repository_1.authRepository.attachGoogleIdentity(user.id, profile);
         }
-        const accessToken = signAccessToken({ userId: user.id, role: user.role, salonId: user.salon_id });
+        const salonId = await auth_repository_1.authRepository.findSalonIdByUserId(user.id);
+        const accessToken = signAccessToken({ userId: user.id, role: user.role, salonId });
         const refreshToken = signRefreshToken({ userId: user.id });
         await auth_repository_1.authRepository.saveRefreshToken({
             user_id: user.id,
             token: refreshToken,
             expires_at: refreshExpiryDate(),
         });
-        return { user, accessToken, refreshToken };
+        return { user, accessToken, refreshToken, salonId, isOnboardingComplete: user.is_onboarding_complete ?? false };
     },
     googleMakePkce() {
         const codeVerifier = randomString(32);

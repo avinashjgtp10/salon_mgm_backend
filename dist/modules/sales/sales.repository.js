@@ -103,6 +103,27 @@ exports.salesRepository = {
     async checkout(id, params) {
         const { rows } = await database_1.default.query(`UPDATE sales SET payment_method = $2, payment_reference = $3, status = $4, updated_at = NOW() WHERE id = $1 RETURNING *`, [id, params.payment_method, params.payment_reference || null, params.status || 'completed']);
         return rows[0];
+    },
+    async exportList(filters) {
+        const conditions = [];
+        const values = [];
+        let idx = 1;
+        if (filters.salon_id) {
+            conditions.push(`salon_id = $${idx++}`);
+            values.push(filters.salon_id);
+        }
+        if (filters.status) {
+            conditions.push(`status = $${idx++}`);
+            values.push(filters.status);
+        }
+        if (filters.date) {
+            conditions.push(`DATE(created_at) = $${idx++}`);
+            values.push(filters.date);
+        }
+        const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+        const query = `SELECT * FROM sales ${whereClause} ORDER BY created_at DESC`;
+        const { rows } = await database_1.default.query(query, values);
+        return rows;
     }
 };
 //# sourceMappingURL=sales.repository.js.map

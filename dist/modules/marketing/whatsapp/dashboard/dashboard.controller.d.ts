@@ -1,5 +1,13 @@
 import { Request, Response, NextFunction } from 'express';
-export declare const dashboardController: {
-    getDashboard(req: Request, res: Response, next: NextFunction): Promise<Response<any, Record<string, any>> | undefined>;
+type AuthRequest = Request & {
+    user?: {
+        userId: string;
+        salonId?: string;
+        role?: string;
+    };
 };
+export declare const dashboardController: {
+    getStats(req: AuthRequest, res: Response, next: NextFunction): Promise<void | Response<any, Record<string, any>>>;
+};
+export {};
 //# sourceMappingURL=dashboard.controller.d.ts.map

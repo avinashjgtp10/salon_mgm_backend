@@ -5,5 +5,6 @@ export declare const usersService: {
     getById(id: string): Promise<SafeUser>;
     update(id: string, input: UpdateUserInput): Promise<SafeUser>;
     remove(id: string): Promise<boolean>;
+    changePassword(userId: string, currentPassword: string, newPassword: string): Promise<void>;
 };
 //# sourceMappingURL=users.service.d.ts.map

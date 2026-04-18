@@ -7,36 +7,39 @@ exports.configController = {
         try {
             const salonId = req.user?.salonId;
             if (!salonId)
-                return res.status(400).json({ success: false, message: 'salonId missing' });
+                return res.status(400).json({ error: 'salonId missing from token' });
+            // Frontend: api.get('/wa-config').then(r => r.data)
             const data = await config_service_1.configService.getConfig(salonId);
-            res.json({ success: true, data });
+            return res.status(200).json(data);
         }
-        catch (err) {
-            next(err);
+        catch (e) {
+            return next(e);
         }
     },
     async saveConfig(req, res, next) {
         try {
             const salonId = req.user?.salonId;
             if (!salonId)
-                return res.status(400).json({ success: false, message: 'salonId missing' });
+                return res.status(400).json({ error: 'salonId missing from token' });
+            // Frontend: api.put('/wa-config', payload).then(r => r.data)
             const data = await config_service_1.configService.saveConfig(salonId, req.body);
-            res.json({ success: true, data });
+            return res.status(200).json(data);
         }
-        catch (err) {
-            next(err);
+        catch (e) {
+            return next(e);
         }
     },
     async testConnection(req, res, next) {
         try {
             const salonId = req.user?.salonId;
             if (!salonId)
-                return res.status(400).json({ success: false, message: 'salonId missing' });
+                return res.status(400).json({ error: 'salonId missing from token' });
+            // Frontend: api.post('/wa-config/test').then(r => r.data)
             const data = await config_service_1.configService.testConnection(salonId);
-            res.json({ success: true, data });
+            return res.status(200).json(data);
         }
-        catch (err) {
-            next(err);
+        catch (e) {
+            return next(e);
         }
     },
 };

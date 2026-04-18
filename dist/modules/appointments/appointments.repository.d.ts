@@ -17,5 +17,11 @@ export declare const appointmentsRepository: {
     update(id: string, patch: UpdateAppointmentBody): Promise<Appointment>;
     updateStatus(id: string, status: string): Promise<Appointment>;
     linkSale(id: string, saleId: string): Promise<Appointment>;
+    exportList(filters: {
+        salon_id?: string;
+        status?: string;
+        start_date?: string;
+        end_date?: string;
+    }): Promise<Appointment[]>;
 };
 //# sourceMappingURL=appointments.repository.d.ts.map

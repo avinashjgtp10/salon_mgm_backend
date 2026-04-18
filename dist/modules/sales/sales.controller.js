@@ -91,6 +91,24 @@ exports.salesController = {
         catch (err) {
             return next(err);
         }
+    },
+    async exportSales(req, res, next) {
+        try {
+            const rawFormat = req.query.format;
+            const format = rawFormat === "pdf" ? "pdf" : rawFormat === "excel" ? "excel" : "csv";
+            const { buffer, contentType, filename } = await sales_service_1.salesService.exportSales({
+                salon_id: req.query.salon_id,
+                status: req.query.status,
+                date: req.query.date,
+                format,
+            });
+            res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+            res.setHeader("Content-Type", contentType);
+            return res.send(buffer);
+        }
+        catch (err) {
+            return next(err);
+        }
     }
 };
 //# sourceMappingURL=sales.controller.js.map

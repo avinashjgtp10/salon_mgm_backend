@@ -109,5 +109,33 @@ exports.appointmentsRepository = {
              WHERE id = $1 RETURNING *`, [id, saleId]);
         return rows[0];
     },
+    async exportList(filters) {
+        const conditions = [];
+        const values = [];
+        let idx = 1;
+        if (filters.salon_id) {
+            conditions.push(`salon_id = $${idx}`);
+            values.push(filters.salon_id);
+            idx++;
+        }
+        if (filters.status) {
+            conditions.push(`status = $${idx}`);
+            values.push(filters.status);
+            idx++;
+        }
+        if (filters.start_date) {
+            conditions.push(`scheduled_at >= $${idx}::date`);
+            values.push(filters.start_date);
+            idx++;
+        }
+        if (filters.end_date) {
+            conditions.push(`scheduled_at < ($${idx}::date + INTERVAL '1 day')`);
+            values.push(filters.end_date);
+            idx++;
+        }
+        const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+        const { rows } = await database_1.default.query(`SELECT * FROM appointments ${where} ORDER BY scheduled_at DESC`, values);
+        return rows;
+    },
 };
 //# sourceMappingURL=appointments.repository.js.map
