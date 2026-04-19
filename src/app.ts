@@ -30,8 +30,8 @@ import marketingDashboardRoutes from './modules/marketing/whatsapp/dashboard/das
 import marketingTemplatesRoutes from './modules/marketing/whatsapp/templates/templates.routes'
 import marketingCampaignsRoutes from './modules/marketing/whatsapp/campaigns/campaigns.routes'
 import marketingConfigRoutes    from './modules/marketing/whatsapp/config/config.routes'
-import marketingUsersRoutes     from './modules/marketing/whatsapp/users/users.routes'
 import marketingWebhooksRoutes  from './modules/marketing/whatsapp/webhooks/webhooks.routes'
+import profileRoutes from "./modules/profile/profile.routes";
 
 import swaggerUi from "swagger-ui-express";
 import YAML from "yamljs";
@@ -96,8 +96,8 @@ app.use('/api/v1/dashboard', marketingDashboardRoutes)
 app.use('/api/v1/templates', marketingTemplatesRoutes)
 app.use('/api/v1/campaigns', marketingCampaignsRoutes)
 app.use('/api/v1/wa-config', marketingConfigRoutes)
-app.use('/api/v1/users',     marketingUsersRoutes)
 app.use('/api/v1/webhooks',  marketingWebhooksRoutes)
+app.use("/api/v1/profile",  profileRoutes);
 
 
 // Swagger Documentation

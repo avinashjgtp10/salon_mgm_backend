@@ -60,12 +60,30 @@ export const refreshSchema = z.object({
 export const updateUserSchema = z.object({
   body: z.object({
     firstName: z.string().trim().min(1).max(50).optional(),
-    lastName: z.string().trim().max(50).optional(),
+    lastName: z.string().trim().max(50).optional().nullable(),
     phone: phoneSchema,
     avatarUrl: z.string().url().optional().nullable(),
     isActive: z.boolean().optional(),
     role: z.enum(["salon_owner", "staff", "client", "admin"]).optional(),
+    // Profile fields
+    businessName: z.string().trim().max(255).optional().nullable(),
+    address: z.string().trim().max(500).optional().nullable(),
+    country: z.string().trim().max(100).optional().nullable(),
+    countryCode: z.string().trim().max(10).optional().nullable(),
   }),
+});
+
+/**
+ * Change Password Schema (authenticated user)
+ */
+export const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1, "Current password is required"),
+  newPassword: z
+    .string()
+    .min(8, "Password must be at least 8 characters")
+    .regex(/[A-Z]/, "Must contain at least one uppercase letter")
+    .regex(/[a-z]/, "Must contain at least one lowercase letter")
+    .regex(/[0-9]/, "Must contain at least one number"),
 });
 
 /**
@@ -75,3 +93,4 @@ export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
 export type RefreshInput = z.infer<typeof refreshSchema>;
 export type UpdateUserInput = z.infer<typeof updateUserSchema>["body"];
+export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
