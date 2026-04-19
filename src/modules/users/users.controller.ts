@@ -271,4 +271,112 @@ export const usersController = {
       return next(error);
     }
   },
+
+  /**
+   * PATCH /api/v1/users/me
+   * The authenticated user updates their own profile
+   */
+  async updateMe(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user?.userId;
+
+      logger.info("PATCH /users/me called", {
+        userId,
+        method: req.method,
+        path: req.originalUrl,
+      });
+
+      if (!userId) {
+        throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+      }
+
+      const updated = await usersService.update(userId, req.body);
+
+      logger.info("PATCH /users/me success", {
+        userId,
+        method: req.method,
+        path: req.originalUrl,
+      });
+
+      return sendSuccess(res, 200, updated, "Profile updated successfully");
+    } catch (error) {
+      logger.error("PATCH /users/me error", {
+        method: req.method,
+        path: req.originalUrl,
+        error,
+      });
+      return next(error);
+    }
+  },
+
+  /**
+   * POST /api/v1/users/me/change-password
+   * Authenticated user changes their own password.
+   */
+  async changePassword(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user?.userId;
+
+      logger.info("POST /users/me/change-password called", { userId });
+
+      if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+
+      const { currentPassword, newPassword } = req.body;
+      await usersService.changePassword(userId, currentPassword, newPassword);
+
+      logger.info("POST /users/me/change-password success", { userId });
+      return sendSuccess(res, 200, null, "Password changed successfully");
+    } catch (error) {
+      logger.error("POST /users/me/change-password error", { error });
+      return next(error);
+    }
+  },
+
+  /**
+   * POST /api/v1/users/me/avatar
+   * Upload profile picture — file processed by multer, then stored to S3 (or local)
+   */
+  async uploadAvatar(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user?.userId;
+
+      logger.info("POST /users/me/avatar called", {
+        userId,
+        method: req.method,
+        path: req.originalUrl,
+      });
+
+      if (!userId) {
+        throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+      }
+
+      const file = (req as any).file as Express.Multer.File | undefined;
+      if (!file) {
+        throw new AppError(400, "No image file provided", "FILE_REQUIRED");
+      }
+
+      const { uploadAvatarToS3 } = await import("../utils/avatar.upload");
+      const avatarUrl = await uploadAvatarToS3(file.path, userId, file.mimetype);
+
+      // Persist the URL in the DB
+      const updated = await usersService.update(userId, { avatarUrl });
+
+      logger.info("POST /users/me/avatar success", {
+        userId,
+        avatarUrl,
+        method: req.method,
+        path: req.originalUrl,
+      });
+
+      return sendSuccess(res, 200, { avatarUrl: updated.avatarUrl }, "Avatar updated successfully");
+    } catch (error) {
+      logger.error("POST /users/me/avatar error", {
+        method: req.method,
+        path: req.originalUrl,
+        error,
+      });
+      return next(error);
+    }
+  },
 };
+

@@ -17,6 +17,7 @@ import servicesRoutes from "./modules/services/services.routes";
 import { corsMiddleware } from "./middleware/cors.middleware";
 import marketplaceRoutes from "./modules/marketplace/marketplace.routes";
 import membershipsRoutes from "./modules/memberships/memberships.routes";
+import packagesRoutes from "./modules/packages/packages.routes";
 import productsRoutes from "./modules/products/products.routes";
 import brandsRoutes from "./modules/products/products.routes";
 import appointmentsRoutes from "./modules/appointments/appointments.routes";
@@ -29,8 +30,8 @@ import marketingDashboardRoutes from './modules/marketing/whatsapp/dashboard/das
 import marketingTemplatesRoutes from './modules/marketing/whatsapp/templates/templates.routes'
 import marketingCampaignsRoutes from './modules/marketing/whatsapp/campaigns/campaigns.routes'
 import marketingConfigRoutes    from './modules/marketing/whatsapp/config/config.routes'
-import marketingUsersRoutes     from './modules/marketing/whatsapp/users/users.routes'
 import marketingWebhooksRoutes  from './modules/marketing/whatsapp/webhooks/webhooks.routes'
+import profileRoutes from "./modules/profile/profile.routes";
 
 import swaggerUi from "swagger-ui-express";
 import YAML from "yamljs";
@@ -82,6 +83,7 @@ app.use("/api/v1/clients", clientsRoutes);
 app.use("/api/v1/services", servicesRoutes);
 app.use("/api/v1/marketplace", marketplaceRoutes);
 app.use("/api/v1/memberships", membershipsRoutes);
+app.use("/api/v1/packages", packagesRoutes);
 app.use("/api/v1/products", productsRoutes);
 app.use("/api/v1/brands", brandsRoutes);
 app.use("/api/v1/appointments", appointmentsRoutes);
@@ -94,8 +96,8 @@ app.use('/api/v1/dashboard', marketingDashboardRoutes)
 app.use('/api/v1/templates', marketingTemplatesRoutes)
 app.use('/api/v1/campaigns', marketingCampaignsRoutes)
 app.use('/api/v1/wa-config', marketingConfigRoutes)
-app.use('/api/v1/users',     marketingUsersRoutes)
 app.use('/api/v1/webhooks',  marketingWebhooksRoutes)
+app.use("/api/v1/profile",  profileRoutes);
 
 
 // Swagger Documentation

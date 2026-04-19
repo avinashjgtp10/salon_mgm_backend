@@ -4,9 +4,12 @@ import logger from "../config/logger";
 
 const corsOptions: CorsOptionsDelegate<Request> = (req, callback) => {
   const originHeader = req.header("Origin");
-  
+
   // Normalize origin (remove trailing slash if any)
   const origin = originHeader ? originHeader.replace(/\/$/, "") : undefined;
+
+  // Allow all origins if CORS_ALLOW_ALL_ORIGINS=true (equivalent to Django's CORS_ALLOW_ALL_ORIGINS)
+  const allowAll = process.env.CORS_ALLOW_ALL_ORIGINS === "true";
 
   // Retrieve dynamically to ensure env lets it load even if imported early
   const allowedOrigins: string[] = process.env.CORS_ALLOWED_ORIGINS
@@ -22,6 +25,17 @@ const corsOptions: CorsOptionsDelegate<Request> = (req, callback) => {
     return callback(null, {
       origin: true,
       credentials: true,
+    });
+  }
+
+  // Allow all origins when flag is set
+  if (allowAll) {
+    logger.info(`CORS allowed for all origins (CORS_ALLOW_ALL_ORIGINS=true): ${origin}`);
+    return callback(null, {
+      origin: true,
+      credentials: true,
+      methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+      allowedHeaders: ["Content-Type", "Authorization", "x-api-key", "x-timezone", "x-currency"],
     });
   }
 
