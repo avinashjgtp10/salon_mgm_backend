@@ -25,7 +25,7 @@ const corsOptions: CorsOptionsDelegate<Request> = (req, callback) => {
     });
   }
 
-  if (allowedOrigins.includes(origin)) {
+  if (allowedOrigins.includes("*") || allowedOrigins.includes(origin)) {
     logger.info(`CORS allowed for origin: ${origin}`);
 
     callback(null, {
