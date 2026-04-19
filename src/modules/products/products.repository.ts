@@ -12,6 +12,16 @@ export const productsRepository = {
         return rows[0] || null;
     },
 
+    async listAll(): Promise<Product[]> {
+    const { rows } = await pool.query(
+        `SELECT p.*, pb.name as brand_name 
+         FROM products p
+         LEFT JOIN product_brands pb ON p.brand_id = pb.id
+         ORDER BY p.created_at DESC`
+    );
+    return rows;
+},
+
     async list(filters: ProductListFilters): Promise<{ data: Product[]; total: number }> {
         const conditions: string[] = [];
         const values: unknown[] = [];

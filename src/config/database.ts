@@ -40,7 +40,9 @@ pool.on('connect', () => {
 
 pool.on('error', (err) => {
   console.error('❌ Database error:', err);
-  process.exit(-1);
+  // Do NOT exit the process on idle client errors. The pg pool will automatically remove
+  // the errored client and create a new one when a query is issued. 
+  // Exiting here causes the entire backend to crash unnecessarily.
 });
 
 export default pool;
