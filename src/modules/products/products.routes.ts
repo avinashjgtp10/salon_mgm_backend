@@ -21,6 +21,10 @@ router.patch("/brands/:id", authMiddleware, roleMiddleware("salon_owner", "admin
 router.delete("/brands/:id", authMiddleware, roleMiddleware("salon_owner", "admin"), brandsController.delete);
 
 // Products
+router.get("/export/csv", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), productsController.exportCSV);
+router.get("/export/excel", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), productsController.exportExcel);
+router.get("/export/pdf", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), productsController.exportPDF);
+
 router.get("/", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), productsController.list);
 router.get("/:id", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), productsController.getById);
 router.post("/", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), uploadMiddleware.array("photos", 5), validateCreateProduct, productsController.create);

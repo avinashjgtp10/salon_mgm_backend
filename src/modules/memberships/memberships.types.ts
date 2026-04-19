@@ -1,7 +1,17 @@
+export interface MembershipsListQuery {
+  search?:      string;   // ← ADD
+  sessionType?: string;
+  colour?:      string;
+  validFor?:    string;
+  page?:        number;
+  limit?:       number;
+}
+
+// all other interfaces stay the same
 export interface IncludedService {
   serviceId:        string;
   serviceName:      string;
-  durationMinutes?: number;  // ✅ added
+  durationMinutes?: number;
 }
 
 export interface CreateMembershipDTO {
@@ -20,14 +30,6 @@ export interface CreateMembershipDTO {
 }
 
 export interface UpdateMembershipDTO extends Partial<CreateMembershipDTO> {}
-
-export interface MembershipsListQuery {
-  sessionType?: string;
-  colour?:      string;
-  validFor?:    string;
-  page?:        number;
-  limit?:       number;
-}
 
 export interface Membership extends CreateMembershipDTO {
   id:        string;

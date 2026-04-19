@@ -23,6 +23,29 @@ const isOptionalUUID = (v: unknown) => v === undefined || isUUID(v);
 const VALID_MEASURE_UNITS: MeasureUnit[] = ["ml", "l", "g", "kg", "pcs", "oz", "lb"];
 const VALID_TAX_TYPES: TaxType[] = ["no_tax", "gst_5", "gst_12", "gst_18", "gst_28", "custom"];
 
+// ─── Coercion for FormData (Multipart) Requests ───────────────────────────────
+
+const coerceProductFields = (b: Record<string, any>) => {
+    if (!b || typeof b !== "object") return;
+    const floatFields = ["amount", "supply_price", "retail_price", "markup_percentage", "custom_tax_rate", "team_commission_rate"];
+    for (const f of floatFields) {
+        if (typeof b[f] === "string" && b[f].trim() !== "") {
+            const parsed = parseFloat(b[f]);
+            if (!Number.isNaN(parsed)) b[f] = parsed;
+        }
+    }
+    const boolFields = ["retail_sales_enabled", "team_commission_enabled"];
+    for (const f of boolFields) {
+        if (b[f] === "true" || b[f] === "1") b[f] = true;
+        if (b[f] === "false" || b[f] === "0") b[f] = false;
+    }
+    for (const key of Object.keys(b)) {
+        if (b[key] === "" || b[key] === "undefined" || b[key] === "null") {
+            b[key] = undefined;
+        }
+    }
+};
+
 // ─── Shared Product Field Validation ─────────────────────────────────────────
 
 const validateProductFields = (b: Record<string, unknown>, requireName = false) => {
@@ -93,6 +116,7 @@ const validateProductFields = (b: Record<string, unknown>, requireName = false) 
 
 export const validateCreateProduct = (req: Request, _res: Response, next: NextFunction) => {
     try {
+        coerceProductFields(req.body);
         validateProductFields(req.body, true);
         return next();
     } catch (err) {
@@ -102,6 +126,7 @@ export const validateCreateProduct = (req: Request, _res: Response, next: NextFu
 
 export const validateUpdateProduct = (req: Request, _res: Response, next: NextFunction) => {
     try {
+        coerceProductFields(req.body);
         validateProductFields(req.body, false);
         return next();
     } catch (err) {
