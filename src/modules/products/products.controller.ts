@@ -194,6 +194,45 @@ export const productsController = {
             return next(err);
         }
     },
+
+    async exportCSV(req: any, res: any, next: any) {
+        try {
+            logger.info("GET /products/export/csv called", { path: req.originalUrl });
+            const { stream, filename } = await productsService.exportCSV({
+                requesterUserId: req.user?.userId ?? "anonymous",
+                requesterRole: req.user?.role,
+            });
+            res.setHeader("Content-Type", "text/csv");
+            res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+            stream.pipe(res);
+        } catch (err) { return next(err); }
+    },
+
+    async exportExcel(req: any, res: any, next: any) {
+        try {
+            logger.info("GET /products/export/excel called", { path: req.originalUrl });
+            const { buffer, filename } = await productsService.exportExcel({
+                requesterUserId: req.user?.userId ?? "anonymous",
+                requesterRole: req.user?.role,
+            });
+            res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+            res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+            res.send(buffer);
+        } catch (err) { return next(err); }
+    },
+
+    async exportPDF(req: any, res: any, next: any) {
+        try {
+            logger.info("GET /products/export/pdf called", { path: req.originalUrl });
+            const { stream, filename } = await productsService.exportPDF({
+                requesterUserId: req.user?.userId ?? "anonymous",
+                requesterRole: req.user?.role,
+            });
+            res.setHeader("Content-Type", "application/pdf");
+            res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+            stream.pipe(res);
+        } catch (err) { return next(err); }
+    },
 };
 
 // ─── Brands Controller ────────────────────────────────────────────────────────
