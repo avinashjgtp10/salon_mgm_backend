@@ -3,9 +3,14 @@ import { AppError } from "../../middleware/error.middleware";
 
 export const validateCreateMembership = (req: Request, _res: Response, next: NextFunction) => {
   try {
-    const { name, price, sessionType, validFor, colour, enableOnlineSales, enableOnlineRedemption } = req.body;
+    const {
+      name, price, sessionType, validFor,
+      colour, enableOnlineSales, enableOnlineRedemption, includedServices
+    } = req.body;
     if (!name || typeof name !== "string")
       throw new AppError(400, "name is required", "VALIDATION_ERROR");
+    if (!Array.isArray(includedServices))
+      throw new AppError(400, "includedServices must be an array", "VALIDATION_ERROR");
     if (price === undefined || isNaN(Number(price)))
       throw new AppError(400, "price is required and must be a number", "VALIDATION_ERROR");
     if (!sessionType)
@@ -22,14 +27,23 @@ export const validateCreateMembership = (req: Request, _res: Response, next: Nex
   } catch (e) { return next(e); }
 };
 
-export const validateUpdateMembership = (_req: Request, _res: Response, next: NextFunction) => {
+export const validateUpdateMembership = (
+  _req: Request, _res: Response, next: NextFunction
+) => next();
+
+export const validateMembershipsListQuery = (
+  req: Request, _res: Response, next: NextFunction
+) => {
   try {
+    const { page, limit } = req.query;
+    if (page && isNaN(Number(page)))
+      throw new AppError(400, "page must be a number", "VALIDATION_ERROR");
+    if (limit && isNaN(Number(limit)))
+      throw new AppError(400, "limit must be a number", "VALIDATION_ERROR");
     return next();
   } catch (e) { return next(e); }
 };
 
-export const validateMembershipsListQuery = (_req: Request, _res: Response, next: NextFunction) => {
-  try {
-    return next();
-  } catch (e) { return next(e); }
-};
+export const validateExportQuery = (
+  _req: Request, _res: Response, next: NextFunction
+) => next();
