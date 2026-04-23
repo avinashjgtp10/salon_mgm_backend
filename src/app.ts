@@ -31,6 +31,8 @@ import marketingCampaignsRoutes from './modules/marketing/whatsapp/campaigns/cam
 import marketingConfigRoutes    from './modules/marketing/whatsapp/config/config.routes'
 import marketingUsersRoutes     from './modules/marketing/whatsapp/users/users.routes'
 import marketingWebhooksRoutes  from './modules/marketing/whatsapp/webhooks/webhooks.routes'
+import botRoutes from './modules/bot/bot.routes';
+import { botRateLimiter, botLogger } from './modules/bot/bot.middleware';
 
 import swaggerUi from "swagger-ui-express";
 import YAML from "yamljs";
@@ -96,6 +98,9 @@ app.use('/api/v1/campaigns', marketingCampaignsRoutes)
 app.use('/api/v1/wa-config', marketingConfigRoutes)
 app.use('/api/v1/users',     marketingUsersRoutes)
 app.use('/api/v1/webhooks',  marketingWebhooksRoutes)
+app.use(botLogger);
+app.use(botRateLimiter);
+app.use('/api/v1/bot', botRoutes);
 
 
 // Swagger Documentation
