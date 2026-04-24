@@ -1,4 +1,8 @@
 import logger from "../../config/logger";
+import ExcelJS from "exceljs";
+import PDFDocument from "pdfkit";
+import { format } from "fast-csv";
+import { PassThrough } from "stream";
 import { AppError } from "../../middleware/error.middleware";
 import {
     productsRepository,
@@ -121,6 +125,96 @@ export const productsService = {
         }
         await productPhotosRepository.delete(photoId);
         logger.info("productsService.deletePhoto success", { photoId });
+    },
+
+    async exportCSV(params: { requesterUserId: string; requesterRole?: string; }): Promise<{ stream: PassThrough; filename: string }> {
+        logger.info("productsService.exportCSV called", params);
+        const products = await productsRepository.listAll();
+        const passThrough = new PassThrough();
+        const csvStream = format({ headers: true });
+        csvStream.pipe(passThrough);
+        products.forEach((p: any) => {
+            csvStream.write({
+                ID: p.id, Name: p.name, Barcode: p.barcode ?? "", Brand: p.brand_name ?? "", Category: p.category_id ?? "",
+                Measure: p.measure_unit, Amount: p.amount, Supply_Price: p.supply_price, Retail_Price: p.retail_price ?? "",
+                Markup: p.markup_percentage ?? "", Tax_Type: p.tax_type, Stock: p.amount, Created_At: p.created_at,
+            });
+        });
+        csvStream.end();
+        return { stream: passThrough, filename: "products.csv" };
+    },
+
+    async exportExcel(params: { requesterUserId: string; requesterRole?: string; }): Promise<{ buffer: Buffer; filename: string }> {
+        logger.info("productsService.exportExcel called", params);
+        const products = await productsRepository.listAll();
+        const workbook = new ExcelJS.Workbook();
+        const sheet = workbook.addWorksheet("Products");
+        sheet.columns = [
+            { header: "ID", key: "id", width: 36 },
+            { header: "Name", key: "name", width: 30 },
+            { header: "Barcode", key: "barcode", width: 20 },
+            { header: "Brand", key: "brand_name", width: 20 },
+            { header: "Category", key: "category_id", width: 20 },
+            { header: "Measure", key: "measure_unit", width: 12 },
+            { header: "Amount", key: "amount", width: 12 },
+            { header: "Supply Price", key: "supply_price", width: 15 },
+            { header: "Retail Price", key: "retail_price", width: 15 },
+            { header: "Markup %", key: "markup_percentage", width: 12 },
+            { header: "Tax Type", key: "tax_type", width: 15 },
+            { header: "Created At", key: "created_at", width: 20 },
+        ];
+        sheet.getRow(1).eachCell((cell) => {
+            cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+            cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF101828" } };
+            cell.alignment = { vertical: "middle", horizontal: "center" };
+        });
+        products.forEach((p: any) => {
+            sheet.addRow({ ...p, brand_name: p.brand_name ?? "", category_id: p.category_id ?? "", barcode: p.barcode ?? "", retail_price: p.retail_price ?? "", markup_percentage: p.markup_percentage ?? "" });
+        });
+        const buffer = await workbook.xlsx.writeBuffer();
+        return { buffer: Buffer.from(buffer), filename: "products.xlsx" };
+    },
+
+    async exportPDF(params: { requesterUserId: string; requesterRole?: string; }): Promise<{ stream: PassThrough; filename: string }> {
+        logger.info("productsService.exportPDF called", params);
+        const products = await productsRepository.listAll();
+        const doc = new PDFDocument({ margin: 40, size: "A4", layout: "landscape" });
+        const passThrough = new PassThrough();
+        doc.pipe(passThrough);
+        doc.fontSize(18).font("Helvetica-Bold").text("Products Report", { align: "center" });
+        doc.fontSize(10).font("Helvetica").fillColor("#666").text(`Generated: ${new Date().toLocaleDateString()}`, { align: "center" });
+        doc.moveDown(1);
+        const cols = { name: 40, barcode: 160, brand: 260, measure: 340, supply: 400, retail: 470, stock: 540 };
+        let y = doc.y;
+        doc.rect(30, y, 760, 22).fill("#101828");
+        doc.fillColor("#ffffff").fontSize(9).font("Helvetica-Bold");
+        doc.text("Name", cols.name, y + 7, { width: 115 });
+        doc.text("Barcode", cols.barcode, y + 7, { width: 95 });
+        doc.text("Brand", cols.brand, y + 7, { width: 75 });
+        doc.text("Measure", cols.measure, y + 7, { width: 55 });
+        doc.text("Supply Price", cols.supply, y + 7, { width: 65 });
+        doc.text("Retail Price", cols.retail, y + 7, { width: 65 });
+        doc.text("Stock", cols.stock, y + 7, { width: 50 });
+        y += 22;
+        products.forEach((p: any, i: number) => {
+            if (y > 530) {
+                doc.addPage({ margin: 40, size: "A4", layout: "landscape" });
+                y = 40;
+            }
+            const bg = i % 2 === 0 ? "#F9FAFB" : "#FFFFFF";
+            doc.rect(30, y, 760, 22).fill(bg);
+            doc.fillColor("#101828").fontSize(8).font("Helvetica");
+            doc.text(String(p.name).substring(0, 20), cols.name, y + 7, { width: 115 });
+            doc.text(String(p.barcode ?? "—"), cols.barcode, y + 7, { width: 95 });
+            doc.text(String(p.brand_name ?? "—"), cols.brand, y + 7, { width: 75 });
+            doc.text(`${p.amount} ${p.measure_unit}`, cols.measure, y + 7, { width: 55 });
+            doc.text(`₹${Number(p.supply_price).toFixed(2)}`, cols.supply, y + 7, { width: 65 });
+            doc.text(p.retail_price ? `₹${Number(p.retail_price).toFixed(2)}` : "—", cols.retail, y + 7, { width: 65 });
+            doc.text(String(p.amount ?? 0), cols.stock, y + 7, { width: 50 });
+            y += 22;
+        });
+        doc.end();
+        return { stream: passThrough, filename: "products.pdf" };
     },
 };
 
