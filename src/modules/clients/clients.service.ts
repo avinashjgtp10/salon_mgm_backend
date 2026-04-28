@@ -284,4 +284,14 @@ export const clientsService = {
 
         return result;
     },
+
+    // ── Search clients ────────────────────────────────────────────────────────────
+    async search(q: string, limit?: number): Promise<Client[]> {
+        const term = String(q || "").trim();
+
+        if (term.length < 2)
+            throw new AppError(400, "q must be at least 2 characters", "VALIDATION_ERROR");
+
+        return clientsRepository.search(term, limit ?? 20);
+    },
 };

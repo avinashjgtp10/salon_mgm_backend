@@ -283,4 +283,28 @@ export const clientsController = {
             return next(e);
         }
     },
+
+    // GET /api/v1/clients/search?q=<term>&limit=<n>
+    async search(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const q     = String(req.query.q || "").trim();
+            const limit = req.query.limit !== undefined ? Number(String(req.query.limit)) : 20;
+
+            const clients = await clientsService.search(q, limit);
+
+            // Return a flat array shaped for the frontend search component
+            const results = clients.map((c: any) => ({
+                id:           c.id,
+                first_name:   c.first_name,
+                last_name:    c.last_name  ?? "",
+                phone_number: c.phone_number ?? null,
+                email:        c.email        ?? null,
+                avatar_url:   c.avatar_url   ?? null,
+            }));
+
+            return sendSuccess(res, 200, results, "Search results");
+        } catch (e) {
+            return next(e);
+        }
+    },
 };
