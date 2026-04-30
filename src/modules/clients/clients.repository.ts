@@ -563,4 +563,41 @@ export const clientsRepository = {
         }
         return groups;
     },
+
+    // ---------------- SEARCH ----------------
+    /**
+     * Search clients by name (full_name) or phone_number.
+     * Case-insensitive partial match. Excludes inactive/archived clients.
+     * Returns at most `limit` rows (default 20).
+     */
+    async search(q: string, limit = 20): Promise<Client[]> {
+        const term = `%${q.trim().toLowerCase()}%`;
+
+        const { rows } = await pool.query(
+            `SELECT
+                id,
+                first_name,
+                last_name,
+                full_name,
+                email,
+                phone_country_code,
+                phone_number,
+                avatar_url,
+                is_active,
+                created_at,
+                updated_at
+             FROM clients
+             WHERE is_active = true
+               AND (
+                   LOWER(full_name)     LIKE $1
+                OR LOWER(COALESCE(phone_number, '')) LIKE $1
+               )
+             ORDER BY full_name ASC
+             LIMIT $2`,
+            [term, limit]
+        );
+
+        return rows as Client[];
+    },
 };
+

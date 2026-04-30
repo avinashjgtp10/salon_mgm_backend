@@ -21,7 +21,6 @@ import packagesRoutes from "./modules/packages/packages.routes";
 import productsRoutes from "./modules/products/products.routes";
 import brandsRoutes from "./modules/products/products.routes";
 import appointmentsRoutes from "./modules/appointments/appointments.routes";
-import calendarRoutes from "./modules/calendar/calendar.routes";
 import salesRoutes from "./modules/sales/sales.routes";
 import inventoryRoutes from "./modules/inventory/inventory.routes";
 import billingRoutes from "./modules/billing/billing.routes";
@@ -32,6 +31,9 @@ import marketingCampaignsRoutes from './modules/marketing/whatsapp/campaigns/cam
 import marketingConfigRoutes    from './modules/marketing/whatsapp/config/config.routes'
 import marketingWebhooksRoutes  from './modules/marketing/whatsapp/webhooks/webhooks.routes'
 import profileRoutes from "./modules/profile/profile.routes";
+import couponsRoutes from "./modules/coupons/coupons.routes";
+import paymentsRoutes from "./modules/payments/payments.routes";
+import blockedTimesRoutes from "./modules/blocked_times/blocked_times.routes";
 
 import swaggerUi from "swagger-ui-express";
 import YAML from "yamljs";
@@ -87,7 +89,6 @@ app.use("/api/v1/packages", packagesRoutes);
 app.use("/api/v1/products", productsRoutes);
 app.use("/api/v1/brands", brandsRoutes);
 app.use("/api/v1/appointments", appointmentsRoutes);
-app.use("/api/v1/calendar", calendarRoutes);
 app.use("/api/v1/sales", salesRoutes);
 app.use("/api/v1/inventory", inventoryRoutes);
 app.use("/api/v1/billing", billingRoutes);
@@ -98,6 +99,9 @@ app.use('/api/v1/campaigns', marketingCampaignsRoutes)
 app.use('/api/v1/wa-config', marketingConfigRoutes)
 app.use('/api/v1/webhooks',  marketingWebhooksRoutes)
 app.use("/api/v1/profile",  profileRoutes);
+app.use("/api/v1/coupons",        couponsRoutes);
+app.use("/api/v1/payments",       paymentsRoutes);
+app.use("/api/v1/blocked-times",  blockedTimesRoutes);
 
 
 // Swagger Documentation

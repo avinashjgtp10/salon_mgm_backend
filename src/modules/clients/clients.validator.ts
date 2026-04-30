@@ -270,3 +270,23 @@ export const validateBlockClients = (req: Request, _res: Response, next: NextFun
         return next(e);
     }
 };
+
+// ---------------------------------------------------------------------------
+// validateSearchClients – used by GET /api/v1/clients/search?q=<term>
+// ---------------------------------------------------------------------------
+export const validateSearchClients = (req: Request, _res: Response, next: NextFunction) => {
+    try {
+        const q = req.query.q;
+
+        if (q === undefined || q === null || String(q).trim() === "")
+            throw new AppError(400, "q query param is required", "VALIDATION_ERROR");
+
+        if (String(q).trim().length < 2)
+            throw new AppError(400, "q must be at least 2 characters", "VALIDATION_ERROR");
+
+        return next();
+    } catch (e) {
+        return next(e);
+    }
+};
+
