@@ -1,6 +1,6 @@
 export type SaleStatus = "draft" | "completed" | "cancelled" | "refunded";
 export type PaymentMethod = "cash" | "card" | "gift_card" | "split" | "upi";
-export type SaleItemType = "service" | "product" | "membership" | "gift_card";
+export type SaleItemType = "service" | "product" | "membership" | "gift_card" | "quick";
 
 export type Sale = {
     id: string;
@@ -59,6 +59,7 @@ export type UpdateSaleBody = Partial<Omit<CreateSaleBody, "salon_id" | "items">>
 
 export type CheckoutSaleBody = {
     payment_method: PaymentMethod;
+    amount_paid: number;
     payment_reference?: string;
     status?: "completed";
 };
