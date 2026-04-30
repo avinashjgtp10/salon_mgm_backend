@@ -30,6 +30,8 @@ import marketingTemplatesRoutes from './modules/marketing/whatsapp/templates/tem
 import marketingCampaignsRoutes from './modules/marketing/whatsapp/campaigns/campaigns.routes'
 import marketingConfigRoutes    from './modules/marketing/whatsapp/config/config.routes'
 import marketingWebhooksRoutes  from './modules/marketing/whatsapp/webhooks/webhooks.routes'
+import botRoutes from './modules/bot/bot.routes';
+import { botRateLimiter, botLogger } from './modules/bot/bot.middleware';
 import profileRoutes from "./modules/profile/profile.routes";
 import couponsRoutes from "./modules/coupons/coupons.routes";
 import paymentsRoutes from "./modules/payments/payments.routes";
@@ -98,6 +100,9 @@ app.use('/api/v1/templates', marketingTemplatesRoutes)
 app.use('/api/v1/campaigns', marketingCampaignsRoutes)
 app.use('/api/v1/wa-config', marketingConfigRoutes)
 app.use('/api/v1/webhooks',  marketingWebhooksRoutes)
+app.use(botLogger);
+app.use(botRateLimiter);
+app.use('/api/v1/bot', botRoutes);
 app.use("/api/v1/profile",  profileRoutes);
 app.use("/api/v1/coupons",        couponsRoutes);
 app.use("/api/v1/payments",       paymentsRoutes);
