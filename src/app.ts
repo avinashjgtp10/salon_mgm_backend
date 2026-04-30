@@ -36,6 +36,7 @@ import profileRoutes from "./modules/profile/profile.routes";
 import couponsRoutes from "./modules/coupons/coupons.routes";
 import paymentsRoutes from "./modules/payments/payments.routes";
 import blockedTimesRoutes from "./modules/blocked_times/blocked_times.routes";
+import salonDashboardRoutes from "./modules/salon-dashboard/salon-dashboard.routes";
 
 import swaggerUi from "swagger-ui-express";
 import YAML from "yamljs";
@@ -95,6 +96,7 @@ app.use("/api/v1/sales", salesRoutes);
 app.use("/api/v1/inventory", inventoryRoutes);
 app.use("/api/v1/billing", billingRoutes);
 app.use("/api/v1/subscriptions", subscriptionsRoutes);
+app.use('/api/v1/dashboard', salonDashboardRoutes)
 app.use('/api/v1/dashboard', marketingDashboardRoutes)
 app.use('/api/v1/templates', marketingTemplatesRoutes)
 app.use('/api/v1/campaigns', marketingCampaignsRoutes)
