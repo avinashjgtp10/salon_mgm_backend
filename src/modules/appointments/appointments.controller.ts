@@ -126,7 +126,8 @@ export const appointmentsController = {
 
     async exportAppointments(req: AuthRequest, res: Response, next: NextFunction) {
         try {
-            const format = (req.query.format as string) === "excel" ? "excel" : "csv";
+            const rawFormat = req.query.format as string;
+            const format = rawFormat === "excel" ? "excel" : rawFormat === "pdf" ? "pdf" : "csv";
             const { buffer, contentType, filename } = await appointmentsService.exportAppointments({
                 salon_id: req.query.salon_id as string | undefined,
                 status: req.query.status as string | undefined,
