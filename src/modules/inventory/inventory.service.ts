@@ -3,6 +3,7 @@ import { AppError } from "../../middleware/error.middleware";
 import {
     suppliersRepository,
     stockMovementsRepository,
+    stocktakesRepository,
     stockTakeRepository,
 } from "./inventory.repository";
 import {
@@ -14,6 +15,9 @@ import {
     StockTakeBody,
     StockTakeResult,
     ListStockMovementsFilters,
+    Stocktake,
+    CreateStocktakeBody,
+    StocktakeStatus,
 } from "./inventory.types";
 
 // ─── Suppliers ────────────────────────────────────────────────────────────────
@@ -134,6 +138,53 @@ export const stockMovementsService = {
     },
 };
 
+// ─── Stock Takes ──────────────────────────────────────────────────────────────
+
+export const stocktakesService = {
+    async create(params: {
+        requesterUserId: string;
+        requesterRole?: string;
+        body: CreateStocktakeBody;
+    }): Promise<Stocktake> {
+        const { requesterUserId, body } = params;
+
+        logger.info("stocktakesService.create called", { requesterUserId, branchId: body.branch_id });
+
+        const created = await stocktakesRepository.create({
+            branch_id: body.branch_id,
+            name: body.name || `Stocktake - ${new Date().toLocaleDateString()}`,
+            description: body.description,
+            started_by: requesterUserId,
+        });
+
+        return created;
+    },
+
+    async getById(id: string): Promise<Stocktake> {
+        const stocktake = await stocktakesRepository.findById(id);
+        if (!stocktake) throw new AppError(404, "Stocktake not found", "NOT_FOUND");
+        return stocktake;
+    },
+
+    async list(branchId: string): Promise<Stocktake[]> {
+        return stocktakesRepository.list(branchId);
+    },
+
+    async updateStatus(id: string, status: StocktakeStatus): Promise<Stocktake> {
+        const updated = await stocktakesRepository.updateStatus(id, status);
+        if (!updated) throw new AppError(404, "Stocktake not found", "NOT_FOUND");
+        return updated;
+    },
+
+    async delete(id: string): Promise<void> {
+        logger.info("stocktakesService.delete called", { id });
+        const existing = await stocktakesRepository.findById(id);
+        if (!existing) throw new AppError(404, "Stocktake not found", "NOT_FOUND");
+        await stocktakesRepository.delete(id);
+        logger.info("stocktakesService.delete success", { id });
+    },
+};
+
 // ─── Stock Take ───────────────────────────────────────────────────────────────
 
 export const stockTakeService = {
@@ -148,15 +199,20 @@ export const stockTakeService = {
             requesterUserId,
             requesterRole,
             branchId: body.branch_id,
+            stocktakeId: body.stocktake_id,
             itemCount: body.items.length,
         });
 
         const movements = await stockTakeRepository.process({
+            stocktake_id: body.stocktake_id,
             branch_id: body.branch_id,
             notes: body.notes,
             items: body.items,
             created_by: requesterUserId,
         });
+
+        // If part of a formal stocktake, we might want to automatically complete it or keep it open
+        // For now, we just process movements.
 
         logger.info("stockTakeService.process success", {
             processed: body.items.length,

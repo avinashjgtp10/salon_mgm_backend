@@ -4,6 +4,7 @@ import { roleMiddleware } from "../../middleware/role.middleware";
 import {
     suppliersController,
     stockMovementsController,
+    stocktakesController,
     stockTakeController,
 } from "./inventory.controller";
 import {
@@ -78,7 +79,37 @@ router.get(
     stockMovementsController.getById
 );
 
-// ─── Stock Take ───────────────────────────────────────────────────────────────
+// ─── Stock Takes (Events) ─────────────────────────────────────────────────────
+
+router.post(
+    "/stock-takes",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin"),
+    stocktakesController.create
+);
+
+router.get(
+    "/stock-takes",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    stocktakesController.list
+);
+
+router.get(
+    "/stock-takes/:id",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    stocktakesController.getById
+);
+
+router.delete(
+    "/stock-takes/:id",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin"),
+    stocktakesController.delete
+);
+
+// ─── Stock Take (Processing) ──────────────────────────────────────────────────
 
 router.post(
     "/stock-take",
