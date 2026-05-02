@@ -9,9 +9,10 @@ const corsOptions: CorsOptionsDelegate<Request> = (req, callback) => {
   const origin = originHeader ? originHeader.replace(/\/$/, "") : undefined;
 
   // Retrieve dynamically to ensure env lets it load even if imported early
-  const allowedOrigins: string[] = process.env.CORS_ALLOWED_ORIGINS
-    ? process.env.CORS_ALLOWED_ORIGINS.split(",").map((o) => o.trim().replace(/\/$/, ""))
-    : [];
+  const allowedOrigins: string[] = (process.env.CORS_ALLOWED_ORIGINS || process.env.ALLOWED_ORIGINS || "")
+    .split(",")
+    .map((o) => o.trim().replace(/\/$/, ""))
+    .filter((o) => o);
 
   // Log incoming request origin
   logger.info(`CORS check - Incoming Origin: ${origin || "No Origin (Postman/Mobile)"}`);

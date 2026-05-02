@@ -147,7 +147,6 @@ export const stockMovementsRepository = {
 
         return { data: rows, total };
     },
-
     async create(data: CreateStockMovementBody, createdBy: string): Promise<StockMovement> {
         const { rows } = await pool.query(
             `INSERT INTO stock_movements (
@@ -173,10 +172,56 @@ export const stockMovementsRepository = {
     },
 };
 
+// ─── Stock Takes ──────────────────────────────────────────────────────────────
+
+export const stocktakesRepository = {
+    async findById(id: string): Promise<any | null> {
+        const { rows } = await pool.query(`SELECT * FROM stocktakes WHERE id = $1`, [id]);
+        return rows[0] || null;
+    },
+
+    async list(branchId: string): Promise<any[]> {
+        const { rows } = await pool.query(
+            `SELECT * FROM stocktakes WHERE branch_id = $1 ORDER BY created_at DESC`,
+            [branchId]
+        );
+        return rows;
+    },
+
+    async create(data: {
+        branch_id: string;
+        name: string;
+        description?: string;
+        started_by: string;
+    }): Promise<any> {
+        const { rows } = await pool.query(
+            `INSERT INTO stocktakes (branch_id, name, description, started_by, status)
+       VALUES ($1, $2, $3, $4, 'In progress')
+       RETURNING *`,
+            [data.branch_id, data.name, data.description || null, data.started_by]
+        );
+        return rows[0];
+    },
+
+    async updateStatus(id: string, status: string): Promise<any> {
+        const { rows } = await pool.query(
+            `UPDATE stocktakes SET status = $1, completed_at = CASE WHEN $1 = 'Completed' THEN NOW() ELSE completed_at END, updated_at = NOW()
+       WHERE id = $2 RETURNING *`,
+            [status, id]
+        );
+        return rows[0];
+    },
+
+    async delete(id: string): Promise<void> {
+        await pool.query(`DELETE FROM stocktakes WHERE id = $1`, [id]);
+    },
+};
+
 // ─── Stock Take ───────────────────────────────────────────────────────────────
 
 export const stockTakeRepository = {
     async process(params: {
+        stocktake_id?: string;
         branch_id: string;
         notes?: string;
         items: { product_id: string; actual_qty: number; notes?: string }[];
@@ -211,13 +256,14 @@ export const stockTakeRepository = {
 
                     const { rows } = await client.query(
                         `INSERT INTO stock_movements (
-              branch_id, product_id,
+              stocktake_id, branch_id, product_id,
               movement_type, quantity,
               notes, created_by
             )
-            VALUES ($1,$2,$3,$4,$5,$6)
+            VALUES ($1,$2,$3,$4,$5,$6,$7)
             RETURNING *`,
                         [
+                            params.stocktake_id || null,
                             params.branch_id,
                             item.product_id,
                             movementType,

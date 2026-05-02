@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
-import { suppliersService, stockMovementsService, stockTakeService } from "./inventory.service";
+import { suppliersService, stockMovementsService, stocktakesService, stockTakeService } from "./inventory.service";
 import {
     CreateSupplierBody,
     UpdateSupplierBody,
@@ -10,6 +10,7 @@ import {
     StockTakeBody,
     ListStockMovementsFilters,
     MovementType,
+    CreateStocktakeBody,
 } from "./inventory.types";
 
 type AuthRequest = Request & {
@@ -206,6 +207,84 @@ export const stockMovementsController = {
             sendSuccess(res, 200, movement, "Stock movement fetched successfully");
         } catch (err) {
             logger.error("GET /inventory/stock-movements/:id error", { err });
+            next(err);
+        }
+    },
+};
+
+// ─── Stock Takes ──────────────────────────────────────────────────────────────
+
+export const stocktakesController = {
+    // POST /api/v1/inventory/stock-takes
+    async create(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const userId = req.user?.userId;
+            const role = req.user?.role;
+
+            logger.info("POST /inventory/stock-takes called", { userId, role, path: req.originalUrl });
+
+            if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+
+            const stocktake = await stocktakesService.create({
+                requesterUserId: userId,
+                requesterRole: role,
+                body: req.body as CreateStocktakeBody,
+            });
+
+            sendSuccess(res, 201, stocktake, "Stocktake event created successfully");
+        } catch (err) {
+            logger.error("POST /inventory/stock-takes error", { err });
+            next(err);
+        }
+    },
+
+    // GET /api/v1/inventory/stock-takes
+    async list(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const branchId = String(req.query.branch_id || "");
+            if (!branchId) throw new AppError(400, "branch_id is required", "VALIDATION_ERROR");
+
+            logger.info("GET /inventory/stock-takes called", { branchId, path: req.originalUrl });
+
+            const stocktakes = await stocktakesService.list(branchId);
+
+            sendSuccess(res, 200, stocktakes, "Stocktakes fetched successfully");
+        } catch (err) {
+            logger.error("GET /inventory/stock-takes error", { err });
+            next(err);
+        }
+    },
+
+    // GET /api/v1/inventory/stock-takes/:id
+    async getById(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const id = String(req.params.id || "");
+            logger.info("GET /inventory/stock-takes/:id called", { id, path: req.originalUrl });
+
+            const stocktake = await stocktakesService.getById(id);
+            sendSuccess(res, 200, stocktake, "Stocktake fetched successfully");
+        } catch (err) {
+            logger.error("GET /inventory/stock-takes/:id error", { err });
+            next(err);
+        }
+    },
+
+    // DELETE /api/v1/inventory/stock-takes/:id
+    async delete(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const id = String(req.params.id || "");
+            const userId = req.user?.userId;
+
+            logger.info("DELETE /inventory/stock-takes/:id called", { id, userId, path: req.originalUrl });
+
+            if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
+            if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+
+            await stocktakesService.delete(id);
+
+            sendSuccess(res, 200, null, "Stocktake deleted successfully");
+        } catch (err) {
+            logger.error("DELETE /inventory/stock-takes/:id error", { err });
             next(err);
         }
     },
