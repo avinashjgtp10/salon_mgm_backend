@@ -37,6 +37,7 @@ router.patch("/:id", auth, ownerAdmin, validateUpdateStaff, staffController.upda
 router.delete("/:id", auth, ownerAdmin, staffController.deactivate);
 
 // ─── Invitation management ────────────────────────────────────────────────────
+router.get("/:id/invitation-status", auth, ownerAdmin, staffInvitationController.getInvitationStatus);
 router.post("/:id/resend-invite", auth, ownerAdmin, staffInvitationController.resendInvitation);
 router.delete("/:id/cancel-invite", auth, ownerAdmin, staffInvitationController.cancelInvitation);
 

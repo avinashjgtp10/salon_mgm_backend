@@ -65,16 +65,17 @@ export const staffRepository = {
         return { data, total: countRows[0].total };
     },
 
-    async create(salonId: string, data: CreateStaffBody): Promise<Staff> {
+    async findByEmail(salonId: string, email: string): Promise<Staff | null> {
         const { rows } = await pool.query(
-            `INSERT INTO staff (
-        salon_id, first_name, last_name, email, phone, phone_country_code,
-        additional_phone, country, calendar_color, designation,
-        staff_external_id, employment_type, branch_id, employee_code,
-        experience_years, specialization, is_active, invitation_status
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,true,'pending')
-      RETURNING *`,
-            [
+            `SELECT * FROM staff WHERE salon_id = $1 AND email = $2`,
+            [salonId, email]
+        );
+        return rows[0] || null;
+    },
+
+    async create(salonId: string, data: CreateStaffBody): Promise<Staff> {
+        try {
+            console.log("[DB DEBUG] staffRepository.create - SQL params:", [
                 salonId, data.first_name, data.last_name ?? null, data.email,
                 data.phone ?? null, data.phone_country_code ?? null,
                 data.additional_phone ?? null, data.country ?? null,
@@ -82,9 +83,31 @@ export const staffRepository = {
                 data.staff_external_id ?? null, data.employment_type ?? null,
                 data.branch_id ?? null, data.employee_code ?? null,
                 data.experience_years ?? null, data.specialization ?? [],
-            ]
-        );
-        return rows[0];
+            ]);
+
+            const { rows } = await pool.query(
+                `INSERT INTO staff (
+            salon_id, first_name, last_name, email, phone, phone_country_code,
+            additional_phone, country, calendar_color, designation,
+            staff_external_id, employment_type, branch_id, employee_code,
+              experience_years, specialization, is_active, invitation_status
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,false,'pending')
+            RETURNING *`,
+                [
+                    salonId, data.first_name, data.last_name ?? null, data.email,
+                    data.phone ?? null, data.phone_country_code ?? null,
+                    data.additional_phone ?? null, data.country ?? null,
+                    data.calendar_color ?? "blue", data.job_title ?? null,
+                    data.staff_external_id ?? null, data.employment_type ?? null,
+                    data.branch_id ?? null, data.employee_code ?? null,
+                    data.experience_years ?? null, data.specialization ?? [],
+                ]
+            );
+            return rows[0];
+        } catch (error) {
+            console.error("[DB DEBUG] staffRepository.create - DATABASE ERROR:", error);
+            throw error;
+        }
     },
 
     async update(id: string, salonId: string, patch: UpdateStaffBody): Promise<Staff> {
@@ -179,6 +202,13 @@ export const staffRepository = {
             values
         );
         return rows;
+    },
+
+    async linkUserToStaff(staffId: string, userId: string, firstName: string, lastName?: string): Promise<void> {
+        await pool.query(
+            `UPDATE staff SET user_id = $1, first_name = COALESCE($2, first_name), last_name = COALESCE($3, last_name), updated_at = NOW() WHERE id = $4`,
+            [userId, firstName, lastName || null, staffId]
+        );
     },
 };
 

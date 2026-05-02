@@ -155,9 +155,8 @@ export const staffInvitationRepository = {
       UPDATE staff
       SET
         invitation_status = 'accepted',
+        is_active = true,
         invitation_accepted_at = NOW(),
-        invitation_token = NULL,
-        invitation_expires_at = NULL,
         updated_at = NOW()
       WHERE invitation_token = $1
       RETURNING
