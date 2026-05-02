@@ -9,6 +9,9 @@ import {
     staffWagesRepository, staffCommissionsRepository,
     staffPayRunsRepository, staffSchedulesRepository,
 } from "./staffSettings.repository";
+
+import { authRepository } from "../auth/auth.repository";
+import bcrypt from "bcrypt";
 import { staffInvitationRepository } from "./staffInvitation.repository";
 import { salonsRepository } from "../salons/salons.repository";
 import {
@@ -43,30 +46,50 @@ export const staffService = {
         salonId: string; requesterUserId: string; requesterRole?: string; body: CreateStaffBody;
     }): Promise<{ staffId: string }> {
         const { salonId, requesterUserId, requesterRole, body } = params;
-        logger.info("staffService.create", { salonId, requesterUserId, requesterRole, email: body.email });
+        console.log("[DEBUG] staffService.create - params:", { salonId, requesterUserId, requesterRole, email: body.email });
 
-        const existing = await staffRepository.findByEmail(salonId, body.email);
-        if (existing) throw new AppError(409, "A staff member with this email already exists", "DUPLICATE_EMAIL");
+        try {
+            console.log("[DEBUG] staffService.create - Step 1: Checking existing email...");
+            const existing = await staffRepository.findByEmail(salonId, body.email);
+            if (existing) {
+                console.log("[DEBUG] staffService.create - Email already exists:", body.email);
+                throw new AppError(409, "A staff member with this email already exists", "DUPLICATE_EMAIL");
+            }
 
-        const staff = await staffRepository.create(salonId, body);
-        const invitation = await staffInvitationRepository.create(staff.id, staff.email);
+            console.log("[DEBUG] staffService.create - Step 2: Creating staff in DB...");
+            const staff = await staffRepository.create(salonId, body);
+            if (!staff) {
+                console.error("[DEBUG] staffService.create - DB returned null staff object");
+                throw new AppError(500, "Database failed to create staff record", "DB_ERROR");
+            }
+            console.log("[DEBUG] staffService.create - staff created with ID:", staff.id);
 
-        logger.info("staffService.create success", { staffId: staff.id });
+            console.log("[DEBUG] staffService.create - Step 3: Creating invitation...");
+            const invitation = await staffInvitationRepository.create(staff.id, staff.email);
+            console.log("[DEBUG] staffService.create - invitation created:", invitation?.id);
 
-        // Send invitation email (fire-and-forget: don't fail the creation if email fails)
-        const salon = await salonsRepository.findById(salonId);
-        const salonName = salon?.business_name ?? "Our Salon";
+            // Send invitation email (fire-and-forget)
+            console.log("[DEBUG] staffService.create - Step 4: Resolving salon name...");
+            const salon = await salonsRepository.findById(salonId);
+            const salonName = salon?.business_name ?? "Our Salon";
 
-        emailService.sendStaffInvitation({
-            to: staff.email,
-            token: invitation.token,
-            staffFirstName: body.first_name,
-            salonName,
-        }).catch((err) =>
-            logger.warn("staffService.create: invitation email failed", { staffId: staff.id, err })
-        );
+            console.log("[DEBUG] staffService.create - Step 5: Sending invitation email...");
+            emailService.sendStaffInvitation({
+                to: staff.email,
+                token: invitation.token,
+                staffFirstName: body.first_name,
+                salonName,
+            }).then(() => {
+                console.log("[DEBUG] staffService.create - invitation email sent successfully");
+            }).catch((err) => {
+                console.error("[DEBUG] staffService.create - invitation email failed:", err);
+            });
 
-        return { staffId: staff.id };
+            return { staffId: staff.id };
+        } catch (error) {
+            console.error("[DEBUG] staffService.create - WORKFLOW CRASHED:", error);
+            throw error;
+        }
     },
 
     async update(params: {
@@ -113,19 +136,56 @@ export const staffInvitationService = {
             valid: invitation.status === "pending" && !isExpired,
             email: invitation.email,
             expired: isExpired,
+            status: invitation.status,
         };
     },
 
     async acceptInvitation(body: AcceptInvitationBody): Promise<{ staffId: string }> {
         const invitation = await staffInvitationRepository.findByToken(body.token);
 
-        if (!invitation || invitation.status !== "pending" || new Date(invitation.expires_at) < new Date()) {
-            throw new AppError(400, "Invalid, expired or already used token", "BAD_REQUEST");
+        if (!invitation) {
+            throw new AppError(400, "Invalid token", "BAD_REQUEST");
         }
 
-        // TODO: hash password + create/link user account
-        // e.g. const user = await authService.createUser({ email: invitation.email, password: body.password, ... });
-        // await staffRepository.update(invitation.staff_id, ..., { user_id: user.id, first_name: body.first_name });
+        if (invitation.status === "accepted") {
+            // Edge case: If invite already accepted -> keep status as "Active".
+            logger.info("acceptInvitation: invitation already accepted", { staffId: invitation.staff_id });
+            return { staffId: invitation.staff_id };
+        }
+
+        if (new Date(invitation.expires_at) < new Date()) {
+            throw new AppError(400, "Expired token", "BAD_REQUEST");
+        }
+
+        if (invitation.status !== "pending") {
+            throw new AppError(400, "Invalid or already used token", "BAD_REQUEST");
+        }
+
+        // Avoid creating duplicate users: check if user exists
+        let user = await authRepository.findUserByEmail(invitation.email);
+        
+        if (!user) {
+            const passwordHash = await bcrypt.hash(body.password, 10);
+            user = await authRepository.createUser({
+                email: invitation.email,
+                first_name: body.first_name,
+                last_name: body.last_name,
+                password_hash: passwordHash,
+                role: 'staff',
+            } as any);
+        } else if (body.password) {
+            // Update password if they provided a new one (optional based on your flow)
+            // Or just ignore if user already exists and let them login with their existing password
+        }
+
+        await staffRepository.linkUserToStaff(
+            invitation.staff_id, 
+            user.id, 
+            body.first_name, 
+            body.last_name
+        );
+        
+        await authRepository.markUserVerified(user.id);
 
         await staffInvitationRepository.markAccepted(body.token);
         logger.info("acceptInvitation success", { staffId: invitation.staff_id });

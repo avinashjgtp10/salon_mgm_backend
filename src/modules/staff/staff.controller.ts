@@ -64,17 +64,34 @@ export const staffController = {
   async create(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = getSalonId(req);
-      if (!req.user?.userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
-      logger.info("POST /staff", { salonId, userId: req.user.userId });
-
+      console.log("[DEBUG] Controller: POST /staff - salonId:", salonId);
       const result = await staffService.create({
         salonId,
-        requesterUserId: req.user.userId,
-        requesterRole: req.user.role,
+        requesterUserId: (req as any).user?.userId || (req as any).user?.id,
+        requesterRole: (req as any).user?.role,
         body: req.body as CreateStaffBody,
       });
-      return sendSuccess(res, 201, result, "Staff created and invitation sent");
-    } catch (err) { return next(err); }
+
+      return sendSuccess(res, 201, result, "Staff member created successfully");
+    } catch (error: any) {
+      console.error("[DEBUG] Controller: POST /staff FAILED", {
+        message: error.message,
+        code: error.code,
+        stack: error.stack
+      });
+      // If it's not already an AppError, we want to know exactly what happened
+      if (!(error instanceof AppError)) {
+        return res.status(500).json({
+          success: false,
+          error: {
+            code: "CONTROLLER_CRASH",
+            message: error.message,
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+          }
+        });
+      }
+      throw error;
+    }
   },
 
   async getById(req: AuthRequest, res: Response, next: NextFunction) {
