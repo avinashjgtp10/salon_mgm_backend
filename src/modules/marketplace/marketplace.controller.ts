@@ -5,6 +5,7 @@ import { marketplaceService } from "./marketplace.service";
 import {
     UpsertEssentialsBody, UpsertAboutBody, UpsertLocationBody,
     UpsertWorkingHoursBody, AddImageBody, ReorderImagesBody, UpsertFeaturesBody,
+    UpsertBookingSettingsBody,
 } from "./marketplace.types";
 
 type AuthRequest = Request & { user?: { userId: string; role?: string } };
@@ -53,6 +54,21 @@ export const marketplaceController = {
         try {
             const data = await marketplaceService.upsertLocation(getSalonId(req), req.body as UpsertLocationBody);
             return sendSuccess(res, 200, data, "Location saved");
+        } catch (err) { return next(err); }
+    },
+
+    // ── Booking Settings ─────────────────────────────────────────────────────────
+    async getBookingSettings(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const data = await marketplaceService.getBookingSettings(getSalonId(req));
+            return sendSuccess(res, 200, data, "Booking settings fetched");
+        } catch (err) { return next(err); }
+    },
+
+    async upsertBookingSettings(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const data = await marketplaceService.upsertBookingSettings(getSalonId(req), req.body as UpsertBookingSettingsBody);
+            return sendSuccess(res, 200, data, "Booking settings saved");
         } catch (err) { return next(err); }
     },
 

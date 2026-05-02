@@ -67,6 +67,28 @@ export const validateUpsertAbout = (req: Request, _res: Response, next: NextFunc
   } catch (err) { return next(err); }
 };
 
+// ─── Booking Settings ───────────────────────────────────────────────────────────
+
+export const validateUpsertBookingSettings = (req: Request, _res: Response, next: NextFunction) => {
+  try {
+    const b = req.body;
+
+    if (typeof b.max_advance_booking !== "number" || b.max_advance_booking < 0)
+      throw new AppError(400, "max_advance_booking must be a positive number", "VALIDATION_ERROR");
+
+    if (typeof b.min_notice_period !== "number" || b.min_notice_period < 0)
+      throw new AppError(400, "min_notice_period must be a positive number", "VALIDATION_ERROR");
+
+    if (typeof b.cancellation_notice !== "number" || b.cancellation_notice < 0)
+      throw new AppError(400, "cancellation_notice must be a positive number", "VALIDATION_ERROR");
+
+    if (typeof b.slot_interval !== "number" || b.slot_interval <= 0)
+      throw new AppError(400, "slot_interval must be a positive number > 0", "VALIDATION_ERROR");
+
+    return next();
+  } catch (err) { return next(err); }
+};
+
 // ─── Location ─────────────────────────────────────────────────────────────────
 
 export const validateUpsertLocation = (req: Request, _res: Response, next: NextFunction) => {

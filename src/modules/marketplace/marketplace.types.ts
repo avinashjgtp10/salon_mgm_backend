@@ -57,6 +57,26 @@ export type UpsertAboutBody = {
   venue_description: string;
 };
 
+// ─── Booking Settings ───────────────────────────────────────────────────────────
+
+export type MarketplaceBookingSettings = {
+  id: string;
+  profile_id: string;
+  max_advance_booking: number;
+  min_notice_period: number;
+  cancellation_notice: number;
+  slot_interval: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type UpsertBookingSettingsBody = {
+  max_advance_booking: number;
+  min_notice_period: number;
+  cancellation_notice: number;
+  slot_interval: number;
+};
+
 // ─── Business Location ────────────────────────────────────────────────────────
 
 export type MarketplaceLocation = {
@@ -153,6 +173,7 @@ export type UpsertFeaturesBody = {
 
 export type MarketplaceProfileFull = MarketplaceProfile & {
   location: MarketplaceLocation | null;
+  booking_settings: MarketplaceBookingSettings | null;
   working_hours: WorkingHoursDay[];
   images: MarketplaceImage[];
   amenities: Amenity[];

@@ -4,7 +4,7 @@ import { roleMiddleware } from "../../middleware/role.middleware";
 import { marketplaceController } from "./marketplace.controller";
 import {
   validateUpsertEssentials, validateUpsertAbout,
-  validateUpsertLocation, validateUpsertWorkingHours,
+  validateUpsertLocation, validateUpsertBookingSettings, validateUpsertWorkingHours,
   validateAddImage, validateReorderImages, validateUpsertFeatures,
 } from "./marketplace.validator";
 
@@ -22,6 +22,10 @@ router.put("/about",            auth, ownerAdmin, validateUpsertAbout,      mark
 // ── Location ──────────────────────────────────────────────────────────────────
 router.get("/location",         auth, ownerAdmin, marketplaceController.getLocation);
 router.put("/location",         auth, ownerAdmin, validateUpsertLocation,    marketplaceController.upsertLocation);
+
+// ── Booking Settings ──────────────────────────────────────────────────────────
+router.get("/booking-settings", auth, ownerAdmin, marketplaceController.getBookingSettings);
+router.put("/booking-settings", auth, ownerAdmin, validateUpsertBookingSettings, marketplaceController.upsertBookingSettings);
 
 // ── Opening Hours ─────────────────────────────────────────────────────────────
 router.get("/working-hours",    auth, ownerAdmin, marketplaceController.getWorkingHours);

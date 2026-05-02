@@ -3,6 +3,7 @@ import {
   MarketplaceProfile, MarketplaceLocation, MarketplaceWorkingHour,
   MarketplaceImage, MarketplaceFeature,
   UpsertEssentialsBody, UpsertAboutBody, UpsertLocationBody,
+  UpsertBookingSettingsBody, MarketplaceBookingSettings,
   UpsertWorkingHoursBody, AddImageBody, ReorderImagesBody,
   UpsertFeaturesBody,
 } from "./marketplace.types";
@@ -47,7 +48,7 @@ export const marketplaceProfileRepo = {
          venue_description = EXCLUDED.venue_description,
          updated_at        = NOW()
        RETURNING *`,
-      [salonId, data.venue_description, data.venue_description]
+      [salonId, 'Salon', data.venue_description]
     );
     return rows[0];
   },
@@ -96,6 +97,40 @@ export const marketplaceLocationRepo = {
         data.postal_code  ?? null,
         data.latitude     ?? null,
         data.longitude    ?? null,
+      ]
+    );
+    return rows[0];
+  },
+};
+
+// ─── Booking Settings ─────────────────────────────────────────────────────────
+
+export const marketplaceBookingSettingsRepo = {
+  async findByProfileId(profileId: string): Promise<MarketplaceBookingSettings | null> {
+    const { rows } = await pool.query(
+      `SELECT * FROM marketplace_booking_settings WHERE profile_id = $1`, [profileId]
+    );
+    return rows[0] || null;
+  },
+
+  async upsert(profileId: string, data: UpsertBookingSettingsBody): Promise<MarketplaceBookingSettings> {
+    const { rows } = await pool.query(
+      `INSERT INTO marketplace_booking_settings
+         (profile_id, max_advance_booking, min_notice_period, cancellation_notice, slot_interval)
+       VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (profile_id) DO UPDATE SET
+         max_advance_booking = EXCLUDED.max_advance_booking,
+         min_notice_period   = EXCLUDED.min_notice_period,
+         cancellation_notice = EXCLUDED.cancellation_notice,
+         slot_interval       = EXCLUDED.slot_interval,
+         updated_at          = NOW()
+       RETURNING *`,
+      [
+        profileId,
+        data.max_advance_booking,
+        data.min_notice_period,
+        data.cancellation_notice,
+        data.slot_interval,
       ]
     );
     return rows[0];

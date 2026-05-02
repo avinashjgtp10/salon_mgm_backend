@@ -3,12 +3,14 @@ import { AppError } from "../../middleware/error.middleware";
 import {
   marketplaceProfileRepo, marketplaceLocationRepo,
   marketplaceWorkingHoursRepo, marketplaceImagesRepo, marketplaceFeaturesRepo,
+  marketplaceBookingSettingsRepo
 } from "./marketplace.repository";
 import {
   Amenity, Highlight, Value,
   MarketplaceProfile, MarketplaceProfileFull, WorkingHoursDay,
   UpsertEssentialsBody, UpsertAboutBody, UpsertLocationBody,
   UpsertWorkingHoursBody, AddImageBody, ReorderImagesBody, UpsertFeaturesBody,
+  UpsertBookingSettingsBody,
 } from "./marketplace.types";
 
 const MAX_IMAGES = 10;
@@ -43,8 +45,9 @@ export const marketplaceService = {
 
   async getProfile(salonId: string): Promise<MarketplaceProfileFull> {
     const profile = await _ensureProfile(salonId);
-    const [location, hourRows, images, featureRows] = await Promise.all([
+    const [location, booking_settings, hourRows, images, featureRows] = await Promise.all([
       marketplaceLocationRepo.findByProfileId(profile.id),
+      marketplaceBookingSettingsRepo.findByProfileId(profile.id),
       marketplaceWorkingHoursRepo.findByProfileId(profile.id),
       marketplaceImagesRepo.findByProfileId(profile.id),
       marketplaceFeaturesRepo.findByProfileId(profile.id),
@@ -53,6 +56,7 @@ export const marketplaceService = {
     return {
       ...profile,
       location,
+      booking_settings,
       working_hours: _groupHours(hourRows),
       images,
       amenities:  featureRows.filter((f) => f.feature_type === "amenity")  .map((f) => f.feature_key as Amenity),
@@ -87,6 +91,19 @@ export const marketplaceService = {
     logger.info("marketplace.upsertLocation", { salonId });
     const profile = await _ensureProfile(salonId);
     return marketplaceLocationRepo.upsert(profile.id, data);
+  },
+
+  // ── Booking Settings ────────────────────────────────────────────────────────
+
+  async getBookingSettings(salonId: string) {
+    const profile = await _ensureProfile(salonId);
+    return marketplaceBookingSettingsRepo.findByProfileId(profile.id);
+  },
+
+  async upsertBookingSettings(salonId: string, data: UpsertBookingSettingsBody) {
+    logger.info("marketplace.upsertBookingSettings", { salonId });
+    const profile = await _ensureProfile(salonId);
+    return marketplaceBookingSettingsRepo.upsert(profile.id, data);
   },
 
   // ── Working Hours ───────────────────────────────────────────────────────────
