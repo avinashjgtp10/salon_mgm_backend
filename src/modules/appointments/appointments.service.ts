@@ -233,7 +233,7 @@ export const appointmentsService = {
                 client_id:      existing.client_id  ?? undefined,
                 appointment_id: appointmentId,
                 staff_id:       existing.staff_id   ?? undefined,
-                status:         "draft",
+                status:         "completed",   // ← was "draft"; must be completed so stock is deducted
                 items:          resolvedItems,
                 ...saleExtras,
             } as any,

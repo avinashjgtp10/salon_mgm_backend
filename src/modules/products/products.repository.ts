@@ -4,17 +4,27 @@ import {
     ProductPhoto, Brand, CreateBrandBody, UpdateBrandBody,
 } from "./products.types";
 
+const PRODUCT_COLUMNS = `id, name, barcode, brand_id, category_id, measure_unit, amount,
+    short_description, description, supply_price, retail_sales_enabled,
+    retail_price, markup_percentage, tax_type, custom_tax_rate,
+    team_commission_enabled, team_commission_rate, created_at, updated_at`;
+
+const PRODUCT_COLUMNS_P = `p.id, p.name, p.barcode, p.brand_id, p.category_id, p.measure_unit, p.amount,
+    p.short_description, p.description, p.supply_price, p.retail_sales_enabled,
+    p.retail_price, p.markup_percentage, p.tax_type, p.custom_tax_rate,
+    p.team_commission_enabled, p.team_commission_rate, p.created_at, p.updated_at`;
+
 // ─── Products Repository ──────────────────────────────────────────────────────
 
 export const productsRepository = {
     async findById(id: string): Promise<Product | null> {
-        const { rows } = await pool.query(`SELECT * FROM products WHERE id = $1`, [id]);
+        const { rows } = await pool.query(`SELECT ${PRODUCT_COLUMNS} FROM products WHERE id = $1`, [id]);
         return rows[0] || null;
     },
 
     async listAll(): Promise<Product[]> {
     const { rows } = await pool.query(
-        `SELECT p.*, pb.name as brand_name 
+        `SELECT ${PRODUCT_COLUMNS_P}, pb.name as brand_name 
          FROM products p
          LEFT JOIN product_brands pb ON p.brand_id = pb.id
          ORDER BY p.created_at DESC`
@@ -72,7 +82,7 @@ export const productsRepository = {
         const total = parseInt(countRows[0].total, 10);
 
         const { rows } = await pool.query(
-            `SELECT * FROM products ${where} ORDER BY ${orderCol} ${orderDir} LIMIT $${idx++} OFFSET $${idx}`,
+            `SELECT ${PRODUCT_COLUMNS} FROM products ${where} ORDER BY ${orderCol} ${orderDir} LIMIT $${idx++} OFFSET $${idx}`,
             [...values, limit, offset]
         );
 
@@ -86,7 +96,7 @@ export const productsRepository = {
         short_description, description,
         supply_price, retail_sales_enabled, retail_price, markup_percentage,
         tax_type, custom_tax_rate, team_commission_enabled, team_commission_rate
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING ${PRODUCT_COLUMNS}`,
             [
                 data.name, data.barcode ?? null, data.brand_id ?? null, data.category_id ?? null,
                 data.measure_unit ?? "ml", data.amount ?? 0,
@@ -103,7 +113,7 @@ export const productsRepository = {
     async update(id: string, patch: UpdateProductBody): Promise<Product> {
         const keys = Object.keys(patch) as (keyof UpdateProductBody)[];
         if (keys.length === 0) {
-            const { rows } = await pool.query(`SELECT * FROM products WHERE id = $1`, [id]);
+            const { rows } = await pool.query(`SELECT ${PRODUCT_COLUMNS} FROM products WHERE id = $1`, [id]);
             return rows[0];
         }
         const setParts: string[] = [];
@@ -112,7 +122,7 @@ export const productsRepository = {
         setParts.push(`updated_at = NOW()`);
         values.push(id);
         const { rows } = await pool.query(
-            `UPDATE products SET ${setParts.join(", ")} WHERE id = $${values.length} RETURNING *`, values
+            `UPDATE products SET ${setParts.join(", ")} WHERE id = $${values.length} RETURNING ${PRODUCT_COLUMNS}`, values
         );
         return rows[0];
     },
@@ -120,6 +130,33 @@ export const productsRepository = {
     async delete(id: string): Promise<boolean> {
         const { rowCount } = await pool.query(`DELETE FROM products WHERE id = $1`, [id]);
         return (rowCount ?? 0) > 0;
+    },
+
+    /**
+     * Atomically deduct sold quantities from stock.
+     * Prevents negative stock via GREATEST(amount - qty, 0).
+     * items: array of { product_id, quantity }
+     */
+    async deductStock(items: { product_id: string; quantity: number }[]): Promise<void> {
+        if (items.length === 0) return;
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            for (const { product_id, quantity } of items) {
+                await client.query(
+                    `UPDATE products
+                     SET amount = GREATEST(amount - $1, 0), updated_at = NOW()
+                     WHERE id = $2`,
+                    [quantity, product_id]
+                );
+            }
+            await client.query("COMMIT");
+        } catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        } finally {
+            client.release();
+        }
     },
 };
 
