@@ -7,18 +7,18 @@ import { MeasureUnit, TaxType } from "./products.types";
 const isNonEmptyString = (v: unknown): v is string =>
     typeof v === "string" && v.trim().length > 0;
 
-const isOptionalString = (v: unknown) => v === undefined || typeof v === "string";
+const isOptionalString = (v: unknown) => v === undefined || v === null || typeof v === "string";
 
 const isOptionalNumber = (v: unknown) =>
-    v === undefined || (typeof v === "number" && Number.isFinite(v));
+    v === undefined || v === null || (typeof v === "number" && Number.isFinite(v));
 
-const isOptionalBoolean = (v: unknown) => v === undefined || typeof v === "boolean";
+const isOptionalBoolean = (v: unknown) => v === undefined || v === null || typeof v === "boolean";
 
 const UUID_RE =
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const isUUID = (v: unknown): v is string => typeof v === "string" && UUID_RE.test(v);
-const isOptionalUUID = (v: unknown) => v === undefined || isUUID(v);
+const isOptionalUUID = (v: unknown) => v === undefined || v === null || isUUID(v);
 
 const VALID_MEASURE_UNITS: MeasureUnit[] = ["ml", "l", "g", "kg", "pcs", "oz", "lb"];
 const VALID_TAX_TYPES: TaxType[] = ["no_tax", "gst_5", "gst_12", "gst_18", "gst_28", "custom"];
