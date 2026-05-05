@@ -107,10 +107,10 @@ const bundleToRow = (b: Bundle): DownloadRow => ({
   created_at:         new Date(b.created_at).toLocaleDateString(),
 });
 
-const fetchRows = async (q: Record<string, unknown>): Promise<DownloadRow[]> => {
+const fetchRows = async (q: Record<string, unknown>, salonId: string): Promise<DownloadRow[]> => {
   const [services, bundles] = await Promise.all([
-    servicesRepository.listAll(parseServiceQuery(q)),
-    bundlesRepository.listAll(parseBundleQuery(q)),
+    servicesRepository.listAll(parseServiceQuery(q), salonId),
+    bundlesRepository.listAll(parseBundleQuery(q), salonId),
   ]);
   return [...services.map(serviceToRow), ...bundles.map(bundleToRow)];
 };
@@ -118,12 +118,15 @@ const fetchRows = async (q: Record<string, unknown>): Promise<DownloadRow[]> => 
 // ─── PDF ──────────────────────────────────────────────────────────────────────
 
 export const downloadCataloguePdf = async (
-  req: Request,
+  req: Request & { user?: { salonId?: string } },
   res: Response,
   next: NextFunction
 ) => {
   try {
-    const rows = await fetchRows(req.query as Record<string, unknown>);
+    const salonId = req.user?.salonId;
+    if (!salonId) return res.status(403).json({ error: "Salon context required" });
+
+    const rows = await fetchRows(req.query as Record<string, unknown>, salonId);
     logger.info("GET /download/pdf", { total: rows.length });
 
     res.setHeader("Content-Type", "application/pdf");
@@ -189,12 +192,15 @@ export const downloadCataloguePdf = async (
 // ─── Excel ────────────────────────────────────────────────────────────────────
 
 export const downloadCatalogueExcel = async (
-  req: Request,
+  req: Request & { user?: { salonId?: string } },
   res: Response,
   next: NextFunction
 ) => {
   try {
-    const rows = await fetchRows(req.query as Record<string, unknown>);
+    const salonId = req.user?.salonId;
+    if (!salonId) return res.status(403).json({ error: "Salon context required" });
+
+    const rows = await fetchRows(req.query as Record<string, unknown>, salonId);
     logger.info("GET /download/excel", { total: rows.length });
 
     const workbook = new ExcelJS.Workbook();
@@ -255,12 +261,15 @@ export const downloadCatalogueExcel = async (
 // ─── CSV ──────────────────────────────────────────────────────────────────────
 
 export const downloadCatalogueCsv = async (
-  req: Request,
+  req: Request & { user?: { salonId?: string } },
   res: Response,
   next: NextFunction
 ) => {
   try {
-    const rows = await fetchRows(req.query as Record<string, unknown>);
+    const salonId = req.user?.salonId;
+    if (!salonId) return res.status(403).json({ error: "Salon context required" });
+
+    const rows = await fetchRows(req.query as Record<string, unknown>, salonId);
     logger.info("GET /download/csv", { total: rows.length });
 
     const fields = HEADERS.map((h) => ({ label: h.label, value: h.key }));

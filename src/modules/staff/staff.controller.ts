@@ -9,7 +9,6 @@ import {
   staffEmergencyContactService, staffWagesService, staffCommissionsService,
   staffPayRunsService, staffSchedulesService, staffLeavesService,
 } from "./staff.service";
-import { salonsRepository } from "../salons/salons.repository";
 import {
   CreateStaffBody, UpdateStaffBody, CreateStaffAddressBody, UpdateStaffAddressBody,
   CreateEmergencyContactBody, UpdateEmergencyContactBody, UpdateWageSettingsBody,
@@ -17,14 +16,14 @@ import {
   CreateStaffLeaveBody, UpdateStaffLeaveBody, AcceptInvitationBody, StaffListQuery,
 } from "./staff.types";
 
-type AuthRequest = Request & { user?: { userId: string; role?: string } };
+type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string } };
 
-// ─── Helper: extract & validate x-salon-id header ─────────────────────────────
+// ─── Helper: extract salon from JWT claims (tamper-proof) ─────────────────────
 
-const getSalonId = (req: Request): string => {
-  const id = String(req.headers["x-salon-id"] ?? "").trim();
-  if (!id) throw new AppError(400, "x-salon-id header is required", "VALIDATION_ERROR");
-  return id;
+const getSalonId = (req: AuthRequest): string => {
+  const salonId = req.user?.salonId;
+  if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+  return salonId;
 };
 
 // ─── Staff ────────────────────────────────────────────────────────────────────
@@ -61,7 +60,7 @@ export const staffController = {
     } catch (err) { return next(err); }
   },
 
-  async create(req: AuthRequest, res: Response, next: NextFunction) {
+  async create(req: AuthRequest, res: Response) {
     try {
       const salonId = getSalonId(req);
       console.log("[DEBUG] Controller: POST /staff - salonId:", salonId);
@@ -244,21 +243,9 @@ export const staffController = {
   },
 };
 
-// ─── Helper: resolve salon ID for export without requiring header ─────────────
-// Priority: 1) x-salon-id header  2) salon owned by the token's userId
+// ─── Helper: resolve salon ID for export ──────────────────────────────────────
 async function resolveExportSalonId(req: AuthRequest): Promise<string> {
-  // If the header is present, use it (same as other endpoints)
-  const fromHeader = String(req.headers["x-salon-id"] ?? "").trim();
-  if (fromHeader) return fromHeader;
-
-  // Fall back: look up the salon owned by the authenticated user
-  const userId = req.user?.userId;
-  if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
-
-  const salon = await salonsRepository.findByOwnerId(userId);
-  if (!salon) throw new AppError(404, "No salon found for this account. Please provide x-salon-id header.", "NOT_FOUND");
-
-  return salon.id;
+  return getSalonId(req);
 }
 
 // ─── Invitations ──────────────────────────────────────────────────────────────

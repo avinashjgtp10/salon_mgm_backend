@@ -36,29 +36,26 @@ const normalizeCreateBody = (b: CreateClientBody): CreateClientBody => ({
 });
 
 export const clientsService = {
-    async list(query: ClientsListQuery) {
-        return clientsRepository.list(query);
+    async list(query: ClientsListQuery, salonId: string) {
+        return clientsRepository.list(query, salonId);
     },
 
-    async create(body: CreateClientBody): Promise<ClientWithRelations> {
-        const created = await clientsRepository.create(normalizeCreateBody(body));
+    async create(body: CreateClientBody, salonId: string): Promise<ClientWithRelations> {
+        const created = await clientsRepository.create(normalizeCreateBody(body), salonId);
 
         if (body.addresses?.length) await clientsRepository.replaceUpsertAddresses(created.id, body.addresses);
         if (body.emergency_contacts?.length) await clientsRepository.replaceUpsertEmergencyContacts(created.id, body.emergency_contacts);
 
-        const withRel = await clientsRepository.getByIdWithRelations(created.id);
+        const withRel = await clientsRepository.getByIdWithRelations(created.id, salonId);
         return withRel as ClientWithRelations;
     },
 
-    async getById(clientId: string, include?: string): Promise<ClientWithRelations> {
+    async getById(clientId: string, salonId: string, include?: string): Promise<ClientWithRelations> {
         const includeSet = new Set(
-            String(include || "")
-                .split(",")
-                .map((s) => s.trim())
-                .filter(Boolean)
+            String(include || "").split(",").map((s) => s.trim()).filter(Boolean)
         );
 
-        const client = await clientsRepository.findById(clientId);
+        const client = await clientsRepository.findById(clientId, salonId);
         if (!client) throw new AppError(404, "Client not found", "NOT_FOUND");
 
         const result: ClientWithRelations = client as any;
@@ -70,31 +67,30 @@ export const clientsService = {
         return result;
     },
 
-    async update(clientId: string, patch: UpdateClientBody): Promise<ClientWithRelations> {
-        const exists = await clientsRepository.findById(clientId);
+    async update(clientId: string, patch: UpdateClientBody, salonId: string): Promise<ClientWithRelations> {
+        const exists = await clientsRepository.findById(clientId, salonId);
         if (!exists) throw new AppError(404, "Client not found", "NOT_FOUND");
 
-        const updated = await clientsRepository.update(clientId, patch);
+        const updated = await clientsRepository.update(clientId, patch, salonId);
 
-        // relations: simple replace strategy when arrays provided
         if (patch.addresses) await clientsRepository.replaceUpsertAddresses(clientId, patch.addresses);
         if (patch.emergency_contacts) await clientsRepository.replaceUpsertEmergencyContacts(clientId, patch.emergency_contacts);
 
-        const withRel = await clientsRepository.getByIdWithRelations(updated.id);
+        const withRel = await clientsRepository.getByIdWithRelations(updated.id, salonId);
         return withRel as ClientWithRelations;
     },
 
-    async remove(clientId: string, hard?: boolean): Promise<void> {
-        const exists = await clientsRepository.findById(clientId);
+    async remove(clientId: string, salonId: string, hard?: boolean): Promise<void> {
+        const exists = await clientsRepository.findById(clientId, salonId);
         if (!exists) throw new AppError(404, "Client not found", "NOT_FOUND");
 
-        if (hard) await clientsRepository.hardDelete(clientId);
-        else await clientsRepository.softDelete(clientId);
+        if (hard) await clientsRepository.hardDelete(clientId, salonId);
+        else await clientsRepository.softDelete(clientId, salonId);
     },
 
-    async blockClients(ids: string[], reason: string): Promise<void> {
+    async blockClients(ids: string[], reason: string, salonId: string): Promise<void> {
         if (!ids?.length) return;
-        await clientsRepository.blockClients(ids, reason);
+        await clientsRepository.blockClients(ids, reason, salonId);
     },
 
     // ---------------- IMPORT ----------------
@@ -102,6 +98,7 @@ export const clientsService = {
         rows: Array<any>;
         mode: ClientsImportMode;
         dry_run: boolean;
+        salonId: string;
     }): Promise<ClientsImportResult> {
         const result: ClientsImportResult = {
             total_rows: params.rows.length,
@@ -111,26 +108,24 @@ export const clientsService = {
             errors: [],
         };
 
-        // basic mapping: expects columns like:
-        // first_name,last_name,email,phone_country_code,phone_number,client_source,country,birthday_day_month,birthday_year
         const toBody = (r: any): CreateClientBody => ({
             first_name: String(r.firstName ?? "").trim(),
-            last_name:  String(r.lastName  ?? "").trim(),
-            email:      r.email    ? String(r.email).trim()  : null,
-            phone_country_code:  null, // not in FRESHA_COLUMNS — stays null unless you add it
-            phone_number:        r.mobile  ? String(r.mobile).trim()  : null,
-            additional_email:    null,
+            last_name: String(r.lastName ?? "").trim(),
+            email: r.email ? String(r.email).trim() : null,
+            phone_country_code: null,
+            phone_number: r.mobile ? String(r.mobile).trim() : null,
+            additional_email: null,
             additional_phone_country_code: null,
             additional_phone_number: null,
-            birthday_day_month:  r.birthday ? String(r.birthday).trim() : null,
-            birthday_year:       null,
-            client_source:       null,
-            preferred_language:  null,
-            occupation:          null,
-            country:             null,
-            gender:              r.gender ? String(r.gender).trim() : null,
-            pronouns:            null,
-            avatar_url:          null,
+            birthday_day_month: r.birthday ? String(r.birthday).trim() : null,
+            birthday_year: null,
+            client_source: null,
+            preferred_language: null,
+            occupation: null,
+            country: null,
+            gender: r.gender ? String(r.gender).trim() : null,
+            pronouns: null,
+            avatar_url: null,
         });
 
         for (let i = 0; i < params.rows.length; i++) {
@@ -144,33 +139,25 @@ export const clientsService = {
                     continue;
                 }
 
-                const existing = await clientsRepository.findExistingByEmailOrPhone({
-                    email: body.email ?? null,
-                    phone_country_code: body.phone_country_code ?? null,
-                    phone_number: body.phone_number ?? null,
-                });
+                const existing = await clientsRepository.findExistingByEmailOrPhone(
+                    { email: body.email ?? null, phone_country_code: body.phone_country_code ?? null, phone_number: body.phone_number ?? null },
+                    params.salonId
+                );
 
                 if (params.mode === "create_only") {
-                    if (existing) {
-                        result.skipped += 1;
-                        continue;
-                    }
-                    if (!params.dry_run) await clientsRepository.create(body);
+                    if (existing) { result.skipped += 1; continue; }
+                    if (!params.dry_run) await clientsRepository.create(body, params.salonId);
                     result.imported += 1;
                     continue;
                 }
 
                 // upsert
                 if (!existing) {
-                    if (!params.dry_run) await clientsRepository.create(body);
+                    if (!params.dry_run) await clientsRepository.create(body, params.salonId);
                     result.imported += 1;
                 } else {
                     if (!params.dry_run) {
-                        await clientsRepository.update(existing.id, {
-                            ...body,
-                            // keep is_active default true on updates? you can decide:
-                            is_active: true,
-                        } as any);
+                        await clientsRepository.update(existing.id, { ...body, is_active: true } as any, params.salonId);
                     }
                     result.updated += 1;
                 }
@@ -182,116 +169,84 @@ export const clientsService = {
         return result;
     },
 
-    // ── Find duplicates by phone (called by GET /duplicates) ──────────────────────
-    async findDuplicatesByPhone(phone_number: string): Promise<Client[]> {
+    async findDuplicatesByPhone(phone_number: string, salonId: string): Promise<Client[]> {
         const cleaned = String(phone_number || "").trim();
-        if (!cleaned)
-            throw new AppError(400, "phone_number is required", "VALIDATION_ERROR");
-
-        const duplicates = await clientsRepository.findDuplicatesByPhone(cleaned);
-        return duplicates;
+        if (!cleaned) throw new AppError(400, "phone_number is required", "VALIDATION_ERROR");
+        return clientsRepository.findDuplicatesByPhone(cleaned, salonId);
     },
 
-    // ── Merge clients ─────────────────────────────────────────────────────────────
-    async mergeClients(body: ClientsMergeBody) {
-        // Collect all IDs (target + sources) and find the oldest automatically
+    async mergeClients(body: ClientsMergeBody, salonId: string) {
         const allIds = [body.target_client_id, ...body.source_client_ids];
-
-        // Remove duplicates
         const uniqueIds = Array.from(new Set(allIds));
         if (uniqueIds.length < 2)
             throw new AppError(400, "At least 2 unique client IDs are required to merge", "VALIDATION_ERROR");
 
-        // Fetch all clients and validate they exist
         const clients: Client[] = [];
         for (const id of uniqueIds) {
-            const c = await clientsRepository.findById(id);
+            const c = await clientsRepository.findById(id, salonId);
             if (!c) throw new AppError(404, `Client ${id} not found`, "NOT_FOUND");
             clients.push(c);
         }
 
-        // Sort by created_at ASC — oldest is always the target
-        clients.sort(
-            (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-        );
+        clients.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
 
-        const targetId  = clients[0].id;
+        const targetId = clients[0].id;
         const sourceIds = clients.slice(1).map((c) => c.id);
-
         const strategy: MergeStrategy = body.strategy ?? "fill_missing_from_sources";
 
-        return clientsRepository.mergeClients({ targetId, sourceIds, strategy });
+        return clientsRepository.mergeClients({ targetId, sourceIds, strategy, salonId });
     },
 
-    async mergeAllDuplicates(): Promise<{
-        total_groups:  number;
-        total_merged:  number;
+    async mergeAllDuplicates(salonId: string): Promise<{
+        total_groups: number;
+        total_merged: number;
         total_archived: number;
-        results: Array<{
-            phone_number: string;
-            target_client_id: string;
-            archived_client_ids: string[];
-            updated_fields: string[];
-        }>;
-        errors: Array<{
-            phone_number: string;
-            message: string;
-        }>;
+        results: Array<any>;
+        errors: Array<any>;
     }> {
-        // Get all duplicate groups
-        const groups = await clientsRepository.findAllDuplicateGroups();
+        const groups = await clientsRepository.findAllDuplicateGroups(salonId);
         const phoneNumbers = Object.keys(groups);
 
         const result = {
-            total_groups:   phoneNumbers.length,
-            total_merged:   0,
+            total_groups: phoneNumbers.length,
+            total_merged: 0,
             total_archived: 0,
             results: [] as any[],
-            errors:  [] as any[],
+            errors: [] as any[],
         };
 
         if (phoneNumbers.length === 0) return result;
 
-        // Process each duplicate group one by one
         for (const phone of phoneNumbers) {
             const clients = groups[phone];
             try {
-                // Oldest client (index 0 since ordered by created_at ASC) = target
-                const targetId  = clients[0].id;
+                const targetId = clients[0].id;
                 const sourceIds = clients.slice(1).map((c) => c.id);
-
                 const merged = await clientsRepository.mergeClients({
                     targetId,
                     sourceIds,
                     strategy: "fill_missing_from_sources",
+                    salonId,
                 });
-
-                result.total_merged   += 1;
+                result.total_merged += 1;
                 result.total_archived += sourceIds.length;
                 result.results.push({
-                    phone_number:        phone,
-                    target_client_id:    merged.target_client_id,
+                    phone_number: phone,
+                    target_client_id: merged.target_client_id,
                     archived_client_ids: merged.archived_source_client_ids,
-                    updated_fields:      merged.updated_fields,
+                    updated_fields: merged.updated_fields,
                 });
             } catch (e: any) {
-                result.errors.push({
-                    phone_number: phone,
-                    message:      e?.message || "Unknown error",
-                });
+                result.errors.push({ phone_number: phone, message: e?.message || "Unknown error" });
             }
         }
 
         return result;
     },
 
-    // ── Search clients ────────────────────────────────────────────────────────────
-    async search(q: string, limit?: number): Promise<Client[]> {
+    async search(q: string, salonId: string, limit?: number): Promise<Client[]> {
         const term = String(q || "").trim();
-
-        if (term.length < 2)
-            throw new AppError(400, "q must be at least 2 characters", "VALIDATION_ERROR");
-
-        return clientsRepository.search(term, limit ?? 20);
+        if (term.length < 2) throw new AppError(400, "q must be at least 2 characters", "VALIDATION_ERROR");
+        return clientsRepository.search(term, limit ?? 20, salonId);
     },
 };

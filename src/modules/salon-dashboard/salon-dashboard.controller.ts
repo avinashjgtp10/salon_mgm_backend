@@ -4,13 +4,12 @@ import { salonDashboardService } from "./salon-dashboard.service";
 
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string } };
 
-// Resolve salon_id from JWT claim → query param → header (in priority order)
+import { AppError } from "../../middleware/error.middleware";
+
 function resolveSalonId(req: AuthRequest): string {
-  return (
-    req.user?.salonId ||
-    String(req.query.salon_id || "").trim() ||
-    String(req.headers["x-salon-id"] || "").trim()
-  );
+  const salonId = req.user?.salonId;
+  if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+  return salonId;
 }
 
 export const salonDashboardController = {

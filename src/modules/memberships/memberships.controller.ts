@@ -2,19 +2,32 @@ import { NextFunction, Request, Response } from "express";
 import ExcelJS from "exceljs";
 import { membershipsService } from "./memberships.service";
 import { sendSuccess } from "../utils/response.util";
+import { AppError } from "../../middleware/error.middleware";
+
+type AuthRequest = Request & {
+  user?: { userId: string; role?: string; salonId?: string };
+};
+
+const getSalonId = (req: AuthRequest): string => {
+  const salonId = req.user?.salonId;
+  if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+  return salonId;
+};
 
 export const membershipsController = {
 
-  async list(req: Request, res: Response, next: NextFunction) {
+  async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const data = await membershipsService.list(req.query);
+      const salonId = getSalonId(req);
+      const data = await membershipsService.list(req.query, salonId);
       return sendSuccess(res, 200, data, "Memberships fetched successfully");
     } catch (e) { return next(e); }
   },
 
-  async exportCsv(req: Request, res: Response, next: NextFunction) {
+  async exportCsv(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const items = await membershipsService.listAll(req.query);
+      const salonId = getSalonId(req);
+      const items = await membershipsService.listAll(req.query, salonId);
 
       const headers = [
         "Name", "Description", "Session Type", "Sessions",
@@ -51,9 +64,10 @@ export const membershipsController = {
     } catch (e) { return next(e); }
   },
 
-  async exportExcel(req: Request, res: Response, next: NextFunction) {
+  async exportExcel(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const items = await membershipsService.listAll(req.query);
+      const salonId = getSalonId(req);
+      const items = await membershipsService.listAll(req.query, salonId);
 
       const workbook = new ExcelJS.Workbook();
       const sheet = workbook.addWorksheet("Memberships");
@@ -96,9 +110,10 @@ export const membershipsController = {
     } catch (e) { return next(e); }
   },
 
-  async exportPdf(req: Request, res: Response, next: NextFunction) {
+  async exportPdf(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const items = await membershipsService.listAll(req.query);
+      const salonId = getSalonId(req);
+      const items = await membershipsService.listAll(req.query, salonId);
 
       // Build HTML → PDF using pdfkit (already in your backend deps)
       const PDFDocument = require("pdfkit");
@@ -165,30 +180,34 @@ export const membershipsController = {
     } catch (e) { return next(e); }
   },
 
-  async create(req: Request, res: Response, next: NextFunction) {
+  async create(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const data = await membershipsService.create(req.body);
+      const salonId = getSalonId(req);
+      const data = await membershipsService.create(req.body, salonId);
       return sendSuccess(res, 201, data, "Membership created successfully");
     } catch (e) { return next(e); }
   },
 
-  async getById(req: Request, res: Response, next: NextFunction) {
+  async getById(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const data = await membershipsService.getById(req.params.id as string);
+      const salonId = getSalonId(req);
+      const data = await membershipsService.getById(req.params.id as string, salonId);
       return sendSuccess(res, 200, data, "Membership fetched successfully");
     } catch (e) { return next(e); }
   },
 
-  async update(req: Request, res: Response, next: NextFunction) {
+  async update(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const data = await membershipsService.update(req.params.id as string, req.body);
+      const salonId = getSalonId(req);
+      const data = await membershipsService.update(req.params.id as string, req.body, salonId);
       return sendSuccess(res, 200, data, "Membership updated successfully");
     } catch (e) { return next(e); }
   },
 
-  async delete(req: Request, res: Response, next: NextFunction) {
+  async delete(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      await membershipsService.delete(req.params.id as string);
+      const salonId = getSalonId(req);
+      await membershipsService.delete(req.params.id as string, salonId);
       return sendSuccess(res, 200, {}, "Membership deleted successfully");
     } catch (e) { return next(e); }
   },

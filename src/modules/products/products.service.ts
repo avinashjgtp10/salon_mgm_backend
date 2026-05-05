@@ -21,15 +21,16 @@ export const productsService = {
     async list(params: {
         requesterUserId: string;
         requesterRole?: string;
+        salonId: string;
         filters: ProductListFilters;
     }) {
-        const { requesterUserId, requesterRole, filters } = params;
-        logger.info("productsService.list called", { requesterUserId, requesterRole, filters });
-        return productsRepository.list(filters);
+        const { requesterUserId, requesterRole, salonId, filters } = params;
+        logger.info("productsService.list called", { requesterUserId, requesterRole, salonId, filters });
+        return productsRepository.list(filters, salonId);
     },
 
-    async getById(id: string): Promise<Product & { photos: ProductPhoto[] }> {
-        const product = await productsRepository.findById(id);
+    async getById(id: string, salonId: string): Promise<Product & { photos: ProductPhoto[] }> {
+        const product = await productsRepository.findById(id, salonId);
         if (!product) throw new AppError(404, "Product not found", "NOT_FOUND");
         const photos = await productPhotosRepository.findByProductId(id);
         return { ...product, photos };
@@ -38,12 +39,13 @@ export const productsService = {
     async create(params: {
         requesterUserId: string;
         requesterRole?: string;
+        salonId: string;
         body: CreateProductBody;
         files: { url: string; filename: string }[];
     }): Promise<Product & { photos: ProductPhoto[] }> {
-        const { requesterUserId, requesterRole, body, files } = params;
-        logger.info("productsService.create called", { requesterUserId, requesterRole });
-        const created = await productsRepository.create(body);
+        const { requesterUserId, requesterRole, salonId, body, files } = params;
+        logger.info("productsService.create called", { requesterUserId, requesterRole, salonId });
+        const created = await productsRepository.create(body, salonId);
         let photos: ProductPhoto[] = [];
         if (files.length > 0) {
             photos = await productPhotosRepository.insertMany(created.id, files, 0);
@@ -56,13 +58,14 @@ export const productsService = {
         productId: string;
         requesterUserId: string;
         requesterRole?: string;
+        salonId: string;
         patch: UpdateProductBody;
     }): Promise<Product> {
-        const { productId, requesterUserId, requesterRole, patch } = params;
-        logger.info("productsService.update called", { productId, requesterUserId, requesterRole });
-        const existing = await productsRepository.findById(productId);
+        const { productId, requesterUserId, requesterRole, salonId, patch } = params;
+        logger.info("productsService.update called", { productId, requesterUserId, requesterRole, salonId });
+        const existing = await productsRepository.findById(productId, salonId);
         if (!existing) throw new AppError(404, "Product not found", "NOT_FOUND");
-        const updated = await productsRepository.update(productId, patch);
+        const updated = await productsRepository.update(productId, patch, salonId);
         logger.info("productsService.update success", { productId: updated.id });
         return updated;
     },
@@ -71,25 +74,25 @@ export const productsService = {
         productId: string;
         requesterUserId: string;
         requesterRole?: string;
+        salonId: string;
     }): Promise<void> {
-        const { productId, requesterUserId, requesterRole } = params;
-        logger.info("productsService.delete called", { productId, requesterUserId, requesterRole });
-        const existing = await productsRepository.findById(productId);
+        const { productId, requesterUserId, requesterRole, salonId } = params;
+        logger.info("productsService.delete called", { productId, requesterUserId, requesterRole, salonId });
+        const existing = await productsRepository.findById(productId, salonId);
         if (!existing) throw new AppError(404, "Product not found", "NOT_FOUND");
-        await productsRepository.delete(productId);
+        await productsRepository.delete(productId, salonId);
         logger.info("productsService.delete success", { productId });
     },
-
-    // ─── Photos ──────────────────────────────────────────────────────────────────
 
     async uploadPhotos(params: {
         productId: string;
         requesterUserId: string;
+        salonId: string;
         files: { url: string; filename: string }[];
     }): Promise<ProductPhoto[]> {
-        const { productId, requesterUserId, files } = params;
-        logger.info("productsService.uploadPhotos called", { productId, requesterUserId });
-        const existing = await productsRepository.findById(productId);
+        const { productId, requesterUserId, salonId, files } = params;
+        logger.info("productsService.uploadPhotos called", { productId, requesterUserId, salonId });
+        const existing = await productsRepository.findById(productId, salonId);
         if (!existing) throw new AppError(404, "Product not found", "NOT_FOUND");
         if (files.length === 0) throw new AppError(400, "No photos uploaded", "VALIDATION_ERROR");
         const maxOrder = await productPhotosRepository.getMaxSortOrder(productId);
@@ -101,11 +104,12 @@ export const productsService = {
     async reorderPhotos(params: {
         productId: string;
         requesterUserId: string;
+        salonId: string;
         body: ReorderPhotosBody;
     }): Promise<void> {
-        const { productId, requesterUserId, body } = params;
-        logger.info("productsService.reorderPhotos called", { productId, requesterUserId });
-        const existing = await productsRepository.findById(productId);
+        const { productId, requesterUserId, salonId, body } = params;
+        logger.info("productsService.reorderPhotos called", { productId, requesterUserId, salonId });
+        const existing = await productsRepository.findById(productId, salonId);
         if (!existing) throw new AppError(404, "Product not found", "NOT_FOUND");
         const updates = body.photo_ids.map((id, i) => ({ id, sort_order: i }));
         await productPhotosRepository.reorder(updates);
@@ -116,9 +120,10 @@ export const productsService = {
         productId: string;
         photoId: string;
         requesterUserId: string;
+        salonId: string;
     }): Promise<void> {
-        const { productId, photoId, requesterUserId } = params;
-        logger.info("productsService.deletePhoto called", { productId, photoId, requesterUserId });
+        const { productId, photoId, requesterUserId, salonId } = params;
+        logger.info("productsService.deletePhoto called", { productId, photoId, requesterUserId, salonId });
         const photo = await productPhotosRepository.findById(photoId);
         if (!photo || photo.product_id !== productId) {
             throw new AppError(404, "Photo not found", "NOT_FOUND");
@@ -127,9 +132,9 @@ export const productsService = {
         logger.info("productsService.deletePhoto success", { photoId });
     },
 
-    async exportCSV(params: { requesterUserId: string; requesterRole?: string; }): Promise<{ stream: PassThrough; filename: string }> {
-        logger.info("productsService.exportCSV called", params);
-        const products = await productsRepository.listAll();
+    async exportCSV(params: { requesterUserId: string; requesterRole?: string; salonId: string; }): Promise<{ stream: PassThrough; filename: string }> {
+        logger.info("productsService.exportCSV called", { salonId: params.salonId });
+        const products = await productsRepository.listAll(params.salonId);
         const passThrough = new PassThrough();
         const csvStream = format({ headers: true });
         csvStream.pipe(passThrough);
@@ -144,24 +149,18 @@ export const productsService = {
         return { stream: passThrough, filename: "products.csv" };
     },
 
-    async exportExcel(params: { requesterUserId: string; requesterRole?: string; }): Promise<{ buffer: Buffer; filename: string }> {
-        logger.info("productsService.exportExcel called", params);
-        const products = await productsRepository.listAll();
+    async exportExcel(params: { requesterUserId: string; requesterRole?: string; salonId: string; }): Promise<{ buffer: Buffer; filename: string }> {
+        logger.info("productsService.exportExcel called", { salonId: params.salonId });
+        const products = await productsRepository.listAll(params.salonId);
         const workbook = new ExcelJS.Workbook();
         const sheet = workbook.addWorksheet("Products");
         sheet.columns = [
-            { header: "ID", key: "id", width: 36 },
-            { header: "Name", key: "name", width: 30 },
-            { header: "Barcode", key: "barcode", width: 20 },
-            { header: "Brand", key: "brand_name", width: 20 },
-            { header: "Category", key: "category_id", width: 20 },
-            { header: "Measure", key: "measure_unit", width: 12 },
-            { header: "Amount", key: "amount", width: 12 },
-            { header: "Supply Price", key: "supply_price", width: 15 },
-            { header: "Retail Price", key: "retail_price", width: 15 },
-            { header: "Markup %", key: "markup_percentage", width: 12 },
-            { header: "Tax Type", key: "tax_type", width: 15 },
-            { header: "Created At", key: "created_at", width: 20 },
+            { header: "ID", key: "id", width: 36 }, { header: "Name", key: "name", width: 30 },
+            { header: "Barcode", key: "barcode", width: 20 }, { header: "Brand", key: "brand_name", width: 20 },
+            { header: "Category", key: "category_id", width: 20 }, { header: "Measure", key: "measure_unit", width: 12 },
+            { header: "Amount", key: "amount", width: 12 }, { header: "Supply Price", key: "supply_price", width: 15 },
+            { header: "Retail Price", key: "retail_price", width: 15 }, { header: "Markup %", key: "markup_percentage", width: 12 },
+            { header: "Tax Type", key: "tax_type", width: 15 }, { header: "Created At", key: "created_at", width: 20 },
         ];
         sheet.getRow(1).eachCell((cell) => {
             cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
@@ -175,9 +174,9 @@ export const productsService = {
         return { buffer: Buffer.from(buffer), filename: "products.xlsx" };
     },
 
-    async exportPDF(params: { requesterUserId: string; requesterRole?: string; }): Promise<{ stream: PassThrough; filename: string }> {
-        logger.info("productsService.exportPDF called", params);
-        const products = await productsRepository.listAll();
+    async exportPDF(params: { requesterUserId: string; requesterRole?: string; salonId: string; }): Promise<{ stream: PassThrough; filename: string }> {
+        logger.info("productsService.exportPDF called", { salonId: params.salonId });
+        const products = await productsRepository.listAll(params.salonId);
         const doc = new PDFDocument({ margin: 40, size: "A4", layout: "landscape" });
         const passThrough = new PassThrough();
         doc.pipe(passThrough);
@@ -197,10 +196,7 @@ export const productsService = {
         doc.text("Stock", cols.stock, y + 7, { width: 50 });
         y += 22;
         products.forEach((p: any, i: number) => {
-            if (y > 530) {
-                doc.addPage({ margin: 40, size: "A4", layout: "landscape" });
-                y = 40;
-            }
+            if (y > 530) { doc.addPage({ margin: 40, size: "A4", layout: "landscape" }); y = 40; }
             const bg = i % 2 === 0 ? "#F9FAFB" : "#FFFFFF";
             doc.rect(30, y, 760, 22).fill(bg);
             doc.fillColor("#101828").fontSize(8).font("Helvetica");
@@ -221,12 +217,12 @@ export const productsService = {
 // ─── Brands Service ───────────────────────────────────────────────────────────
 
 export const brandsService = {
-    async list(): Promise<Brand[]> {
-        return brandsRepository.list();
+    async list(salonId: string): Promise<Brand[]> {
+        return brandsRepository.list(salonId);
     },
 
-    async getById(id: string): Promise<Brand> {
-        const brand = await brandsRepository.findById(id);
+    async getById(id: string, salonId: string): Promise<Brand> {
+        const brand = await brandsRepository.findById(id, salonId);
         if (!brand) throw new AppError(404, "Brand not found", "NOT_FOUND");
         return brand;
     },
@@ -234,13 +230,14 @@ export const brandsService = {
     async create(params: {
         requesterUserId: string;
         requesterRole?: string;
+        salonId: string;
         body: CreateBrandBody;
     }): Promise<Brand> {
-        const { requesterUserId, requesterRole, body } = params;
-        logger.info("brandsService.create called", { requesterUserId, requesterRole });
-        const existing = await brandsRepository.findByName(body.name);
+        const { requesterUserId, requesterRole, salonId, body } = params;
+        logger.info("brandsService.create called", { requesterUserId, requesterRole, salonId });
+        const existing = await brandsRepository.findByName(body.name, salonId);
         if (existing) throw new AppError(409, "A brand with this name already exists", "CONFLICT");
-        const created = await brandsRepository.create(body);
+        const created = await brandsRepository.create(body, salonId);
         logger.info("brandsService.create success", { brandId: created.id });
         return created;
     },
@@ -249,19 +246,20 @@ export const brandsService = {
         brandId: string;
         requesterUserId: string;
         requesterRole?: string;
+        salonId: string;
         patch: UpdateBrandBody;
     }): Promise<Brand> {
-        const { brandId, requesterUserId, requesterRole, patch } = params;
-        logger.info("brandsService.update called", { brandId, requesterUserId, requesterRole });
-        const existing = await brandsRepository.findById(brandId);
+        const { brandId, requesterUserId, requesterRole, salonId, patch } = params;
+        logger.info("brandsService.update called", { brandId, requesterUserId, requesterRole, salonId });
+        const existing = await brandsRepository.findById(brandId, salonId);
         if (!existing) throw new AppError(404, "Brand not found", "NOT_FOUND");
         if (patch.name) {
-            const nameConflict = await brandsRepository.findByName(patch.name);
+            const nameConflict = await brandsRepository.findByName(patch.name, salonId);
             if (nameConflict && nameConflict.id !== brandId) {
                 throw new AppError(409, "A brand with this name already exists", "CONFLICT");
             }
         }
-        const updated = await brandsRepository.update(brandId, patch);
+        const updated = await brandsRepository.update(brandId, patch, salonId);
         logger.info("brandsService.update success", { brandId: updated.id });
         return updated;
     },
@@ -270,12 +268,13 @@ export const brandsService = {
         brandId: string;
         requesterUserId: string;
         requesterRole?: string;
+        salonId: string;
     }): Promise<void> {
-        const { brandId, requesterUserId, requesterRole } = params;
-        logger.info("brandsService.delete called", { brandId, requesterUserId, requesterRole });
-        const existing = await brandsRepository.findById(brandId);
+        const { brandId, requesterUserId, requesterRole, salonId } = params;
+        logger.info("brandsService.delete called", { brandId, requesterUserId, requesterRole, salonId });
+        const existing = await brandsRepository.findById(brandId, salonId);
         if (!existing) throw new AppError(404, "Brand not found", "NOT_FOUND");
-        await brandsRepository.delete(brandId);
+        await brandsRepository.delete(brandId, salonId);
         logger.info("brandsService.delete success", { brandId });
     },
 };

@@ -45,6 +45,7 @@ const SELECT_FULL = `
 function toPackage(row: PackageRow): Package {
   return {
     id:              row.id,
+    salonId:         row.salon_id,
     name:            row.name,
     slug:            row.slug,
     description:     row.description ?? undefined,
@@ -80,6 +81,10 @@ export const packagesRepository = {
     const values: any[] = [];
     let idx = 1;
 
+    // Always scope to salon first
+    conditions.push(`p.salon_id = $${idx++}`);
+    values.push(query.salonId);
+
     if (query.search) {
       conditions.push(`p.name ILIKE $${idx++}`);
       values.push(`%${query.search}%`);
@@ -89,9 +94,9 @@ export const packagesRepository = {
       values.push(query.category);
     }
 
-    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-    const page  = Math.max(1, query.page  ?? 1);
-    const limit = Math.min(100, query.limit ?? 20);
+    const where  = `WHERE ${conditions.join(" AND ")}`;
+    const page   = Math.max(1, query.page  ?? 1);
+    const limit  = Math.min(100, query.limit ?? 20);
     const offset = (page - 1) * limit;
 
     const { rows } = await pool.query(
@@ -110,10 +115,10 @@ export const packagesRepository = {
     };
   },
 
-  async findById(id: string): Promise<Package | null> {
+  async findById(id: string, salonId: string): Promise<Package | null> {
     const { rows } = await pool.query(
-      `${SELECT_FULL} WHERE p.id = $1 GROUP BY p.id`,
-      [id]
+      `${SELECT_FULL} WHERE p.id = $1 AND p.salon_id = $2 GROUP BY p.id`,
+      [id, salonId]
     );
     return rows.length ? toPackage(rows[0]) : null;
   },
@@ -127,11 +132,12 @@ export const packagesRepository = {
 
       await client.query(
         `INSERT INTO packages
-          (id, name, slug, description, base_price, discount_value,
+          (id, salon_id, name, slug, description, base_price, discount_value,
            discount_type, duration_minutes, category, priority)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
         [
           pkgId,
+          data.salonId,
           data.name,
           data.slug,
           data.description ?? null,
@@ -144,7 +150,6 @@ export const packagesRepository = {
         ]
       );
 
-      // Link services
       for (const serviceId of (data.serviceIds ?? [])) {
         await client.query(
           `INSERT INTO package_services (package_id, service_id)
@@ -153,7 +158,6 @@ export const packagesRepository = {
         );
       }
 
-      // Insert offers
       for (const offer of (data.offers ?? [])) {
         await client.query(
           `INSERT INTO package_offers
@@ -190,7 +194,7 @@ export const packagesRepository = {
     }
   },
 
-  async update(id: string, data: UpdatePackageDTO): Promise<Package | null> {
+  async update(id: string, salonId: string, data: UpdatePackageDTO): Promise<Package | null> {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
@@ -220,9 +224,10 @@ export const packagesRepository = {
 
       if (fields.length > 0) {
         values.push(id);
+        values.push(salonId);
         const res = await client.query(
           `UPDATE packages SET ${fields.join(", ")}, updated_at = NOW()
-           WHERE id = $${idx} RETURNING id`,
+           WHERE id = $${idx} AND salon_id = $${idx + 1} RETURNING id`,
           values
         );
         if (res.rowCount === 0) return null;
@@ -264,8 +269,8 @@ export const packagesRepository = {
       }
 
       const { rows } = await client.query(
-        `${SELECT_FULL} WHERE p.id = $1 GROUP BY p.id`,
-        [id]
+        `${SELECT_FULL} WHERE p.id = $1 AND p.salon_id = $2 GROUP BY p.id`,
+        [id, salonId]
       );
 
       await client.query("COMMIT");
@@ -278,10 +283,10 @@ export const packagesRepository = {
     }
   },
 
-  async delete(id: string): Promise<boolean> {
+  async delete(id: string, salonId: string): Promise<boolean> {
     const { rowCount } = await pool.query(
-      `DELETE FROM packages WHERE id = $1`,
-      [id]
+      `DELETE FROM packages WHERE id = $1 AND salon_id = $2`,
+      [id, salonId]
     );
     return (rowCount ?? 0) > 0;
   },

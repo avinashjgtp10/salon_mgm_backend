@@ -25,9 +25,13 @@ import {
 
 // ─── Query builders ───────────────────────────────────────────────────────────
 
-const buildServiceWhere = (q: ListServicesQuery) => {
+const buildServiceWhere = (q: ListServicesQuery, salonId: string) => {
   const where: string[] = [];
   const values: unknown[] = [];
+
+  // Always scope to salon first
+  values.push(salonId);
+  where.push(`s.salon_id = $${values.length}`);
 
   const add = (sql: string, val: unknown) => {
     values.push(val);
@@ -50,9 +54,13 @@ const buildServiceWhere = (q: ListServicesQuery) => {
   return { whereSql: where.length ? `WHERE ${where.join(" AND ")}` : "", values };
 };
 
-const buildBundleWhere = (q: ListBundlesQuery) => {
+const buildBundleWhere = (q: ListBundlesQuery, salonId: string) => {
   const where: string[] = [];
   const values: unknown[] = [];
+
+  // Always scope to salon first
+  values.push(salonId);
+  where.push(`b.salon_id = $${values.length}`);
 
   const add = (sql: string, val: unknown) => {
     values.push(val);
@@ -69,15 +77,10 @@ const buildBundleWhere = (q: ListBundlesQuery) => {
     where.push(`b.commission_enabled = ${q.commissions === "enabled" ? "true" : "false"}`);
   if (q.resource_requirements && q.resource_requirements !== "all")
     where.push(`b.resource_required = ${q.resource_requirements === "required" ? "true" : "false"}`);
-  if (q.available_for && q.available_for !== "all")
-    add(`b.available_for = ?`, q.available_for);
+  if (q.available_for && q.available_for !== "all") add(`b.available_for = ?`, q.available_for);
   if (q.team_member_id)
     add(
-      `EXISTS (
-        SELECT 1 FROM bundle_services bs2
-        JOIN service_staff ss ON ss.service_id = bs2.service_id
-        WHERE bs2.bundle_id = b.id AND ss.staff_id = ?
-      )`,
+      `EXISTS (SELECT 1 FROM bundle_services bs2 JOIN service_staff ss ON ss.service_id = bs2.service_id WHERE bs2.bundle_id = b.id AND ss.staff_id = ?)`,
       q.team_member_id
     );
 
@@ -87,22 +90,22 @@ const buildBundleWhere = (q: ListBundlesQuery) => {
 // ─── Services ─────────────────────────────────────────────────────────────────
 
 export const servicesRepository = {
-  async findById(id: string): Promise<Service | null> {
+  async findById(id: string, salonId: string): Promise<Service | null> {
     const { rows } = await pool.query(
       `SELECT s.*, s.duration_minutes AS duration, c.name AS category_name
        FROM services s
        LEFT JOIN service_categories c ON c.id = s.category_id
-       WHERE s.id = $1`,
-      [id]
+       WHERE s.id = $1 AND s.salon_id = $2`,
+      [id, salonId]
     );
     return rows[0] || null;
   },
 
-  async list(query: ListServicesQuery): Promise<ServiceListResponse> {
+  async list(query: ListServicesQuery, salonId: string): Promise<ServiceListResponse> {
     const page = Math.max(1, Number(query.page ?? 1));
     const limit = Math.min(200, Math.max(1, Number(query.limit ?? 20)));
     const offset = (page - 1) * limit;
-    const { whereSql, values } = buildServiceWhere(query);
+    const { whereSql, values } = buildServiceWhere(query, salonId);
 
     const countRes = await pool.query(
       `SELECT COUNT(*)::int AS total FROM services s ${whereSql}`,
@@ -126,8 +129,8 @@ export const servicesRepository = {
     };
   },
 
-  async listAll(query: ListServicesQuery): Promise<Service[]> {
-    const { whereSql, values } = buildServiceWhere(query);
+  async listAll(query: ListServicesQuery, salonId: string): Promise<Service[]> {
+    const { whereSql, values } = buildServiceWhere(query, salonId);
     const { rows } = await pool.query(
       `SELECT s.*, s.duration_minutes AS duration, c.name AS category_name
        FROM services s
@@ -139,15 +142,16 @@ export const servicesRepository = {
     return rows;
   },
 
-  async create(data: CreateServiceBody): Promise<Service> {
+  async create(data: CreateServiceBody, salonId: string): Promise<Service> {
     const { rows } = await pool.query(
       `INSERT INTO services (
-        name, category_id, treatment_type, description,
+        salon_id, name, category_id, treatment_type, description,
         price_type, price, duration_minutes,
         online_booking, commission_enabled, resource_required
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
       RETURNING *, duration_minutes AS duration`,
       [
+        salonId,
         data.name,
         data.category_id,
         data.treatment_type ?? null,
@@ -163,7 +167,7 @@ export const servicesRepository = {
     return rows[0];
   },
 
-  async update(id: string, patch: UpdateServiceBody): Promise<Service> {
+  async update(id: string, patch: UpdateServiceBody, salonId: string): Promise<Service> {
     const normalized: Record<string, unknown> = { ...patch };
     if (normalized.duration !== undefined) {
       normalized.duration_minutes = normalized.duration;
@@ -178,8 +182,8 @@ export const servicesRepository = {
         `SELECT s.*, s.duration_minutes AS duration, c.name AS category_name
          FROM services s
          LEFT JOIN service_categories c ON c.id = s.category_id
-         WHERE s.id = $1`,
-        [id]
+         WHERE s.id = $1 AND s.salon_id = $2`,
+        [id, salonId]
       );
       return rows[0];
     }
@@ -188,18 +192,19 @@ export const servicesRepository = {
     const values: unknown[] = keys.map((k) => normalized[k]);
     setParts.push(`updated_at = NOW()`);
     values.push(id);
+    values.push(salonId);
 
     const { rows } = await pool.query(
       `UPDATE services SET ${setParts.join(", ")}
-       WHERE id = $${values.length}
+       WHERE id = $${values.length - 1} AND salon_id = $${values.length}
        RETURNING *, duration_minutes AS duration`,
       values
     );
     return rows[0];
   },
 
-  async delete(id: string): Promise<void> {
-    await pool.query(`DELETE FROM services WHERE id = $1`, [id]);
+  async delete(id: string, salonId: string): Promise<void> {
+    await pool.query(`DELETE FROM services WHERE id = $1 AND salon_id = $2`, [id, salonId]);
   },
 
   async replaceStaff(serviceId: string, staffIds: string[]): Promise<void> {
@@ -238,9 +243,7 @@ export const servicesRepository = {
     if (!groups.length) return [];
 
     const optRes = await pool.query(
-      `SELECT * FROM service_add_on_options
-       WHERE add_on_group_id = ANY($1::uuid[])
-       ORDER BY created_at ASC`,
+      `SELECT * FROM service_add_on_options WHERE add_on_group_id = ANY($1::uuid[]) ORDER BY created_at ASC`,
       [groups.map((g) => g.id)]
     );
 
@@ -257,14 +260,7 @@ export const servicesRepository = {
       `INSERT INTO service_add_on_groups
         (service_id, name, prompt_to_client, min_quantity, max_quantity, allow_multiple_same)
        VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-      [
-        serviceId,
-        data.name,
-        data.prompt_to_client ?? "Select an option",
-        data.min_quantity ?? null,
-        data.max_quantity ?? null,
-        data.allow_multiple_same ?? false,
-      ]
+      [serviceId, data.name, data.prompt_to_client ?? "Select an option", data.min_quantity ?? null, data.max_quantity ?? null, data.allow_multiple_same ?? false]
     );
     return rows[0];
   },
@@ -280,8 +276,7 @@ export const servicesRepository = {
     setParts.push(`updated_at = NOW()`);
     values.push(groupId);
     const { rows } = await pool.query(
-      `UPDATE service_add_on_groups SET ${setParts.join(", ")}
-       WHERE id = $${values.length} RETURNING *`,
+      `UPDATE service_add_on_groups SET ${setParts.join(", ")} WHERE id = $${values.length} RETURNING *`,
       values
     );
     return rows[0];
@@ -293,8 +288,7 @@ export const servicesRepository = {
 
   async createAddOnOption(groupId: string, data: CreateAddOnOptionBody): Promise<AddOnOption> {
     const { rows } = await pool.query(
-      `INSERT INTO service_add_on_options
-        (add_on_group_id, name, description, additional_price, additional_duration)
+      `INSERT INTO service_add_on_options (add_on_group_id, name, description, additional_price, additional_duration)
        VALUES ($1,$2,$3,$4,$5) RETURNING *`,
       [groupId, data.name, data.description ?? null, data.additional_price ?? 0, data.additional_duration ?? 0]
     );
@@ -312,8 +306,7 @@ export const servicesRepository = {
     setParts.push(`updated_at = NOW()`);
     values.push(optionId);
     const { rows } = await pool.query(
-      `UPDATE service_add_on_options SET ${setParts.join(", ")}
-       WHERE id = $${values.length} RETURNING *`,
+      `UPDATE service_add_on_options SET ${setParts.join(", ")} WHERE id = $${values.length} RETURNING *`,
       values
     );
     return rows[0];
@@ -323,8 +316,8 @@ export const servicesRepository = {
     await pool.query(`DELETE FROM service_add_on_options WHERE id = $1`, [optionId]);
   },
 
-  async getDetailById(serviceId: string): Promise<ServiceDetail | null> {
-    const svc = await this.findById(serviceId);
+  async getDetailById(serviceId: string, salonId: string): Promise<ServiceDetail | null> {
+    const svc = await this.findById(serviceId, salonId);
     if (!svc) return null;
     const [staff, add_on_groups] = await Promise.all([
       this.getStaff(serviceId),
@@ -337,27 +330,24 @@ export const servicesRepository = {
 // ─── Bundles ──────────────────────────────────────────────────────────────────
 
 export const bundlesRepository = {
-  async findById(id: string): Promise<Bundle | null> {
+  async findById(id: string, salonId: string): Promise<Bundle | null> {
     const { rows } = await pool.query(
       `SELECT b.*, c.name AS category_name
        FROM bundles b
        LEFT JOIN service_categories c ON c.id = b.category_id
-       WHERE b.id = $1`,
-      [id]
+       WHERE b.id = $1 AND b.salon_id = $2`,
+      [id, salonId]
     );
     return rows[0] || null;
   },
 
-  async list(query: ListBundlesQuery): Promise<BundleListResponse> {
+  async list(query: ListBundlesQuery, salonId: string): Promise<BundleListResponse> {
     const page = Math.max(1, Number(query.page ?? 1));
     const limit = Math.min(200, Math.max(1, Number(query.limit ?? 20)));
     const offset = (page - 1) * limit;
-    const { whereSql, values } = buildBundleWhere(query);
+    const { whereSql, values } = buildBundleWhere(query, salonId);
 
-    const countRes = await pool.query(
-      `SELECT COUNT(*)::int AS total FROM bundles b ${whereSql}`,
-      values
-    );
+    const countRes = await pool.query(`SELECT COUNT(*)::int AS total FROM bundles b ${whereSql}`, values);
     const total: number = countRes.rows[0]?.total ?? 0;
 
     const dataRes = await pool.query(
@@ -376,8 +366,8 @@ export const bundlesRepository = {
     };
   },
 
-  async listAll(query: ListBundlesQuery): Promise<Bundle[]> {
-    const { whereSql, values } = buildBundleWhere(query);
+  async listAll(query: ListBundlesQuery, salonId: string): Promise<Bundle[]> {
+    const { whereSql, values } = buildBundleWhere(query, salonId);
     const { rows } = await pool.query(
       `SELECT b.*, c.name AS category_name
        FROM bundles b
@@ -389,14 +379,15 @@ export const bundlesRepository = {
     return rows;
   },
 
-  async create(data: CreateBundleBody): Promise<Bundle> {
+  async create(data: CreateBundleBody, salonId: string): Promise<Bundle> {
     const { rows } = await pool.query(
       `INSERT INTO bundles (
-        name, category_id, description,
+        salon_id, name, category_id, description,
         schedule_type, price_type, retail_price,
         online_booking, commission_enabled, resource_required, available_for
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
       [
+        salonId,
         data.name,
         data.category_id,
         data.description ?? null,
@@ -412,18 +403,15 @@ export const bundlesRepository = {
     return rows[0];
   },
 
-  async update(id: string, patch: UpdateBundleBody): Promise<Bundle> {
+  async update(id: string, patch: UpdateBundleBody, salonId: string): Promise<Bundle> {
     const normalized: Record<string, unknown> = { ...patch };
     delete normalized.service_ids;
 
     const keys = Object.keys(normalized);
     if (!keys.length) {
       const { rows } = await pool.query(
-        `SELECT b.*, c.name AS category_name
-         FROM bundles b
-         LEFT JOIN service_categories c ON c.id = b.category_id
-         WHERE b.id = $1`,
-        [id]
+        `SELECT b.*, c.name AS category_name FROM bundles b LEFT JOIN service_categories c ON c.id = b.category_id WHERE b.id = $1 AND b.salon_id = $2`,
+        [id, salonId]
       );
       return rows[0];
     }
@@ -432,17 +420,17 @@ export const bundlesRepository = {
     const values: unknown[] = keys.map((k) => normalized[k]);
     setParts.push(`updated_at = NOW()`);
     values.push(id);
+    values.push(salonId);
 
     const { rows } = await pool.query(
-      `UPDATE bundles SET ${setParts.join(", ")}
-       WHERE id = $${values.length} RETURNING *`,
+      `UPDATE bundles SET ${setParts.join(", ")} WHERE id = $${values.length - 1} AND salon_id = $${values.length} RETURNING *`,
       values
     );
     return rows[0];
   },
 
-  async delete(id: string): Promise<void> {
-    await pool.query(`DELETE FROM bundles WHERE id = $1`, [id]);
+  async delete(id: string, salonId: string): Promise<void> {
+    await pool.query(`DELETE FROM bundles WHERE id = $1 AND salon_id = $2`, [id, salonId]);
   },
 
   async replaceServices(bundleId: string, serviceIds: string[]): Promise<void> {
@@ -473,8 +461,8 @@ export const bundlesRepository = {
     return rows;
   },
 
-  async getDetailById(bundleId: string): Promise<BundleDetail | null> {
-    const bundle = await this.findById(bundleId);
+  async getDetailById(bundleId: string, salonId: string): Promise<BundleDetail | null> {
+    const bundle = await this.findById(bundleId, salonId);
     if (!bundle) return null;
     const services = await this.getBundleServices(bundleId);
     return { ...bundle, services };
