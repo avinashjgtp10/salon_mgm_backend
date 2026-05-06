@@ -233,7 +233,7 @@ export const appointmentsService = {
                 client_id:      existing.client_id  ?? undefined,
                 appointment_id: appointmentId,
                 staff_id:       existing.staff_id   ?? undefined,
-                status:         "completed",   // ← was "draft"; must be completed so stock is deducted
+                status:         "draft",
                 items:          resolvedItems,
                 ...saleExtras,
             } as any,
@@ -248,7 +248,7 @@ export const appointmentsService = {
         status?: string;
         start_date?: string;
         end_date?: string;
-        format: "csv" | "excel" | "pdf";
+        format: "csv" | "excel";
     }): Promise<{ buffer: Buffer; contentType: string; filename: string }> {
         const appointments = await appointmentsRepository.exportList({
             salon_id:   filters.salon_id,
@@ -292,101 +292,17 @@ export const appointmentsService = {
         }
 
         // Excel via ExcelJS
-        if (filters.format === "excel") {
-            const workbook = new ExcelJS.Workbook();
-            const sheet    = workbook.addWorksheet("Appointments");
-            sheet.addRow(headers).font = { bold: true };
-            rows.forEach(r => sheet.addRow(r));
-            sheet.columns.forEach(col => { col.width = 22; });
+        const workbook = new ExcelJS.Workbook();
+        const sheet    = workbook.addWorksheet("Appointments");
+        sheet.addRow(headers).font = { bold: true };
+        rows.forEach(r => sheet.addRow(r));
+        sheet.columns.forEach(col => { col.width = 22; });
 
-            const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
-            return {
-                buffer,
-                contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                filename:    "appointments.xlsx",
-            };
-        }
-
-        // PDF via pdfkit
-        return new Promise((resolve, reject) => {
-            // Need to import PDFDocument dynamically or at the top of the file
-            const PDFDocument = require("pdfkit");
-            const doc = new PDFDocument({ margin: 30, size: "A4", layout: "landscape" });
-            const chunks: Buffer[] = [];
-
-            doc.on("data", (chunk: Buffer) => chunks.push(chunk));
-            doc.on("end", () => resolve({
-                buffer: Buffer.concat(chunks),
-                contentType: "application/pdf",
-                filename: "appointments.pdf",
-            }));
-            doc.on("error", reject);
-
-            // Title
-            doc.fontSize(16).font("Helvetica-Bold").text("Appointments Report", { align: "center" });
-            doc.moveDown(1.5);
-
-            // Simple table
-            const colWidths = [50, 60, 50, 50, 70, 40, 50, 100, 50, 60];
-            // ID, Title, Status, Client, Staff, Dur, Scheduled, Services, Sale, Created
-            const pdfHeaders = ["ID", "Title", "Status", "Client", "Staff", "Dur.", "Scheduled At", "Services", "Sale ID", "Created At"];
-            
-            const pdfRows = appointments.map(a => [
-                String(a.id).substring(0, 8),
-                a.title ?? "",
-                a.status,
-                a.client_id ? String(a.client_id).substring(0,8) : "Walk-in",
-                a.staff_id ? String(a.staff_id).substring(0,8) : "",
-                String(a.duration_minutes),
-                new Date(a.scheduled_at).toLocaleString("en-GB"),
-                (a.services ?? []).map((s: any) => s.name).join(", "),
-                a.sale_id ? String(a.sale_id).substring(0,8) : "",
-                new Date(a.created_at).toLocaleDateString("en-GB")
-            ]);
-
-            const startX = 30;
-            const rowHeight = 20;
-            let y = doc.y;
-
-            const drawRow = (cells: string[], isHeader = false) => {
-                let x = startX;
-                if (isHeader) {
-                    doc.rect(x, y, colWidths.reduce((a, b) => a + b, 0), rowHeight).fill("#333333");
-                    doc.fillColor("white").font("Helvetica-Bold").fontSize(8);
-                } else {
-                    doc.fillColor("black").font("Helvetica").fontSize(7);
-                }
-                cells.forEach((cell, i) => {
-                    doc.text(String(cell), x + 3, y + 5, { width: colWidths[i] - 6, ellipsis: true, lineBreak: false });
-                    x += colWidths[i];
-                });
-                y += rowHeight;
-                
-                // Add new page if needed
-                if (y > doc.page.height - 50) {
-                    doc.addPage();
-                    y = 50;
-                    if (!isHeader) {
-                        drawRow(pdfHeaders, true);
-                    }
-                }
-            };
-
-            drawRow(pdfHeaders, true);
-
-            pdfRows.forEach((row, idx) => {
-                if (idx % 2 === 0) {
-                    doc.rect(startX, y, colWidths.reduce((a, b) => a + b, 0), rowHeight).fill("#f5f5f5");
-                }
-                drawRow(row);
-            });
-
-            if (pdfRows.length === 0) {
-                doc.fillColor("#999999").font("Helvetica").fontSize(10)
-                    .text("No appointment records found.", startX, y + 10, { align: "center" });
-            }
-
-            doc.end();
-        });
+        const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+        return {
+            buffer,
+            contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            filename:    "appointments.xlsx",
+        };
     },
 };

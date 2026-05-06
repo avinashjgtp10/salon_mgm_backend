@@ -9,7 +9,6 @@ import {
   staffEmergencyContactService, staffWagesService, staffCommissionsService,
   staffPayRunsService, staffSchedulesService, staffLeavesService,
 } from "./staff.service";
-import { salonsRepository } from "../salons/salons.repository";
 import {
   CreateStaffBody, UpdateStaffBody, CreateStaffAddressBody, UpdateStaffAddressBody,
   CreateEmergencyContactBody, UpdateEmergencyContactBody, UpdateWageSettingsBody,
@@ -17,9 +16,13 @@ import {
   CreateStaffLeaveBody, UpdateStaffLeaveBody, AcceptInvitationBody, StaffListQuery,
 } from "./staff.types";
 
-import { getSalonId } from "../utils/salon.util";
+type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string } };
 
-type AuthRequest = Request & { user?: { userId: string; role?: string } };
+const getSalonId = (req: AuthRequest): string => {
+  const salonId = req.user?.salonId;
+  if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+  return salonId;
+};
 
 // ─── Staff ────────────────────────────────────────────────────────────────────
 
@@ -55,7 +58,7 @@ export const staffController = {
     } catch (err) { return next(err); }
   },
 
-  async create(req: AuthRequest, res: Response, next: NextFunction) {
+  async create(req: AuthRequest, res: Response) {
     try {
       const salonId = await getSalonId(req);
       console.log("[DEBUG] Controller: POST /staff - salonId:", salonId);
@@ -237,6 +240,7 @@ export const staffController = {
     } catch (err) { return next(err); }
   },
 };
+
 
 
 

@@ -3,6 +3,7 @@ import { usersService } from "./users.service";
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
 import logger from "../../config/logger";
+import { uploadAvatarToS3 } from "../utils/avatar.upload";
 
 interface AuthRequest extends Request {
   user?: {
@@ -355,7 +356,6 @@ export const usersController = {
         throw new AppError(400, "No image file provided", "FILE_REQUIRED");
       }
 
-      const { uploadAvatarToS3 } = await import("../utils/avatar.upload");
       const avatarUrl = await uploadAvatarToS3(file.path, userId, file.mimetype);
 
       // Persist the URL in the DB

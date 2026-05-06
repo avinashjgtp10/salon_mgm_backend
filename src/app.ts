@@ -130,6 +130,5 @@ app.use((_req, res) => {
 
 // Error handler (must be last)
 app.use(errorHandler);
-console.log("App loaded");
 
 export default app;

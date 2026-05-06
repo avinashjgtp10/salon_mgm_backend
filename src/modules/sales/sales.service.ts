@@ -4,26 +4,12 @@ import { AppError } from "../../middleware/error.middleware";
 import { salesRepository } from "./sales.repository";
 import { Sale, SaleItem, CreateSaleBody, UpdateSaleBody, CheckoutSaleBody } from "./sales.types";
 import { paymentsRepository } from "../payments/payments.repository";
-import { productsRepository } from "../products/products.repository";
 
 export const salesService = {
     async create(params: { requesterUserId: string; requesterRole?: string; body: CreateSaleBody }): Promise<{ sale: Sale; items: SaleItem[] }> {
         const { requesterUserId, body } = params;
         const sale = await salesRepository.create(body, requesterUserId);
         const items = await salesRepository.findItemsBySaleId(sale.id);
-
-        // Deduct stock immediately if sale is created as completed (e.g. appointment checkout)
-        if (sale.status === "completed") {
-            try {
-                const productDeductions = items
-                    .filter((item: SaleItem) => item.item_type === "product" && item.item_id)
-                    .map((item: SaleItem) => ({ product_id: item.item_id as string, quantity: item.quantity }));
-                await productsRepository.deductStock(productDeductions);
-            } catch (error) {
-                console.error("Failed to deduct product stock on sale create:", error);
-            }
-        }
-
         return { sale, items };
     },
 
@@ -86,20 +72,6 @@ export const salesService = {
             });
         } catch (error) {
             console.error('Failed to create payment record for sale:', error);
-        }
-
-        // ── Deduct product stock ──────────────────────────────────────────────
-        try {
-            const saleItems = await salesRepository.findItemsBySaleId(sale.id);
-            const productDeductions = saleItems
-                .filter((item: SaleItem) => item.item_type === "product" && item.item_id)
-                .map((item: SaleItem) => ({
-                    product_id: item.item_id as string,
-                    quantity: item.quantity,
-                }));
-            await productsRepository.deductStock(productDeductions);
-        } catch (error) {
-            console.error('Failed to deduct product stock after checkout:', error);
         }
 
         return sale;

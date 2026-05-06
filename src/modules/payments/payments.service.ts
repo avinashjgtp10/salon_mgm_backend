@@ -1,7 +1,6 @@
 import { paymentsRepository } from './payments.repository';
 import { couponsRepository } from '../coupons/coupons.repository';
 import { appointmentsRepository } from '../appointments/appointments.repository';
-import { productsRepository } from '../products/products.repository';
 import { CreatePaymentBody, Payment } from './payments.types';
 
 export const paymentsService = {
@@ -54,28 +53,10 @@ export const paymentsService = {
     // Mark appointment payment_status based on computed due_amount
     if (data.appointment_id) {
       try {
-        const isFullyPaid = (data.due_amount ?? 0) <= 0;
-        const apptStatus = isFullyPaid ? 'paid' : 'partial';
+        const apptStatus = (data.due_amount ?? 0) > 0 ? 'partial' : 'paid';
         await appointmentsRepository.updatePaymentStatus(data.appointment_id, apptStatus);
-
-        // ── Deduct stock if fully paid ──────────────────────────────────────
-        if (isFullyPaid) {
-          const appt = await appointmentsRepository.findById(data.appointment_id);
-          if (appt && appt.product_items && Array.isArray(appt.product_items)) {
-            const deductions = appt.product_items
-              .filter((p: any) => p.product_id || p.id)
-              .map((p: any) => ({
-                product_id: String(p.product_id || p.id),
-                quantity: Number(p.quantity) || 1,
-              }));
-            
-            if (deductions.length > 0) {
-              await productsRepository.deductStock(deductions);
-            }
-          }
-        }
-      } catch (err) {
-        console.error("Failed to update appointment status or deduct stock:", err);
+      } catch {
+        // Non-fatal: payment is still recorded
       }
     }
 
