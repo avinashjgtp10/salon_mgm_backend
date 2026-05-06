@@ -111,15 +111,36 @@ export const staffRepository = {
     },
 
     async update(id: string, salonId: string, patch: UpdateStaffBody): Promise<Staff> {
-        const keys = Object.keys(patch) as (keyof UpdateStaffBody)[];
-        if (keys.length === 0) {
+        // Maps UpdateStaffBody keys to actual DB column names (job_title → designation)
+        const COLUMN_MAP: Record<keyof UpdateStaffBody, string> = {
+            first_name: "first_name",
+            email: "email",
+            last_name: "last_name",
+            phone: "phone",
+            phone_country_code: "phone_country_code",
+            additional_phone: "additional_phone",
+            country: "country",
+            calendar_color: "calendar_color",
+            job_title: "designation",
+            staff_external_id: "staff_external_id",
+            employment_type: "employment_type",
+            branch_id: "branch_id",
+            employee_code: "employee_code",
+            experience_years: "experience_years",
+            specialization: "specialization",
+        };
+
+        const entries = (Object.keys(patch) as (keyof UpdateStaffBody)[])
+            .filter((k) => k in COLUMN_MAP)
+            .map((k) => [COLUMN_MAP[k], (patch as any)[k]] as [string, unknown]);
+
+        if (entries.length === 0) {
             const { rows } = await pool.query(`SELECT * FROM staff WHERE id = $1 AND salon_id = $2`, [id, salonId]);
             return rows[0];
         }
 
-        const setParts: string[] = [];
-        const values: unknown[] = [];
-        keys.forEach((k, i) => { setParts.push(`${k} = $${i + 1}`); values.push((patch as any)[k]); });
+        const setParts = entries.map(([col], i) => `${col} = $${i + 1}`);
+        const values: unknown[] = entries.map(([, val]) => val);
         setParts.push(`updated_at = NOW()`);
         values.push(id, salonId);
 
