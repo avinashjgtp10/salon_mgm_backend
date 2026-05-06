@@ -1,3 +1,4 @@
+import pool from "../../config/database";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { emailService } from "../utils/email.service";
@@ -14,6 +15,7 @@ import { authRepository } from "../auth/auth.repository";
 import bcrypt from "bcrypt";
 import { staffInvitationRepository } from "./staffInvitation.repository";
 import { salonsRepository } from "../salons/salons.repository";
+import { authService } from "../auth/auth.service";
 import {
     Staff, StaffAddress, StaffEmergencyContact, StaffLeave, StaffSchedule,
     StaffWageSettings, StaffCommissionSettings, StaffPayRunSettings,
@@ -140,63 +142,99 @@ export const staffInvitationService = {
         };
     },
 
-    async acceptInvitation(body: AcceptInvitationBody): Promise<{ staffId: string }> {
-        const invitation = await staffInvitationRepository.findByToken(body.token);
+    async acceptInvitation(body: AcceptInvitationBody): Promise<{ staffId: string; accessToken: string; refreshToken: string; user: any; isOnboardingComplete: boolean }> {
+        try {
+            logger.info("acceptInvitation: start", { token: body.token });
+            const invitation = await staffInvitationRepository.findByToken(body.token);
 
-        if (!invitation) {
-            throw new AppError(400, "Invalid token", "BAD_REQUEST");
+            if (!invitation) {
+                logger.warn("acceptInvitation: invalid token", { token: body.token });
+                throw new AppError(400, "Invalid token", "BAD_REQUEST");
+            }
+
+            if (invitation.status === "active" || invitation.status === "accepted") {
+                logger.info("acceptInvitation: invitation already accepted", { staffId: invitation.staff_id });
+                throw new AppError(400, "This invitation has already been accepted", "ALREADY_ACCEPTED");
+            }
+
+            if (new Date(invitation.expires_at) < new Date()) {
+                logger.warn("acceptInvitation: expired token", { token: body.token, expiresAt: invitation.expires_at });
+                throw new AppError(400, "Expired token", "BAD_REQUEST");
+            }
+
+            // Avoid creating duplicate users: check if user exists
+            let user = await authRepository.findUserByEmail(invitation.email);
+            const userAlreadyExisted = !!user;
+
+            if (!user) {
+                logger.info("acceptInvitation: creating new user", { email: invitation.email });
+                const passwordHash = await bcrypt.hash(body.password, 10);
+                user = await authRepository.createUser({
+                    email: invitation.email,
+                    first_name: body.first_name,
+                    last_name: body.last_name,
+                    password_hash: passwordHash,
+                    role: 'staff',
+                } as any);
+            } else {
+                logger.info("acceptInvitation: user already exists", { email: invitation.email, userId: user.id });
+            }
+
+            logger.info("acceptInvitation: linking user to staff", { staffId: invitation.staff_id, userId: user.id });
+            await staffRepository.linkUserToStaff(
+                invitation.staff_id,
+                user.id,
+                body.first_name,
+                body.last_name
+            );
+
+            logger.info("acceptInvitation: marking user verified", { userId: user.id });
+            await authRepository.markUserVerified(user.id);
+
+            logger.info("acceptInvitation: marking invitation accepted", { token: body.token });
+            await staffInvitationRepository.markAccepted(body.token);
+
+            logger.info("acceptInvitation: attempting auto-login", { email: invitation.email });
+            try {
+                const loginData = await authService.login({
+                    email: invitation.email,
+                    password: body.password
+                });
+
+                logger.info("acceptInvitation success with auto-login", { staffId: invitation.staff_id });
+                return {
+                    staffId: invitation.staff_id,
+                    accessToken: loginData.accessToken,
+                    refreshToken: loginData.refreshToken,
+                    user: loginData.user,
+                    isOnboardingComplete: loginData.isOnboardingComplete
+                };
+            } catch (loginError: any) {
+                logger.warn("acceptInvitation: auto-login failed", {
+                    email: invitation.email,
+                    error: loginError.message,
+                    userAlreadyExisted
+                });
+
+                // If the user already existed, they might have a different password.
+                // We shouldn't fail the whole invitation acceptance just because auto-login failed.
+                // However, the frontend expects tokens. We'll throw a clear error message.
+                if (userAlreadyExisted) {
+                    throw new AppError(401, "Invitation accepted! Please log in with your existing account password.", "LOGIN_REQUIRED");
+                }
+                throw loginError;
+            }
+        } catch (error) {
+            logger.error("acceptInvitation failed", { error, stack: (error as Error).stack });
+            throw error;
         }
-
-        if (invitation.status === "accepted") {
-            // Edge case: If invite already accepted -> keep status as "Active".
-            logger.info("acceptInvitation: invitation already accepted", { staffId: invitation.staff_id });
-            return { staffId: invitation.staff_id };
-        }
-
-        if (new Date(invitation.expires_at) < new Date()) {
-            throw new AppError(400, "Expired token", "BAD_REQUEST");
-        }
-
-        if (invitation.status !== "pending") {
-            throw new AppError(400, "Invalid or already used token", "BAD_REQUEST");
-        }
-
-        // Avoid creating duplicate users: check if user exists
-        let user = await authRepository.findUserByEmail(invitation.email);
-        
-        if (!user) {
-            const passwordHash = await bcrypt.hash(body.password, 10);
-            user = await authRepository.createUser({
-                email: invitation.email,
-                first_name: body.first_name,
-                last_name: body.last_name,
-                password_hash: passwordHash,
-                role: 'staff',
-            } as any);
-        } else if (body.password) {
-            // Update password if they provided a new one (optional based on your flow)
-            // Or just ignore if user already exists and let them login with their existing password
-        }
-
-        await staffRepository.linkUserToStaff(
-            invitation.staff_id, 
-            user.id, 
-            body.first_name, 
-            body.last_name
-        );
-        
-        await authRepository.markUserVerified(user.id);
-
-        await staffInvitationRepository.markAccepted(body.token);
-        logger.info("acceptInvitation success", { staffId: invitation.staff_id });
-        return { staffId: invitation.staff_id };
     },
 
     async resendInvitation(params: { staffId: string; salonId: string; salonName?: string }): Promise<void> {
         const { staffId, salonId, salonName } = params;
         const staff = await staffRepository.findById(staffId, salonId);
 
-        if (!staff || !staff.email || staff.invitation_status === "accepted") {
+        if (!staff || !staff.email || staff.invitation_status === "active" || staff.invitation_status === "accepted") {
             throw new AppError(400, "Cannot resend: not found, no email, or already accepted", "BAD_REQUEST");
         }
 

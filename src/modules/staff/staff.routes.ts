@@ -41,6 +41,7 @@ router.get("/:id/invitation-status", auth, ownerAdmin, staffInvitationController
 router.post("/:id/resend-invite", auth, ownerAdmin, staffInvitationController.resendInvitation);
 router.delete("/:id/cancel-invite", auth, ownerAdmin, staffInvitationController.cancelInvitation);
 
+
 // ─── Addresses ────────────────────────────────────────────────────────────────
 router.get("/:staffId/addresses", auth, ownerAdminStaff, staffAddressController.list);
 router.post("/:staffId/addresses", auth, ownerAdmin, validateCreateStaffAddress, staffAddressController.create);

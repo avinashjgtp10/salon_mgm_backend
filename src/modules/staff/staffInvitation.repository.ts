@@ -8,6 +8,7 @@ type InvitationStatus = "pending" | "accepted" | "expired" | "cancelled";
 
 type StaffInviteRow = {
   id: string;
+  salon_id: string;
   email: string | null;
 
   invitation_token: string | null;
@@ -24,6 +25,7 @@ const toInvitation = (r: StaffInviteRow): StaffInvitation => ({
   id: r.id,
 
   staff_id: r.id,
+  salon_id: r.salon_id,
   email: r.email ?? "",
 
   token: r.invitation_token ?? "",
@@ -44,6 +46,7 @@ export const staffInvitationRepository = {
       `
       SELECT
         id,
+        salon_id,
         email,
         invitation_token,
         invitation_status,
@@ -77,6 +80,7 @@ export const staffInvitationRepository = {
       `
       SELECT
         id,
+        salon_id,
         email,
         invitation_token,
         invitation_status,
@@ -111,6 +115,7 @@ export const staffInvitationRepository = {
       WHERE id = $1
       RETURNING
         id,
+        salon_id,
         email,
         invitation_token,
         invitation_status,
@@ -161,6 +166,7 @@ export const staffInvitationRepository = {
       WHERE invitation_token = $1
       RETURNING
         id,
+        salon_id,
         email,
         invitation_token,
         invitation_status,
