@@ -37,6 +37,7 @@ import couponsRoutes from "./modules/coupons/coupons.routes";
 import paymentsRoutes from "./modules/payments/payments.routes";
 import blockedTimesRoutes from "./modules/blocked_times/blocked_times.routes";
 import salonDashboardRoutes from "./modules/salon-dashboard/salon-dashboard.routes";
+import settingsRoutes from "./modules/settings/settings.routes";
 
 import swaggerUi from "swagger-ui-express";
 import YAML from "yamljs";
@@ -109,6 +110,7 @@ app.use("/api/v1/profile",  profileRoutes);
 app.use("/api/v1/coupons",        couponsRoutes);
 app.use("/api/v1/payments",       paymentsRoutes);
 app.use("/api/v1/blocked-times",  blockedTimesRoutes);
+app.use("/api/v1/settings",       settingsRoutes);
 
 
 // Swagger Documentation

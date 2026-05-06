@@ -3,6 +3,7 @@
 import { Router } from "express";
 import { authController } from "./auth.controller";
 import { loginRateLimitCheck } from "../../middleware/rate-limit.middleware";
+import { authMiddleware } from "../../middleware/auth.middleware";
 
 const router = Router();
 
@@ -14,6 +15,8 @@ router.post("/register", authController.register);
 router.post("/login", loginRateLimitCheck, authController.login);
 router.post("/refresh", authController.refresh);
 router.post("/logout", authController.logout);
+router.post("/logout-all", authMiddleware, authController.logoutAll);
+router.delete("/account", authMiddleware, authController.deleteAccount);
 
 // Email OTP
 router.post("/send-email-otp", authController.sendEmailOtp);
