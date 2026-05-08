@@ -200,7 +200,7 @@ export const salonDashboardRepository = {
     }));
   },
 
-  // ── Top Staff by Client Count ────────────────────────────────────────────────
+  // ── Top Staff by Revenue ────────────────────────────────────────────────────
   async getTopStaff(salonId: string): Promise<TopStaffMember[]> {
     const { rows } = await pool.query<{
       id: string;
@@ -234,7 +234,7 @@ export const salonDashboardRepository = {
        WHERE s.salon_id = $1
          AND s.is_active = true
        GROUP BY s.id, s.first_name, s.last_name, s.designation
-       ORDER BY client_count DESC, revenue DESC
+       ORDER BY revenue DESC, client_count DESC
        LIMIT 10`,
       [salonId]
     );
