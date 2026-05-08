@@ -120,6 +120,20 @@ export const staffService = {
         await staffRepository.deactivate(id, salonId);
         logger.info("staffService.deactivate success", { staffId: id });
     },
+
+    async delete(params: {
+        id: string; salonId: string; requesterUserId: string; requesterRole?: string;
+    }): Promise<void> {
+        const { id, salonId } = params;
+        logger.info("staffService.delete", { id, salonId });
+
+        const existing = await staffRepository.findById(id, salonId);
+        if (!existing) throw new AppError(404, "Staff not found", "NOT_FOUND");
+
+        const deleted = await staffRepository.delete(id, salonId);
+        if (!deleted) throw new AppError(500, "Failed to delete staff member", "DELETE_FAILED");
+        logger.info("staffService.delete success", { staffId: id });
+    },
 };
 
 // ─── Invitations ──────────────────────────────────────────────────────────────

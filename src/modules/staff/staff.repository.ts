@@ -159,6 +159,14 @@ export const staffRepository = {
         return (rowCount ?? 0) > 0;
     },
 
+    async delete(id: string, salonId: string): Promise<boolean> {
+        const { rowCount } = await pool.query(
+            `DELETE FROM staff WHERE id = $1 AND salon_id = $2`,
+            [id, salonId]
+        );
+        return (rowCount ?? 0) > 0;
+    },
+
     async exportForDownload(salonId: string, q: Omit<StaffListQuery, "page" | "limit">): Promise<Record<string, unknown>[]> {
         const {
             search, invitation_status, employment_type, is_active, branch_id,
