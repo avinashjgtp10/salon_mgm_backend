@@ -14,14 +14,14 @@ export const salonDashboardService = {
     return salonDashboardRepository.getSummary(salonId);
   },
 
-  async getTodayAppointments(salonId: string): Promise<TodayAppointment[]> {
+  async getTodayAppointments(salonId: string, date?: string): Promise<TodayAppointment[]> {
     if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR");
-    return salonDashboardRepository.getTodayAppointments(salonId);
+    return salonDashboardRepository.getTodayAppointments(salonId, date);
   },
 
-  async getRevenueChart(salonId: string): Promise<RevenueDataPoint[]> {
+  async getRevenueChart(salonId: string, period?: string): Promise<RevenueDataPoint[]> {
     if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR");
-    return salonDashboardRepository.getRevenueChart(salonId);
+    return salonDashboardRepository.getRevenueChart(salonId, period);
   },
 
   async getTopStaff(salonId: string): Promise<TopStaffMember[]> {

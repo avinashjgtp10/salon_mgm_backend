@@ -26,7 +26,8 @@ export const salonDashboardController = {
   async getTodayAppointments(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = resolveSalonId(req);
-      const data = await salonDashboardService.getTodayAppointments(salonId);
+      const date = typeof req.query.date === "string" ? req.query.date : undefined;
+      const data = await salonDashboardService.getTodayAppointments(salonId, date);
       return sendSuccess(res, 200, data, "Today's appointments fetched successfully");
     } catch (err) {
       return next(err);
@@ -36,7 +37,8 @@ export const salonDashboardController = {
   async getRevenueChart(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = resolveSalonId(req);
-      const data = await salonDashboardService.getRevenueChart(salonId);
+      const period = typeof req.query.period === "string" ? req.query.period : undefined;
+      const data = await salonDashboardService.getRevenueChart(salonId, period);
       return sendSuccess(res, 200, data, "Revenue chart data fetched successfully");
     } catch (err) {
       return next(err);

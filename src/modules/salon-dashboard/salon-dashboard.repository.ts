@@ -123,7 +123,7 @@ export const salonDashboardRepository = {
   },
 
   // ── Today's Appointments ─────────────────────────────────────────────────────
-  async getTodayAppointments(salonId: string): Promise<TodayAppointment[]> {
+  async getTodayAppointments(salonId: string, date?: string | null): Promise<TodayAppointment[]> {
     const { rows } = await pool.query<{
       id: string;
       client_name: string;
@@ -157,9 +157,9 @@ export const salonDashboardRepository = {
        LEFT JOIN clients c ON c.id = a.client_id
        LEFT JOIN staff  s ON s.id = a.staff_id
        WHERE a.salon_id = $1
-         AND DATE(a.scheduled_at AT TIME ZONE 'UTC') = CURRENT_DATE
+         AND DATE(a.scheduled_at AT TIME ZONE 'UTC') = COALESCE($2::date, CURRENT_DATE)
        ORDER BY a.scheduled_at ASC`,
-      [salonId]
+      [salonId, date ?? null]
     );
 
     return rows.map((row) => ({
@@ -173,25 +173,62 @@ export const salonDashboardRepository = {
     }));
   },
 
-  // ── Revenue Chart (last 12 months) ───────────────────────────────────────────
-  async getRevenueChart(salonId: string): Promise<RevenueDataPoint[]> {
-    const { rows } = await pool.query<{
-      month: string;
-      revenue: string;
-    }>(
-      `SELECT
-         TO_CHAR(date_trunc('month', created_at), 'Mon') AS month,
-         date_trunc('month', created_at)                 AS month_sort,
-         COALESCE(SUM(total_amount), 0)::numeric         AS revenue
-       FROM sales
-       WHERE salon_id = $1
-         AND status = 'completed'
-         AND created_at >= NOW() - INTERVAL '12 months'
-       GROUP BY date_trunc('month', created_at),
-                TO_CHAR(date_trunc('month', created_at), 'Mon')
-       ORDER BY month_sort ASC`,
-      [salonId]
-    );
+  // ── Revenue Chart (today / weekly / monthly / yearly) ───────────────────────
+  async getRevenueChart(salonId: string, period: string = "monthly"): Promise<RevenueDataPoint[]> {
+    let sql: string;
+
+    if (period === "today") {
+      sql = `
+        SELECT
+          TO_CHAR(date_trunc('hour', created_at AT TIME ZONE 'UTC'), 'HH12AM') AS month,
+          date_trunc('hour', created_at AT TIME ZONE 'UTC')                     AS sort_key,
+          COALESCE(SUM(total_amount), 0)::numeric                               AS revenue
+        FROM sales
+        WHERE salon_id = $1
+          AND status = 'completed'
+          AND DATE(created_at AT TIME ZONE 'UTC') = CURRENT_DATE
+        GROUP BY date_trunc('hour', created_at AT TIME ZONE 'UTC')
+        ORDER BY sort_key ASC`;
+    } else if (period === "weekly") {
+      sql = `
+        SELECT
+          TO_CHAR(DATE(created_at AT TIME ZONE 'UTC'), 'Dy DD') AS month,
+          DATE(created_at AT TIME ZONE 'UTC')                    AS sort_key,
+          COALESCE(SUM(total_amount), 0)::numeric                AS revenue
+        FROM sales
+        WHERE salon_id = $1
+          AND status = 'completed'
+          AND created_at >= CURRENT_DATE - INTERVAL '6 days'
+        GROUP BY DATE(created_at AT TIME ZONE 'UTC')
+        ORDER BY sort_key ASC`;
+    } else if (period === "yearly") {
+      sql = `
+        SELECT
+          TO_CHAR(date_trunc('month', created_at), 'Mon YY') AS month,
+          date_trunc('month', created_at)                     AS sort_key,
+          COALESCE(SUM(total_amount), 0)::numeric             AS revenue
+        FROM sales
+        WHERE salon_id = $1
+          AND status = 'completed'
+          AND created_at >= NOW() - INTERVAL '12 months'
+        GROUP BY date_trunc('month', created_at)
+        ORDER BY sort_key ASC`;
+    } else {
+      // monthly — daily data for the current calendar month
+      sql = `
+        SELECT
+          TO_CHAR(DATE(created_at AT TIME ZONE 'UTC'), 'DD') AS month,
+          DATE(created_at AT TIME ZONE 'UTC')                 AS sort_key,
+          COALESCE(SUM(total_amount), 0)::numeric             AS revenue
+        FROM sales
+        WHERE salon_id = $1
+          AND status = 'completed'
+          AND date_trunc('month', created_at AT TIME ZONE 'UTC') = date_trunc('month', NOW() AT TIME ZONE 'UTC')
+        GROUP BY DATE(created_at AT TIME ZONE 'UTC')
+        ORDER BY sort_key ASC`;
+    }
+
+    const { rows } = await pool.query<{ month: string; revenue: string }>(sql, [salonId]);
 
     return rows.map((row) => ({
       month: row.month,
