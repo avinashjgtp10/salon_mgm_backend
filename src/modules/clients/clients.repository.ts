@@ -12,7 +12,7 @@ import {
     MergeStrategy,
 } from "./clients.types";
 
-const buildFullName = (first: string, last: string) =>
+const buildFullName = (first: string, last?: string | null) =>
     `${String(first || "").trim()} ${String(last || "").trim()}`.trim();
 
 export const clientsRepository = {
@@ -160,7 +160,7 @@ export const clientsRepository = {
             [
                 salonId,
                 body.first_name.trim(),
-                body.last_name.trim(),
+                body.last_name ? body.last_name.trim() : null,
                 fullName,
                 body.email ?? null,
                 body.phone_country_code ?? null,
@@ -330,6 +330,14 @@ export const clientsRepository = {
             `UPDATE clients SET is_active = false, block_reason = $1, updated_at = NOW()
              WHERE id = ANY($2::uuid[]) AND salon_id = $3`,
             [reason, ids, salonId]
+        );
+    },
+
+    async unblockClients(ids: string[], salonId: string): Promise<void> {
+        await pool.query(
+            `UPDATE clients SET is_active = true, block_reason = NULL, updated_at = NOW()
+             WHERE id = ANY($1::uuid[]) AND salon_id = $2`,
+            [ids, salonId]
         );
     },
 

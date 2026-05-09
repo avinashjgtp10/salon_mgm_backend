@@ -204,6 +204,18 @@ export const clientsController = {
         }
     },
 
+    // POST /api/v1/clients/unblock
+    async unblock(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const salonId = getSalonId(req);
+            const { client_ids } = req.body;
+            await clientsService.unblockClients(client_ids, salonId);
+            return sendSuccess(res, 200, {}, "Clients unblocked");
+        } catch (e) {
+            return next(e);
+        }
+    },
+
     // GET /api/v1/clients/export
     async export(req: AuthRequest, res: Response, next: NextFunction) {
         try {
