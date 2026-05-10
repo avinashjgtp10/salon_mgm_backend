@@ -33,6 +33,12 @@ import marketingConfigRoutes    from './modules/marketing/whatsapp/config/config
 import marketingWebhooksRoutes  from './modules/marketing/whatsapp/webhooks/webhooks.routes'
 import profileRoutes from "./modules/profile/profile.routes";
 import inboxRouter from './modules/marketing/whatsapp/inbox/inbox.routes';
+import salonDashboardRoutes from "./modules/salon-dashboard/salon-dashboard.routes";
+import paymentsRoutes from "./modules/payments/payments.routes";
+import couponsRoutes from "./modules/coupons/coupons.routes";
+import settingsRoutes from "./modules/settings/settings.routes";
+import blockedTimesRoutes from "./modules/blocked_times/blocked_times.routes";
+import botRoutes from "./modules/bot/bot.routes";
 import swaggerUi from "swagger-ui-express";
 import YAML from "yamljs";
 import path from "path";
@@ -70,7 +76,7 @@ app.get("/health", (_req, res) => {
   });
 });
 
-// ✅ API ROUTES (MUST be before 404)
+// ✅ API ROUT1ES (MUST be before 404)
 app.use("/api/v1/auth", authRoutes);
 // Alias: Google OAuth console uses /api/v1/oauth/google/callback as redirect URI
 app.use("/api/v1/oauth", authRoutes);
@@ -99,6 +105,12 @@ app.use('/api/v1/wa-config', marketingConfigRoutes)
 app.use('/api/v1/webhooks',  marketingWebhooksRoutes)
 app.use('/api/v1/inbox', inboxRouter);
 app.use("/api/v1/profile",  profileRoutes);
+app.use("/api/v1/dashboard", salonDashboardRoutes);
+app.use("/api/v1/payments", paymentsRoutes);
+app.use("/api/v1/coupons", couponsRoutes);
+app.use("/api/v1/settings", settingsRoutes);
+app.use("/api/v1/blocked-times", blockedTimesRoutes);
+app.use("/api/v1/bot", botRoutes);
 
 
 // Swagger Documentation
