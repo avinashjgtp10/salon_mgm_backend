@@ -7,13 +7,27 @@ export const dashboardRepository = {
     const { rows: [stats] } = await pool.query(`
       SELECT
         COUNT(DISTINCT c.id)                                           AS total_campaigns,
+        COUNT(DISTINCT CASE WHEN c.status IN ('SENDING','RUNNING') THEN c.id END) AS active_campaigns,
         COALESCE(SUM(c.sent_count), 0)                                 AS total_messages_sent,
         COALESCE(SUM(c.delivered_count), 0)                            AS total_delivered,
         COALESCE(SUM(c.read_count), 0)                                 AS total_read,
         COALESCE(SUM(c.failed_count), 0)                               AS total_failed,
-        COALESCE(SUM(c.blocked_count), 0)                              AS total_blocked
+        COALESCE(SUM(c.blocked_count), 0)                              AS total_blocked,
+        COALESCE(SUM(c.total_contacts), 0)                             AS total_contacts
       FROM wa_campaigns c
       WHERE c.salon_id = $1
+    `, [salonId])
+
+    // Daily volume for last 7 days
+    const { rows: dailyRows } = await pool.query(`
+      SELECT
+        DATE(created_at)::text AS date,
+        COALESCE(SUM(sent_count), 0)::int AS count
+      FROM wa_campaigns
+      WHERE salon_id = $1
+        AND created_at >= NOW() - INTERVAL '7 days'
+      GROUP BY DATE(created_at)
+      ORDER BY DATE(created_at) ASC
     `, [salonId])
 
     const totalSent      = parseInt(stats.total_messages_sent) || 0
@@ -23,14 +37,18 @@ export const dashboardRepository = {
     const recentCampaigns = await this.getRecentCampaigns(salonId)
 
     return {
-      totalCampaigns:    parseInt(stats.total_campaigns) || 0,
+      totalCampaigns:    parseInt(stats.total_campaigns)   || 0,
+      activeCampaigns:   parseInt(stats.active_campaigns)  || 0,
       totalMessagesSent: totalSent,
+      totalSent,
       totalDelivered,
       totalRead,
-      totalFailed:       parseInt(stats.total_failed)   || 0,
-      totalBlocked:      parseInt(stats.total_blocked)  || 0,
+      totalFailed:       parseInt(stats.total_failed)      || 0,
+      totalBlocked:      parseInt(stats.total_blocked)     || 0,
+      totalContacts:     parseInt(stats.total_contacts)    || 0,
       deliveryRate:      totalSent > 0 ? Math.round((totalDelivered / totalSent) * 100) : 0,
       readRate:          totalSent > 0 ? Math.round((totalRead      / totalSent) * 100) : 0,
+      dailyVolume:       dailyRows,
       recentCampaigns,
     }
   },

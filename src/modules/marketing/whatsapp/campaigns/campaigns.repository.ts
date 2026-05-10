@@ -25,19 +25,35 @@ export const campaignsRepository = {
     return rows[0] || null
   },
 
+  // Find all SCHEDULED campaigns that are due to run
+  async findDueScheduled(): Promise<WACampaign[]> {
+    const { rows } = await pool.query(`
+      SELECT c.*, t.name AS template_name
+      FROM wa_campaigns c
+      JOIN wa_templates t ON t.id = c.template_id
+      WHERE c.status = 'SCHEDULED'
+        AND c.scheduled_at <= NOW()
+    `)
+    return rows
+  },
+
   async create(
     salonId:       string,
     templateId:    string,
     name:          string,
     batchSize:     number,
-    totalContacts: number
+    totalContacts: number,
+    scheduledAt?:  string | null   // NEW: optional schedule time
   ): Promise<string> {
     const campaignId = uuid()
+    const isScheduled = scheduledAt && new Date(scheduledAt) > new Date()
+    const status      = isScheduled ? 'SCHEDULED' : 'SENDING'
+
     await pool.query(`
       INSERT INTO wa_campaigns
-        (id, salon_id, template_id, name, status, batch_size, total_contacts, started_at)
-      VALUES ($1,$2,$3,$4,'SENDING',$5,$6,NOW())
-    `, [campaignId, salonId, templateId, name, batchSize, totalContacts])
+        (id, salon_id, template_id, name, status, batch_size, total_contacts, scheduled_at, started_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,${isScheduled ? 'NULL' : 'NOW()'})
+    `, [campaignId, salonId, templateId, name, status, batchSize, totalContacts, scheduledAt ?? null])
     return campaignId
   },
 
@@ -81,9 +97,10 @@ export const campaignsRepository = {
     return rows.map(r => r.id)
   },
 
-  async updateStatus(id: string, status: string): Promise<WACampaign> {
+  async updateStatus(id: string, status: string, extra?: { started_at?: boolean }): Promise<WACampaign> {
+    const startedClause = extra?.started_at ? ', started_at = NOW()' : ''
     const { rows } = await pool.query(
-      `UPDATE wa_campaigns SET status=$2, updated_at=NOW() WHERE id=$1 RETURNING *`,
+      `UPDATE wa_campaigns SET status=$2${startedClause}, updated_at=NOW() WHERE id=$1 RETURNING *`,
       [id, status]
     )
     return rows[0]
