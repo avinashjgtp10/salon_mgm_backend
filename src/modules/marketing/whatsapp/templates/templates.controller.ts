@@ -28,8 +28,18 @@ export const templatesController = {
     try {
       const salonId = req.user?.salonId
       if (!salonId) return res.status(400).json({ error: 'salonId missing from token' })
-      const data = await templatesService.create(salonId, req.body)
+      const data = await templatesService.create(salonId, req.body, req.file)
       return sendSuccess(res, 201, data, 'Template created successfully')
+    } catch (e) { return next(e) }
+  },
+
+  async fixMedia(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId
+      if (!salonId) return res.status(400).json({ error: 'salonId missing from token' })
+      if (!req.file)  return res.status(400).json({ error: 'No file uploaded' })
+      const data = await templatesService.fixMedia(req.params.id as string, salonId, req.file)
+      return sendSuccess(res, 200, data, 'Media ID updated successfully')
     } catch (e) { return next(e) }
   },
 

@@ -3,6 +3,8 @@ export type WhatsAppConfig = {
   salon_id:             string
   phone_number_id:      string
   waba_id:              string
+  app_id:               string | null
+  app_secret:           string | null  // Used to generate app access token for webhook registration
   access_token:         string
   webhook_verify_token: string
   display_phone:        string | null
@@ -17,13 +19,15 @@ export type WhatsAppConfig = {
 export type SaveConfigBody = {
   phone_number_id:      string
   waba_id:              string
-  access_token:         string
+  app_id?:              string | null
+  app_secret?:          string | null  // For auto webhook registration
+  access_token?:        string | null  // Optional — empty = keep existing
   webhook_verify_token: string
   display_phone?:       string | null
 }
 
 export type TestConnectionResult = {
-  success:      boolean
-  tier:         string
+  success:       boolean
+  tier:          string
   qualityRating: string
 }

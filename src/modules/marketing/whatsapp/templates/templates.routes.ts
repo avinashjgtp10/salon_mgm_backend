@@ -1,10 +1,12 @@
 import { Router } from 'express'
+import multer from 'multer'
 import { authMiddleware } from '../../../../middleware/auth.middleware'
 import { roleMiddleware } from '../../../../middleware/role.middleware'
 import { templatesController } from './templates.controller'
 import { validateCreateTemplate } from './templates.validator'
 
 const router = Router()
+const upload = multer({ storage: multer.memoryStorage() })
 
 // GET /api/v1/templates
 router.get(
@@ -27,8 +29,18 @@ router.post(
   '/',
   authMiddleware,
   roleMiddleware('salon_owner', 'admin'),
+  upload.single('headerFile'),
   validateCreateTemplate,
   templatesController.create
+)
+
+// PATCH /api/v1/templates/:id/media — re-upload file, update header_media_id only
+router.patch(
+  '/:id/media',
+  authMiddleware,
+  roleMiddleware('salon_owner', 'admin'),
+  upload.single('headerFile'),
+  templatesController.fixMedia
 )
 
 // POST /api/v1/templates/:id/sync

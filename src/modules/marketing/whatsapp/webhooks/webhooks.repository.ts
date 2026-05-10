@@ -11,6 +11,15 @@ export const webhooksRepository = {
     return rows[0]?.webhook_verify_token ?? null
   },
 
+  // ── NEW: look up salonId from the phone number ID in the webhook payload
+  async findSalonByPhoneNumberId(phoneNumberId: string): Promise<string | null> {
+    const { rows } = await pool.query(
+      `SELECT salon_id FROM whatsapp_configs WHERE phone_number_id = $1`,
+      [phoneNumberId]
+    )
+    return rows[0]?.salon_id ?? null
+  },
+
   async findContactByWamid(wamid: string) {
     const { rows } = await pool.query(
       `SELECT id, campaign_id FROM wa_campaign_contacts WHERE wamid = $1`,

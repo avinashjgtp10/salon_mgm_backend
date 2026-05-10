@@ -2,6 +2,7 @@ import { Worker, Job } from 'bullmq'
 import pool from '../../../../config/database'
 import { redisConnection, CampaignJobData } from './campaign.queue'
 import { whatsappMetaApi } from '../shared/whatsapp.api'
+import { inboxRepository } from '../inbox/inbox.repository'
 
 export const campaignWorker = new Worker<CampaignJobData>(
   'wa-campaign-messages',
@@ -28,6 +29,34 @@ export const campaignWorker = new Worker<CampaignJobData>(
       WHERE c.id = $1
     `, [campaignId])
 
+    // ── Pre-flight: catch missing media ID ────────────────────────────────────
+    const hasMediaHeader = (
+      campaign.header_type &&
+      campaign.header_type !== 'none' &&
+      campaign.header_type !== 'text'
+    )
+    if (hasMediaHeader && !campaign.header_media_id) {
+      await pool.query(`
+        UPDATE wa_campaign_contacts
+        SET status = 'FAILED',
+            error_code    = 'MISSING_MEDIA_ID',
+            error_message = 'Template has a media header but no media ID stored. Re-create the template with a file upload.',
+            updated_at    = NOW()
+        WHERE id = ANY($1::uuid[])
+      `, [contactIds])
+
+      await pool.query(`
+        UPDATE wa_campaigns
+        SET status = 'FAILED',
+            failed_count = failed_count + $1,
+            updated_at   = NOW()
+        WHERE id = $2
+      `, [contactIds.length, campaignId])
+
+      console.error(`❌ Campaign ${campaignId} aborted: template "${campaign.template_name}" has ${campaign.header_type} header but no header_media_id in DB.`)
+      return
+    }
+
     const { rows: contacts } = await pool.query(
       `SELECT * FROM wa_campaign_contacts WHERE id = ANY($1::uuid[])`,
       [contactIds]
@@ -40,13 +69,7 @@ export const campaignWorker = new Worker<CampaignJobData>(
         const matches    = campaign.body_text.match(/\{\{\d+\}\}/g) ?? []
         const components: any[] = []
 
-        if (
-          campaign.header_type &&
-          campaign.header_type !== 'none' &&
-          campaign.header_type !== 'text' &&
-          campaign.header_media_id &&
-          !campaign.header_media_id.startsWith('4:')
-        ) {
+        if (hasMediaHeader && campaign.header_media_id) {
           const mt = campaign.header_type
           components.push({
             type:       'header',
@@ -78,12 +101,37 @@ export const campaignWorker = new Worker<CampaignJobData>(
         })
 
         const wamid = result?.messages?.[0]?.id
+
         await pool.query(
           `UPDATE wa_campaign_contacts
            SET status='SENT', wamid=$1, sent_at=NOW(), updated_at=NOW()
            WHERE id=$2`,
           [wamid, contact.id]
         )
+
+        // ── Save to inbox (wa_conversations + wa_messages) ────────────────
+        try {
+          const messageBody = campaign.body_text ?? ''
+          const conversationId = await inboxRepository.upsertConversation(
+            salonId,
+            contact.phone,
+            contact.name ?? null,
+            messageBody,
+            false  // outbound — don't increment unread
+          )
+          await inboxRepository.insertMessage({
+            conversationId,
+            salonId,
+            direction: 'OUTBOUND',
+            body:      messageBody,
+            wamid:     wamid ?? null,
+            status:    'SENT',
+          })
+        } catch (inboxErr) {
+          // Never crash the campaign because of inbox write failure
+          console.error(`⚠️ Inbox write failed for ${contact.phone}:`, inboxErr)
+        }
+
         sent++
 
       } catch (err: any) {
@@ -91,6 +139,8 @@ export const campaignWorker = new Worker<CampaignJobData>(
         const code      = errObj.code?.toString()    ?? 'unknown'
         const msg       = errObj.message             ?? err.message ?? 'Unknown error'
         const isBlocked = [131047, 131026, 131051, 131049].includes(parseInt(code))
+
+        console.error(`❌ Failed to send to ${contact.phone}: [${code}] ${msg}`)
 
         await pool.query(
           `UPDATE wa_campaign_contacts

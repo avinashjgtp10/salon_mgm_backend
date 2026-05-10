@@ -93,6 +93,11 @@ export const clientsService = {
         await clientsRepository.blockClients(ids, reason, salonId);
     },
 
+    async unblockClients(ids: string[], salonId: string): Promise<void> {
+        if (!ids?.length) return;
+        await clientsRepository.unblockClients(ids, salonId);
+    },
+
     // ---------------- IMPORT ----------------
     async importClients(params: {
         rows: Array<any>;
