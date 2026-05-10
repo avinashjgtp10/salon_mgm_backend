@@ -42,11 +42,15 @@ export const errorHandler = (
   // Postgres unique-constraint violation (code 23505)
   if ((err as any).code === '23505') {
     logger.warn(`Duplicate key error: ${err.message}`, { url: req.url, method: req.method });
+    const detail: string = (err as any).detail || '';
+    let message = 'A client with this value already exists.';
+    if (detail.includes('email')) message = 'A client with this email address already exists.';
+    else if (detail.includes('phone_number')) message = 'A client with this phone number already exists.';
     return res.status(409).json({
       success: false,
       error: {
         code: 'DUPLICATE_ENTRY',
-        message: 'A record with this value already exists',
+        message,
       },
     });
   }

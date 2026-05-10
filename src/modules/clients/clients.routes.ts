@@ -10,6 +10,7 @@ import {
     validateClientsListQuery,
     validateMergeClients,
     validateBlockClients,
+    validateUnblockClients,
     validateSearchClients,
 } from "./clients.validator";
 
@@ -49,9 +50,10 @@ router.post(
     clientsController.mergeAllDuplicates
 );
 
-// BLOCK
+// BLOCK / UNBLOCK
 router.post("/block", authMiddleware, roleMiddleware("salon_owner", "admin"), validateBlockClients, clientsController.block);
 router.patch("/block", authMiddleware, roleMiddleware("salon_owner", "admin"), validateBlockClients, clientsController.block);
+router.post("/unblock", authMiddleware, roleMiddleware("salon_owner", "admin"), validateUnblockClients, clientsController.unblock);
 
 // SEARCH  – must be BEFORE /:clientId to avoid "search" being parsed as a UUID
 router.get("/search", authMiddleware, roleMiddleware("salon_owner", "admin"), validateSearchClients, clientsController.search);

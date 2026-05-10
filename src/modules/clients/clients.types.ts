@@ -92,7 +92,7 @@ export type UpsertEmergencyContactInput = CreateEmergencyContactInput & { id?: s
 
 export type CreateClientBody = {
     first_name: string;
-    last_name: string;
+    last_name?: string | null;
 
     email?: string | null;
     phone_country_code?: string | null;
