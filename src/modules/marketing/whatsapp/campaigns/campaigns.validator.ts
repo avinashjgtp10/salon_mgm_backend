@@ -30,6 +30,15 @@ export const validateCreateCampaign = (req: Request, _res: Response, next: NextF
         throw new AppError(400, 'batch_size must be between 1 and 500', 'VALIDATION_ERROR')
     }
 
+    // Validate scheduled_at if provided
+    if (b.scheduled_at !== undefined && b.scheduled_at !== null && b.scheduled_at !== '') {
+      const d = new Date(b.scheduled_at)
+      if (isNaN(d.getTime()))
+        throw new AppError(400, 'scheduled_at must be a valid ISO date string', 'VALIDATION_ERROR')
+      if (d.getTime() <= Date.now())
+        throw new AppError(400, 'scheduled_at must be in the future', 'VALIDATION_ERROR')
+    }
+
     return next()
   } catch (e) {
     return next(e)

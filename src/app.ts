@@ -32,7 +32,7 @@ import marketingCampaignsRoutes from './modules/marketing/whatsapp/campaigns/cam
 import marketingConfigRoutes    from './modules/marketing/whatsapp/config/config.routes'
 import marketingWebhooksRoutes  from './modules/marketing/whatsapp/webhooks/webhooks.routes'
 import profileRoutes from "./modules/profile/profile.routes";
-
+import inboxRouter from './modules/marketing/whatsapp/inbox/inbox.routes';
 import swaggerUi from "swagger-ui-express";
 import YAML from "yamljs";
 import path from "path";
@@ -97,6 +97,7 @@ app.use('/api/v1/templates', marketingTemplatesRoutes)
 app.use('/api/v1/campaigns', marketingCampaignsRoutes)
 app.use('/api/v1/wa-config', marketingConfigRoutes)
 app.use('/api/v1/webhooks',  marketingWebhooksRoutes)
+app.use('/api/v1/inbox', inboxRouter);
 app.use("/api/v1/profile",  profileRoutes);
 
 

@@ -21,7 +21,9 @@ export const webhooksController = {
     try {
       // Respond to Meta immediately
       res.status(200).json({ success: true })
-      await webhooksService.handleWebhook(req.body)
+      // Inject salonId from URL so service uses correct salon
+      const body = { ...req.body, _salonId: req.params.salonId }
+      await webhooksService.handleWebhook(body)
     } catch (e) { return next(e) }
   },
 

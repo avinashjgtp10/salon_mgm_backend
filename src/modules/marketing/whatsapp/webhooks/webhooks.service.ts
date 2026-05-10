@@ -1,5 +1,6 @@
 import { AppError } from '../../../../middleware/error.middleware'
 import { webhooksRepository } from './webhooks.repository'
+import { inboxService } from '../inbox/inbox.service'
 
 export const webhooksService = {
 
@@ -11,16 +12,48 @@ export const webhooksService = {
   },
 
   async handleWebhook(body: any) {
-    const entry    = body?.entry?.[0]
-    const changes  = entry?.changes?.[0]
-    const value    = changes?.value
-    const statuses = value?.statuses
+    const entry   = body?.entry?.[0]
+    const changes = entry?.changes?.[0]
+    const value   = changes?.value
 
-    if (statuses?.length) {
-      for (const status of statuses) {
+    // ── Delivery status updates (existing) ──────────────────────
+    if (value?.statuses?.length) {
+      for (const status of value.statuses) {
         await this.processStatus(status)
       }
     }
+
+    // ── Inbound customer replies (NEW) ───────────────────────────
+    if (value?.messages?.length) {
+      // Use salonId passed from the URL (already resolved by the controller)
+      // This avoids ambiguity when multiple salons share the same phone number
+      const resolvedSalonId = (body as any)._salonId ?? null
+      const phoneNumberId   = value?.metadata?.phone_number_id
+
+      // Fallback to DB lookup if no salonId in body
+      const salonId = resolvedSalonId
+        ?? (phoneNumberId ? await webhooksRepository.findSalonByPhoneNumberId(phoneNumberId) : null)
+
+      console.log('📨 Inbound message — salonId:', salonId, '| phoneNumberId:', phoneNumberId)
+
+      if (salonId) {
+        for (const msg of value.messages) {
+          await this.processInboundMessage(salonId, msg, value.contacts?.[0])
+        }
+      }
+    }
+  },
+
+  async processInboundMessage(salonId: string, msg: any, contact: any) {
+    // Only handle text messages for now
+    if (msg.type !== 'text') return
+
+    const phone = msg.from
+    const wamid = msg.id
+    const body  = msg.text?.body ?? ''
+    const name  = contact?.profile?.name ?? null
+
+    await inboxService.handleInboundMessage({ salonId, phone, name, body, wamid })
   },
 
   async processStatus(status: any) {
@@ -31,6 +64,15 @@ export const webhooksService = {
     const timestamp = new Date(parseInt(status.timestamp) * 1000)
     const errorCode = status.errors?.[0]?.code?.toString() ?? null
     const errorMsg  = status.errors?.[0]?.title            ?? null
+
+    // 🔍 Temporary debug log — remove after diagnosing failures
+    if (type === 'FAILED') {
+      console.error('📛 Webhook FAILED payload:', JSON.stringify({
+        wamid, errorCode, errorMsg,
+        rawErrors: status.errors,
+        fullStatus: status,
+      }, null, 2))
+    }
 
     const contact = await webhooksRepository.findContactByWamid(wamid)
     if (!contact) return
