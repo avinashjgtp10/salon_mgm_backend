@@ -3,7 +3,6 @@ import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { bundlesService, servicesService } from "./services.service";
-
 import {
   CreateAddOnGroupBody,
   CreateAddOnOptionBody,
@@ -18,7 +17,13 @@ import {
 } from "./services.types";
 
 type AuthRequest = Request & {
-  user?: { userId: string; role?: string };
+  user?: { userId: string; role?: string; salonId?: string };
+};
+
+const getSalonId = (req: AuthRequest): string => {
+  const salonId = req.user?.salonId;
+  if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+  return salonId;
 };
 
 // ─── Services ─────────────────────────────────────────────────────────────────
@@ -26,6 +31,7 @@ type AuthRequest = Request & {
 export const servicesController = {
   async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
+      const salonId = getSalonId(req);
       const q = req.query as any;
       const query: ListServicesQuery = {
         category_id: q.category_id,
@@ -39,8 +45,8 @@ export const servicesController = {
         page: q.page ? Number(q.page) : undefined,
         limit: q.limit ? Number(q.limit) : undefined,
       };
-      logger.info("GET /services", { query });
-      const result = await servicesService.list(query);
+      logger.info("GET /services", { query, salonId });
+      const result = await servicesService.list(query, salonId);
       return sendSuccess(res, 200, result, "Services list fetched successfully");
     } catch (err) {
       return next(err);
@@ -50,11 +56,13 @@ export const servicesController = {
   async create(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const userId = req.user?.userId;
+      const salonId = getSalonId(req);
       if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
-      logger.info("POST /services", { userId });
+      logger.info("POST /services", { userId, salonId });
       const created = await servicesService.create({
         requesterUserId: userId,
         requesterRole: req.user?.role,
+        salonId,
         body: req.body as CreateServiceBody,
       });
       return sendSuccess(res, 201, created, "Service created successfully");
@@ -65,9 +73,10 @@ export const servicesController = {
 
   async getById(req: AuthRequest, res: Response, next: NextFunction) {
     try {
+      const salonId = getSalonId(req);
       const id = String(req.params.id || "").trim();
       if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
-      const service = await servicesService.getById(id);
+      const service = await servicesService.getById(id, salonId);
       return sendSuccess(res, 200, service, "Service fetched successfully");
     } catch (err) {
       return next(err);
@@ -77,6 +86,7 @@ export const servicesController = {
   async update(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const userId = req.user?.userId;
+      const salonId = getSalonId(req);
       const id = String(req.params.id || "").trim();
       if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
       if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
@@ -84,6 +94,7 @@ export const servicesController = {
         serviceId: id,
         requesterUserId: userId,
         requesterRole: req.user?.role,
+        salonId,
         patch: req.body as UpdateServiceBody,
       });
       return sendSuccess(res, 200, updated, "Service updated successfully");
@@ -95,10 +106,11 @@ export const servicesController = {
   async remove(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const userId = req.user?.userId;
+      const salonId = getSalonId(req);
       const id = String(req.params.id || "").trim();
       if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
       if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
-      await servicesService.remove(id);
+      await servicesService.remove(id, salonId);
       return res.status(204).send();
     } catch (err) {
       return next(err);
@@ -107,9 +119,10 @@ export const servicesController = {
 
   async listAddOnGroups(req: AuthRequest, res: Response, next: NextFunction) {
     try {
+      const salonId = getSalonId(req);
       const id = String(req.params.id || "").trim();
       if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
-      const groups = await servicesService.listAddOnGroups(id);
+      const groups = await servicesService.listAddOnGroups(id, salonId);
       return sendSuccess(res, 200, groups, "Add-on groups fetched successfully");
     } catch (err) {
       return next(err);
@@ -119,14 +132,13 @@ export const servicesController = {
   async createAddOnGroup(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const userId = req.user?.userId;
+      const salonId = getSalonId(req);
       const id = String(req.params.id || "").trim();
       if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
       if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
       const created = await servicesService.createAddOnGroup({
-        serviceId: id,
-        requesterUserId: userId,
-        requesterRole: req.user?.role,
-        body: req.body as CreateAddOnGroupBody,
+        serviceId: id, requesterUserId: userId, requesterRole: req.user?.role,
+        salonId, body: req.body as CreateAddOnGroupBody,
       });
       return sendSuccess(res, 201, created, "Add-on group created successfully");
     } catch (err) {
@@ -137,17 +149,15 @@ export const servicesController = {
   async updateAddOnGroup(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const userId = req.user?.userId;
+      const salonId = getSalonId(req);
       const id = String(req.params.id || "").trim();
       const groupId = String(req.params.groupId || "").trim();
       if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
       if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
       if (!groupId) throw new AppError(400, "groupId is required", "VALIDATION_ERROR");
       const updated = await servicesService.updateAddOnGroup({
-        serviceId: id,
-        groupId,
-        requesterUserId: userId,
-        requesterRole: req.user?.role,
-        patch: req.body as UpdateAddOnGroupBody,
+        serviceId: id, groupId, requesterUserId: userId,
+        requesterRole: req.user?.role, salonId, patch: req.body as UpdateAddOnGroupBody,
       });
       return sendSuccess(res, 200, updated, "Add-on group updated successfully");
     } catch (err) {
@@ -158,12 +168,13 @@ export const servicesController = {
   async deleteAddOnGroup(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const userId = req.user?.userId;
+      const salonId = getSalonId(req);
       const id = String(req.params.id || "").trim();
       const groupId = String(req.params.groupId || "").trim();
       if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
       if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
       if (!groupId) throw new AppError(400, "groupId is required", "VALIDATION_ERROR");
-      await servicesService.deleteAddOnGroup({ serviceId: id, groupId });
+      await servicesService.deleteAddOnGroup({ serviceId: id, groupId, salonId });
       return res.status(204).send();
     } catch (err) {
       return next(err);
@@ -173,17 +184,15 @@ export const servicesController = {
   async createAddOnOption(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const userId = req.user?.userId;
+      const salonId = getSalonId(req);
       const id = String(req.params.id || "").trim();
       const groupId = String(req.params.groupId || "").trim();
       if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
       if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
       if (!groupId) throw new AppError(400, "groupId is required", "VALIDATION_ERROR");
       const created = await servicesService.createAddOnOption({
-        serviceId: id,
-        groupId,
-        requesterUserId: userId,
-        requesterRole: req.user?.role,
-        body: req.body as CreateAddOnOptionBody,
+        serviceId: id, groupId, requesterUserId: userId,
+        requesterRole: req.user?.role, salonId, body: req.body as CreateAddOnOptionBody,
       });
       return sendSuccess(res, 201, created, "Add-on option created successfully");
     } catch (err) {
@@ -194,20 +203,15 @@ export const servicesController = {
   async updateAddOnOption(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const userId = req.user?.userId;
+      const salonId = getSalonId(req);
       const id = String(req.params.id || "").trim();
       const groupId = String(req.params.groupId || "").trim();
       const optionId = String(req.params.optionId || "").trim();
       if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
-      if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
-      if (!groupId) throw new AppError(400, "groupId is required", "VALIDATION_ERROR");
-      if (!optionId) throw new AppError(400, "optionId is required", "VALIDATION_ERROR");
+      if (!id || !groupId || !optionId) throw new AppError(400, "id, groupId, optionId required", "VALIDATION_ERROR");
       const updated = await servicesService.updateAddOnOption({
-        serviceId: id,
-        groupId,
-        optionId,
-        requesterUserId: userId,
-        requesterRole: req.user?.role,
-        patch: req.body as UpdateAddOnOptionBody,
+        serviceId: id, groupId, optionId, requesterUserId: userId,
+        requesterRole: req.user?.role, salonId, patch: req.body as UpdateAddOnOptionBody,
       });
       return sendSuccess(res, 200, updated, "Add-on option updated successfully");
     } catch (err) {
@@ -218,14 +222,13 @@ export const servicesController = {
   async deleteAddOnOption(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const userId = req.user?.userId;
+      const salonId = getSalonId(req);
       const id = String(req.params.id || "").trim();
       const groupId = String(req.params.groupId || "").trim();
       const optionId = String(req.params.optionId || "").trim();
       if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
-      if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
-      if (!groupId) throw new AppError(400, "groupId is required", "VALIDATION_ERROR");
-      if (!optionId) throw new AppError(400, "optionId is required", "VALIDATION_ERROR");
-      await servicesService.deleteAddOnOption({ serviceId: id, groupId, optionId });
+      if (!id || !groupId || !optionId) throw new AppError(400, "id, groupId, optionId required", "VALIDATION_ERROR");
+      await servicesService.deleteAddOnOption({ serviceId: id, groupId, optionId, salonId });
       return res.status(204).send();
     } catch (err) {
       return next(err);
@@ -238,21 +241,18 @@ export const servicesController = {
 export const bundlesController = {
   async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
+      const salonId = getSalonId(req);
       const q = req.query as any;
       const query: ListBundlesQuery = {
-        category_id: q.category_id,
-        search: q.search,
-        status: q.status,
-        team_member_id: q.team_member_id,
-        online_booking: q.online_booking,
-        commissions: q.commissions,
-        resource_requirements: q.resource_requirements,
+        category_id: q.category_id, search: q.search, status: q.status,
+        team_member_id: q.team_member_id, online_booking: q.online_booking,
+        commissions: q.commissions, resource_requirements: q.resource_requirements,
         available_for: q.available_for,
         page: q.page ? Number(q.page) : undefined,
         limit: q.limit ? Number(q.limit) : undefined,
       };
-      logger.info("GET /bundles", { query });
-      const result = await bundlesService.list(query);
+      logger.info("GET /bundles", { query, salonId });
+      const result = await bundlesService.list(query, salonId);
       return sendSuccess(res, 200, result, "Bundles list fetched successfully");
     } catch (err) {
       return next(err);
@@ -262,12 +262,12 @@ export const bundlesController = {
   async create(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const userId = req.user?.userId;
+      const salonId = getSalonId(req);
       if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
-      logger.info("POST /bundles", { userId });
+      logger.info("POST /bundles", { userId, salonId });
       const created = await bundlesService.create({
-        requesterUserId: userId,
-        requesterRole: req.user?.role,
-        body: req.body as CreateBundleBody,
+        requesterUserId: userId, requesterRole: req.user?.role,
+        salonId, body: req.body as CreateBundleBody,
       });
       return sendSuccess(res, 201, created, "Bundle created successfully");
     } catch (err) {
@@ -277,9 +277,10 @@ export const bundlesController = {
 
   async getById(req: AuthRequest, res: Response, next: NextFunction) {
     try {
+      const salonId = getSalonId(req);
       const id = String(req.params.id || "").trim();
       if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
-      const bundle = await bundlesService.getById(id);
+      const bundle = await bundlesService.getById(id, salonId);
       return sendSuccess(res, 200, bundle, "Bundle fetched successfully");
     } catch (err) {
       return next(err);
@@ -289,14 +290,13 @@ export const bundlesController = {
   async update(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const userId = req.user?.userId;
+      const salonId = getSalonId(req);
       const id = String(req.params.id || "").trim();
       if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
       if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
       const updated = await bundlesService.update({
-        bundleId: id,
-        requesterUserId: userId,
-        requesterRole: req.user?.role,
-        patch: req.body as UpdateBundleBody,
+        bundleId: id, requesterUserId: userId,
+        requesterRole: req.user?.role, salonId, patch: req.body as UpdateBundleBody,
       });
       return sendSuccess(res, 200, updated, "Bundle updated successfully");
     } catch (err) {
@@ -307,10 +307,11 @@ export const bundlesController = {
   async remove(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const userId = req.user?.userId;
+      const salonId = getSalonId(req);
       const id = String(req.params.id || "").trim();
       if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
       if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
-      await bundlesService.remove(id);
+      await bundlesService.remove(id, salonId);
       return res.status(204).send();
     } catch (err) {
       return next(err);

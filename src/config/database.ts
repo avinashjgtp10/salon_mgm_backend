@@ -28,10 +28,19 @@ const pool = new Pool({
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   ssl: sslConfig,
-  min: parseInt(process.env.DB_POOL_MIN || '2'),
+  // Keep min at 0 so the pool doesn't hold persistent idle connections
+  // that cloud DBs (Supabase/Neon/Render) silently kill, causing
+  // "Connection terminated unexpectedly" on the next query.
+  min: 0,
   max: parseInt(process.env.DB_POOL_MAX || '10'),
-  idleTimeoutMillis: 30000,
+  // Idle connections are closed after 10s — well before cloud DB kills them
+  idleTimeoutMillis: 10000,
+  // How long to wait for a new connection to be established
   connectionTimeoutMillis: 10000,
+  // TCP keepalive: sends a heartbeat packet so the OS/network never
+  // silently drops a connection that pg-pool still thinks is alive.
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 10000,
 });
 
 pool.on('connect', () => {
@@ -46,3 +55,33 @@ pool.on('error', (err) => {
 });
 
 export default pool;
+
+/**
+ * safeQuery — wraps any pool.query() call with a single auto-retry.
+ *
+ * WHY: Cloud databases (Supabase, Neon, Render, Railway, etc.) silently
+ * terminate idle PostgreSQL connections. pg-pool doesn't detect this until
+ * the next query attempt, causing "Connection terminated unexpectedly".
+ * One retry is enough because the pool discards the dead client and opens
+ * a fresh connection for the second attempt.
+ *
+ * USAGE:
+ *   const { rows } = await safeQuery(() => pool.query(sql, params));
+ */
+export async function safeQuery<T>(queryFn: () => Promise<T>, retries = 1): Promise<T> {
+  try {
+    return await queryFn();
+  } catch (err: any) {
+    const isStaleConn =
+      err?.message?.includes('Connection terminated unexpectedly') ||
+      err?.message?.includes('terminating connection') ||
+      err?.message?.includes('Connection terminated') ||
+      err?.code === 'ECONNRESET';
+
+    if (retries > 0 && isStaleConn) {
+      console.warn('🔁 [safeQuery] Stale DB connection detected — retrying query...');
+      return safeQuery(queryFn, retries - 1);
+    }
+    throw err;
+  }
+}

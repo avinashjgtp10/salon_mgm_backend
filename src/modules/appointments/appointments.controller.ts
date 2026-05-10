@@ -89,6 +89,17 @@ export const appointmentsController = {
         } catch (err) { return next(err); }
     },
 
+    async delete(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const userId = req.user?.userId;
+            const id = String(req.params.id || "").trim();
+            if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+            if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
+            const appointment = await appointmentsService.delete(id);
+            return sendSuccess(res, 200, appointment, "Appointment deleted successfully");
+        } catch (err) { return next(err); }
+    },
+
     async noShow(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const userId = req.user?.userId;

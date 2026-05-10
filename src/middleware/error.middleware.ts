@@ -39,6 +39,18 @@ export const errorHandler = (
     });
   }
 
+  // Postgres unique-constraint violation (code 23505)
+  if ((err as any).code === '23505') {
+    logger.warn(`Duplicate key error: ${err.message}`, { url: req.url, method: req.method });
+    return res.status(409).json({
+      success: false,
+      error: {
+        code: 'DUPLICATE_ENTRY',
+        message: 'A record with this value already exists',
+      },
+    });
+  }
+
   logger.error(`Unhandled error: ${err.message}`, {
     stack: err.stack,
     url: req.url,

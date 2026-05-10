@@ -24,6 +24,7 @@ export interface CreatePackageOfferDTO {
 }
 
 export interface CreatePackageDTO {
+  salonId:         string;
   name:            string;
   slug:            string;
   description?:    string;
@@ -40,6 +41,7 @@ export interface CreatePackageDTO {
 export interface UpdatePackageDTO extends Partial<CreatePackageDTO> {}
 
 export interface PackagesListQuery {
+  salonId:   string;
   search?:   string;
   category?: string;
   page?:     number;
@@ -48,6 +50,7 @@ export interface PackagesListQuery {
 
 export interface Package {
   id:              string;
+  salonId:         string;
   name:            string;
   slug:            string;
   description?:    string;
@@ -79,6 +82,7 @@ export interface PackageOfferRow {
 
 export interface PackageRow {
   id:               string;
+  salon_id:         string;
   name:             string;
   slug:             string;
   description:      string | null;

@@ -9,7 +9,6 @@ import {
   staffEmergencyContactService, staffWagesService, staffCommissionsService,
   staffPayRunsService, staffSchedulesService, staffLeavesService,
 } from "./staff.service";
-import { salonsRepository } from "../salons/salons.repository";
 import {
   CreateStaffBody, UpdateStaffBody, CreateStaffAddressBody, UpdateStaffAddressBody,
   CreateEmergencyContactBody, UpdateEmergencyContactBody, UpdateWageSettingsBody,
@@ -17,14 +16,12 @@ import {
   CreateStaffLeaveBody, UpdateStaffLeaveBody, AcceptInvitationBody, StaffListQuery,
 } from "./staff.types";
 
-type AuthRequest = Request & { user?: { userId: string; role?: string } };
+type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string } };
 
-// ─── Helper: extract & validate x-salon-id header ─────────────────────────────
-
-const getSalonId = (req: Request): string => {
-  const id = String(req.headers["x-salon-id"] ?? "").trim();
-  if (!id) throw new AppError(400, "x-salon-id header is required", "VALIDATION_ERROR");
-  return id;
+const getSalonId = (req: AuthRequest): string => {
+  const salonId = req.user?.salonId;
+  if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+  return salonId;
 };
 
 // ─── Staff ────────────────────────────────────────────────────────────────────
@@ -32,7 +29,7 @@ const getSalonId = (req: Request): string => {
 export const staffController = {
   async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = getSalonId(req);
+      const salonId = await getSalonId(req);
       logger.info("GET /staff", { salonId });
 
       const query: StaffListQuery = {
@@ -61,25 +58,42 @@ export const staffController = {
     } catch (err) { return next(err); }
   },
 
-  async create(req: AuthRequest, res: Response, next: NextFunction) {
+  async create(req: AuthRequest, res: Response) {
     try {
-      const salonId = getSalonId(req);
-      if (!req.user?.userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
-      logger.info("POST /staff", { salonId, userId: req.user.userId });
-
+      const salonId = await getSalonId(req);
+      console.log("[DEBUG] Controller: POST /staff - salonId:", salonId);
       const result = await staffService.create({
         salonId,
-        requesterUserId: req.user.userId,
-        requesterRole: req.user.role,
+        requesterUserId: (req as any).user?.userId || (req as any).user?.id,
+        requesterRole: (req as any).user?.role,
         body: req.body as CreateStaffBody,
       });
-      return sendSuccess(res, 201, result, "Staff created and invitation sent");
-    } catch (err) { return next(err); }
+
+      return sendSuccess(res, 201, result, "Staff member created successfully");
+    } catch (error: any) {
+      console.error("[DEBUG] Controller: POST /staff FAILED", {
+        message: error.message,
+        code: error.code,
+        stack: error.stack
+      });
+      // If it's not already an AppError, we want to know exactly what happened
+      if (!(error instanceof AppError)) {
+        return res.status(500).json({
+          success: false,
+          error: {
+            code: "CONTROLLER_CRASH",
+            message: error.message,
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+          }
+        });
+      }
+      throw error;
+    }
   },
 
   async getById(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = getSalonId(req);
+      const salonId = await getSalonId(req);
       const id = String(req.params.id); // FIX: cast to string
       logger.info("GET /staff/:id", { id, salonId });
 
@@ -90,7 +104,7 @@ export const staffController = {
 
   async update(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = getSalonId(req);
+      const salonId = await getSalonId(req);
       if (!req.user?.userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
       const id = String(req.params.id); // FIX
       logger.info("PATCH /staff/:id", { id, salonId });
@@ -108,10 +122,10 @@ export const staffController = {
 
   async deactivate(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = getSalonId(req);
+      const salonId = await getSalonId(req);
       if (!req.user?.userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
-      const id = String(req.params.id); // FIX
-      logger.info("DELETE /staff/:id", { id, salonId });
+      const id = String(req.params.id);
+      logger.info("PATCH /staff/:id/deactivate", { id, salonId });
 
       await staffService.deactivate({
         id, salonId,
@@ -119,6 +133,22 @@ export const staffController = {
         requesterRole: req.user.role,
       });
       return sendSuccess(res, 200, null, "Staff deactivated");
+    } catch (err) { return next(err); }
+  },
+
+  async delete(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = await getSalonId(req);
+      if (!req.user?.userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+      const id = String(req.params.id);
+      logger.info("DELETE /staff/:id", { id, salonId });
+
+      await staffService.delete({
+        id, salonId,
+        requesterUserId: req.user.userId,
+        requesterRole: req.user.role,
+      });
+      return sendSuccess(res, 200, null, "Staff member deleted successfully");
     } catch (err) { return next(err); }
   },
 
@@ -175,7 +205,7 @@ export const staffController = {
 
   async exportExcel(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = await resolveExportSalonId(req);
+      const salonId = await getSalonId(req);
       logger.info("GET /staff/export/excel", { salonId });
 
       const rows = await staffService.exportStaff(salonId, staffController._buildExportQuery(req));
@@ -204,7 +234,7 @@ export const staffController = {
 
   async exportCsv(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = await resolveExportSalonId(req);
+      const salonId = await getSalonId(req);
       logger.info("GET /staff/export/csv", { salonId });
 
       const rows = await staffService.exportStaff(salonId, staffController._buildExportQuery(req));
@@ -227,22 +257,8 @@ export const staffController = {
   },
 };
 
-// ─── Helper: resolve salon ID for export without requiring header ─────────────
-// Priority: 1) x-salon-id header  2) salon owned by the token's userId
-async function resolveExportSalonId(req: AuthRequest): Promise<string> {
-  // If the header is present, use it (same as other endpoints)
-  const fromHeader = String(req.headers["x-salon-id"] ?? "").trim();
-  if (fromHeader) return fromHeader;
 
-  // Fall back: look up the salon owned by the authenticated user
-  const userId = req.user?.userId;
-  if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
 
-  const salon = await salonsRepository.findByOwnerId(userId);
-  if (!salon) throw new AppError(404, "No salon found for this account. Please provide x-salon-id header.", "NOT_FOUND");
-
-  return salon.id;
-}
 
 // ─── Invitations ──────────────────────────────────────────────────────────────
 
@@ -263,9 +279,18 @@ export const staffInvitationController = {
     } catch (err) { return next(err); }
   },
 
+  async getInvitationStatus(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = await getSalonId(req);
+      const staffId = String(req.params.id);
+      const result = await staffInvitationService.getInvitationStatus({ staffId, salonId });
+      return sendSuccess(res, 200, result, "Invitation status fetched");
+    } catch (err) { return next(err); }
+  },
+
   async resendInvitation(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = getSalonId(req);
+      const salonId = await getSalonId(req);
       const staffId = String(req.params.id); // FIX
       await staffInvitationService.resendInvitation({
         staffId, salonId, salonName: req.body?.salon_name,
@@ -276,7 +301,7 @@ export const staffInvitationController = {
 
   async cancelInvitation(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = getSalonId(req);
+      const salonId = await getSalonId(req);
       const staffId = String(req.params.id); // FIX
       await staffInvitationService.cancelInvitation({ staffId, salonId });
       return sendSuccess(res, 200, null, "Invitation cancelled");
@@ -289,14 +314,14 @@ export const staffInvitationController = {
 export const staffAddressController = {
   async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const data = await staffAddressService.list(String(req.params.staffId), getSalonId(req));
+      const data = await staffAddressService.list(String(req.params.staffId), await getSalonId(req));
       return sendSuccess(res, 200, data, "Addresses fetched successfully");
     } catch (err) { return next(err); }
   },
   async create(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const data = await staffAddressService.create(
-        String(req.params.staffId), getSalonId(req), req.body as CreateStaffAddressBody
+        String(req.params.staffId), await getSalonId(req), req.body as CreateStaffAddressBody
       );
       return sendSuccess(res, 201, data, "Address created successfully");
     } catch (err) { return next(err); }
@@ -304,7 +329,7 @@ export const staffAddressController = {
   async update(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const data = await staffAddressService.update(
-        String(req.params.staffId), getSalonId(req),
+        String(req.params.staffId), await getSalonId(req),
         String(req.params.id), req.body as UpdateStaffAddressBody
       );
       return sendSuccess(res, 200, data, "Address updated successfully");
@@ -313,7 +338,7 @@ export const staffAddressController = {
   async delete(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       await staffAddressService.delete(
-        String(req.params.staffId), getSalonId(req), String(req.params.id)
+        String(req.params.staffId), await getSalonId(req), String(req.params.id)
       );
       return sendSuccess(res, 200, null, "Address deleted");
     } catch (err) { return next(err); }
@@ -325,14 +350,14 @@ export const staffAddressController = {
 export const staffEmergencyContactController = {
   async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const data = await staffEmergencyContactService.list(String(req.params.staffId), getSalonId(req));
+      const data = await staffEmergencyContactService.list(String(req.params.staffId), await getSalonId(req));
       return sendSuccess(res, 200, data, "Emergency contacts fetched successfully");
     } catch (err) { return next(err); }
   },
   async create(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const data = await staffEmergencyContactService.create(
-        String(req.params.staffId), getSalonId(req), req.body as CreateEmergencyContactBody
+        String(req.params.staffId), await getSalonId(req), req.body as CreateEmergencyContactBody
       );
       return sendSuccess(res, 201, data, "Emergency contact created successfully");
     } catch (err) { return next(err); }
@@ -340,7 +365,7 @@ export const staffEmergencyContactController = {
   async update(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const data = await staffEmergencyContactService.update(
-        String(req.params.staffId), getSalonId(req),
+        String(req.params.staffId), await getSalonId(req),
         String(req.params.id), req.body as UpdateEmergencyContactBody
       );
       return sendSuccess(res, 200, data, "Emergency contact updated successfully");
@@ -349,7 +374,7 @@ export const staffEmergencyContactController = {
   async delete(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       await staffEmergencyContactService.delete(
-        String(req.params.staffId), getSalonId(req), String(req.params.id)
+        String(req.params.staffId), await getSalonId(req), String(req.params.id)
       );
       return sendSuccess(res, 200, null, "Emergency contact deleted");
     } catch (err) { return next(err); }
@@ -361,14 +386,14 @@ export const staffEmergencyContactController = {
 export const staffWagesController = {
   async get(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const data = await staffWagesService.get(String(req.params.staffId), getSalonId(req));
+      const data = await staffWagesService.get(String(req.params.staffId), await getSalonId(req));
       return sendSuccess(res, 200, data, "Wage settings fetched successfully");
     } catch (err) { return next(err); }
   },
   async upsert(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const data = await staffWagesService.upsert(
-        String(req.params.staffId), getSalonId(req), req.body as UpdateWageSettingsBody
+        String(req.params.staffId), await getSalonId(req), req.body as UpdateWageSettingsBody
       );
       return sendSuccess(res, 200, data, "Wage settings updated successfully");
     } catch (err) { return next(err); }
@@ -380,14 +405,14 @@ export const staffWagesController = {
 export const staffCommissionsController = {
   async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const data = await staffCommissionsService.list(String(req.params.staffId), getSalonId(req));
+      const data = await staffCommissionsService.list(String(req.params.staffId), await getSalonId(req));
       return sendSuccess(res, 200, data, "Commission settings fetched successfully");
     } catch (err) { return next(err); }
   },
   async upsert(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const data = await staffCommissionsService.upsert(
-        String(req.params.staffId), getSalonId(req), req.body as UpdateCommissionBody
+        String(req.params.staffId), await getSalonId(req), req.body as UpdateCommissionBody
       );
       return sendSuccess(res, 200, data, "Commission setting updated successfully");
     } catch (err) { return next(err); }
@@ -399,14 +424,14 @@ export const staffCommissionsController = {
 export const staffPayRunsController = {
   async get(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const data = await staffPayRunsService.get(String(req.params.staffId), getSalonId(req));
+      const data = await staffPayRunsService.get(String(req.params.staffId), await getSalonId(req));
       return sendSuccess(res, 200, data, "Pay run settings fetched successfully");
     } catch (err) { return next(err); }
   },
   async upsert(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const data = await staffPayRunsService.upsert(
-        String(req.params.staffId), getSalonId(req), req.body as UpdatePayRunBody
+        String(req.params.staffId), await getSalonId(req), req.body as UpdatePayRunBody
       );
       return sendSuccess(res, 200, data, "Pay run settings updated successfully");
     } catch (err) { return next(err); }
@@ -418,14 +443,14 @@ export const staffPayRunsController = {
 export const staffSchedulesController = {
   async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const data = await staffSchedulesService.list(String(req.params.staffId), getSalonId(req));
+      const data = await staffSchedulesService.list(String(req.params.staffId), await getSalonId(req));
       return sendSuccess(res, 200, data, "Schedules fetched successfully");
     } catch (err) { return next(err); }
   },
   async upsert(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const data = await staffSchedulesService.upsert(
-        String(req.params.staffId), getSalonId(req), req.body as UpsertStaffSchedulesBody
+        String(req.params.staffId), await getSalonId(req), req.body as UpsertStaffSchedulesBody
       );
       return sendSuccess(res, 200, data, "Schedules updated successfully");
     } catch (err) { return next(err); }
@@ -438,7 +463,7 @@ export const staffLeavesController = {
   async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const data = await staffLeavesService.list(
-        String(req.params.staffId), getSalonId(req),
+        String(req.params.staffId), await getSalonId(req),
         req.query.from ? String(req.query.from) : undefined,
         req.query.to ? String(req.query.to) : undefined,
       );
@@ -448,7 +473,7 @@ export const staffLeavesController = {
   async create(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const data = await staffLeavesService.create(
-        String(req.params.staffId), getSalonId(req), req.body as CreateStaffLeaveBody
+        String(req.params.staffId), await getSalonId(req), req.body as CreateStaffLeaveBody
       );
       return sendSuccess(res, 201, data, "Leave created successfully");
     } catch (err) { return next(err); }
@@ -456,7 +481,7 @@ export const staffLeavesController = {
   async update(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const data = await staffLeavesService.update(
-        String(req.params.staffId), getSalonId(req),
+        String(req.params.staffId), await getSalonId(req),
         String(req.params.id), req.body as UpdateStaffLeaveBody
       );
       return sendSuccess(res, 200, data, "Leave updated successfully");
@@ -465,7 +490,7 @@ export const staffLeavesController = {
   async delete(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       await staffLeavesService.delete(
-        String(req.params.staffId), getSalonId(req), String(req.params.id)
+        String(req.params.staffId), await getSalonId(req), String(req.params.id)
       );
       return sendSuccess(res, 200, null, "Leave deleted");
     } catch (err) { return next(err); }

@@ -10,6 +10,7 @@ import {
     validateClientsListQuery,
     validateMergeClients,
     validateBlockClients,
+    validateSearchClients,
 } from "./clients.validator";
 
 const router = Router();
@@ -51,6 +52,9 @@ router.post(
 // BLOCK
 router.post("/block", authMiddleware, roleMiddleware("salon_owner", "admin"), validateBlockClients, clientsController.block);
 router.patch("/block", authMiddleware, roleMiddleware("salon_owner", "admin"), validateBlockClients, clientsController.block);
+
+// SEARCH  – must be BEFORE /:clientId to avoid "search" being parsed as a UUID
+router.get("/search", authMiddleware, roleMiddleware("salon_owner", "admin"), validateSearchClients, clientsController.search);
 
 // GET/UPDATE/DELETE by id
 router.get("/:clientId", authMiddleware, roleMiddleware("salon_owner", "admin"), clientsController.getById);

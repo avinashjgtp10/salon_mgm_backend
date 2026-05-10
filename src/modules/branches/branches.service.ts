@@ -25,7 +25,28 @@ export const branchesService = {
     },
 
     async listBranchesBySalon(salonId: string): Promise<Branch[]> {
-        return branchesRepository.listBySalonId(salonId);
+        const branches = await branchesRepository.listBySalonId(salonId);
+        
+        if (branches.length === 0) {
+            try {
+                logger.info("Auto-creating Main Branch for salon", { salonId });
+                const mainBranch = await branchesRepository.create(salonId, {
+                    name: "Main Branch",
+                    address_line1: "Main Location",
+                    city: "Default City",
+                    state: "Default State",
+                    pincode: "000000",
+                    phone: "",
+                    is_main: true,
+                });
+                return [mainBranch];
+            } catch (e) {
+                logger.error("Failed to auto-create main branch", { salonId, error: e });
+                return [];
+            }
+        }
+        
+        return branches;
     },
 
     async getBranchById(id: string): Promise<Branch> {

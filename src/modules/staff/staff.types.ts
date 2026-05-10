@@ -285,6 +285,7 @@ export type UpdateStaffLeaveBody = Partial<CreateStaffLeaveBody>;
 export type StaffInvitation = {
     id: string;
     staff_id: string;
+    salon_id: string;
     token: string;
     email: string;
     expires_at: string;

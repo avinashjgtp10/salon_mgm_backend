@@ -18,7 +18,7 @@ const parseTaxRate = (val?: string | number): number | undefined => {
 
 export const membershipsService = {
 
-  async list(query: any) {
+  async list(query: any, salonId: string) {
     return membershipsRepository.list({
       search:      query.search,
       sessionType: query.sessionType,
@@ -26,19 +26,19 @@ export const membershipsService = {
       colour:      query.colour,
       page:        query.page  ? Number(query.page)  : undefined,
       limit:       query.limit ? Number(query.limit) : undefined,
-    });
+    }, salonId);
   },
 
-  async listAll(query: any) {
+  async listAll(query: any, salonId: string) {
     return membershipsRepository.listAll({
       search:      query.search,
       sessionType: query.sessionType,
       validFor:    query.validFor,
       colour:      query.colour,
-    });
+    }, salonId);
   },
 
-  async create(data: CreateMembershipDTO) {
+  async create(data: CreateMembershipDTO, salonId: string) {
     data.sessionType = normalize(data.sessionType)!;
     data.validFor    = normalize(data.validFor)!;
     data.colour      = normalize(data.colour)!;
@@ -47,29 +47,29 @@ export const membershipsService = {
       throw new Error("Invalid price value");
     data.price   = parseFloat(String(data.price));
     data.taxRate = parseTaxRate(data.taxRate as any);
-    return membershipsRepository.create(data);
+    return membershipsRepository.create(data, salonId);
   },
 
-  async getById(id: string) {
-    const m = await membershipsRepository.findById(id);
+  async getById(id: string, salonId: string) {
+    const m = await membershipsRepository.findById(id, salonId);
     if (!m) throw new Error(`Membership '${id}' not found`);
     return m;
   },
 
-  async update(id: string, data: UpdateMembershipDTO) {
+  async update(id: string, data: UpdateMembershipDTO, salonId: string) {
     if (data.sessionType) data.sessionType = normalize(data.sessionType);
     if (data.validFor)    data.validFor    = normalize(data.validFor);
     if (data.colour)      data.colour      = normalize(data.colour);
     if (data.sessionType && data.sessionType !== "limited")
       data.numberOfSessions = undefined;
     data.taxRate = parseTaxRate(data.taxRate as any);
-    const updated = await membershipsRepository.update(id, data);
+    const updated = await membershipsRepository.update(id, data, salonId);
     if (!updated) throw new Error(`Membership '${id}' not found`);
     return updated;
   },
 
-  async delete(id: string) {
-    const deleted = await membershipsRepository.delete(id);
+  async delete(id: string, salonId: string) {
+    const deleted = await membershipsRepository.delete(id, salonId);
     if (!deleted) throw new Error(`Membership '${id}' not found`);
     return { message: "Membership deleted successfully" };
   },

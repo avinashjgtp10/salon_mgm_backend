@@ -14,8 +14,8 @@ export const packagesService = {
     return packagesRepository.list(query);
   },
 
-  async getById(id: string): Promise<Package> {
-    const pkg = await packagesRepository.findById(id);
+  async getById(id: string, salonId: string): Promise<Package> {
+    const pkg = await packagesRepository.findById(id, salonId);
     if (!pkg) throw new Error(`Package '${id}' not found`);
     return pkg;
   },
@@ -27,14 +27,14 @@ export const packagesService = {
     return packagesRepository.create(data);
   },
 
-  async update(id: string, data: UpdatePackageDTO): Promise<Package> {
-    const updated = await packagesRepository.update(id, data);
+  async update(id: string, salonId: string, data: UpdatePackageDTO): Promise<Package> {
+    const updated = await packagesRepository.update(id, salonId, data);
     if (!updated) throw new Error(`Package '${id}' not found`);
     return updated;
   },
 
-  async delete(id: string): Promise<{ message: string }> {
-    const deleted = await packagesRepository.delete(id);
+  async delete(id: string, salonId: string): Promise<{ message: string }> {
+    const deleted = await packagesRepository.delete(id, salonId);
     if (!deleted) throw new Error(`Package '${id}' not found`);
     return { message: "Package deleted successfully" };
   },
@@ -51,18 +51,9 @@ export const packagesService = {
     ];
 
     const rows = packages.map((p) => [
-      p.id,
-      p.name,
-      p.slug,
-      p.category,
-      p.basePrice,
-      p.discountValue,
-      p.discountType,
-      p.durationMinutes,
-      p.priority,
-      p.serviceIds.length,
-      p.offers.length,
-      p.createdAt,
+      p.id, p.name, p.slug, p.category,
+      p.basePrice, p.discountValue, p.discountType, p.durationMinutes,
+      p.priority, p.serviceIds.length, p.offers.length, p.createdAt,
     ]);
 
     const lines = [
@@ -95,28 +86,16 @@ export const packagesService = {
       { header: "Created At",     key: "createdAt",       width: 26 },
     ];
 
-    // Style header row
     ws.getRow(1).font = { bold: true };
-    ws.getRow(1).fill = {
-      type: "pattern",
-      pattern: "solid",
-      fgColor: { argb: "FFE0F7F5" },
-    };
+    ws.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE0F7F5" } };
 
     packages.forEach((p) => {
       ws.addRow({
-        id:              p.id,
-        name:            p.name,
-        slug:            p.slug,
-        category:        p.category,
-        basePrice:       p.basePrice,
-        discountValue:   p.discountValue,
-        discountType:    p.discountType,
-        durationMinutes: p.durationMinutes,
-        priority:        p.priority,
-        servicesCount:   p.serviceIds.length,
-        offersCount:     p.offers.length,
-        createdAt:       p.createdAt,
+        id: p.id, name: p.name, slug: p.slug, category: p.category,
+        basePrice: p.basePrice, discountValue: p.discountValue,
+        discountType: p.discountType, durationMinutes: p.durationMinutes,
+        priority: p.priority, servicesCount: p.serviceIds.length,
+        offersCount: p.offers.length, createdAt: p.createdAt,
       });
     });
 
@@ -129,7 +108,6 @@ export const packagesService = {
     return new Promise(async (resolve, reject) => {
       try {
         const packages = await packagesRepository.listForExport(query);
-
         const doc = new PDFDocument({ margin: 40, size: "A4" });
         const chunks: Buffer[] = [];
 
@@ -137,7 +115,6 @@ export const packagesService = {
         doc.on("end", () => resolve(Buffer.concat(chunks)));
         doc.on("error", reject);
 
-        // Title
         doc.fontSize(18).font("Helvetica-Bold").text("Packages Report", { align: "center" });
         doc.moveDown(0.5);
         doc.fontSize(10).font("Helvetica").fillColor("#666")

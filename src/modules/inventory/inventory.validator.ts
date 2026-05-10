@@ -156,6 +156,9 @@ export const validateStockTake = (
         if (!isUUID(b.branch_id)) {
             throw new AppError(400, "branch_id is required and must be a UUID", "VALIDATION_ERROR");
         }
+        if (!isOptionalUUID(b.stocktake_id)) {
+            throw new AppError(400, "stocktake_id must be a UUID", "VALIDATION_ERROR");
+        }
         if (!isOptionalString(b.notes)) {
             throw new AppError(400, "notes must be a string", "VALIDATION_ERROR");
         }

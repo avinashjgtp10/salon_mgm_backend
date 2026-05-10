@@ -34,11 +34,13 @@ router.get("/export/csv", auth, ownerAdmin, staffController.exportCsv);
 
 router.get("/:id", auth, ownerAdminStaff, staffController.getById);
 router.patch("/:id", auth, ownerAdmin, validateUpdateStaff, staffController.update);
-router.delete("/:id", auth, ownerAdmin, staffController.deactivate);
+router.delete("/:id", auth, ownerAdmin, staffController.delete);
 
 // ─── Invitation management ────────────────────────────────────────────────────
+router.get("/:id/invitation-status", auth, ownerAdmin, staffInvitationController.getInvitationStatus);
 router.post("/:id/resend-invite", auth, ownerAdmin, staffInvitationController.resendInvitation);
 router.delete("/:id/cancel-invite", auth, ownerAdmin, staffInvitationController.cancelInvitation);
+
 
 // ─── Addresses ────────────────────────────────────────────────────────────────
 router.get("/:staffId/addresses", auth, ownerAdminStaff, staffAddressController.list);

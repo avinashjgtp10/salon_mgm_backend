@@ -89,6 +89,27 @@ export type CreateStockMovementBody = {
 
 // ─── Stock Take ──────────────────────────────────────────────────────────────
 
+export type StocktakeStatus = "In progress" | "Paused" | "Review" | "Completed" | "Canceled";
+
+export type Stocktake = {
+    id: string;
+    branch_id: string;
+    name: string;
+    description: string | null;
+    status: StocktakeStatus;
+    started_by: string;
+    completed_at: string | null;
+    created_at: string;
+    updated_at: string;
+};
+
+export type CreateStocktakeBody = {
+    branch_id: string;
+    name?: string;
+    description?: string;
+    selection_type?: "all" | "category" | "manual";
+};
+
 export type StockTakeItem = {
     product_id: string;
     actual_qty: number;
@@ -96,6 +117,7 @@ export type StockTakeItem = {
 };
 
 export type StockTakeBody = {
+    stocktake_id?: string; // Optional link to a stocktake event
     branch_id: string;
     notes?: string;
     items: StockTakeItem[];

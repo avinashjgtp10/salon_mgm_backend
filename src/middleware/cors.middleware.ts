@@ -12,9 +12,10 @@ const corsOptions: CorsOptionsDelegate<Request> = (req, callback) => {
   const allowAll = process.env.CORS_ALLOW_ALL_ORIGINS === "true";
 
   // Retrieve dynamically to ensure env lets it load even if imported early
-  const allowedOrigins: string[] = process.env.CORS_ALLOWED_ORIGINS
-    ? process.env.CORS_ALLOWED_ORIGINS.split(",").map((o) => o.trim().replace(/\/$/, ""))
-    : [];
+  const allowedOrigins: string[] = (process.env.CORS_ALLOWED_ORIGINS || process.env.ALLOWED_ORIGINS || "")
+    .split(",")
+    .map((o) => o.trim().replace(/\/$/, ""))
+    .filter((o) => o);
 
   // Log incoming request origin
   logger.info(`CORS check - Incoming Origin: ${origin || "No Origin (Postman/Mobile)"}`);
@@ -46,7 +47,7 @@ const corsOptions: CorsOptionsDelegate<Request> = (req, callback) => {
       origin: true,
       credentials: true,
       methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-      allowedHeaders: ["Content-Type", "Authorization", "x-api-key", "x-timezone", "x-currency"],
+      allowedHeaders: ["Content-Type", "Authorization", "x-api-key", "x-timezone", "x-currency", "x-salon-id"],
     });
 
   } else {

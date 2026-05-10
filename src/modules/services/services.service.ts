@@ -20,18 +20,19 @@ import {
 } from "./services.types";
 
 export const servicesService = {
-  async list(query: ListServicesQuery): Promise<ServiceListResponse> {
-    return servicesRepository.list(query);
+  async list(query: ListServicesQuery, salonId: string): Promise<ServiceListResponse> {
+    return servicesRepository.list(query, salonId);
   },
 
   async create(params: {
     requesterUserId: string;
     requesterRole?: string;
+    salonId: string;
     body: CreateServiceBody;
   }): Promise<Service> {
-    const { requesterUserId, requesterRole, body } = params;
-    logger.info("servicesService.create", { requesterUserId, requesterRole });
-    const created = await servicesRepository.create(body);
+    const { requesterUserId, requesterRole, salonId, body } = params;
+    logger.info("servicesService.create", { requesterUserId, requesterRole, salonId });
+    const created = await servicesRepository.create(body, salonId);
     if (body.staff_ids?.length) {
       await servicesRepository.replaceStaff(created.id, body.staff_ids);
     }
@@ -39,8 +40,8 @@ export const servicesService = {
     return created;
   },
 
-  async getById(serviceId: string): Promise<ServiceDetail> {
-    const detail = await servicesRepository.getDetailById(serviceId);
+  async getById(serviceId: string, salonId: string): Promise<ServiceDetail> {
+    const detail = await servicesRepository.getDetailById(serviceId, salonId);
     if (!detail) throw new AppError(404, "Service not found", "NOT_FOUND");
     return detail;
   },
@@ -49,16 +50,17 @@ export const servicesService = {
     serviceId: string;
     requesterUserId: string;
     requesterRole?: string;
+    salonId: string;
     patch: UpdateServiceBody;
   }): Promise<Service> {
-    const { serviceId, requesterUserId, requesterRole, patch } = params;
+    const { serviceId, requesterUserId, requesterRole, salonId, patch } = params;
     logger.info("servicesService.update", { serviceId, requesterUserId, requesterRole });
-    const existing = await servicesRepository.findById(serviceId);
+    const existing = await servicesRepository.findById(serviceId, salonId);
     if (!existing) throw new AppError(404, "Service not found", "NOT_FOUND");
     const staffIds =
       patch.staff_ids ??
       ((patch as Record<string, unknown>).team_member_ids as string[] | undefined);
-    const updated = await servicesRepository.update(serviceId, patch);
+    const updated = await servicesRepository.update(serviceId, patch, salonId);
     if (staffIds !== undefined) {
       await servicesRepository.replaceStaff(serviceId, staffIds);
     }
@@ -66,14 +68,14 @@ export const servicesService = {
     return updated;
   },
 
-  async remove(serviceId: string): Promise<void> {
-    const existing = await servicesRepository.findById(serviceId);
+  async remove(serviceId: string, salonId: string): Promise<void> {
+    const existing = await servicesRepository.findById(serviceId, salonId);
     if (!existing) throw new AppError(404, "Service not found", "NOT_FOUND");
-    await servicesRepository.delete(serviceId);
+    await servicesRepository.delete(serviceId, salonId);
   },
 
-  async listAddOnGroups(serviceId: string) {
-    const existing = await servicesRepository.findById(serviceId);
+  async listAddOnGroups(serviceId: string, salonId: string) {
+    const existing = await servicesRepository.findById(serviceId, salonId);
     if (!existing) throw new AppError(404, "Service not found", "NOT_FOUND");
     return servicesRepository.listAddOnGroupsWithOptions(serviceId);
   },
@@ -82,9 +84,10 @@ export const servicesService = {
     serviceId: string;
     requesterUserId: string;
     requesterRole?: string;
+    salonId: string;
     body: CreateAddOnGroupBody;
   }) {
-    const existing = await servicesRepository.findById(params.serviceId);
+    const existing = await servicesRepository.findById(params.serviceId, params.salonId);
     if (!existing) throw new AppError(404, "Service not found", "NOT_FOUND");
     return servicesRepository.createAddOnGroup(params.serviceId, params.body);
   },
@@ -94,9 +97,10 @@ export const servicesService = {
     groupId: string;
     requesterUserId: string;
     requesterRole?: string;
+    salonId: string;
     patch: UpdateAddOnGroupBody;
   }) {
-    const existing = await servicesRepository.findById(params.serviceId);
+    const existing = await servicesRepository.findById(params.serviceId, params.salonId);
     if (!existing) throw new AppError(404, "Service not found", "NOT_FOUND");
     const groups = await servicesRepository.listAddOnGroupsWithOptions(params.serviceId);
     if (!groups.some((g) => g.id === params.groupId))
@@ -104,8 +108,8 @@ export const servicesService = {
     return servicesRepository.updateAddOnGroup(params.groupId, params.patch);
   },
 
-  async deleteAddOnGroup(params: { serviceId: string; groupId: string }) {
-    const existing = await servicesRepository.findById(params.serviceId);
+  async deleteAddOnGroup(params: { serviceId: string; groupId: string; salonId: string }) {
+    const existing = await servicesRepository.findById(params.serviceId, params.salonId);
     if (!existing) throw new AppError(404, "Service not found", "NOT_FOUND");
     const groups = await servicesRepository.listAddOnGroupsWithOptions(params.serviceId);
     if (!groups.some((g) => g.id === params.groupId))
@@ -118,9 +122,10 @@ export const servicesService = {
     groupId: string;
     requesterUserId: string;
     requesterRole?: string;
+    salonId: string;
     body: CreateAddOnOptionBody;
   }) {
-    const existing = await servicesRepository.findById(params.serviceId);
+    const existing = await servicesRepository.findById(params.serviceId, params.salonId);
     if (!existing) throw new AppError(404, "Service not found", "NOT_FOUND");
     const groups = await servicesRepository.listAddOnGroupsWithOptions(params.serviceId);
     if (!groups.some((g) => g.id === params.groupId))
@@ -134,9 +139,10 @@ export const servicesService = {
     optionId: string;
     requesterUserId: string;
     requesterRole?: string;
+    salonId: string;
     patch: UpdateAddOnOptionBody;
   }) {
-    const existing = await servicesRepository.findById(params.serviceId);
+    const existing = await servicesRepository.findById(params.serviceId, params.salonId);
     if (!existing) throw new AppError(404, "Service not found", "NOT_FOUND");
     const groups = await servicesRepository.listAddOnGroupsWithOptions(params.serviceId);
     const group = groups.find((g) => g.id === params.groupId);
@@ -146,12 +152,8 @@ export const servicesService = {
     return servicesRepository.updateAddOnOption(params.optionId, params.patch);
   },
 
-  async deleteAddOnOption(params: {
-    serviceId: string;
-    groupId: string;
-    optionId: string;
-  }) {
-    const existing = await servicesRepository.findById(params.serviceId);
+  async deleteAddOnOption(params: { serviceId: string; groupId: string; optionId: string; salonId: string }) {
+    const existing = await servicesRepository.findById(params.serviceId, params.salonId);
     if (!existing) throw new AppError(404, "Service not found", "NOT_FOUND");
     const groups = await servicesRepository.listAddOnGroupsWithOptions(params.serviceId);
     const group = groups.find((g) => g.id === params.groupId);
@@ -163,27 +165,28 @@ export const servicesService = {
 };
 
 export const bundlesService = {
-  async list(query: ListBundlesQuery): Promise<BundleListResponse> {
-    return bundlesRepository.list(query);
+  async list(query: ListBundlesQuery, salonId: string): Promise<BundleListResponse> {
+    return bundlesRepository.list(query, salonId);
   },
 
   async create(params: {
     requesterUserId: string;
     requesterRole?: string;
+    salonId: string;
     body: CreateBundleBody;
   }): Promise<BundleDetail> {
-    const { requesterUserId, requesterRole, body } = params;
-    logger.info("bundlesService.create", { requesterUserId, requesterRole });
-    const created = await bundlesRepository.create(body);
+    const { requesterUserId, requesterRole, salonId, body } = params;
+    logger.info("bundlesService.create", { requesterUserId, requesterRole, salonId });
+    const created = await bundlesRepository.create(body, salonId);
     if (body.service_ids?.length) {
       await bundlesRepository.replaceServices(created.id, body.service_ids);
     }
     logger.info("bundlesService.create success", { bundleId: created.id });
-    return bundlesRepository.getDetailById(created.id) as Promise<BundleDetail>;
+    return bundlesRepository.getDetailById(created.id, salonId) as Promise<BundleDetail>;
   },
 
-  async getById(bundleId: string): Promise<BundleDetail> {
-    const detail = await bundlesRepository.getDetailById(bundleId);
+  async getById(bundleId: string, salonId: string): Promise<BundleDetail> {
+    const detail = await bundlesRepository.getDetailById(bundleId, salonId);
     if (!detail) throw new AppError(404, "Bundle not found", "NOT_FOUND");
     return detail;
   },
@@ -192,23 +195,24 @@ export const bundlesService = {
     bundleId: string;
     requesterUserId: string;
     requesterRole?: string;
+    salonId: string;
     patch: UpdateBundleBody;
   }): Promise<BundleDetail> {
-    const { bundleId, requesterUserId, requesterRole, patch } = params;
+    const { bundleId, requesterUserId, requesterRole, salonId, patch } = params;
     logger.info("bundlesService.update", { bundleId, requesterUserId, requesterRole });
-    const existing = await bundlesRepository.findById(bundleId);
+    const existing = await bundlesRepository.findById(bundleId, salonId);
     if (!existing) throw new AppError(404, "Bundle not found", "NOT_FOUND");
-    await bundlesRepository.update(bundleId, patch);
+    await bundlesRepository.update(bundleId, patch, salonId);
     if (patch.service_ids !== undefined) {
       await bundlesRepository.replaceServices(bundleId, patch.service_ids);
     }
     logger.info("bundlesService.update success", { bundleId });
-    return bundlesRepository.getDetailById(bundleId) as Promise<BundleDetail>;
+    return bundlesRepository.getDetailById(bundleId, salonId) as Promise<BundleDetail>;
   },
 
-  async remove(bundleId: string): Promise<void> {
-    const existing = await bundlesRepository.findById(bundleId);
+  async remove(bundleId: string, salonId: string): Promise<void> {
+    const existing = await bundlesRepository.findById(bundleId, salonId);
     if (!existing) throw new AppError(404, "Bundle not found", "NOT_FOUND");
-    await bundlesRepository.delete(bundleId);
+    await bundlesRepository.delete(bundleId, salonId);
   },
 };

@@ -7,12 +7,12 @@ import {
     UpsertWorkingHoursBody, AddImageBody, ReorderImagesBody, UpsertFeaturesBody,
 } from "./marketplace.types";
 
-type AuthRequest = Request & { user?: { userId: string; role?: string } };
+type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string } };
 
-const getSalonId = (req: Request): string => {
-    const id = String(req.headers["x-salon-id"] ?? "").trim();
-    if (!id) throw new AppError(400, "x-salon-id header is required", "VALIDATION_ERROR");
-    return id;
+const getSalonId = (req: AuthRequest): string => {
+    const salonId = req.user?.salonId;
+    if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+    return salonId;
 };
 
 export const marketplaceController = {

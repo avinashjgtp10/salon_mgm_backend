@@ -1,12 +1,10 @@
 import dotenv from 'dotenv';
 import path from 'path';
 
+// ✅ Load .env first, then .env.local overrides it
+dotenv.config({ path: path.join(__dirname, '../../.env') });
 dotenv.config({ path: path.join(__dirname, '../../.env.local') });
 
-/**
- * ✅ Helper for required env variables
- * (does NOT affect existing config)
- */
 function required(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env: ${name}`);
@@ -53,9 +51,6 @@ interface Config {
     level: string;
   };
 
-  /**
-   * ✅ ADD SMTP CONFIG (NEW)
-   */
   smtp: {
     host: string;
     port: number;
@@ -64,11 +59,12 @@ interface Config {
     from: string;
   };
 
-  /**
-   * ✅ ADD OTP CONFIG (NEW)
-   */
   otp: {
     expMinutes: number;
+  };
+
+  groq: {
+    apiKey: string;
   };
 }
 
@@ -112,22 +108,20 @@ const config: Config = {
     level: process.env.LOG_LEVEL || 'info',
   },
 
-  /**
-   * ✅ NEW SMTP CONFIG
-   */
   smtp: {
-    host: required("SMTP_HOST"),
-    port: Number(required("SMTP_PORT")),
-    user: required("SMTP_USER"),
-    pass: required("SMTP_PASS"),
-    from: required("EMAIL_FROM"),
+    host: required('SMTP_HOST'),
+    port: Number(required('SMTP_PORT')),
+    user: required('SMTP_USER'),
+    pass: required('SMTP_PASS'),
+    from: required('EMAIL_FROM'),
   },
 
-  /**
-   * ✅ NEW OTP CONFIG
-   */
   otp: {
     expMinutes: Number(process.env.OTP_EXP_MINUTES || 10),
+  },
+
+  groq: {
+    apiKey: process.env.GROQ_API_KEY || '',
   },
 };
 

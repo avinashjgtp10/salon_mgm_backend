@@ -25,8 +25,6 @@ export const validateCreateAppointment = (req: Request, _res: Response, next: Ne
             throw new AppError(400, "service_id must be a UUID", "VALIDATION_ERROR");
         if (!isISODatetime(b.scheduled_at))
             throw new AppError(400, "scheduled_at is required and must be a valid ISO datetime", "VALIDATION_ERROR");
-        if (new Date(b.scheduled_at) < new Date())
-            throw new AppError(400, "scheduled_at cannot be in the past", "VALIDATION_ERROR");
         if (typeof b.duration_minutes !== "number" || !Number.isInteger(b.duration_minutes) || b.duration_minutes <= 0)
             throw new AppError(400, "duration_minutes is required and must be a positive integer", "VALIDATION_ERROR");
         if (b.status !== undefined && !VALID_STATUSES.includes(b.status))
@@ -45,8 +43,6 @@ export const validateUpdateAppointment = (req: Request, _res: Response, next: Ne
         if (!isOptionalUUID(b.service_id)) throw new AppError(400, "service_id must be a UUID", "VALIDATION_ERROR");
         if (b.scheduled_at !== undefined && !isISODatetime(b.scheduled_at))
             throw new AppError(400, "scheduled_at must be a valid ISO datetime", "VALIDATION_ERROR");
-        if (b.scheduled_at && new Date(b.scheduled_at) < new Date())
-            throw new AppError(400, "scheduled_at cannot be in the past", "VALIDATION_ERROR");
         if (b.duration_minutes !== undefined && (typeof b.duration_minutes !== "number" || b.duration_minutes <= 0))
             throw new AppError(400, "duration_minutes must be a positive integer", "VALIDATION_ERROR");
         if (b.status !== undefined && !VALID_STATUSES.includes(b.status))

@@ -3,6 +3,7 @@ import PDFDocument from "pdfkit";
 import { AppError } from "../../middleware/error.middleware";
 import { salesRepository } from "./sales.repository";
 import { Sale, SaleItem, CreateSaleBody, UpdateSaleBody, CheckoutSaleBody } from "./sales.types";
+import { paymentsRepository } from "../payments/payments.repository";
 
 export const salesService = {
     async create(params: { requesterUserId: string; requesterRole?: string; body: CreateSaleBody }): Promise<{ sale: Sale; items: SaleItem[] }> {
@@ -40,7 +41,40 @@ export const salesService = {
         const existing = await salesRepository.findById(id);
         if (!existing) throw new AppError(404, "Sale not found", "NOT_FOUND");
         if (existing.status !== 'draft') throw new AppError(400, "Only draft sales can be checked out", "BAD_REQUEST");
-        return salesRepository.checkout(id, body);
+        
+        const sale = await salesRepository.checkout(id, {
+            payment_method: body.payment_method,
+            payment_reference: body.payment_reference,
+            status: "completed"
+        });
+
+        let splitDetails: Record<string, number> | undefined = undefined;
+        if (body.payment_method === 'split' && body.payment_reference) {
+             try {
+                 splitDetails = JSON.parse(body.payment_reference);
+             } catch(e) {}
+        }
+        
+        try {
+            await paymentsRepository.create({
+                salon_id: sale.salon_id,
+                client_id: sale.client_id || undefined,
+                appointment_id: sale.appointment_id || undefined,
+                gross_amount: parseFloat(sale.subtotal) || parseFloat(sale.total_amount),
+                discount_amount: parseFloat(sale.discount_amount),
+                net_amount: parseFloat(sale.total_amount),
+                paid_amount: body.amount_paid,
+                due_amount: Math.max(0, parseFloat(sale.total_amount) - body.amount_paid),
+                payment_method: body.payment_method,
+                split_details: splitDetails,
+                status: 'completed',
+                notes: `Payment for Sale ID: ${sale.id}`
+            });
+        } catch (error) {
+            console.error('Failed to create payment record for sale:', error);
+        }
+
+        return sale;
     },
 
     async exportSales(filters: {
