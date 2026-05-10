@@ -5,7 +5,7 @@
   "main": "src/server.ts",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
-    "build": "tsc",
+    "build": "esbuild src/app.ts --bundle --platform=node --packages=external --outfile=dist/index.js",
     "start": "node dist/server.js",
     "start:prod": "NODE_ENV=production node dist/server.js",
     "lint": "eslint src/**/*.ts",
@@ -103,6 +103,7 @@
     "@types/uuid": "^10.0.0",
     "@typescript-eslint/eslint-plugin": "^8.55.0",
     "@typescript-eslint/parser": "^8.55.0",
+    "esbuild": "^0.28.0",
     "eslint": "^9.39.2",
     "jest": "^30.2.0",
     "nodemon": "^3.1.11",

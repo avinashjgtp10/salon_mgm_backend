@@ -17969,3 +17969,10 @@
 {"level":"info","message":"🌐 API: http://localhost:3000/api/v1","service":"salon-backend","timestamp":"2026-05-10 16:59:14"}
 {"level":"info","message":"✅ Redis connection successful","service":"salon-backend","timestamp":"2026-05-10 16:59:15"}
 {"level":"info","message":"✅ Database connection successful","service":"salon-backend","timestamp":"2026-05-10 16:59:17"}
+{"level":"info","message":"🔌 Socket.io initialized","service":"salon-backend","timestamp":"2026-05-10 17:44:10"}
+{"level":"info","message":"🚀 Server running on port 3000","service":"salon-backend","timestamp":"2026-05-10 17:44:10"}
+{"level":"info","message":"📍 Environment: development","service":"salon-backend","timestamp":"2026-05-10 17:44:10"}
+{"level":"info","message":"🌐 API: http://localhost:3000/api/v1","service":"salon-backend","timestamp":"2026-05-10 17:44:10"}
+{"level":"info","message":"⏰ Campaign scheduler started — checking every 60s","service":"salon-backend","timestamp":"2026-05-10 17:44:10"}
+{"level":"info","message":"✅ Redis connection successful","service":"salon-backend","timestamp":"2026-05-10 17:44:11"}
+{"level":"info","message":"✅ Database connection successful","service":"salon-backend","timestamp":"2026-05-10 17:44:13"}
