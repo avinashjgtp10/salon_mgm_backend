@@ -1,4 +1,3 @@
-import pool from "../../config/database";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { emailService } from "../utils/email.service";
@@ -166,7 +165,7 @@ export const staffInvitationService = {
                 throw new AppError(400, "Invalid token", "BAD_REQUEST");
             }
 
-            if (invitation.status === "active" || invitation.status === "accepted") {
+            if (invitation.status === "accepted") {
                 logger.info("acceptInvitation: invitation already accepted", { staffId: invitation.staff_id });
                 throw new AppError(400, "This invitation has already been accepted", "ALREADY_ACCEPTED");
             }
@@ -248,7 +247,7 @@ export const staffInvitationService = {
         const { staffId, salonId, salonName } = params;
         const staff = await staffRepository.findById(staffId, salonId);
 
-        if (!staff || !staff.email || staff.invitation_status === "active" || staff.invitation_status === "accepted") {
+        if (!staff || !staff.email || staff.invitation_status === "accepted") {
             throw new AppError(400, "Cannot resend: not found, no email, or already accepted", "BAD_REQUEST");
         }
 
