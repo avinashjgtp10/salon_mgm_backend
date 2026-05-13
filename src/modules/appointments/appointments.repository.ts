@@ -106,7 +106,7 @@ export const appointmentsRepository = {
         const { rows } = await pool.query(
             `INSERT INTO appointments (
                 salon_id, branch_id, client_id, staff_id, service_id,
-                title, notes, status,
+                title, notes, staff_alert, status,
                 scheduled_at, duration_minutes,
                 ends_at,
                 colour, created_by,
@@ -114,11 +114,11 @@ export const appointmentsRepository = {
             )
             VALUES (
                 $1, $2, $3, $4, $5,
-                $6, $7, 'booked',
-                $8, $9,
-                ($8::timestamptz + ($9::integer * INTERVAL '1 minute')),
-                $10, $11,
-                $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb
+                $6, $7, $8, 'booked',
+                $9, $10,
+                ($9::timestamptz + ($10::integer * INTERVAL '1 minute')),
+                $11, $12,
+                $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb
             )
             RETURNING *`,
             [
@@ -129,6 +129,7 @@ export const appointmentsRepository = {
                 data.service_id         ?? null,
                 data.title              ?? "Appointment",
                 data.notes              ?? null,
+                data.staff_alert        ?? null,
                 data.scheduled_at,
                 data.duration_minutes,
                 data.colour             ?? null,

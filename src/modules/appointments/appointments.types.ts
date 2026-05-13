@@ -52,6 +52,7 @@ export type Appointment = {
     service_id: string | null;
     title: string | null;
     notes: string | null;
+    staff_alert: string | null;
     status: AppointmentStatus;
     payment_status: PaymentStatusField;
     scheduled_at: string;
@@ -83,6 +84,7 @@ export type CreateAppointmentBody = {
     duration_minutes: number;
     title?: string;
     notes?: string;
+    staff_alert?: string;
     status?: AppointmentStatus;
     colour?: string;
     // JSONB items
