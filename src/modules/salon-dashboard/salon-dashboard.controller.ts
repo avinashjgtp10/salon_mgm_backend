@@ -7,7 +7,7 @@ type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?:
 import { AppError } from "../../middleware/error.middleware";
 
 function resolveSalonId(req: AuthRequest): string {
-  const salonId = req.user?.salonId;
+  const salonId = req.user?.salonId || (req.query.salon_id as string);
   if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
   return salonId;
 }
@@ -60,6 +60,18 @@ export const salonDashboardController = {
       const salonId = resolveSalonId(req);
       const data = await salonDashboardService.getServiceMix(salonId);
       return sendSuccess(res, 200, data, "Service mix fetched successfully");
+    } catch (err) {
+      return next(err);
+    }
+  },
+
+  async getAll(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = resolveSalonId(req);
+      const period = typeof req.query.period === "string" ? req.query.period : undefined;
+      const date   = typeof req.query.date   === "string" ? req.query.date   : undefined;
+      const data   = await salonDashboardService.getAll(salonId, period, date);
+      return sendSuccess(res, 200, data, "Dashboard data fetched successfully");
     } catch (err) {
       return next(err);
     }

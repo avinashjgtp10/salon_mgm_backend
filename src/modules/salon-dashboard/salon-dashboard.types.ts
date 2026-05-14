@@ -40,3 +40,11 @@ export interface ServiceMixItem {
   name: string;
   value: number;
 }
+
+export interface DashboardAll {
+  summary: DashboardSummary;
+  todayAppointments: TodayAppointment[];
+  revenueChart: RevenueDataPoint[];
+  topStaff: TopStaffMember[];
+  serviceMix: ServiceMixItem[];
+}

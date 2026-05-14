@@ -5,6 +5,7 @@ import type {
   RevenueDataPoint,
   TopStaffMember,
   ServiceMixItem,
+  DashboardAll,
 } from "./salon-dashboard.types";
 
 // Map appointment status → frontend display status
@@ -319,5 +320,18 @@ export const salonDashboardRepository = {
       name: row.name,
       value: round1((parseInt(row.booking_count, 10) / total) * 100),
     }));
+  },
+
+  // ── Combined: all dashboard data in one call ────────────────────────────────
+  async getAll(salonId: string, period: string = "monthly", date?: string): Promise<DashboardAll> {
+    const [summary, todayAppointments, revenueChart, topStaff, serviceMix] = await Promise.all([
+      this.getSummary(salonId),
+      this.getTodayAppointments(salonId, date),
+      this.getRevenueChart(salonId, period),
+      this.getTopStaff(salonId),
+      this.getServiceMix(salonId),
+    ]);
+
+    return { summary, todayAppointments, revenueChart, topStaff, serviceMix };
   },
 };

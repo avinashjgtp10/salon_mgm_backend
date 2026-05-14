@@ -22,4 +22,7 @@ router.get("/staff/top", ...guard, salonDashboardController.getTopStaff);
 // GET /api/v1/dashboard/services/mix
 router.get("/services/mix", ...guard, salonDashboardController.getServiceMix);
 
+// GET /api/v1/dashboard/all
+router.get("/all", ...guard, salonDashboardController.getAll);
+
 export default router;

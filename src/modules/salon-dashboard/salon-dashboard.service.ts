@@ -6,6 +6,7 @@ import type {
   RevenueDataPoint,
   TopStaffMember,
   ServiceMixItem,
+  DashboardAll,
 } from "./salon-dashboard.types";
 
 export const salonDashboardService = {
@@ -32,5 +33,10 @@ export const salonDashboardService = {
   async getServiceMix(salonId: string): Promise<ServiceMixItem[]> {
     if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR");
     return salonDashboardRepository.getServiceMix(salonId);
+  },
+
+  async getAll(salonId: string, period?: string, date?: string): Promise<DashboardAll> {
+    if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR");
+    return salonDashboardRepository.getAll(salonId, period, date);
   },
 };
