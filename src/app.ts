@@ -98,7 +98,8 @@ app.use("/api/v1/sales", salesRoutes);
 app.use("/api/v1/inventory", inventoryRoutes);
 app.use("/api/v1/billing", billingRoutes);
 app.use("/api/v1/subscriptions", subscriptionsRoutes);
-app.use('/api/v1/dashboard', marketingDashboardRoutes)
+//app.use('/api/v1//dashboard', marketingDashboardRoutes)
+app.use('/api/v1/marketing/dashboard', marketingDashboardRoutes);
 app.use('/api/v1/templates', marketingTemplatesRoutes)
 app.use('/api/v1/campaigns', marketingCampaignsRoutes)
 app.use('/api/v1/wa-config', marketingConfigRoutes)
