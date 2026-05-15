@@ -141,8 +141,9 @@ export const validateUpsertWorkingHours = (req: Request, _res: Response, next: N
 export const validateAddImage = (req: Request, _res: Response, next: NextFunction) => {
   try {
     const b = req.body;
+    const hasFile = !!(req as any).file;
 
-    if (typeof b.image_url !== "string" || !URL_RE.test(b.image_url))
+    if (!hasFile && (typeof b.image_url !== "string" || !URL_RE.test(b.image_url)))
       throw new AppError(400, "image_url must be a valid URL", "VALIDATION_ERROR");
 
     if (b.is_cover !== undefined && typeof b.is_cover !== "boolean")
