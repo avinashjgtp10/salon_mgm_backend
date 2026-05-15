@@ -5,6 +5,8 @@ import type {
   RevenueDataPoint,
   TopStaffMember,
   ServiceMixItem,
+  DashboardService,
+  DashboardAll,
 } from "./salon-dashboard.types";
 
 // Map appointment status → frontend display status
@@ -319,5 +321,58 @@ export const salonDashboardRepository = {
       name: row.name,
       value: round1((parseInt(row.booking_count, 10) / total) * 100),
     }));
+  },
+
+  // ── Active Services catalog ──────────────────────────────────────────────────
+  async getServices(salonId: string): Promise<DashboardService[]> {
+    const { rows } = await pool.query<{
+      id: string;
+      name: string;
+      price: string;
+      duration: string;
+      category_name: string | null;
+      price_type: string | null;
+      is_active: boolean;
+    }>(
+      `SELECT
+         s.id,
+         s.name,
+         COALESCE(s.price::text, '0')          AS price,
+         COALESCE(s.duration_minutes, 0)       AS duration,
+         c.name                                AS category_name,
+         s.price_type,
+         s.is_active
+       FROM services s
+       LEFT JOIN service_categories c ON c.id = s.category_id
+       WHERE s.salon_id = $1
+         AND s.is_active = true
+       ORDER BY s.name ASC`,
+      [salonId]
+    );
+
+    return rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      price: row.price,
+      duration: parseInt(String(row.duration), 10),
+      category_name: row.category_name ?? null,
+      price_type: (row.price_type as DashboardService["price_type"]) ?? null,
+      is_active: row.is_active,
+    }));
+  },
+
+  // ── Combined: all dashboard data in one call ────────────────────────────────
+  async getAll(salonId: string, period: string = "monthly", date?: string): Promise<DashboardAll> {
+    const [summary, todayAppointments, revenueChart, topStaff, serviceMix, services] =
+      await Promise.all([
+        this.getSummary(salonId),
+        this.getTodayAppointments(salonId, date),
+        this.getRevenueChart(salonId, period),
+        this.getTopStaff(salonId),
+        this.getServiceMix(salonId),
+        this.getServices(salonId),
+      ]);
+
+    return { summary, todayAppointments, revenueChart, topStaff, serviceMix, services };
   },
 };
