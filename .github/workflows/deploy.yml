@@ -21,15 +21,11 @@ jobs:
           script: |
             set -e
             cd /home/ubuntu/salon_mgm_backend
-            echo "📥 Pulling latest code..."
             git fetch origin main
             git reset --hard origin/main
-            echo "📦 Installing dependencies..."
             npm ci
-            echo "🔨 Building..."
             npm run build
-            echo "🔄 Restarting server..."
+            cd /home/ubuntu
             pm2 restart salon-backend --update-env
             sleep 3
-            pm2 list | grep salon-backend
-            echo "✅ Deployed commit: $(git rev-parse --short HEAD)"
+            echo "✅ Deployed commit: $(cd salon_mgm_backend && git rev-parse --short HEAD)"
