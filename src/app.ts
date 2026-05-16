@@ -23,6 +23,7 @@ import brandsRoutes from "./modules/products/products.routes";
 import appointmentsRoutes from "./modules/appointments/appointments.routes";
 import calendarRoutes from "./modules/calendar/calendar.routes";
 import salesRoutes from "./modules/sales/sales.routes";
+import bookingsRoutes from "./modules/bookings/bookings.routes";
 import inventoryRoutes from "./modules/inventory/inventory.routes";
 import billingRoutes from "./modules/billing/billing.routes";
 import subscriptionsRoutes from "./modules/subscriptions/subscriptions.routes";
@@ -52,6 +53,9 @@ app.use(corsMiddleware);
 // Body parsing middleware
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+
+// Serve uploaded files as static assets
+app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 
 // Compression
 app.use(compression());
@@ -93,6 +97,7 @@ app.use("/api/v1/packages", packagesRoutes);
 app.use("/api/v1/products", productsRoutes);
 app.use("/api/v1/brands", brandsRoutes);
 app.use("/api/v1/appointments", appointmentsRoutes);
+app.use("/api/v1/bookings", bookingsRoutes);
 app.use("/api/v1/calendar", calendarRoutes);
 app.use("/api/v1/sales", salesRoutes);
 app.use("/api/v1/inventory", inventoryRoutes);

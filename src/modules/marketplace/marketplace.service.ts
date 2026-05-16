@@ -107,13 +107,18 @@ export const marketplaceService = {
   // ── Images ──────────────────────────────────────────────────────────────────
 
   async getImages(salonId: string) {
-    const profile = await _ensureProfile(salonId);
+    const profile = await marketplaceProfileRepo.findBySalonId(salonId);
+    if (!profile) return [];
     return marketplaceImagesRepo.findByProfileId(profile.id);
   },
 
   async addImage(salonId: string, data: AddImageBody) {
     logger.info("marketplace.addImage", { salonId });
-    const profile = await _ensureProfile(salonId);
+    // Auto-create a minimal profile if none exists so gallery works standalone
+    let profile = await marketplaceProfileRepo.findBySalonId(salonId);
+    if (!profile) {
+      profile = await marketplaceProfileRepo.upsertEssentials(salonId, { display_name: "My Salon" });
+    }
 
     const count = await marketplaceImagesRepo.count(profile.id);
     if (count >= MAX_IMAGES)
@@ -139,7 +144,8 @@ export const marketplaceService = {
 
   async deleteImage(salonId: string, imageId: string) {
     logger.info("marketplace.deleteImage", { salonId, imageId });
-    const profile = await _ensureProfile(salonId);
+    const profile = await marketplaceProfileRepo.findBySalonId(salonId);
+    if (!profile) throw new AppError(404, "Image not found", "NOT_FOUND");
     const deleted = await marketplaceImagesRepo.delete(imageId, profile.id);
     if (!deleted) throw new AppError(404, "Image not found", "NOT_FOUND");
   },
@@ -161,6 +167,30 @@ export const marketplaceService = {
     const profile = await _ensureProfile(salonId);
     await marketplaceFeaturesRepo.upsert(profile.id, data);
     return this.getFeatures(salonId);
+  },
+
+  // ── Logo & Cover ────────────────────────────────────────────────────────────
+
+  async uploadLogo(salonId: string, logoUrl: string) {
+    logger.info("marketplace.uploadLogo", { salonId });
+    let profile = await marketplaceProfileRepo.findBySalonId(salonId);
+    if (!profile) {
+      profile = await marketplaceProfileRepo.upsertEssentials(salonId, { display_name: "My Salon" });
+    }
+    const updated = await marketplaceProfileRepo.updateLogo(salonId, logoUrl);
+    if (!updated) throw new AppError(500, "Failed to save logo", "INTERNAL_ERROR");
+    return updated;
+  },
+
+  async uploadCover(salonId: string, coverUrl: string) {
+    logger.info("marketplace.uploadCover", { salonId });
+    let profile = await marketplaceProfileRepo.findBySalonId(salonId);
+    if (!profile) {
+      profile = await marketplaceProfileRepo.upsertEssentials(salonId, { display_name: "My Salon" });
+    }
+    const updated = await marketplaceProfileRepo.updateCover(salonId, coverUrl);
+    if (!updated) throw new AppError(500, "Failed to save cover photo", "INTERNAL_ERROR");
+    return updated;
   },
 
   // ── Publish ─────────────────────────────────────────────────────────────────
