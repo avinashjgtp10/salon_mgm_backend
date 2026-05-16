@@ -4,8 +4,18 @@ import { AppError } from "../../middleware/error.middleware";
 import { salesRepository } from "./sales.repository";
 import { Sale, SaleItem, CreateSaleBody, UpdateSaleBody, CheckoutSaleBody } from "./sales.types";
 import { paymentsRepository } from "../payments/payments.repository";
+import { staffRepository } from "../staff/staff.repository";
+import { servicesRepository } from "../services/services.repository";
 
 export const salesService = {
+    async init(salonId: string): Promise<{ staff: any[]; services: any[] }> {
+        const [staffResult, services] = await Promise.all([
+            staffRepository.list(salonId, { limit: 500, is_active: true }),
+            servicesRepository.listAll({ status: "active" }, salonId),
+        ]);
+        return { staff: staffResult.data, services };
+    },
+
     async create(params: { requesterUserId: string; requesterRole?: string; body: CreateSaleBody }): Promise<{ sale: Sale; items: SaleItem[] }> {
         const { requesterUserId, body } = params;
         const sale = await salesRepository.create(body, requesterUserId);

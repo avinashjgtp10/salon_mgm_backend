@@ -3,18 +3,21 @@ import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { salesService } from "./sales.service";
 import { CreateSaleBody, UpdateSaleBody, CheckoutSaleBody } from "./sales.types";
+import { getSalonId } from "../utils/tenant.util";
 
-type AuthRequest = Request & { user?: { userId: string; role?: string } };
+type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string | null } };
 
 export const salesController = {
     async create(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const userId = req.user?.userId;
             if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+            const salonId = getSalonId(req);
+            const body = req.body as Omit<CreateSaleBody, "salon_id">;
             const result = await salesService.create({
                 requesterUserId: userId,
                 requesterRole: req.user?.role,
-                body: req.body as CreateSaleBody,
+                body: { ...body, salon_id: salonId },
             });
             return sendSuccess(res, 201, result, "Sale created successfully");
         } catch (err) { return next(err); }
@@ -28,10 +31,19 @@ export const salesController = {
         } catch (err) { return next(err); }
     },
 
+    async getInit(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const salonId = getSalonId(req);
+            const result = await salesService.init(salonId);
+            return sendSuccess(res, 200, result, "Quick sale init data fetched successfully");
+        } catch (err) { return next(err); }
+    },
+
     async list(req: AuthRequest, res: Response, next: NextFunction) {
         try {
+            const salonId = getSalonId(req);
             const sales = await salesService.list({
-                salon_id: req.query.salon_id as string,
+                salon_id: salonId,
                 client_id: req.query.client_id as string,
                 status: req.query.status as string,
             });
@@ -41,9 +53,10 @@ export const salesController = {
 
     async getDailySummary(req: AuthRequest, res: Response, next: NextFunction) {
         try {
-            const { salon_id, date } = req.query;
-            if (!salon_id || !date) throw new AppError(400, "salon_id and date query parameters are required", "VALIDATION_ERROR");
-            const summary = await salesService.getDailySummary(salon_id as string, date as string);
+            const salonId = getSalonId(req);
+            const { date } = req.query;
+            if (!date) throw new AppError(400, "date query parameter is required", "VALIDATION_ERROR");
+            const summary = await salesService.getDailySummary(salonId, date as string);
             return sendSuccess(res, 200, summary, "Daily summary fetched successfully");
         } catch (err) { return next(err); }
     },
@@ -80,12 +93,13 @@ export const salesController = {
 
     async exportSales(req: AuthRequest, res: Response, next: NextFunction) {
         try {
+            const salonId = getSalonId(req);
             const rawFormat = req.query.format as string;
             const format: "csv" | "excel" | "pdf" =
                 rawFormat === "pdf" ? "pdf" : rawFormat === "excel" ? "excel" : "csv";
 
             const { buffer, contentType, filename } = await salesService.exportSales({
-                salon_id: req.query.salon_id as string | undefined,
+                salon_id: salonId,
                 status: req.query.status as string | undefined,
                 date: req.query.date as string | undefined,
                 format,

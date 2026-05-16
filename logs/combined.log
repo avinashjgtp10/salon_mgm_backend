@@ -17976,3 +17976,198 @@
 {"level":"info","message":"⏰ Campaign scheduler started — checking every 60s","service":"salon-backend","timestamp":"2026-05-10 17:44:10"}
 {"level":"info","message":"✅ Redis connection successful","service":"salon-backend","timestamp":"2026-05-10 17:44:11"}
 {"level":"info","message":"✅ Database connection successful","service":"salon-backend","timestamp":"2026-05-10 17:44:13"}
+{"level":"info","message":"🔌 Socket.io initialized","service":"salon-backend","timestamp":"2026-05-15 15:11:37"}
+{"level":"info","message":"🚀 Server running on port 3000","service":"salon-backend","timestamp":"2026-05-15 15:11:37"}
+{"level":"info","message":"📍 Environment: development","service":"salon-backend","timestamp":"2026-05-15 15:11:37"}
+{"level":"info","message":"🌐 API: http://localhost:3000/api/v1","service":"salon-backend","timestamp":"2026-05-15 15:11:37"}
+{"level":"info","message":"⏰ Campaign scheduler started — checking every 60s","service":"salon-backend","timestamp":"2026-05-15 15:11:37"}
+{"level":"info","message":"✅ Redis connection successful","service":"salon-backend","timestamp":"2026-05-15 15:11:37"}
+{"level":"info","message":"✅ Database connection successful","service":"salon-backend","timestamp":"2026-05-15 15:11:41"}
+{"level":"info","message":"🔌 Socket.io initialized","service":"salon-backend","timestamp":"2026-05-15 15:15:26"}
+{"level":"info","message":"🚀 Server running on port 3000","service":"salon-backend","timestamp":"2026-05-15 15:15:26"}
+{"level":"info","message":"📍 Environment: development","service":"salon-backend","timestamp":"2026-05-15 15:15:26"}
+{"level":"info","message":"🌐 API: http://localhost:3000/api/v1","service":"salon-backend","timestamp":"2026-05-15 15:15:26"}
+{"level":"info","message":"⏰ Campaign scheduler started — checking every 60s","service":"salon-backend","timestamp":"2026-05-15 15:15:26"}
+{"level":"info","message":"✅ Redis connection successful","service":"salon-backend","timestamp":"2026-05-15 15:15:26"}
+{"level":"info","message":"✅ Database connection successful","service":"salon-backend","timestamp":"2026-05-15 15:15:30"}
+{"level":"info","message":"🔌 Socket.io initialized","service":"salon-backend","timestamp":"2026-05-15 15:15:41"}
+{"level":"info","message":"🚀 Server running on port 3000","service":"salon-backend","timestamp":"2026-05-15 15:15:41"}
+{"level":"info","message":"📍 Environment: development","service":"salon-backend","timestamp":"2026-05-15 15:15:41"}
+{"level":"info","message":"🌐 API: http://localhost:3000/api/v1","service":"salon-backend","timestamp":"2026-05-15 15:15:41"}
+{"level":"info","message":"⏰ Campaign scheduler started — checking every 60s","service":"salon-backend","timestamp":"2026-05-15 15:15:41"}
+{"level":"info","message":"✅ Redis connection successful","service":"salon-backend","timestamp":"2026-05-15 15:15:41"}
+{"level":"info","message":"✅ Database connection successful","service":"salon-backend","timestamp":"2026-05-15 15:15:44"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:21:14"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:21:14"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:21:14"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:21:14"}
+{"email":"eqrjr16630@minitts.net","ip":"::ffff:192.168.1.63","level":"info","message":"Login attempt","service":"salon-backend","timestamp":"2026-05-15 15:21:14"}
+{"email":"eqrjr16630@minitts.net","level":"info","message":"[authService.login] Start","service":"salon-backend","timestamp":"2026-05-15 15:21:14"}
+{"email":"eqrjr16630@minitts.net","level":"info","message":"[authService.login] Login successful","role":"salon_owner","salonId":"c63904bb-1c94-4e8e-bf22-1a5ec7168d02","service":"salon-backend","timestamp":"2026-05-15 15:21:19","userId":"c3d3a1c9-9d64-457b-ab3e-10fe305585b8"}
+{"email":"eqrjr16630@minitts.net","ip":"::ffff:192.168.1.63","level":"info","message":"Login successful","service":"salon-backend","timestamp":"2026-05-15 15:21:19"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:21:19"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:21:19"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:21:19"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:21:19"}
+{"level":"info","message":"GET /salons/me called","method":"GET","path":"/api/v1/salons/me","service":"salon-backend","timestamp":"2026-05-15 15:21:19","userId":"c3d3a1c9-9d64-457b-ab3e-10fe305585b8"}
+{"level":"info","message":"GET /salons/me success","salonId":"c63904bb-1c94-4e8e-bf22-1a5ec7168d02","service":"salon-backend","timestamp":"2026-05-15 15:21:20","userId":"c3d3a1c9-9d64-457b-ab3e-10fe305585b8"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:21:20"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:21:20"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:21:20"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:21:20"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:21:20"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:21:20"}
+{"level":"info","message":"GET /salons/me called","method":"GET","path":"/api/v1/salons/me","service":"salon-backend","timestamp":"2026-05-15 15:21:20","userId":"c3d3a1c9-9d64-457b-ab3e-10fe305585b8"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:21:20"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:21:20"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:21:20"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:21:20"}
+{"level":"info","message":"GET /users/me called","method":"GET","path":"/api/v1/users/me","service":"salon-backend","timestamp":"2026-05-15 15:21:20","userId":"c3d3a1c9-9d64-457b-ab3e-10fe305585b8"}
+{"level":"info","message":"Fetching current user profile","service":"salon-backend","timestamp":"2026-05-15 15:21:20","userId":"c3d3a1c9-9d64-457b-ab3e-10fe305585b8"}
+{"level":"info","message":"GET /salons/me success","salonId":"c63904bb-1c94-4e8e-bf22-1a5ec7168d02","service":"salon-backend","timestamp":"2026-05-15 15:21:21","userId":"c3d3a1c9-9d64-457b-ab3e-10fe305585b8"}
+{"level":"info","message":"User profile fetched successfully","service":"salon-backend","timestamp":"2026-05-15 15:21:23","userId":"c3d3a1c9-9d64-457b-ab3e-10fe305585b8"}
+{"level":"info","message":"GET /users/me success","method":"GET","path":"/api/v1/users/me","service":"salon-backend","timestamp":"2026-05-15 15:21:23","userId":"c3d3a1c9-9d64-457b-ab3e-10fe305585b8"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:21:39"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:21:39"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:21:39"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:21:39"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:21:49"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:21:49"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:21:49"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:21:49"}
+{"level":"info","message":"GET /products called","method":"GET","path":"/api/v1/products","requesterRole":"salon_owner","requesterUserId":"c3d3a1c9-9d64-457b-ab3e-10fe305585b8","service":"salon-backend","timestamp":"2026-05-15 15:21:49"}
+{"filters":{},"level":"info","message":"productsService.list called","requesterRole":"salon_owner","requesterUserId":"c3d3a1c9-9d64-457b-ab3e-10fe305585b8","salonId":"c63904bb-1c94-4e8e-bf22-1a5ec7168d02","service":"salon-backend","timestamp":"2026-05-15 15:21:50"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:21:53"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:21:53"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:21:53"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:21:53"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:22:16"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:22:16"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:22:16"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:22:16"}
+{"0":"C","1":"o","10":" ","11":"t","12":"e","13":"r","14":"m","15":"i","16":"n","17":"a","18":"t","19":"e","2":"n","20":"d","21":" ","22":"d","23":"u","24":"e","25":" ","26":"t","27":"o","28":" ","29":"c","3":"n","30":"o","31":"n","32":"n","33":"e","34":"c","35":"t","36":"i","37":"o","38":"n","39":" ","4":"e","40":"t","41":"i","42":"m","43":"e","44":"o","45":"u","46":"t","5":"c","6":"t","7":"i","8":"o","9":"n","level":"error","message":"Campaign scheduler error:","service":"salon-backend","timestamp":"2026-05-15 15:22:51"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:29:09"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:29:09"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:29:09"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:29:09"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:29:21"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:29:21"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:29:21"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:29:21"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:29:52"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:29:52"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:29:52"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:29:52"}
+{"level":"info","message":"GET /products called","method":"GET","path":"/api/v1/products","requesterRole":"salon_owner","requesterUserId":"c3d3a1c9-9d64-457b-ab3e-10fe305585b8","service":"salon-backend","timestamp":"2026-05-15 15:29:52"}
+{"filters":{},"level":"info","message":"productsService.list called","requesterRole":"salon_owner","requesterUserId":"c3d3a1c9-9d64-457b-ab3e-10fe305585b8","salonId":"c63904bb-1c94-4e8e-bf22-1a5ec7168d02","service":"salon-backend","timestamp":"2026-05-15 15:29:52"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:36:18"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:36:18"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:36:18"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:36:18"}
+{"ip":"::ffff:192.168.1.63","level":"info","message":"Token refresh request","service":"salon-backend","timestamp":"2026-05-15 15:36:18"}
+{"level":"info","message":"[authService.refresh] Token refresh requested","service":"salon-backend","timestamp":"2026-05-15 15:36:18"}
+{"level":"info","message":"[authService.refresh] New access token issued","salonId":"c63904bb-1c94-4e8e-bf22-1a5ec7168d02","service":"salon-backend","timestamp":"2026-05-15 15:36:22","userId":"c3d3a1c9-9d64-457b-ab3e-10fe305585b8"}
+{"level":"info","message":"Token refreshed successfully","service":"salon-backend","timestamp":"2026-05-15 15:36:22"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:36:51"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:36:51"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:36:51"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:36:51"}
+{"email":"eqrjr16630@minitts.net","ip":"::ffff:192.168.1.63","level":"info","message":"Login attempt","service":"salon-backend","timestamp":"2026-05-15 15:36:51"}
+{"email":"eqrjr16630@minitts.net","level":"info","message":"[authService.login] Start","service":"salon-backend","timestamp":"2026-05-15 15:36:51"}
+{"email":"eqrjr16630@minitts.net","level":"info","message":"[authService.login] Login successful","role":"salon_owner","salonId":"c63904bb-1c94-4e8e-bf22-1a5ec7168d02","service":"salon-backend","timestamp":"2026-05-15 15:36:54","userId":"c3d3a1c9-9d64-457b-ab3e-10fe305585b8"}
+{"email":"eqrjr16630@minitts.net","ip":"::ffff:192.168.1.63","level":"info","message":"Login successful","service":"salon-backend","timestamp":"2026-05-15 15:36:54"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:36:54"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:36:54"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:36:54"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:36:54"}
+{"level":"info","message":"GET /salons/me called","method":"GET","path":"/api/v1/salons/me","service":"salon-backend","timestamp":"2026-05-15 15:36:54","userId":"c3d3a1c9-9d64-457b-ab3e-10fe305585b8"}
+{"level":"info","message":"GET /salons/me success","salonId":"c63904bb-1c94-4e8e-bf22-1a5ec7168d02","service":"salon-backend","timestamp":"2026-05-15 15:36:54","userId":"c3d3a1c9-9d64-457b-ab3e-10fe305585b8"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:36:54"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:36:54"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:36:54"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:36:54"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:36:54"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:36:54"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:36:54"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:36:54"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:36:54"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:36:54"}
+{"level":"info","message":"GET /salons/me called","method":"GET","path":"/api/v1/salons/me","service":"salon-backend","timestamp":"2026-05-15 15:36:54","userId":"c3d3a1c9-9d64-457b-ab3e-10fe305585b8"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:36:54"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:36:55"}
+{"level":"info","message":"GET /users/me called","method":"GET","path":"/api/v1/users/me","service":"salon-backend","timestamp":"2026-05-15 15:36:55","userId":"c3d3a1c9-9d64-457b-ab3e-10fe305585b8"}
+{"level":"info","message":"Fetching current user profile","service":"salon-backend","timestamp":"2026-05-15 15:36:55","userId":"c3d3a1c9-9d64-457b-ab3e-10fe305585b8"}
+{"level":"info","message":"User profile fetched successfully","service":"salon-backend","timestamp":"2026-05-15 15:36:58","userId":"c3d3a1c9-9d64-457b-ab3e-10fe305585b8"}
+{"level":"info","message":"GET /users/me success","method":"GET","path":"/api/v1/users/me","service":"salon-backend","timestamp":"2026-05-15 15:36:58","userId":"c3d3a1c9-9d64-457b-ab3e-10fe305585b8"}
+{"level":"info","message":"GET /salons/me success","salonId":"c63904bb-1c94-4e8e-bf22-1a5ec7168d02","service":"salon-backend","timestamp":"2026-05-15 15:36:58","userId":"c3d3a1c9-9d64-457b-ab3e-10fe305585b8"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:37:28"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:37:28"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:37:28"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:37:28"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:37:50"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:37:50"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:37:50"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:37:50"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:37:50"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:37:50"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:37:50"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:37:50"}
+{"code":"VALIDATION_ERROR","level":"error","message":"AppError: salon_id and date query parameters are required","method":"GET","service":"salon-backend","statusCode":400,"timestamp":"2026-05-15 15:37:50","url":"/api/v1/sales/summary?salon_id=c63904bb-1c94-4e8e-bf22-1a5ec7168d02"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:37:51"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:37:51"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:37:51"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 15:37:51"}
+{"0":"C","1":"o","10":" ","11":"t","12":"e","13":"r","14":"m","15":"i","16":"n","17":"a","18":"t","19":"e","2":"n","20":"d","21":" ","22":"d","23":"u","24":"e","25":" ","26":"t","27":"o","28":" ","29":"c","3":"n","30":"o","31":"n","32":"n","33":"e","34":"c","35":"t","36":"i","37":"o","38":"n","39":" ","4":"e","40":"t","41":"i","42":"m","43":"e","44":"o","45":"u","46":"t","5":"c","6":"t","7":"i","8":"o","9":"n","level":"error","message":"Campaign scheduler error:","service":"salon-backend","timestamp":"2026-05-15 15:54:51"}
+{"level":"info","message":"🔌 Socket.io initialized","service":"salon-backend","timestamp":"2026-05-15 15:55:59"}
+{"level":"info","message":"🚀 Server running on port 3000","service":"salon-backend","timestamp":"2026-05-15 15:55:59"}
+{"level":"info","message":"📍 Environment: development","service":"salon-backend","timestamp":"2026-05-15 15:55:59"}
+{"level":"info","message":"🌐 API: http://localhost:3000/api/v1","service":"salon-backend","timestamp":"2026-05-15 15:55:59"}
+{"level":"info","message":"⏰ Campaign scheduler started — checking every 60s","service":"salon-backend","timestamp":"2026-05-15 15:55:59"}
+{"level":"info","message":"✅ Redis connection successful","service":"salon-backend","timestamp":"2026-05-15 15:55:59"}
+{"level":"info","message":"✅ Database connection successful","service":"salon-backend","timestamp":"2026-05-15 15:56:08"}
+{"level":"info","message":"🔌 Socket.io initialized","service":"salon-backend","timestamp":"2026-05-15 15:57:43"}
+{"level":"info","message":"🚀 Server running on port 3000","service":"salon-backend","timestamp":"2026-05-15 15:57:43"}
+{"level":"info","message":"📍 Environment: development","service":"salon-backend","timestamp":"2026-05-15 15:57:43"}
+{"level":"info","message":"🌐 API: http://localhost:3000/api/v1","service":"salon-backend","timestamp":"2026-05-15 15:57:43"}
+{"level":"info","message":"⏰ Campaign scheduler started — checking every 60s","service":"salon-backend","timestamp":"2026-05-15 15:57:43"}
+{"level":"info","message":"✅ Redis connection successful","service":"salon-backend","timestamp":"2026-05-15 15:57:43"}
+{"level":"info","message":"✅ Database connection successful","service":"salon-backend","timestamp":"2026-05-15 15:57:46"}
+{"level":"info","message":"🔌 Socket.io initialized","service":"salon-backend","timestamp":"2026-05-15 15:57:58"}
+{"level":"info","message":"🚀 Server running on port 3000","service":"salon-backend","timestamp":"2026-05-15 15:57:58"}
+{"level":"info","message":"📍 Environment: development","service":"salon-backend","timestamp":"2026-05-15 15:57:58"}
+{"level":"info","message":"🌐 API: http://localhost:3000/api/v1","service":"salon-backend","timestamp":"2026-05-15 15:57:58"}
+{"level":"info","message":"⏰ Campaign scheduler started — checking every 60s","service":"salon-backend","timestamp":"2026-05-15 15:57:58"}
+{"level":"info","message":"✅ Redis connection successful","service":"salon-backend","timestamp":"2026-05-15 15:57:58"}
+{"level":"info","message":"✅ Database connection successful","service":"salon-backend","timestamp":"2026-05-15 15:58:01"}
+{"level":"info","message":"🔌 Socket.io initialized","service":"salon-backend","timestamp":"2026-05-15 15:58:13"}
+{"level":"info","message":"🚀 Server running on port 3000","service":"salon-backend","timestamp":"2026-05-15 15:58:13"}
+{"level":"info","message":"📍 Environment: development","service":"salon-backend","timestamp":"2026-05-15 15:58:13"}
+{"level":"info","message":"🌐 API: http://localhost:3000/api/v1","service":"salon-backend","timestamp":"2026-05-15 15:58:13"}
+{"level":"info","message":"⏰ Campaign scheduler started — checking every 60s","service":"salon-backend","timestamp":"2026-05-15 15:58:13"}
+{"level":"info","message":"✅ Redis connection successful","service":"salon-backend","timestamp":"2026-05-15 15:58:13"}
+{"level":"info","message":"✅ Database connection successful","service":"salon-backend","timestamp":"2026-05-15 15:58:16"}
+{"level":"info","message":"🔌 Socket.io initialized","service":"salon-backend","timestamp":"2026-05-15 15:59:28"}
+{"level":"info","message":"🚀 Server running on port 3000","service":"salon-backend","timestamp":"2026-05-15 15:59:28"}
+{"level":"info","message":"📍 Environment: development","service":"salon-backend","timestamp":"2026-05-15 15:59:28"}
+{"level":"info","message":"🌐 API: http://localhost:3000/api/v1","service":"salon-backend","timestamp":"2026-05-15 15:59:28"}
+{"level":"info","message":"⏰ Campaign scheduler started — checking every 60s","service":"salon-backend","timestamp":"2026-05-15 15:59:28"}
+{"level":"info","message":"✅ Redis connection successful","service":"salon-backend","timestamp":"2026-05-15 15:59:28"}
+{"cause":{},"level":"error","message":"Scheduler error: Connection terminated due to connection timeout","service":"salon-backend","stack":"Error: Connection terminated due to connection timeout\n    at C:\\Users\\HP\\Desktop\\salon_project\\salon backend\\salon_mgm_backend\\node_modules\\pg-pool\\index.js:45:11\n    at processTicksAndRejections (node:internal/process/task_queues:105:5)\n    at Object.findDueScheduled (C:\\Users\\HP\\Desktop\\salon_project\\salon backend\\salon_mgm_backend\\src\\modules\\marketing\\whatsapp\\campaigns\\campaigns.repository.ts:30:22)\n    at Object.runDueScheduledCampaigns (C:\\Users\\HP\\Desktop\\salon_project\\salon backend\\salon_mgm_backend\\src\\modules\\marketing\\whatsapp\\campaigns\\campaigns.service.ts:106:17)","timestamp":"2026-05-15 15:59:38"}
+{"level":"info","message":"✅ Database connection successful","service":"salon-backend","timestamp":"2026-05-15 15:59:40"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 16:01:14"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 16:01:14"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 16:01:14"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 16:01:14"}
+{"code":"INVALID_TOKEN","level":"error","message":"AppError: Unauthorized","method":"GET","service":"salon-backend","statusCode":401,"timestamp":"2026-05-15 16:01:14","url":"/api/v1/dashboard/all?salon_id=c63904bb-1c94-4e8e-bf22-1a5ec7168d02&period=monthly&date=2026-05-15"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 16:01:14"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 16:01:14"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 16:01:14"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 16:01:14"}
+{"ip":"::ffff:192.168.1.63","level":"info","message":"Token refresh request","service":"salon-backend","timestamp":"2026-05-15 16:01:14"}
+{"level":"info","message":"[authService.refresh] Token refresh requested","service":"salon-backend","timestamp":"2026-05-15 16:01:14"}
+{"level":"info","message":"[authService.refresh] New access token issued","salonId":"c63904bb-1c94-4e8e-bf22-1a5ec7168d02","service":"salon-backend","timestamp":"2026-05-15 16:01:18","userId":"c3d3a1c9-9d64-457b-ab3e-10fe305585b8"}
+{"level":"info","message":"Token refreshed successfully","service":"salon-backend","timestamp":"2026-05-15 16:01:18"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 16:01:18"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 16:01:18"}
+{"level":"info","message":"CORS check - Incoming Origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 16:01:18"}
+{"level":"info","message":"CORS allowed for origin: http://localhost:5173","service":"salon-backend","timestamp":"2026-05-15 16:01:18"}

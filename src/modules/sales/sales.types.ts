@@ -35,7 +35,7 @@ export type SaleItem = {
 };
 
 export type CreateSaleBody = {
-    salon_id: string;
+    salon_id: string; // injected from JWT in controller, not accepted from frontend body
     client_id?: string;
     appointment_id?: string;
     staff_id?: string;

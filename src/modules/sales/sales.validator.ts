@@ -1,9 +1,6 @@
 import { NextFunction, Request, Response } from "express";
 import { AppError } from "../../middleware/error.middleware";
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const isUUID = (v: any) => typeof v === "string" && UUID_RE.test(v);
-
 export const validateCreateSale = (
     req: Request,
     _res: Response,
@@ -11,9 +8,6 @@ export const validateCreateSale = (
 ) => {
     try {
         const b = req.body;
-        if (!b.salon_id || !isUUID(b.salon_id)) {
-            throw new AppError(400, "salon_id is required and must be a UUID", "VALIDATION_ERROR");
-        }
         if (!Array.isArray(b.items) || b.items.length === 0) {
             throw new AppError(400, "items array is required and cannot be empty", "VALIDATION_ERROR");
         }
