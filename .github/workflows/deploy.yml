@@ -1,4 +1,4 @@
-name: Deploy to EC2
+name: Deploy Backend to EC2
 
 on:
   push:
@@ -10,20 +10,26 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
       - name: Deploy to EC2 via SSH
-        uses: appleboy/ssh-action@v1.0.0
+        uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           port: ${{ secrets.EC2_PORT }}
+          script_stop: true
           script: |
+            set -e
             cd /home/ubuntu/salon_mgm_backend
-            git pull origin main
-            npm install
+            echo "📥 Pulling latest code..."
+            git fetch origin main
+            git reset --hard origin/main
+            echo "📦 Installing dependencies..."
+            npm ci
+            echo "🔨 Building..."
             npm run build
-            pm2 restart salon-backend
-            echo "✅ Deployed successfully!"
+            echo "🔄 Restarting server..."
+            pm2 restart salon-backend --update-env
+            sleep 3
+            pm2 list | grep salon-backend
+            echo "✅ Deployed commit: $(git rev-parse --short HEAD)"
