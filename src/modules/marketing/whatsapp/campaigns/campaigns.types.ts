@@ -1,4 +1,4 @@
-export type WACampaignStatus = 'DRAFT' | 'SENDING' | 'PAUSED' | 'COMPLETED' | 'FAILED'
+export type WACampaignStatus = 'DRAFT' | 'SCHEDULED' | 'SENDING' | 'PAUSED' | 'COMPLETED' | 'FAILED'
 export type WAContactStatus  = 'PENDING' | 'SENT' | 'DELIVERED' | 'READ' | 'FAILED' | 'BLOCKED'
 
 export type WACampaign = {
@@ -41,10 +41,11 @@ export type WACampaignContact = {
 }
 
 export type CreateCampaignBody = {
-  name:        string
-  template_id: string
-  batch_size?: number
-  contacts:    Array<{
+  name:          string
+  template_id:   string
+  batch_size?:   number
+  scheduled_at?: string | null   // ISO string — if set, campaign is scheduled
+  contacts:      Array<{
     phone:       string
     name?:       string | null
     variables?:  Record<string, any>

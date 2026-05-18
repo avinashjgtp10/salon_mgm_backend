@@ -12,6 +12,7 @@ router.post("/", authMiddleware, roleMiddleware("salon_owner", "admin", "staff")
 router.get("/", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), salesController.list);
 router.get("/summary", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), salesController.getDailySummary);
 router.get("/export", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), salesController.exportSales);
+router.get("/init", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), salesController.getInit);
 router.get("/:id", authMiddleware, roleMiddleware("salon_owner", "admin", "staff", "client"), salesController.getById);
 router.patch("/:id", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), validateUpdateSale, salesController.update);
 router.post("/:id/checkout", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), validateCheckoutSale, salesController.checkout);

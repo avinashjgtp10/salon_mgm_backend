@@ -5,6 +5,8 @@ import type {
   RevenueDataPoint,
   TopStaffMember,
   ServiceMixItem,
+  DashboardService,
+  DashboardAll,
 } from "./salon-dashboard.types";
 
 // Map appointment status → frontend display status
@@ -123,7 +125,7 @@ export const salonDashboardRepository = {
   },
 
   // ── Today's Appointments ─────────────────────────────────────────────────────
-  async getTodayAppointments(salonId: string): Promise<TodayAppointment[]> {
+  async getTodayAppointments(salonId: string, date?: string | null): Promise<TodayAppointment[]> {
     const { rows } = await pool.query<{
       id: string;
       client_name: string;
@@ -157,9 +159,9 @@ export const salonDashboardRepository = {
        LEFT JOIN clients c ON c.id = a.client_id
        LEFT JOIN staff  s ON s.id = a.staff_id
        WHERE a.salon_id = $1
-         AND DATE(a.scheduled_at AT TIME ZONE 'UTC') = CURRENT_DATE
+         AND DATE(a.scheduled_at AT TIME ZONE 'UTC') = COALESCE($2::date, CURRENT_DATE)
        ORDER BY a.scheduled_at ASC`,
-      [salonId]
+      [salonId, date ?? null]
     );
 
     return rows.map((row) => ({
@@ -173,25 +175,62 @@ export const salonDashboardRepository = {
     }));
   },
 
-  // ── Revenue Chart (last 12 months) ───────────────────────────────────────────
-  async getRevenueChart(salonId: string): Promise<RevenueDataPoint[]> {
-    const { rows } = await pool.query<{
-      month: string;
-      revenue: string;
-    }>(
-      `SELECT
-         TO_CHAR(date_trunc('month', created_at), 'Mon') AS month,
-         date_trunc('month', created_at)                 AS month_sort,
-         COALESCE(SUM(total_amount), 0)::numeric         AS revenue
-       FROM sales
-       WHERE salon_id = $1
-         AND status = 'completed'
-         AND created_at >= NOW() - INTERVAL '12 months'
-       GROUP BY date_trunc('month', created_at),
-                TO_CHAR(date_trunc('month', created_at), 'Mon')
-       ORDER BY month_sort ASC`,
-      [salonId]
-    );
+  // ── Revenue Chart (today / weekly / monthly / yearly) ───────────────────────
+  async getRevenueChart(salonId: string, period: string = "monthly"): Promise<RevenueDataPoint[]> {
+    let sql: string;
+
+    if (period === "today") {
+      sql = `
+        SELECT
+          TO_CHAR(date_trunc('hour', created_at AT TIME ZONE 'UTC'), 'HH12AM') AS month,
+          date_trunc('hour', created_at AT TIME ZONE 'UTC')                     AS sort_key,
+          COALESCE(SUM(total_amount), 0)::numeric                               AS revenue
+        FROM sales
+        WHERE salon_id = $1
+          AND status = 'completed'
+          AND DATE(created_at AT TIME ZONE 'UTC') = CURRENT_DATE
+        GROUP BY date_trunc('hour', created_at AT TIME ZONE 'UTC')
+        ORDER BY sort_key ASC`;
+    } else if (period === "weekly") {
+      sql = `
+        SELECT
+          TO_CHAR(DATE(created_at AT TIME ZONE 'UTC'), 'Dy DD') AS month,
+          DATE(created_at AT TIME ZONE 'UTC')                    AS sort_key,
+          COALESCE(SUM(total_amount), 0)::numeric                AS revenue
+        FROM sales
+        WHERE salon_id = $1
+          AND status = 'completed'
+          AND created_at >= CURRENT_DATE - INTERVAL '6 days'
+        GROUP BY DATE(created_at AT TIME ZONE 'UTC')
+        ORDER BY sort_key ASC`;
+    } else if (period === "yearly") {
+      sql = `
+        SELECT
+          TO_CHAR(date_trunc('month', created_at), 'Mon YY') AS month,
+          date_trunc('month', created_at)                     AS sort_key,
+          COALESCE(SUM(total_amount), 0)::numeric             AS revenue
+        FROM sales
+        WHERE salon_id = $1
+          AND status = 'completed'
+          AND created_at >= NOW() - INTERVAL '12 months'
+        GROUP BY date_trunc('month', created_at)
+        ORDER BY sort_key ASC`;
+    } else {
+      // monthly — daily data for the current calendar month
+      sql = `
+        SELECT
+          TO_CHAR(DATE(created_at AT TIME ZONE 'UTC'), 'DD') AS month,
+          DATE(created_at AT TIME ZONE 'UTC')                 AS sort_key,
+          COALESCE(SUM(total_amount), 0)::numeric             AS revenue
+        FROM sales
+        WHERE salon_id = $1
+          AND status = 'completed'
+          AND date_trunc('month', created_at AT TIME ZONE 'UTC') = date_trunc('month', NOW() AT TIME ZONE 'UTC')
+        GROUP BY DATE(created_at AT TIME ZONE 'UTC')
+        ORDER BY sort_key ASC`;
+    }
+
+    const { rows } = await pool.query<{ month: string; revenue: string }>(sql, [salonId]);
 
     return rows.map((row) => ({
       month: row.month,
@@ -200,7 +239,7 @@ export const salonDashboardRepository = {
     }));
   },
 
-  // ── Top Staff by Client Count ────────────────────────────────────────────────
+  // ── Top Staff by Revenue ────────────────────────────────────────────────────
   async getTopStaff(salonId: string): Promise<TopStaffMember[]> {
     const { rows } = await pool.query<{
       id: string;
@@ -234,7 +273,7 @@ export const salonDashboardRepository = {
        WHERE s.salon_id = $1
          AND s.is_active = true
        GROUP BY s.id, s.first_name, s.last_name, s.designation
-       ORDER BY client_count DESC, revenue DESC
+       ORDER BY revenue DESC, client_count DESC
        LIMIT 10`,
       [salonId]
     );
@@ -282,5 +321,58 @@ export const salonDashboardRepository = {
       name: row.name,
       value: round1((parseInt(row.booking_count, 10) / total) * 100),
     }));
+  },
+
+  // ── Active Services catalog ──────────────────────────────────────────────────
+  async getServices(salonId: string): Promise<DashboardService[]> {
+    const { rows } = await pool.query<{
+      id: string;
+      name: string;
+      price: string;
+      duration: string;
+      category_name: string | null;
+      price_type: string | null;
+      is_active: boolean;
+    }>(
+      `SELECT
+         s.id,
+         s.name,
+         COALESCE(s.price::text, '0')          AS price,
+         COALESCE(s.duration_minutes, 0)       AS duration,
+         c.name                                AS category_name,
+         s.price_type,
+         s.is_active
+       FROM services s
+       LEFT JOIN service_categories c ON c.id = s.category_id
+       WHERE s.salon_id = $1
+         AND s.is_active = true
+       ORDER BY s.name ASC`,
+      [salonId]
+    );
+
+    return rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      price: row.price,
+      duration: parseInt(String(row.duration), 10),
+      category_name: row.category_name ?? null,
+      price_type: (row.price_type as DashboardService["price_type"]) ?? null,
+      is_active: row.is_active,
+    }));
+  },
+
+  // ── Combined: all dashboard data in one call ────────────────────────────────
+  async getAll(salonId: string, period: string = "monthly", date?: string): Promise<DashboardAll> {
+    const [summary, todayAppointments, revenueChart, topStaff, serviceMix, services] =
+      await Promise.all([
+        this.getSummary(salonId),
+        this.getTodayAppointments(salonId, date),
+        this.getRevenueChart(salonId, period),
+        this.getTopStaff(salonId),
+        this.getServiceMix(salonId),
+        this.getServices(salonId),
+      ]);
+
+    return { summary, todayAppointments, revenueChart, topStaff, serviceMix, services };
   },
 };

@@ -168,13 +168,29 @@ export const servicesRepository = {
   },
 
   async update(id: string, patch: UpdateServiceBody, salonId: string): Promise<Service> {
-    const normalized: Record<string, unknown> = { ...patch };
-    if (normalized.duration !== undefined) {
-      normalized.duration_minutes = normalized.duration;
-      delete normalized.duration;
+    // Only these columns actually exist in the services table.
+    // Any extra fields sent by the client (all_members, padding_before,
+    // discounted_price, image_url, etc.) are silently ignored so a dynamic
+    // SET clause never references non-existent columns.
+    const ALLOWED: ReadonlySet<string> = new Set([
+      "name", "category_id", "treatment_type", "description",
+      "price_type", "price", "duration_minutes", "is_active",
+      "online_booking", "commission_enabled", "resource_required",
+    ]);
+
+    const raw = patch as Record<string, unknown>;
+    const normalized: Record<string, unknown> = {};
+
+    // duration → duration_minutes
+    if (raw.duration !== undefined) normalized.duration_minutes = raw.duration;
+
+    // Copy only whitelisted columns (skips staff_ids, team_member_ids,
+    // all_members, padding_before, padding_after, image_url, etc.)
+    for (const key of ALLOWED) {
+      if (key !== "duration_minutes" && raw[key] !== undefined) {
+        normalized[key] = raw[key];
+      }
     }
-    delete normalized.staff_ids;
-    delete normalized.team_member_ids;
 
     const keys = Object.keys(normalized);
     if (!keys.length) {
@@ -319,10 +335,18 @@ export const servicesRepository = {
   async getDetailById(serviceId: string, salonId: string): Promise<ServiceDetail | null> {
     const svc = await this.findById(serviceId, salonId);
     if (!svc) return null;
-    const [staff, add_on_groups] = await Promise.all([
-      this.getStaff(serviceId),
-      this.listAddOnGroupsWithOptions(serviceId),
-    ]);
+
+    let staff: ServiceStaff[] = [];
+    let add_on_groups: AddOnGroupDetail[] = [];
+    try {
+      [staff, add_on_groups] = await Promise.all([
+        this.getStaff(serviceId),
+        this.listAddOnGroupsWithOptions(serviceId),
+      ]);
+    } catch {
+      // Secondary tables may not exist yet; return base service data
+    }
+
     return { ...svc, staff, add_on_groups };
   },
 };

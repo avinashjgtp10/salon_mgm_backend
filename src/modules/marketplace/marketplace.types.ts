@@ -40,6 +40,9 @@ export type MarketplaceProfile = {
   business_email: string | null;
   // About
   venue_description: string | null;
+  // Branding
+  logo_url: string | null;
+  cover_url: string | null;
   // Status
   is_published: boolean;
   created_at: string;

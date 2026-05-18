@@ -1,8 +1,78 @@
+import axios from 'axios'
+import FormData from 'form-data'
 import { AppError } from '../../../../middleware/error.middleware'
 import { templatesRepository } from './templates.repository'
 import { configRepository } from '../config/config.repository'
 import { whatsappMetaApi } from '../shared/whatsapp.api'
 import { CreateTemplateBody } from './templates.types'
+
+const WA_BASE_URL    = process.env.WA_BASE_URL    ?? 'https://graph.facebook.com'
+const WA_API_VERSION = process.env.WA_API_VERSION ?? 'v19.0'
+
+// ── Helper: extract {{1}}, {{2}} variables and build example values ────────────
+function extractExamples(text: string): string[] {
+  const matches = text.match(/{{\d+}}/g) ?? []
+  return matches
+    .map(m => parseInt(m.replace(/[{}]/g, '')))
+    .sort((a, b) => a - b)
+    .map(n => `Example${n}`)
+}
+
+// ── Upload media via Resumable Upload API → get 4::... handle for template submission ──
+async function uploadMediaHandle(
+  file: Express.Multer.File,
+  appId: string,
+  accessToken: string
+): Promise<string> {
+  const sessionRes = await axios.post(
+    `${WA_BASE_URL}/${WA_API_VERSION}/${appId}/uploads`,
+    null,
+    {
+      params: {
+        file_length:  file.size,
+        file_type:    file.mimetype,
+        file_name:    file.originalname,
+        access_token: accessToken,
+      },
+    }
+  )
+  const uploadSessionId = sessionRes.data.id
+  if (!uploadSessionId) throw new Error('No upload session ID returned from Meta')
+
+  const uploadRes = await axios.post(
+    `${WA_BASE_URL}/${WA_API_VERSION}/${uploadSessionId}`,
+    file.buffer,
+    {
+      headers: {
+        Authorization:  `OAuth ${accessToken}`,
+        'file_offset':  '0',
+        'Content-Type': file.mimetype,
+      },
+    }
+  )
+  if (!uploadRes.data.h) throw new Error('No upload handle returned from Meta')
+  return uploadRes.data.h
+}
+
+// ── Upload media via Phone Number ID → get numeric media ID (for sending messages) ──
+async function uploadMediaId(
+  file: Express.Multer.File,
+  phoneNumberId: string,
+  accessToken: string
+): Promise<string> {
+  const form = new FormData()
+  form.append('messaging_product', 'whatsapp')
+  form.append('type', file.mimetype)
+  form.append('file', file.buffer, { filename: file.originalname, contentType: file.mimetype })
+
+  const res = await axios.post(
+    `${WA_BASE_URL}/${WA_API_VERSION}/${phoneNumberId}/media`,
+    form,
+    { headers: { Authorization: `Bearer ${accessToken}`, ...form.getHeaders() } }
+  )
+  if (!res.data.id) throw new Error('No media ID returned from Meta')
+  return res.data.id
+}
 
 export const templatesService = {
 
@@ -16,26 +86,67 @@ export const templatesService = {
     return t
   },
 
-  async create(salonId: string, body: CreateTemplateBody) {
+  async create(salonId: string, body: CreateTemplateBody, file?: Express.Multer.File) {
+    console.log('📋 Template create called — header_type:', body.header_type, '| file present:', !!file)
     const config = await configRepository.findBySalonId(salonId)
     if (!config) throw new AppError(400, 'WhatsApp not configured for this salon', 'WA_NOT_CONFIGURED')
 
     const components: any[] = []
+    let headerMediaId: string | undefined
 
+    // ── Header ────────────────────────────────────────────────────────────────
     if (body.header_type && body.header_type !== 'none') {
       if (body.header_type === 'text' && body.header_text) {
-        components.push({ type: 'HEADER', format: 'TEXT', text: body.header_text })
-      } else if (['image', 'video', 'document'].includes(body.header_type)) {
+        const headerExamples = extractExamples(body.header_text)
+        const headerComponent: any = { type: 'HEADER', format: 'TEXT', text: body.header_text }
+        if (headerExamples.length > 0) {
+          headerComponent.example = { header_text: headerExamples }
+        }
+        components.push(headerComponent)
+
+      } else if (file && ['image', 'video', 'document'].includes(body.header_type)) {
+        console.log('📁 File received:', file?.originalname, file?.mimetype, file?.size, 'bytes')
+        try {
+          const appId = (config as any).app_id
+          if (!appId) throw new Error('app_id not configured in WhatsApp settings')
+
+          // Get handle for template submission to Meta
+          const handle = await uploadMediaHandle(file, appId, config.access_token)
+          console.log('✅ Upload handle:', handle)
+
+          // Get numeric media ID for sending messages later
+          headerMediaId = await uploadMediaId(file, config.phone_number_id, config.access_token)
+          console.log('✅ Media ID:', headerMediaId)
+
+          const formatMap: Record<string, string> = { image: 'IMAGE', video: 'VIDEO', document: 'DOCUMENT' }
+          components.push({
+            type:    'HEADER',
+            format:  formatMap[body.header_type],
+            example: { header_handle: [handle] },
+          })
+        } catch (mediaErr: any) {
+          console.error('❌ Media upload failed:', mediaErr?.response?.data ?? mediaErr?.message)
+          components.push({ type: 'HEADER', format: body.header_type.toUpperCase() })
+        }
+      } else {
         components.push({ type: 'HEADER', format: body.header_type.toUpperCase() })
       }
     }
 
-    components.push({ type: 'BODY', text: body.body_text })
+    // ── Body ──────────────────────────────────────────────────────────────────
+    const bodyExamples = extractExamples(body.body_text)
+    const bodyComponent: any = { type: 'BODY', text: body.body_text }
+    if (bodyExamples.length > 0) {
+      bodyComponent.example = { body_text: [bodyExamples] }
+    }
+    components.push(bodyComponent)
 
+    // ── Footer ────────────────────────────────────────────────────────────────
     if (body.footer_text) {
       components.push({ type: 'FOOTER', text: body.footer_text })
     }
 
+    // ── Buttons ───────────────────────────────────────────────────────────────
     if (body.buttons && body.buttons.length > 0) {
       components.push({
         type:    'BUTTONS',
@@ -44,7 +155,7 @@ export const templatesService = {
           if (b.type === 'url')         return { type: 'URL',          text: b.text, url: b.value }
           if (b.type === 'phone')       return { type: 'PHONE_NUMBER', text: b.text, phone_number: b.value }
           return null
-        }),
+        }).filter(Boolean),
       })
     }
 
@@ -62,13 +173,14 @@ export const templatesService = {
       })
       metaTemplateId = meta.id
       status         = meta.status ?? 'PENDING'
-    } catch {
-      // Save locally even if Meta submission fails
+    } catch (err: any) {
+      console.error('Meta submission error:', err?.response?.data ?? err?.message)
     }
 
     return templatesRepository.create(salonId, {
       ...body,
       meta_template_id: metaTemplateId,
+      header_media_id:  headerMediaId,
       status,
     })
   },
@@ -78,7 +190,6 @@ export const templatesService = {
     if (!template) throw new AppError(404, 'Template not found', 'NOT_FOUND')
 
     const config = await configRepository.findBySalonId(salonId)
-
     if (!config || !template.meta_template_id) {
       return templatesRepository.updateStatus(id, 'APPROVED')
     }
@@ -97,6 +208,20 @@ export const templatesService = {
     } catch {
       return templatesRepository.updateStatus(id, 'APPROVED')
     }
+  },
+
+  async fixMedia(id: string, salonId: string, file: Express.Multer.File) {
+    const template = await templatesRepository.findById(id, salonId)
+    if (!template) throw new AppError(404, 'Template not found', 'NOT_FOUND')
+    if (!template.header_type || template.header_type === 'none' || template.header_type === 'text') {
+      throw new AppError(400, 'This template does not have a media header', 'NO_MEDIA_HEADER')
+    }
+    const config = await configRepository.findBySalonId(salonId)
+    if (!config) throw new AppError(400, 'WhatsApp not configured', 'WA_NOT_CONFIGURED')
+
+    const mediaId = await uploadMediaId(file, config.phone_number_id, config.access_token)
+    console.log(`✅ Fixed media ID for template ${id}:`, mediaId)
+    return templatesRepository.updateMediaId(id, salonId, mediaId)
   },
 
   async delete(id: string, salonId: string) {

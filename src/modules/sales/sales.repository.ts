@@ -1,14 +1,14 @@
-import pool from "../../config/database";
+import pool, { safeQuery } from "../../config/database";
 import { Sale, SaleItem, CreateSaleBody, UpdateSaleBody } from "./sales.types";
 
 export const salesRepository = {
     async findById(id: string): Promise<Sale | null> {
-        const { rows } = await pool.query(`SELECT * FROM sales WHERE id = $1`, [id]);
+        const { rows } = await safeQuery(() => pool.query(`SELECT * FROM sales WHERE id = $1`, [id]));
         return rows[0] || null;
     },
 
     async findItemsBySaleId(saleId: string): Promise<SaleItem[]> {
-        const { rows } = await pool.query(`SELECT * FROM sale_items WHERE sale_id = $1`, [saleId]);
+        const { rows } = await safeQuery(() => pool.query(`SELECT * FROM sale_items WHERE sale_id = $1`, [saleId]));
         return rows;
     },
 
@@ -23,16 +23,16 @@ export const salesRepository = {
 
         const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
         const query = `SELECT * FROM sales ${whereClause} ORDER BY created_at DESC`;
-        const { rows } = await pool.query(query, values);
+        const { rows } = await safeQuery(() => pool.query(query, values));
         return rows;
     },
 
     async getDailySummary(salonId: string, date: string): Promise<{ total: string; count: string }> {
-        const { rows } = await pool.query(
-            `SELECT COALESCE(SUM(total_amount), 0) as total, COUNT(*) as count 
+        const { rows } = await safeQuery(() => pool.query(
+            `SELECT COALESCE(SUM(total_amount), 0) as total, COUNT(*) as count
              FROM sales WHERE salon_id = $1 AND DATE(created_at) = $2 AND status = 'completed'`,
             [salonId, date]
-        );
+        ));
         return { total: rows[0].total.toString(), count: rows[0].count.toString() };
     },
 
@@ -92,7 +92,7 @@ export const salesRepository = {
     async update(id: string, patch: UpdateSaleBody): Promise<Sale> {
         const keys = Object.keys(patch) as (keyof UpdateSaleBody)[];
         if (keys.length === 0) {
-            const { rows } = await pool.query(`SELECT * FROM sales WHERE id = $1`, [id]);
+            const { rows } = await safeQuery(() => pool.query(`SELECT * FROM sales WHERE id = $1`, [id]));
             return rows[0];
         }
 
@@ -105,18 +105,18 @@ export const salesRepository = {
         setParts.push(`updated_at = NOW()`);
         values.push(id);
 
-        const { rows } = await pool.query(
+        const { rows } = await safeQuery(() => pool.query(
             `UPDATE sales SET ${setParts.join(", ")} WHERE id = $${values.length} RETURNING *`,
             values
-        );
+        ));
         return rows[0];
     },
 
     async checkout(id: string, params: { payment_method: string; payment_reference?: string; status?: "completed" }): Promise<Sale> {
-        const { rows } = await pool.query(
+        const { rows } = await safeQuery(() => pool.query(
             `UPDATE sales SET payment_method = $2, payment_reference = $3, status = $4, updated_at = NOW() WHERE id = $1 RETURNING *`,
             [id, params.payment_method, params.payment_reference || null, params.status || 'completed']
-        );
+        ));
         return rows[0];
     },
 
@@ -131,7 +131,7 @@ export const salesRepository = {
 
         const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
         const query = `SELECT * FROM sales ${whereClause} ORDER BY created_at DESC`;
-        const { rows } = await pool.query(query, values);
+        const { rows } = await safeQuery(() => pool.query(query, values));
         return rows;
     }
 };

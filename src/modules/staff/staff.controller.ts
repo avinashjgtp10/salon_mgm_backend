@@ -124,8 +124,8 @@ export const staffController = {
     try {
       const salonId = await getSalonId(req);
       if (!req.user?.userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
-      const id = String(req.params.id); // FIX
-      logger.info("DELETE /staff/:id", { id, salonId });
+      const id = String(req.params.id);
+      logger.info("PATCH /staff/:id/deactivate", { id, salonId });
 
       await staffService.deactivate({
         id, salonId,
@@ -133,6 +133,22 @@ export const staffController = {
         requesterRole: req.user.role,
       });
       return sendSuccess(res, 200, null, "Staff deactivated");
+    } catch (err) { return next(err); }
+  },
+
+  async delete(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = await getSalonId(req);
+      if (!req.user?.userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+      const id = String(req.params.id);
+      logger.info("DELETE /staff/:id", { id, salonId });
+
+      await staffService.delete({
+        id, salonId,
+        requesterUserId: req.user.userId,
+        requesterRole: req.user.role,
+      });
+      return sendSuccess(res, 200, null, "Staff member deleted successfully");
     } catch (err) { return next(err); }
   },
 

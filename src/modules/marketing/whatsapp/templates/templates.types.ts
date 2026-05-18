@@ -29,12 +29,13 @@ export type WATemplate = {
 }
 
 export type CreateTemplateBody = {
-  name:         string
-  category:     WATemplateCategory
-  language:     string
-  header_type:  WAHeaderType
-  header_text?: string | null
-  body_text:    string
-  footer_text?: string | null
-  buttons?:     WAButton[]
+  name:             string
+  category:         WATemplateCategory
+  language:         string
+  header_type:      WAHeaderType
+  header_text?:     string | null
+  header_media_id?: string | null   
+  body_text:        string
+  footer_text?:     string | null
+  buttons?:         WAButton[]
 }

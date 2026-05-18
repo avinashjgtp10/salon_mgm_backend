@@ -70,8 +70,8 @@ export const validateCreateClient = (req: Request, _res: Response, next: NextFun
 
         if (!isString(b.first_name) || !b.first_name.trim())
             throw new AppError(400, "first_name is required", "VALIDATION_ERROR");
-        if (!isString(b.last_name) || !b.last_name.trim())
-            throw new AppError(400, "last_name is required", "VALIDATION_ERROR");
+        if (b.last_name !== undefined && b.last_name !== null && !isOptionalString(b.last_name))
+            throw new AppError(400, "last_name must be a string", "VALIDATION_ERROR");
 
         const optionalStringFields = [
             "email",
@@ -264,6 +264,23 @@ export const validateBlockClients = (req: Request, _res: Response, next: NextFun
 
         if (!isString(b.reason) || !b.reason.trim())
             throw new AppError(400, "reason is required", "VALIDATION_ERROR");
+
+        return next();
+    } catch (e) {
+        return next(e);
+    }
+};
+
+export const validateUnblockClients = (req: Request, _res: Response, next: NextFunction) => {
+    try {
+        const b = req.body;
+
+        if (!Array.isArray(b.client_ids) || b.client_ids.length < 1)
+            throw new AppError(400, "client_ids must be non-empty uuid array", "VALIDATION_ERROR");
+
+        for (const id of b.client_ids) {
+            if (!isUUID(id)) throw new AppError(400, "client_ids must be uuid array", "VALIDATION_ERROR");
+        }
 
         return next();
     } catch (e) {

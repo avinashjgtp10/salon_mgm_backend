@@ -81,7 +81,15 @@ export const marketplaceController = {
 
     async addImage(req: AuthRequest, res: Response, next: NextFunction) {
         try {
-            const data = await marketplaceService.addImage(getSalonId(req), req.body as AddImageBody);
+            let imageUrl: string = (req.body as AddImageBody)?.image_url;
+            const file = (req as any).file as Express.Multer.File | undefined;
+            if (file) {
+                // Use APP_BASE_URL in production; fall back to relative path for dev proxy
+                const base = process.env.APP_BASE_URL || "";
+                imageUrl = `${base}/uploads/${file.filename}`;
+            }
+            if (!imageUrl) throw new AppError(400, "No image provided", "VALIDATION_ERROR");
+            const data = await marketplaceService.addImage(getSalonId(req), { image_url: imageUrl });
             return sendSuccess(res, 201, data, "Image added");
         } catch (err) { return next(err); }
     },
@@ -119,6 +127,29 @@ export const marketplaceController = {
         try {
             const data = await marketplaceService.upsertFeatures(getSalonId(req), req.body as UpsertFeaturesBody);
             return sendSuccess(res, 200, data, "Amenities and highlights saved");
+        } catch (err) { return next(err); }
+    },
+
+    // ── Logo & Cover ─────────────────────────────────────────────────────────────
+    async uploadLogo(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const file = (req as any).file as Express.Multer.File | undefined;
+            if (!file) throw new AppError(400, "No image file provided", "VALIDATION_ERROR");
+            const base = process.env.APP_BASE_URL || "";
+            const logoUrl = `${base}/uploads/${file.filename}`;
+            const data = await marketplaceService.uploadLogo(getSalonId(req), logoUrl);
+            return sendSuccess(res, 200, data, "Logo uploaded");
+        } catch (err) { return next(err); }
+    },
+
+    async uploadCover(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const file = (req as any).file as Express.Multer.File | undefined;
+            if (!file) throw new AppError(400, "No image file provided", "VALIDATION_ERROR");
+            const base = process.env.APP_BASE_URL || "";
+            const coverUrl = `${base}/uploads/${file.filename}`;
+            const data = await marketplaceService.uploadCover(getSalonId(req), coverUrl);
+            return sendSuccess(res, 200, data, "Cover photo uploaded");
         } catch (err) { return next(err); }
     },
 

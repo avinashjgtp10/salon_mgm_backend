@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
+import { uploadMiddleware } from "../../middleware/upload.middleware";
 import { marketplaceController } from "./marketplace.controller";
 import {
   validateUpsertEssentials, validateUpsertAbout,
@@ -29,10 +30,14 @@ router.put("/working-hours",    auth, ownerAdmin, validateUpsertWorkingHours, ma
 
 // ── Venue Images ──────────────────────────────────────────────────────────────
 router.get("/images",                  auth, ownerAdmin, marketplaceController.getImages);
-router.post("/images",                 auth, ownerAdmin, validateAddImage,       marketplaceController.addImage);
+router.post("/images",                 auth, ownerAdmin, uploadMiddleware.single("image"), validateAddImage, marketplaceController.addImage);
 router.patch("/images/reorder",        auth, ownerAdmin, validateReorderImages,  marketplaceController.reorderImages);
 router.patch("/images/:imageId/cover", auth, ownerAdmin, marketplaceController.setCoverImage);
 router.delete("/images/:imageId",      auth, ownerAdmin, marketplaceController.deleteImage);
+
+// ── Logo & Cover ─────────────────────────────────────────────────────────────
+router.post("/logo",  auth, ownerAdmin, uploadMiddleware.single("image"), marketplaceController.uploadLogo);
+router.post("/cover", auth, ownerAdmin, uploadMiddleware.single("image"), marketplaceController.uploadCover);
 
 // ── Amenities & Highlights ────────────────────────────────────────────────────
 router.get("/features",         auth, ownerAdmin, marketplaceController.getFeatures);

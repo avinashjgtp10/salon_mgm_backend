@@ -1,12 +1,16 @@
 export type WADashboardStats = {
   totalCampaigns:    number
+  activeCampaigns:   number
   totalMessagesSent: number
+  totalSent:         number  // alias for totalMessagesSent
   totalDelivered:    number
   totalRead:         number
   totalFailed:       number
   totalBlocked:      number
+  totalContacts:     number
   deliveryRate:      number
   readRate:          number
+  dailyVolume:       { date: string; count: number }[]
   recentCampaigns:   WARecentCampaign[]
 }
 

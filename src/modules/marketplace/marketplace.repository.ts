@@ -52,6 +52,24 @@ export const marketplaceProfileRepo = {
     return rows[0];
   },
 
+  async updateLogo(salonId: string, logoUrl: string): Promise<MarketplaceProfile | null> {
+    const { rows } = await pool.query(
+      `UPDATE marketplace_profiles SET logo_url = $1, updated_at = NOW()
+       WHERE salon_id = $2 RETURNING *`,
+      [logoUrl, salonId]
+    );
+    return rows[0] || null;
+  },
+
+  async updateCover(salonId: string, coverUrl: string): Promise<MarketplaceProfile | null> {
+    const { rows } = await pool.query(
+      `UPDATE marketplace_profiles SET cover_url = $1, updated_at = NOW()
+       WHERE salon_id = $2 RETURNING *`,
+      [coverUrl, salonId]
+    );
+    return rows[0] || null;
+  },
+
   async setPublished(salonId: string, published: boolean): Promise<MarketplaceProfile | null> {
     const { rows } = await pool.query(
       `UPDATE marketplace_profiles SET is_published = $1, updated_at = NOW()

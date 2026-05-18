@@ -31,6 +31,8 @@ export const validateCreateAppointment = (req: Request, _res: Response, next: Ne
             throw new AppError(400, `status must be one of: ${VALID_STATUSES.join(", ")}`, "VALIDATION_ERROR");
         if (!isOptionalString(b.notes))
             throw new AppError(400, "notes must be a string", "VALIDATION_ERROR");
+        if (!isOptionalString(b.staff_alert))
+            throw new AppError(400, "staff_alert must be a string", "VALIDATION_ERROR");
         return next();
     } catch (err) { return next(err); }
 };
@@ -48,6 +50,7 @@ export const validateUpdateAppointment = (req: Request, _res: Response, next: Ne
         if (b.status !== undefined && !VALID_STATUSES.includes(b.status))
             throw new AppError(400, `status must be one of: ${VALID_STATUSES.join(", ")}`, "VALIDATION_ERROR");
         if (!isOptionalString(b.notes)) throw new AppError(400, "notes must be a string", "VALIDATION_ERROR");
+        if (!isOptionalString(b.staff_alert)) throw new AppError(400, "staff_alert must be a string", "VALIDATION_ERROR");
         return next();
     } catch (err) { return next(err); }
 };

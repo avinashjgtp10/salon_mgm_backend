@@ -14,12 +14,18 @@ export const configRepository = {
   async upsert(salonId: string, body: SaveConfigBody): Promise<WhatsAppConfig> {
     const { rows } = await pool.query(`
       INSERT INTO whatsapp_configs
-        (salon_id, phone_number_id, waba_id, access_token, webhook_verify_token, display_phone)
-      VALUES ($1,$2,$3,$4,$5,$6)
+        (salon_id, phone_number_id, waba_id, app_id, app_secret, access_token, webhook_verify_token, display_phone)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       ON CONFLICT (salon_id) DO UPDATE SET
         phone_number_id      = EXCLUDED.phone_number_id,
         waba_id              = EXCLUDED.waba_id,
-        access_token         = EXCLUDED.access_token,
+        app_id               = COALESCE(NULLIF(EXCLUDED.app_id, ''),     whatsapp_configs.app_id),
+        app_secret           = COALESCE(NULLIF(EXCLUDED.app_secret, ''), whatsapp_configs.app_secret),
+        access_token         = CASE
+                                 WHEN EXCLUDED.access_token IS NULL OR EXCLUDED.access_token = ''
+                                 THEN whatsapp_configs.access_token
+                                 ELSE EXCLUDED.access_token
+                               END,
         webhook_verify_token = EXCLUDED.webhook_verify_token,
         display_phone        = EXCLUDED.display_phone,
         updated_at           = NOW()
@@ -28,9 +34,11 @@ export const configRepository = {
       salonId,
       body.phone_number_id,
       body.waba_id,
-      body.access_token,
+      body.app_id     ?? null,
+      body.app_secret ?? null,
+      body.access_token        ?? null,
       body.webhook_verify_token,
-      body.display_phone ?? null,
+      body.display_phone       ?? null,
     ])
     return rows[0]
   },

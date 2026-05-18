@@ -40,3 +40,22 @@ export interface ServiceMixItem {
   name: string;
   value: number;
 }
+
+export interface DashboardService {
+  id: string;
+  name: string;
+  price: string;
+  duration: number;
+  category_name: string | null;
+  price_type: "fixed" | "from" | "free" | null;
+  is_active: boolean;
+}
+
+export interface DashboardAll {
+  summary: DashboardSummary;
+  todayAppointments: TodayAppointment[];
+  revenueChart: RevenueDataPoint[];
+  topStaff: TopStaffMember[];
+  serviceMix: ServiceMixItem[];
+  services: DashboardService[];
+}

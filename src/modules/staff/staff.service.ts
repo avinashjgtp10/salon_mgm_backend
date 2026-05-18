@@ -1,4 +1,3 @@
-import pool from "../../config/database";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { emailService } from "../utils/email.service";
@@ -120,6 +119,20 @@ export const staffService = {
         await staffRepository.deactivate(id, salonId);
         logger.info("staffService.deactivate success", { staffId: id });
     },
+
+    async delete(params: {
+        id: string; salonId: string; requesterUserId: string; requesterRole?: string;
+    }): Promise<void> {
+        const { id, salonId } = params;
+        logger.info("staffService.delete", { id, salonId });
+
+        const existing = await staffRepository.findById(id, salonId);
+        if (!existing) throw new AppError(404, "Staff not found", "NOT_FOUND");
+
+        const deleted = await staffRepository.delete(id, salonId);
+        if (!deleted) throw new AppError(500, "Failed to delete staff member", "DELETE_FAILED");
+        logger.info("staffService.delete success", { staffId: id });
+    },
 };
 
 // ─── Invitations ──────────────────────────────────────────────────────────────
@@ -152,7 +165,7 @@ export const staffInvitationService = {
                 throw new AppError(400, "Invalid token", "BAD_REQUEST");
             }
 
-            if (invitation.status === "active" || invitation.status === "accepted") {
+            if (invitation.status === "accepted") {
                 logger.info("acceptInvitation: invitation already accepted", { staffId: invitation.staff_id });
                 throw new AppError(400, "This invitation has already been accepted", "ALREADY_ACCEPTED");
             }
@@ -234,7 +247,7 @@ export const staffInvitationService = {
         const { staffId, salonId, salonName } = params;
         const staff = await staffRepository.findById(staffId, salonId);
 
-        if (!staff || !staff.email || staff.invitation_status === "active" || staff.invitation_status === "accepted") {
+        if (!staff || !staff.email || staff.invitation_status === "accepted") {
             throw new AppError(400, "Cannot resend: not found, no email, or already accepted", "BAD_REQUEST");
         }
 

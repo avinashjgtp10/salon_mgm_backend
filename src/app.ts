@@ -21,7 +21,9 @@ import packagesRoutes from "./modules/packages/packages.routes";
 import productsRoutes from "./modules/products/products.routes";
 import brandsRoutes from "./modules/products/products.routes";
 import appointmentsRoutes from "./modules/appointments/appointments.routes";
+import calendarRoutes from "./modules/calendar/calendar.routes";
 import salesRoutes from "./modules/sales/sales.routes";
+import bookingsRoutes from "./modules/bookings/bookings.routes";
 import inventoryRoutes from "./modules/inventory/inventory.routes";
 import billingRoutes from "./modules/billing/billing.routes";
 import subscriptionsRoutes from "./modules/subscriptions/subscriptions.routes";
@@ -30,16 +32,15 @@ import marketingTemplatesRoutes from './modules/marketing/whatsapp/templates/tem
 import marketingCampaignsRoutes from './modules/marketing/whatsapp/campaigns/campaigns.routes'
 import marketingConfigRoutes    from './modules/marketing/whatsapp/config/config.routes'
 import marketingWebhooksRoutes  from './modules/marketing/whatsapp/webhooks/webhooks.routes'
-import botRoutes from './modules/bot/bot.routes';
-import { botRateLimiter, botLogger } from './modules/bot/bot.middleware';
 import profileRoutes from "./modules/profile/profile.routes";
-import couponsRoutes from "./modules/coupons/coupons.routes";
-import paymentsRoutes from "./modules/payments/payments.routes";
-import blockedTimesRoutes from "./modules/blocked_times/blocked_times.routes";
+import inboxRouter from './modules/marketing/whatsapp/inbox/inbox.routes';
 import salonDashboardRoutes from "./modules/salon-dashboard/salon-dashboard.routes";
+import paymentsRoutes from "./modules/payments/payments.routes";
+import couponsRoutes from "./modules/coupons/coupons.routes";
 import settingsRoutes from "./modules/settings/settings.routes";
 import reportsRoutes from "./modules/reports/reports.routes";
-
+import blockedTimesRoutes from "./modules/blocked_times/blocked_times.routes";
+import botRoutes from "./modules/bot/bot.routes";
 import swaggerUi from "swagger-ui-express";
 import YAML from "yamljs";
 import path from "path";
@@ -53,6 +54,9 @@ app.use(corsMiddleware);
 // Body parsing middleware
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+
+// Serve uploaded files as static assets
+app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 
 // Compression
 app.use(compression());
@@ -77,7 +81,7 @@ app.get("/health", (_req, res) => {
   });
 });
 
-// ✅ API ROUTES (MUST be before 404)
+// ✅ API ROUT1ES (MUST be before 404)
 app.use("/api/v1/auth", authRoutes);
 // Alias: Google OAuth console uses /api/v1/oauth/google/callback as redirect URI
 app.use("/api/v1/oauth", authRoutes);
@@ -94,24 +98,26 @@ app.use("/api/v1/packages", packagesRoutes);
 app.use("/api/v1/products", productsRoutes);
 app.use("/api/v1/brands", brandsRoutes);
 app.use("/api/v1/appointments", appointmentsRoutes);
+app.use("/api/v1/bookings", bookingsRoutes);
+app.use("/api/v1/calendar", calendarRoutes);
 app.use("/api/v1/sales", salesRoutes);
 app.use("/api/v1/inventory", inventoryRoutes);
 app.use("/api/v1/billing", billingRoutes);
 app.use("/api/v1/subscriptions", subscriptionsRoutes);
-app.use('/api/v1/dashboard', salonDashboardRoutes)
-app.use('/api/v1/dashboard', marketingDashboardRoutes)
+//app.use('/api/v1//dashboard', marketingDashboardRoutes)
+app.use('/api/v1/marketing/dashboard', marketingDashboardRoutes);
 app.use('/api/v1/templates', marketingTemplatesRoutes)
 app.use('/api/v1/campaigns', marketingCampaignsRoutes)
 app.use('/api/v1/wa-config', marketingConfigRoutes)
 app.use('/api/v1/webhooks',  marketingWebhooksRoutes)
-app.use(botLogger);
-app.use(botRateLimiter);
-app.use('/api/v1/bot', botRoutes);
+app.use('/api/v1/inbox', inboxRouter);
 app.use("/api/v1/profile",  profileRoutes);
+app.use("/api/v1/dashboard",      salonDashboardRoutes);
 app.use("/api/v1/coupons",        couponsRoutes);
 app.use("/api/v1/payments",       paymentsRoutes);
 app.use("/api/v1/blocked-times",  blockedTimesRoutes);
 app.use("/api/v1/settings",       settingsRoutes);
+app.use("/api/v1/bot",            botRoutes);
 app.use("/api/v1/reports",        reportsRoutes);
 
 
