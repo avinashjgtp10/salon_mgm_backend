@@ -51,6 +51,7 @@ export interface AppointmentsKPI {
 export interface AppointmentsReport {
   volume: AppointmentVolumePoint[];
   kpi: AppointmentsKPI;
+  peakHours: { hour: string; count: number }[];
 }
 
 // ── Clients ───────────────────────────────────────────────────────────────────

@@ -17,8 +17,9 @@ import type {
 const r1 = (n: number) => Math.round(n * 10) / 10;
 
 const pct = (curr: number, prev: number): number => {
-  if (prev === 0) return curr > 0 ? 100 : 0;
-  return r1(((curr - prev) / prev) * 100);
+  if (prev < 1) return 0; // no meaningful previous data — show neutral 0%
+  const raw = ((curr - prev) / prev) * 100;
+  return r1(Math.max(-99, Math.min(999, raw))); // cap at ±999%
 };
 
 interface PeriodConfig {
@@ -178,8 +179,10 @@ export const reportsRepository = {
     const prevTotal       = parseFloat(pk?.prev_total    ?? "0");
     const prevBestDay     = parseFloat(pk?.prev_best_day ?? "0");
     const prevAvgDaily    = r1(prevTotal / numDays);
-    const revenueTarget   = prevTotal * 1.1;
-    const targetAchieved  = revenueTarget > 0 ? r1((totalRevenue / revenueTarget) * 100) : 100;
+    const revenueTarget   = prevTotal > 1 ? prevTotal * 1.1 : 0;
+    const targetAchieved  = revenueTarget > 0
+      ? r1(Math.min((totalRevenue / revenueTarget) * 100, 200))
+      : 100; // no prior data → show neutral 100%
 
     return {
       trend,
@@ -206,7 +209,7 @@ export const reportsRepository = {
       buildDateExprs(period, from, to);
     const p = [salonId, ...extraParams];
 
-    const [volRows, kpiRows, prevKpiRows] = await Promise.all([
+    const [volRows, kpiRows, prevKpiRows, peakRows] = await Promise.all([
       pool.query<{ label: string; completed: string; cancelled: string; no_show: string }>(
         `SELECT
            TO_CHAR(DATE_TRUNC('${trunc}', scheduled_at), '${labelFmt}') AS label,
@@ -244,6 +247,18 @@ export const reportsRepository = {
            AND scheduled_at <  ${prevEnd}`,
         p,
       ),
+      pool.query<{ hour: string; count: string }>(
+        `SELECT
+           EXTRACT(HOUR FROM scheduled_at)::int AS hour,
+           COUNT(*)::int                        AS count
+         FROM appointments
+         WHERE salon_id = $1
+           AND scheduled_at >= ${startExpr}
+           AND scheduled_at <  ${endExpr}
+         GROUP BY hour
+         ORDER BY hour`,
+        p,
+      ),
     ]);
 
     const volume: AppointmentVolumePoint[] = volRows.rows.map(row => ({
@@ -267,8 +282,18 @@ export const reportsRepository = {
     const prevCompletionRate = prevTotal > 0 ? r1((prevCompleted / prevTotal) * 100) : 0;
     const prevCancelRate     = prevTotal > 0 ? r1((prevCancelled / prevTotal) * 100) : 0;
 
+    const HOUR_LABEL: Record<number, string> = {
+      6:"6AM", 7:"7AM", 8:"8AM", 9:"9AM", 10:"10AM", 11:"11AM",
+      12:"12PM", 13:"1PM", 14:"2PM", 15:"3PM", 16:"4PM",
+      17:"5PM", 18:"6PM", 19:"7PM", 20:"8PM", 21:"9PM",
+    };
+    const peakHours = peakRows.rows
+      .filter(r => HOUR_LABEL[parseInt(r.hour, 10)])
+      .map(r => ({ hour: HOUR_LABEL[parseInt(r.hour, 10)], count: parseInt(r.count, 10) }));
+
     return {
       volume,
+      peakHours,
       kpi: {
         totalBookings: total,
         completionRate,
@@ -540,43 +565,35 @@ export const reportsRepository = {
     const [curRows, prevRows, activeCountRows] = await Promise.all([
       pool.query<{ name: string; bookings: string; revenue: string }>(
         `SELECT
-           (item->>'name')                                                         AS name,
-           COUNT(*)::int                                                           AS bookings,
-           COALESCE(SUM(
-             (item->>'price')::numeric * COALESCE((item->>'quantity')::numeric, 1)
-           ), 0)::numeric                                                          AS revenue
-         FROM appointments a,
-              jsonb_array_elements(
-                CASE WHEN jsonb_typeof(a.services) = 'array'
-                     THEN a.services ELSE '[]'::jsonb END
-              ) AS item
-         WHERE a.salon_id = $1
-           AND a.status = 'completed'
-           AND a.scheduled_at >= ${startExpr}
-           AND a.scheduled_at <  ${endExpr}
-           AND (item->>'name') IS NOT NULL AND (item->>'name') != ''
-         GROUP BY (item->>'name')
+           si.name                                    AS name,
+           COUNT(*)::int                              AS bookings,
+           COALESCE(SUM(si.total_price), 0)::numeric AS revenue
+         FROM sale_items si
+         JOIN sales s ON si.sale_id = s.id
+         WHERE s.salon_id = $1
+           AND s.status   = 'completed'
+           AND si.item_type = 'service'
+           AND si.name IS NOT NULL AND si.name != ''
+           AND s.created_at >= ${startExpr}
+           AND s.created_at <  ${endExpr}
+         GROUP BY si.name
          ORDER BY revenue DESC
          LIMIT 20`,
         p,
       ),
       pool.query<{ name: string; prev_revenue: string }>(
         `SELECT
-           (item->>'name')                                                         AS name,
-           COALESCE(SUM(
-             (item->>'price')::numeric * COALESCE((item->>'quantity')::numeric, 1)
-           ), 0)::numeric                                                          AS prev_revenue
-         FROM appointments a,
-              jsonb_array_elements(
-                CASE WHEN jsonb_typeof(a.services) = 'array'
-                     THEN a.services ELSE '[]'::jsonb END
-              ) AS item
-         WHERE a.salon_id = $1
-           AND a.status = 'completed'
-           AND a.scheduled_at >= ${prevStart}
-           AND a.scheduled_at <  ${prevEnd}
-           AND (item->>'name') IS NOT NULL AND (item->>'name') != ''
-         GROUP BY (item->>'name')`,
+           si.name                                    AS name,
+           COALESCE(SUM(si.total_price), 0)::numeric AS prev_revenue
+         FROM sale_items si
+         JOIN sales s ON si.sale_id = s.id
+         WHERE s.salon_id = $1
+           AND s.status   = 'completed'
+           AND si.item_type = 'service'
+           AND si.name IS NOT NULL AND si.name != ''
+           AND s.created_at >= ${prevStart}
+           AND s.created_at <  ${prevEnd}
+         GROUP BY si.name`,
         p,
       ),
       pool.query<{ count: string }>(
@@ -631,29 +648,39 @@ export const reportsRepository = {
       "Closed": "completed", "Cancelled": "cancelled", "No Show": "no_show",
       "Deleted": "cancelled",
     };
+    const ALL_DB_STATUSES = ["booked", "confirmed", "in_progress", "completed", "cancelled", "no_show"];
     const dbStatuses = statuses
       .map(s => STATUS_MAP[s] ?? s.toLowerCase())
       .filter(Boolean);
+    // Skip the status filter when all known statuses are covered (avoids array param issues)
+    const coversAll = ALL_DB_STATUSES.every(s => dbStatuses.includes(s));
+    const useStatusFilter = dbStatuses.length > 0 && !coversAll;
 
     const dateField    = dateType === "booking" ? "a.created_at" : "a.scheduled_at";
-    const statusClause = dbStatuses.length ? `AND a.status::text = ANY($4::text[])` : "";
+    const statusClause = useStatusFilter ? `AND a.status::text = ANY($4::text[])` : "";
     const params: any[] = [salonId, from, to];
-    if (dbStatuses.length) params.push(dbStatuses);
+    if (useStatusFilter) params.push(dbStatuses);
 
     const { rows } = await pool.query(
       `SELECT
-         TO_CHAR(a.scheduled_at, 'DD-MM-YYYY')   AS "appointmentDate",
-         TO_CHAR(a.created_at,   'DD-MM-YYYY')   AS "bookedDate",
-         a.id                                     AS "ticketNo",
+         a.id                                               AS "id",
+         TO_CHAR(a.scheduled_at, 'DD-MM-YYYY')              AS "appointmentDate",
+         TO_CHAR(a.scheduled_at, 'HH12:MI AM')              AS "time",
+         TO_CHAR(a.created_at,   'DD-MM-YYYY')              AS "bookedDate",
          COALESCE(c.full_name,
            TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,''))
-         )                                        AS "guestName",
-         COALESCE(a.title,'Service')              AS "serviceName",
-         COALESCE(a.services->0->>'code','')      AS "serviceCode",
-         COALESCE(br.name,'Main Branch')          AS "centerName"
+         )                                                  AS "clientName",
+         COALESCE(a.title,'Service')                        AS "serviceName",
+         TRIM(COALESCE(st.first_name,'') || ' ' || COALESCE(st.last_name,'')) AS "staffName",
+         a.status                                           AS "status",
+         a.duration_minutes                                 AS "duration",
+         COALESCE(s.total_amount, 0)::numeric               AS "amount",
+         COALESCE(s.payment_method, '')                     AS "paymentMethod",
+         CASE WHEN s.id IS NOT NULL THEN 'paid' ELSE 'unpaid' END AS "paymentStatus"
        FROM appointments a
        LEFT JOIN clients  c  ON c.id  = a.client_id
-       LEFT JOIN branches br ON br.id = a.branch_id
+       LEFT JOIN staff    st ON st.id = a.staff_id
+       LEFT JOIN sales    s  ON s.appointment_id = a.id AND s.status = 'completed'
        WHERE a.salon_id = $1
          AND DATE(${dateField}) BETWEEN $2 AND $3
          ${statusClause}
@@ -702,12 +729,15 @@ export const reportsRepository = {
 
   // ── Detail: Employee ──────────────────────────────────────────────────────────
   async getEmployeeDetail(
-    salonId: string, from: string, to: string, role: string,
+    salonId: string, from: string, to: string, role: string, department: string = "All",
   ) {
     const roleClause = role && role !== "All"
       ? `AND LOWER(s.designation) ILIKE LOWER($4)` : "";
+    const deptClause = department && department !== "All"
+      ? `AND LOWER(s.department) ILIKE LOWER($${role && role !== "All" ? 5 : 4})` : "";
     const params: any[] = [salonId, from, to];
     if (role && role !== "All") params.push(role);
+    if (department && department !== "All") params.push(department);
 
     const { rows } = await pool.query(
       `SELECT
@@ -736,8 +766,179 @@ export const reportsRepository = {
              AND sl.status = 'completed'
        WHERE s.salon_id = $1 AND s.is_active = true
          ${roleClause}
+         ${deptClause}
        GROUP BY s.id, s.first_name, s.last_name, s.designation
        ORDER BY revenue DESC`,
+      params,
+    );
+    return rows;
+  },
+
+  // ── Detail: Inventory / Current Stock ────────────────────────────────────────
+  async getInventoryDetail(salonId: string, category: string, status: string) {
+    const catClause = category && category !== "All"
+      ? `AND LOWER(p.name) ILIKE LOWER($2)` : "";
+    const params: any[] = [salonId];
+    if (category && category !== "All") params.push(`%${category}%`);
+
+    const { rows } = await pool.query(
+      `SELECT
+         p.name                                        AS product,
+         COALESCE(p.name, 'General')                   AS category,
+         COALESCE(p.barcode, p.id::text)               AS sku,
+         COALESCE(p.amount, 0)::int                    AS "currentStock",
+         5                                             AS "reorderLevel",
+         COALESCE(p.supply_price, 0)::numeric          AS "unitCost",
+         (COALESCE(p.amount, 0) * COALESCE(p.supply_price, 0))::numeric AS "totalValue",
+         CASE
+           WHEN COALESCE(p.amount, 0) = 0 THEN 'Out of Stock'
+           WHEN COALESCE(p.amount, 0) <= 5 THEN 'Low Stock'
+           ELSE 'In Stock'
+         END                                           AS status
+       FROM products p
+       WHERE p.salon_id = $1 ${catClause}
+       ORDER BY p.name
+       LIMIT 500`,
+      params,
+    );
+
+    return status && status !== "All"
+      ? rows.filter((r: any) => r.status === status)
+      : rows;
+  },
+
+  // ── Detail: Payments (online / gateway) ──────────────────────────────────────
+  async getPaymentsDetail(
+    salonId: string, from: string, to: string, gateway: string, status: string,
+  ) {
+    // Map frontend display values → DB values for the status filter
+    const dbStatusMap: Record<string, string> = {
+      Success: "completed", Failed: "failed", Refunded: "refunded", Pending: "pending",
+    };
+    const dbStatus = status && status !== "All"
+      ? (dbStatusMap[status] ?? status.toLowerCase()) : null;
+
+    // payments table uses payment_method (no gateway column), payment_id as reference
+    const gatewayClause = gateway && gateway !== "All"
+      ? `AND LOWER(py.payment_method) = LOWER($4)` : "";
+    const statusClause  = dbStatus
+      ? `AND LOWER(COALESCE(py.status,'pending')) = $${gateway && gateway !== "All" ? 5 : 4}` : "";
+    const params: any[] = [salonId, from, to];
+    if (gateway && gateway !== "All") params.push(gateway);
+    if (dbStatus) params.push(dbStatus);
+
+    const { rows } = await pool.query(
+      `SELECT
+         TO_CHAR(py.created_at, 'YYYY-MM-DD')                          AS date,
+         py.payment_id                                                  AS "transactionId",
+         COALESCE(c.full_name,
+           TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,''))
+         )                                                              AS "clientName",
+         COALESCE(py.payment_method, 'Online')                         AS gateway,
+         COALESCE(py.payment_method, 'Online')                         AS method,
+         COALESCE(py.amount, py.net_amount, 0)::numeric                AS amount,
+         CASE
+           WHEN LOWER(COALESCE(py.status,'')) IN ('completed','success') THEN 'Success'
+           WHEN LOWER(COALESCE(py.status,'')) = 'failed'                 THEN 'Failed'
+           WHEN LOWER(COALESCE(py.status,'')) = 'refunded'               THEN 'Refunded'
+           ELSE 'Pending'
+         END                                                            AS status,
+         py.payment_id                                                  AS "referenceNo"
+       FROM payments py
+       LEFT JOIN clients c ON c.id = py.client_id
+       WHERE py.salon_id = $1
+         AND DATE(py.created_at) BETWEEN $2 AND $3
+         ${gatewayClause}
+         ${statusClause}
+       ORDER BY py.created_at DESC
+       LIMIT 500`,
+      params,
+    );
+    return rows;
+  },
+
+  // ── Detail: Daily Sales ───────────────────────────────────────────────────────
+  async getDailyDetail(
+    salonId: string, date: string, service: string, staff: string,
+  ) {
+    const serviceClause = service && service !== "All"
+      ? `AND COALESCE(a.title,'') ILIKE $3` : "";
+    const staffClause = staff && staff !== "All"
+      ? `AND TRIM(COALESCE(st.first_name,'') || ' ' || COALESCE(st.last_name,'')) ILIKE $${
+          service && service !== "All" ? 4 : 3
+        }` : "";
+    const params: any[] = [salonId, date];
+    if (service && service !== "All") params.push(`%${service}%`);
+    if (staff   && staff   !== "All") params.push(`%${staff}%`);
+
+    const { rows } = await pool.query(
+      `SELECT
+         TO_CHAR(a.scheduled_at, 'HH24:MI')          AS time,
+         a.id                                         AS "ticketNo",
+         COALESCE(c.full_name,
+           TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,''))
+         )                                            AS "clientName",
+         COALESCE(a.title, 'Service')                            AS service,
+         TRIM(COALESCE(st.first_name,'') || ' ' || COALESCE(st.last_name,'')) AS staff,
+         COALESCE(s.total_amount, 0)::numeric                   AS amount,
+         COALESCE(s.payment_method, 'N/A')                      AS "paymentMethod",
+         a.status
+       FROM appointments a
+       LEFT JOIN clients c  ON c.id  = a.client_id
+       LEFT JOIN staff   st ON st.id = a.staff_id
+       LEFT JOIN sales   s  ON s.appointment_id = a.id AND s.status = 'completed'
+       WHERE a.salon_id = $1
+         AND DATE(a.scheduled_at) = $2::date
+         ${serviceClause}
+         ${staffClause}
+       ORDER BY a.scheduled_at ASC
+       LIMIT 500`,
+      params,
+    );
+    return rows;
+  },
+
+  // ── Detail: Marketing / Client Activity ──────────────────────────────────────
+  async getMarketingDetail(
+    salonId: string, from: string, to: string, status: string, search: string,
+  ) {
+    const statusClause = status && status !== "All"
+      ? `AND c.is_active = $4` : "";
+    const searchClause = search
+      ? `AND (c.full_name ILIKE $${status && status !== "All" ? 5 : 4}
+              OR c.first_name ILIKE $${status && status !== "All" ? 5 : 4}
+              OR c.email      ILIKE $${status && status !== "All" ? 5 : 4}
+              OR c.phone      ILIKE $${status && status !== "All" ? 5 : 4})` : "";
+    const params: any[] = [salonId, from, to];
+    if (status && status !== "All") params.push(status === "Active");
+    if (search) params.push(`%${search}%`);
+
+    const { rows } = await pool.query(
+      `SELECT
+         COALESCE(c.full_name,
+           TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,''))
+         )                                            AS "clientName",
+         COALESCE(c.email, '')                        AS email,
+         COALESCE(c.phone, '')                        AS phone,
+         COUNT(DISTINCT a.id)::int                    AS visits,
+         TO_CHAR(MAX(a.scheduled_at), 'YYYY-MM-DD')  AS "lastVisit",
+         COALESCE(SUM(s.total_amount), 0)::numeric    AS spend,
+         CASE WHEN c.is_active THEN 'Active' ELSE 'Inactive' END AS status
+       FROM clients c
+       LEFT JOIN appointments a
+              ON a.client_id = c.id AND a.salon_id = $1
+             AND DATE(a.scheduled_at) BETWEEN $2 AND $3
+             AND a.status = 'completed'
+       LEFT JOIN sales s
+              ON s.client_id = c.id AND s.salon_id = $1
+             AND DATE(s.created_at) BETWEEN $2 AND $3
+             AND s.status = 'completed'
+       WHERE c.salon_id = $1
+         ${statusClause}
+         ${searchClause}
+       GROUP BY c.id, c.full_name, c.first_name, c.last_name, c.email, c.phone, c.is_active
+       ORDER BY spend DESC
+       LIMIT 500`,
       params,
     );
     return rows;
