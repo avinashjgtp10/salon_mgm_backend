@@ -462,9 +462,22 @@ export const authService = {
     
     await authRepository.updatePassword(user.id, passwordHash);
     await authRepository.markOtpUsed(latest.id);
-    
+
     // Log out of all sessions for security
     await authRepository.deleteAllRefreshTokensForUser(user.id);
+
+    // Send confirmation email (non-blocking — failure must not break the reset)
+    const fullName = [user.first_name, user.last_name].filter(Boolean).join(" ") || email;
+    emailService.sendPasswordResetConfirmationEmail({
+      to: email,
+      fullName,
+      resetAt: new Date(),
+    }).catch((err: any) => {
+      logger.error("[authService.resetPassword] Failed to send confirmation email", {
+        email,
+        error: err?.message,
+      });
+    });
 
     logger.info("[authService.resetPassword] Password reset successfully", { email, userId: user.id });
     return { message: "Password reset successful" };
