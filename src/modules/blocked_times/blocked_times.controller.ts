@@ -4,18 +4,22 @@ import { sendSuccess } from "../utils/response.util";
 import { blockedTimesService } from "./blocked_times.service";
 import type { CreateBlockedTimeBody, UpdateBlockedTimeBody } from "./blocked_times.types";
 
-type AuthRequest = Request & { user?: { userId: string; role?: string } };
+type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string | null } };
 
 export const blockedTimesController = {
 
   async create(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const userId = req.user?.userId;
+      const salonId = req.user?.salonId;
       if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+      if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
 
+      const body = req.body as CreateBlockedTimeBody;
+      (body as any).salon_id = salonId; // enforce JWT value
       const record = await blockedTimesService.create({
         requesterUserId: userId,
-        body: req.body as CreateBlockedTimeBody,
+        body,
       });
       return sendSuccess(res, 201, record, "Blocked time created successfully");
     } catch (err) { return next(err); }
@@ -23,8 +27,10 @@ export const blockedTimesController = {
 
   async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
+      const salonId = req.user?.salonId;
+      if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
       const records = await blockedTimesService.list({
-        salon_id: String(req.query.salon_id || "").trim() || undefined,
+        salon_id: salonId,
         staff_id: String(req.query.staff_id || "").trim() || undefined,
         date:     String(req.query.date     || "").trim() || undefined,
       });

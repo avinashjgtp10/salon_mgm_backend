@@ -4,13 +4,14 @@ import { sendSuccess } from '../utils/response.util';
 import { couponsService } from './coupons.service';
 import { couponsRepository } from './coupons.repository';
 
-type AuthRequest = Request & { user?: { userId: string; role?: string } };
+type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string | null } };
 
 export const couponsController = {
 
   async validate(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { code, orderAmount, salonId } = req.body;
+      const { code, orderAmount } = req.body;
+      const salonId = req.user?.salonId ?? undefined; // from JWT; optional for global coupons
       if (!code || typeof code !== 'string')
         throw new AppError(400, 'code is required', 'VALIDATION_ERROR');
       if (typeof orderAmount !== 'number' || orderAmount <= 0)
@@ -27,7 +28,8 @@ export const couponsController = {
 
   async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = String(req.query.salon_id || '').trim() || undefined;
+      const salonId = req.user?.salonId;
+      if (!salonId) throw new AppError(403, 'Salon context required', 'NO_SALON_CONTEXT');
       const coupons = await couponsRepository.list(salonId);
       return sendSuccess(res, 200, coupons, 'Coupons fetched successfully');
     } catch (err) { return next(err); }

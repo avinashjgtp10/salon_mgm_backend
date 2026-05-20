@@ -1,4 +1,4 @@
-import { Request, Response, NextFunction } from "express";
+﻿import { Request, Response, NextFunction } from "express";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
@@ -30,7 +30,7 @@ export const suppliersController = {
         try {
             const userId = req.user?.userId;
             const role = req.user?.role;
-            const salonId = getSalonId(req);
+            const salonId = await getSalonId(req);
 
             logger.info("POST /inventory/suppliers called", { userId, role, salonId, path: req.originalUrl });
             if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
@@ -48,7 +48,7 @@ export const suppliersController = {
 
     async list(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
         try {
-            const salonId = getSalonId(req);
+            const salonId = await getSalonId(req);
             logger.info("GET /inventory/suppliers called", { requesterUserId: req.user?.userId, salonId, path: req.originalUrl });
 
             const suppliers = await suppliersService.listAll(salonId);
@@ -59,7 +59,7 @@ export const suppliersController = {
     async getById(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             const id = String(req.params.id || "").trim();
-            const salonId = getSalonId(req);
+            const salonId = await getSalonId(req);
             logger.info("GET /inventory/suppliers/:id called", { supplierId: id, salonId, path: req.originalUrl });
 
             if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
@@ -73,7 +73,7 @@ export const suppliersController = {
         try {
             const userId = req.user?.userId;
             const role = req.user?.role;
-            const salonId = getSalonId(req);
+            const salonId = await getSalonId(req);
             const id = String(req.params.id || "").trim();
 
             logger.info("PATCH /inventory/suppliers/:id called", { supplierId: id, requesterUserId: userId, requesterRole: role, salonId, path: req.originalUrl });
@@ -97,7 +97,7 @@ export const suppliersController = {
         try {
             const userId = req.user?.userId;
             const role = req.user?.role;
-            const salonId = getSalonId(req);
+            const salonId = await getSalonId(req);
             const id = String(req.params.id || "").trim();
 
             logger.info("DELETE /inventory/suppliers/:id called", { supplierId: id, requesterUserId: userId, salonId, path: req.originalUrl });
@@ -118,7 +118,7 @@ export const stockMovementsController = {
         try {
             const userId = req.user?.userId;
             const role = req.user?.role;
-            const salonId = getSalonId(req);
+            const salonId = await getSalonId(req);
 
             logger.info("POST /inventory/stock-movements called", { userId, salonId, path: req.originalUrl });
             if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
@@ -136,7 +136,7 @@ export const stockMovementsController = {
 
     async list(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
         try {
-            const salonId = getSalonId(req);
+            const salonId = await getSalonId(req);
             logger.info("GET /inventory/stock-movements called", { requesterUserId: req.user?.userId, salonId, query: req.query, path: req.originalUrl });
 
             const filters: ListStockMovementsFilters = {
@@ -158,7 +158,7 @@ export const stockMovementsController = {
     async getById(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             const id = String(req.params.id || "").trim();
-            const salonId = getSalonId(req);
+            const salonId = await getSalonId(req);
             logger.info("GET /inventory/stock-movements/:id called", { movementId: id, salonId, path: req.originalUrl });
 
             if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
@@ -176,7 +176,7 @@ export const stocktakesController = {
         try {
             const userId = req.user?.userId;
             const role = req.user?.role;
-            const salonId = getSalonId(req);
+            const salonId = await getSalonId(req);
             logger.info("POST /inventory/stock-takes called", { userId, role, salonId, path: req.originalUrl });
             if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
 
@@ -193,7 +193,7 @@ export const stocktakesController = {
 
     async list(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
         try {
-            const salonId = getSalonId(req);
+            const salonId = await getSalonId(req);
             const branchId = String(req.query.branch_id || "");
             if (!branchId) throw new AppError(400, "branch_id is required", "VALIDATION_ERROR");
 
@@ -206,7 +206,7 @@ export const stocktakesController = {
 
     async getById(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
         try {
-            const salonId = getSalonId(req);
+            const salonId = await getSalonId(req);
             const id = String(req.params.id || "");
             logger.info("GET /inventory/stock-takes/:id called", { id, salonId, path: req.originalUrl });
 
@@ -217,7 +217,7 @@ export const stocktakesController = {
 
     async delete(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
         try {
-            const salonId = getSalonId(req);
+            const salonId = await getSalonId(req);
             const id = String(req.params.id || "");
             const userId = req.user?.userId;
 
@@ -239,7 +239,7 @@ export const stockTakeController = {
         try {
             const userId = req.user?.userId;
             const role = req.user?.role;
-            const salonId = getSalonId(req);
+            const salonId = await getSalonId(req);
 
             logger.info("POST /inventory/stock-take called", { userId, salonId, path: req.originalUrl });
 
@@ -256,3 +256,4 @@ export const stockTakeController = {
         } catch (err) { next(err); }
     },
 };
+

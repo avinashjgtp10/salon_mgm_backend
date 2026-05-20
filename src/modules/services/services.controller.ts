@@ -1,4 +1,4 @@
-import { NextFunction, Request, Response } from "express";
+﻿import { NextFunction, Request, Response } from "express";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
@@ -31,7 +31,7 @@ const getSalonId = (req: AuthRequest): string => {
 export const servicesController = {
   async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = getSalonId(req);
+      const salonId = await getSalonId(req);
       const q = req.query as any;
       const query: ListServicesQuery = {
         category_id: q.category_id,
@@ -56,7 +56,7 @@ export const servicesController = {
   async create(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const userId = req.user?.userId;
-      const salonId = getSalonId(req);
+      const salonId = await getSalonId(req);
       if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
       logger.info("POST /services", { userId, salonId });
       const created = await servicesService.create({
@@ -73,7 +73,7 @@ export const servicesController = {
 
   async getById(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = getSalonId(req);
+      const salonId = await getSalonId(req);
       const id = String(req.params.id || "").trim();
       if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
       const service = await servicesService.getById(id, salonId);
@@ -86,7 +86,7 @@ export const servicesController = {
   async update(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const userId = req.user?.userId;
-      const salonId = getSalonId(req);
+      const salonId = await getSalonId(req);
       const id = String(req.params.id || "").trim();
       if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
       if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
@@ -106,7 +106,7 @@ export const servicesController = {
   async remove(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const userId = req.user?.userId;
-      const salonId = getSalonId(req);
+      const salonId = await getSalonId(req);
       const id = String(req.params.id || "").trim();
       if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
       if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
@@ -119,7 +119,7 @@ export const servicesController = {
 
   async listAddOnGroups(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = getSalonId(req);
+      const salonId = await getSalonId(req);
       const id = String(req.params.id || "").trim();
       if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
       const groups = await servicesService.listAddOnGroups(id, salonId);
@@ -132,7 +132,7 @@ export const servicesController = {
   async createAddOnGroup(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const userId = req.user?.userId;
-      const salonId = getSalonId(req);
+      const salonId = await getSalonId(req);
       const id = String(req.params.id || "").trim();
       if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
       if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
@@ -149,7 +149,7 @@ export const servicesController = {
   async updateAddOnGroup(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const userId = req.user?.userId;
-      const salonId = getSalonId(req);
+      const salonId = await getSalonId(req);
       const id = String(req.params.id || "").trim();
       const groupId = String(req.params.groupId || "").trim();
       if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
@@ -168,7 +168,7 @@ export const servicesController = {
   async deleteAddOnGroup(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const userId = req.user?.userId;
-      const salonId = getSalonId(req);
+      const salonId = await getSalonId(req);
       const id = String(req.params.id || "").trim();
       const groupId = String(req.params.groupId || "").trim();
       if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
@@ -184,7 +184,7 @@ export const servicesController = {
   async createAddOnOption(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const userId = req.user?.userId;
-      const salonId = getSalonId(req);
+      const salonId = await getSalonId(req);
       const id = String(req.params.id || "").trim();
       const groupId = String(req.params.groupId || "").trim();
       if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
@@ -203,7 +203,7 @@ export const servicesController = {
   async updateAddOnOption(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const userId = req.user?.userId;
-      const salonId = getSalonId(req);
+      const salonId = await getSalonId(req);
       const id = String(req.params.id || "").trim();
       const groupId = String(req.params.groupId || "").trim();
       const optionId = String(req.params.optionId || "").trim();
@@ -222,7 +222,7 @@ export const servicesController = {
   async deleteAddOnOption(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const userId = req.user?.userId;
-      const salonId = getSalonId(req);
+      const salonId = await getSalonId(req);
       const id = String(req.params.id || "").trim();
       const groupId = String(req.params.groupId || "").trim();
       const optionId = String(req.params.optionId || "").trim();
@@ -241,7 +241,7 @@ export const servicesController = {
 export const bundlesController = {
   async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = getSalonId(req);
+      const salonId = await getSalonId(req);
       const q = req.query as any;
       const query: ListBundlesQuery = {
         category_id: q.category_id, search: q.search, status: q.status,
@@ -262,7 +262,7 @@ export const bundlesController = {
   async create(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const userId = req.user?.userId;
-      const salonId = getSalonId(req);
+      const salonId = await getSalonId(req);
       if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
       logger.info("POST /bundles", { userId, salonId });
       const created = await bundlesService.create({
@@ -277,7 +277,7 @@ export const bundlesController = {
 
   async getById(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = getSalonId(req);
+      const salonId = await getSalonId(req);
       const id = String(req.params.id || "").trim();
       if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
       const bundle = await bundlesService.getById(id, salonId);
@@ -290,7 +290,7 @@ export const bundlesController = {
   async update(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const userId = req.user?.userId;
-      const salonId = getSalonId(req);
+      const salonId = await getSalonId(req);
       const id = String(req.params.id || "").trim();
       if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
       if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
@@ -307,7 +307,7 @@ export const bundlesController = {
   async remove(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const userId = req.user?.userId;
-      const salonId = getSalonId(req);
+      const salonId = await getSalonId(req);
       const id = String(req.params.id || "").trim();
       if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
       if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");

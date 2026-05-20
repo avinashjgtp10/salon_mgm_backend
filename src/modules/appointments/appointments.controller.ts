@@ -4,17 +4,20 @@ import { sendSuccess } from "../utils/response.util";
 import { appointmentsService } from "./appointments.service";
 import { CreateAppointmentBody, UpdateAppointmentBody, CancelAppointmentBody } from "./appointments.types";
 
-type AuthRequest = Request & { user?: { userId: string; role?: string } };
+type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string | null } };
 
 export const appointmentsController = {
 
     async create(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const userId = req.user?.userId;
+            const salonId = req.user?.salonId;
             if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+            if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+            const body = req.body as CreateAppointmentBody;
+            body.salon_id = salonId; // enforce JWT value — never trust client-supplied salon_id
             const appointment = await appointmentsService.create({
-                requesterUserId: userId, requesterRole: req.user?.role,
-                body: req.body as CreateAppointmentBody,
+                requesterUserId: userId, requesterRole: req.user?.role, body,
             });
             return sendSuccess(res, 201, appointment, "Appointment created successfully");
         } catch (err) { return next(err); }
@@ -31,8 +34,10 @@ export const appointmentsController = {
 
     async list(req: AuthRequest, res: Response, next: NextFunction) {
         try {
+            const salonId = req.user?.salonId;
+            if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
             const appointments = await appointmentsService.list({
-                salonId: String(req.query.salon_id || "").trim() || undefined,
+                salonId,
                 clientId: String(req.query.client_id || "").trim() || undefined,
                 date: String(req.query.date || "").trim() || undefined,
                 staffId: String(req.query.staff_id || "").trim() || undefined,
@@ -126,9 +131,11 @@ export const appointmentsController = {
 
     async exportAppointments(req: AuthRequest, res: Response, next: NextFunction) {
         try {
+            const salonId = req.user?.salonId;
+            if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
             const format = (req.query.format as string) === "excel" ? "excel" : "csv";
             const { buffer, contentType, filename } = await appointmentsService.exportAppointments({
-                salon_id: req.query.salon_id as string | undefined,
+                salon_id: salonId,
                 status: req.query.status as string | undefined,
                 start_date: req.query.start_date as string | undefined,
                 end_date: req.query.end_date as string | undefined,

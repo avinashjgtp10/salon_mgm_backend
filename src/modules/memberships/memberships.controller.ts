@@ -1,4 +1,4 @@
-import { NextFunction, Request, Response } from "express";
+﻿import { NextFunction, Request, Response } from "express";
 import ExcelJS from "exceljs";
 import { membershipsService } from "./memberships.service";
 import { sendSuccess } from "../utils/response.util";
@@ -18,7 +18,7 @@ export const membershipsController = {
 
   async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = getSalonId(req);
+      const salonId = await getSalonId(req);
       const data = await membershipsService.list(req.query, salonId);
       return sendSuccess(res, 200, data, "Memberships fetched successfully");
     } catch (e) { return next(e); }
@@ -26,7 +26,7 @@ export const membershipsController = {
 
   async exportCsv(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = getSalonId(req);
+      const salonId = await getSalonId(req);
       const items = await membershipsService.listAll(req.query, salonId);
 
       const headers = [
@@ -66,7 +66,7 @@ export const membershipsController = {
 
   async exportExcel(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = getSalonId(req);
+      const salonId = await getSalonId(req);
       const items = await membershipsService.listAll(req.query, salonId);
 
       const workbook = new ExcelJS.Workbook();
@@ -112,7 +112,7 @@ export const membershipsController = {
 
   async exportPdf(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = getSalonId(req);
+      const salonId = await getSalonId(req);
       const items = await membershipsService.listAll(req.query, salonId);
 
       // Build HTML → PDF using pdfkit (already in your backend deps)
@@ -182,7 +182,7 @@ export const membershipsController = {
 
   async create(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = getSalonId(req);
+      const salonId = await getSalonId(req);
       const data = await membershipsService.create(req.body, salonId);
       return sendSuccess(res, 201, data, "Membership created successfully");
     } catch (e) { return next(e); }
@@ -190,7 +190,7 @@ export const membershipsController = {
 
   async getById(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = getSalonId(req);
+      const salonId = await getSalonId(req);
       const data = await membershipsService.getById(req.params.id as string, salonId);
       return sendSuccess(res, 200, data, "Membership fetched successfully");
     } catch (e) { return next(e); }
@@ -198,7 +198,7 @@ export const membershipsController = {
 
   async update(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = getSalonId(req);
+      const salonId = await getSalonId(req);
       const data = await membershipsService.update(req.params.id as string, req.body, salonId);
       return sendSuccess(res, 200, data, "Membership updated successfully");
     } catch (e) { return next(e); }
@@ -206,7 +206,7 @@ export const membershipsController = {
 
   async delete(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = getSalonId(req);
+      const salonId = await getSalonId(req);
       await membershipsService.delete(req.params.id as string, salonId);
       return sendSuccess(res, 200, {}, "Membership deleted successfully");
     } catch (e) { return next(e); }

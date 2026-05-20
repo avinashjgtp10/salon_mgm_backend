@@ -1,4 +1,4 @@
-import { Request, Response, NextFunction } from "express";
+﻿import { Request, Response, NextFunction } from "express";
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { salesService } from "./sales.service";
@@ -12,7 +12,7 @@ export const salesController = {
         try {
             const userId = req.user?.userId;
             if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
-            const salonId = getSalonId(req);
+            const salonId = await getSalonId(req);
             const body = req.body as Omit<CreateSaleBody, "salon_id">;
             const result = await salesService.create({
                 requesterUserId: userId,
@@ -33,7 +33,7 @@ export const salesController = {
 
     async getInit(req: AuthRequest, res: Response, next: NextFunction) {
         try {
-            const salonId = getSalonId(req);
+            const salonId = await getSalonId(req);
             const result = await salesService.init(salonId);
             return sendSuccess(res, 200, result, "Quick sale init data fetched successfully");
         } catch (err) { return next(err); }
@@ -41,7 +41,7 @@ export const salesController = {
 
     async list(req: AuthRequest, res: Response, next: NextFunction) {
         try {
-            const salonId = getSalonId(req);
+            const salonId = await getSalonId(req);
             const sales = await salesService.list({
                 salon_id: salonId,
                 client_id: req.query.client_id as string,
@@ -53,7 +53,7 @@ export const salesController = {
 
     async getDailySummary(req: AuthRequest, res: Response, next: NextFunction) {
         try {
-            const salonId = getSalonId(req);
+            const salonId = await getSalonId(req);
             const { date } = req.query;
             if (!date) throw new AppError(400, "date query parameter is required", "VALIDATION_ERROR");
             const summary = await salesService.getDailySummary(salonId, date as string);
@@ -93,7 +93,7 @@ export const salesController = {
 
     async exportSales(req: AuthRequest, res: Response, next: NextFunction) {
         try {
-            const salonId = getSalonId(req);
+            const salonId = await getSalonId(req);
             const rawFormat = req.query.format as string;
             const format: "csv" | "excel" | "pdf" =
                 rawFormat === "pdf" ? "pdf" : rawFormat === "excel" ? "excel" : "csv";
@@ -110,3 +110,4 @@ export const salesController = {
         } catch (err) { return next(err); }
     }
 };
+
