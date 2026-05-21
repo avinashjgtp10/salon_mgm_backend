@@ -38,6 +38,7 @@ import salonDashboardRoutes from "./modules/salon-dashboard/salon-dashboard.rout
 import paymentsRoutes from "./modules/payments/payments.routes";
 import couponsRoutes from "./modules/coupons/coupons.routes";
 import settingsRoutes from "./modules/settings/settings.routes";
+import reportsRoutes from "./modules/reports/reports.routes";
 import blockedTimesRoutes from "./modules/blocked_times/blocked_times.routes";
 import botRoutes from "./modules/bot/bot.routes";
 import swaggerUi from "swagger-ui-express";
@@ -111,12 +112,13 @@ app.use('/api/v1/wa-config', marketingConfigRoutes)
 app.use('/api/v1/webhooks',  marketingWebhooksRoutes)
 app.use('/api/v1/inbox', inboxRouter);
 app.use("/api/v1/profile",  profileRoutes);
-app.use("/api/v1/dashboard", salonDashboardRoutes);
-app.use("/api/v1/payments", paymentsRoutes);
-app.use("/api/v1/coupons", couponsRoutes);
-app.use("/api/v1/settings", settingsRoutes);
-app.use("/api/v1/blocked-times", blockedTimesRoutes);
-app.use("/api/v1/bot", botRoutes);
+app.use("/api/v1/dashboard",      salonDashboardRoutes);
+app.use("/api/v1/coupons",        couponsRoutes);
+app.use("/api/v1/payments",       paymentsRoutes);
+app.use("/api/v1/blocked-times",  blockedTimesRoutes);
+app.use("/api/v1/settings",       settingsRoutes);
+app.use("/api/v1/bot",            botRoutes);
+app.use("/api/v1/reports",        reportsRoutes);
 
 
 // Swagger Documentation
