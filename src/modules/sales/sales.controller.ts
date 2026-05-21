@@ -91,6 +91,16 @@ export const salesController = {
         } catch (err) { return next(err); }
     },
 
+    async delete(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const userId = req.user?.userId;
+            const id = req.params.id as string;
+            if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+            const sale = await salesService.delete(id);
+            return sendSuccess(res, 200, sale, "Sale deleted successfully");
+        } catch (err) { return next(err); }
+    },
+
     async exportSales(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const salonId = getSalonId(req);

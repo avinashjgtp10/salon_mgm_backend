@@ -45,4 +45,25 @@ export const paymentsController = {
       return sendSuccess(res, 200, payments, 'Payments fetched successfully');
     } catch (err) { return next(err); }
   },
+
+  async exportPayments(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = String(req.query.salon_id || '').trim();
+      if (!salonId) throw new AppError(400, 'salon_id query param is required', 'VALIDATION_ERROR');
+      const rawFormat = req.query.format as string;
+      const format: 'csv' | 'excel' | 'pdf' =
+        rawFormat === 'pdf' ? 'pdf' : rawFormat === 'excel' ? 'excel' : 'csv';
+      const { buffer, contentType, filename } = await paymentsService.exportPayments({
+        salon_id: salonId,
+        start_date: req.query.start_date as string | undefined,
+        end_date: req.query.end_date as string | undefined,
+        payment_method: req.query.payment_method as string | undefined,
+        status: req.query.status as string | undefined,
+        format,
+      });
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Type', contentType);
+      return res.send(buffer);
+    } catch (err) { return next(err); }
+  },
 };

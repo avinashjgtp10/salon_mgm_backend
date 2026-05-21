@@ -66,4 +66,46 @@ export const paymentsRepository = {
     );
     return rows;
   },
+
+  async exportList(filters: {
+    salon_id: string;
+    start_date?: string;
+    end_date?: string;
+    payment_method?: string;
+    status?: string;
+  }): Promise<(Payment & { client_name: string | null; sale_invoice: string | null })[]> {
+    const conditions: string[] = [`p.salon_id = $1`];
+    const values: any[] = [filters.salon_id];
+    let idx = 2;
+
+    if (filters.start_date) {
+      conditions.push(`DATE(p.paid_at) >= $${idx}::date`);
+      values.push(filters.start_date); idx++;
+    }
+    if (filters.end_date) {
+      conditions.push(`DATE(p.paid_at) <= $${idx}::date`);
+      values.push(filters.end_date); idx++;
+    }
+    if (filters.payment_method) {
+      conditions.push(`p.payment_method = $${idx}`);
+      values.push(filters.payment_method); idx++;
+    }
+    if (filters.status) {
+      conditions.push(`p.status = $${idx}`);
+      values.push(filters.status); idx++;
+    }
+
+    const { rows } = await pool.query(
+      `SELECT p.*,
+        TRIM(CONCAT(COALESCE(c.first_name,''),' ',COALESCE(c.last_name,''))) AS client_name,
+        s.invoice_number AS sale_invoice
+       FROM payments p
+       LEFT JOIN clients c ON c.id = p.client_id
+       LEFT JOIN sales s ON s.appointment_id = p.appointment_id
+       WHERE ${conditions.join(' AND ')}
+       ORDER BY p.paid_at DESC`,
+      values
+    );
+    return rows;
+  },
 };

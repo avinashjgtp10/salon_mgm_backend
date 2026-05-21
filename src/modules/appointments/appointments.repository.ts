@@ -7,7 +7,6 @@ import {
 
 export const appointmentsRepository = {
 
-    // ✅ FIX — LEFT JOIN payments so payment_status reflects actual payment records
     async findById(id: string): Promise<Appointment | null> {
         const { rows } = await pool.query(
             `SELECT a.*,
@@ -21,18 +20,26 @@ export const appointmentsRepository = {
                   WHERE p.appointment_id = a.id),
                   'unpaid'::text
                 ) AS payment_status,
-                COALESCE((SELECT SUM(net_amount) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS paid_amount
+                COALESCE((SELECT SUM(net_amount) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS paid_amount,
+                TRIM(CONCAT(COALESCE(c.first_name, ''), ' ', COALESCE(c.last_name, ''))) AS client_name,
+                (
+                  COALESCE((SELECT SUM((item->>'price')::numeric * (item->>'quantity')::numeric) FROM jsonb_array_elements(COALESCE(a.services,'[]'::jsonb)) item), 0) +
+                  COALESCE((SELECT SUM((item->>'price')::numeric * (item->>'quantity')::numeric) FROM jsonb_array_elements(COALESCE(a.package_items,'[]'::jsonb)) item), 0) +
+                  COALESCE((SELECT SUM((item->>'price')::numeric * (item->>'quantity')::numeric) FROM jsonb_array_elements(COALESCE(a.product_items,'[]'::jsonb)) item), 0) +
+                  COALESCE((SELECT SUM((item->>'price')::numeric * (item->>'quantity')::numeric) FROM jsonb_array_elements(COALESCE(a.membership_items,'[]'::jsonb)) item), 0)
+                )::text AS total_amount,
+                (SELECT pm.payment_method FROM payments pm WHERE pm.appointment_id = a.id ORDER BY pm.created_at DESC LIMIT 1) AS payment_method
              FROM appointments a
+             LEFT JOIN clients c ON c.id = a.client_id
              WHERE a.id = $1`,
             [id]
         );
         return rows[0] || null;
     },
 
-    // ✅ FIX — LEFT JOIN payments so payment_status is accurate on list
     async listBySalonId(
         salonId: string,
-        filters: { date?: string; staff_id?: string; status?: string }
+        filters: { date?: string; staff_id?: string; status?: string; search?: string }
     ): Promise<Appointment[]> {
         const conditions: string[] = [`a.salon_id = $1`];
         const values: any[] = [salonId];
@@ -50,6 +57,11 @@ export const appointmentsRepository = {
             conditions.push(`a.status = $${idx}`);
             values.push(filters.status); idx++;
         }
+        if (filters.search) {
+            const term = filters.search.replace(/^#/, '').trim();
+            conditions.push(`(a.id::text ILIKE $${idx} OR TRIM(CONCAT(COALESCE(c.first_name,''),' ',COALESCE(c.last_name,''))) ILIKE $${idx})`);
+            values.push(`%${term}%`); idx++;
+        }
 
         const { rows } = await pool.query(
             `SELECT a.*,
@@ -63,8 +75,17 @@ export const appointmentsRepository = {
                   WHERE p.appointment_id = a.id),
                   'unpaid'::text
                 ) AS payment_status,
-                COALESCE((SELECT SUM(net_amount) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS paid_amount
+                COALESCE((SELECT SUM(net_amount) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS paid_amount,
+                TRIM(CONCAT(COALESCE(c.first_name, ''), ' ', COALESCE(c.last_name, ''))) AS client_name,
+                (
+                  COALESCE((SELECT SUM((item->>'price')::numeric * (item->>'quantity')::numeric) FROM jsonb_array_elements(COALESCE(a.services,'[]'::jsonb)) item), 0) +
+                  COALESCE((SELECT SUM((item->>'price')::numeric * (item->>'quantity')::numeric) FROM jsonb_array_elements(COALESCE(a.package_items,'[]'::jsonb)) item), 0) +
+                  COALESCE((SELECT SUM((item->>'price')::numeric * (item->>'quantity')::numeric) FROM jsonb_array_elements(COALESCE(a.product_items,'[]'::jsonb)) item), 0) +
+                  COALESCE((SELECT SUM((item->>'price')::numeric * (item->>'quantity')::numeric) FROM jsonb_array_elements(COALESCE(a.membership_items,'[]'::jsonb)) item), 0)
+                )::text AS total_amount,
+                (SELECT pm.payment_method FROM payments pm WHERE pm.appointment_id = a.id ORDER BY pm.created_at DESC LIMIT 1) AS payment_method
              FROM appointments a
+             LEFT JOIN clients c ON c.id = a.client_id
              WHERE ${conditions.join(" AND ")}
              ORDER BY a.scheduled_at ASC`,
             values

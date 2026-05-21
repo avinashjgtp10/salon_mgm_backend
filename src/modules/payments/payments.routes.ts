@@ -20,6 +20,12 @@ router.get(
   paymentsController.listBySalon
 );
 router.get(
+  '/export',
+  authMiddleware,
+  roleMiddleware('salon_owner', 'admin', 'staff'),
+  paymentsController.exportPayments
+);
+router.get(
   '/:appointmentId',
   authMiddleware,
   roleMiddleware('salon_owner', 'admin', 'staff'),

@@ -3,7 +3,15 @@ import { Sale, SaleItem, CreateSaleBody, UpdateSaleBody } from "./sales.types";
 
 export const salesRepository = {
     async findById(id: string): Promise<Sale | null> {
-        const { rows } = await safeQuery(() => pool.query(`SELECT * FROM sales WHERE id = $1`, [id]));
+        const { rows } = await safeQuery(() => pool.query(
+            `SELECT s.*,
+                NULLIF(TRIM(CONCAT(COALESCE(c.first_name,''),' ',COALESCE(c.last_name,''))),''
+                ) AS client_name
+             FROM sales s
+             LEFT JOIN clients c ON c.id = s.client_id
+             WHERE s.id = $1`,
+            [id]
+        ));
         return rows[0] || null;
     },
 
@@ -17,12 +25,19 @@ export const salesRepository = {
         const values: any[] = [];
         let idx = 1;
 
-        if (filters.salon_id) { conditions.push(`salon_id = $${idx++}`); values.push(filters.salon_id); }
-        if (filters.client_id) { conditions.push(`client_id = $${idx++}`); values.push(filters.client_id); }
-        if (filters.status) { conditions.push(`status = $${idx++}`); values.push(filters.status); }
+        if (filters.salon_id) { conditions.push(`s.salon_id = $${idx++}`); values.push(filters.salon_id); }
+        if (filters.client_id) { conditions.push(`s.client_id = $${idx++}`); values.push(filters.client_id); }
+        if (filters.status) { conditions.push(`s.status = $${idx++}`); values.push(filters.status); }
 
         const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-        const query = `SELECT * FROM sales ${whereClause} ORDER BY created_at DESC`;
+        const query = `
+            SELECT s.*,
+                NULLIF(TRIM(CONCAT(COALESCE(c.first_name,''),' ',COALESCE(c.last_name,''))),''
+                ) AS client_name
+            FROM sales s
+            LEFT JOIN clients c ON c.id = s.client_id
+            ${whereClause}
+            ORDER BY s.created_at DESC`;
         const { rows } = await safeQuery(() => pool.query(query, values));
         return rows;
     },
@@ -80,7 +95,18 @@ export const salesRepository = {
             }
 
             await client.query('COMMIT');
-            return sale;
+
+            // Re-fetch with client JOIN so client_name is included in the response
+            const { rows: withName } = await pool.query(
+                `SELECT s.*,
+                    NULLIF(TRIM(CONCAT(COALESCE(c.first_name,''),' ',COALESCE(c.last_name,''))),''
+                    ) AS client_name
+                 FROM sales s
+                 LEFT JOIN clients c ON c.id = s.client_id
+                 WHERE s.id = $1`,
+                [sale.id]
+            );
+            return withName[0] || sale;
         } catch (e) {
             await client.query('ROLLBACK');
             throw e;
@@ -120,17 +146,40 @@ export const salesRepository = {
         return rows[0];
     },
 
+    async deleteById(id: string): Promise<Sale | null> {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            await client.query(`DELETE FROM sale_items WHERE sale_id = $1`, [id]);
+            const { rows } = await client.query(`DELETE FROM sales WHERE id = $1 RETURNING *`, [id]);
+            await client.query('COMMIT');
+            return rows[0] || null;
+        } catch (e) {
+            await client.query('ROLLBACK');
+            throw e;
+        } finally {
+            client.release();
+        }
+    },
+
     async exportList(filters: { salon_id?: string; status?: string; date?: string }): Promise<Sale[]> {
         const conditions: string[] = [];
         const values: any[] = [];
         let idx = 1;
 
-        if (filters.salon_id) { conditions.push(`salon_id = $${idx++}`);          values.push(filters.salon_id); }
-        if (filters.status)   { conditions.push(`status = $${idx++}`);             values.push(filters.status);   }
-        if (filters.date)     { conditions.push(`DATE(created_at) = $${idx++}`);   values.push(filters.date);     }
+        if (filters.salon_id) { conditions.push(`s.salon_id = $${idx++}`);          values.push(filters.salon_id); }
+        if (filters.status)   { conditions.push(`s.status = $${idx++}`);             values.push(filters.status);   }
+        if (filters.date)     { conditions.push(`DATE(s.created_at) = $${idx++}`);   values.push(filters.date);     }
 
         const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-        const query = `SELECT * FROM sales ${whereClause} ORDER BY created_at DESC`;
+        const query = `
+            SELECT s.*,
+                NULLIF(TRIM(CONCAT(COALESCE(c.first_name,''),' ',COALESCE(c.last_name,''))),''
+                ) AS client_name
+            FROM sales s
+            LEFT JOIN clients c ON c.id = s.client_id
+            ${whereClause}
+            ORDER BY s.created_at DESC`;
         const { rows } = await safeQuery(() => pool.query(query, values));
         return rows;
     }

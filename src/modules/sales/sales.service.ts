@@ -87,6 +87,14 @@ export const salesService = {
         return sale;
     },
 
+    async delete(id: string): Promise<Sale> {
+        const existing = await salesRepository.findById(id);
+        if (!existing) throw new AppError(404, "Sale not found", "NOT_FOUND");
+        const deleted = await salesRepository.deleteById(id);
+        if (!deleted) throw new AppError(500, "Failed to delete sale", "INTERNAL_ERROR");
+        return deleted;
+    },
+
     async exportSales(filters: {
         salon_id?: string;
         status?: string;

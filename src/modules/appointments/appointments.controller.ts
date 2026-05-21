@@ -37,6 +37,7 @@ export const appointmentsController = {
                 date: String(req.query.date || "").trim() || undefined,
                 staffId: String(req.query.staff_id || "").trim() || undefined,
                 status: String(req.query.status || "").trim() || undefined,
+                search: String(req.query.search || "").trim() || undefined,
             });
             return sendSuccess(res, 200, appointments, "Appointments fetched successfully");
         } catch (err) { return next(err); }

@@ -70,6 +70,10 @@ export type Appointment = {
     package_items: AppointmentPackageItem[];
     product_items: AppointmentProductItem[];
     membership_items: AppointmentMembershipItem[];
+    // Computed fields (joined/aggregated)
+    client_name: string | null;
+    total_amount: string | null;
+    payment_method: string | null;
 };
 
 // ─── Request body types ──────────────────────────────────────────────────────

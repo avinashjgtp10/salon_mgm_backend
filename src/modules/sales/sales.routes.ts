@@ -15,6 +15,7 @@ router.get("/export", authMiddleware, roleMiddleware("salon_owner", "admin", "st
 router.get("/init", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), salesController.getInit);
 router.get("/:id", authMiddleware, roleMiddleware("salon_owner", "admin", "staff", "client"), salesController.getById);
 router.patch("/:id", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), validateUpdateSale, salesController.update);
+router.delete("/:id", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), salesController.delete);
 router.post("/:id/checkout", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), validateCheckoutSale, salesController.checkout);
 
 export default router;
