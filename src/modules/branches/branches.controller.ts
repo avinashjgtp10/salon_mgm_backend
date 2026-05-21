@@ -9,7 +9,7 @@ import { salonsService } from "../salons/salons.service";
 import { CreateBranchBody, CreateHolidayBody, TimingDayInput, UpdateBranchBody } from "./branches.types";
 
 type AuthRequest = Request & {
-    user?: { userId: string; role?: string };
+    user?: { userId: string; role?: string; salonId?: string | null };
 };
 
 export const branchesController = {
@@ -32,8 +32,8 @@ export const branchesController = {
     async listBySalon(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             if (!req.user?.userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
-
-            const salonId = String(req.params.salonId || "").trim();
+            const salonId = req.user?.salonId;
+            if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
             const list = await branchesService.listBranchesBySalon(salonId);
 
             return sendSuccess(res, 200, list, "Branches fetched successfully");

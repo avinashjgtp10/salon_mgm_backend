@@ -4,18 +4,19 @@ import { sendSuccess } from '../utils/response.util';
 import { paymentsService } from './payments.service';
 import { CreatePaymentBody } from './payments.types';
 
-type AuthRequest = Request & { user?: { userId: string; role?: string } };
+type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string | null } };
 
 export const paymentsController = {
 
   async create(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const userId = req.user?.userId;
+      const salonId = req.user?.salonId;
       if (!userId) throw new AppError(401, 'Unauthorized', 'UNAUTHORIZED');
+      if (!salonId) throw new AppError(403, 'Salon context required', 'NO_SALON_CONTEXT');
 
       const body = req.body as CreatePaymentBody;
-      if (!body.salon_id)
-        throw new AppError(400, 'salon_id is required', 'VALIDATION_ERROR');
+      body.salon_id = salonId; // enforce JWT value — ignore whatever client sent
       if (typeof body.gross_amount !== 'number' || body.gross_amount < 0)
         throw new AppError(400, 'gross_amount must be a non-negative number', 'VALIDATION_ERROR');
       if (typeof body.net_amount !== 'number' || body.net_amount < 0)
@@ -39,8 +40,8 @@ export const paymentsController = {
 
   async listBySalon(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = String(req.query.salon_id || '').trim();
-      if (!salonId) throw new AppError(400, 'salon_id query param is required', 'VALIDATION_ERROR');
+      const salonId = req.user?.salonId;
+      if (!salonId) throw new AppError(403, 'Salon context required', 'NO_SALON_CONTEXT');
       const payments = await paymentsService.listBySalon(salonId);
       return sendSuccess(res, 200, payments, 'Payments fetched successfully');
     } catch (err) { return next(err); }
