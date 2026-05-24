@@ -5,7 +5,9 @@ export const templatesRepository = {
 
   async findAll(salonId: string): Promise<WATemplate[]> {
     const { rows } = await pool.query(
-      `SELECT * FROM wa_templates WHERE salon_id = $1 ORDER BY created_at DESC`,
+      `SELECT * FROM wa_templates 
+       WHERE salon_id = $1 
+       ORDER BY is_favorite DESC, created_at DESC`,
       [salonId]
     )
     return rows
@@ -21,13 +23,17 @@ export const templatesRepository = {
 
   async create(
     salonId: string,
-    body: CreateTemplateBody & { meta_template_id?: string | null; header_media_id?: string | null; status?: string }
+    body: CreateTemplateBody & {
+      meta_template_id?: string | null
+      header_media_id?:  string | null
+      status?:           string
+    }
   ): Promise<WATemplate> {
     const { rows } = await pool.query(`
       INSERT INTO wa_templates
         (salon_id, name, category, language, header_type, header_text,
-         body_text, footer_text, buttons, meta_template_id, header_media_id, status)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12)
+         body_text, footer_text, buttons, meta_template_id, header_media_id, status, is_favorite)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12, FALSE)
       RETURNING *
     `, [
       salonId,
@@ -76,11 +82,39 @@ export const templatesRepository = {
     return rows[0] || null
   },
 
-  async delete(id: string, salonId: string): Promise<boolean> {
+  // ── Favorite toggle ────────────────────────────────────────────────────────
+  async toggleFavorite(id: string, salonId: string): Promise<WATemplate | null> {
+    const { rows } = await pool.query(
+      `UPDATE wa_templates
+       SET is_favorite = NOT is_favorite, updated_at = NOW()
+       WHERE id = $1 AND salon_id = $2
+       RETURNING *`,
+      [id, salonId]
+    )
+    return rows[0] || null
+  },
+
+  // ── Delete — checks FK constraint first ───────────────────────────────────
+  async delete(id: string, salonId: string): Promise<{
+    deleted:       boolean
+    reason?:       string
+    campaignCount?: number
+  }> {
+    // check if template is referenced by any campaigns
+    const { rows: [usage] } = await pool.query(
+      `SELECT COUNT(*) AS count FROM wa_campaigns WHERE template_id = $1`,
+      [id]
+    )
+    const campaignCount = parseInt(usage.count) || 0
+
+    if (campaignCount > 0) {
+      return { deleted: false, reason: 'IN_USE', campaignCount }
+    }
+
     const result = await pool.query(
       `DELETE FROM wa_templates WHERE id = $1 AND salon_id = $2`,
       [id, salonId]
     )
-    return (result.rowCount ?? 0) > 0
+    return { deleted: (result.rowCount ?? 0) > 0 }
   },
 }

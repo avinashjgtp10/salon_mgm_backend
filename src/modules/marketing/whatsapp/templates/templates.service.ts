@@ -9,7 +9,6 @@ import { CreateTemplateBody } from './templates.types'
 const WA_BASE_URL    = process.env.WA_BASE_URL    ?? 'https://graph.facebook.com'
 const WA_API_VERSION = process.env.WA_API_VERSION ?? 'v19.0'
 
-// ── Helper: extract {{1}}, {{2}} variables and build example values ────────────
 function extractExamples(text: string): string[] {
   const matches = text.match(/{{\d+}}/g) ?? []
   return matches
@@ -18,7 +17,6 @@ function extractExamples(text: string): string[] {
     .map(n => `Example${n}`)
 }
 
-// ── Upload media via Resumable Upload API → get 4::... handle for template submission ──
 async function uploadMediaHandle(
   file: Express.Multer.File,
   appId: string,
@@ -54,7 +52,6 @@ async function uploadMediaHandle(
   return uploadRes.data.h
 }
 
-// ── Upload media via Phone Number ID → get numeric media ID (for sending messages) ──
 async function uploadMediaId(
   file: Express.Multer.File,
   phoneNumberId: string,
@@ -87,37 +84,25 @@ export const templatesService = {
   },
 
   async create(salonId: string, body: CreateTemplateBody, file?: Express.Multer.File) {
-    console.log('📋 Template create called — header_type:', body.header_type, '| file present:', !!file)
     const config = await configRepository.findBySalonId(salonId)
     if (!config) throw new AppError(400, 'WhatsApp not configured for this salon', 'WA_NOT_CONFIGURED')
 
     const components: any[] = []
     let headerMediaId: string | undefined
 
-    // ── Header ────────────────────────────────────────────────────────────────
     if (body.header_type && body.header_type !== 'none') {
       if (body.header_type === 'text' && body.header_text) {
         const headerExamples = extractExamples(body.header_text)
         const headerComponent: any = { type: 'HEADER', format: 'TEXT', text: body.header_text }
-        if (headerExamples.length > 0) {
-          headerComponent.example = { header_text: headerExamples }
-        }
+        if (headerExamples.length > 0) headerComponent.example = { header_text: headerExamples }
         components.push(headerComponent)
 
       } else if (file && ['image', 'video', 'document'].includes(body.header_type)) {
-        console.log('📁 File received:', file?.originalname, file?.mimetype, file?.size, 'bytes')
         try {
           const appId = (config as any).app_id
           if (!appId) throw new Error('app_id not configured in WhatsApp settings')
-
-          // Get handle for template submission to Meta
           const handle = await uploadMediaHandle(file, appId, config.access_token)
-          console.log('✅ Upload handle:', handle)
-
-          // Get numeric media ID for sending messages later
           headerMediaId = await uploadMediaId(file, config.phone_number_id, config.access_token)
-          console.log('✅ Media ID:', headerMediaId)
-
           const formatMap: Record<string, string> = { image: 'IMAGE', video: 'VIDEO', document: 'DOCUMENT' }
           components.push({
             type:    'HEADER',
@@ -133,20 +118,15 @@ export const templatesService = {
       }
     }
 
-    // ── Body ──────────────────────────────────────────────────────────────────
     const bodyExamples = extractExamples(body.body_text)
     const bodyComponent: any = { type: 'BODY', text: body.body_text }
-    if (bodyExamples.length > 0) {
-      bodyComponent.example = { body_text: [bodyExamples] }
-    }
+    if (bodyExamples.length > 0) bodyComponent.example = { body_text: [bodyExamples] }
     components.push(bodyComponent)
 
-    // ── Footer ────────────────────────────────────────────────────────────────
     if (body.footer_text) {
       components.push({ type: 'FOOTER', text: body.footer_text })
     }
 
-    // ── Buttons ───────────────────────────────────────────────────────────────
     if (body.buttons && body.buttons.length > 0) {
       components.push({
         type:    'BUTTONS',
@@ -210,6 +190,12 @@ export const templatesService = {
     }
   },
 
+  async toggleFavorite(id: string, salonId: string) {
+    const result = await templatesRepository.toggleFavorite(id, salonId)
+    if (!result) throw new AppError(404, 'Template not found', 'NOT_FOUND')
+    return result
+  },
+
   async fixMedia(id: string, salonId: string, file: Express.Multer.File) {
     const template = await templatesRepository.findById(id, salonId)
     if (!template) throw new AppError(404, 'Template not found', 'NOT_FOUND')
@@ -220,13 +206,21 @@ export const templatesService = {
     if (!config) throw new AppError(400, 'WhatsApp not configured', 'WA_NOT_CONFIGURED')
 
     const mediaId = await uploadMediaId(file, config.phone_number_id, config.access_token)
-    console.log(`✅ Fixed media ID for template ${id}:`, mediaId)
     return templatesRepository.updateMediaId(id, salonId, mediaId)
   },
 
   async delete(id: string, salonId: string) {
-    const deleted = await templatesRepository.delete(id, salonId)
-    if (!deleted) throw new AppError(404, 'Template not found', 'NOT_FOUND')
+    const result = await templatesRepository.delete(id, salonId)
+
+    if (!result.deleted && result.reason === 'IN_USE') {
+      throw new AppError(
+        409,
+        `Cannot delete — this template is used in ${result.campaignCount} campaign(s). Delete those campaigns first.`,
+        'TEMPLATE_IN_USE'
+      )
+    }
+
+    if (!result.deleted) throw new AppError(404, 'Template not found', 'NOT_FOUND')
     return { message: 'Template deleted successfully' }
   },
 }

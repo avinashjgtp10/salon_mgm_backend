@@ -58,5 +58,12 @@ router.delete(
   roleMiddleware('salon_owner', 'admin'),
   templatesController.delete
 )
+// POST /api/v1/templates/:id/favorite — toggle favorite
+router.post(
+  '/:id/favorite',
+  authMiddleware,
+  roleMiddleware('salon_owner', 'admin'),
+  templatesController.toggleFavorite
+)
 
 export default router
