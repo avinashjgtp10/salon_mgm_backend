@@ -39,10 +39,12 @@ import paymentsRoutes from "./modules/payments/payments.routes";
 import couponsRoutes from "./modules/coupons/coupons.routes";
 import settingsRoutes from "./modules/settings/settings.routes";
 import blockedTimesRoutes from "./modules/blocked_times/blocked_times.routes";
+import analyticsRoutes from './modules/marketing/whatsapp/analytics/analytics.routes'
 import botRoutes from "./modules/bot/bot.routes";
 import swaggerUi from "swagger-ui-express";
 import YAML from "yamljs";
 import path from "path";
+
 
 const app: Application = express();
 app.set("trust proxy", 1);
@@ -105,6 +107,7 @@ app.use("/api/v1/billing", billingRoutes);
 app.use("/api/v1/subscriptions", subscriptionsRoutes);
 //app.use('/api/v1//dashboard', marketingDashboardRoutes)
 app.use('/api/v1/marketing/dashboard', marketingDashboardRoutes);
+app.use('/api/v1/marketing/analytics', analyticsRoutes)
 app.use('/api/v1/templates', marketingTemplatesRoutes)
 app.use('/api/v1/campaigns', marketingCampaignsRoutes)
 app.use('/api/v1/wa-config', marketingConfigRoutes)

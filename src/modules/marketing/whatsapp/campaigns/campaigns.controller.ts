@@ -52,14 +52,16 @@ export const campaignsController = {
   },
 
   async getContacts(req: AuthRequest, res: Response, next: NextFunction) {
-    try {
-      const salonId = req.user?.salonId
-      if (!salonId) return res.status(400).json({ error: 'salonId missing from token' })
-      const status  = req.query.status as string | undefined
-      const data    = await campaignsService.getContacts(req.params.id as string, salonId, status)
-      return sendSuccess(res, 200, data, 'Contacts fetched successfully')
-    } catch (e) { return next(e) }
-  },
+  try {
+    const salonId = req.user?.salonId
+    if (!salonId) return res.status(400).json({ error: 'salonId missing from token' })
+    const status  = req.query.status  as string | undefined
+    const page    = parseInt(req.query.page  as string) || 1
+    const limit   = parseInt(req.query.limit as string) || 50
+    const data    = await campaignsService.getContacts(req.params.id as string, salonId, status, page, limit)
+    return sendSuccess(res, 200, data, 'Contacts fetched successfully')
+  } catch (e) { return next(e) }
+},
 
   async getReport(req: AuthRequest, res: Response, next: NextFunction) {
     try {

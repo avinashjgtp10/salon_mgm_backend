@@ -4,6 +4,15 @@ import { whatsappMetaApi } from '../shared/whatsapp.api'
 import { configRepository } from '../config/config.repository'
 import { getIO } from '../../../../config/socket'
 
+
+function normalizePhone(phone: string): string {
+  const digits = phone.replace(/[^0-9]/g, '')
+  if (phone.startsWith('+'))                          return '+' + digits
+  if (digits.length === 10)                           return '+91' + digits
+  if (digits.length === 12 && digits.startsWith('91')) return '+' + digits
+  return '+' + digits
+}
+
 export const inboxService = {
 
   async getConversations(salonId: string) {
@@ -11,26 +20,29 @@ export const inboxService = {
   },
 
   async getMessages(salonId: string, phone: string) {
+    const normalizedPhone = normalizePhone(phone)
     // Fire-and-forget — don't block message fetch on unread reset
-    inboxRepository.markConversationRead(salonId, phone).catch(() => {})
-    return inboxRepository.getMessages(salonId, phone)
+    inboxRepository.markConversationRead(salonId, normalizedPhone).catch(() => {})
+    return inboxRepository.getMessages(salonId, normalizedPhone)
   },
 
   async sendReply(salonId: string, phone: string, message: string) {
+    const normalizedPhone = normalizePhone(phone)
+
     const config = await configRepository.findBySalonId(salonId)
     if (!config) throw new AppError(400, 'WhatsApp not configured', 'WA_NOT_CONFIGURED')
 
     const result = await whatsappMetaApi.sendTextMessage({
       phoneNumberId: config.phone_number_id,
       accessToken:   config.access_token,
-      to:            phone,
+      to:            normalizedPhone,
       message,
     })
 
     const wamid = result.messages?.[0]?.id ?? null
 
     const conversationId = await inboxRepository.upsertConversation(
-      salonId, phone, null, message, false
+      salonId, normalizedPhone, null, message, false
     )
 
     return inboxRepository.insertMessage({
@@ -50,8 +62,10 @@ export const inboxService = {
     body:    string
     wamid:   string
   }) {
+    const normalizedPhone = normalizePhone(params.phone)
+
     const conversationId = await inboxRepository.upsertConversation(
-      params.salonId, params.phone, params.name, params.body, true
+      params.salonId, normalizedPhone, params.name, params.body, true
     )
 
     const message = await inboxRepository.insertMessage({
@@ -67,7 +81,7 @@ export const inboxService = {
       const io = getIO()
       io.to(`salon:${params.salonId}`).emit('inbox:message', {
         salonId:      params.salonId,
-        contactPhone: params.phone,
+        contactPhone: normalizedPhone,
         contactName:  params.name,
         message,
       })

@@ -24,6 +24,22 @@ export const configService = {
   },
 
   async saveConfig(salonId: string, body: SaveConfigBody) {
+
+    // ── Check verify token uniqueness ─────────────────────────────────────────
+    if (body.webhook_verify_token) {
+      const taken = await configRepository.isVerifyTokenTaken(
+        body.webhook_verify_token,
+        salonId
+      )
+      if (taken) {
+        throw new AppError(
+          409,
+          'This Webhook Verify Token is already in use by another account. Please choose a unique token — e.g. webhook_verify_yourSalonName',
+          'VERIFY_TOKEN_TAKEN'
+        )
+      }
+    }
+
     const cleanBody: SaveConfigBody = {
       phone_number_id:      body.phone_number_id,
       waba_id:              body.waba_id,
@@ -31,14 +47,12 @@ export const configService = {
       app_secret:           body.app_secret            || null,
       access_token:         body.access_token?.trim()  || null,
       webhook_verify_token: body.webhook_verify_token,
-      display_phone:        body.display_phone          ?? null,
+      display_phone:        body.display_phone         ?? null,
     }
 
     const saved = await configRepository.upsert(salonId, cleanBody as any)
 
-    // ── Auto-register webhook with Meta ──────────────────────────────────────
-    // Uses app_id + app_secret to generate an app access token (app_id|app_secret)
-    // which has the correct permissions to register webhook subscriptions.
+    // ── Auto-register webhook with Meta ───────────────────────────────────────
     const fullConfig = await configRepository.findBySalonId(salonId)
 
     if (
@@ -48,18 +62,15 @@ export const configService = {
       fullConfig?.webhook_verify_token
     ) {
       try {
-        // App access token = app_id|app_secret (Meta format)
         const appAccessToken = `${fullConfig.app_id}|${fullConfig.app_secret}`
 
-        // Step 1: Register webhook callback URL on the Meta App
         await whatsappMetaApi.registerWebhook({
-          appId:        fullConfig.app_id,
-          appToken:     appAccessToken,
-          callbackUrl:  WEBHOOK_CALLBACK_URL,
-          verifyToken:  fullConfig.webhook_verify_token,
+          appId:       fullConfig.app_id,
+          appToken:    appAccessToken,
+          callbackUrl: WEBHOOK_CALLBACK_URL,
+          verifyToken: fullConfig.webhook_verify_token,
         })
 
-        // Step 2: Subscribe the WABA to receive webhook events
         await whatsappMetaApi.subscribeWaba({
           wabaId:      fullConfig.waba_id,
           accessToken: fullConfig.access_token,
@@ -67,7 +78,10 @@ export const configService = {
 
         logger.info(`✅ Webhook auto-registered for salon ${salonId}`)
       } catch (err: any) {
-        logger.warn(`⚠️  Webhook auto-registration failed for salon ${salonId}: ${err?.message}`, { response: err?.response?.data })
+        logger.warn(
+          `⚠️  Webhook auto-registration failed for salon ${salonId}: ${err?.message}`,
+          { response: err?.response?.data }
+        )
       }
     }
 

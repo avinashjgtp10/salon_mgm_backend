@@ -5,32 +5,42 @@ import { WACampaign, WACampaignContact } from './campaigns.types'
 export const campaignsRepository = {
 
   async findAll(salonId: string): Promise<WACampaign[]> {
-    const { rows } = await pool.query(`
-      SELECT c.*, t.name AS template_name
-      FROM wa_campaigns c
-      JOIN wa_templates t ON t.id = c.template_id
-      WHERE c.salon_id = $1
-      ORDER BY c.created_at DESC
-    `, [salonId])
-    return rows
-  },
+  const { rows } = await pool.query(`
+    SELECT
+      c.*,
+      COALESCE(t.name, 'Deleted template') AS template_name,
+      -- real counts from contacts table
+      COUNT(cc.id) FILTER (WHERE cc.status IN ('SENT','DELIVERED','READ','FAILED','BLOCKED'))::int AS sent_count,
+      COUNT(cc.id) FILTER (WHERE cc.status IN ('DELIVERED','READ'))::int AS delivered_count,
+      COUNT(cc.id) FILTER (WHERE cc.status = 'READ')::int    AS read_count,
+      COUNT(cc.id) FILTER (WHERE cc.status = 'FAILED')::int  AS failed_count,
+      COUNT(cc.id) FILTER (WHERE cc.status = 'BLOCKED')::int AS blocked_count
+    FROM wa_campaigns c
+    LEFT JOIN wa_templates t ON t.id = c.template_id
+    LEFT JOIN wa_campaign_contacts cc ON cc.campaign_id = c.id
+    WHERE c.salon_id = $1
+    GROUP BY c.id, t.name
+    ORDER BY c.created_at DESC
+  `, [salonId])
+  return rows
+},
 
   async findById(id: string, salonId: string): Promise<WACampaign | null> {
     const { rows } = await pool.query(`
-      SELECT c.*, t.name AS template_name, t.body_text AS template_body
+      SELECT c.*, COALESCE(t.name, 'Deleted template') AS template_name,
+             t.body_text AS template_body
       FROM wa_campaigns c
-      JOIN wa_templates t ON t.id = c.template_id
+      LEFT JOIN wa_templates t ON t.id = c.template_id
       WHERE c.id = $1 AND c.salon_id = $2
     `, [id, salonId])
     return rows[0] || null
   },
 
-  // Find all SCHEDULED campaigns that are due to run
   async findDueScheduled(): Promise<WACampaign[]> {
     const { rows } = await pool.query(`
-      SELECT c.*, t.name AS template_name
+      SELECT c.*, COALESCE(t.name, 'Deleted template') AS template_name
       FROM wa_campaigns c
-      JOIN wa_templates t ON t.id = c.template_id
+      LEFT JOIN wa_templates t ON t.id = c.template_id
       WHERE c.status = 'SCHEDULED'
         AND c.scheduled_at <= NOW()
     `)
@@ -43,9 +53,9 @@ export const campaignsRepository = {
     name:          string,
     batchSize:     number,
     totalContacts: number,
-    scheduledAt?:  string | null   // NEW: optional schedule time
+    scheduledAt?:  string | null
   ): Promise<string> {
-    const campaignId = uuid()
+    const campaignId  = uuid()
     const isScheduled = scheduledAt && new Date(scheduledAt) > new Date()
     const status      = isScheduled ? 'SCHEDULED' : 'SENDING'
 
@@ -106,17 +116,37 @@ export const campaignsRepository = {
     return rows[0]
   },
 
-  async getContacts(campaignId: string, status?: string): Promise<WACampaignContact[]> {
-    const params: any[] = [campaignId]
-    const statusFilter  = status ? `AND status = $2` : ''
-    if (status) params.push(status)
-    const { rows } = await pool.query(`
-      SELECT * FROM wa_campaign_contacts
-      WHERE campaign_id = $1 ${statusFilter}
-      ORDER BY created_at ASC
-    `, params)
-    return rows
-  },
+  async getContacts(
+  campaignId: string,
+  status?:    string,
+  page:       number = 1,
+  limit:      number = 50
+): Promise<{ contacts: WACampaignContact[]; total: number; page: number; totalPages: number }> {
+  const offset = (page - 1) * limit
+  const params: any[] = [campaignId]
+  const statusFilter  = status ? `AND cc.status = $2` : ''
+  if (status) params.push(status)
+
+  // total count
+  const { rows: [countRow] } = await pool.query(`
+    SELECT COUNT(*) AS total
+    FROM wa_campaign_contacts cc
+    WHERE cc.campaign_id = $1 ${statusFilter}
+  `, params)
+
+  const total      = parseInt(countRow.total) || 0
+  const totalPages = Math.ceil(total / limit)
+
+  // paginated data
+  const { rows } = await pool.query(`
+    SELECT * FROM wa_campaign_contacts cc
+    WHERE cc.campaign_id = $1 ${statusFilter}
+    ORDER BY cc.created_at ASC
+    LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+  `, [...params, limit, offset])
+
+  return { contacts: rows, total, page, totalPages }
+},
 
   async getReport(campaignId: string, type: string): Promise<WACampaignContact[]> {
     const statusMap: Record<string, string[]> = {

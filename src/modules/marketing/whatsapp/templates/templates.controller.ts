@@ -60,4 +60,12 @@ export const templatesController = {
       return sendSuccess(res, 200, data, 'Template deleted successfully')
     } catch (e) { return next(e) }
   },
+  async toggleFavorite(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId
+      if (!salonId) return res.status(400).json({ error: 'salonId missing from token' })
+      const data = await templatesService.toggleFavorite(req.params.id as string, salonId)
+      return sendSuccess(res, 200, data, 'Template favorite updated')
+    } catch (e) { return next(e) }
+  },
 }

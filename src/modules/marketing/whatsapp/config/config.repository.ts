@@ -1,6 +1,5 @@
 import pool from '../../../../config/database'
 import { WhatsAppConfig, SaveConfigBody } from './config.types'
-
 export const configRepository = {
 
   async findBySalonId(salonId: string): Promise<WhatsAppConfig | null> {
@@ -11,15 +10,28 @@ export const configRepository = {
     return rows[0] || null
   },
 
+  // ── Check if verify token is taken by another salon ───────────────────────
+  async isVerifyTokenTaken(token: string, salonId: string): Promise<boolean> {
+    const { rows } = await pool.query(
+      `SELECT 1 FROM whatsapp_configs
+       WHERE webhook_verify_token = $1
+         AND salon_id != $2
+       LIMIT 1`,
+      [token, salonId]
+    )
+    return rows.length > 0
+  },
+
   async upsert(salonId: string, body: SaveConfigBody): Promise<WhatsAppConfig> {
     const { rows } = await pool.query(`
       INSERT INTO whatsapp_configs
-        (salon_id, phone_number_id, waba_id, app_id, app_secret, access_token, webhook_verify_token, display_phone)
+        (salon_id, phone_number_id, waba_id, app_id, app_secret,
+         access_token, webhook_verify_token, display_phone)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       ON CONFLICT (salon_id) DO UPDATE SET
         phone_number_id      = EXCLUDED.phone_number_id,
         waba_id              = EXCLUDED.waba_id,
-        app_id               = COALESCE(NULLIF(EXCLUDED.app_id, ''),     whatsapp_configs.app_id),
+        app_id               = COALESCE(NULLIF(EXCLUDED.app_id,     ''), whatsapp_configs.app_id),
         app_secret           = COALESCE(NULLIF(EXCLUDED.app_secret, ''), whatsapp_configs.app_secret),
         access_token         = CASE
                                  WHEN EXCLUDED.access_token IS NULL OR EXCLUDED.access_token = ''
@@ -34,8 +46,8 @@ export const configRepository = {
       salonId,
       body.phone_number_id,
       body.waba_id,
-      body.app_id     ?? null,
-      body.app_secret ?? null,
+      body.app_id              ?? null,
+      body.app_secret          ?? null,
       body.access_token        ?? null,
       body.webhook_verify_token,
       body.display_phone       ?? null,
@@ -44,10 +56,10 @@ export const configRepository = {
   },
 
   async setVerified(
-    salonId: string,
+    salonId:      string,
     displayPhone: string,
     qualityRating: string,
-    tier: number
+    tier:         number
   ): Promise<WhatsAppConfig> {
     const { rows } = await pool.query(`
       UPDATE whatsapp_configs SET

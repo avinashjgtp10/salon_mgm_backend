@@ -6,29 +6,41 @@ import { validateSaveConfig } from './config.validator'
 
 const router = Router()
 
-// GET /api/v1/wa-config
-router.get(
-  '/',
-  authMiddleware,
-  roleMiddleware('salon_owner', 'admin'),
+router.get('/',
+  authMiddleware, roleMiddleware('salon_owner', 'admin'),
   configController.getConfig
 )
 
-// PUT /api/v1/wa-config
-router.put(
-  '/',
-  authMiddleware,
-  roleMiddleware('salon_owner', 'admin'),
+router.put('/',
+  authMiddleware, roleMiddleware('salon_owner', 'admin'),
   validateSaveConfig,
   configController.saveConfig
 )
 
-// POST /api/v1/wa-config/test
-router.post(
-  '/test',
-  authMiddleware,
-  roleMiddleware('salon_owner', 'admin'),
+router.post('/test',
+  authMiddleware, roleMiddleware('salon_owner', 'admin'),
   configController.testConnection
+)
+
+router.post('/sync-limits',
+  authMiddleware, roleMiddleware('salon_owner', 'admin'),
+  configController.syncLimits
+)
+
+router.post('/verify-phone',
+  authMiddleware, roleMiddleware('salon_owner', 'admin'),
+  configController.verifyPhone
+)
+
+router.post('/verify-app',
+  authMiddleware, roleMiddleware('salon_owner', 'admin'),
+  configController.verifyApp
+)
+
+// ← Single endpoint that verifies everything on final step
+router.post('/verify-all',
+  authMiddleware, roleMiddleware('salon_owner', 'admin'),
+  configController.verifyAll
 )
 
 export default router

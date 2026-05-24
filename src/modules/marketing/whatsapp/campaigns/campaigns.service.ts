@@ -119,10 +119,11 @@ export const campaignsService = {
     }
   },
 
-  async getContacts(id: string, salonId: string, status?: string) {
-    await this.getById(id, salonId)
-    return campaignsRepository.getContacts(id, status)
-  },
+  async getContacts(id: string, salonId: string, status?: string, page?: number, limit?: number) {
+  const campaign = await campaignsRepository.findById(id, salonId)
+  if (!campaign) throw new AppError(404, 'Campaign not found', 'NOT_FOUND')
+  return campaignsRepository.getContacts(id, status, page ?? 1, limit ?? 50)
+},
 
   async getReport(id: string, salonId: string, type: string) {
     await this.getById(id, salonId)

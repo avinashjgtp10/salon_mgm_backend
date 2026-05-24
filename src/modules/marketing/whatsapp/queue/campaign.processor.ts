@@ -4,6 +4,15 @@ import { redisConnection, CampaignJobData } from './campaign.queue'
 import { whatsappMetaApi } from '../shared/whatsapp.api'
 import { inboxRepository } from '../inbox/inbox.repository'
 
+// ── Normalize phone to E.164 ──────────────────────────────────────────────────
+function normalizePhone(phone: string): string {
+  const digits = phone.replace(/[^0-9]/g, '')
+  if (phone.startsWith('+'))                           return '+' + digits
+  if (digits.length === 10)                            return '+91' + digits
+  if (digits.length === 12 && digits.startsWith('91')) return '+' + digits
+  return '+' + digits
+}
+
 export const campaignWorker = new Worker<CampaignJobData>(
   'wa-campaign-messages',
   async (job: Job<CampaignJobData>) => {
@@ -25,7 +34,7 @@ export const campaignWorker = new Worker<CampaignJobData>(
       SELECT c.*, t.name AS template_name, t.body_text,
              t.language, t.header_type, t.header_media_id
       FROM wa_campaigns c
-      JOIN wa_templates t ON t.id = c.template_id
+      LEFT JOIN wa_templates t ON t.id = c.template_id
       WHERE c.id = $1
     `, [campaignId])
 
@@ -38,7 +47,7 @@ export const campaignWorker = new Worker<CampaignJobData>(
     if (hasMediaHeader && !campaign.header_media_id) {
       await pool.query(`
         UPDATE wa_campaign_contacts
-        SET status = 'FAILED',
+        SET status        = 'FAILED',
             error_code    = 'MISSING_MEDIA_ID',
             error_message = 'Template has a media header but no media ID stored. Re-create the template with a file upload.',
             updated_at    = NOW()
@@ -47,7 +56,7 @@ export const campaignWorker = new Worker<CampaignJobData>(
 
       await pool.query(`
         UPDATE wa_campaigns
-        SET status = 'FAILED',
+        SET status       = 'FAILED',
             failed_count = failed_count + $1,
             updated_at   = NOW()
         WHERE id = $2
@@ -65,8 +74,11 @@ export const campaignWorker = new Worker<CampaignJobData>(
     let sent = 0, failed = 0, blocked = 0
 
     for (const contact of contacts) {
+      // ← normalize phone before sending — prevents duplicate conversations
+      const normalizedPhone = normalizePhone(contact.phone)
+
       try {
-        const matches    = campaign.body_text.match(/\{\{\d+\}\}/g) ?? []
+        const matches    = (campaign.body_text ?? '').match(/\{\{\d+\}\}/g) ?? []
         const components: any[] = []
 
         if (hasMediaHeader && campaign.header_media_id) {
@@ -94,7 +106,7 @@ export const campaignWorker = new Worker<CampaignJobData>(
         const result = await whatsappMetaApi.sendTemplateMessage({
           phoneNumberId: waConfig.phone_number_id,
           accessToken:   waConfig.access_token,
-          to:            contact.phone,
+          to:            normalizedPhone,   // ← use normalized
           templateName:  campaign.template_name,
           language:      campaign.language,
           components,
@@ -109,16 +121,27 @@ export const campaignWorker = new Worker<CampaignJobData>(
           [wamid, contact.id]
         )
 
-        // ── Save to inbox (wa_conversations + wa_messages) ────────────────
+        // ── Save to inbox ────────────────────────────────────────────────────
         try {
           const messageBody = campaign.body_text ?? ''
+
+          const mediaLabel =
+            campaign.header_type === 'image'    ? '🖼 [Image]'    :
+            campaign.header_type === 'video'    ? '🎬 [Video]'    :
+            campaign.header_type === 'document' ? '📄 [Document]' : ''
+
+          const lastMessagePreview = mediaLabel
+            ? mediaLabel + (messageBody ? ' ' + messageBody.slice(0, 60) : '')
+            : messageBody
+
           const conversationId = await inboxRepository.upsertConversation(
             salonId,
-            contact.phone,
+            normalizedPhone,        // ← use normalized — prevents duplicate conversations
             contact.name ?? null,
-            messageBody,
-            false  // outbound — don't increment unread
+            lastMessagePreview,
+            false                   // outbound — don't increment unread
           )
+
           await inboxRepository.insertMessage({
             conversationId,
             salonId,
@@ -126,10 +149,11 @@ export const campaignWorker = new Worker<CampaignJobData>(
             body:      messageBody,
             wamid:     wamid ?? null,
             status:    'SENT',
+            mediaType: hasMediaHeader ? campaign.header_type : null,
+            mediaUrl:  hasMediaHeader ? campaign.header_media_id : null,
           })
         } catch (inboxErr) {
-          // Never crash the campaign because of inbox write failure
-          console.error(`⚠️ Inbox write failed for ${contact.phone}:`, inboxErr)
+          console.error(`⚠️ Inbox write failed for ${normalizedPhone}:`, inboxErr)
         }
 
         sent++
@@ -140,7 +164,7 @@ export const campaignWorker = new Worker<CampaignJobData>(
         const msg       = errObj.message             ?? err.message ?? 'Unknown error'
         const isBlocked = [131047, 131026, 131051, 131049].includes(parseInt(code))
 
-        console.error(`❌ Failed to send to ${contact.phone}: [${code}] ${msg}`)
+        console.error(`❌ Failed to send to ${normalizedPhone}: [${code}] ${msg}`)
 
         await pool.query(
           `UPDATE wa_campaign_contacts
@@ -151,6 +175,7 @@ export const campaignWorker = new Worker<CampaignJobData>(
         isBlocked ? blocked++ : failed++
       }
 
+      // 200ms delay between sends — respects Meta TPS limit
       await new Promise(r => setTimeout(r, 200))
     }
 
@@ -179,7 +204,7 @@ export const campaignWorker = new Worker<CampaignJobData>(
       )
     }
   },
-  { connection: redisConnection, concurrency: 1 }
+  { connection: redisConnection, concurrency: 100 }
 )
 
 campaignWorker.on('completed', j     => console.log(`✅ WA Job ${j.id} completed`))
