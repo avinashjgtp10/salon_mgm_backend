@@ -24,7 +24,7 @@ async function queueCampaignBatches(
       campaignId, salonId,
       batchIndex: i,
       contactIds: batches[i],
-    }, { delay: i * 2000 })
+    }, { delay: i * 500 })
   }
 }
 
@@ -94,7 +94,7 @@ export const campaignsService = {
           campaignId: id, salonId,
           batchIndex: i,
           contactIds: batches[i],
-        }, { delay: i * 2000 })
+        }, { delay: i * 500 })
       }
     }
 

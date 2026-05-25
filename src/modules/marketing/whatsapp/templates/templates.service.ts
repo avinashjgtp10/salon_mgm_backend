@@ -7,7 +7,7 @@ import { whatsappMetaApi } from '../shared/whatsapp.api'
 import { CreateTemplateBody } from './templates.types'
 
 const WA_BASE_URL    = process.env.WA_BASE_URL    ?? 'https://graph.facebook.com'
-const WA_API_VERSION = process.env.WA_API_VERSION ?? 'v19.0'
+const WA_API_VERSION = process.env.WA_API_VERSION ?? 'v21.0'
 
 function extractExamples(text: string): string[] {
   const matches = text.match(/{{\d+}}/g) ?? []

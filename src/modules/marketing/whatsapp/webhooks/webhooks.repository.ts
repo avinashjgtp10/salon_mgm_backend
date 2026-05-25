@@ -28,29 +28,27 @@ export const webhooksRepository = {
   },
 
   async markDelivered(wamid: string, timestamp: Date): Promise<void> {
-  await pool.query(
-    `UPDATE wa_campaign_contacts
-     SET status='DELIVERED',
-         delivered_at = COALESCE(delivered_at, $1),  // ← ADD COALESCE
-         updated_at=NOW()
-     WHERE wamid=$2`,
-    [timestamp, wamid]
-  )
-},
+    await pool.query(
+      `UPDATE wa_campaign_contacts
+       SET status       = 'DELIVERED',
+           delivered_at = COALESCE(delivered_at, $1),
+           updated_at   = NOW()
+       WHERE wamid = $2`,
+      [timestamp, wamid]
+    )
+  },
 
-  // ← FIXED: also set delivered_at if not already set
-  // Meta sometimes sends READ without a prior DELIVERED webhook
   async markRead(wamid: string, timestamp: Date): Promise<void> {
-  await pool.query(
-    `UPDATE wa_campaign_contacts
-     SET status='READ',
-         read_at = COALESCE(read_at, $1),  // ← ADD COALESCE
-         delivered_at = COALESCE(delivered_at, $1),  // ← also set delivered if not set
-         updated_at=NOW()
-     WHERE wamid=$2`,
-    [timestamp, wamid]
-  )
-},
+    await pool.query(
+      `UPDATE wa_campaign_contacts
+       SET status       = 'READ',
+           read_at      = COALESCE(read_at, $1),
+           delivered_at = COALESCE(delivered_at, $1),
+           updated_at   = NOW()
+       WHERE wamid = $2`,
+      [timestamp, wamid]
+    )
+  },
 
   async markFailed(
     wamid:        string,
@@ -60,7 +58,10 @@ export const webhooksRepository = {
   ): Promise<void> {
     await pool.query(
       `UPDATE wa_campaign_contacts
-       SET status = $1, error_code = $2, error_message = $3, updated_at = NOW()
+       SET status        = $1,
+           error_code    = $2,
+           error_message = $3,
+           updated_at    = NOW()
        WHERE wamid = $4`,
       [status, errorCode, errorMessage, wamid]
     )

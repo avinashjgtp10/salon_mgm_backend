@@ -4,9 +4,12 @@ import { whatsappMetaApi } from '../shared/whatsapp.api'
 import { SaveConfigBody, TestConnectionResult } from './config.types'
 import logger from '../../../../config/logger'
 
-const WEBHOOK_CALLBACK_URL =
-  process.env.WEBHOOK_CALLBACK_URL ??
-  `${process.env.APP_URL ?? 'https://your-app.onrender.com'}/api/v1/webhooks`
+// APP_URL = your backend domain e.g. https://api.salonox.com
+// Each salon gets their own webhook URL with their salonId in it
+function getWebhookUrl(salonId: string): string {
+  const base = process.env.APP_URL ?? 'https://your-app.onrender.com'
+  return `${base}/api/v1/webhooks/${salonId}/meta`
+}
 
 export const configService = {
 
@@ -15,7 +18,6 @@ export const configService = {
     if (!config) return null
     return {
       ...config,
-      // Never send secrets to frontend
       access_token: config.access_token
         ? config.access_token.slice(0, 8) + '••••••••'
         : null,
@@ -53,6 +55,7 @@ export const configService = {
     const saved = await configRepository.upsert(salonId, cleanBody as any)
 
     // ── Auto-register webhook with Meta ───────────────────────────────────────
+    // Re-fetch so we have the full config including any previously saved secrets
     const fullConfig = await configRepository.findBySalonId(salonId)
 
     if (
@@ -64,10 +67,13 @@ export const configService = {
       try {
         const appAccessToken = `${fullConfig.app_id}|${fullConfig.app_secret}`
 
+        // Each salon gets their own webhook URL with salonId in it
+        const callbackUrl = getWebhookUrl(salonId)
+
         await whatsappMetaApi.registerWebhook({
           appId:       fullConfig.app_id,
           appToken:    appAccessToken,
-          callbackUrl: WEBHOOK_CALLBACK_URL,
+          callbackUrl, // ← correct URL with salonId
           verifyToken: fullConfig.webhook_verify_token,
         })
 
@@ -76,7 +82,7 @@ export const configService = {
           accessToken: fullConfig.access_token,
         })
 
-        logger.info(`✅ Webhook auto-registered for salon ${salonId}`)
+        logger.info(`✅ Webhook registered: ${callbackUrl} for salon ${salonId}`)
       } catch (err: any) {
         logger.warn(
           `⚠️  Webhook auto-registration failed for salon ${salonId}: ${err?.message}`,
