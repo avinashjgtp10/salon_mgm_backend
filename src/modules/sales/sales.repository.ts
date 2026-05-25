@@ -7,6 +7,14 @@ export const salesRepository = {
         return rows[0] || null;
     },
 
+    async findByAppointmentId(appointmentId: string): Promise<Sale | null> {
+        const { rows } = await safeQuery(() => pool.query(
+            `SELECT * FROM sales WHERE appointment_id = $1 LIMIT 1`,
+            [appointmentId]
+        ));
+        return rows[0] || null;
+    },
+
     async findItemsBySaleId(saleId: string): Promise<SaleItem[]> {
         const { rows } = await safeQuery(() => pool.query(`SELECT * FROM sale_items WHERE sale_id = $1`, [saleId]));
         return rows;

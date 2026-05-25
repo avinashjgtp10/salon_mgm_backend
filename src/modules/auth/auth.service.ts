@@ -127,6 +127,14 @@ export const authService = {
 
     logger.info("[authService.register] User created successfully", { email, userId: user?.id, role, salonId });
 
+    const fullName = [user.first_name, user.last_name].filter(Boolean).join(" ");
+    const salonName = body.businessName?.trim() || fullName;
+    emailService.sendWelcomeEmail({ to: email, fullName, salonName })
+      .then(() => logger.info("[authService.register] Welcome email sent successfully", { email }))
+      .catch((err: any) => {
+        logger.error("[authService.register] Failed to send welcome email", { email, error: err?.message, stack: err?.stack });
+      });
+
     return {
       accessToken,
       refreshToken,

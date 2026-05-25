@@ -4,7 +4,7 @@ import { authRepository } from "./auth.repository";
 import pool from "../../config/database";
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
-
+``
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string } };
 import {
   recordLoginFail,
@@ -90,7 +90,7 @@ export const authController = {
 
       const data = await authService.login({ email, password });
 
-      await resetLoginFails(email, ip);
+      resetLoginFails(email, ip).catch(() => {/* Redis down — non-fatal */});
 
       logger.info("Login successful", { email, ip });
 
@@ -116,10 +116,8 @@ export const authController = {
             )
           );
         } catch (e: any) {
-
           if (e?.msBeforeNext) {
             logger.warn("Login rate limit exceeded", { email, ip });
-
             return next(
               new AppError(
                 429,
@@ -130,6 +128,10 @@ export const authController = {
               )
             );
           }
+          // Redis down — return plain 401
+          return next(
+            new AppError(401, "Invalid credentials", "INVALID_CREDENTIALS")
+          );
         }
       }
 

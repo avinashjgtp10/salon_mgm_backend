@@ -1,4 +1,4 @@
-// src/modules/clients/clients.controller.ts
+﻿// src/modules/clients/clients.controller.ts
 import { NextFunction, Request, Response } from "express";
 import csvParser from "csv-parser";
 import { Readable } from "stream";
@@ -39,7 +39,7 @@ export const clientsController = {
     // GET /api/v1/clients
     async list(req: AuthRequest, res: Response, next: NextFunction) {
         try {
-            const salonId = getSalonId(req);
+            const salonId = await getSalonId(req);
             const q: ClientsListQuery = {
                 offset: req.query.offset !== undefined ? Number(String(req.query.offset)) : undefined,
                 limit: req.query.limit !== undefined ? Number(String(req.query.limit)) : undefined,
@@ -64,7 +64,7 @@ export const clientsController = {
     // POST /api/v1/clients
     async create(req: AuthRequest, res: Response, next: NextFunction) {
         try {
-            const salonId = getSalonId(req);
+            const salonId = await getSalonId(req);
             const body = req.body as CreateClientBody;
             const created = await clientsService.create(body, salonId);
             return sendSuccess(res, 201, created, "Client created successfully");
@@ -76,7 +76,7 @@ export const clientsController = {
     // GET /api/v1/clients/:clientId
     async getById(req: AuthRequest, res: Response, next: NextFunction) {
         try {
-            const salonId = getSalonId(req);
+            const salonId = await getSalonId(req);
             const clientId = String(req.params.clientId || "").trim();
             if (!clientId) throw new AppError(400, "clientId is required", "VALIDATION_ERROR");
 
@@ -94,7 +94,7 @@ export const clientsController = {
     // PATCH /api/v1/clients/:clientId
     async update(req: AuthRequest, res: Response, next: NextFunction) {
         try {
-            const salonId = getSalonId(req);
+            const salonId = await getSalonId(req);
             const clientId = String(req.params.clientId || "").trim();
             if (!clientId) throw new AppError(400, "clientId is required", "VALIDATION_ERROR");
 
@@ -112,7 +112,7 @@ export const clientsController = {
     // DELETE /api/v1/clients/:clientId
     async remove(req: AuthRequest, res: Response, next: NextFunction) {
         try {
-            const salonId = getSalonId(req);
+            const salonId = await getSalonId(req);
             const clientId = String(req.params.clientId || "").trim();
             if (!clientId) throw new AppError(400, "clientId is required", "VALIDATION_ERROR");
 
@@ -131,7 +131,7 @@ export const clientsController = {
     // POST /api/v1/clients/import
     async import(req: AuthRequest, res: Response, next: NextFunction) {
         try {
-            const salonId = getSalonId(req);
+            const salonId = await getSalonId(req);
             const file = (req as any).file as Express.Multer.File | undefined;
             if (!file) throw new AppError(400, "file is required", "VALIDATION_ERROR");
 
@@ -154,7 +154,7 @@ export const clientsController = {
     // GET /api/v1/clients/duplicates
     async findDuplicates(req: AuthRequest, res: Response, next: NextFunction) {
         try {
-            const salonId = getSalonId(req);
+            const salonId = await getSalonId(req);
             const phone_number = req.query.phone_number ? String(req.query.phone_number).trim() : "";
             if (!phone_number) throw new AppError(400, "phone_number query param is required", "VALIDATION_ERROR");
 
@@ -168,7 +168,7 @@ export const clientsController = {
     // POST /api/v1/clients/merge
     async merge(req: AuthRequest, res: Response, next: NextFunction) {
         try {
-            const salonId = getSalonId(req);
+            const salonId = await getSalonId(req);
             const result = await clientsService.mergeClients(req.body, salonId);
             return sendSuccess(res, 200, result, "Clients merged successfully");
         } catch (e) {
@@ -179,7 +179,7 @@ export const clientsController = {
     // POST /api/v1/clients/merge-duplicates
     async mergeAllDuplicates(req: AuthRequest, res: Response, next: NextFunction) {
         try {
-            const salonId = getSalonId(req);
+            const salonId = await getSalonId(req);
             const result = await clientsService.mergeAllDuplicates(salonId);
             return sendSuccess(
                 res, 200, result,
@@ -195,7 +195,7 @@ export const clientsController = {
     // POST /api/v1/clients/block
     async block(req: AuthRequest, res: Response, next: NextFunction) {
         try {
-            const salonId = getSalonId(req);
+            const salonId = await getSalonId(req);
             const { client_ids, reason } = req.body;
             await clientsService.blockClients(client_ids, reason, salonId);
             return sendSuccess(res, 200, {}, "Clients blocked");
@@ -207,7 +207,7 @@ export const clientsController = {
     // POST /api/v1/clients/unblock
     async unblock(req: AuthRequest, res: Response, next: NextFunction) {
         try {
-            const salonId = getSalonId(req);
+            const salonId = await getSalonId(req);
             const { client_ids } = req.body;
             await clientsService.unblockClients(client_ids, salonId);
             return sendSuccess(res, 200, {}, "Clients unblocked");
@@ -219,7 +219,7 @@ export const clientsController = {
     // GET /api/v1/clients/export
     async export(req: AuthRequest, res: Response, next: NextFunction) {
         try {
-            const salonId = getSalonId(req);
+            const salonId = await getSalonId(req);
             const format = String(req.query.format || "").toLowerCase();
             if (!["csv", "excel"].includes(format)) throw new AppError(400, "format must be csv or excel", "VALIDATION_ERROR");
 
@@ -277,7 +277,7 @@ export const clientsController = {
     // GET /api/v1/clients/search
     async search(req: AuthRequest, res: Response, next: NextFunction) {
         try {
-            const salonId = getSalonId(req);
+            const salonId = await getSalonId(req);
             const q = String(req.query.q || "").trim();
             const limit = req.query.limit !== undefined ? Number(String(req.query.limit)) : 20;
 
@@ -298,3 +298,4 @@ export const clientsController = {
         }
     },
 };
+

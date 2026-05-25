@@ -10,7 +10,7 @@ import {
     ListBillingInvoicesFilters,
 } from "./billing.types";
 
-type AuthRequest = Request & { user?: { userId: string; role?: string } };
+type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string | null } };
 
 export const billingController = {
 
@@ -33,11 +33,11 @@ export const billingController = {
         } catch (err) { next(err); }
     },
 
-    // GET /api/v1/billing/subscription?salon_id=
+    // GET /api/v1/billing/subscription
     async getSubscription(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
         try {
-            const salonId = String(req.query.salon_id || "").trim();
-            if (!salonId) throw new AppError(400, "salon_id query param is required", "VALIDATION_ERROR");
+            const salonId = req.user?.salonId;
+            if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
             const sub = await billingService.getSubscription(salonId);
             sendSuccess(res, 200, sub, "Billing subscription fetched successfully");
         } catch (err) { next(err); }
@@ -91,8 +91,10 @@ export const billingController = {
     // GET /api/v1/billing/invoices
     async listInvoices(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
         try {
+            const salonId = req.user?.salonId;
+            if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
             const filters: ListBillingInvoicesFilters = {
-                salon_id: req.query.salon_id as string | undefined,
+                salon_id: salonId,
                 subscription_id: req.query.subscription_id as string | undefined,
                 status: req.query.status as string | undefined,
                 page: req.query.page ? parseInt(req.query.page as string, 10) : 1,

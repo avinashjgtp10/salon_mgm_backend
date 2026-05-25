@@ -52,7 +52,7 @@ const corsOptions: CorsOptionsDelegate<Request> = (req, callback) => {
 
   } else {
     logger.warn(`CORS blocked for origin: ${origin}. Allowed origins: ${allowedOrigins.join(", ")}`);
-    callback(new Error("Not allowed by CORS"));
+    callback(null, { origin: false });
   }
 };
 
