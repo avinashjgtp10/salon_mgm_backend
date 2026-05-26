@@ -4,12 +4,12 @@ import {
     ProductPhoto, Brand, CreateBrandBody, UpdateBrandBody,
 } from "./products.types";
 
-const PRODUCT_COLUMNS = `id, name, barcode, brand_id, category_id, measure_unit, amount,
+const PRODUCT_COLUMNS = `id, name, barcode, brand_id, category_id, measure_unit, amount, qty_alert,
     short_description, description, supply_price, retail_sales_enabled,
     retail_price, markup_percentage, tax_type, custom_tax_rate,
     team_commission_enabled, team_commission_rate, created_at, updated_at`;
 
-const PRODUCT_COLUMNS_P = `p.id, p.name, p.barcode, p.brand_id, p.category_id, p.measure_unit, p.amount,
+const PRODUCT_COLUMNS_P = `p.id, p.name, p.barcode, p.brand_id, p.category_id, p.measure_unit, p.amount, p.qty_alert,
     p.short_description, p.description, p.supply_price, p.retail_sales_enabled,
     p.retail_price, p.markup_percentage, p.tax_type, p.custom_tax_rate,
     p.team_commission_enabled, p.team_commission_rate, p.created_at, p.updated_at`;
@@ -21,6 +21,14 @@ export const productsRepository = {
         const { rows } = await pool.query(
             `SELECT ${PRODUCT_COLUMNS} FROM products WHERE id = $1 AND salon_id = $2`,
             [id, salonId]
+        );
+        return rows[0] || null;
+    },
+
+    async findByBarcode(barcode: string, salonId: string): Promise<Product | null> {
+        const { rows } = await pool.query(
+            `SELECT ${PRODUCT_COLUMNS} FROM products WHERE barcode = $1 AND salon_id = $2`,
+            [barcode, salonId]
         );
         return rows[0] || null;
     },
@@ -71,6 +79,13 @@ export const productsRepository = {
             conditions.push(`supply_price <= $${idx++}`);
             values.push(filters.max_price);
         }
+        if (filters.stock !== undefined && filters.stock !== "all") {
+            if (filters.stock === "low") {
+                conditions.push(`(amount > 0 AND amount <= qty_alert)`);
+            } else if (filters.stock === "out_of_stock") {
+                conditions.push(`amount = 0`);
+            }
+        }
 
         const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 
@@ -102,15 +117,15 @@ export const productsRepository = {
         const { rows } = await pool.query(
             `INSERT INTO products (
         salon_id,
-        name, barcode, brand_id, category_id, measure_unit, amount,
+        name, barcode, brand_id, category_id, measure_unit, amount, qty_alert,
         short_description, description,
         supply_price, retail_sales_enabled, retail_price, markup_percentage,
         tax_type, custom_tax_rate, team_commission_enabled, team_commission_rate
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING ${PRODUCT_COLUMNS}`,
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING ${PRODUCT_COLUMNS}`,
             [
                 salonId,
                 data.name, data.barcode ?? null, data.brand_id ?? null, data.category_id ?? null,
-                data.measure_unit ?? "ml", data.amount ?? 0,
+                data.measure_unit ?? "ml", data.amount ?? 0, data.qty_alert ?? null,
                 data.short_description ?? null, data.description ?? null,
                 data.supply_price ?? 0, data.retail_sales_enabled ?? true,
                 data.retail_price ?? null, data.markup_percentage ?? null,

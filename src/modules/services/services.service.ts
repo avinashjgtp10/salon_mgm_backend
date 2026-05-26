@@ -1,6 +1,7 @@
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { bundlesRepository, servicesRepository } from "./services.repository";
+import pool from "../../config/database";
 import {
   BundleDetail,
   BundleListResponse,
@@ -161,6 +162,83 @@ export const servicesService = {
     if (!group.options.some((o) => o.id === params.optionId))
       throw new AppError(404, "Add-on option not found for this group", "NOT_FOUND");
     await servicesRepository.deleteAddOnOption(params.optionId);
+  },
+
+  // ─── Import ───────────────────────────────────────────────────────────────────
+  async importServices(params: { rows: any[]; salonId: string }) {
+    const { rows, salonId } = params;
+    const result = { total_rows: rows.length, imported: 0, skipped: 0, errors: [] as string[] };
+
+    // Get existing categories to match by name
+    const db = pool;
+    const catRows = await db.query(
+      "SELECT id, name FROM service_categories WHERE salon_id = $1",
+      [salonId]
+    );
+    const categoryMap: Record<string, string> = {};
+    for (const c of catRows.rows ?? []) categoryMap[c.name.toLowerCase()] = c.id;
+
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const rowNum = i + 1;
+      const name = String(r.Name ?? r.name ?? "").trim();
+      if (!name) {
+        result.skipped++;
+        result.errors.push(`Row ${rowNum}: name is required`);
+        continue;
+      }
+
+      // Resolve category
+      const catName = String(r.Category ?? r.category ?? "").trim();
+      let category_id: string | undefined;
+      if (catName) {
+        if (categoryMap[catName.toLowerCase()]) {
+          category_id = categoryMap[catName.toLowerCase()];
+        } else {
+          // Create category
+          try {
+            const newCat = await db.query(
+              "INSERT INTO service_categories (salon_id, name) VALUES ($1, $2) RETURNING id",
+              [salonId, catName]
+            );
+            category_id = newCat.rows[0].id;
+            categoryMap[catName.toLowerCase()] = category_id!;
+          } catch {
+            result.skipped++;
+            result.errors.push(`Row ${rowNum}: failed to create category "${catName}"`);
+            continue;
+          }
+        }
+      }
+
+      const priceRaw = String(r["Price / Retail Price"] ?? r.Price ?? r.price ?? "0").replace(/[^0-9.]/g, "");
+      const durationRaw = String(r["Duration (min)"] ?? r.Duration ?? r.duration ?? "30").replace(/[^0-9]/g, "");
+      const priceTypeRaw = String(r["Price Type"] ?? r.price_type ?? "fixed").toLowerCase().trim();
+      const priceType = (["fixed", "from", "free"].includes(priceTypeRaw) ? priceTypeRaw : "fixed") as "fixed" | "from" | "free";
+      const onlineBooking = ["yes", "true", "1"].includes(String(r["Online Booking"] ?? r.online_booking ?? "yes").toLowerCase());
+
+      const body: CreateServiceBody = {
+        name,
+        category_id: category_id!,
+        description: String(r.Description ?? r.description ?? "").trim() || undefined,
+        price_type: priceType,
+        price: parseFloat(priceRaw) || 0,
+        duration: parseInt(durationRaw) || 30,
+        online_booking: onlineBooking,
+        commission_enabled: ["yes", "true", "1"].includes(String(r.Commission ?? r.commission_enabled ?? "no").toLowerCase()),
+        resource_required: ["yes", "true", "1"].includes(String(r["Resource Required"] ?? r.resource_required ?? "no").toLowerCase()),
+      };
+
+      try {
+        await servicesRepository.create(body, salonId);
+        result.imported++;
+      } catch (err: any) {
+        result.skipped++;
+        result.errors.push(`Row ${rowNum}: ${err?.message ?? "Failed to create service"}`);
+      }
+    }
+
+    return result;
   },
 };
 

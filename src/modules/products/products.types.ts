@@ -9,6 +9,7 @@ export type Product = {
     category_id: string | null;
     measure_unit: MeasureUnit;
     amount: number;
+    qty_alert: number | null;
     short_description: string | null;
     description: string | null;
     supply_price: number;
@@ -47,6 +48,7 @@ export type CreateProductBody = {
     category_id?: string;
     measure_unit?: string;
     amount?: number;
+    qty_alert?: number;
     short_description?: string;
     description?: string;
     supply_price?: number;
@@ -74,6 +76,7 @@ export type ProductListFilters = {
     retail_sales_enabled?: boolean;
     min_price?: number;
     max_price?: number;
+    stock?: "all" | "low" | "out_of_stock";
     sort_by?: string;
     sort_order?: "ASC" | "DESC";
     page?: number;

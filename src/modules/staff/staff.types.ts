@@ -111,6 +111,16 @@ export type CreateStaffBody = {
 
 export type UpdateStaffBody = Partial<CreateStaffBody>;
 
+// ─── Import ───────────────────────────────────────────────────────────────────
+
+export type StaffImportResult = {
+    total_rows: number;
+    imported: number;
+    updated: number;
+    skipped: number;
+    errors: Array<{ row: number; email?: string; code: string; message: string }>;
+};
+
 // ─── Address ──────────────────────────────────────────────────────────────────
 
 export type StaffAddress = {

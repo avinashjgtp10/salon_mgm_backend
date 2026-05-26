@@ -1,18 +1,19 @@
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
+import { upload } from "./staff.upload";
 import {
-    staffController, staffInvitationController, staffAddressController,
-    staffEmergencyContactController, staffWagesController, staffCommissionsController,
-    staffPayRunsController, staffSchedulesController, staffLeavesController,
+  staffController, staffInvitationController, staffAddressController,
+  staffEmergencyContactController, staffWagesController, staffCommissionsController,
+  staffPayRunsController, staffSchedulesController, staffLeavesController,
 } from "./staff.controller";
 import {
-    validateCreateStaff, validateUpdateStaff,
-    validateCreateStaffAddress, validateUpdateStaffAddress,
-    validateCreateEmergencyContact, validateUpdateEmergencyContact,
-    validateUpdateWageSettings, validateUpdateCommission, validateUpdatePayRun,
-    validateUpsertStaffSchedules, validateCreateStaffLeave, validateUpdateStaffLeave,
-    validateAcceptInvitation,
+  validateCreateStaff, validateUpdateStaff,
+  validateCreateStaffAddress, validateUpdateStaffAddress,
+  validateCreateEmergencyContact, validateUpdateEmergencyContact,
+  validateUpdateWageSettings, validateUpdateCommission, validateUpdatePayRun,
+  validateUpsertStaffSchedules, validateCreateStaffLeave, validateUpdateStaffLeave,
+  validateAcceptInvitation,
 } from "./staff.validator";
 
 const router = Router();
@@ -28,10 +29,14 @@ router.post("/invite/accept", validateAcceptInvitation, staffInvitationControlle
 router.get("/", auth, ownerAdminStaff, staffController.list);
 router.post("/", auth, ownerAdmin, validateCreateStaff, staffController.create);
 
-// ─── Export (must be BEFORE /:id to avoid wildcard collision) ─────────────────
+// ─── Import (must be BEFORE /:id) ────────────────────────────────────────────
+router.post("/import", auth, ownerAdmin, upload.single("file"), staffController.importStaff);
+
+// ─── Export (must be BEFORE /:id) ────────────────────────────────────────────
 router.get("/export/excel", auth, ownerAdmin, staffController.exportExcel);
 router.get("/export/csv", auth, ownerAdmin, staffController.exportCsv);
 
+// ─── Staff by ID ──────────────────────────────────────────────────────────────
 router.get("/:id", auth, ownerAdminStaff, staffController.getById);
 router.patch("/:id", auth, ownerAdmin, validateUpdateStaff, staffController.update);
 router.delete("/:id", auth, ownerAdmin, staffController.delete);
@@ -40,7 +45,6 @@ router.delete("/:id", auth, ownerAdmin, staffController.delete);
 router.get("/:id/invitation-status", auth, ownerAdmin, staffInvitationController.getInvitationStatus);
 router.post("/:id/resend-invite", auth, ownerAdmin, staffInvitationController.resendInvitation);
 router.delete("/:id/cancel-invite", auth, ownerAdmin, staffInvitationController.cancelInvitation);
-
 
 // ─── Addresses ────────────────────────────────────────────────────────────────
 router.get("/:staffId/addresses", auth, ownerAdminStaff, staffAddressController.list);
