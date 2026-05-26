@@ -110,6 +110,17 @@ export const staffRepository = {
         }
     },
 
+    async updateDateFields(id: string, salonId: string, data: {
+        joined_date?: string | null;
+        birthday_day?: number | null;
+        birthday_month?: number | null;
+    }): Promise<void> {
+        await pool.query(
+            `UPDATE staff SET joined_date = $1, birthday_day = $2, birthday_month = $3 WHERE id = $4 AND salon_id = $5`,
+            [data.joined_date ?? null, data.birthday_day ?? null, data.birthday_month ?? null, id, salonId]
+        );
+    },
+
     async update(id: string, salonId: string, patch: UpdateStaffBody): Promise<Staff> {
         // Maps UpdateStaffBody keys to actual DB column names (job_title → designation)
         const COLUMN_MAP: Record<keyof UpdateStaffBody, string> = {

@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
-import { bundlesController, servicesController } from "./services.controller";
+import { bundlesController, servicesController, servicesImportController } from "./services.controller";
+import { upload } from "./services.upload";
 import { downloadCatalogueCsv, downloadCatalogueExcel, downloadCataloguePdf } from "./services.download.controller.ts";
 import {
   validateCreateAddOnGroup, validateCreateAddOnOption,
@@ -17,6 +18,9 @@ const auth = [authMiddleware, roleMiddleware("salon_owner", "admin", "staff")];
 router.get("/download/pdf",   ...auth, downloadCataloguePdf);
 router.get("/download/excel", ...auth, downloadCatalogueExcel);
 router.get("/download/csv",   ...auth, downloadCatalogueCsv);
+
+// ─── Import ───────────────────────────────────────────────────────────────────
+router.post("/import", ...auth, upload.single("file"), servicesImportController.import);
 
 // ─── Services CRUD ────────────────────────────────────────────────────────────
 router.get("/",    ...auth, servicesController.list);

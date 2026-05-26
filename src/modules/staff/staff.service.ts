@@ -21,7 +21,7 @@ import {
     CreateStaffBody, UpdateStaffBody, CreateStaffAddressBody, UpdateStaffAddressBody,
     CreateEmergencyContactBody, UpdateEmergencyContactBody, CreateStaffLeaveBody,
     UpdateStaffLeaveBody, UpdateWageSettingsBody, UpdateCommissionBody, UpdatePayRunBody,
-    UpsertStaffSchedulesBody, AcceptInvitationBody, StaffListQuery,
+    UpsertStaffSchedulesBody, AcceptInvitationBody, StaffListQuery, StaffImportResult,
 } from "./staff.types";
 
 // ─── Staff ────────────────────────────────────────────────────────────────────
@@ -132,6 +132,126 @@ export const staffService = {
         const deleted = await staffRepository.delete(id, salonId);
         if (!deleted) throw new AppError(500, "Failed to delete staff member", "DELETE_FAILED");
         logger.info("staffService.delete success", { staffId: id });
+    },
+
+    async importStaff(params: {
+        rows: any[];
+        salonId: string;
+        dry_run: boolean;
+    }): Promise<StaffImportResult> {
+        const { rows, salonId, dry_run } = params;
+        const result: StaffImportResult = {
+            total_rows: rows.length,
+            imported: 0,
+            updated: 0,
+            skipped: 0,
+            errors: [],
+        };
+
+        const parseDate = (val: string): string | null => {
+            const s = String(val || "").trim();
+            if (!s) return null;
+            const parts = s.split("-");
+            if (parts.length !== 3) return null;
+            const [day, month, year] = parts;
+            if (!day || !month || !year) return null;
+            return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+        };
+
+        const parseDOB = (val: string): { birthday_day: number | null; birthday_month: number | null } => {
+            const s = String(val || "").trim();
+            if (!s) return { birthday_day: null, birthday_month: null };
+            const parts = s.split("-");
+            const day = parseInt(parts[0], 10);
+            const month = parseInt(parts[1], 10);
+            return {
+                birthday_day: isNaN(day) ? null : day,
+                birthday_month: isNaN(month) ? null : month,
+            };
+        };
+
+        const toNum = (val: any): number | null => {
+            const n = parseFloat(String(val || ""));
+            return isNaN(n) ? null : n;
+        };
+
+        for (let i = 0; i < rows.length; i++) {
+            const rowNum = i + 1;
+            const row = rows[i];
+            const email = String(row["Email"] ?? row["email"] ?? "").trim().toLowerCase();
+
+            try {
+                const fullName = String(row["Name"] ?? row["name"] ?? "").trim();
+                if (!fullName && !email) {
+                    result.skipped += 1;
+                    result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: "Name and Email are both empty" });
+                    continue;
+                }
+
+                if (!email) {
+                    result.skipped += 1;
+                    result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: "Email is required" });
+                    continue;
+                }
+
+                const nameParts = fullName.split(" ");
+                const first_name = nameParts[0] || email.split("@")[0];
+                const last_name = nameParts.slice(1).join(" ") || undefined;
+
+                const phone = String(row["Contact"] ?? row["contact"] ?? "").trim() || undefined;
+                const country = String(row["Address"] ?? row["address"] ?? "").trim() || undefined;
+                const job_title = String(row["Designation"] ?? row["designation"] ?? "").trim() || undefined;
+
+                const dojRaw = String(row["DOJ(dd-mm-YYYY)"] ?? row["DOJ"] ?? row["doj"] ?? "").trim();
+                const dobRaw = String(row["DOB(dd-mm-YYYY)"] ?? row["DOB"] ?? row["dob"] ?? "").trim();
+                const hourly_rate = toNum(row["Hourly Rate"] ?? row["hourly_rate"]);
+                const salary_amount = toNum(row["Fixed Salary"] ?? row["fixed_salary"]);
+
+                const joined_date = parseDate(dojRaw);
+                const { birthday_day, birthday_month } = parseDOB(dobRaw);
+
+                const existing = await staffRepository.findByEmail(salonId, email);
+
+                if (existing) {
+                    if (!dry_run) {
+                        await staffRepository.update(existing.id, salonId, {
+                            first_name, last_name, phone, country, job_title,
+                        });
+                        await staffRepository.updateDateFields(existing.id, salonId, { joined_date, birthday_day, birthday_month });
+                        if (hourly_rate !== null || salary_amount !== null) {
+                            await staffWagesRepository.upsert(existing.id, {
+                                wages_enabled: true,
+                                compensation_type: hourly_rate !== null ? "hourly" : "salary",
+                                hourly_rate: hourly_rate ?? undefined,
+                                salary_amount: salary_amount ?? undefined,
+                            });
+                        }
+                    }
+                    result.updated += 1;
+                    continue;
+                }
+
+                if (!dry_run) {
+                    const staff = await staffRepository.create(salonId, {
+                        first_name, last_name, email, phone, country, job_title,
+                    });
+                    await staffRepository.updateDateFields(staff.id, salonId, { joined_date, birthday_day, birthday_month });
+                    if (hourly_rate !== null || salary_amount !== null) {
+                        await staffWagesRepository.upsert(staff.id, {
+                            wages_enabled: true,
+                            compensation_type: hourly_rate !== null ? "hourly" : "salary",
+                            hourly_rate: hourly_rate ?? undefined,
+                            salary_amount: salary_amount ?? undefined,
+                        });
+                    }
+                }
+                result.imported += 1;
+            } catch (e: any) {
+                result.errors.push({ row: rowNum, email, code: "IMPORT_ERROR", message: e?.message || "Unknown error" });
+            }
+        }
+
+        return result;
     },
 };
 

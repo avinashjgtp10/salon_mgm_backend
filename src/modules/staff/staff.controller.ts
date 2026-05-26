@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import * as XLSX from "xlsx";
+import * as Papa from "papaparse";
 import { Parser as CsvParser } from "json2csv";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
@@ -29,7 +30,8 @@ const getSalonId = (req: AuthRequest): string => {
 export const staffController = {
   async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = await getSalonId(req);
+      const salonId = req.user?.salonId ?? req.body?.salon_id;
+if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR");
       logger.info("GET /staff", { salonId });
 
       const query: StaffListQuery = {
@@ -50,7 +52,6 @@ export const staffController = {
       const page = query.page ?? 1;
       const limit = query.limit ?? 20;
 
-      // FIX: wrap data + pagination together — sendSuccess only takes 3-4 args
       return sendSuccess(res, 200, {
         items: data,
         pagination: { total, page, limit, total_pages: Math.ceil(total / limit) },
@@ -58,33 +59,31 @@ export const staffController = {
     } catch (err) { return next(err); }
   },
 
-  async create(req: AuthRequest, res: Response) {
+  async create(req: AuthRequest, res: Response, _next: NextFunction) {
     try {
-      const salonId = await getSalonId(req);
+      const salonId = getSalonId(req);
       console.log("[DEBUG] Controller: POST /staff - salonId:", salonId);
       const result = await staffService.create({
         salonId,
-        requesterUserId: (req as any).user?.userId || (req as any).user?.id,
-        requesterRole: (req as any).user?.role,
+        requesterUserId: req.user?.userId || (req as any).user?.id,
+        requesterRole: req.user?.role,
         body: req.body as CreateStaffBody,
       });
-
       return sendSuccess(res, 201, result, "Staff member created successfully");
     } catch (error: any) {
       console.error("[DEBUG] Controller: POST /staff FAILED", {
         message: error.message,
         code: error.code,
-        stack: error.stack
+        stack: error.stack,
       });
-      // If it's not already an AppError, we want to know exactly what happened
       if (!(error instanceof AppError)) {
         return res.status(500).json({
           success: false,
           error: {
             code: "CONTROLLER_CRASH",
             message: error.message,
-            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-          }
+            stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
+          },
         });
       }
       throw error;
@@ -93,8 +92,8 @@ export const staffController = {
 
   async getById(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = await getSalonId(req);
-      const id = String(req.params.id); // FIX: cast to string
+      const salonId = getSalonId(req);
+      const id = String(req.params.id);
       logger.info("GET /staff/:id", { id, salonId });
 
       const staff = await staffService.getById(id, salonId);
@@ -104,9 +103,9 @@ export const staffController = {
 
   async update(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = await getSalonId(req);
+      const salonId = getSalonId(req);
       if (!req.user?.userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
-      const id = String(req.params.id); // FIX
+      const id = String(req.params.id);
       logger.info("PATCH /staff/:id", { id, salonId });
 
       const updated = await staffService.update({
@@ -122,7 +121,7 @@ export const staffController = {
 
   async deactivate(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = await getSalonId(req);
+      const salonId = getSalonId(req);
       if (!req.user?.userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
       const id = String(req.params.id);
       logger.info("PATCH /staff/:id/deactivate", { id, salonId });
@@ -138,7 +137,7 @@ export const staffController = {
 
   async delete(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = await getSalonId(req);
+      const salonId = getSalonId(req);
       if (!req.user?.userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
       const id = String(req.params.id);
       logger.info("DELETE /staff/:id", { id, salonId });
@@ -152,9 +151,65 @@ export const staffController = {
     } catch (err) { return next(err); }
   },
 
+  // ─── Import ────────────────────────────────────────────────────────────────
+
+  async importStaff(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = getSalonId(req);
+      const file = (req as any).file as Express.Multer.File | undefined;
+
+      if (!file) throw new AppError(400, "No file uploaded", "VALIDATION_ERROR");
+
+      const dry_run = req.query.dry_run === "true";
+      logger.info("POST /staff/import", { salonId, dry_run, filename: file.originalname });
+
+      let rows: any[] = [];
+      const name = file.originalname.toLowerCase();
+
+      if (name.endsWith(".csv") || file.mimetype.includes("csv")) {
+        // ── CSV parsing ──────────────────────────────────────────────────────
+        const text = file.buffer.toString("utf-8");
+        const parsed = Papa.parse(text, {
+          header: true,
+          skipEmptyLines: true,
+        });
+
+        if (parsed.errors && parsed.errors.length > 0) {
+          logger.warn("CSV parse warnings", { errors: parsed.errors });
+        }
+
+        rows = parsed.data as any[];
+      } else {
+        // ── Excel parsing ────────────────────────────────────────────────────
+        const wb = XLSX.read(file.buffer, { type: "buffer" });
+        const sheetName = wb.SheetNames[0];
+        if (!sheetName) throw new AppError(400, "Excel file has no sheets", "VALIDATION_ERROR");
+
+        const ws = wb.Sheets[sheetName];
+        rows = XLSX.utils.sheet_to_json(ws, { defval: "" });
+      }
+
+      if (rows.length === 0) {
+        throw new AppError(400, "File is empty or has no valid rows", "VALIDATION_ERROR");
+      }
+
+      if (rows.length > 1000) {
+        throw new AppError(400, "Max 1000 rows allowed per import", "VALIDATION_ERROR");
+      }
+
+      const result = await staffService.importStaff({ rows, salonId, dry_run });
+
+      return sendSuccess(
+        res,
+        200,
+        result,
+        dry_run ? "Dry run complete — no changes saved" : "Import complete"
+      );
+    } catch (err) { return next(err); }
+  },
+
   // ─── Export helpers ────────────────────────────────────────────────────────
 
-  /** Build export query params from the request (no pagination) */
   _buildExportQuery(req: Request): Omit<StaffListQuery, "page" | "limit"> {
     return {
       search: req.query.search ? String(req.query.search) : undefined,
@@ -169,7 +224,6 @@ export const staffController = {
     };
   },
 
-  /** Column definitions — ordered with first_name / last_name first */
   _exportFields: [
     { label: "First Name", value: "first_name" },
     { label: "Last Name", value: "last_name" },
@@ -205,12 +259,11 @@ export const staffController = {
 
   async exportExcel(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = await getSalonId(req);
+      const salonId = getSalonId(req);
       logger.info("GET /staff/export/excel", { salonId });
 
       const rows = await staffService.exportStaff(salonId, staffController._buildExportQuery(req));
 
-      // Build worksheet data: header row + data rows
       const headers = staffController._exportFields.map(f => f.label);
       const data = rows.map(row =>
         staffController._exportFields.map(f => {
@@ -226,7 +279,7 @@ export const staffController = {
 
       const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
 
-      res.setHeader("Content-Disposition", "attachment; filename=\"staff_export.xlsx\"");
+      res.setHeader("Content-Disposition", 'attachment; filename="staff_export.xlsx"');
       res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
       return res.status(200).send(buffer);
     } catch (err) { return next(err); }
@@ -234,14 +287,13 @@ export const staffController = {
 
   async exportCsv(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = await getSalonId(req);
+      const salonId = getSalonId(req);
       logger.info("GET /staff/export/csv", { salonId });
 
       const rows = await staffService.exportStaff(salonId, staffController._buildExportQuery(req));
 
-      // Flatten specialization array for CSV
       const flatRows = rows.map(row => {
-        const r: Record<string, unknown> = { ...row as any };
+        const r: Record<string, unknown> = { ...(row as any) };
         if (Array.isArray(r.specialization)) r.specialization = (r.specialization as string[]).join(", ");
         return r;
       });
@@ -250,22 +302,19 @@ export const staffController = {
       const parser = new CsvParser({ fields });
       const csv = flatRows.length ? parser.parse(flatRows) : fields.map(f => f.label).join(",");
 
-      res.setHeader("Content-Disposition", "attachment; filename=\"staff_export.csv\"");
+      res.setHeader("Content-Disposition", 'attachment; filename="staff_export.csv"');
       res.setHeader("Content-Type", "text/csv");
       return res.status(200).send(csv);
     } catch (err) { return next(err); }
   },
 };
 
-
-
-
 // ─── Invitations ──────────────────────────────────────────────────────────────
 
 export const staffInvitationController = {
   async verifyToken(req: Request, res: Response, next: NextFunction) {
     try {
-      const token = String(req.params.token); // FIX
+      const token = String(req.params.token);
       if (!token) throw new AppError(400, "token is required", "VALIDATION_ERROR");
       const result = await staffInvitationService.verifyToken(token);
       return sendSuccess(res, 200, result, "Token verified");
@@ -281,7 +330,7 @@ export const staffInvitationController = {
 
   async getInvitationStatus(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = await getSalonId(req);
+      const salonId = getSalonId(req);
       const staffId = String(req.params.id);
       const result = await staffInvitationService.getInvitationStatus({ staffId, salonId });
       return sendSuccess(res, 200, result, "Invitation status fetched");
@@ -290,8 +339,8 @@ export const staffInvitationController = {
 
   async resendInvitation(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = await getSalonId(req);
-      const staffId = String(req.params.id); // FIX
+      const salonId = getSalonId(req);
+      const staffId = String(req.params.id);
       await staffInvitationService.resendInvitation({
         staffId, salonId, salonName: req.body?.salon_name,
       });
@@ -301,8 +350,8 @@ export const staffInvitationController = {
 
   async cancelInvitation(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = await getSalonId(req);
-      const staffId = String(req.params.id); // FIX
+      const salonId = getSalonId(req);
+      const staffId = String(req.params.id);
       await staffInvitationService.cancelInvitation({ staffId, salonId });
       return sendSuccess(res, 200, null, "Invitation cancelled");
     } catch (err) { return next(err); }
@@ -314,14 +363,14 @@ export const staffInvitationController = {
 export const staffAddressController = {
   async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const data = await staffAddressService.list(String(req.params.staffId), await getSalonId(req));
+      const data = await staffAddressService.list(String(req.params.staffId), getSalonId(req));
       return sendSuccess(res, 200, data, "Addresses fetched successfully");
     } catch (err) { return next(err); }
   },
   async create(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const data = await staffAddressService.create(
-        String(req.params.staffId), await getSalonId(req), req.body as CreateStaffAddressBody
+        String(req.params.staffId), getSalonId(req), req.body as CreateStaffAddressBody
       );
       return sendSuccess(res, 201, data, "Address created successfully");
     } catch (err) { return next(err); }
@@ -329,7 +378,7 @@ export const staffAddressController = {
   async update(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const data = await staffAddressService.update(
-        String(req.params.staffId), await getSalonId(req),
+        String(req.params.staffId), getSalonId(req),
         String(req.params.id), req.body as UpdateStaffAddressBody
       );
       return sendSuccess(res, 200, data, "Address updated successfully");
@@ -338,7 +387,7 @@ export const staffAddressController = {
   async delete(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       await staffAddressService.delete(
-        String(req.params.staffId), await getSalonId(req), String(req.params.id)
+        String(req.params.staffId), getSalonId(req), String(req.params.id)
       );
       return sendSuccess(res, 200, null, "Address deleted");
     } catch (err) { return next(err); }
@@ -350,14 +399,14 @@ export const staffAddressController = {
 export const staffEmergencyContactController = {
   async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const data = await staffEmergencyContactService.list(String(req.params.staffId), await getSalonId(req));
+      const data = await staffEmergencyContactService.list(String(req.params.staffId), getSalonId(req));
       return sendSuccess(res, 200, data, "Emergency contacts fetched successfully");
     } catch (err) { return next(err); }
   },
   async create(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const data = await staffEmergencyContactService.create(
-        String(req.params.staffId), await getSalonId(req), req.body as CreateEmergencyContactBody
+        String(req.params.staffId), getSalonId(req), req.body as CreateEmergencyContactBody
       );
       return sendSuccess(res, 201, data, "Emergency contact created successfully");
     } catch (err) { return next(err); }
@@ -365,7 +414,7 @@ export const staffEmergencyContactController = {
   async update(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const data = await staffEmergencyContactService.update(
-        String(req.params.staffId), await getSalonId(req),
+        String(req.params.staffId), getSalonId(req),
         String(req.params.id), req.body as UpdateEmergencyContactBody
       );
       return sendSuccess(res, 200, data, "Emergency contact updated successfully");
@@ -374,7 +423,7 @@ export const staffEmergencyContactController = {
   async delete(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       await staffEmergencyContactService.delete(
-        String(req.params.staffId), await getSalonId(req), String(req.params.id)
+        String(req.params.staffId), getSalonId(req), String(req.params.id)
       );
       return sendSuccess(res, 200, null, "Emergency contact deleted");
     } catch (err) { return next(err); }
@@ -386,14 +435,14 @@ export const staffEmergencyContactController = {
 export const staffWagesController = {
   async get(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const data = await staffWagesService.get(String(req.params.staffId), await getSalonId(req));
+      const data = await staffWagesService.get(String(req.params.staffId), getSalonId(req));
       return sendSuccess(res, 200, data, "Wage settings fetched successfully");
     } catch (err) { return next(err); }
   },
   async upsert(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const data = await staffWagesService.upsert(
-        String(req.params.staffId), await getSalonId(req), req.body as UpdateWageSettingsBody
+        String(req.params.staffId), getSalonId(req), req.body as UpdateWageSettingsBody
       );
       return sendSuccess(res, 200, data, "Wage settings updated successfully");
     } catch (err) { return next(err); }
@@ -405,14 +454,14 @@ export const staffWagesController = {
 export const staffCommissionsController = {
   async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const data = await staffCommissionsService.list(String(req.params.staffId), await getSalonId(req));
+      const data = await staffCommissionsService.list(String(req.params.staffId), getSalonId(req));
       return sendSuccess(res, 200, data, "Commission settings fetched successfully");
     } catch (err) { return next(err); }
   },
   async upsert(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const data = await staffCommissionsService.upsert(
-        String(req.params.staffId), await getSalonId(req), req.body as UpdateCommissionBody
+        String(req.params.staffId), getSalonId(req), req.body as UpdateCommissionBody
       );
       return sendSuccess(res, 200, data, "Commission setting updated successfully");
     } catch (err) { return next(err); }
@@ -424,14 +473,14 @@ export const staffCommissionsController = {
 export const staffPayRunsController = {
   async get(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const data = await staffPayRunsService.get(String(req.params.staffId), await getSalonId(req));
+      const data = await staffPayRunsService.get(String(req.params.staffId), getSalonId(req));
       return sendSuccess(res, 200, data, "Pay run settings fetched successfully");
     } catch (err) { return next(err); }
   },
   async upsert(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const data = await staffPayRunsService.upsert(
-        String(req.params.staffId), await getSalonId(req), req.body as UpdatePayRunBody
+        String(req.params.staffId), getSalonId(req), req.body as UpdatePayRunBody
       );
       return sendSuccess(res, 200, data, "Pay run settings updated successfully");
     } catch (err) { return next(err); }
@@ -443,14 +492,14 @@ export const staffPayRunsController = {
 export const staffSchedulesController = {
   async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const data = await staffSchedulesService.list(String(req.params.staffId), await getSalonId(req));
+      const data = await staffSchedulesService.list(String(req.params.staffId), getSalonId(req));
       return sendSuccess(res, 200, data, "Schedules fetched successfully");
     } catch (err) { return next(err); }
   },
   async upsert(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const data = await staffSchedulesService.upsert(
-        String(req.params.staffId), await getSalonId(req), req.body as UpsertStaffSchedulesBody
+        String(req.params.staffId), getSalonId(req), req.body as UpsertStaffSchedulesBody
       );
       return sendSuccess(res, 200, data, "Schedules updated successfully");
     } catch (err) { return next(err); }
@@ -463,7 +512,7 @@ export const staffLeavesController = {
   async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const data = await staffLeavesService.list(
-        String(req.params.staffId), await getSalonId(req),
+        String(req.params.staffId), getSalonId(req),
         req.query.from ? String(req.query.from) : undefined,
         req.query.to ? String(req.query.to) : undefined,
       );
@@ -473,7 +522,7 @@ export const staffLeavesController = {
   async create(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const data = await staffLeavesService.create(
-        String(req.params.staffId), await getSalonId(req), req.body as CreateStaffLeaveBody
+        String(req.params.staffId), getSalonId(req), req.body as CreateStaffLeaveBody
       );
       return sendSuccess(res, 201, data, "Leave created successfully");
     } catch (err) { return next(err); }
@@ -481,7 +530,7 @@ export const staffLeavesController = {
   async update(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const data = await staffLeavesService.update(
-        String(req.params.staffId), await getSalonId(req),
+        String(req.params.staffId), getSalonId(req),
         String(req.params.id), req.body as UpdateStaffLeaveBody
       );
       return sendSuccess(res, 200, data, "Leave updated successfully");
@@ -490,7 +539,7 @@ export const staffLeavesController = {
   async delete(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       await staffLeavesService.delete(
-        String(req.params.staffId), await getSalonId(req), String(req.params.id)
+        String(req.params.staffId), getSalonId(req), String(req.params.id)
       );
       return sendSuccess(res, 200, null, "Leave deleted");
     } catch (err) { return next(err); }

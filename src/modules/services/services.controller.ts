@@ -1,5 +1,8 @@
 ﻿import { NextFunction, Request, Response } from "express";
 import logger from "../../config/logger";
+import csvParser from "csv-parser";
+import { Readable } from "stream";
+import * as XLSX from "xlsx";
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { bundlesService, servicesService } from "./services.service";
@@ -234,6 +237,41 @@ export const servicesController = {
       return next(err);
     }
   },
+};
+
+// ─── Import ───────────────────────────────────────────────────────────────────
+
+async function parseCSVBuffer(buffer: Buffer): Promise<any[]> {
+    return new Promise((resolve, reject) => {
+        const rows: any[] = [];
+        Readable.from(buffer).pipe(csvParser()).on("data", (r) => rows.push(r)).on("end", () => resolve(rows)).on("error", reject);
+    });
+}
+
+function parseExcelBuffer(buffer: Buffer): any[] {
+    const wb = XLSX.read(buffer, { type: "buffer" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    return XLSX.utils.sheet_to_json(ws, { defval: "" });
+}
+
+export const servicesImportController = {
+    async import(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const salonId = getSalonId(req);
+            const file = (req as any).file as Express.Multer.File | undefined;
+            if (!file) throw new AppError(400, "file is required", "VALIDATION_ERROR");
+
+            const name = file.originalname.toLowerCase();
+            const rows: any[] = (name.endsWith(".xlsx") || name.endsWith(".xls"))
+                ? parseExcelBuffer(file.buffer)
+                : await parseCSVBuffer(file.buffer);
+
+            const result = await servicesService.importServices({ rows, salonId });
+            return sendSuccess(res, 200, result, "Import completed");
+        } catch (e) {
+            return next(e);
+        }
+    },
 };
 
 // ─── Bundles ──────────────────────────────────────────────────────────────────

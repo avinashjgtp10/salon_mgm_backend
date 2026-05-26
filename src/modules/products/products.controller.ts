@@ -3,6 +3,7 @@ import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { productsService, brandsService } from "./products.service";
+import { productsImportService } from "./products.import";
 import {
     CreateProductBody, UpdateProductBody, ReorderPhotosBody,
     CreateBrandBody, UpdateBrandBody,
@@ -32,7 +33,7 @@ export const productsController = {
             });
             const {
                 search, category_id, brand_id, retail_sales_enabled,
-                min_price, max_price, sort_by, sort_order, page, limit,
+                min_price, max_price, stock, sort_by, sort_order, page, limit,
             } = req.query;
             const salonId = await getSalonId(req);
             const result = await productsService.list({
@@ -47,6 +48,7 @@ export const productsController = {
                         retail_sales_enabled !== undefined ? retail_sales_enabled === "true" : undefined,
                     min_price: min_price ? parseFloat(min_price as string) : undefined,
                     max_price: max_price ? parseFloat(max_price as string) : undefined,
+                    stock: stock as "all" | "low" | "out_of_stock" | undefined,
                     sort_by: sort_by as string | undefined,
                     sort_order: sort_order as "ASC" | "DESC" | undefined,
                     page: page ? parseInt(page as string, 10) : undefined,
@@ -255,6 +257,34 @@ export const productsController = {
             res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
             stream.pipe(res);
         } catch (err) { return next(err); }
+    },
+
+    // POST /api/v1/products/import
+    async importProducts(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const userId = req.user?.userId;
+            const role = req.user?.role;
+            logger.info("POST /products/import called", {
+                userId, role, path: req.originalUrl, method: req.method,
+            });
+            if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+            const salonId = await getSalonId(req);
+            const file = (req.file as Express.Multer.File) ?? null;
+            if (!file) throw new AppError(400, "No file uploaded", "VALIDATION_ERROR");
+            const updateExisting = req.body?.updateExisting === "true" || req.body?.updateExisting === true;
+            const result = await productsImportService.importProducts({
+                file: file.buffer,
+                filename: file.originalname,
+                salonId,
+                requesterUserId: userId,
+                requesterRole: role,
+                updateExisting,
+            });
+            return sendSuccess(res, 200, result, `Import completed: ${result.success} created, ${result.failed} failed, ${result.skipped} skipped`);
+        } catch (err) {
+            logger.error("POST /products/import error", { err });
+            return next(err);
+        }
     },
 };
 

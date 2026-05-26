@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { uploadMiddleware } from "../../middleware/upload.middleware";
+import { importUpload } from "./products.upload";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { productsController, brandsController } from "./products.controller";
@@ -24,6 +25,7 @@ router.delete("/brands/:id", authMiddleware, roleMiddleware("salon_owner", "admi
 router.get("/export/csv", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), productsController.exportCSV);
 router.get("/export/excel", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), productsController.exportExcel);
 router.get("/export/pdf", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), productsController.exportPDF);
+router.post("/import", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), importUpload.single("file"), productsController.importProducts);
 
 router.get("/", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), productsController.list);
 router.get("/:id", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), productsController.getById);
