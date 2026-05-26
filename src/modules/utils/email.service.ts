@@ -51,6 +51,152 @@ export const emailService = {
     });
   },
 
+  async sendPasswordResetConfirmationEmail(params: {
+    to: string;
+    fullName: string;
+    resetAt: Date;
+  }) {
+    const { to, fullName, resetAt } = params;
+    const loginUrl = `${config.frontend.url}/login`;
+    const formattedDate = resetAt.toLocaleDateString("en-US", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+    const formattedTime = resetAt.toLocaleTimeString("en-US", {
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZoneName: "short",
+    });
+
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to,
+      subject: "Your SalonOx Password Has Been Reset Successfully",
+      html: `
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+          <meta charset="UTF-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+          <title>Password Reset Confirmation</title>
+        </head>
+        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:40px 0;">
+            <tr>
+              <td align="center">
+                <table width="560" cellpadding="0" cellspacing="0"
+                  style="background:#ffffff;border-radius:10px;overflow:hidden;
+                         box-shadow:0 4px 20px rgba(0,0,0,0.08);max-width:560px;width:100%;">
+
+                  <!-- Header -->
+                  <tr>
+                    <td style="background:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);
+                               padding:36px 40px;text-align:center;">
+                      <h1 style="margin:0;color:#ffffff;font-size:26px;font-weight:700;letter-spacing:-0.5px;">
+                        SalonOx
+                      </h1>
+                      <p style="margin:8px 0 0;color:rgba(255,255,255,0.85);font-size:14px;">
+                        Password Reset Confirmation
+                      </p>
+                    </td>
+                  </tr>
+
+                  <!-- Body -->
+                  <tr>
+                    <td style="padding:40px 40px 24px;">
+                      <p style="margin:0 0 16px;color:#374151;font-size:16px;line-height:1.6;">
+                        Hi <strong>${fullName}</strong>,
+                      </p>
+                      <p style="margin:0 0 16px;color:#374151;font-size:16px;line-height:1.6;">
+                        Your <strong>SalonOx</strong> account password has been successfully reset.
+                      </p>
+
+                      <!-- Reset Details Box -->
+                      <table cellpadding="0" cellspacing="0" width="100%"
+                        style="background:#f9fafb;border-radius:8px;border:1px solid #e5e7eb;margin:24px 0;">
+                        <tr>
+                          <td style="padding:20px 24px;">
+                            <p style="margin:0 0 8px;color:#6b7280;font-size:13px;text-transform:uppercase;
+                                      letter-spacing:0.05em;font-weight:600;">
+                              Reset Details
+                            </p>
+                            <p style="margin:0 0 4px;color:#374151;font-size:14px;">
+                              <strong>Date:</strong> ${formattedDate}
+                            </p>
+                            <p style="margin:0;color:#374151;font-size:14px;">
+                              <strong>Time:</strong> ${formattedTime}
+                            </p>
+                          </td>
+                        </tr>
+                      </table>
+
+                      <p style="margin:0 0 32px;color:#374151;font-size:15px;line-height:1.6;">
+                        You can now log in to your SalonOx account using your new password.
+                      </p>
+
+                      <!-- CTA Button -->
+                      <table cellpadding="0" cellspacing="0" width="100%">
+                        <tr>
+                          <td align="center">
+                            <a href="${loginUrl}"
+                               style="display:inline-block;background:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);
+                                      color:#ffffff;text-decoration:none;font-size:16px;font-weight:600;
+                                      padding:14px 48px;border-radius:8px;
+                                      box-shadow:0 4px 12px rgba(99,102,241,0.4);">
+                              Login Now
+                            </a>
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+
+                  <!-- Security Notice -->
+                  <tr>
+                    <td style="padding:24px 40px;">
+                      <table cellpadding="0" cellspacing="0" width="100%"
+                        style="background:#fef3c7;border-radius:8px;border:1px solid #fcd34d;">
+                        <tr>
+                          <td style="padding:16px 20px;">
+                            <p style="margin:0 0 8px;color:#92400e;font-size:14px;font-weight:600;">
+                              Security Notice
+                            </p>
+                            <p style="margin:0 0 6px;color:#92400e;font-size:13px;line-height:1.6;">
+                              If you did not request this password reset, please contact our support team immediately — your account may be at risk.
+                            </p>
+                            <p style="margin:0;color:#92400e;font-size:13px;">
+                              Support: <a href="mailto:support@salonox.com" style="color:#6366f1;">support@salonox.com</a>
+                            </p>
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+
+                  <!-- Footer -->
+                  <tr>
+                    <td style="background:#f9fafb;padding:20px 40px;border-top:1px solid #e5e7eb;">
+                      <p style="margin:0 0 6px;color:#9ca3af;font-size:12px;text-align:center;">
+                        © ${new Date().getFullYear()} SalonOx. All rights reserved.
+                      </p>
+                      <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">
+                        This is an automated security notification. Please do not reply to this email.
+                      </p>
+                    </td>
+                  </tr>
+
+                </table>
+              </td>
+            </tr>
+          </table>
+        </body>
+        </html>
+      `,
+    });
+  },
+
   async sendWelcomeEmail(params: {
     to: string;
     fullName: string;
@@ -308,4 +454,3 @@ export const emailService = {
     });
   },
 };
-
