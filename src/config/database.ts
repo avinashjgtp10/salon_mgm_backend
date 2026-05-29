@@ -1,9 +1,15 @@
-import { Pool } from 'pg';
+import { Pool, types } from 'pg';
 import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 
 dotenv.config({ path: '.env.local' });
+
+// ✅ Return timestamps as raw ISO strings instead of JS Date objects.
+// This prevents the pg driver from silently shifting timezone during
+// Date construction. The frontend is responsible for parsing & display.
+types.setTypeParser(1114, (val: string) => val);  // TIMESTAMP WITHOUT TZ
+types.setTypeParser(1184, (val: string) => val);  // TIMESTAMP WITH TZ (timestamptz)
 
 const sslConfig = (() => {
   if (process.env.DB_SSL !== 'true') return false;
@@ -43,8 +49,14 @@ const pool = new Pool({
   keepAliveInitialDelayMillis: 10000,
 });
 
-pool.on('connect', () => {
-  console.log('✅ Database connected');
+pool.on('connect', (client) => {
+  // ✅ Force UTC on every session so timestamp casts are always timezone-consistent.
+  // Without this, bare strings like "2026-05-26T10:30:00" would be interpreted using
+  // whatever the OS/cloud-DB default timezone is (varies by host).
+  client.query("SET TIME ZONE 'UTC'").catch((err) =>
+    console.warn('⚠️  Could not set session timezone:', err.message)
+  );
+  console.log('✅ Database connected (session TZ = UTC)');
 });
 
 pool.on('error', (err) => {

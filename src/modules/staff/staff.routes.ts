@@ -69,6 +69,7 @@ router.put("/:staffId/pay-runs", auth, ownerAdmin, validateUpdatePayRun, staffPa
 // ─── Schedules ────────────────────────────────────────────────────────────────
 router.get("/:staffId/scheduled", auth, ownerAdminStaff, staffSchedulesController.list);
 router.put("/:staffId/scheduled", auth, ownerAdmin, validateUpsertStaffSchedules, staffSchedulesController.upsert);
+router.delete("/:staffId/scheduled", auth, ownerAdmin, staffSchedulesController.delete);
 
 // ─── Leaves ───────────────────────────────────────────────────────────────────
 router.get("/:staffId/leaves", auth, ownerAdminStaff, staffLeavesController.list);

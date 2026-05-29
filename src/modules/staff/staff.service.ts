@@ -395,6 +395,18 @@ export const staffSchedulesService = {
         await _ensureStaff(staffId, salonId);
         return staffSchedulesRepository.upsertBulk(staffId, body);
     },
+    /** Delete by exact calendar date (YYYY-MM-DD) */
+    async deleteByDate(staffId: string, salonId: string, date: string): Promise<void> {
+        await _ensureStaff(staffId, salonId);
+        await staffSchedulesRepository.deleteByDate(staffId, date);
+    },
+    /** Legacy: delete by day-of-week index */
+    async delete(staffId: string, salonId: string, dateStr: string): Promise<void> {
+        await _ensureStaff(staffId, salonId);
+        const dateObj = new Date(dateStr + "T12:00:00");
+        const dayOfWeek = dateObj.getDay();
+        await staffSchedulesRepository.deleteByDay(staffId, dayOfWeek);
+    },
 };
 
 // ─── Leaves ───────────────────────────────────────────────────────────────────

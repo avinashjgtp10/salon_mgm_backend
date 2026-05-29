@@ -90,7 +90,7 @@ export const appointmentsRepository = {
         const query = `
             SELECT 1 FROM appointments
             WHERE staff_id = $1
-              AND status NOT IN ('cancelled', 'no_show')
+              AND LOWER(status::text) NOT IN ('cancelled', 'no_show', 'completed')
               AND scheduled_at < ($2::timestamptz + ($3 * interval '1 minute'))
               AND (scheduled_at + (duration_minutes * interval '1 minute')) > $2::timestamptz
               ${excludeId ? `AND id != $4` : ""}
@@ -114,11 +114,11 @@ export const appointmentsRepository = {
             )
             VALUES (
                 $1, $2, $3, $4, $5,
-                $6, $7, $8, 'booked',
-                $9, $10,
-                ($9::timestamptz + ($10::integer * INTERVAL '1 minute')),
-                $11, $12,
-                $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb
+                $6, $7, $8, $9,
+                $10, $11,
+                ($10::timestamptz + ($11::integer * INTERVAL '1 minute')),
+                $12, $13,
+                $14::jsonb, $15::jsonb, $16::jsonb, $17::jsonb
             )
             RETURNING *`,
             [
@@ -130,6 +130,7 @@ export const appointmentsRepository = {
                 data.title              ?? "Appointment",
                 data.notes              ?? null,
                 data.staff_alert        ?? null,
+                data.status             ?? "booked",   // ✅ respect caller status, default 'booked'
                 data.scheduled_at,
                 data.duration_minutes,
                 data.colour             ?? null,
@@ -145,6 +146,12 @@ export const appointmentsRepository = {
 
     async update(id: string, patch: UpdateAppointmentBody): Promise<Appointment> {
         const JSONB_FIELDS = new Set(["services", "package_items", "product_items", "membership_items"]);
+
+        // Remove ends_at from the patch if auto-recalculation is triggered
+        if ("scheduled_at" in patch || "duration_minutes" in patch) {
+            delete patch.ends_at;
+        }
+
         const keys = Object.keys(patch) as (keyof UpdateAppointmentBody)[];
 
         if (keys.length === 0) {
@@ -154,6 +161,9 @@ export const appointmentsRepository = {
 
         const setParts: string[] = [];
         const values: any[] = [];
+        // Track param indices so we can recalculate ends_at in SQL
+        let scheduledAtIdx: number | null = null;
+        let durationIdx: number | null = null;
 
         keys.forEach((k) => {
             const idx = values.length + 1;
@@ -164,7 +174,16 @@ export const appointmentsRepository = {
                 setParts.push(`${String(k)} = $${idx}`);
                 values.push((patch as any)[k]);
             }
+            if (k === "scheduled_at")    scheduledAtIdx = idx;
+            if (k === "duration_minutes") durationIdx    = idx;
         });
+
+        // ✅ Auto-recalculate ends_at when scheduled_at or duration_minutes changes
+        if (scheduledAtIdx !== null || durationIdx !== null) {
+            const schedPart = scheduledAtIdx !== null ? `$${scheduledAtIdx}::timestamptz` : `scheduled_at`;
+            const durPart   = durationIdx    !== null ? `$${durationIdx}::integer`        : `duration_minutes`;
+            setParts.push(`ends_at = (${schedPart} + (${durPart} * INTERVAL '1 minute'))`);
+        }
 
         setParts.push(`updated_at = NOW()`);
         values.push(id);

@@ -67,8 +67,8 @@ function toPackage(row: PackageRow): Package {
       minimumOrder:   parseFloat(o.minimumOrder),
       isActive:       o.isActive,
     })),
-    createdAt: row.created_at.toISOString(),
-    updatedAt: row.updated_at.toISOString(),
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : new Date(row.created_at).toISOString(),
+    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : new Date(row.updated_at).toISOString(),
   };
 }
 
