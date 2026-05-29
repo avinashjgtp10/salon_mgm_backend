@@ -261,6 +261,8 @@ export type UpsertScheduleItem = {
     start_time?: string | null;
     end_time?: string | null;
     notes?: string;
+    /** Optional concrete calendar date (YYYY-MM-DD) for date-based scheduling */
+    date?: string | null;
 };
 
 export type UpsertStaffSchedulesBody = {

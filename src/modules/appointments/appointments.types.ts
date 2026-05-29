@@ -82,6 +82,8 @@ export type CreateAppointmentBody = {
     service_id?: string;
     scheduled_at: string;
     duration_minutes: number;
+    /** Computed end timestamp — auto-calculated from scheduled_at + duration_minutes */
+    ends_at?: string | null;
     title?: string;
     notes?: string;
     staff_alert?: string;

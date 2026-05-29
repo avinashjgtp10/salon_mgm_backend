@@ -37,12 +37,13 @@ export const appointmentsService = {
 
             // Blocked-time check — reject booking if the slot is blocked for this staff
             const apptDate = new Date(body.scheduled_at);
-            const dateStr  = apptDate.toISOString().slice(0, 10);
+            // Use UTC consistently — toISOString() gives UTC date, so times must also be UTC
+            const dateStr  = apptDate.toISOString().slice(0, 10);           // UTC date
             const pad = (n: number) => String(n).padStart(2, "0");
-            const startStr = `${pad(apptDate.getHours())}:${pad(apptDate.getMinutes())}`;
+            const startStr = `${pad(apptDate.getUTCHours())}:${pad(apptDate.getUTCMinutes())}`;   // UTC time
             const endMs    = apptDate.getTime() + body.duration_minutes * 60_000;
             const endDate  = new Date(endMs);
-            const endStr   = `${pad(endDate.getHours())}:${pad(endDate.getMinutes())}`;
+            const endStr   = `${pad(endDate.getUTCHours())}:${pad(endDate.getUTCMinutes())}`;     // UTC time
 
             const blocked = await blockedTimesRepository.hasOverlap({
                 staffId: body.staff_id,

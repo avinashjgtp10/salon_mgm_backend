@@ -136,11 +136,28 @@ export const staffPayRunsRepository = {
 // ─── Schedules ────────────────────────────────────────────────────────────────
 
 export const staffSchedulesRepository = {
-    async listByStaffId(staffId: string): Promise<StaffSchedule[]> {
+    async listByStaffId(staffId: string, start?: string, end?: string): Promise<StaffSchedule[]> {
+        if (start && end) {
+            const { rows } = await pool.query(
+                `SELECT * FROM staff_schedules WHERE staff_id = $1 AND date >= $2::date AND date <= $3::date ORDER BY date ASC, day_of_week ASC`,
+                [staffId, start, end]
+            );
+            return rows;
+        }
         const { rows } = await pool.query(
-            `SELECT * FROM staff_schedules WHERE staff_id = $1 ORDER BY day_of_week`, [staffId]
+            `SELECT * FROM staff_schedules WHERE staff_id = $1 ORDER BY date ASC, day_of_week ASC`, [staffId]
         );
         return rows;
+    },
+
+    // delete by specific date (new API)
+    async deleteByDate(staffId: string, date: string): Promise<void> {
+        await pool.query(`DELETE FROM staff_schedules WHERE staff_id = $1 AND date = $2::date`, [staffId, date]);
+    },
+
+    // retain old deleteByDay for compatibility (may be unused)
+    async deleteByDay(staffId: string, dayOfWeek: number): Promise<void> {
+        await pool.query(`DELETE FROM staff_schedules WHERE staff_id = $1 AND day_of_week = $2`, [staffId, dayOfWeek]);
     },
 
     async upsertBulk(staffId: string, body: UpsertStaffSchedulesBody): Promise<StaffSchedule[]> {
@@ -150,23 +167,37 @@ export const staffSchedulesRepository = {
             const results: StaffSchedule[] = [];
 
             for (const item of body.items) {
-                const { rows } = await client.query(
-                    `INSERT INTO staff_schedules (staff_id, day_of_week, is_available, start_time, end_time, notes)
-           VALUES ($1,$2,$3,$4,$5,$6)
-           ON CONFLICT (staff_id, day_of_week) DO UPDATE SET
-             is_available = EXCLUDED.is_available,
-             start_time   = EXCLUDED.start_time,
-             end_time     = EXCLUDED.end_time,
-             notes        = EXCLUDED.notes,
-             updated_at   = NOW()
-           RETURNING *`,
-                    [
-                        staffId, item.day_of_week, item.is_available,
+                // Compute conflict target: if a concrete date is provided, use it; otherwise fall back to day_of_week
+                const conflictColumns = item.date ? '(staff_id, date)' : '(staff_id, day_of_week) WHERE (date IS NULL)';
+                const insertColumns = item.date
+                    ? `staff_id, day_of_week, is_available, start_time, end_time, notes, date`
+                    : `staff_id, day_of_week, is_available, start_time, end_time, notes`;
+                const valuesPlaceholders = item.date
+                    ? `$1,$2,$3,$4,$5,$6,$7`
+                    : `$1,$2,$3,$4,$5,$6`;
+                const updateSet = `
+                    is_available = EXCLUDED.is_available,
+                    start_time   = EXCLUDED.start_time,
+                    end_time     = EXCLUDED.end_time,
+                    notes        = EXCLUDED.notes,
+                    day_of_week  = EXCLUDED.day_of_week,
+                    ${item.date ? 'date = EXCLUDED.date,' : ''}
+                    updated_at   = NOW()`;
+                const query = `INSERT INTO staff_schedules (${insertColumns})
+                    VALUES (${valuesPlaceholders})
+                    ON CONFLICT ${conflictColumns} DO UPDATE SET ${updateSet}
+                    RETURNING *`;
+                const params = item.date
+                    ? [staffId, item.day_of_week, item.is_available,
                         item.is_available ? (item.start_time ?? null) : null,
                         item.is_available ? (item.end_time ?? null) : null,
                         item.notes ?? null,
-                    ]
-                );
+                        item.date ?? null]
+                    : [staffId, item.day_of_week, item.is_available,
+                        item.is_available ? (item.start_time ?? null) : null,
+                        item.is_available ? (item.end_time ?? null) : null,
+                        item.notes ?? null];
+                const { rows } = await client.query(query, params);
                 results.push(rows[0]);
             }
 

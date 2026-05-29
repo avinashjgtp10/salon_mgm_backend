@@ -504,6 +504,18 @@ export const staffSchedulesController = {
       return sendSuccess(res, 200, data, "Schedules updated successfully");
     } catch (err) { return next(err); }
   },
+  async delete(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const staffId = String(req.params.staffId);
+      const salonId = await getSalonId(req);
+      const date = req.query.date ? String(req.query.date) : undefined;
+      if (!date) {
+        throw new AppError(400, "Date is required", "MISSING_DATE");
+      }
+      await staffSchedulesService.delete(staffId, salonId, date);
+      return sendSuccess(res, 200, null, "Schedule deleted successfully");
+    } catch (err) { return next(err); }
+  },
 };
 
 // ─── Leaves ───────────────────────────────────────────────────────────────────
