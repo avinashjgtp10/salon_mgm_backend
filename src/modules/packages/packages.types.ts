@@ -1,4 +1,5 @@
 export type DiscountType = "percentage" | "fixed";
+export type PackageStatus = "Active" | "Draft" | "Inactive";
 
 export interface PackageOffer {
   id:             string;
@@ -34,6 +35,8 @@ export interface CreatePackageDTO {
   durationMinutes: number;
   category:        string;
   priority?:       number;
+  status?:         PackageStatus;
+  colour?:         string;
   serviceIds:      string[];
   offers:          CreatePackageOfferDTO[];
 }
@@ -44,6 +47,7 @@ export interface PackagesListQuery {
   salonId:   string;
   search?:   string;
   category?: string;
+  status?:   PackageStatus;
   page?:     number;
   limit?:    number;
 }
@@ -60,6 +64,8 @@ export interface Package {
   durationMinutes: number;
   category:        string;
   priority:        number;
+  status:          PackageStatus;
+  colour:          string;
   serviceIds:      string[];
   offers:          PackageOffer[];
   createdAt:       string;
@@ -92,6 +98,8 @@ export interface PackageRow {
   duration_minutes: number;
   category:         string;
   priority:         number;
+  status:           string;
+  colour:           string;
   created_at:       Date;
   updated_at:       Date;
   service_ids:      string[] | null;

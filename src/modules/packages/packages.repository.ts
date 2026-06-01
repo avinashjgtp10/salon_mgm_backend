@@ -8,6 +8,7 @@ import type {
   UpdatePackageDTO,
   PackagesListQuery,
   DiscountType,
+  PackageStatus,
 } from "./packages.types";
 
 // ── Shared SELECT ────────────────────────────────────────────────────────────
@@ -55,6 +56,8 @@ function toPackage(row: PackageRow): Package {
     durationMinutes: row.duration_minutes,
     category:        row.category,
     priority:        row.priority,
+    status:          (row.status as PackageStatus) ?? "Active",
+    colour:          row.colour ?? "#10b981",
     serviceIds:      row.service_ids ?? [],
     offers: (row.offers ?? []).map((o: PackageOfferRow) => ({
       id:             o.id,
@@ -81,7 +84,6 @@ export const packagesRepository = {
     const values: any[] = [];
     let idx = 1;
 
-    // Always scope to salon first
     conditions.push(`p.salon_id = $${idx++}`);
     values.push(query.salonId);
 
@@ -92,6 +94,10 @@ export const packagesRepository = {
     if (query.category) {
       conditions.push(`p.category = $${idx++}`);
       values.push(query.category);
+    }
+    if (query.status) {
+      conditions.push(`p.status = $${idx++}`);
+      values.push(query.status);
     }
 
     const where  = `WHERE ${conditions.join(" AND ")}`;
@@ -133,20 +139,22 @@ export const packagesRepository = {
       await client.query(
         `INSERT INTO packages
           (id, salon_id, name, slug, description, base_price, discount_value,
-           discount_type, duration_minutes, category, priority)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+           discount_type, duration_minutes, category, priority, status, colour)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
         [
           pkgId,
           data.salonId,
           data.name,
           data.slug,
-          data.description ?? null,
+          data.description     ?? null,
           data.basePrice,
           data.discountValue   ?? 0,
           data.discountType    ?? "percentage",
           data.durationMinutes,
           data.category,
           data.priority        ?? 5,
+          data.status          ?? "Active",
+          data.colour          ?? "#10b981",
         ]
       );
 
@@ -209,6 +217,8 @@ export const packagesRepository = {
         durationMinutes: "duration_minutes",
         category:        "category",
         priority:        "priority",
+        status:          "status",
+        colour:          "colour",
       };
 
       const fields: string[] = [];
