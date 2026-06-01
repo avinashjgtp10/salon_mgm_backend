@@ -4,6 +4,7 @@ import { AppError } from "../../middleware/error.middleware";
 import { salesRepository } from "./sales.repository";
 import { Sale, SaleItem, CreateSaleBody, UpdateSaleBody, CheckoutSaleBody } from "./sales.types";
 import { paymentsRepository } from "../payments/payments.repository";
+import { appointmentsRepository } from "../appointments/appointments.repository";
 import { staffRepository } from "../staff/staff.repository";
 import { servicesRepository } from "../services/services.repository";
 
@@ -83,6 +84,15 @@ export const salesService = {
             });
         } catch (error) {
             console.error('Failed to create payment record for sale:', error);
+        }
+
+        // Mark the linked appointment as completed when the sale is checked out
+        if (sale.appointment_id) {
+            try {
+                await appointmentsRepository.updateStatus(sale.appointment_id, 'completed');
+            } catch (error) {
+                console.error('Failed to update appointment status after checkout:', error);
+            }
         }
 
         return sale;
