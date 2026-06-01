@@ -65,6 +65,8 @@ export type Appointment = {
     updated_at: string;
     cancelled_at: string | null;
     cancel_reason: string | null;
+    // Joined field
+    client_name?: string | null;
     // JSONB columns
     services: AppointmentServiceItem[];
     package_items: AppointmentPackageItem[];
