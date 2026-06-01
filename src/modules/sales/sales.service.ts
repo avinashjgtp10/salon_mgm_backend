@@ -38,12 +38,13 @@ export const salesService = {
         return salesRepository.getDailySummary(salonId, date);
     },
 
-    async update(params: { id: string; requesterUserId: string; requesterRole?: string; patch: UpdateSaleBody }): Promise<Sale> {
+    async update(params: { id: string; requesterUserId: string; requesterRole?: string; patch: UpdateSaleBody }): Promise<{ sale: Sale; items: SaleItem[] }> {
         const { id, patch } = params;
         const existing = await salesRepository.findById(id);
         if (!existing) throw new AppError(404, "Sale not found", "NOT_FOUND");
-        if (existing.status !== 'draft') throw new AppError(400, "Only draft sales can be updated", "BAD_REQUEST");
-        return salesRepository.update(id, patch);
+        const sale = await salesRepository.update(id, patch);
+        const items = await salesRepository.findItemsBySaleId(id);
+        return { sale, items };
     },
 
     async checkout(params: { id: string; requesterUserId: string; requesterRole?: string; body: CheckoutSaleBody }): Promise<Sale> {

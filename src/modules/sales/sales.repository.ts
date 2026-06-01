@@ -3,7 +3,13 @@ import { Sale, SaleItem, CreateSaleBody, UpdateSaleBody } from "./sales.types";
 
 export const salesRepository = {
     async findById(id: string): Promise<Sale | null> {
-        const { rows } = await safeQuery(() => pool.query(`SELECT * FROM sales WHERE id = $1`, [id]));
+        const { rows } = await safeQuery(() => pool.query(
+            `SELECT s.*, c.full_name AS client_name
+             FROM sales s
+             LEFT JOIN clients c ON s.client_id = c.id
+             WHERE s.id = $1`,
+            [id]
+        ));
         return rows[0] || null;
     },
 
@@ -16,7 +22,15 @@ export const salesRepository = {
     },
 
     async findItemsBySaleId(saleId: string): Promise<SaleItem[]> {
-        const { rows } = await safeQuery(() => pool.query(`SELECT * FROM sale_items WHERE sale_id = $1`, [saleId]));
+        const { rows } = await safeQuery(() => pool.query(
+            `SELECT si.id, si.sale_id, si.item_type, si.item_id,
+                    COALESCE(si.staff_id, s.staff_id) AS staff_id,
+                    si.name, si.quantity, si.unit_price, si.discount_amount, si.total_price, si.created_at
+             FROM sale_items si
+             JOIN sales s ON si.sale_id = s.id
+             WHERE si.sale_id = $1`,
+            [saleId]
+        ));
         return rows;
     },
 
@@ -25,12 +39,16 @@ export const salesRepository = {
         const values: any[] = [];
         let idx = 1;
 
-        if (filters.salon_id) { conditions.push(`salon_id = $${idx++}`); values.push(filters.salon_id); }
-        if (filters.client_id) { conditions.push(`client_id = $${idx++}`); values.push(filters.client_id); }
-        if (filters.status) { conditions.push(`status = $${idx++}`); values.push(filters.status); }
+        if (filters.salon_id) { conditions.push(`s.salon_id = $${idx++}`); values.push(filters.salon_id); }
+        if (filters.client_id) { conditions.push(`s.client_id = $${idx++}`); values.push(filters.client_id); }
+        if (filters.status) { conditions.push(`s.status = $${idx++}`); values.push(filters.status); }
 
         const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-        const query = `SELECT * FROM sales ${whereClause} ORDER BY created_at DESC`;
+        const query = `SELECT s.*, c.full_name AS client_name
+                       FROM sales s
+                       LEFT JOIN clients c ON s.client_id = c.id
+                       ${whereClause}
+                       ORDER BY s.created_at DESC`;
         const { rows } = await safeQuery(() => pool.query(query, values));
         return rows;
     },
@@ -49,22 +67,22 @@ export const salesRepository = {
         try {
             await client.query('BEGIN');
 
-            // Generate basic total values
             let subtotal = 0;
             data.items.forEach(item => {
-                subtotal += item.quantity * parseFloat(item.unit_price);
+                const discAmt = item.discount_amount ? parseFloat(item.discount_amount) : 0;
+                subtotal += item.quantity * parseFloat(item.unit_price) - discAmt;
             });
             const discountAmt = data.discount_amount ? parseFloat(data.discount_amount) : 0;
-            const taxAmt = data.tax_amount ? parseFloat(data.tax_amount) : 0;
-            const tipAmt = data.tip_amount ? parseFloat(data.tip_amount) : 0;
+            const taxAmt      = data.tax_amount      ? parseFloat(data.tax_amount)      : 0;
+            const tipAmt      = data.tip_amount      ? parseFloat(data.tip_amount)      : 0;
             const total = subtotal - discountAmt + taxAmt + tipAmt;
 
             const invoiceNumber = `INV-${Date.now()}`;
 
             const saleResult = await client.query(
                 `INSERT INTO sales (
-                    salon_id, client_id, appointment_id, staff_id, status, subtotal, 
-                    discount_amount, tip_amount, tax_amount, total_amount, payment_method, 
+                    salon_id, client_id, appointment_id, staff_id, status, subtotal,
+                    discount_amount, tip_amount, tax_amount, total_amount, payment_method,
                     payment_reference, notes, invoice_number, created_by
                 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
                 [
@@ -72,18 +90,20 @@ export const salesRepository = {
                     data.status || 'draft', subtotal.toString(), data.discount_amount || '0',
                     data.tip_amount || '0', data.tax_amount || '0', total.toString(),
                     data.payment_method || null, data.payment_reference || null, data.notes || null,
-                    invoiceNumber, createdBy
+                    invoiceNumber, createdBy,
                 ]
             );
             const sale = saleResult.rows[0];
 
             for (const item of data.items) {
-                const item_total_price = item.quantity * parseFloat(item.unit_price);
+                const discAmt       = item.discount_amount ? parseFloat(item.discount_amount) : 0;
+                const itemTotal     = item.quantity * parseFloat(item.unit_price) - discAmt;
                 await client.query(
                     `INSERT INTO sale_items (
-                        sale_id, item_type, item_id, name, quantity, unit_price, total_price
-                    ) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-                    [sale.id, item.item_type, item.item_id || null, item.name, item.quantity, item.unit_price, item_total_price.toString()]
+                        sale_id, item_type, item_id, staff_id, name, quantity, unit_price, discount_amount, total_price
+                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+                    [sale.id, item.item_type, item.item_id || null, item.staff_id || null,
+                     item.name, item.quantity, item.unit_price, item.discount_amount || '0', itemTotal.toString()]
                 );
             }
 
@@ -98,26 +118,85 @@ export const salesRepository = {
     },
 
     async update(id: string, patch: UpdateSaleBody): Promise<Sale> {
-        const keys = Object.keys(patch) as (keyof UpdateSaleBody)[];
-        if (keys.length === 0) {
-            const { rows } = await safeQuery(() => pool.query(`SELECT * FROM sales WHERE id = $1`, [id]));
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            const { items, ...salePatch } = patch;
+
+            // If items are provided: replace all items and recalculate totals
+            if (items && items.length > 0) {
+                await client.query(`DELETE FROM sale_items WHERE sale_id = $1`, [id]);
+
+                let subtotal = 0;
+                for (const item of items) {
+                    const discAmt   = item.discount_amount ? parseFloat(item.discount_amount) : 0;
+                    const itemTotal = item.quantity * parseFloat(item.unit_price) - discAmt;
+                    subtotal += itemTotal;
+                    await client.query(
+                        `INSERT INTO sale_items (
+                            sale_id, item_type, item_id, staff_id, name, quantity, unit_price, discount_amount, total_price
+                        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+                        [id, item.item_type, item.item_id || null, item.staff_id || null,
+                         item.name, item.quantity, item.unit_price, item.discount_amount || '0', itemTotal.toString()]
+                    );
+                }
+
+                const discountAmt = salePatch.discount_amount ? parseFloat(salePatch.discount_amount) : 0;
+                const taxAmt      = salePatch.tax_amount      ? parseFloat(salePatch.tax_amount)      : 0;
+                const tipAmt      = salePatch.tip_amount      ? parseFloat(salePatch.tip_amount)      : 0;
+                const total       = subtotal - discountAmt + taxAmt + tipAmt;
+
+                const setParts: string[] = ['subtotal = $1', 'total_amount = $2', 'updated_at = NOW()'];
+                const values: any[]      = [subtotal.toString(), total.toString()];
+                let idx = 3;
+
+                const extraFields = ['client_id', 'discount_amount', 'tip_amount', 'tax_amount', 'notes', 'status', 'payment_method', 'payment_reference'] as const;
+                for (const key of extraFields) {
+                    if (key in salePatch && (salePatch as any)[key] !== undefined) {
+                        setParts.push(`${key} = $${idx++}`);
+                        values.push((salePatch as any)[key]);
+                    }
+                }
+                values.push(id);
+
+                const { rows } = await client.query(
+                    `UPDATE sales SET ${setParts.join(', ')} WHERE id = $${idx} RETURNING *`,
+                    values
+                );
+                await client.query('COMMIT');
+                return rows[0];
+            }
+
+            // No items — just patch sale-level fields
+            const keys = Object.keys(salePatch) as (keyof typeof salePatch)[];
+            if (keys.length === 0) {
+                const { rows } = await client.query(`SELECT * FROM sales WHERE id = $1`, [id]);
+                await client.query('COMMIT');
+                return rows[0];
+            }
+
+            const setParts: string[] = [];
+            const values: any[]      = [];
+            keys.forEach((k, i) => {
+                setParts.push(`${String(k)} = $${i + 1}`);
+                values.push((salePatch as any)[k]);
+            });
+            setParts.push(`updated_at = NOW()`);
+            values.push(id);
+
+            const { rows } = await client.query(
+                `UPDATE sales SET ${setParts.join(', ')} WHERE id = $${values.length} RETURNING *`,
+                values
+            );
+            await client.query('COMMIT');
             return rows[0];
+        } catch (e) {
+            await client.query('ROLLBACK');
+            throw e;
+        } finally {
+            client.release();
         }
-
-        const setParts: string[] = [];
-        const values: any[] = [];
-        keys.forEach((k, idx) => {
-            setParts.push(`${String(k)} = $${idx + 1}`);
-            values.push((patch as any)[k]);
-        });
-        setParts.push(`updated_at = NOW()`);
-        values.push(id);
-
-        const { rows } = await safeQuery(() => pool.query(
-            `UPDATE sales SET ${setParts.join(", ")} WHERE id = $${values.length} RETURNING *`,
-            values
-        ));
-        return rows[0];
     },
 
     async checkout(id: string, params: { payment_method: string; payment_reference?: string; status?: "completed" }): Promise<Sale> {
