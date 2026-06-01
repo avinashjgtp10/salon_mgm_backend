@@ -10,7 +10,7 @@ export const appointmentsRepository = {
     // ✅ FIX — LEFT JOIN payments so payment_status reflects actual payment records
     async findById(id: string): Promise<Appointment | null> {
         const { rows } = await pool.query(
-            `SELECT a.*,
+            `SELECT a.*, c.full_name AS client_name,
                 COALESCE(
                   (SELECT CASE
                       WHEN bool_or(p.status = 'completed') THEN 'paid'::text
@@ -23,6 +23,7 @@ export const appointmentsRepository = {
                 ) AS payment_status,
                 COALESCE((SELECT SUM(net_amount) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS paid_amount
              FROM appointments a
+             LEFT JOIN clients c ON a.client_id = c.id
              WHERE a.id = $1`,
             [id]
         );
@@ -52,7 +53,7 @@ export const appointmentsRepository = {
         }
 
         const { rows } = await pool.query(
-            `SELECT a.*,
+            `SELECT a.*, c.full_name AS client_name,
                 COALESCE(
                   (SELECT CASE
                       WHEN bool_or(p.status = 'completed') THEN 'paid'::text
@@ -65,6 +66,7 @@ export const appointmentsRepository = {
                 ) AS payment_status,
                 COALESCE((SELECT SUM(net_amount) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS paid_amount
              FROM appointments a
+             LEFT JOIN clients c ON a.client_id = c.id
              WHERE ${conditions.join(" AND ")}
              ORDER BY a.scheduled_at ASC`,
             values
