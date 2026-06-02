@@ -3,6 +3,7 @@ import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 
+dotenv.config({ path: '.env' });
 dotenv.config({ path: '.env.local' });
 
 // ✅ Return timestamps as raw ISO strings instead of JS Date objects.
