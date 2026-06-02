@@ -87,11 +87,19 @@ export const appointmentsService = {
         date?: string;
         staffId?: string;
         status?: string;
-    }): Promise<Appointment[]> {
-        const { salonId, clientId, date, staffId, status } = params;
+        startDate?: string;
+        endDate?: string;
+        page?: number;
+        limit?: number;
+    }): Promise<{ data: Appointment[]; totalRecords: number; totalPages: number; currentPage: number } | Appointment[]> {
+        const { salonId, clientId, date, staffId, status, startDate, endDate, page, limit } = params;
         if (clientId) return appointmentsRepository.listByClientId(clientId);
         if (!salonId) throw new AppError(400, "salon_id or client_id is required", "VALIDATION_ERROR");
-        return appointmentsRepository.listBySalonId(salonId, { date, staff_id: staffId, status });
+        return appointmentsRepository.listBySalonId(salonId, {
+            date, staff_id: staffId, status,
+            start_date: startDate, end_date: endDate,
+            page, limit,
+        });
     },
 
     async update(params: {
