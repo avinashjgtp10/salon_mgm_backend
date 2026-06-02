@@ -36,14 +36,20 @@ export const appointmentsController = {
         try {
             const salonId = req.user?.salonId;
             if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
-            const appointments = await appointmentsService.list({
+            const page = Math.max(1, parseInt(String(req.query.page || "1"), 10) || 1);
+            const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit || "50"), 10) || 50));
+            const result = await appointmentsService.list({
                 salonId,
                 clientId: String(req.query.client_id || "").trim() || undefined,
                 date: String(req.query.date || "").trim() || undefined,
                 staffId: String(req.query.staff_id || "").trim() || undefined,
                 status: String(req.query.status || "").trim() || undefined,
+                startDate: String(req.query.start_date || "").trim() || undefined,
+                endDate: String(req.query.end_date || "").trim() || undefined,
+                page,
+                limit,
             });
-            return sendSuccess(res, 200, appointments, "Appointments fetched successfully");
+            return sendSuccess(res, 200, result, "Appointments fetched successfully");
         } catch (err) { return next(err); }
     },
 

@@ -10,7 +10,7 @@ export const appointmentsRepository = {
     // ✅ FIX — LEFT JOIN payments so payment_status reflects actual payment records
     async findById(id: string): Promise<Appointment | null> {
         const { rows } = await pool.query(
-            `SELECT a.*,
+            `SELECT a.*, c.full_name AS client_name,
                 COALESCE(
                   (SELECT CASE
                       WHEN bool_or(p.status = 'completed') THEN 'paid'::text
@@ -23,17 +23,30 @@ export const appointmentsRepository = {
                 ) AS payment_status,
                 COALESCE((SELECT SUM(net_amount) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS paid_amount
              FROM appointments a
+             LEFT JOIN clients c ON a.client_id = c.id
              WHERE a.id = $1`,
             [id]
         );
         return rows[0] || null;
     },
 
-    // ✅ FIX — LEFT JOIN payments so payment_status is accurate on list
+    // ✅ FIX — LEFT JOIN payments so payment_status is accurate on list, supports server-side pagination
     async listBySalonId(
         salonId: string,
-        filters: { date?: string; staff_id?: string; status?: string }
-    ): Promise<Appointment[]> {
+        filters: {
+            date?: string;
+            staff_id?: string;
+            status?: string;
+            start_date?: string;
+            end_date?: string;
+            page?: number;
+            limit?: number;
+        }
+    ): Promise<{ data: Appointment[]; totalRecords: number; totalPages: number; currentPage: number }> {
+        const page = Math.max(1, filters.page || 1);
+        const limit = Math.min(200, Math.max(1, filters.limit || 50));
+        const offset = (page - 1) * limit;
+
         const conditions: string[] = [`a.salon_id = $1`];
         const values: any[] = [salonId];
         let idx = 2;
@@ -41,6 +54,14 @@ export const appointmentsRepository = {
         if (filters.date) {
             conditions.push(`DATE(a.scheduled_at) = $${idx}::date`);
             values.push(filters.date); idx++;
+        }
+        if (filters.start_date) {
+            conditions.push(`a.scheduled_at >= $${idx}::timestamptz`);
+            values.push(filters.start_date + "T00:00:00Z"); idx++;
+        }
+        if (filters.end_date) {
+            conditions.push(`a.scheduled_at < ($${idx}::date + INTERVAL '1 day')`);
+            values.push(filters.end_date); idx++;
         }
         if (filters.staff_id) {
             conditions.push(`a.staff_id = $${idx}`);
@@ -51,8 +72,17 @@ export const appointmentsRepository = {
             values.push(filters.status); idx++;
         }
 
+        const whereClause = conditions.join(" AND ");
+
+        const countResult = await pool.query(
+            `SELECT COUNT(*) FROM appointments a WHERE ${whereClause}`,
+            values
+        );
+        const totalRecords = parseInt(countResult.rows[0].count, 10);
+        const totalPages = Math.max(1, Math.ceil(totalRecords / limit));
+
         const { rows } = await pool.query(
-            `SELECT a.*,
+            `SELECT a.*, c.full_name AS client_name,
                 COALESCE(
                   (SELECT CASE
                       WHEN bool_or(p.status = 'completed') THEN 'paid'::text
@@ -65,11 +95,14 @@ export const appointmentsRepository = {
                 ) AS payment_status,
                 COALESCE((SELECT SUM(net_amount) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS paid_amount
              FROM appointments a
-             WHERE ${conditions.join(" AND ")}
-             ORDER BY a.scheduled_at ASC`,
-            values
+             LEFT JOIN clients c ON a.client_id = c.id
+             WHERE ${whereClause}
+             ORDER BY a.scheduled_at DESC
+             LIMIT $${idx} OFFSET $${idx + 1}`,
+            [...values, limit, offset]
         );
-        return rows;
+
+        return { data: rows, totalRecords, totalPages, currentPage: page };
     },
 
     async listByClientId(clientId: string): Promise<Appointment[]> {

@@ -66,13 +66,13 @@ export const salesController = {
             const userId = req.user?.userId;
             const id = req.params.id as string;
             if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
-            const sale = await salesService.update({
+            const result = await salesService.update({
                 id,
                 requesterUserId: userId,
                 requesterRole: req.user?.role,
                 patch: req.body as UpdateSaleBody,
             });
-            return sendSuccess(res, 200, sale, "Sale updated successfully");
+            return sendSuccess(res, 200, result, "Sale updated successfully");
         } catch (err) { return next(err); }
     },
 

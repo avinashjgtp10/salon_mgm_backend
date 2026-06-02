@@ -28,10 +28,13 @@ export type SaleItem = {
     sale_id: string;
     item_type: SaleItemType;
     item_id: string | null;
+    staff_id: string | null;
     name: string;
     quantity: number;
     unit_price: string;
+    discount_amount: string;
     total_price: string;
+    created_at: string;
 };
 
 export type CreateSaleBody = {
@@ -49,13 +52,15 @@ export type CreateSaleBody = {
     items: Array<{
         item_type: SaleItemType;
         item_id?: string;
+        staff_id?: string;
         name: string;
         quantity: number;
         unit_price: string;
+        discount_amount?: string;
     }>;
 };
 
-export type UpdateSaleBody = Partial<Omit<CreateSaleBody, "salon_id" | "items">>;
+export type UpdateSaleBody = Partial<Omit<CreateSaleBody, "salon_id">>;
 
 export type CheckoutSaleBody = {
     payment_method: PaymentMethod;
