@@ -3,7 +3,7 @@ import { AppError } from "../../middleware/error.middleware";
 
 export const validateCreatePackage = (req: Request, _res: Response, next: NextFunction) => {
   try {
-    const { name, basePrice, durationMinutes, category } = req.body;
+    const { name, basePrice, durationMinutes, category, status, discountType } = req.body;
 
     if (!name || typeof name !== "string" || name.trim().length < 3)
       throw new AppError(400, "name is required and must be at least 3 characters", "VALIDATION_ERROR");
@@ -17,15 +17,26 @@ export const validateCreatePackage = (req: Request, _res: Response, next: NextFu
     if (!category || typeof category !== "string")
       throw new AppError(400, "category is required", "VALIDATION_ERROR");
 
-    if (req.body.discountType && !["percentage", "fixed"].includes(req.body.discountType))
+    if (discountType && !["percentage", "fixed"].includes(discountType))
       throw new AppError(400, "discountType must be 'percentage' or 'fixed'", "VALIDATION_ERROR");
+
+    if (status && !["Active", "Draft", "Inactive"].includes(status))
+      throw new AppError(400, "status must be Active, Draft, or Inactive", "VALIDATION_ERROR");
 
     return next();
   } catch (e) { return next(e); }
 };
 
-export const validateUpdatePackage = (_req: Request, _res: Response, next: NextFunction) => {
+export const validateUpdatePackage = (req: Request, _res: Response, next: NextFunction) => {
   try {
+    const { discountType, status } = req.body;
+
+    if (discountType && !["percentage", "fixed"].includes(discountType))
+      throw new AppError(400, "discountType must be 'percentage' or 'fixed'", "VALIDATION_ERROR");
+
+    if (status && !["Active", "Draft", "Inactive"].includes(status))
+      throw new AppError(400, "status must be Active, Draft, or Inactive", "VALIDATION_ERROR");
+
     return next();
   } catch (e) { return next(e); }
 };
