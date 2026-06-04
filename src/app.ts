@@ -44,7 +44,6 @@ import blockedTimesRoutes from "./modules/blocked_times/blocked_times.routes";
 import analyticsRoutes from './modules/marketing/whatsapp/analytics/analytics.routes'
 import botRoutes from "./modules/bot/bot.routes";
 import swaggerUi from "swagger-ui-express";
-import YAML from "yamljs";
 import path from "path";
 
 
@@ -127,7 +126,7 @@ app.use("/api/v1/reports",        reportsRoutes);
 
 
 // Swagger Documentation
-const swaggerDocument = YAML.load(path.join(__dirname, "../docs/api/swagger.yaml"));
+const swaggerDocument = require(path.join(__dirname, "../docs/api/swagger-gen.json"));
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
 // 404 handler (after all routes)
