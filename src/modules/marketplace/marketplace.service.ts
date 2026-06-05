@@ -1,213 +1,182 @@
-import logger from "../../config/logger";
-import { AppError } from "../../middleware/error.middleware";
+import { AppError } from '../../middleware/error.middleware';
+import { marketplaceRepository } from './marketplace.repository';
 import {
-  marketplaceProfileRepo, marketplaceLocationRepo,
-  marketplaceWorkingHoursRepo, marketplaceImagesRepo, marketplaceFeaturesRepo,
-} from "./marketplace.repository";
-import {
-  Amenity, Highlight, Value,
-  MarketplaceProfile, MarketplaceProfileFull, WorkingHoursDay,
-  UpsertEssentialsBody, UpsertAboutBody, UpsertLocationBody,
-  UpsertWorkingHoursBody, AddImageBody, ReorderImagesBody, UpsertFeaturesBody,
-} from "./marketplace.types";
-
-const MAX_IMAGES = 10;
-
-// ─── Helper: ensure profile exists ───────────────────────────────────────────
-
-async function _ensureProfile(salonId: string): Promise<MarketplaceProfile> {
-  const profile = await marketplaceProfileRepo.findBySalonId(salonId);
-  if (!profile) throw new AppError(404, "Marketplace profile not found. Save venue essentials first.", "NOT_FOUND");
-  return profile;
-}
-
-// ─── Helper: group flat working hour rows into day objects ────────────────────
-
-function _groupHours(rows: any[]): WorkingHoursDay[] {
-  const map = new Map<number, WorkingHoursDay>();
-  for (const r of rows) {
-    if (!map.has(r.day_of_week)) {
-      map.set(r.day_of_week, { day_of_week: r.day_of_week, is_open: r.is_open, slots: [] });
-    }
-    const day = map.get(r.day_of_week)!;
-    if (r.is_open && r.open_time && r.close_time) {
-      day.slots.push({ open_time: r.open_time, close_time: r.close_time });
-    }
-  }
-  return Array.from(map.values()).sort((a, b) => a.day_of_week - b.day_of_week);
-}
-
-// ─── Full Profile ─────────────────────────────────────────────────────────────
+  MarketplaceListing, MarketplaceBooking, MarketplaceReview,
+  CreateListingBody, UpdateListingBody, CreateBookingBody, CreateReviewBody,
+} from './marketplace.types';
 
 export const marketplaceService = {
 
-  async getProfile(salonId: string): Promise<MarketplaceProfileFull> {
-    const profile = await _ensureProfile(salonId);
-    const [location, hourRows, images, featureRows] = await Promise.all([
-      marketplaceLocationRepo.findByProfileId(profile.id),
-      marketplaceWorkingHoursRepo.findByProfileId(profile.id),
-      marketplaceImagesRepo.findByProfileId(profile.id),
-      marketplaceFeaturesRepo.findByProfileId(profile.id),
-    ]);
+  // ── Partner: manage own listing ───────────────────────────────────────────
 
-    return {
-      ...profile,
-      location,
-      working_hours: _groupHours(hourRows),
-      images,
-      amenities:  featureRows.filter((f) => f.feature_type === "amenity")  .map((f) => f.feature_key as Amenity),
-      highlights: featureRows.filter((f) => f.feature_type === "highlight").map((f) => f.feature_key as Highlight),
-      values:     featureRows.filter((f) => f.feature_type === "value")    .map((f) => f.feature_key as Value),
-    };
+
+  async getListingByUserId(userId: string): Promise<MarketplaceListing | null> {
+    return marketplaceRepository.findListingByUserId(userId);
   },
 
-  // ── Essentials ──────────────────────────────────────────────────────────────
-
-  async upsertEssentials(salonId: string, data: UpsertEssentialsBody) {
-    logger.info("marketplace.upsertEssentials", { salonId });
-    return marketplaceProfileRepo.upsertEssentials(salonId, data);
+  async ensureSalon(userId: string, businessName: string): Promise<string> {
+    return marketplaceRepository.ensureSalonExists(userId, businessName);
   },
 
-  // ── About ───────────────────────────────────────────────────────────────────
-
-  async upsertAbout(salonId: string, data: UpsertAboutBody) {
-    logger.info("marketplace.upsertAbout", { salonId });
-    await _ensureProfile(salonId);
-    return marketplaceProfileRepo.upsertAbout(salonId, data);
+  async getMyListing(salonId: string): Promise<MarketplaceListing | null> {
+    return marketplaceRepository.findListingBySalonId(salonId);
   },
 
-  // ── Location ────────────────────────────────────────────────────────────────
-
-  async getLocation(salonId: string) {
-    const profile = await _ensureProfile(salonId);
-    return marketplaceLocationRepo.findByProfileId(profile.id);
+  async createOrGetListing(salonId: string, body: CreateListingBody): Promise<MarketplaceListing> {
+    const existing = await marketplaceRepository.findListingBySalonId(salonId);
+    if (existing) throw new AppError(409, 'Listing already exists for this salon', 'CONFLICT');
+    return marketplaceRepository.createListing(salonId, body);
   },
 
-  async upsertLocation(salonId: string, data: UpsertLocationBody) {
-    logger.info("marketplace.upsertLocation", { salonId });
-    const profile = await _ensureProfile(salonId);
-    return marketplaceLocationRepo.upsert(profile.id, data);
+  async updateMyListing(salonId: string, patch: UpdateListingBody): Promise<MarketplaceListing> {
+    let listing = await marketplaceRepository.findListingBySalonId(salonId);
+    if (!listing) listing = await marketplaceRepository.findListingByUserId(salonId);
+    if (!listing) throw new AppError(404, 'Listing not found', 'NOT_FOUND');
+    // Strip out null/undefined/empty-string values so we never overwrite existing data with blanks
+    const cleanPatch = Object.fromEntries(
+      Object.entries(patch).filter(([_, v]) => v !== null && v !== undefined && v !== '')
+    ) as UpdateListingBody;
+    if (Object.keys(cleanPatch).length === 0) return listing;
+    return marketplaceRepository.updateListing(listing.id, cleanPatch);
   },
 
-  // ── Working Hours ───────────────────────────────────────────────────────────
-
-  async getWorkingHours(salonId: string) {
-    const profile = await _ensureProfile(salonId);
-    const rows = await marketplaceWorkingHoursRepo.findByProfileId(profile.id);
-    return _groupHours(rows);
+  async publish(salonId: string): Promise<MarketplaceListing> {
+    let listing = await marketplaceRepository.findListingBySalonId(salonId);
+    if (!listing) listing = await marketplaceRepository.findListingByUserId(salonId);
+    if (!listing) throw new AppError(404, 'Listing not found', 'NOT_FOUND');
+    if (listing.status !== 'approved')
+      throw new AppError(400, 'Listing must be approved before publishing', 'BAD_REQUEST');
+    return marketplaceRepository.setPublished(listing.id, true);
   },
 
-  async upsertWorkingHours(salonId: string, data: UpsertWorkingHoursBody) {
-    logger.info("marketplace.upsertWorkingHours", { salonId });
-    const profile = await _ensureProfile(salonId);
-    const rows = await marketplaceWorkingHoursRepo.upsertBulk(profile.id, data);
-    return _groupHours(rows);
+  async unpublish(salonId: string): Promise<MarketplaceListing> {
+    const listing = await marketplaceRepository.findListingBySalonId(salonId);
+    if (!listing) throw new AppError(404, 'Listing not found', 'NOT_FOUND');
+    return marketplaceRepository.setPublished(listing.id, false);
   },
 
-  // ── Images ──────────────────────────────────────────────────────────────────
-
-  async getImages(salonId: string) {
-    const profile = await marketplaceProfileRepo.findBySalonId(salonId);
-    if (!profile) return [];
-    return marketplaceImagesRepo.findByProfileId(profile.id);
+  async addImage(salonId: string, imageUrl: string): Promise<MarketplaceListing> {
+    const listing = await marketplaceRepository.findListingBySalonId(salonId);
+    if (!listing) throw new AppError(404, 'Listing not found', 'NOT_FOUND');
+    return marketplaceRepository.addImage(listing.id, imageUrl);
   },
 
-  async addImage(salonId: string, data: AddImageBody) {
-    logger.info("marketplace.addImage", { salonId });
-    // Auto-create a minimal profile if none exists so gallery works standalone
-    let profile = await marketplaceProfileRepo.findBySalonId(salonId);
-    if (!profile) {
-      profile = await marketplaceProfileRepo.upsertEssentials(salonId, { display_name: "My Salon" });
-    }
-
-    const count = await marketplaceImagesRepo.count(profile.id);
-    if (count >= MAX_IMAGES)
-      throw new AppError(400, `Maximum of ${MAX_IMAGES} images allowed`, "LIMIT_EXCEEDED");
-
-    return marketplaceImagesRepo.add(profile.id, data);
+  async setCoverImage(salonId: string, imageUrl: string): Promise<MarketplaceListing> {
+    const listing = await marketplaceRepository.findListingBySalonId(salonId);
+    if (!listing) throw new AppError(404, 'Listing not found', 'NOT_FOUND');
+    return marketplaceRepository.setCoverImage(listing.id, imageUrl);
   },
 
-  async setCoverImage(salonId: string, imageId: string) {
-    logger.info("marketplace.setCoverImage", { salonId, imageId });
-    const profile = await _ensureProfile(salonId);
-    const updated = await marketplaceImagesRepo.setCover(imageId, profile.id);
-    if (!updated) throw new AppError(404, "Image not found", "NOT_FOUND");
-    return updated;
+  async removeImage(salonId: string, imageUrl: string): Promise<MarketplaceListing> {
+    const listing = await marketplaceRepository.findListingBySalonId(salonId);
+    if (!listing) throw new AppError(404, 'Listing not found', 'NOT_FOUND');
+    return marketplaceRepository.removeImage(listing.id, imageUrl);
   },
 
-  async reorderImages(salonId: string, data: ReorderImagesBody) {
-    logger.info("marketplace.reorderImages", { salonId });
-    const profile = await _ensureProfile(salonId);
-    await marketplaceImagesRepo.reorder(profile.id, data);
-    return marketplaceImagesRepo.findByProfileId(profile.id);
+  // ── Admin ─────────────────────────────────────────────────────────────────
+
+  async adminListAll(filters: { status?: string; city?: string }): Promise<MarketplaceListing[]> {
+    return marketplaceRepository.listAll(filters);
   },
 
-  async deleteImage(salonId: string, imageId: string) {
-    logger.info("marketplace.deleteImage", { salonId, imageId });
-    const profile = await marketplaceProfileRepo.findBySalonId(salonId);
-    if (!profile) throw new AppError(404, "Image not found", "NOT_FOUND");
-    const deleted = await marketplaceImagesRepo.delete(imageId, profile.id);
-    if (!deleted) throw new AppError(404, "Image not found", "NOT_FOUND");
+  async adminApprove(listingId: string): Promise<MarketplaceListing> {
+    const listing = await marketplaceRepository.findListingById(listingId);
+    if (!listing) throw new AppError(404, 'Listing not found', 'NOT_FOUND');
+    return marketplaceRepository.updateStatus(listingId, 'approved');
   },
 
-  // ── Features ────────────────────────────────────────────────────────────────
-
-  async getFeatures(salonId: string) {
-    const profile = await _ensureProfile(salonId);
-    const rows = await marketplaceFeaturesRepo.findByProfileId(profile.id);
-    return {
-      amenities:  rows.filter((f) => f.feature_type === "amenity")  .map((f) => f.feature_key as Amenity),
-      highlights: rows.filter((f) => f.feature_type === "highlight").map((f) => f.feature_key as Highlight),
-      values:     rows.filter((f) => f.feature_type === "value")    .map((f) => f.feature_key as Value),
-    };
+  async adminReject(listingId: string): Promise<MarketplaceListing> {
+    const listing = await marketplaceRepository.findListingById(listingId);
+    if (!listing) throw new AppError(404, 'Listing not found', 'NOT_FOUND');
+    return marketplaceRepository.updateStatus(listingId, 'rejected');
   },
 
-  async upsertFeatures(salonId: string, data: UpsertFeaturesBody) {
-    logger.info("marketplace.upsertFeatures", { salonId });
-    const profile = await _ensureProfile(salonId);
-    await marketplaceFeaturesRepo.upsert(profile.id, data);
-    return this.getFeatures(salonId);
+  async adminListBookings(filters: { status?: string }): Promise<MarketplaceBooking[]> {
+    return marketplaceRepository.listAllBookings(filters);
   },
 
-  // ── Logo & Cover ────────────────────────────────────────────────────────────
-
-  async uploadLogo(salonId: string, logoUrl: string) {
-    logger.info("marketplace.uploadLogo", { salonId });
-    let profile = await marketplaceProfileRepo.findBySalonId(salonId);
-    if (!profile) {
-      profile = await marketplaceProfileRepo.upsertEssentials(salonId, { display_name: "My Salon" });
-    }
-    const updated = await marketplaceProfileRepo.updateLogo(salonId, logoUrl);
-    if (!updated) throw new AppError(500, "Failed to save logo", "INTERNAL_ERROR");
-    return updated;
+  async adminUpdateBookingStatus(bookingId: string, status: string): Promise<MarketplaceBooking> {
+    return marketplaceRepository.updateBookingStatus(bookingId, status);
   },
 
-  async uploadCover(salonId: string, coverUrl: string) {
-    logger.info("marketplace.uploadCover", { salonId });
-    let profile = await marketplaceProfileRepo.findBySalonId(salonId);
-    if (!profile) {
-      profile = await marketplaceProfileRepo.upsertEssentials(salonId, { display_name: "My Salon" });
-    }
-    const updated = await marketplaceProfileRepo.updateCover(salonId, coverUrl);
-    if (!updated) throw new AppError(500, "Failed to save cover photo", "INTERNAL_ERROR");
-    return updated;
+  // ── Public: consumer browse ───────────────────────────────────────────────
+
+  async browse(filters: {
+    city?: string; category?: string; search?: string; limit?: number; offset?: number;
+  }): Promise<MarketplaceListing[]> {
+    return marketplaceRepository.listPublished(filters);
   },
 
-  // ── Publish ─────────────────────────────────────────────────────────────────
-
-  async publish(salonId: string) {
-    logger.info("marketplace.publish", { salonId });
-    await _ensureProfile(salonId);
-    const updated = await marketplaceProfileRepo.setPublished(salonId, true);
-    if (!updated) throw new AppError(500, "Failed to publish", "INTERNAL_ERROR");
-    return updated;
+  async getListingById(id: string): Promise<MarketplaceListing> {
+    const listing = await marketplaceRepository.findListingById(id);
+    if (!listing || !listing.is_published)
+      throw new AppError(404, 'Listing not found', 'NOT_FOUND');
+    return listing;
   },
 
-  async unpublish(salonId: string) {
-    logger.info("marketplace.unpublish", { salonId });
-    await _ensureProfile(salonId);
-    const updated = await marketplaceProfileRepo.setPublished(salonId, false);
-    if (!updated) throw new AppError(500, "Failed to unpublish", "INTERNAL_ERROR");
-    return updated;
+  async createBooking(body: CreateBookingBody): Promise<MarketplaceBooking> {
+    const listing = await marketplaceRepository.findListingById(body.listing_id);
+    if (!listing || !listing.is_published)
+      throw new AppError(404, 'Listing not found', 'NOT_FOUND');
+    return marketplaceRepository.createBooking(listing.salon_id, body);
   },
+
+  async getBookingsForListing(listingId: string): Promise<MarketplaceBooking[]> {
+    return marketplaceRepository.listBookingsByListing(listingId);
+  },
+
+  async createReview(body: CreateReviewBody): Promise<MarketplaceReview> {
+    const listing = await marketplaceRepository.findListingById(body.listing_id);
+    if (!listing) throw new AppError(404, 'Listing not found', 'NOT_FOUND');
+    return marketplaceRepository.createReview(body);
+  },
+
+  async getReviewsForListing(listingId: string): Promise<MarketplaceReview[]> {
+    return marketplaceRepository.listReviewsByListing(listingId);
+  },
+
+  async checkEmail(email: string): Promise<{ exists: boolean; role: string | null }> {
+    return marketplaceRepository.checkEmailExists(email);
+  },
+
+  async getServicesForListing(listingId: string): Promise<any[]> {
+    return marketplaceRepository.getServicesByListingId(listingId);
+  },
+
+  async getStaffForListing(listingId: string): Promise<any[]> {
+    return marketplaceRepository.getStaffByListingId(listingId);
+  },
+
+  async getAvailability(listingId: string, date: string): Promise<string[]> {
+    return marketplaceRepository.getBookedSlotsForDate(listingId, date);
+  },
+
+  async getMyBookings(customerPhone: string): Promise<MarketplaceBooking[]> {
+    return marketplaceRepository.getBookingsByPhone(customerPhone);
+  },
+
+  async getWishlist(userId: string): Promise<string[]> {
+    return marketplaceRepository.getWishlist(userId);
+  },
+
+  async addToWishlist(userId: string, listingId: string): Promise<void> {
+    return marketplaceRepository.addToWishlist(userId, listingId);
+  },
+
+  async removeFromWishlist(userId: string, listingId: string): Promise<void> {
+    return marketplaceRepository.removeFromWishlist(userId, listingId);
+  },
+
+  async getNotifications(userId: string): Promise<any[]> {
+    return marketplaceRepository.getNotifications(userId);
+  },
+
+  async markNotificationRead(id: string, userId: string): Promise<void> {
+    return marketplaceRepository.markNotificationRead(id, userId);
+  },
+
+  async markAllNotificationsRead(userId: string): Promise<void> {
+    return marketplaceRepository.markAllNotificationsRead(userId);
+  },
+
 };

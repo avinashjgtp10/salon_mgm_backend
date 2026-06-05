@@ -1,170 +1,309 @@
-﻿import { Request, Response, NextFunction } from "express";
-import { AppError } from "../../middleware/error.middleware";
-import { sendSuccess } from "../utils/response.util";
-import { marketplaceService } from "./marketplace.service";
-import {
-    UpsertEssentialsBody, UpsertAboutBody, UpsertLocationBody,
-    UpsertWorkingHoursBody, AddImageBody, ReorderImagesBody, UpsertFeaturesBody,
-} from "./marketplace.types";
+﻿import { Request, Response, NextFunction } from 'express';
+import { AppError } from '../../middleware/error.middleware';
+import { sendSuccess } from '../utils/response.util';
+import { marketplaceService } from './marketplace.service';
 
-type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string } };
-
-const getSalonId = (req: AuthRequest): string => {
-    const salonId = req.user?.salonId;
-    if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
-    return salonId;
-};
+type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string | null } };
 
 export const marketplaceController = {
 
-    // ── Full Profile ─────────────────────────────────────────────────────────────
-    async getProfile(req: AuthRequest, res: Response, next: NextFunction) {
-        try {
-            const data = await marketplaceService.getProfile(await getSalonId(req));
-            return sendSuccess(res, 200, data, "Marketplace profile fetched successfully");
-        } catch (err) { return next(err); }
-    },
+  // ── Partner routes ────────────────────────────────────────────────────────
 
-    // ── Essentials ───────────────────────────────────────────────────────────────
-    async upsertEssentials(req: AuthRequest, res: Response, next: NextFunction) {
-        try {
-            const data = await marketplaceService.upsertEssentials(await getSalonId(req), req.body as UpsertEssentialsBody);
-            return sendSuccess(res, 200, data, "Venue essentials saved");
-        } catch (err) { return next(err); }
-    },
+  async getMyListing(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { salonId, userId } = req.user ?? {};
+      if (!userId) throw new AppError(401, 'Unauthorized', 'UNAUTHORIZED');
+      const listing = salonId
+        ? await marketplaceService.getMyListing(salonId)
+        : await marketplaceService.getListingByUserId(userId);
+      return sendSuccess(res, 200, listing, 'Listing fetched');
+    } catch (err) { return next(err); }
+  },
 
-    // ── About ────────────────────────────────────────────────────────────────────
-    async upsertAbout(req: AuthRequest, res: Response, next: NextFunction) {
-        try {
-            const data = await marketplaceService.upsertAbout(await getSalonId(req), req.body as UpsertAboutBody);
-            return sendSuccess(res, 200, data, "About section saved");
-        } catch (err) { return next(err); }
-    },
+  async createListing(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { salonId, userId } = req.user ?? {};
+      if (!userId) throw new AppError(401, 'Unauthorized', 'UNAUTHORIZED');
+      const resolvedId = salonId ?? await marketplaceService.ensureSalon(userId, req.body.display_name);
+      const listing = await marketplaceService.createOrGetListing(resolvedId, req.body);
+      return sendSuccess(res, 201, listing, 'Listing created');
+    } catch (err) { return next(err); }
+  },
 
-    // ── Location ─────────────────────────────────────────────────────────────────
-    async getLocation(req: AuthRequest, res: Response, next: NextFunction) {
-        try {
-            const data = await marketplaceService.getLocation(await getSalonId(req));
-            return sendSuccess(res, 200, data, "Location fetched");
-        } catch (err) { return next(err); }
-    },
+  async updateListing(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { salonId, userId } = req.user ?? {};
+      if (!userId) throw new AppError(401, 'Unauthorized', 'UNAUTHORIZED');
+      // Use salonId if available, otherwise userId — service will try both
+      const resolvedId = salonId ?? userId;
+      const listing = await marketplaceService.updateMyListing(resolvedId, req.body);
+      return sendSuccess(res, 200, listing, 'Listing updated');
+    } catch (err) { return next(err); }
+  },
 
-    async upsertLocation(req: AuthRequest, res: Response, next: NextFunction) {
-        try {
-            const data = await marketplaceService.upsertLocation(await getSalonId(req), req.body as UpsertLocationBody);
-            return sendSuccess(res, 200, data, "Location saved");
-        } catch (err) { return next(err); }
-    },
+  async publish(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { salonId, userId } = req.user ?? {};
+      if (!userId) throw new AppError(401, 'Unauthorized', 'UNAUTHORIZED');
+      const resolvedId = salonId ?? userId;
+      const listing = await marketplaceService.publish(resolvedId);
+      return sendSuccess(res, 200, listing, 'Listing published');
+    } catch (err) { return next(err); }
+  },
 
-    // ── Working Hours ────────────────────────────────────────────────────────────
-    async getWorkingHours(req: AuthRequest, res: Response, next: NextFunction) {
-        try {
-            const data = await marketplaceService.getWorkingHours(await getSalonId(req));
-            return sendSuccess(res, 200, data, "Opening hours fetched");
-        } catch (err) { return next(err); }
-    },
+  async unpublish(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId;
+      if (!salonId) throw new AppError(403, 'Salon context required', 'NO_SALON_CONTEXT');
+      const listing = await marketplaceService.unpublish(salonId);
+      return sendSuccess(res, 200, listing, 'Listing unpublished');
+    } catch (err) { return next(err); }
+  },
 
-    async upsertWorkingHours(req: AuthRequest, res: Response, next: NextFunction) {
-        try {
-            const data = await marketplaceService.upsertWorkingHours(await getSalonId(req), req.body as UpsertWorkingHoursBody);
-            return sendSuccess(res, 200, data, "Opening hours saved");
-        } catch (err) { return next(err); }
-    },
+  async addImage(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId;
+      if (!salonId) throw new AppError(403, 'Salon context required', 'NO_SALON_CONTEXT');
+      const { image_url } = req.body;
+      if (!image_url) throw new AppError(400, 'image_url is required', 'VALIDATION_ERROR');
+      const listing = await marketplaceService.addImage(salonId, image_url);
+      return sendSuccess(res, 200, listing, 'Image added');
+    } catch (err) { return next(err); }
+  },
 
-    // ── Images ───────────────────────────────────────────────────────────────────
-    async getImages(req: AuthRequest, res: Response, next: NextFunction) {
-        try {
-            const data = await marketplaceService.getImages(await getSalonId(req));
-            return sendSuccess(res, 200, data, "Images fetched");
-        } catch (err) { return next(err); }
-    },
+  async setCoverImage(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId;
+      if (!salonId) throw new AppError(403, 'Salon context required', 'NO_SALON_CONTEXT');
+      const { image_url } = req.body;
+      if (!image_url) throw new AppError(400, 'image_url is required', 'VALIDATION_ERROR');
+      const listing = await marketplaceService.setCoverImage(salonId, image_url);
+      return sendSuccess(res, 200, listing, 'Cover image set');
+    } catch (err) { return next(err); }
+  },
 
-    async addImage(req: AuthRequest, res: Response, next: NextFunction) {
-        try {
-            let imageUrl: string = (req.body as AddImageBody)?.image_url;
-            const file = (req as any).file as Express.Multer.File | undefined;
-            if (file) {
-                // Use APP_BASE_URL in production; fall back to relative path for dev proxy
-                const base = process.env.APP_BASE_URL || "";
-                imageUrl = `${base}/uploads/${file.filename}`;
-            }
-            if (!imageUrl) throw new AppError(400, "No image provided", "VALIDATION_ERROR");
-            const data = await marketplaceService.addImage(await getSalonId(req), { image_url: imageUrl });
-            return sendSuccess(res, 201, data, "Image added");
-        } catch (err) { return next(err); }
-    },
+  async removeImage(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId;
+      if (!salonId) throw new AppError(403, 'Salon context required', 'NO_SALON_CONTEXT');
+      const { image_url } = req.body;
+      if (!image_url) throw new AppError(400, 'image_url is required', 'VALIDATION_ERROR');
+      const listing = await marketplaceService.removeImage(salonId, image_url);
+      return sendSuccess(res, 200, listing, 'Image removed');
+    } catch (err) { return next(err); }
+  },
 
-    async setCoverImage(req: AuthRequest, res: Response, next: NextFunction) {
-        try {
-            const data = await marketplaceService.setCoverImage(await getSalonId(req), String(req.params.imageId));
-            return sendSuccess(res, 200, data, "Cover image updated");
-        } catch (err) { return next(err); }
-    },
+  async getMyBookings(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId;
+      if (!salonId) throw new AppError(403, 'Salon context required', 'NO_SALON_CONTEXT');
+      const listing = await marketplaceService.getMyListing(salonId);
+      if (!listing) return sendSuccess(res, 200, [], 'No listing found');
+      const bookings = await marketplaceService.getBookingsForListing(listing.id);
+      return sendSuccess(res, 200, bookings, 'Bookings fetched');
+    } catch (err) { return next(err); }
+  },
 
-    async reorderImages(req: AuthRequest, res: Response, next: NextFunction) {
-        try {
-            const data = await marketplaceService.reorderImages(await getSalonId(req), req.body as ReorderImagesBody);
-            return sendSuccess(res, 200, data, "Images reordered");
-        } catch (err) { return next(err); }
-    },
+  // ── Admin routes ──────────────────────────────────────────────────────────
 
-    async deleteImage(req: AuthRequest, res: Response, next: NextFunction) {
-        try {
-            await marketplaceService.deleteImage(await getSalonId(req), String(req.params.imageId));
-            return sendSuccess(res, 200, null, "Image deleted");
-        } catch (err) { return next(err); }
-    },
+  async adminListAll(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const status = String(req.query.status || '').trim() || undefined;
+      const city   = String(req.query.city   || '').trim() || undefined;
+      const listings = await marketplaceService.adminListAll({ status, city });
+      return sendSuccess(res, 200, listings, 'All listings fetched');
+    } catch (err) { return next(err); }
+  },
 
-    // ── Features ─────────────────────────────────────────────────────────────────
-    async getFeatures(req: AuthRequest, res: Response, next: NextFunction) {
-        try {
-            const data = await marketplaceService.getFeatures(await getSalonId(req));
-            return sendSuccess(res, 200, data, "Amenities and highlights fetched");
-        } catch (err) { return next(err); }
-    },
+  async adminApprove(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const id = String(req.params.id || '').trim();
+      if (!id) throw new AppError(400, 'id is required', 'VALIDATION_ERROR');
+      const listing = await marketplaceService.adminApprove(id);
+      return sendSuccess(res, 200, listing, 'Listing approved');
+    } catch (err) { return next(err); }
+  },
 
-    async upsertFeatures(req: AuthRequest, res: Response, next: NextFunction) {
-        try {
-            const data = await marketplaceService.upsertFeatures(await getSalonId(req), req.body as UpsertFeaturesBody);
-            return sendSuccess(res, 200, data, "Amenities and highlights saved");
-        } catch (err) { return next(err); }
-    },
+  async adminReject(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const id = String(req.params.id || '').trim();
+      if (!id) throw new AppError(400, 'id is required', 'VALIDATION_ERROR');
+      const listing = await marketplaceService.adminReject(id);
+      return sendSuccess(res, 200, listing, 'Listing rejected');
+    } catch (err) { return next(err); }
+  },
 
-    // ── Logo & Cover ─────────────────────────────────────────────────────────────
-    async uploadLogo(req: AuthRequest, res: Response, next: NextFunction) {
-        try {
-            const file = (req as any).file as Express.Multer.File | undefined;
-            if (!file) throw new AppError(400, "No image file provided", "VALIDATION_ERROR");
-            const base = process.env.APP_BASE_URL || "";
-            const logoUrl = `${base}/uploads/${file.filename}`;
-            const data = await marketplaceService.uploadLogo(await getSalonId(req), logoUrl);
-            return sendSuccess(res, 200, data, "Logo uploaded");
-        } catch (err) { return next(err); }
-    },
+  async adminListBookings(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const status = String(req.query.status || '').trim() || undefined;
+      const bookings = await marketplaceService.adminListBookings({ status });
+      return sendSuccess(res, 200, bookings, 'All bookings fetched');
+    } catch (err) { return next(err); }
+  },
 
-    async uploadCover(req: AuthRequest, res: Response, next: NextFunction) {
-        try {
-            const file = (req as any).file as Express.Multer.File | undefined;
-            if (!file) throw new AppError(400, "No image file provided", "VALIDATION_ERROR");
-            const base = process.env.APP_BASE_URL || "";
-            const coverUrl = `${base}/uploads/${file.filename}`;
-            const data = await marketplaceService.uploadCover(await getSalonId(req), coverUrl);
-            return sendSuccess(res, 200, data, "Cover photo uploaded");
-        } catch (err) { return next(err); }
-    },
+  async adminUpdateBookingStatus(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const id = String(req.params.id || '').trim();
+      const { status } = req.body;
+      if (!id || !status) throw new AppError(400, 'id and status required', 'VALIDATION_ERROR');
+      const booking = await marketplaceService.adminUpdateBookingStatus(id, status);
+      return sendSuccess(res, 200, booking, 'Booking status updated');
+    } catch (err) { return next(err); }
+  },
 
-    // ── Publish ──────────────────────────────────────────────────────────────────
-    async publish(req: AuthRequest, res: Response, next: NextFunction) {
-        try {
-            const data = await marketplaceService.publish(await getSalonId(req));
-            return sendSuccess(res, 200, data, "Profile published successfully");
-        } catch (err) { return next(err); }
-    },
+  // ── Public routes ─────────────────────────────────────────────────────────
 
-    async unpublish(req: AuthRequest, res: Response, next: NextFunction) {
-        try {
-            const data = await marketplaceService.unpublish(await getSalonId(req));
-            return sendSuccess(res, 200, data, "Profile unpublished");
-        } catch (err) { return next(err); }
-    },
+  async browse(req: Request, res: Response, next: NextFunction) {
+    try {
+      const city     = String(req.query.city     || '').trim() || undefined;
+      const category = String(req.query.category || '').trim() || undefined;
+      const search   = String(req.query.search   || '').trim() || undefined;
+      const limit    = Number(req.query.limit)  || 20;
+      const offset   = Number(req.query.offset) || 0;
+      const listings = await marketplaceService.browse({ city, category, search, limit, offset });
+      return sendSuccess(res, 200, listings, 'Listings fetched');
+    } catch (err) { return next(err); }
+  },
+
+  async getById(req: Request, res: Response, next: NextFunction) {
+    try {
+      const id = String(req.params.id || '').trim();
+      if (!id) throw new AppError(400, 'id is required', 'VALIDATION_ERROR');
+      const listing = await marketplaceService.getListingById(id);
+      return sendSuccess(res, 200, listing, 'Listing fetched');
+    } catch (err) { return next(err); }
+  },
+
+  async createBooking(req: Request, res: Response, next: NextFunction) {
+    try {
+      const booking = await marketplaceService.createBooking(req.body);
+      return sendSuccess(res, 201, booking, 'Booking created');
+    } catch (err) { return next(err); }
+  },
+
+  async getReviews(req: Request, res: Response, next: NextFunction) {
+    try {
+      const id = String(req.params.id || '').trim();
+      if (!id) throw new AppError(400, 'id is required', 'VALIDATION_ERROR');
+      const reviews = await marketplaceService.getReviewsForListing(id);
+      return sendSuccess(res, 200, reviews, 'Reviews fetched');
+    } catch (err) { return next(err); }
+  },
+
+  async createReview(req: Request, res: Response, next: NextFunction) {
+    try {
+      const review = await marketplaceService.createReview(req.body);
+      return sendSuccess(res, 201, review, 'Review submitted');
+    } catch (err) { return next(err); }
+  },
+
+  // ── Check email ───────────────────────────────────────────────────────────
+  async checkEmail(req: Request, res: Response, next: NextFunction) {
+    try {
+      const email = String(req.query.email || '').trim().toLowerCase();
+      if (!email) throw new AppError(400, 'email query param required', 'VALIDATION_ERROR');
+      const result = await marketplaceService.checkEmail(email);
+      return sendSuccess(res, 200, result, 'Email checked');
+    } catch (err) { return next(err); }
+  },
+
+  // ── Browse: services, staff, availability, my-bookings ───────────────────
+  async getServices(req: Request, res: Response, next: NextFunction) {
+    try {
+      const id = String(req.params.id).trim();
+      const services = await marketplaceService.getServicesForListing(id);
+      return sendSuccess(res, 200, services, 'Services fetched');
+    } catch (err) { return next(err); }
+  },
+
+  async getStaff(req: Request, res: Response, next: NextFunction) {
+    try {
+      const id = String(req.params.id).trim();
+      const staff = await marketplaceService.getStaffForListing(id);
+      return sendSuccess(res, 200, staff, 'Staff fetched');
+    } catch (err) { return next(err); }
+  },
+
+  async getAvailability(req: Request, res: Response, next: NextFunction) {
+    try {
+      const id   = String(req.params.id).trim();
+      const date = String(req.query.date || '').trim();
+      const slots = await marketplaceService.getAvailability(id, date);
+      return sendSuccess(res, 200, slots, 'Availability fetched');
+    } catch (err) { return next(err); }
+  },
+
+
+  // ── Partner: bookings ─────────────────────────────────────────────────────
+  async getPartnerBookings(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { salonId, userId } = req.user ?? {};
+      if (!userId) throw new AppError(401, 'Unauthorized', 'UNAUTHORIZED');
+      const resolvedId = salonId ?? await marketplaceService.ensureSalon(userId, '');
+      const listing = await marketplaceService.getMyListing(resolvedId);
+      if (!listing) return sendSuccess(res, 200, [], 'No listing found');
+      const bookings = await marketplaceService.getBookingsForListing(listing.id);
+      return sendSuccess(res, 200, bookings, 'Bookings fetched');
+    } catch (err) { return next(err); }
+  },
+
+  // ── Wishlist ──────────────────────────────────────────────────────────────
+  async getWishlist(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user?.userId;
+      if (!userId) throw new AppError(401, 'Unauthorized', 'UNAUTHORIZED');
+      const list = await marketplaceService.getWishlist(userId);
+      return sendSuccess(res, 200, list, 'Wishlist fetched');
+    } catch (err) { return next(err); }
+  },
+
+  async addToWishlist(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const userId    = req.user?.userId;
+      const listingId = String(req.params.id);
+      if (!userId) throw new AppError(401, 'Unauthorized', 'UNAUTHORIZED');
+      await marketplaceService.addToWishlist(userId, listingId);
+      return sendSuccess(res, 200, { listing_id: listingId }, 'Added to wishlist');
+    } catch (err) { return next(err); }
+  },
+
+  async removeFromWishlist(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const userId    = req.user?.userId;
+      const listingId = String(req.params.id);
+      if (!userId) throw new AppError(401, 'Unauthorized', 'UNAUTHORIZED');
+      await marketplaceService.removeFromWishlist(userId, listingId);
+      return sendSuccess(res, 200, { listing_id: listingId }, 'Removed from wishlist');
+    } catch (err) { return next(err); }
+  },
+
+  // ── Notifications ─────────────────────────────────────────────────────────
+  async getNotifications(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user?.userId;
+      if (!userId) throw new AppError(401, 'Unauthorized', 'UNAUTHORIZED');
+      const notifs = await marketplaceService.getNotifications(userId);
+      return sendSuccess(res, 200, notifs, 'Notifications fetched');
+    } catch (err) { return next(err); }
+  },
+
+  async markNotificationRead(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user?.userId;
+      const id     = String(req.params.id);
+      if (!userId) throw new AppError(401, 'Unauthorized', 'UNAUTHORIZED');
+      await marketplaceService.markNotificationRead(id, userId);
+      return sendSuccess(res, 200, null, 'Marked as read');
+    } catch (err) { return next(err); }
+  },
+
+  async markAllNotificationsRead(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user?.userId;
+      if (!userId) throw new AppError(401, 'Unauthorized', 'UNAUTHORIZED');
+      await marketplaceService.markAllNotificationsRead(userId);
+      return sendSuccess(res, 200, null, 'All marked as read');
+    } catch (err) { return next(err); }
+  },
+
 };

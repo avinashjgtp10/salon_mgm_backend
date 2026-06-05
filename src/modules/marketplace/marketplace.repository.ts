@@ -1,349 +1,417 @@
-import pool from "../../config/database";
+import pool from '../../config/database';
 import {
-  MarketplaceProfile, MarketplaceLocation, MarketplaceWorkingHour,
-  MarketplaceImage, MarketplaceFeature,
-  UpsertEssentialsBody, UpsertAboutBody, UpsertLocationBody,
-  UpsertWorkingHoursBody, AddImageBody, ReorderImagesBody,
-  UpsertFeaturesBody,
-} from "./marketplace.types";
+  MarketplaceListing,
+  MarketplaceBooking,
+  MarketplaceReview,
+  CreateListingBody,
+  UpdateListingBody,
+  CreateBookingBody,
+  CreateReviewBody,
+} from './marketplace.types';
 
-// ─── Profile ──────────────────────────────────────────────────────────────────
+export const marketplaceRepository = {
 
-export const marketplaceProfileRepo = {
-  async findBySalonId(salonId: string): Promise<MarketplaceProfile | null> {
+  // ── Listings ──────────────────────────────────────────────────────────────
+
+  async findListingBySalonId(salonId: string): Promise<MarketplaceListing | null> {
     const { rows } = await pool.query(
-      `SELECT * FROM marketplace_profiles WHERE salon_id = $1`, [salonId]
+      `SELECT * FROM marketplace_listings WHERE salon_id = $1`,
+      [salonId]
     );
     return rows[0] || null;
   },
 
-  async upsertEssentials(salonId: string, data: UpsertEssentialsBody): Promise<MarketplaceProfile> {
-    const { rows } = await pool.query(
-      `INSERT INTO marketplace_profiles
-         (salon_id, display_name, business_phone, business_phone_country_code, business_email)
-       VALUES ($1,$2,$3,$4,$5)
-       ON CONFLICT (salon_id) DO UPDATE SET
-         display_name                = EXCLUDED.display_name,
-         business_phone              = EXCLUDED.business_phone,
-         business_phone_country_code = EXCLUDED.business_phone_country_code,
-         business_email              = EXCLUDED.business_email,
-         updated_at                  = NOW()
-       RETURNING *`,
-      [
-        salonId, data.display_name,
-        data.business_phone              ?? null,
-        data.business_phone_country_code ?? null,
-        data.business_email              ?? null,
-      ]
+
+  async findListingByUserId(userId: string): Promise<MarketplaceListing | null> {
+    const via = await pool.query(
+      `SELECT ml.* FROM marketplace_listings ml
+       JOIN salons s ON s.id = ml.salon_id
+       WHERE s.owner_id = $1 LIMIT 1`,
+      [userId]
     );
-    return rows[0];
+    if (via.rows.length) return via.rows[0];
+    const direct = await pool.query(
+      `SELECT * FROM marketplace_listings WHERE salon_id = $1 LIMIT 1`,
+      [userId]
+    );
+    return direct.rows[0] || null;
   },
 
-  async upsertAbout(salonId: string, data: UpsertAboutBody): Promise<MarketplaceProfile> {
-    const { rows } = await pool.query(
-      `INSERT INTO marketplace_profiles (salon_id, display_name, venue_description)
+  async ensureSalonExists(userId: string, businessName: string): Promise<string> {
+    const existing = await pool.query(
+      `SELECT id FROM salons WHERE owner_id = $1 LIMIT 1`, [userId]
+    );
+    if (existing.rows.length) return existing.rows[0].id;
+    const created = await pool.query(
+      `INSERT INTO salons (owner_id, business_name, slug)
        VALUES ($1, $2, $3)
-       ON CONFLICT (salon_id) DO UPDATE SET
-         venue_description = EXCLUDED.venue_description,
-         updated_at        = NOW()
-       RETURNING *`,
-      [salonId, data.venue_description, data.venue_description]
+       ON CONFLICT DO NOTHING RETURNING id`,
+      [userId, businessName || 'My Salon', 'salon-' + userId.slice(0, 8)]
     );
-    return rows[0];
+    return created.rows[0]?.id ?? userId;
   },
 
-  async updateLogo(salonId: string, logoUrl: string): Promise<MarketplaceProfile | null> {
+  async findListingById(id: string): Promise<MarketplaceListing | null> {
     const { rows } = await pool.query(
-      `UPDATE marketplace_profiles SET logo_url = $1, updated_at = NOW()
-       WHERE salon_id = $2 RETURNING *`,
-      [logoUrl, salonId]
+      `SELECT * FROM marketplace_listings WHERE id = $1`,
+      [id]
     );
     return rows[0] || null;
   },
 
-  async updateCover(salonId: string, coverUrl: string): Promise<MarketplaceProfile | null> {
+  async listPublished(filters: {
+    city?: string;
+    category?: string;
+    search?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<MarketplaceListing[]> {
+    const conditions: string[] = [`is_published = true`, `status = 'approved'`];
+    const values: any[] = [];
+    let idx = 1;
+
+    if (filters.city) {
+      conditions.push(`LOWER(city) = LOWER($${idx})`);
+      values.push(filters.city); idx++;
+    }
+    if (filters.category) {
+      conditions.push(`LOWER(category) = LOWER($${idx})`);
+      values.push(filters.category); idx++;
+    }
+    if (filters.search) {
+      conditions.push(`(LOWER(display_name) LIKE LOWER($${idx}) OR LOWER(description) LIKE LOWER($${idx}))`);
+      values.push(`%${filters.search}%`); idx++;
+    }
+
+    const limit = filters.limit ?? 20;
+    const offset = filters.offset ?? 0;
+
     const { rows } = await pool.query(
-      `UPDATE marketplace_profiles SET cover_url = $1, updated_at = NOW()
-       WHERE salon_id = $2 RETURNING *`,
-      [coverUrl, salonId]
+      `SELECT * FROM marketplace_listings
+       WHERE ${conditions.join(' AND ')}
+       ORDER BY avg_rating DESC, created_at DESC
+       LIMIT $${idx} OFFSET $${idx + 1}`,
+      [...values, limit, offset]
     );
-    return rows[0] || null;
+    return rows;
   },
 
-  async setPublished(salonId: string, published: boolean): Promise<MarketplaceProfile | null> {
+  async listAll(filters: { status?: string; city?: string }): Promise<MarketplaceListing[]> {
+    const conditions: string[] = [];
+    const values: any[] = [];
+    let idx = 1;
+
+    if (filters.status) {
+      conditions.push(`status = $${idx}`);
+      values.push(filters.status); idx++;
+    }
+    if (filters.city) {
+      conditions.push(`LOWER(city) = LOWER($${idx})`);
+      values.push(filters.city); idx++;
+    }
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const { rows } = await pool.query(
-      `UPDATE marketplace_profiles SET is_published = $1, updated_at = NOW()
-       WHERE salon_id = $2 RETURNING *`,
-      [published, salonId]
+      `SELECT * FROM marketplace_listings ${where} ORDER BY created_at DESC`,
+      values
     );
-    return rows[0] || null;
-  },
-};
-
-// ─── Location ─────────────────────────────────────────────────────────────────
-
-export const marketplaceLocationRepo = {
-  async findByProfileId(profileId: string): Promise<MarketplaceLocation | null> {
-    const { rows } = await pool.query(
-      `SELECT * FROM marketplace_locations WHERE profile_id = $1`, [profileId]
-    );
-    return rows[0] || null;
+    return rows;
   },
 
-  async upsert(profileId: string, data: UpsertLocationBody): Promise<MarketplaceLocation> {
+  async createListing(salonId: string, data: CreateListingBody): Promise<MarketplaceListing> {
     const { rows } = await pool.query(
-      `INSERT INTO marketplace_locations
-         (profile_id, address_line, city, state, country, postal_code, latitude, longitude)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-       ON CONFLICT (profile_id) DO UPDATE SET
-         address_line = EXCLUDED.address_line,
-         city         = EXCLUDED.city,
-         state        = EXCLUDED.state,
-         country      = EXCLUDED.country,
-         postal_code  = EXCLUDED.postal_code,
-         latitude     = EXCLUDED.latitude,
-         longitude    = EXCLUDED.longitude,
-         updated_at   = NOW()
-       RETURNING *`,
+      `INSERT INTO marketplace_listings (
+        salon_id, display_name, description, phone, email,
+        city, address, latitude, longitude, category,
+        tags, amenities, highlights, working_hours,
+        status, is_published
+      ) VALUES (
+        $1, $2, $3, $4, $5,
+        $6, $7, $8, $9, $10,
+        $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb,
+        'approved', false
+      ) RETURNING *`,
       [
-        profileId,
-        data.address_line,
-        data.city         ?? null,
-        data.state        ?? null,
-        data.country      ?? null,
-        data.postal_code  ?? null,
-        data.latitude     ?? null,
-        data.longitude    ?? null,
+        salonId,
+        data.display_name,
+        data.description ?? null,
+        data.phone ?? null,
+        data.email ?? null,
+        data.city ?? null,
+        data.address ?? null,
+        data.latitude ?? null,
+        data.longitude ?? null,
+        data.category ?? null,
+        JSON.stringify(data.tags ?? []),
+        JSON.stringify(data.amenities ?? []),
+        JSON.stringify(data.highlights ?? []),
+        data.working_hours ? JSON.stringify(data.working_hours) : null,
       ]
     );
     return rows[0];
   },
-};
 
-// ─── Working Hours ────────────────────────────────────────────────────────────
+  async updateListing(id: string, patch: UpdateListingBody): Promise<MarketplaceListing> {
+    const JSONB_FIELDS = new Set(['tags', 'amenities', 'highlights', 'working_hours']);
+    const keys = Object.keys(patch) as (keyof UpdateListingBody)[];
 
-export const marketplaceWorkingHoursRepo = {
-  async findByProfileId(profileId: string): Promise<MarketplaceWorkingHour[]> {
-    const { rows } = await pool.query(
-      `SELECT * FROM marketplace_working_hours
-       WHERE profile_id = $1 ORDER BY day_of_week, slot_index`,
-      [profileId]
-    );
-    return rows;
-  },
-
-  async upsertBulk(profileId: string, body: UpsertWorkingHoursBody): Promise<MarketplaceWorkingHour[]> {
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      const dayNums = body.days.map((d) => d.day_of_week);
-
-      await client.query(
-        `DELETE FROM marketplace_working_hours
-         WHERE profile_id = $1 AND day_of_week = ANY($2::int[])`,
-        [profileId, dayNums]
-      );
-
-      const results: MarketplaceWorkingHour[] = [];
-
-      for (const day of body.days) {
-        if (!day.is_open) {
-          const { rows } = await client.query(
-            `INSERT INTO marketplace_working_hours
-               (profile_id, day_of_week, is_open, open_time, close_time, slot_index)
-             VALUES ($1,$2,false,NULL,NULL,0) RETURNING *`,
-            [profileId, day.day_of_week]
-          );
-          results.push(rows[0]);
-        } else {
-          for (let i = 0; i < day.slots.length; i++) {
-            const { rows } = await client.query(
-              `INSERT INTO marketplace_working_hours
-                 (profile_id, day_of_week, is_open, open_time, close_time, slot_index)
-               VALUES ($1,$2,true,$3,$4,$5) RETURNING *`,
-              [profileId, day.day_of_week, day.slots[i].open_time, day.slots[i].close_time, i]
-            );
-            results.push(rows[0]);
-          }
-        }
-      }
-
-      await client.query("COMMIT");
-      return results;
-    } catch (err) {
-      await client.query("ROLLBACK");
-      throw err;
-    } finally {
-      client.release();
-    }
-  },
-};
-
-// ─── Images ───────────────────────────────────────────────────────────────────
-
-export const marketplaceImagesRepo = {
-  async findByProfileId(profileId: string): Promise<MarketplaceImage[]> {
-    const { rows } = await pool.query(
-      `SELECT * FROM marketplace_images
-       WHERE profile_id = $1 ORDER BY sort_order, created_at`,
-      [profileId]
-    );
-    return rows;
-  },
-
-  async findById(id: string, profileId: string): Promise<MarketplaceImage | null> {
-    const { rows } = await pool.query(
-      `SELECT * FROM marketplace_images WHERE id = $1 AND profile_id = $2`, [id, profileId]
-    );
-    return rows[0] || null;
-  },
-
-  async count(profileId: string): Promise<number> {
-    const { rows } = await pool.query(
-      `SELECT COUNT(*)::int AS total FROM marketplace_images WHERE profile_id = $1`, [profileId]
-    );
-    return rows[0].total;
-  },
-
-  async add(profileId: string, data: AddImageBody): Promise<MarketplaceImage> {
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-
-      // If marking as cover, unset existing cover
-      if (data.is_cover) {
-        await client.query(
-          `UPDATE marketplace_images SET is_cover = false WHERE profile_id = $1`, [profileId]
-        );
-      }
-
-      // Get next sort_order
-      const { rows: countRows } = await client.query(
-        `SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order
-         FROM marketplace_images WHERE profile_id = $1`,
-        [profileId]
-      );
-      const sortOrder = countRows[0].next_order;
-
-      const { rows } = await client.query(
-        `INSERT INTO marketplace_images (profile_id, image_url, is_cover, sort_order)
-         VALUES ($1,$2,$3,$4) RETURNING *`,
-        [profileId, data.image_url, data.is_cover ?? false, sortOrder]
-      );
-
-      await client.query("COMMIT");
+    if (keys.length === 0) {
+      const { rows } = await pool.query(`SELECT * FROM marketplace_listings WHERE id = $1`, [id]);
       return rows[0];
-    } catch (err) {
-      await client.query("ROLLBACK");
-      throw err;
-    } finally {
-      client.release();
     }
-  },
 
-  async setCover(id: string, profileId: string): Promise<MarketplaceImage | null> {
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      await client.query(
-        `UPDATE marketplace_images SET is_cover = false WHERE profile_id = $1`, [profileId]
-      );
-      const { rows } = await client.query(
-        `UPDATE marketplace_images SET is_cover = true, updated_at = NOW()
-         WHERE id = $1 AND profile_id = $2 RETURNING *`,
-        [id, profileId]
-      );
-      await client.query("COMMIT");
-      return rows[0] || null;
-    } catch (err) {
-      await client.query("ROLLBACK");
-      throw err;
-    } finally {
-      client.release();
-    }
-  },
+    const setParts: string[] = [];
+    const values: any[] = [];
 
-  async reorder(profileId: string, data: ReorderImagesBody): Promise<void> {
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      for (let i = 0; i < data.image_ids.length; i++) {
-        await client.query(
-          `UPDATE marketplace_images SET sort_order = $1, updated_at = NOW()
-           WHERE id = $2 AND profile_id = $3`,
-          [i, data.image_ids[i], profileId]
-        );
+    keys.forEach(k => {
+      const idx = values.length + 1;
+      if (JSONB_FIELDS.has(k as string)) {
+        setParts.push(`${String(k)} = $${idx}::jsonb`);
+        values.push(JSON.stringify((patch as any)[k]));
+      } else {
+        setParts.push(`${String(k)} = $${idx}`);
+        values.push((patch as any)[k]);
       }
-      await client.query("COMMIT");
-    } catch (err) {
-      await client.query("ROLLBACK");
-      throw err;
-    } finally {
-      client.release();
-    }
-  },
+    });
 
-  async delete(id: string, profileId: string): Promise<boolean> {
-    const { rowCount } = await pool.query(
-      `DELETE FROM marketplace_images WHERE id = $1 AND profile_id = $2`, [id, profileId]
-    );
-    return (rowCount ?? 0) > 0;
-  },
-};
+    setParts.push(`updated_at = NOW()`);
+    values.push(id);
 
-// ─── Features ─────────────────────────────────────────────────────────────────
-
-export const marketplaceFeaturesRepo = {
-  async findByProfileId(profileId: string): Promise<MarketplaceFeature[]> {
     const { rows } = await pool.query(
-      `SELECT * FROM marketplace_features
-       WHERE profile_id = $1 ORDER BY feature_type, feature_key`,
-      [profileId]
+      `UPDATE marketplace_listings SET ${setParts.join(', ')} WHERE id = $${values.length} RETURNING *`,
+      values
+    );
+    return rows[0];
+  },
+
+  async updateStatus(id: string, status: string): Promise<MarketplaceListing> {
+    const { rows } = await pool.query(
+      `UPDATE marketplace_listings SET status = $2, updated_at = NOW() WHERE id = $1 RETURNING *`,
+      [id, status]
+    );
+    return rows[0];
+  },
+
+  async setPublished(id: string, published: boolean): Promise<MarketplaceListing> {
+    const { rows } = await pool.query(
+      `UPDATE marketplace_listings SET is_published = $2, updated_at = NOW() WHERE id = $1 RETURNING *`,
+      [id, published]
+    );
+    return rows[0];
+  },
+
+  async addImage(id: string, imageUrl: string): Promise<MarketplaceListing> {
+    const { rows } = await pool.query(
+      `UPDATE marketplace_listings
+       SET images = images || $2::jsonb, updated_at = NOW()
+       WHERE id = $1 RETURNING *`,
+      [id, JSON.stringify([imageUrl])]
+    );
+    return rows[0];
+  },
+
+  async setCoverImage(id: string, imageUrl: string): Promise<MarketplaceListing> {
+    const { rows } = await pool.query(
+      `UPDATE marketplace_listings SET cover_image = $2, updated_at = NOW() WHERE id = $1 RETURNING *`,
+      [id, imageUrl]
+    );
+    return rows[0];
+  },
+
+  async removeImage(id: string, imageUrl: string): Promise<MarketplaceListing> {
+    const { rows } = await pool.query(
+      `UPDATE marketplace_listings
+       SET images = (
+         SELECT jsonb_agg(img) FROM jsonb_array_elements_text(images) AS img
+         WHERE img != $2
+       ),
+       updated_at = NOW()
+       WHERE id = $1 RETURNING *`,
+      [id, imageUrl]
+    );
+    return rows[0];
+  },
+
+  // ── Bookings ──────────────────────────────────────────────────────────────
+
+  async createBooking(salonId: string, data: CreateBookingBody): Promise<MarketplaceBooking> {
+    const { rows } = await pool.query(
+      `INSERT INTO marketplace_bookings (
+        listing_id, salon_id, customer_name, customer_phone, customer_email,
+        service_name, staff_name, booking_date, booking_time,
+        duration_minutes, status, notes
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', $11)
+      RETURNING *`,
+      [
+        data.listing_id,
+        salonId,
+        data.customer_name,
+        data.customer_phone,
+        data.customer_email ?? null,
+        data.service_name,
+        data.staff_name ?? null,
+        data.booking_date,
+        data.booking_time,
+        data.duration_minutes ?? 60,
+        data.notes ?? null,
+      ]
+    );
+    return rows[0];
+  },
+
+  async listBookingsByListing(listingId: string): Promise<MarketplaceBooking[]> {
+    const { rows } = await pool.query(
+      `SELECT * FROM marketplace_bookings WHERE listing_id = $1 ORDER BY booking_date DESC, booking_time DESC`,
+      [listingId]
     );
     return rows;
   },
 
-  async upsert(profileId: string, data: UpsertFeaturesBody): Promise<MarketplaceFeature[]> {
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
+  async listAllBookings(filters: { status?: string }): Promise<MarketplaceBooking[]> {
+    const conditions: string[] = [];
+    const values: any[] = [];
 
-      const typesToReplace: string[] = [];
-      if (data.amenities  !== undefined) typesToReplace.push("amenity");
-      if (data.highlights !== undefined) typesToReplace.push("highlight");
-      if (data.values     !== undefined) typesToReplace.push("value");
-
-      if (typesToReplace.length > 0) {
-        await client.query(
-          `DELETE FROM marketplace_features
-           WHERE profile_id = $1 AND feature_type = ANY($2::text[])`,
-          [profileId, typesToReplace]
-        );
-      }
-
-      const toInsert = [
-        ...(data.amenities  ?? []).map((k) => ({ type: "amenity",   key: k })),
-        ...(data.highlights ?? []).map((k) => ({ type: "highlight", key: k })),
-        ...(data.values     ?? []).map((k) => ({ type: "value",     key: k })),
-      ];
-
-      const results: MarketplaceFeature[] = [];
-      for (const item of toInsert) {
-        const { rows } = await client.query(
-          `INSERT INTO marketplace_features (profile_id, feature_type, feature_key)
-           VALUES ($1,$2,$3) RETURNING *`,
-          [profileId, item.type, item.key]
-        );
-        results.push(rows[0]);
-      }
-
-      await client.query("COMMIT");
-      return results;
-    } catch (err) {
-      await client.query("ROLLBACK");
-      throw err;
-    } finally {
-      client.release();
+    if (filters.status) {
+      conditions.push(`status = $1`);
+      values.push(filters.status);
     }
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const { rows } = await pool.query(
+      `SELECT * FROM marketplace_bookings ${where} ORDER BY created_at DESC`,
+      values
+    );
+    return rows;
   },
+
+  async updateBookingStatus(id: string, status: string): Promise<MarketplaceBooking> {
+    const { rows } = await pool.query(
+      `UPDATE marketplace_bookings SET status = $2, updated_at = NOW() WHERE id = $1 RETURNING *`,
+      [id, status]
+    );
+    return rows[0];
+  },
+
+  // ── Reviews ───────────────────────────────────────────────────────────────
+
+  async createReview(data: CreateReviewBody): Promise<MarketplaceReview> {
+    const { rows } = await pool.query(
+      `INSERT INTO marketplace_reviews (listing_id, customer_phone, customer_name, rating, comment)
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [data.listing_id, data.customer_phone, data.customer_name ?? null, data.rating, data.comment ?? null]
+    );
+    // update avg_rating on listing
+    await pool.query(
+      `UPDATE marketplace_listings SET
+        avg_rating = (SELECT ROUND(AVG(rating)::numeric, 1) FROM marketplace_reviews WHERE listing_id = $1),
+        total_reviews = (SELECT COUNT(*) FROM marketplace_reviews WHERE listing_id = $1),
+        updated_at = NOW()
+       WHERE id = $1`,
+      [data.listing_id]
+    );
+    return rows[0];
+  },
+
+  async listReviewsByListing(listingId: string): Promise<MarketplaceReview[]> {
+    const { rows } = await pool.query(
+      `SELECT * FROM marketplace_reviews WHERE listing_id = $1 ORDER BY created_at DESC`,
+      [listingId]
+    );
+    return rows;
+  },
+
+  async checkEmailExists(email: string): Promise<{ exists: boolean; role: string | null }> {
+    const { rows } = await pool.query(
+      `SELECT role FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1`, [email]
+    );
+    return rows.length > 0 ? { exists: true, role: rows[0].role } : { exists: false, role: null };
+  },
+
+  async getServicesByListingId(listingId: string): Promise<any[]> {
+    const listing = await pool.query(
+      `SELECT salon_id FROM marketplace_listings WHERE id = $1`, [listingId]
+    );
+    if (!listing.rows[0]) return [];
+    const { rows } = await pool.query(
+      `SELECT * FROM services WHERE salon_id = $1 AND is_active = true`, [listing.rows[0].salon_id]
+    );
+    return rows;
+  },
+
+  async getStaffByListingId(listingId: string): Promise<any[]> {
+    const listing = await pool.query(
+      `SELECT salon_id FROM marketplace_listings WHERE id = $1`, [listingId]
+    );
+    if (!listing.rows[0]) return [];
+    const { rows } = await pool.query(
+      `SELECT * FROM staff WHERE salon_id = $1 AND is_active = true`, [listing.rows[0].salon_id]
+    );
+    return rows;
+  },
+
+  async getBookedSlotsForDate(listingId: string, date: string): Promise<string[]> {
+    const { rows } = await pool.query(
+      `SELECT booking_time FROM marketplace_bookings
+       WHERE listing_id = $1 AND booking_date = $2 AND status != 'cancelled'`,
+      [listingId, date]
+    );
+    return rows.map((r: any) => r.booking_time);
+  },
+
+  async getBookingsByPhone(customerPhone: string): Promise<any[]> {
+    const { rows } = await pool.query(
+      `SELECT mb.*, ml.display_name AS salon_name
+       FROM marketplace_bookings mb
+       JOIN marketplace_listings ml ON ml.id = mb.listing_id
+       WHERE mb.customer_phone = $1
+       ORDER BY mb.booking_date DESC`,
+      [customerPhone]
+    );
+    return rows;
+  },
+
+  async getWishlist(userId: string): Promise<string[]> {
+    const { rows } = await pool.query(
+      `SELECT listing_id FROM marketplace_wishlist WHERE user_id = $1`, [userId]
+    );
+    return rows.map((r: any) => r.listing_id);
+  },
+
+  async addToWishlist(userId: string, listingId: string): Promise<void> {
+    await pool.query(
+      `INSERT INTO marketplace_wishlist (user_id, listing_id)
+       VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+      [userId, listingId]
+    );
+  },
+
+  async removeFromWishlist(userId: string, listingId: string): Promise<void> {
+    await pool.query(
+      `DELETE FROM marketplace_wishlist WHERE user_id = $1 AND listing_id = $2`,
+      [userId, listingId]
+    );
+  },
+
+  async getNotifications(userId: string): Promise<any[]> {
+    const { rows } = await pool.query(
+      `SELECT * FROM marketplace_notifications WHERE user_id = $1 ORDER BY created_at DESC`,
+      [userId]
+    );
+    return rows;
+  },
+
+  async markNotificationRead(id: string, userId: string): Promise<void> {
+    await pool.query(
+      `UPDATE marketplace_notifications SET is_read = true WHERE id = $1 AND user_id = $2`,
+      [id, userId]
+    );
+  },
+
+  async markAllNotificationsRead(userId: string): Promise<void> {
+    await pool.query(
+      `UPDATE marketplace_notifications SET is_read = true WHERE user_id = $1`,
+      [userId]
+    );
+  },
+
 };

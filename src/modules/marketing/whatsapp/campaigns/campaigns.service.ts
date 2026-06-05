@@ -1,4 +1,5 @@
 import pool from '../../../../config/database'
+import { v4 as uuid } from 'uuid'
 import { AppError } from '../../../../middleware/error.middleware'
 import { campaignsRepository } from './campaigns.repository'
 import { campaignQueue } from '../queue/campaign.queue'
@@ -55,21 +56,53 @@ export const campaignsService = {
     const client = await pool.connect()
     try {
       await client.query('BEGIN')
-      const campaignId = await campaignsRepository.create(
-        salonId, body.template_id, body.name, batchSize,
-        body.contacts.length, scheduledAt
-      )
-      await campaignsRepository.bulkInsertContacts(campaignId, body.contacts)
+
+      // ── Create campaign row using client (same transaction) ────────────────
+      const campaignId = uuid()
+      const status     = isScheduled ? 'SCHEDULED' : 'SENDING'
+      await client.query(`
+        INSERT INTO wa_campaigns
+          (id, salon_id, template_id, name, status, batch_size, total_contacts, scheduled_at, started_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,${isScheduled ? 'NULL' : 'NOW()'})
+      `, [campaignId, salonId, body.template_id, body.name, status, batchSize, body.contacts.length, scheduledAt ?? null])
+
+      // ── Bulk insert contacts using client (same transaction) ───────────────
+      const CHUNK = 500
+      for (let i = 0; i < body.contacts.length; i += CHUNK) {
+        const ch     = body.contacts.slice(i, i + CHUNK)
+        const vals   = ch.map((_c, j) => {
+          const b = j * 5
+          return `($${b+1},$${b+2},$${b+3},$${b+4},$${b+5}::jsonb)`
+        }).join(',')
+        const params = ch.flatMap(c => [
+          uuid(), campaignId, c.phone,
+          c.name      ?? null,
+          JSON.stringify(c.variables ?? {}),
+        ])
+        await client.query(
+          `INSERT INTO wa_campaign_contacts (id, campaign_id, phone, name, variables) VALUES ${vals}`,
+          params
+        )
+      }
+
       await client.query('COMMIT')
 
+      // ── Queue immediately or log scheduled ────────────────────────────────
       if (!isScheduled) {
-        // Send immediately
         await queueCampaignBatches(campaignId, salonId, batchSize)
       } else {
         logger.info(`📅 Campaign "${body.name}" scheduled for ${scheduledAt}`)
       }
 
-      return campaignsRepository.findById(campaignId, salonId)
+      // ── Return full campaign row ───────────────────────────────────────────
+      const { rows: [campaign] } = await pool.query(`
+        SELECT c.*, COALESCE(t.name, 'Deleted template') AS template_name
+        FROM wa_campaigns c
+        LEFT JOIN wa_templates t ON t.id = c.template_id
+        WHERE c.id = $1
+      `, [campaignId])
+      return campaign
+
     } catch (err) {
       await client.query('ROLLBACK')
       throw err
@@ -120,10 +153,10 @@ export const campaignsService = {
   },
 
   async getContacts(id: string, salonId: string, status?: string, page?: number, limit?: number) {
-  const campaign = await campaignsRepository.findById(id, salonId)
-  if (!campaign) throw new AppError(404, 'Campaign not found', 'NOT_FOUND')
-  return campaignsRepository.getContacts(id, status, page ?? 1, limit ?? 50)
-},
+    const campaign = await campaignsRepository.findById(id, salonId)
+    if (!campaign) throw new AppError(404, 'Campaign not found', 'NOT_FOUND')
+    return campaignsRepository.getContacts(id, status, page ?? 1, limit ?? 50)
+  },
 
   async getReport(id: string, salonId: string, type: string) {
     await this.getById(id, salonId)
