@@ -9,7 +9,8 @@ export const salonDashboardController = {
   async getSummary(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = await getSalonId(req);
-      const data = await salonDashboardService.getSummary(salonId);
+      const date = typeof req.query.date === "string" ? req.query.date : undefined;
+      const data = await salonDashboardService.getSummary(salonId, date);
       return sendSuccess(res, 200, data, "Dashboard summary fetched successfully");
     } catch (err) {
       return next(err);

@@ -11,9 +11,9 @@ import type {
 } from "./salon-dashboard.types";
 
 export const salonDashboardService = {
-  async getSummary(salonId: string): Promise<DashboardSummary> {
+  async getSummary(salonId: string, date?: string): Promise<DashboardSummary> {
     if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR");
-    return salonDashboardRepository.getSummary(salonId);
+    return salonDashboardRepository.getSummary(salonId, date);
   },
 
   async getTodayAppointments(salonId: string, date?: string): Promise<TodayAppointment[]> {

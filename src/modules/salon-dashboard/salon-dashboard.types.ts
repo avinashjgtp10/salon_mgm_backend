@@ -8,6 +8,14 @@ export interface DashboardSummary {
   clientsChange: number | null;
   todayRevenueChange: number | null;
   todayAppointmentsCount: number;
+  todayClientCount?: number;
+  yesterdayRevenue?: number;
+  yesterdayAppointmentsCount?: number;
+  yesterdayClientCount?: number;
+  pendingClients?: number;
+  pendingAmount?: number;
+  todayProductRevenue?: number;
+  todayProductRevenueChange?: number | null;
 }
 
 export interface TodayAppointment {
