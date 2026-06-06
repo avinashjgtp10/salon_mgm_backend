@@ -542,4 +542,134 @@ export const clientsRepository = {
 
         return rows as Client[];
     },
+    // ── NEW: Smart Filter for campaigns ──────────────────────────────────────
+    async filterForCampaign(salonId: string, filters: {
+        birth_month?:         number;
+        birth_day_month?:     string;
+        genders?:              string[];
+        client_source?:       string;
+        service_category_id?: string;
+        joined_from?:         string;
+        joined_to?:           string;
+    }): Promise<{ id: string; full_name: string; phone: string }[]> {
+
+        const where: string[] = ['c.salon_id = $1', 'c.is_active = true', 'c.phone_number IS NOT NULL']
+        const params: any[]   = [salonId]
+
+        let joinSql = ''
+        if (filters.service_category_id) {
+            params.push(filters.service_category_id)
+            joinSql = `
+                JOIN appointments a ON a.client_id = c.id AND a.salon_id = $1
+                JOIN services s ON s.id = ANY(
+                    SELECT (item->>'service_id')::uuid
+                    FROM jsonb_array_elements(a.services) AS item
+                )
+            `
+            where.push(`s.category_id = $${params.length}`)
+        }
+
+        if (filters.birth_month) {
+            params.push(filters.birth_month)
+            where.push(`EXTRACT(MONTH FROM TO_DATE(c.birthday_day_month, 'MM-DD')) = $${params.length}`)
+        }
+        if (filters.birth_day_month) {
+            params.push(filters.birth_day_month)
+            where.push(`c.birthday_day_month = $${params.length}`)
+        }
+        if (filters.genders && filters.genders.length > 0) {
+     params.push(filters.genders.map((g: string) => g.toLowerCase()))
+    where.push(`LOWER(c.gender) = ANY($${params.length}::text[])`)
+}
+
+        if (filters.client_source && filters.client_source !== 'all') {
+            params.push(filters.client_source)
+            where.push(`c.client_source = $${params.length}`)
+        }
+        if (filters.joined_from) {
+            params.push(filters.joined_from)
+            where.push(`c.created_at::date >= $${params.length}::date`)
+        }
+        if (filters.joined_to) {
+            params.push(filters.joined_to)
+            where.push(`c.created_at::date <= $${params.length}::date`)
+        }
+
+        const { rows } = await pool.query(`
+            SELECT DISTINCT
+                c.id,
+                c.full_name,
+                CASE 
+                WHEN c.phone_number LIKE '+%' THEN c.phone_number
+                ELSE CONCAT(COALESCE(c.phone_country_code, '+91'), c.phone_number)
+                END AS phone
+            FROM clients c
+            ${joinSql}
+            WHERE ${where.join(' AND ')}
+            ORDER BY c.full_name ASC
+        `, params)
+
+        return rows
+    },
+
+    async countFilterForCampaign(salonId: string, filters: {
+        birth_month?:         number;
+        birth_day_month?:     string;
+        genders?:             string[];
+        client_source?:       string;
+        service_category_id?: string;
+        joined_from?:         string;
+        joined_to?:           string;
+    }): Promise<number> {
+
+        const where: string[] = ['c.salon_id = $1', 'c.is_active = true', 'c.phone_number IS NOT NULL']
+        const params: any[]   = [salonId]
+
+        let joinSql = ''
+        if (filters.service_category_id) {
+            params.push(filters.service_category_id)
+            joinSql = `
+     JOIN appointments a ON a.client_id = c.id AND a.salon_id = $1
+    JOIN services s ON s.id = ANY(
+        SELECT (item->>'service_id')::uuid
+        FROM jsonb_array_elements(a.services) AS item
+    )
+`
+            where.push(`s.category_id = $${params.length}`)
+        }
+
+        if (filters.birth_month) {
+            params.push(filters.birth_month)
+            where.push(`EXTRACT(MONTH FROM TO_DATE(c.birthday_day_month, 'MM-DD')) = $${params.length}`)
+        }
+        if (filters.birth_day_month) {
+            params.push(filters.birth_day_month)
+            where.push(`c.birthday_day_month = $${params.length}`)
+        }
+        if (filters.genders && filters.genders.length > 0) {
+    params.push(filters.genders.map((g: string) => g.toLowerCase()))
+    where.push(`LOWER(c.gender) = ANY($${params.length}::text[])`)
+         }
+        if (filters.client_source && filters.client_source !== 'all') {
+            params.push(filters.client_source)
+            where.push(`c.client_source = $${params.length}`)
+        }
+        if (filters.joined_from) {
+            params.push(filters.joined_from)
+            where.push(`c.created_at::date >= $${params.length}::date`)
+        }
+        if (filters.joined_to) {
+            params.push(filters.joined_to)
+            where.push(`c.created_at::date <= $${params.length}::date`)
+        }
+
+        const { rows } = await pool.query(`
+            SELECT COUNT(DISTINCT c.id)::int AS total
+            FROM clients c
+            ${joinSql}
+            WHERE ${where.join(' AND ')}
+        `, params)
+
+        return rows[0]?.total ?? 0
+    },
 };

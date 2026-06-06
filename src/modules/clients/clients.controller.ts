@@ -7,6 +7,7 @@ import { Parser as Json2CsvParser } from "json2csv";
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { clientsService } from "./clients.service";
+import { clientsRepository } from "./clients.repository";
 import { ClientsListQuery, CreateClientBody, UpdateClientBody } from "./clients.types";
 
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string } };
@@ -53,12 +54,9 @@ export const clientsController = {
                 client_group: req.query.client_group ? (String(req.query.client_group) as any) : undefined,
                 gender: req.query.gender ? (String(req.query.gender) as any) : undefined,
             };
-
             const data = await clientsService.list(q, salonId);
             return sendSuccess(res, 200, data, "Clients fetched successfully");
-        } catch (e) {
-            return next(e);
-        }
+        } catch (e) { return next(e); }
     },
 
     // POST /api/v1/clients
@@ -68,9 +66,7 @@ export const clientsController = {
             const body = req.body as CreateClientBody;
             const created = await clientsService.create(body, salonId);
             return sendSuccess(res, 201, created, "Client created successfully");
-        } catch (e) {
-            return next(e);
-        }
+        } catch (e) { return next(e); }
     },
 
     // GET /api/v1/clients/:clientId
@@ -79,16 +75,12 @@ export const clientsController = {
             const salonId = await getSalonId(req);
             const clientId = String(req.params.clientId || "").trim();
             if (!clientId) throw new AppError(400, "clientId is required", "VALIDATION_ERROR");
-
             const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clientId);
             if (!isUUID) throw new AppError(400, "Invalid clientId format", "VALIDATION_ERROR");
-
             const include = req.query.include ? String(req.query.include) : "";
             const data = await clientsService.getById(clientId, salonId, include);
             return sendSuccess(res, 200, data, "Client fetched successfully");
-        } catch (e) {
-            return next(e);
-        }
+        } catch (e) { return next(e); }
     },
 
     // PATCH /api/v1/clients/:clientId
@@ -97,16 +89,12 @@ export const clientsController = {
             const salonId = await getSalonId(req);
             const clientId = String(req.params.clientId || "").trim();
             if (!clientId) throw new AppError(400, "clientId is required", "VALIDATION_ERROR");
-
             const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clientId);
             if (!isUUID) throw new AppError(400, "Invalid clientId format", "VALIDATION_ERROR");
-
             const patch = req.body as UpdateClientBody;
             const updated = await clientsService.update(clientId, patch, salonId);
             return sendSuccess(res, 200, updated, "Client updated successfully");
-        } catch (e) {
-            return next(e);
-        }
+        } catch (e) { return next(e); }
     },
 
     // DELETE /api/v1/clients/:clientId
@@ -115,17 +103,12 @@ export const clientsController = {
             const salonId = await getSalonId(req);
             const clientId = String(req.params.clientId || "").trim();
             if (!clientId) throw new AppError(400, "clientId is required", "VALIDATION_ERROR");
-
             const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clientId);
             if (!isUUID) throw new AppError(400, "Invalid clientId format", "VALIDATION_ERROR");
-
             const hard = String(req.query.hard || "").toLowerCase() === "true";
             await clientsService.remove(clientId, salonId, hard);
-
             return sendSuccess(res, 200, {}, hard ? "Client deleted successfully" : "Client archived successfully");
-        } catch (e) {
-            return next(e);
-        }
+        } catch (e) { return next(e); }
     },
 
     // POST /api/v1/clients/import
@@ -134,21 +117,16 @@ export const clientsController = {
             const salonId = await getSalonId(req);
             const file = (req as any).file as Express.Multer.File | undefined;
             if (!file) throw new AppError(400, "file is required", "VALIDATION_ERROR");
-
             const file_type = req.body.file_type ? String(req.body.file_type) : undefined;
             const mode = (req.body.mode ? String(req.body.mode) : "upsert") as "create_only" | "upsert";
             const dry_run = String(req.body.dry_run || "").toLowerCase() === "true";
-
             const name = file.originalname.toLowerCase();
             let rows: any[] = [];
             if (file_type === "excel" || name.endsWith(".xlsx") || name.endsWith(".xls")) rows = parseExcelBuffer(file.buffer);
             else rows = await parseCSVBuffer(file.buffer);
-
             const result = await clientsService.importClients({ rows, mode, dry_run, salonId });
             return sendSuccess(res, 200, result, "Import completed");
-        } catch (e) {
-            return next(e);
-        }
+        } catch (e) { return next(e); }
     },
 
     // GET /api/v1/clients/duplicates
@@ -157,12 +135,9 @@ export const clientsController = {
             const salonId = await getSalonId(req);
             const phone_number = req.query.phone_number ? String(req.query.phone_number).trim() : "";
             if (!phone_number) throw new AppError(400, "phone_number query param is required", "VALIDATION_ERROR");
-
             const duplicates = await clientsService.findDuplicatesByPhone(phone_number, salonId);
             return sendSuccess(res, 200, duplicates, "Duplicates fetched successfully");
-        } catch (e) {
-            return next(e);
-        }
+        } catch (e) { return next(e); }
     },
 
     // POST /api/v1/clients/merge
@@ -171,9 +146,7 @@ export const clientsController = {
             const salonId = await getSalonId(req);
             const result = await clientsService.mergeClients(req.body, salonId);
             return sendSuccess(res, 200, result, "Clients merged successfully");
-        } catch (e) {
-            return next(e);
-        }
+        } catch (e) { return next(e); }
     },
 
     // POST /api/v1/clients/merge-duplicates
@@ -187,9 +160,7 @@ export const clientsController = {
                     ? "No duplicate clients found"
                     : `Merged ${result.total_merged} duplicate groups, archived ${result.total_archived} clients`
             );
-        } catch (e) {
-            return next(e);
-        }
+        } catch (e) { return next(e); }
     },
 
     // POST /api/v1/clients/block
@@ -199,9 +170,7 @@ export const clientsController = {
             const { client_ids, reason } = req.body;
             await clientsService.blockClients(client_ids, reason, salonId);
             return sendSuccess(res, 200, {}, "Clients blocked");
-        } catch (e) {
-            return next(e);
-        }
+        } catch (e) { return next(e); }
     },
 
     // POST /api/v1/clients/unblock
@@ -211,9 +180,7 @@ export const clientsController = {
             const { client_ids } = req.body;
             await clientsService.unblockClients(client_ids, salonId);
             return sendSuccess(res, 200, {}, "Clients unblocked");
-        } catch (e) {
-            return next(e);
-        }
+        } catch (e) { return next(e); }
     },
 
     // GET /api/v1/clients/export
@@ -222,7 +189,6 @@ export const clientsController = {
             const salonId = await getSalonId(req);
             const format = String(req.query.format || "").toLowerCase();
             if (!["csv", "excel"].includes(format)) throw new AppError(400, "format must be csv or excel", "VALIDATION_ERROR");
-
             const q: ClientsListQuery = {
                 offset: req.query.offset !== undefined ? Number(String(req.query.offset)) : 0,
                 limit: req.query.limit !== undefined ? Number(String(req.query.limit)) : 200,
@@ -236,7 +202,6 @@ export const clientsController = {
                 client_group: req.query.client_group ? (String(req.query.client_group) as any) : undefined,
                 gender: req.query.gender ? (String(req.query.gender) as any) : undefined,
             };
-
             const data = await clientsService.list(q, salonId);
             const rows = data.items.map((c: any) => ({
                 id: c.id, first_name: c.first_name, last_name: c.last_name, full_name: c.full_name,
@@ -253,7 +218,6 @@ export const clientsController = {
                 sms_marketing: c.sms_marketing, whatsapp_marketing: c.whatsapp_marketing,
                 created_at: c.created_at, updated_at: c.updated_at,
             }));
-
             if (format === "csv") {
                 const parser = new Json2CsvParser({ withBOM: true });
                 const csv = parser.parse(rows);
@@ -261,7 +225,6 @@ export const clientsController = {
                 res.setHeader("Content-Disposition", `attachment; filename="clients_export.csv"`);
                 return res.status(200).send(csv);
             }
-
             const ws = XLSX.utils.json_to_sheet(rows);
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, "clients");
@@ -269,9 +232,7 @@ export const clientsController = {
             res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
             res.setHeader("Content-Disposition", `attachment; filename="clients_export.xlsx"`);
             return res.status(200).send(buf);
-        } catch (e) {
-            return next(e);
-        }
+        } catch (e) { return next(e); }
     },
 
     // GET /api/v1/clients/search
@@ -280,9 +241,7 @@ export const clientsController = {
             const salonId = await getSalonId(req);
             const q = String(req.query.q || "").trim();
             const limit = req.query.limit !== undefined ? Number(String(req.query.limit)) : 20;
-
             const clients = await clientsService.search(q, salonId, limit);
-
             const results = clients.map((c: any) => ({
                 id: c.id,
                 first_name: c.first_name,
@@ -291,11 +250,40 @@ export const clientsController = {
                 email: c.email ?? null,
                 avatar_url: c.avatar_url ?? null,
             }));
-
             return sendSuccess(res, 200, results, "Search results");
-        } catch (e) {
-            return next(e);
-        }
+        } catch (e) { return next(e); }
     },
+
+    // ── NEW: GET /api/v1/clients/filter ──────────────────────────────────────
+    // Used by Smart Filter in Create Campaign
+    async filterForCampaign(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const salonId = await getSalonId(req);
+         const {
+    birth_month, birth_day_month, gender,
+    service_category_id, preview,
+} = req.query;
+
+const genders = gender
+    ? (gender as string).split(',').map((g: string) => g.trim()).filter(Boolean)
+    : undefined;
+
+const filters = {
+    birth_month:          birth_month ? parseInt(birth_month as string) : undefined,
+    birth_day_month:      birth_day_month      as string | undefined,
+    genders,
+     service_category_id:  service_category_id  as string | undefined,
 };
 
+            // preview=true → return count only (fast)
+            if (preview === 'true') {
+                const total = await clientsRepository.countFilterForCampaign(salonId, filters);
+                return res.status(200).json({ total });
+            }
+
+            // Full fetch
+            const clients = await clientsRepository.filterForCampaign(salonId, filters);
+            return res.status(200).json({ clients, total: clients.length });
+        } catch (e) { return next(e); }
+    },
+};

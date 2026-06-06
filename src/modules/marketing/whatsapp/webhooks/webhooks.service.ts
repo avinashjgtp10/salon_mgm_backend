@@ -6,6 +6,32 @@ import logger from '../../../../config/logger'
 
 export const webhooksService = {
 
+  // ── Global verify — looks up salon by verify token ────────────────────────
+  // Used by GET /api/v1/webhooks/whatsapp (what you paste in Meta App Dashboard)
+  async verifyGlobal(mode: string, token: string, challenge: string) {
+    if (mode !== 'subscribe') {
+      throw new AppError(403, 'Invalid hub.mode', 'WEBHOOK_VERIFY_FAILED')
+    }
+    if (!token) {
+      throw new AppError(403, 'Missing verify token', 'WEBHOOK_VERIFY_FAILED')
+    }
+
+    // Find which salon has this verify token
+    const { rows } = await pool.query(
+      `SELECT salon_id FROM whatsapp_configs WHERE webhook_verify_token = $1 LIMIT 1`,
+      [token]
+    )
+
+    if (!rows[0]) {
+      logger.warn(`⚠️ Global webhook verify failed — token not found: ${token}`)
+      throw new AppError(403, 'Webhook verification failed — token not found', 'WEBHOOK_VERIFY_FAILED')
+    }
+
+    logger.info(`✅ Global webhook verified for salon ${rows[0].salon_id}`)
+    return challenge
+  },
+
+  // ── Per-salon verify — backward compat ────────────────────────────────────
   async verify(salonId: string, mode: string, token: string, challenge: string) {
     const verifyToken = await webhooksRepository.findVerifyToken(salonId)
     if (!verifyToken) throw new AppError(400, 'WhatsApp not configured', 'WA_NOT_CONFIGURED')
@@ -19,26 +45,22 @@ export const webhooksService = {
     const value   = changes?.value
     const field   = changes?.field
 
-    // ── Portfolio limit auto-update (new Meta webhook Oct 2025) ──────────────
     if (field === 'business_capability_update') {
       await this.processCapabilityUpdate(value)
       return
     }
 
-    // ── Legacy quality update webhook ─────────────────────────────────────────
     if (field === 'phone_number_quality_update') {
       await this.processQualityUpdate(value)
       return
     }
 
-    // ── Delivery status updates ───────────────────────────────────────────────
     if (value?.statuses?.length) {
       for (const status of value.statuses) {
         await this.processStatus(status)
       }
     }
 
-    // ── Inbound customer replies ──────────────────────────────────────────────
     if (value?.messages?.length) {
       const resolvedSalonId = (body as any)._salonId ?? null
       const phoneNumberId   = value?.metadata?.phone_number_id
@@ -52,61 +74,47 @@ export const webhooksService = {
     }
   },
 
-  // ── NEW: business_capability_update — fires when portfolio limit changes ───
   async processCapabilityUpdate(value: any) {
     try {
       logger.info('📊 business_capability_update received:', { value })
-
-      // new field (v24.0+): max_daily_conversations_per_business
-      // old field (v23.0):  max_daily_conversation_per_phone
-      const newLimit = value?.max_daily_conversations_per_business
-                    ?? value?.max_daily_conversation_per_phone
+      const newLimit      = value?.max_daily_conversations_per_business
+                         ?? value?.max_daily_conversation_per_phone
       const phoneNumberId = value?.phone_number_id ?? value?.phone_number
-
       if (!phoneNumberId || !newLimit) return
-
       const dailyLimit = Number(newLimit)
       if (isNaN(dailyLimit) || dailyLimit <= 0) return
-
       const { rows } = await pool.query(
         `SELECT salon_id FROM whatsapp_configs WHERE phone_number_id = $1`,
         [String(phoneNumberId)]
       )
       if (!rows[0]) return
-
       await pool.query(
         `UPDATE whatsapp_configs SET daily_limit = $1, updated_at = NOW() WHERE salon_id = $2`,
         [dailyLimit, rows[0].salon_id]
       )
-      logger.info(`✅ Auto-updated daily_limit to ${dailyLimit} via business_capability_update for salon ${rows[0].salon_id}`)
+      logger.info(`✅ Auto-updated daily_limit to ${dailyLimit} for salon ${rows[0].salon_id}`)
     } catch (err: any) {
       logger.error('❌ processCapabilityUpdate failed:', { error: err?.message })
     }
   },
 
-  // ── LEGACY: phone_number_quality_update ───────────────────────────────────
   async processQualityUpdate(value: any) {
     try {
       logger.info('📊 phone_number_quality_update received:', { value })
-
       const phoneNumberId = value?.phone_number
       const currentLimit  = value?.current_limit
       const qualityRating = value?.quality_rating ?? value?.quality_score ?? 'GREEN'
-
       if (!phoneNumberId) return
-
       const TIER_MAP: Record<string, number> = {
         TIER_50: 50, TIER_250: 250, TIER_1K: 1000,
         TIER_2K: 2000, TIER_10K: 10000, TIER_100K: 100000,
       }
       const dailyLimit = TIER_MAP[currentLimit] ?? null
-
       const { rows } = await pool.query(
         `SELECT salon_id FROM whatsapp_configs WHERE phone_number_id = $1`,
         [String(phoneNumberId)]
       )
       if (!rows[0]) return
-
       if (dailyLimit !== null) {
         await pool.query(
           `UPDATE whatsapp_configs SET quality_rating = $1, daily_limit = $2, updated_at = NOW() WHERE salon_id = $3`,
@@ -145,9 +153,11 @@ export const webhooksService = {
     const errorMsg  = status.errors?.[0]?.title            ?? null
 
     if (type === 'FAILED') {
-      console.error('📛 Webhook FAILED payload:', JSON.stringify({
-        wamid, errorCode, errorMsg, rawErrors: status.errors, fullStatus: status,
-      }, null, 2))
+      logger.error('📛 Webhook FAILED payload:', {
+        wamid, errorCode, errorMsg,
+        rawErrors: status.errors,
+        fullStatus: status,
+      })
     }
 
     const contact = await webhooksRepository.findContactByWamid(wamid)
@@ -158,7 +168,7 @@ export const webhooksService = {
     } else if (type === 'READ') {
       await webhooksRepository.markRead(wamid, timestamp)
     } else if (type === 'FAILED') {
-      const isBlocked = [131047, 131026, 131051].includes(parseInt(errorCode ?? '0'))
+      const isBlocked = [131047, 131026, 131051, 131049].includes(parseInt(errorCode ?? '0'))
       await webhooksRepository.markFailed(wamid, isBlocked ? 'BLOCKED' : 'FAILED', errorCode, errorMsg)
     }
 
