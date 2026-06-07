@@ -176,7 +176,12 @@ export const authService = {
 
     await authRepository.updateLastLogin(user.id);
 
-    const salonId = await authRepository.findSalonIdByUserId(user.id);
+    // Owners look up salonId from the salons table; staff/manager look it up from staff table
+    const isStaffRole = user.role === "staff" || user.role === "manager";
+    const salonId = isStaffRole
+      ? await authRepository.findStaffSalonByUserId(user.id)
+      : await authRepository.findSalonIdByUserId(user.id);
+
     const accessToken = signAccessToken({ userId: user.id, role: user.role, salonId });
     const refreshToken = signRefreshToken({ userId: user.id });
 

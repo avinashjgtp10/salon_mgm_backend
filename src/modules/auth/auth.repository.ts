@@ -100,6 +100,15 @@ export const authRepository = {
   },
 
   /**
+   * Update a user's role (used when admin changes a staff member's login role)
+   */
+  async updateUserRole(userId: string, role: string) {
+    await safeQuery(() =>
+      pool.query(`UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2`, [role, userId]),
+    );
+  },
+
+  /**
    * Promote a user to salon_owner (used when a client creates their first salon)
    */
   async upgradeToSalonOwner(userId: string) {
@@ -120,6 +129,16 @@ export const authRepository = {
       pool.query(`SELECT id FROM salons WHERE owner_id = $1 ORDER BY created_at DESC LIMIT 1`, [userId]),
     );
     return rows[0]?.id ?? null;
+  },
+
+  /**
+   * Get the salon ID for a staff/manager user via the staff table
+   */
+  async findStaffSalonByUserId(userId: string): Promise<string | null> {
+    const { rows } = await safeQuery(() =>
+      pool.query(`SELECT salon_id FROM staff WHERE user_id = $1 LIMIT 1`, [userId]),
+    );
+    return rows[0]?.salon_id ?? null;
   },
 
   // ===================== OTP VERIFICATIONS =====================

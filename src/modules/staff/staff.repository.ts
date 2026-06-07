@@ -90,8 +90,8 @@ export const staffRepository = {
             salon_id, first_name, last_name, email, phone, phone_country_code,
             additional_phone, country, calendar_color, designation,
             staff_external_id, employment_type, branch_id, employee_code,
-              experience_years, specialization, is_active, invitation_status
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,false,'pending')
+              experience_years, specialization, login_role, is_active, invitation_status
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,false,'pending')
             RETURNING *`,
                 [
                     salonId, data.first_name, data.last_name ?? null, data.email,
@@ -101,6 +101,7 @@ export const staffRepository = {
                     data.staff_external_id ?? null, data.employment_type ?? null,
                     data.branch_id ?? null, data.employee_code ?? null,
                     data.experience_years ?? null, data.specialization ?? [],
+                    data.login_role ?? "staff",
                 ]
             );
             return rows[0];
@@ -139,6 +140,7 @@ export const staffRepository = {
             employee_code: "employee_code",
             experience_years: "experience_years",
             specialization: "specialization",
+            login_role: "login_role",
         };
 
         const entries = (Object.keys(patch) as (keyof UpdateStaffBody)[])

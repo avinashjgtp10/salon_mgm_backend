@@ -53,6 +53,8 @@ export type EmergencyRelationship =
 
 // ─── Staff ────────────────────────────────────────────────────────────────────
 
+export type LoginRole = "staff" | "manager" | "admin";
+
 export type Staff = {
     id: string;
     user_id: string | null;
@@ -89,6 +91,7 @@ export type Staff = {
     end_year: number | null;
     employment_type: EmploymentType | null;
     staff_external_id: string | null;
+    login_role: LoginRole;
 };
 
 export type CreateStaffBody = {
@@ -107,6 +110,7 @@ export type CreateStaffBody = {
     employee_code?: string;
     experience_years?: number;
     specialization?: string[];
+    login_role?: LoginRole;
 };
 
 export type UpdateStaffBody = Partial<CreateStaffBody>;

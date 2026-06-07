@@ -24,6 +24,8 @@ import {
     UpsertStaffSchedulesBody, AcceptInvitationBody, StaffListQuery, StaffImportResult,
 } from "./staff.types";
 
+const ALLOWED_ROLES = ["staff", "manager", "admin"] as const;
+
 // ─── Staff ────────────────────────────────────────────────────────────────────
 
 export const staffService = {
@@ -102,7 +104,43 @@ export const staffService = {
         const existing = await staffRepository.findById(id, salonId);
         if (!existing) throw new AppError(404, "Staff not found", "NOT_FOUND");
 
-        const updated = await staffRepository.update(id, salonId, patch);
+        const { password, login_role, ...profilePatch } = patch as any;
+
+        const updated = await staffRepository.update(id, salonId, profilePatch);
+
+        if (password && typeof password === "string" && password.trim().length >= 8) {
+            const passwordHash = await bcrypt.hash(password.trim(), 10);
+            const userRole = (ALLOWED_ROLES as readonly string[]).includes(login_role) ? login_role : "staff";
+
+            if (existing.user_id) {
+                await authRepository.updatePassword(existing.user_id, passwordHash);
+                await authRepository.updateUserRole(existing.user_id, userRole);
+                logger.info("staffService.update password changed", { staffId: id, role: userRole });
+            } else {
+                // No linked user account yet — create one so the staff member can log in
+                const staffEmail = (patch as any).email || existing.email;
+                if (!staffEmail) throw new AppError(400, "Staff must have an email to set a password", "EMAIL_REQUIRED");
+                let user = await authRepository.findUserByEmail(staffEmail);
+                if (!user) {
+                    user = await authRepository.createUser({
+                        email: staffEmail,
+                        first_name: existing.first_name,
+                        last_name: existing.last_name ?? null,
+                        password_hash: passwordHash,
+                        role: userRole,
+                    });
+                } else {
+                    await authRepository.updatePassword(user.id, passwordHash);
+                    await authRepository.updateUserRole(user.id, userRole);
+                }
+                await staffRepository.linkUserToStaff(id, user.id, existing.first_name, existing.last_name ?? undefined);
+                logger.info("staffService.update user account created and linked", { staffId: id, userId: user.id, role: userRole });
+            }
+        } else if (login_role && (ALLOWED_ROLES as readonly string[]).includes(login_role) && existing.user_id) {
+            await authRepository.updateUserRole(existing.user_id, login_role);
+            logger.info("staffService.update role only updated", { staffId: id, role: login_role });
+        }
+
         logger.info("staffService.update success", { staffId: updated.id });
         return updated;
     },
@@ -302,12 +340,16 @@ export const staffInvitationService = {
             if (!user) {
                 logger.info("acceptInvitation: creating new user", { email: invitation.email });
                 const passwordHash = await bcrypt.hash(body.password, 10);
+                const staffRecord = await staffRepository.findById(invitation.staff_id, invitation.salon_id);
+                const staffRole = (staffRecord?.login_role && (ALLOWED_ROLES as readonly string[]).includes(staffRecord.login_role))
+                    ? staffRecord.login_role
+                    : "staff";
                 user = await authRepository.createUser({
                     email: invitation.email,
                     first_name: body.first_name,
                     last_name: body.last_name,
                     password_hash: passwordHash,
-                    role: 'staff',
+                    role: staffRole,
                 } as any);
             } else {
                 logger.info("acceptInvitation: user already exists", { email: invitation.email, userId: user.id });
