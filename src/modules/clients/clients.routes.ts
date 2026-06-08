@@ -62,6 +62,9 @@ router.post("/unblock", authMiddleware, ownerAdmin, validateUnblockClients, clie
 // SEARCH  – must be BEFORE /:clientId to avoid "search" being parsed as a UUID
 router.get("/search", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), validateSearchClients, clientsController.search);
 
+// Smart Filter for campaigns — must be BEFORE /:clientId
+router.get("/filter", authMiddleware, ownerAdmin, clientsController.filterForCampaign);
+
 // GET/UPDATE/DELETE by id
 router.get("/:clientId", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), clientsController.getById);
 router.patch("/:clientId", authMiddleware, ownerAdminStaff, requirePermission("edit_clients"), validateUpdateClient, clientsController.update);
