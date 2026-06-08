@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express'
 import { sendSuccess } from '../../../utils/response.util'
 import { webhooksService } from './webhooks.service'
+import logger from '../../../../config/logger'
 
 type AuthRequest = Request & { user?: { userId: string; salonId?: string; role?: string } }
 
@@ -22,11 +23,11 @@ export const webhooksController = {
   // ── Global handle — Meta App Dashboard POSTs all events here ──────────────
   // POST /api/v1/webhooks/whatsapp
   // Salon identified by phone_number_id in the payload
-  async handleGlobal(req: Request, res: Response, next: NextFunction) {
-    try {
-      res.status(200).json({ success: true })
-      await webhooksService.handleWebhook(req.body)
-    } catch (e) { return next(e) }
+  handleGlobal(req: Request, res: Response) {
+    res.status(200).json({ success: true })
+    void webhooksService.handleWebhook(req.body).catch(err =>
+      logger.error('handleGlobal: webhook processing failed', { err })
+    )
   },
 
   // ── Per-salon verify — backward compat ───────────────────────────────────
@@ -42,12 +43,12 @@ export const webhooksController = {
   },
 
   // ── Per-salon handle — backward compat ───────────────────────────────────
-  async handle(req: Request, res: Response, next: NextFunction) {
-    try {
-      res.status(200).json({ success: true })
-      const body = { ...req.body, _salonId: req.params.salonId }
-      await webhooksService.handleWebhook(body)
-    } catch (e) { return next(e) }
+  handle(req: Request, res: Response) {
+    res.status(200).json({ success: true })
+    const body = { ...req.body, _salonId: req.params.salonId }
+    void webhooksService.handleWebhook(body).catch(err =>
+      logger.error('handle: webhook processing failed', { err })
+    )
   },
 
   async getEvents(req: AuthRequest, res: Response, next: NextFunction) {

@@ -262,6 +262,7 @@ export const clientsController = {
          const {
     birth_month, birth_day_month, gender,
     service_category_id, preview,
+    client_source, joined_from, joined_to,
 } = req.query;
 
 const genders = gender
@@ -272,18 +273,21 @@ const filters = {
     birth_month:          birth_month ? parseInt(birth_month as string) : undefined,
     birth_day_month:      birth_day_month      as string | undefined,
     genders,
-     service_category_id:  service_category_id  as string | undefined,
+    service_category_id:  service_category_id  as string | undefined,
+    client_source:        client_source        as string | undefined,
+    joined_from:          joined_from          as string | undefined,
+    joined_to:            joined_to            as string | undefined,
 };
 
             // preview=true → return count only (fast)
             if (preview === 'true') {
                 const total = await clientsRepository.countFilterForCampaign(salonId, filters);
-                return res.status(200).json({ total });
+                return sendSuccess(res, 200, { total }, "Filter count fetched successfully");
             }
 
             // Full fetch
             const clients = await clientsRepository.filterForCampaign(salonId, filters);
-            return res.status(200).json({ clients, total: clients.length });
+            return sendSuccess(res, 200, { clients, total: clients.length }, "Filtered clients fetched successfully");
         } catch (e) { return next(e); }
     },
 };

@@ -553,7 +553,14 @@ export const clientsRepository = {
         joined_to?:           string;
     }): Promise<{ id: string; full_name: string; phone: string }[]> {
 
-        const where: string[] = ['c.salon_id = $1', 'c.is_active = true', 'c.phone_number IS NOT NULL']
+        const where: string[] = [
+            'c.salon_id = $1',
+            'c.is_active = true',
+            'c.phone_number IS NOT NULL',
+            "TRIM(c.phone_number) <> ''",
+            'c.phone_country_code IS NOT NULL',
+            "TRIM(c.phone_country_code) <> ''",
+        ]
         const params: any[]   = [salonId]
 
         let joinSql = ''
@@ -622,7 +629,14 @@ export const clientsRepository = {
         joined_to?:           string;
     }): Promise<number> {
 
-        const where: string[] = ['c.salon_id = $1', 'c.is_active = true', 'c.phone_number IS NOT NULL']
+        const where: string[] = [
+            'c.salon_id = $1',
+            'c.is_active = true',
+            'c.phone_number IS NOT NULL',
+            "TRIM(c.phone_number) <> ''",
+            'c.phone_country_code IS NOT NULL',
+            "TRIM(c.phone_country_code) <> ''",
+        ]
         const params: any[]   = [salonId]
 
         let joinSql = ''
