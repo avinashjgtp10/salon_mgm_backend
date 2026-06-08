@@ -8,6 +8,18 @@ export const usersRepo = {
     return rows[0] || null;
   },
 
+  async findByIdWithStaffPermissions(id: string) {
+    const { rows } = await pool.query(
+      `SELECT u.*, s.custom_permissions
+       FROM users u
+       LEFT JOIN staff s ON s.user_id = u.id
+       WHERE u.id = $1
+       LIMIT 1`,
+      [id]
+    );
+    return rows[0] || null;
+  },
+
   async findAll() {
     const { rows } = await pool.query(
       `SELECT * FROM users ORDER BY created_at DESC`

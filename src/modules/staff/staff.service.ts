@@ -57,34 +57,61 @@ export const staffService = {
                 throw new AppError(409, "A staff member with this email already exists", "DUPLICATE_EMAIL");
             }
 
+            let passwordHash: string | null = null;
+            if (body.password) {
+                passwordHash = await bcrypt.hash(body.password, 10);
+            }
+
             console.log("[DEBUG] staffService.create - Step 2: Creating staff in DB...");
-            const staff = await staffRepository.create(salonId, body);
+            const staff = await staffRepository.create(salonId, body, passwordHash);
             if (!staff) {
                 console.error("[DEBUG] staffService.create - DB returned null staff object");
                 throw new AppError(500, "Database failed to create staff record", "DB_ERROR");
             }
             console.log("[DEBUG] staffService.create - staff created with ID:", staff.id);
 
-            console.log("[DEBUG] staffService.create - Step 3: Creating invitation...");
-            const invitation = await staffInvitationRepository.create(staff.id, staff.email);
-            console.log("[DEBUG] staffService.create - invitation created:", invitation?.id);
+            if (body.password && passwordHash) {
+                // Admin set a password — create user account immediately, skip invitation email
+                console.log("[DEBUG] staffService.create - Step 3: Admin-set password, creating user account directly...");
+                let user = await authRepository.findUserByEmail(body.email);
+                if (!user) {
+                    user = await authRepository.createUser({
+                        email: body.email,
+                        first_name: body.first_name,
+                        last_name: body.last_name ?? null,
+                        password_hash: passwordHash,
+                        role: "staff",
+                    } as any);
+                } else {
+                    await authRepository.updateUserRole(user.id, "staff");
+                }
+                await staffRepository.linkUserToStaff(staff.id, user.id, body.first_name, body.last_name);
+                await authRepository.markUserVerified(user.id);
+                await authRepository.markOnboardingComplete(user.id);
+                await staffRepository.activateDirectly(staff.id);
+                console.log("[DEBUG] staffService.create - user account created and staff activated:", user.id);
+            } else {
+                // No password — send invitation email so staff sets their own password
+                console.log("[DEBUG] staffService.create - Step 3: Creating invitation...");
+                const invitation = await staffInvitationRepository.create(staff.id, staff.email);
+                console.log("[DEBUG] staffService.create - invitation created:", invitation?.id);
 
-            // Send invitation email (fire-and-forget)
-            console.log("[DEBUG] staffService.create - Step 4: Resolving salon name...");
-            const salon = await salonsRepository.findById(salonId);
-            const salonName = salon?.business_name ?? "Our Salon";
+                console.log("[DEBUG] staffService.create - Step 4: Resolving salon name...");
+                const salon = await salonsRepository.findById(salonId);
+                const salonName = salon?.business_name ?? "Our Salon";
 
-            console.log("[DEBUG] staffService.create - Step 5: Sending invitation email...");
-            emailService.sendStaffInvitation({
-                to: staff.email,
-                token: invitation.token,
-                staffFirstName: body.first_name,
-                salonName,
-            }).then(() => {
-                console.log("[DEBUG] staffService.create - invitation email sent successfully");
-            }).catch((err) => {
-                console.error("[DEBUG] staffService.create - invitation email failed:", err);
-            });
+                console.log("[DEBUG] staffService.create - Step 5: Sending invitation email...");
+                emailService.sendStaffInvitation({
+                    to: staff.email,
+                    token: invitation.token,
+                    staffFirstName: body.first_name,
+                    salonName,
+                }).then(() => {
+                    console.log("[DEBUG] staffService.create - invitation email sent successfully");
+                }).catch((err) => {
+                    console.error("[DEBUG] staffService.create - invitation email failed:", err);
+                });
+            }
 
             return { staffId: staff.id };
         } catch (error) {
@@ -102,7 +129,12 @@ export const staffService = {
         const existing = await staffRepository.findById(id, salonId);
         if (!existing) throw new AppError(404, "Staff not found", "NOT_FOUND");
 
-        const updated = await staffRepository.update(id, salonId, patch);
+        let passwordHash: string | null | undefined = undefined;
+        if (patch.password) {
+            passwordHash = await bcrypt.hash(patch.password, 10);
+        }
+
+        const updated = await staffRepository.update(id, salonId, patch, passwordHash);
         logger.info("staffService.update success", { staffId: updated.id });
         return updated;
     },
@@ -310,7 +342,10 @@ export const staffInvitationService = {
                     role: 'staff',
                 } as any);
             } else {
-                logger.info("acceptInvitation: user already exists", { email: invitation.email, userId: user.id });
+                logger.info("acceptInvitation: user already exists — updating role to staff", { email: invitation.email, userId: user.id });
+                // Ensure the user carries the staff role regardless of what they registered as
+                await authRepository.updateUserRole(user.id, 'staff');
+                user = { ...user, role: 'staff' };
             }
 
             logger.info("acceptInvitation: linking user to staff", { staffId: invitation.staff_id, userId: user.id });
