@@ -49,6 +49,24 @@ router.post(
     billingController.cancelSubscription
 );
 
+// ─── Razorpay ────────────────────────────────────────────────────────────────
+
+// POST — create a Razorpay order (before showing checkout popup)
+router.post(
+    "/create-order",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin"),
+    billingController.createOrder
+);
+
+// POST — verify payment signature and activate subscription
+router.post(
+    "/verify-payment",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin"),
+    billingController.verifyPayment
+);
+
 // ─── Invoices ─────────────────────────────────────────────────────────────────
 router.get(
     "/invoices",
