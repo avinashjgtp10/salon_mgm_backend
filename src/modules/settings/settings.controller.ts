@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { AppError } from "../../middleware/error.middleware";
+import { invalidatePermissionCache } from "../../middleware/permission.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { settingsService } from "./settings.service";
 import { CreateSettingBody, UpdateSettingBody } from "./settings.types";
@@ -35,6 +36,7 @@ export const settingsController = {
       if (!body.key) throw new AppError(400, "key is required", "VALIDATION_ERROR");
       if (body.value === undefined) throw new AppError(400, "value is required", "VALIDATION_ERROR");
       const data = await settingsService.create(salonId, body);
+      if (body.key === "role_permissions") invalidatePermissionCache(salonId);
       sendSuccess(res, 201, data, "Setting created");
     } catch (err) { next(err); }
   },
@@ -44,6 +46,7 @@ export const settingsController = {
       const salonId = req.user?.salonId;
       if (!salonId) throw new AppError(400, "Salon context missing", "NO_SALON");
       const data = await settingsService.update(salonId, String(req.params.id), req.body as UpdateSettingBody);
+      invalidatePermissionCache(salonId);
       sendSuccess(res, 200, data, "Setting updated");
     } catch (err) { next(err); }
   },

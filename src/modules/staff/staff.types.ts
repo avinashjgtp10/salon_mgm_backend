@@ -89,6 +89,10 @@ export type Staff = {
     end_year: number | null;
     employment_type: EmploymentType | null;
     staff_external_id: string | null;
+    password_hash: string | null;
+    permission_level: string | null;
+    allow_calendar_bookings: boolean;
+    custom_permissions: Record<string, boolean> | null;
 };
 
 export type CreateStaffBody = {
@@ -107,6 +111,10 @@ export type CreateStaffBody = {
     employee_code?: string;
     experience_years?: number;
     specialization?: string[];
+    password?: string;
+    permission_level?: string;
+    allow_calendar_bookings?: boolean;
+    custom_permissions?: Record<string, boolean> | null;
 };
 
 export type UpdateStaffBody = Partial<CreateStaffBody>;

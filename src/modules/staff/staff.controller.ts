@@ -4,6 +4,7 @@ import * as Papa from "papaparse";
 import { Parser as CsvParser } from "json2csv";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
+import { invalidateStaffPermCache } from "../../middleware/permission.middleware";
 import { sendSuccess } from "../utils/response.util";
 import {
   staffService, staffInvitationService, staffAddressService,
@@ -108,13 +109,18 @@ if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR"
       const id = String(req.params.id);
       logger.info("PATCH /staff/:id", { id, salonId });
 
+      const patch = req.body as UpdateStaffBody;
       const updated = await staffService.update({
         id,
         salonId,
         requesterUserId: req.user.userId,
         requesterRole: req.user.role,
-        patch: req.body as UpdateStaffBody,
+        patch,
       });
+      // Invalidate per-staff permission cache when custom_permissions changes
+      if ("custom_permissions" in patch && updated.user_id) {
+        invalidateStaffPermCache(updated.user_id);
+      }
       return sendSuccess(res, 200, updated, "Staff updated successfully");
     } catch (err) { return next(err); }
   },
