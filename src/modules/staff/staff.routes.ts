@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
+import { requirePermission } from "../../middleware/permission.middleware";
 import { upload } from "./staff.upload";
 import {
   staffController, staffInvitationController, staffAddressController,
@@ -26,8 +27,8 @@ router.get("/invite/:token/verify", staffInvitationController.verifyToken);
 router.post("/invite/accept", validateAcceptInvitation, staffInvitationController.acceptInvitation);
 
 // ─── Staff CRUD ───────────────────────────────────────────────────────────────
-router.get("/", auth, ownerAdminStaff, staffController.list);
-router.post("/", auth, ownerAdmin, validateCreateStaff, staffController.create);
+router.get("/", auth, ownerAdminStaff, requirePermission("view_team"), staffController.list);
+router.post("/", auth, ownerAdmin, requirePermission("manage_team"), validateCreateStaff, staffController.create);
 
 // ─── Import (must be BEFORE /:id) ────────────────────────────────────────────
 router.post("/import", auth, ownerAdmin, upload.single("file"), staffController.importStaff);
@@ -37,9 +38,9 @@ router.get("/export/excel", auth, ownerAdmin, staffController.exportExcel);
 router.get("/export/csv", auth, ownerAdmin, staffController.exportCsv);
 
 // ─── Staff by ID ──────────────────────────────────────────────────────────────
-router.get("/:id", auth, ownerAdminStaff, staffController.getById);
-router.patch("/:id", auth, ownerAdmin, validateUpdateStaff, staffController.update);
-router.delete("/:id", auth, ownerAdmin, staffController.delete);
+router.get("/:id", auth, ownerAdminStaff, requirePermission("view_team"), staffController.getById);
+router.patch("/:id", auth, ownerAdmin, requirePermission("manage_team"), validateUpdateStaff, staffController.update);
+router.delete("/:id", auth, ownerAdmin, requirePermission("manage_team"), staffController.delete);
 
 // ─── Invitation management ────────────────────────────────────────────────────
 router.get("/:id/invitation-status", auth, ownerAdmin, staffInvitationController.getInvitationStatus);

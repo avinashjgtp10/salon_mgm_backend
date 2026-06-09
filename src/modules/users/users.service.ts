@@ -5,7 +5,6 @@ import { SafeUser, UpdateUserInput } from "./users.types";
 import logger from "../../config/logger";
 
 function toSafeUser(u: any): SafeUser {
-  // Build fullName from full_name or first_name + last_name
   const fullName =
     (u.full_name?.trim()) ||
     [u.first_name, u.last_name]
@@ -28,12 +27,12 @@ function toSafeUser(u: any): SafeUser {
     lastLogin: u.last_login ?? null,
     createdAt: u.created_at,
     updatedAt: u.updated_at,
-    // profile fields
     businessName: u.business_name ?? null,
     address: u.address ?? null,
     country: u.country ?? null,
     countryCode: u.country_code ?? null,
     isOnboardingComplete: u.is_onboarding_complete ?? false,
+    custom_permissions: u.custom_permissions ?? null,
   };
 }
 
@@ -42,7 +41,7 @@ export const usersService = {
   async me(userId: string) {
     logger.info(`Fetching current user profile`, { userId });
 
-    const user = await usersRepo.findById(userId);
+    const user = await usersRepo.findByIdWithStaffPermissions(userId);
 
     if (!user) {
       logger.warn(`User not found`, { userId });

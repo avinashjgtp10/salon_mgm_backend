@@ -2,6 +2,7 @@
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
+import { requirePermission } from "../../middleware/permission.middleware";
 import { clientsController } from "./clients.controller";
 import { upload } from "./clients.upload";
 import {
@@ -15,19 +16,21 @@ import {
 } from "./clients.validator";
 
 const router = Router();
+const ownerAdmin = roleMiddleware("salon_owner", "admin");
+const ownerAdminStaff = roleMiddleware("salon_owner", "admin", "staff");
 
 // LIST + CREATE
-router.get("/", authMiddleware, roleMiddleware("salon_owner", "admin"), validateClientsListQuery, clientsController.list);
-router.post("/", authMiddleware, roleMiddleware("salon_owner", "admin"), validateCreateClient, clientsController.create);
+router.get("/", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), validateClientsListQuery, clientsController.list);
+router.post("/", authMiddleware, ownerAdminStaff, requirePermission("edit_clients"), validateCreateClient, clientsController.create);
 
 // EXPORT (same filters)
-router.get("/export", authMiddleware, roleMiddleware("salon_owner", "admin"), validateClientsListQuery, clientsController.export);
+router.get("/export", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), validateClientsListQuery, clientsController.export);
 
 // IMPORT
 router.post(
     "/import",
     authMiddleware,
-    roleMiddleware("salon_owner", "admin"),
+    ownerAdmin,
     upload.single("file"),
     clientsController.import
 );
@@ -36,31 +39,35 @@ router.post(
 router.get(
     "/duplicates",
     authMiddleware,
-    roleMiddleware("salon_owner", "admin"),
+    ownerAdminStaff,
+    requirePermission("view_clients"),
     clientsController.findDuplicates
 );
 
 // MERGE
-router.post("/merge", authMiddleware, roleMiddleware("salon_owner", "admin"), validateMergeClients, clientsController.merge);
+router.post("/merge", authMiddleware, ownerAdmin, validateMergeClients, clientsController.merge);
 
 router.post(
     "/merge-duplicates",
     authMiddleware,
-    roleMiddleware("salon_owner", "admin"),
+    ownerAdmin,
     clientsController.mergeAllDuplicates
 );
 
 // BLOCK / UNBLOCK
-router.post("/block", authMiddleware, roleMiddleware("salon_owner", "admin"), validateBlockClients, clientsController.block);
-router.patch("/block", authMiddleware, roleMiddleware("salon_owner", "admin"), validateBlockClients, clientsController.block);
-router.post("/unblock", authMiddleware, roleMiddleware("salon_owner", "admin"), validateUnblockClients, clientsController.unblock);
+router.post("/block", authMiddleware, ownerAdmin, validateBlockClients, clientsController.block);
+router.patch("/block", authMiddleware, ownerAdmin, validateBlockClients, clientsController.block);
+router.post("/unblock", authMiddleware, ownerAdmin, validateUnblockClients, clientsController.unblock);
 
 // SEARCH  – must be BEFORE /:clientId to avoid "search" being parsed as a UUID
-router.get("/search", authMiddleware, roleMiddleware("salon_owner", "admin"), validateSearchClients, clientsController.search);
+router.get("/search", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), validateSearchClients, clientsController.search);
+
+// Smart Filter for campaigns — must be BEFORE /:clientId
+router.get("/filter", authMiddleware, ownerAdmin, clientsController.filterForCampaign);
 
 // GET/UPDATE/DELETE by id
-router.get("/:clientId", authMiddleware, roleMiddleware("salon_owner", "admin"), clientsController.getById);
-router.patch("/:clientId", authMiddleware, roleMiddleware("salon_owner", "admin"), validateUpdateClient, clientsController.update);
-router.delete("/:clientId", authMiddleware, roleMiddleware("salon_owner", "admin"), clientsController.remove);
+router.get("/:clientId", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), clientsController.getById);
+router.patch("/:clientId", authMiddleware, ownerAdminStaff, requirePermission("edit_clients"), validateUpdateClient, clientsController.update);
+router.delete("/:clientId", authMiddleware, ownerAdminStaff, requirePermission("delete_clients"), clientsController.remove);
 
 export default router;
