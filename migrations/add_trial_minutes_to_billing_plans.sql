@@ -1,0 +1,3 @@
+-- This migration is superseded by add_billing_plans_free_and_pro.sql
+-- which handles both the column addition and plan seeding in the correct order.
+-- Run add_billing_plans_free_and_pro.sql instead.

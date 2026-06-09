@@ -114,4 +114,28 @@ export const billingController = {
             sendSuccess(res, 200, invoice, "Invoice fetched successfully");
         } catch (err) { next(err); }
     },
+
+    // POST /api/v1/billing/create-order
+    async createOrder(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const { amount, plan_id } = req.body;
+            if (!amount || !plan_id)
+                throw new AppError(400, "amount and plan_id are required", "VALIDATION_ERROR");
+            const order = await billingService.createRazorpayOrder({ amount, plan_id });
+            sendSuccess(res, 200, order, "Order created");
+        } catch (err) { next(err); }
+    },
+
+    // POST /api/v1/billing/verify-payment
+    async verifyPayment(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const salonId = req.user?.salonId;
+            if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+            const result = await billingService.verifyAndActivate({
+                salonId,
+                ...req.body,
+            });
+            sendSuccess(res, 200, result, "Payment verified and subscription activated");
+        } catch (err) { next(err); }
+    },
 };

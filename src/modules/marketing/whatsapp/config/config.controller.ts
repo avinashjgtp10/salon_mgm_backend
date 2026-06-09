@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express'
 import { configService } from './config.service'
 import { whatsappMetaApi } from '../shared/whatsapp.api'
 import { configRepository } from './config.repository'
+import pool from '../../../../config/database'  // ← ADD THIS
 
 type AuthRequest = Request & { user?: { userId: string; salonId?: string; role?: string } }
 
@@ -94,7 +95,7 @@ export const configController = {
     } catch (e) { return next(e) }
   },
 
-  // ── Verify Access Token + Phone + WABA together (final step) ─────────────
+  // ── Verify all credentials (final onboarding step) ────────────────────────
   async verifyAll(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const { phone_number_id, waba_id, app_id, app_secret, access_token, webhook_verify_token } = req.body
@@ -144,7 +145,22 @@ export const configController = {
       })
       if (!wabaResult.valid) return res.status(200).json({ valid: false, results })
 
-      // 4. Check webhook verify token uniqueness
+      // 4. Check phone_number_id not already used by another salon
+      const { rows: phoneTaken } = await pool.query(
+        `SELECT salon_id FROM whatsapp_configs
+         WHERE phone_number_id = $1 AND salon_id != $2`,
+        [phone_number_id, salonId]
+      )
+      if (phoneTaken[0]) {
+        results.push({
+          check: 'Phone Number ID',
+          valid: false,
+          error: 'This Phone Number ID is already registered to another account. Each salon must have their own WhatsApp number.',
+        })
+        return res.status(200).json({ valid: false, results })
+      }
+
+      // 5. Check webhook verify token uniqueness
       const tokenTaken = await configRepository.isVerifyTokenTaken(webhook_verify_token, salonId)
       results.push({
         check: 'Webhook Verify Token',

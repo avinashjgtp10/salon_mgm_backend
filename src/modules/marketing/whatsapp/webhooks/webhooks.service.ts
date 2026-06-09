@@ -8,6 +8,7 @@ import logger from '../../../../config/logger'
 export const webhooksService = {
 
   // ── Global verify — looks up salon by verify token ────────────────────────
+  // Used by GET /api/v1/webhooks/whatsapp (what you paste in Meta App Dashboard)
   async verifyGlobal(mode: string, token: string, challenge: string) {
     if (mode !== 'subscribe') {
       throw new AppError(403, 'Invalid hub.mode', 'WEBHOOK_VERIFY_FAILED')
@@ -16,6 +17,7 @@ export const webhooksService = {
       throw new AppError(403, 'Missing verify token', 'WEBHOOK_VERIFY_FAILED')
     }
 
+    // Find which salon has this verify token
     const { rows } = await pool.query(
       `SELECT salon_id FROM whatsapp_configs WHERE webhook_verify_token = $1 LIMIT 1`,
       [token]
