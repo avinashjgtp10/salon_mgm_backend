@@ -7,6 +7,7 @@ import db from './config/database'
 import redis from './config/redis'
 import { initSocket } from './config/socket'
 import { startCampaignScheduler, stopCampaignScheduler } from './modules/marketing/whatsapp/queue/campaign.scheduler'
+import { startAutomationScheduler, stopAutomationScheduler } from './modules/whatsapp-automation/whatsapp-automation.scheduler'
 
 const PORT = config.port
 
@@ -34,12 +35,16 @@ httpServer.listen(PORT, () => {
 
   // Start campaign scheduler after server is ready
   startCampaignScheduler()
+
+  // Start WhatsApp automation scheduler (separate from campaigns)
+  startAutomationScheduler()
 })
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
   logger.info('SIGTERM signal received: closing HTTP server')
   stopCampaignScheduler()
+  stopAutomationScheduler()
   httpServer.close(() => {
     logger.info('HTTP server closed')
     db.end()

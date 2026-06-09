@@ -1,6 +1,7 @@
 import { AppError } from '../../../../middleware/error.middleware'
 import { webhooksRepository } from './webhooks.repository'
 import { inboxService } from '../inbox/inbox.service'
+import { whatsappAutomationService } from '../../../whatsapp-automation/whatsapp-automation.service'
 import pool from '../../../../config/database'
 import logger from '../../../../config/logger'
 
@@ -57,8 +58,6 @@ export const webhooksService = {
     try {
       logger.info('📊 business_capability_update received:', { value })
 
-      // new field (v24.0+): max_daily_conversations_per_business
-      // old field (v23.0):  max_daily_conversation_per_phone
       const newLimit = value?.max_daily_conversations_per_business
                     ?? value?.max_daily_conversation_per_phone
       const phoneNumberId = value?.phone_number_id ?? value?.phone_number
@@ -150,9 +149,17 @@ export const webhooksService = {
       }, null, 2))
     }
 
+    // ── Check campaign contacts first (existing behaviour) ────────────────────
     const contact = await webhooksRepository.findContactByWamid(wamid)
-    if (!contact) return
 
+    if (!contact) {
+      // ── WA-AUTO: Fallback — check if wamid belongs to automation logs ───────
+      // This handles delivery receipts for event-triggered messages (not campaigns)
+      await whatsappAutomationService.handleDeliveryStatus(wamid, type, timestamp)
+      return
+    }
+
+    // ── Campaign delivery tracking (unchanged) ────────────────────────────────
     if (type === 'DELIVERED') {
       await webhooksRepository.markDelivered(wamid, timestamp)
     } else if (type === 'READ') {

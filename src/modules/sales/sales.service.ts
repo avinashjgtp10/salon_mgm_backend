@@ -7,8 +7,10 @@ import { paymentsRepository } from "../payments/payments.repository";
 import { appointmentsRepository } from "../appointments/appointments.repository";
 import { staffRepository } from "../staff/staff.repository";
 import { servicesRepository } from "../services/services.repository";
+import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
 
 export const salesService = {
+
     async init(salonId: string): Promise<{ staff: any[]; services: any[] }> {
         const [staffResult, services] = await Promise.all([
             staffRepository.list(salonId, { limit: 500, is_active: true }),
@@ -19,8 +21,32 @@ export const salesService = {
 
     async create(params: { requesterUserId: string; requesterRole?: string; body: CreateSaleBody }): Promise<{ sale: Sale; items: SaleItem[] }> {
         const { requesterUserId, body } = params;
-        const sale = await salesRepository.create(body, requesterUserId);
-        const items = await salesRepository.findItemsBySaleId(sale.id);
+        const rawSale = await salesRepository.create(body, requesterUserId);
+        const items = await salesRepository.findItemsBySaleId(rawSale.id);
+
+        // Fetch enriched sale (with client_phone, client_phone_code, salon_name)
+        const sale = (await salesRepository.findById(rawSale.id)) ?? rawSale;
+
+        // ── WhatsApp Automation: Invoice Generated ────────────────────────────
+        // Only fire when there's a real client (not walk-in) and it's a proper sale
+        if (sale.client_id && (sale as any).client_phone) {
+            whatsappAutomationService.trigger({
+                salonId:       sale.salon_id,
+                eventType:     "invoice_generated",
+                clientId:      sale.client_id,
+                phone:         (sale as any).client_phone,
+                countryCode:   (sale as any).client_phone_code ?? null,
+                variables: {
+                    "1": (sale as any).client_name  ?? "Valued Customer",
+                    "2": sale.id.slice(0, 8).toUpperCase(),
+                    "3": String(sale.total_amount   ?? "0"),
+                    "4": (sale as any).salon_name   ?? "our salon",
+                },
+                referenceId:   sale.id,
+                referenceType: "invoice",
+            }).catch(() => {});
+        }
+
         return { sale, items };
     },
 
@@ -52,47 +78,68 @@ export const salesService = {
         const { id, body } = params;
         const existing = await salesRepository.findById(id);
         if (!existing) throw new AppError(404, "Sale not found", "NOT_FOUND");
-        if (existing.status !== 'draft') throw new AppError(400, "Only draft sales can be checked out", "BAD_REQUEST");
-        
-        const sale = await salesRepository.checkout(id, {
-            payment_method: body.payment_method,
+        if (existing.status !== "draft") throw new AppError(400, "Only draft sales can be checked out", "BAD_REQUEST");
+
+        const rawSale = await salesRepository.checkout(id, {
+            payment_method:    body.payment_method,
             payment_reference: body.payment_reference,
-            status: "completed"
+            status:            "completed",
         });
 
+        // Fetch enriched sale (with client_phone, client_phone_code, salon_name)
+        const sale = (await salesRepository.findById(rawSale.id)) ?? rawSale;
+
         let splitDetails: Record<string, number> | undefined = undefined;
-        if (body.payment_method === 'split' && body.payment_reference) {
-             try {
-                 splitDetails = JSON.parse(body.payment_reference);
-             } catch(e) {}
+        if (body.payment_method === "split" && body.payment_reference) {
+            try {
+                splitDetails = JSON.parse(body.payment_reference);
+            } catch (e) {}
         }
-        
+
         try {
             await paymentsRepository.create({
-                salon_id: sale.salon_id,
-                client_id: sale.client_id || undefined,
+                salon_id:       sale.salon_id,
+                client_id:      sale.client_id      || undefined,
                 appointment_id: sale.appointment_id || undefined,
-                gross_amount: parseFloat(sale.subtotal) || parseFloat(sale.total_amount),
+                gross_amount:   parseFloat(sale.subtotal) || parseFloat(sale.total_amount),
                 discount_amount: parseFloat(sale.discount_amount),
-                net_amount: parseFloat(sale.total_amount),
-                paid_amount: body.amount_paid,
-                due_amount: Math.max(0, parseFloat(sale.total_amount) - body.amount_paid),
+                net_amount:     parseFloat(sale.total_amount),
+                paid_amount:    body.amount_paid,
+                due_amount:     Math.max(0, parseFloat(sale.total_amount) - body.amount_paid),
                 payment_method: body.payment_method,
-                split_details: splitDetails,
-                status: 'completed',
-                notes: `Payment for Sale ID: ${sale.id}`
+                split_details:  splitDetails,
+                status:         "completed",
+                notes:          `Payment for Sale ID: ${sale.id}`,
             });
         } catch (error) {
-            console.error('Failed to create payment record for sale:', error);
+            console.error("Failed to create payment record for sale:", error);
         }
 
         // Mark the linked appointment as completed when the sale is checked out
         if (sale.appointment_id) {
             try {
-                await appointmentsRepository.updateStatus(sale.appointment_id, 'completed');
+                await appointmentsRepository.updateStatus(sale.appointment_id, "completed");
             } catch (error) {
-                console.error('Failed to update appointment status after checkout:', error);
+                console.error("Failed to update appointment status after checkout:", error);
             }
+        }
+
+        // ── WhatsApp Automation: Payment Received ─────────────────────────────
+        if (sale.client_id && (sale as any).client_phone) {
+            whatsappAutomationService.trigger({
+                salonId:       sale.salon_id,
+                eventType:     "payment_received",
+                clientId:      sale.client_id,
+                phone:         (sale as any).client_phone,
+                countryCode:   (sale as any).client_phone_code ?? null,
+                variables: {
+                    "1": (sale as any).client_name ?? "Valued Customer",
+                    "2": String(sale.total_amount  ?? "0"),
+                    "3": sale.id.slice(0, 8).toUpperCase(),
+                },
+                referenceId:   sale.id,
+                referenceType: "invoice",
+            }).catch(() => {});
         }
 
         return sale;
@@ -106,8 +153,8 @@ export const salesService = {
     }): Promise<{ buffer: Buffer; contentType: string; filename: string }> {
         const sales = await salesRepository.exportList({
             salon_id: filters.salon_id,
-            status: filters.status,
-            date: filters.date,
+            status:   filters.status,
+            date:     filters.date,
         });
 
         const dateLabel = filters.date ?? "all";
@@ -118,13 +165,13 @@ export const salesService = {
             s.payment_method ?? "", new Date(s.created_at).toLocaleDateString("en-GB"),
         ]);
 
-        // ── CSV ──────────────────────────────────────────────────────────────
+        // ── CSV ───────────────────────────────────────────────────────────────
         if (filters.format === "csv") {
             const csvLines = [headers.join(","), ...rows.map(r => r.join(","))];
             return {
-                buffer: Buffer.from(csvLines.join("\n"), "utf-8"),
+                buffer:      Buffer.from(csvLines.join("\n"), "utf-8"),
                 contentType: "text/csv",
-                filename: `sales_${dateLabel}.csv`,
+                filename:    `sales_${dateLabel}.csv`,
             };
         }
 
@@ -140,7 +187,7 @@ export const salesService = {
             return {
                 buffer,
                 contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                filename: `sales_${dateLabel}.xlsx`,
+                filename:    `sales_${dateLabel}.xlsx`,
             };
         }
 
@@ -151,9 +198,9 @@ export const salesService = {
 
             doc.on("data", (chunk: Buffer) => chunks.push(chunk));
             doc.on("end", () => resolve({
-                buffer: Buffer.concat(chunks),
+                buffer:      Buffer.concat(chunks),
                 contentType: "application/pdf",
-                filename: `sales_${dateLabel}.pdf`,
+                filename:    `sales_${dateLabel}.pdf`,
             }));
             doc.on("error", reject);
 
@@ -165,9 +212,9 @@ export const salesService = {
             doc.moveDown(1.5);
 
             // Column widths
-            const colWidths = [60, 70, 100, 60, 60, 40, 40, 60, 90, 90];
-            const startX = 50;
-            const rowHeight = 20;
+            const colWidths  = [60, 70, 100, 60, 60, 40, 40, 60, 90, 90];
+            const startX     = 50;
+            const rowHeight  = 20;
             let y = doc.y;
 
             const drawRow = (cells: string[], isHeader = false) => {
@@ -201,5 +248,5 @@ export const salesService = {
 
             doc.end();
         });
-    }
+    },
 };
