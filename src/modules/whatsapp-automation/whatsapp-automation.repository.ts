@@ -255,6 +255,19 @@ export const whatsappAutomationRepository = {
   },
 
   // ── Dedup Guard ───────────────────────────────────────────────────────────
+
+  // Atomic insert-if-not-exists — returns true if this worker won the race
+  async guardInsertIfNotExists(key: string): Promise<boolean> {
+    const { rowCount } = await pool.query(
+      `INSERT INTO wa_automation_sent_guard (guard_key)
+       VALUES ($1)
+       ON CONFLICT (guard_key) DO NOTHING`,
+      [key]
+    )
+    return (rowCount ?? 0) > 0
+  },
+
+  // Keep these for backward compat — used in legacy paths
   async guardExists(key: string): Promise<boolean> {
     const { rows } = await pool.query(
       `SELECT 1 FROM wa_automation_sent_guard WHERE guard_key = $1`,

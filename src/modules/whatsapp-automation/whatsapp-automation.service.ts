@@ -295,8 +295,8 @@ export const whatsappAutomationService = {
 
       for (const client of clients) {
         const guardKey    = `birthday:${client.client_id}:${todayIST}`
-        const alreadySent = await whatsappAutomationRepository.guardExists(guardKey)
-        if (alreadySent) continue
+        const inserted = await whatsappAutomationRepository.guardInsertIfNotExists(guardKey)
+        if (!inserted) continue
 
         await this.trigger({
           salonId:       client.salon_id,
@@ -311,8 +311,6 @@ export const whatsappAutomationService = {
           referenceId:   client.client_id,
           referenceType: 'client',
         })
-
-        await whatsappAutomationRepository.guardInsert(guardKey)
       }
     } catch (err: any) {
       logger.error('[WA-AUTO] runBirthdayWishes error:', err?.message)
@@ -330,8 +328,8 @@ export const whatsappAutomationService = {
         // Dedup — don't send again today if already sent
         const todayIST    = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })
         const guardKey    = `pending-payment:${sale.sale_id}:${todayIST}`
-        const alreadySent = await whatsappAutomationRepository.guardExists(guardKey)
-        if (alreadySent) continue
+        const inserted = await whatsappAutomationRepository.guardInsertIfNotExists(guardKey)
+        if (!inserted) continue
 
         const dueDate = sale.due_date
           ? formatDateIST(sale.due_date)
@@ -351,8 +349,6 @@ export const whatsappAutomationService = {
           referenceId:   sale.sale_id,
           referenceType: 'sale',
         })
-
-        await whatsappAutomationRepository.guardInsert(guardKey)
       }
     } catch (err: any) {
       logger.error('[WA-AUTO] runPendingPaymentReminders error:', err?.message)
@@ -368,8 +364,8 @@ export const whatsappAutomationService = {
         if (!mem.phone_number) continue
 
         const guardKey    = `membership-renewal:${mem.membership_id}`
-        const alreadySent = await whatsappAutomationRepository.guardExists(guardKey)
-        if (alreadySent) continue
+        const inserted = await whatsappAutomationRepository.guardInsertIfNotExists(guardKey)
+        if (!inserted) continue
 
         await this.trigger({
           salonId:       mem.salon_id,
@@ -385,8 +381,6 @@ export const whatsappAutomationService = {
           referenceId:   mem.membership_id,
           referenceType: 'membership',
         })
-
-        await whatsappAutomationRepository.guardInsert(guardKey)
       }
     } catch (err: any) {
       logger.error('[WA-AUTO] runMembershipRenewalReminders error:', err?.message)
@@ -405,8 +399,8 @@ export const whatsappAutomationService = {
 
       for (const client of clients) {
         const guardKey    = `we-miss-you-${days}d:${client.client_id}:${todayIST}`
-        const alreadySent = await whatsappAutomationRepository.guardExists(guardKey)
-        if (alreadySent) continue
+        const inserted = await whatsappAutomationRepository.guardInsertIfNotExists(guardKey)
+        if (!inserted) continue
 
         await this.trigger({
           salonId:       client.salon_id,
@@ -422,8 +416,6 @@ export const whatsappAutomationService = {
           referenceId:   client.client_id,
           referenceType: 'client',
         })
-
-        await whatsappAutomationRepository.guardInsert(guardKey)
       }
     } catch (err: any) {
       logger.error(`[WA-AUTO] runWeMissYou(${days}d) error:`, err?.message)
@@ -442,8 +434,8 @@ export const whatsappAutomationService = {
 
       for (const client of clients) {
         const guardKey    = `new-year:${year}:${client.client_id}`
-        const alreadySent = await whatsappAutomationRepository.guardExists(guardKey)
-        if (alreadySent) continue
+        const inserted = await whatsappAutomationRepository.guardInsertIfNotExists(guardKey)
+        if (!inserted) continue
 
         await this.trigger({
           salonId:       client.salon_id,
@@ -458,8 +450,6 @@ export const whatsappAutomationService = {
           referenceId:   client.client_id,
           referenceType: 'client',
         })
-
-        await whatsappAutomationRepository.guardInsert(guardKey)
       }
     } catch (err: any) {
       logger.error('[WA-AUTO] runNewYearCampaign error:', err?.message)
