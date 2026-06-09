@@ -12,6 +12,7 @@ export type BillingPlan = {
     billing_unit: string;
     interval: BillingPlanInterval;
     trial_days: number;
+    trial_minutes?: number;
     features: Record<string, boolean> | null;
     is_active: boolean;
     created_at: string;
