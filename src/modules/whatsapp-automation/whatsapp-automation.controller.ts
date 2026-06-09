@@ -5,7 +5,8 @@
 import { Request, Response, NextFunction } from 'express'
 import { whatsappAutomationService } from './whatsapp-automation.service'
 import { sendSuccess } from '../utils/response.util'
-import { AutomationEventType, AutomationLogStatus } from './whatsapp-automation.types'
+import { AppError } from '../../middleware/error.middleware'
+import { AutomationEventType, AutomationLogStatus, AUTOMATION_EVENT_TYPES } from './whatsapp-automation.types'
 
 export const whatsappAutomationController = {
 
@@ -15,13 +16,33 @@ export const whatsappAutomationController = {
   async getLogs(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const salonId   = req.params.salonId as string
-      const eventType = req.query.eventType as AutomationEventType | undefined
-      const status    = req.query.status    as AutomationLogStatus  | undefined
-      const clientId  = req.query.clientId  as string               | undefined
-      const page      = req.query.page  ? parseInt(req.query.page  as string) : 1
-      const limit     = req.query.limit ? parseInt(req.query.limit as string) : 20
+      const eventType = req.query.eventType as string | undefined
+      const status    = req.query.status    as string | undefined
+      const clientId  = req.query.clientId  as string | undefined
 
-      const result = await whatsappAutomationService.getLogs({ salonId, eventType, status, clientId, page, limit })
+      const rawPage  = parseInt(req.query.page  as string)
+      const rawLimit = parseInt(req.query.limit as string)
+      const page  = Number.isFinite(rawPage)  && rawPage  > 0 ? rawPage  : 1
+      const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 100) : 20
+
+      // Validate eventType if provided
+      if (eventType && !AUTOMATION_EVENT_TYPES.includes(eventType as AutomationEventType)) {
+        return next(new AppError(400, `Invalid eventType: ${eventType}`, 'VALIDATION_ERROR'))
+      }
+
+      const validStatuses: AutomationLogStatus[] = ['QUEUED', 'SENT', 'DELIVERED', 'READ', 'FAILED', 'SKIPPED']
+      if (status && !validStatuses.includes(status as AutomationLogStatus)) {
+        return next(new AppError(400, `Invalid status: ${status}`, 'VALIDATION_ERROR'))
+      }
+
+      const result = await whatsappAutomationService.getLogs({
+        salonId,
+        eventType: eventType as AutomationEventType | undefined,
+        status:    status    as AutomationLogStatus  | undefined,
+        clientId:  clientId && clientId.trim() ? clientId.trim() : undefined,
+        page,
+        limit,
+      })
       sendSuccess(res, 200, result, 'Automation logs fetched')
     } catch (err) { next(err) }
   },
@@ -103,7 +124,7 @@ export const whatsappAutomationController = {
         case 'appointment-reminder':
           await whatsappAutomationService.runAppointmentReminders(); break
         default:
-          res.status(400).json({ error: `Unknown job: ${job}` }); return
+          return next(new AppError(400, `Unknown job: ${job}`, 'VALIDATION_ERROR'))
       }
       sendSuccess(res, 200, { job }, `Job "${job}" executed`)
     } catch (err) { next(err) }

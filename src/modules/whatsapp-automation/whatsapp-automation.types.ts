@@ -41,6 +41,12 @@ export const MARKETING_EVENTS: AutomationEventType[] = [
   'we_miss_you_90d',
 ]
 
+// All event types combined — used for validation
+export const AUTOMATION_EVENT_TYPES: AutomationEventType[] = [
+  ...TRANSACTIONAL_EVENTS,
+  ...MARKETING_EVENTS,
+]
+
 // ── Log Status ────────────────────────────────────────────────────────────────
 export type AutomationLogStatus =
   | 'QUEUED'

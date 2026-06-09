@@ -23,11 +23,11 @@ router.put('/settings/:salonId', whatsappAutomationController.updateSalonSetting
 
 // ── Global Template Management (SalonOx admin) ────────────────────────────────
 // GET  /api/v1/wa-automation/templates
-router.get('/templates', whatsappAutomationController.getAllTemplates)
+router.get('/templates', roleMiddleware('admin'), whatsappAutomationController.getAllTemplates)
 // PUT  /api/v1/wa-automation/templates/:eventType  body: { template_name, language }
-router.put('/templates/:eventType', whatsappAutomationController.updateTemplate)
+router.put('/templates/:eventType', roleMiddleware('admin'), whatsappAutomationController.updateTemplate)
 // PATCH /api/v1/wa-automation/templates/:eventType/toggle  body: { is_active }
-router.patch('/templates/:eventType/toggle', whatsappAutomationController.toggleTemplate)
+router.patch('/templates/:eventType/toggle', roleMiddleware('admin'), whatsappAutomationController.toggleTemplate)
 
 // ── Manual Job Trigger (Admin Only) ──────────────────────────────────────────
 // POST /api/v1/wa-automation/run-job/:jobName

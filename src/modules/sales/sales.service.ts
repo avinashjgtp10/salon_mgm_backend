@@ -1,6 +1,7 @@
 import ExcelJS from "exceljs";
 import PDFDocument from "pdfkit";
 import { AppError } from "../../middleware/error.middleware";
+import logger from "../../config/logger";
 import { salesRepository } from "./sales.repository";
 import { Sale, SaleItem, CreateSaleBody, UpdateSaleBody, CheckoutSaleBody } from "./sales.types";
 import { paymentsRepository } from "../payments/payments.repository";
@@ -112,7 +113,7 @@ export const salesService = {
                 notes:          `Payment for Sale ID: ${sale.id}`,
             });
         } catch (error) {
-            console.error("Failed to create payment record for sale:", error);
+            logger.error("Failed to create payment record for sale:", { saleId: sale.id, salonId: sale.salon_id, error })
         }
 
         // Mark the linked appointment as completed when the sale is checked out
@@ -120,7 +121,7 @@ export const salesService = {
             try {
                 await appointmentsRepository.updateStatus(sale.appointment_id, "completed");
             } catch (error) {
-                console.error("Failed to update appointment status after checkout:", error);
+                logger.error("Failed to update appointment status after checkout:", { appointmentId: sale.appointment_id, error })
             }
         }
 

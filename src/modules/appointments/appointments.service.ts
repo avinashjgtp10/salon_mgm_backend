@@ -180,21 +180,27 @@ export const appointmentsService = {
             try {
                 const full = await appointmentsRepository.findById(appointmentId);
                 if (full && (full as any).client_phone) {
-                    whatsappAutomationService.trigger({
-                        salonId:       full.salon_id,
-                        eventType:     "appointment_rescheduled",
-                        clientId:      full.client_id,
-                        phone:         (full as any).client_phone,
-                        countryCode:   (full as any).client_phone_code ?? null,
-                        variables: {
-                            "1": full.client_name         ?? "Valued Customer",
-                            "2": (full as any).salon_name ?? "our salon",
-                            "3": formatDate(full.scheduled_at),
-                            "4": formatTime(full.scheduled_at),
-                        },
-                        referenceId:   full.id,
-                        referenceType: "appointment",
-                    }).catch(() => {});
+                    const alreadySent = await whatsappAutomationRepository.logExistsForReference(
+                        full.id,
+                        'appointment_rescheduled'
+                    )
+                    if (!alreadySent) {
+                        whatsappAutomationService.trigger({
+                            salonId:       full.salon_id,
+                            eventType:     "appointment_rescheduled",
+                            clientId:      full.client_id,
+                            phone:         (full as any).client_phone,
+                            countryCode:   (full as any).client_phone_code ?? null,
+                            variables: {
+                                "1": full.client_name         ?? "Valued Customer",
+                                "2": (full as any).salon_name ?? "our salon",
+                                "3": formatDate(full.scheduled_at),
+                                "4": formatTime(full.scheduled_at),
+                            },
+                            referenceId:   full.id,
+                            referenceType: "appointment",
+                        }).catch(() => {});
+                    }
                 }
             } catch (_) {
                 // Never block core flow

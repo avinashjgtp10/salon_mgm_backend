@@ -54,6 +54,7 @@ export const whatsappAutomationRepository = {
        RETURNING *`,
       [templateName, language, eventType]
     )
+    if (!rows[0]) throw new Error(`AutomationTemplate not found for eventType=${eventType}`)
     return rows[0]
   },
 
@@ -65,6 +66,7 @@ export const whatsappAutomationRepository = {
        RETURNING *`,
       [isActive, eventType]
     )
+    if (!rows[0]) throw new Error(`AutomationTemplate not found for eventType=${eventType}`)
     return rows[0]
   },
 
@@ -229,8 +231,8 @@ export const whatsappAutomationRepository = {
   },
 
   async listLogs(filters: ListAutomationLogsFilters): Promise<{ data: AutomationLog[]; total: number }> {
-    const page   = filters.page  ?? 1
-    const limit  = filters.limit ?? 20
+    const page   = Math.max(1, parseInt(String(filters.page  ?? 1))  || 1)
+    const limit  = Math.min(100, Math.max(1, parseInt(String(filters.limit ?? 20)) || 20))
     const offset = (page - 1) * limit
 
     const conditions: string[] = ['salon_id = $1']

@@ -179,8 +179,13 @@ export const whatsappAutomationService = {
         })
 
         const wamid = result?.messages?.[0]?.id ?? null
-        await whatsappAutomationRepository.markSent(logId, wamid)
-        logger.info(`[WA-AUTO] ✅ Sent ${templateName} to ${to} (wamid: ${wamid})`)
+        if (wamid) {
+          await whatsappAutomationRepository.markSent(logId, wamid)
+          logger.info(`[WA-AUTO] ✅ Sent ${templateName} to ${to} (wamid: ${wamid})`)
+        } else {
+          logger.warn(`[WA-AUTO] ⚠️ Sent ${templateName} to ${to} but no wamid returned — marking failed`)
+          await whatsappAutomationRepository.markFailed(logId, 'No wamid in response', result ?? {}, null)
+        }
         return
 
       } catch (err: any) {
