@@ -4,12 +4,32 @@ import { AppError } from "../../middleware/error.middleware";
 import { appointmentsRepository } from "./appointments.repository";
 import { blockedTimesRepository } from "../blocked_times/blocked_times.repository";
 import { salesService } from "../sales/sales.service";
+import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
+import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
 import {
     Appointment,
     CreateAppointmentBody,
     UpdateAppointmentBody,
     CancelAppointmentBody,
 } from "./appointments.types";
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function formatDate(dateStr: string): string {
+    return new Date(dateStr).toLocaleDateString("en-IN", {
+        timeZone: "Asia/Kolkata",
+        day: "2-digit", month: "short", year: "numeric",
+    });
+}
+
+function formatTime(dateStr: string): string {
+    return new Date(dateStr).toLocaleTimeString("en-IN", {
+        timeZone: "Asia/Kolkata",
+        hour: "2-digit", minute: "2-digit", hour12: true,
+    });
+}
+
+// ── Service ───────────────────────────────────────────────────────────────────
 
 export const appointmentsService = {
 
@@ -20,7 +40,6 @@ export const appointmentsService = {
     }): Promise<Appointment> {
         const { requesterUserId, body } = params;
 
-        // Conflict check — only when staff_id is provided
         if (body.staff_id && body.staff_id.trim().length > 0) {
             const conflict = await appointmentsRepository.hasConflict({
                 staffId: body.staff_id,
@@ -28,22 +47,16 @@ export const appointmentsService = {
                 durationMinutes: body.duration_minutes,
             });
             if (conflict) {
-                throw new AppError(
-                    409,
-                    "Staff member already has an appointment at this time",
-                    "CONFLICT"
-                );
+                throw new AppError(409, "Staff member already has an appointment at this time", "CONFLICT");
             }
 
-            // Blocked-time check — reject booking if the slot is blocked for this staff
             const apptDate = new Date(body.scheduled_at);
-            // Use UTC consistently — toISOString() gives UTC date, so times must also be UTC
-            const dateStr  = apptDate.toISOString().slice(0, 10);           // UTC date
+            const dateStr  = apptDate.toISOString().slice(0, 10);
             const pad = (n: number) => String(n).padStart(2, "0");
-            const startStr = `${pad(apptDate.getUTCHours())}:${pad(apptDate.getUTCMinutes())}`;   // UTC time
+            const startStr = `${pad(apptDate.getUTCHours())}:${pad(apptDate.getUTCMinutes())}`;
             const endMs    = apptDate.getTime() + body.duration_minutes * 60_000;
             const endDate  = new Date(endMs);
-            const endStr   = `${pad(endDate.getUTCHours())}:${pad(endDate.getUTCMinutes())}`;     // UTC time
+            const endStr   = `${pad(endDate.getUTCHours())}:${pad(endDate.getUTCMinutes())}`;
 
             const blocked = await blockedTimesRepository.hasOverlap({
                 staffId: body.staff_id,
@@ -52,26 +65,55 @@ export const appointmentsService = {
                 endTime: endStr,
             });
             if (blocked) {
-                throw new AppError(
-                    409,
-                    "This time slot is blocked for the selected staff.",
-                    "BLOCKED_TIME"
-                );
+                throw new AppError(409, "This time slot is blocked for the selected staff.", "BLOCKED_TIME");
             }
         }
 
-        // If services array provided but no top-level service_id, use first service
         if (!body.service_id && body.services && body.services.length > 0) {
             body.service_id = body.services[0].service_id;
         }
 
-        // If services array provided but no top-level staff_id, use first service staff
         if (!body.staff_id && body.services && body.services.length > 0 && body.services[0].staff_id) {
             body.staff_id = body.services[0].staff_id ?? undefined;
         }
 
         const appointment = await appointmentsRepository.create(body, requesterUserId);
         logger.info("appointmentsService.create success", { appointmentId: appointment.id });
+
+        // ── WhatsApp Automation: Appointment Confirmation ─────────────────────
+        // Dedup check — NEVER send confirmation twice for the same appointment
+        if (appointment.client_id) {
+            try {
+                const full = await appointmentsRepository.findById(appointment.id);
+                if (full && (full as any).client_phone) {
+                    const alreadySent = await whatsappAutomationRepository.logExistsForReference(
+                        full.id,
+                        "appointment_confirmation"
+                    );
+                    if (!alreadySent) {
+                        whatsappAutomationService.trigger({
+                            salonId:       full.salon_id,
+                            eventType:     "appointment_confirmation",
+                            clientId:      full.client_id,
+                            phone:         (full as any).client_phone,
+                            countryCode:   (full as any).client_phone_code ?? null,
+                            variables: {
+                                "1": full.client_name                      ?? "Valued Customer",
+                                "2": (full as any).salon_name              ?? "our salon",
+                                "3": full.services?.[0]?.name ?? full.title ?? "your service",
+                                "4": formatDate(full.scheduled_at),
+                                "5": formatTime(full.scheduled_at),
+                            },
+                            referenceId:   full.id,
+                            referenceType: "appointment",
+                        }).catch(() => {});
+                    }
+                }
+            } catch (_) {
+                // Never block core flow
+            }
+        }
+
         return appointment;
     },
 
@@ -115,8 +157,8 @@ export const appointmentsService = {
         if (["completed", "cancelled", "no_show"].includes(existing.status))
             throw new AppError(400, `Cannot update an appointment with status '${existing.status}'`, "BAD_REQUEST");
 
-        const newStaffId     = patch.staff_id        ?? existing.staff_id;
-        const newScheduledAt = patch.scheduled_at    ?? existing.scheduled_at;
+        const newStaffId     = patch.staff_id         ?? existing.staff_id;
+        const newScheduledAt = patch.scheduled_at     ?? existing.scheduled_at;
         const newDuration    = patch.duration_minutes ?? existing.duration_minutes;
 
         if (newStaffId && (patch.scheduled_at || patch.staff_id || patch.duration_minutes)) {
@@ -130,7 +172,42 @@ export const appointmentsService = {
                 throw new AppError(409, "Staff member already has an appointment at this time", "CONFLICT");
         }
 
-        return appointmentsRepository.update(appointmentId, patch);
+        const updated = await appointmentsRepository.update(appointmentId, patch);
+
+        // ── WhatsApp Automation: Appointment Rescheduled ──────────────────────
+        // Only fire if scheduled_at actually changed
+        if (patch.scheduled_at && existing.client_id) {
+            try {
+                const full = await appointmentsRepository.findById(appointmentId);
+                if (full && (full as any).client_phone) {
+                    const alreadySent = await whatsappAutomationRepository.logExistsForReference(
+                        full.id,
+                        'appointment_rescheduled'
+                    )
+                    if (!alreadySent) {
+                        whatsappAutomationService.trigger({
+                            salonId:       full.salon_id,
+                            eventType:     "appointment_rescheduled",
+                            clientId:      full.client_id,
+                            phone:         (full as any).client_phone,
+                            countryCode:   (full as any).client_phone_code ?? null,
+                            variables: {
+                                "1": full.client_name         ?? "Valued Customer",
+                                "2": (full as any).salon_name ?? "our salon",
+                                "3": formatDate(full.scheduled_at),
+                                "4": formatTime(full.scheduled_at),
+                            },
+                            referenceId:   full.id,
+                            referenceType: "appointment",
+                        }).catch(() => {});
+                    }
+                }
+            } catch (_) {
+                // Never block core flow
+            }
+        }
+
+        return updated;
     },
 
     async confirm(appointmentId: string): Promise<Appointment> {
@@ -158,7 +235,29 @@ export const appointmentsService = {
         if (!existing) throw new AppError(404, "Appointment not found", "NOT_FOUND");
         if (["completed", "cancelled"].includes(existing.status))
             throw new AppError(400, `Appointment is already '${existing.status}'`, "BAD_REQUEST");
-        return appointmentsRepository.updateStatus(params.appointmentId, "cancelled");
+
+        const cancelled = await appointmentsRepository.updateStatus(params.appointmentId, "cancelled");
+
+        // ── WhatsApp Automation: Appointment Cancelled ────────────────────────
+        if (existing.client_id && (existing as any).client_phone) {
+            whatsappAutomationService.trigger({
+                salonId:       existing.salon_id,
+                eventType:     "appointment_cancelled",
+                clientId:      existing.client_id,
+                phone:         (existing as any).client_phone,
+                countryCode:   (existing as any).client_phone_code ?? null,
+                variables: {
+                    "1": existing.client_name         ?? "Valued Customer",
+                    "2": (existing as any).salon_name ?? "our salon",
+                    "3": formatDate(existing.scheduled_at),
+                    "4": formatTime(existing.scheduled_at),
+                },
+                referenceId:   existing.id,
+                referenceType: "appointment",
+            }).catch(() => {});
+        }
+
+        return cancelled;
     },
 
     async delete(appointmentId: string): Promise<Appointment> {
@@ -200,7 +299,6 @@ export const appointmentsService = {
         if (existing.sale_id)
             throw new AppError(400, "Appointment already has a linked sale", "BAD_REQUEST");
 
-        // Build sale items from JSONB if no explicit items passed
         const resolvedItems = (saleItems && saleItems.length > 0)
             ? saleItems
             : [
@@ -249,6 +347,25 @@ export const appointmentsService = {
         });
 
         const appointment = await appointmentsRepository.linkSale(appointmentId, sale.id);
+
+        // ── WhatsApp Automation: Payment Received ─────────────────────────────
+        if (existing.client_id && (existing as any).client_phone) {
+            whatsappAutomationService.trigger({
+                salonId:       existing.salon_id,
+                eventType:     'payment_received',
+                clientId:      existing.client_id,
+                phone:         (existing as any).client_phone,
+                countryCode:   (existing as any).client_phone_code ?? null,
+                variables: {
+                    '1': existing.client_name         ?? 'Valued Customer',
+                    '2': String(sale.total_amount     ?? '0'),
+                    '3': sale.id.slice(0, 8).toUpperCase(),
+                },
+                referenceId:   sale.id,
+                referenceType: 'invoice',
+            }).catch(() => {});
+        }
+
         return { appointment, saleId: sale.id };
     },
 
@@ -275,19 +392,19 @@ export const appointmentsService = {
 
         const rows = appointments.map(a => [
             a.id,
-            a.title                                              ?? "",
+            a.title                                               ?? "",
             a.status,
-            a.client_id                                          ?? "Walk-in",
-            a.staff_id                                           ?? "",
-            a.service_id                                         ?? "",
+            a.client_id                                           ?? "Walk-in",
+            a.staff_id                                            ?? "",
+            a.service_id                                          ?? "",
             new Date(a.scheduled_at).toLocaleString("en-GB"),
             a.duration_minutes,
             a.ends_at ? new Date(a.ends_at).toLocaleString("en-GB") : "",
-            (a.services        ?? []).map((s: any) => s.name).join(" | "),
-            (a.package_items   ?? []).map((p: any) => p.name).join(" | "),
-            (a.product_items   ?? []).map((p: any) => p.name).join(" | "),
+            (a.services         ?? []).map((s: any) => s.name).join(" | "),
+            (a.package_items    ?? []).map((p: any) => p.name).join(" | "),
+            (a.product_items    ?? []).map((p: any) => p.name).join(" | "),
             (a.membership_items ?? []).map((m: any) => m.name).join(" | "),
-            a.sale_id                                            ?? "",
+            a.sale_id                                             ?? "",
             new Date(a.created_at).toLocaleDateString("en-GB"),
         ]);
 
@@ -300,7 +417,6 @@ export const appointmentsService = {
             };
         }
 
-        // Excel via ExcelJS
         const workbook = new ExcelJS.Workbook();
         const sheet    = workbook.addWorksheet("Appointments");
         sheet.addRow(headers).font = { bold: true };
