@@ -5,15 +5,18 @@ import { webhooksController } from './webhooks.controller'
 
 const router = Router()
 
-// Public — Meta calls these (no auth)
-// GET  /api/v1/webhooks/:salonId/meta
-router.get('/:salonId/meta',  webhooksController.verify)
+// ── Global endpoint — paste this URL in Meta App Dashboard ───────────────────
+// GET  /api/v1/webhooks/whatsapp  ← Meta verification
+// POST /api/v1/webhooks/whatsapp  ← All Meta events
+// MUST be registered BEFORE /:salonId/meta to avoid route conflict
+router.get('/whatsapp',  webhooksController.verifyGlobal)
+router.post('/whatsapp', webhooksController.handleGlobal)
 
-// POST /api/v1/webhooks/:salonId/meta
+// ── Per-salon endpoints — kept for backward compatibility ─────────────────────
+router.get('/:salonId/meta',  webhooksController.verify)
 router.post('/:salonId/meta', webhooksController.handle)
 
-// Private — frontend polling
-// GET /api/v1/webhooks/events
+// ── Private — frontend polling ────────────────────────────────────────────────
 router.get(
   '/events',
   authMiddleware,

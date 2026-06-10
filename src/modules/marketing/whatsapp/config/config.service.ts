@@ -52,7 +52,19 @@ export const configService = {
       display_phone:        body.display_phone         ?? null,
     }
 
-    const saved = await configRepository.upsert(salonId, cleanBody as any)
+    let saved: Awaited<ReturnType<typeof configRepository.upsert>>
+    try {
+      saved = await configRepository.upsert(salonId, cleanBody as any)
+    } catch (err: any) {
+      if (err?.code === '23505') {
+        throw new AppError(
+          409,
+          'This Phone Number ID is already registered to another account. Each salon must use their own WhatsApp number.',
+          'PHONE_NUMBER_ID_TAKEN'
+        )
+      }
+      throw err
+    }
 
     // ── Auto-register webhook with Meta ───────────────────────────────────────
     // Re-fetch so we have the full config including any previously saved secrets

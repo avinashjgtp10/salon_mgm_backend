@@ -17,10 +17,10 @@ import {
 const router = Router();
 
 // LIST + CREATE
-router.get("/", authMiddleware, roleMiddleware("salon_owner", "admin"), validateClientsListQuery, clientsController.list);
+router.get("/",  authMiddleware, roleMiddleware("salon_owner", "admin"), validateClientsListQuery, clientsController.list);
 router.post("/", authMiddleware, roleMiddleware("salon_owner", "admin"), validateCreateClient, clientsController.create);
 
-// EXPORT (same filters)
+// EXPORT
 router.get("/export", authMiddleware, roleMiddleware("salon_owner", "admin"), validateClientsListQuery, clientsController.export);
 
 // IMPORT
@@ -32,35 +32,27 @@ router.post(
     clientsController.import
 );
 
-// GET  /api/v1/clients/duplicates?phone_number=...
-router.get(
-    "/duplicates",
-    authMiddleware,
-    roleMiddleware("salon_owner", "admin"),
-    clientsController.findDuplicates
-);
+// DUPLICATES
+router.get("/duplicates", authMiddleware, roleMiddleware("salon_owner", "admin"), clientsController.findDuplicates);
 
 // MERGE
-router.post("/merge", authMiddleware, roleMiddleware("salon_owner", "admin"), validateMergeClients, clientsController.merge);
-
-router.post(
-    "/merge-duplicates",
-    authMiddleware,
-    roleMiddleware("salon_owner", "admin"),
-    clientsController.mergeAllDuplicates
-);
+router.post("/merge",            authMiddleware, roleMiddleware("salon_owner", "admin"), validateMergeClients, clientsController.merge);
+router.post("/merge-duplicates", authMiddleware, roleMiddleware("salon_owner", "admin"), clientsController.mergeAllDuplicates);
 
 // BLOCK / UNBLOCK
-router.post("/block", authMiddleware, roleMiddleware("salon_owner", "admin"), validateBlockClients, clientsController.block);
-router.patch("/block", authMiddleware, roleMiddleware("salon_owner", "admin"), validateBlockClients, clientsController.block);
+router.post("/block",   authMiddleware, roleMiddleware("salon_owner", "admin"), validateBlockClients,   clientsController.block);
+router.patch("/block",  authMiddleware, roleMiddleware("salon_owner", "admin"), validateBlockClients,   clientsController.block);
 router.post("/unblock", authMiddleware, roleMiddleware("salon_owner", "admin"), validateUnblockClients, clientsController.unblock);
 
-// SEARCH  – must be BEFORE /:clientId to avoid "search" being parsed as a UUID
+// SEARCH — must be BEFORE /:clientId
 router.get("/search", authMiddleware, roleMiddleware("salon_owner", "admin"), validateSearchClients, clientsController.search);
 
+// ── NEW: Smart Filter for campaigns — must be BEFORE /:clientId ──────────────
+router.get("/filter", authMiddleware, roleMiddleware("salon_owner", "admin"), clientsController.filterForCampaign);
+
 // GET/UPDATE/DELETE by id
-router.get("/:clientId", authMiddleware, roleMiddleware("salon_owner", "admin"), clientsController.getById);
-router.patch("/:clientId", authMiddleware, roleMiddleware("salon_owner", "admin"), validateUpdateClient, clientsController.update);
+router.get("/:clientId",    authMiddleware, roleMiddleware("salon_owner", "admin"), clientsController.getById);
+router.patch("/:clientId",  authMiddleware, roleMiddleware("salon_owner", "admin"), validateUpdateClient, clientsController.update);
 router.delete("/:clientId", authMiddleware, roleMiddleware("salon_owner", "admin"), clientsController.remove);
 
 export default router;
