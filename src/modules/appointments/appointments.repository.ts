@@ -8,9 +8,14 @@ import {
 export const appointmentsRepository = {
 
     // ✅ FIX — LEFT JOIN payments so payment_status reflects actual payment records
+    // ✅ WA-AUTO — Added client phone, phone_country_code, salon_name for WhatsApp automation
     async findById(id: string): Promise<Appointment | null> {
         const { rows } = await pool.query(
-            `SELECT a.*, c.full_name AS client_name,
+            `SELECT a.*,
+                c.full_name          AS client_name,
+                c.phone_number       AS client_phone,
+                c.phone_country_code AS client_phone_code,
+                s.business_name AS salon_name,
                 COALESCE(
                   (SELECT CASE
                       WHEN bool_or(p.status = 'completed') THEN 'paid'::text
@@ -24,6 +29,7 @@ export const appointmentsRepository = {
                 COALESCE((SELECT SUM(net_amount) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS paid_amount
              FROM appointments a
              LEFT JOIN clients c ON a.client_id = c.id
+             LEFT JOIN salons  s ON a.salon_id  = s.id
              WHERE a.id = $1`,
             [id]
         );
@@ -163,7 +169,7 @@ export const appointmentsRepository = {
                 data.title              ?? "Appointment",
                 data.notes              ?? null,
                 data.staff_alert        ?? null,
-                data.status             ?? "booked",   // ✅ respect caller status, default 'booked'
+                data.status             ?? "booked",
                 data.scheduled_at,
                 data.duration_minutes,
                 data.colour             ?? null,
@@ -194,7 +200,6 @@ export const appointmentsRepository = {
 
         const setParts: string[] = [];
         const values: any[] = [];
-        // Track param indices so we can recalculate ends_at in SQL
         let scheduledAtIdx: number | null = null;
         let durationIdx: number | null = null;
 
@@ -207,7 +212,7 @@ export const appointmentsRepository = {
                 setParts.push(`${String(k)} = $${idx}`);
                 values.push((patch as any)[k]);
             }
-            if (k === "scheduled_at")    scheduledAtIdx = idx;
+            if (k === "scheduled_at")     scheduledAtIdx = idx;
             if (k === "duration_minutes") durationIdx    = idx;
         });
 
