@@ -1,3 +1,5 @@
+import crypto from "crypto";
+import Razorpay from "razorpay";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import {
@@ -14,6 +16,11 @@ import {
     CancelBillingSubscriptionBody,
     ListBillingInvoicesFilters,
 } from "./billing.types";
+
+const razorpay = new Razorpay({
+    key_id: process.env.RAZORPAY_KEY_ID!,
+    key_secret: process.env.RAZORPAY_KEY_SECRET!,
+});
 
 export const billingService = {
 
@@ -144,5 +151,77 @@ export const billingService = {
         const invoice = await billingInvoicesRepository.findById(id);
         if (!invoice) throw new AppError(404, "Invoice not found", "NOT_FOUND");
         return invoice;
+    },
+
+    // ── Razorpay: Create Order ────────────────────────────────────────────────
+    async createRazorpayOrder(params: { amount: number; plan_id: string }) {
+        const plan = await billingPlansRepository.findById(params.plan_id);
+        if (!plan) throw new AppError(404, "Plan not found", "NOT_FOUND");
+
+        const order = await razorpay.orders.create({
+            amount: Math.round(params.amount * 100), // paise
+            currency: "INR",
+            receipt: `rcpt_${params.plan_id.slice(0, 8)}_${Date.now()}`,
+        });
+
+        logger.info("billingService.createRazorpayOrder", { orderId: order.id, amount: params.amount });
+
+        return {
+            order_id: order.id,
+            amount: params.amount,
+            currency: "INR",
+            plan_id: params.plan_id,
+            plan_name: plan.name,
+        };
+    },
+
+    // ── Razorpay: Verify Payment & Activate Subscription ─────────────────────
+    async verifyAndActivate(params: {
+        salonId: string;
+        plan_id: string;
+        razorpay_order_id: string;
+        razorpay_payment_id: string;
+        razorpay_signature: string;
+    }): Promise<BillingSubscription> {
+        const { salonId, plan_id, razorpay_order_id, razorpay_payment_id, razorpay_signature } = params;
+
+        // Verify HMAC signature
+        const body = razorpay_order_id + "|" + razorpay_payment_id;
+        const expected = crypto
+            .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET!)
+            .update(body)
+            .digest("hex");
+
+        if (expected !== razorpay_signature)
+            throw new AppError(400, "Invalid payment signature", "INVALID_SIGNATURE");
+
+        const plan = await billingPlansRepository.findById(plan_id);
+        if (!plan) throw new AppError(404, "Plan not found", "NOT_FOUND");
+
+        // Cancel any existing active subscription first
+        const existing = await billingSubscriptionsRepository.findActiveBySalonId(salonId);
+        if (existing) {
+            await billingSubscriptionsRepository.cancel(existing.id, "Replaced by new subscription");
+        }
+
+        // Create active subscription
+        const subscription = await billingSubscriptionsRepository.create(
+            { salon_id: salonId, plan_id, quantity: 1 },
+            plan,
+            null as any
+        );
+
+        // Update status to active immediately (payment confirmed)
+        const activated = await billingSubscriptionsRepository.update(subscription.id, {
+            payment_method: "card",
+        });
+
+        logger.info("billingService.verifyAndActivate success", {
+            subscriptionId: activated.id,
+            salonId,
+            paymentId: razorpay_payment_id,
+        });
+
+        return activated;
     },
 };

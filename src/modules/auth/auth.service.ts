@@ -199,6 +199,7 @@ export const authService = {
         first_name: user.first_name,
         last_name: user.last_name,
         salonId,
+        custom_permissions: user.custom_permissions ?? null,
       },
     };
   },

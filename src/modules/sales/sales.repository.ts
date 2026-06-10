@@ -4,9 +4,14 @@ import { Sale, SaleItem, CreateSaleBody, UpdateSaleBody } from "./sales.types";
 export const salesRepository = {
     async findById(id: string): Promise<Sale | null> {
         const { rows } = await safeQuery(() => pool.query(
-            `SELECT s.*, c.full_name AS client_name
+            `SELECT s.*,
+                    c.full_name         AS client_name,
+                    c.phone_number      AS client_phone,
+                    c.phone_country_code AS client_phone_code,
+                    sal.business_name   AS salon_name
              FROM sales s
-             LEFT JOIN clients c ON s.client_id = c.id
+             LEFT JOIN clients c   ON s.client_id = c.id
+             LEFT JOIN salons  sal ON s.salon_id   = sal.id
              WHERE s.id = $1`,
             [id]
         ));

@@ -101,6 +101,9 @@ export const validateCreateStaff = (
         if (!isOptionalStringArray(b.specialization))
             throw new AppError(400, "specialization must be an array of strings", "VALIDATION_ERROR");
 
+        if (b.password !== undefined && (typeof b.password !== "string" || b.password.length < 8))
+            throw new AppError(400, "password must be at least 8 characters", "VALIDATION_ERROR");
+
         return next();
     } catch (err) {
         return next(err);
@@ -138,6 +141,9 @@ export const validateUpdateStaff = (
 
         if (!isOptionalStringArray(b.specialization))
             throw new AppError(400, "specialization must be an array of strings", "VALIDATION_ERROR");
+
+        if (b.password !== undefined && (typeof b.password !== "string" || b.password.length < 8))
+            throw new AppError(400, "password must be at least 8 characters", "VALIDATION_ERROR");
 
         return next();
     } catch (err) {

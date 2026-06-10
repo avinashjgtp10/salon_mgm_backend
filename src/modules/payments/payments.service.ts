@@ -4,6 +4,8 @@ import { appointmentsRepository } from '../appointments/appointments.repository'
 import { salesRepository } from '../sales/sales.repository';
 import { CreatePaymentBody, Payment } from './payments.types';
 import type { Appointment } from '../appointments/appointments.types';
+import logger from '../../config/logger';
+import { whatsappAutomationService } from '../whatsapp-automation/whatsapp-automation.service';
 
 export const paymentsService = {
 
@@ -65,14 +67,10 @@ export const paymentsService = {
     }
 
     // ── Auto-create sale record when calendar payment is fully completed ───────
-    // The dashboard and reports query the `sales` table. Calendar payments
-    // (POST /api/v1/payments) bypass the normal checkout flow and never create
-    // a sales record, so revenue is invisible to the dashboard without this.
     if (data.appointment_id && data.status === 'completed' && appt) {
       try {
         const existingSale = await salesRepository.findByAppointmentId(data.appointment_id);
         if (!existingSale) {
-          // Build sale items from appointment JSONB fields
           const items: Array<{ item_type: 'service' | 'product' | 'membership'; item_id?: string; name: string; quantity: number; unit_price: string }> = [
             ...(appt.services || []).map(s => ({
               item_type: 'service' as const,
@@ -104,7 +102,6 @@ export const paymentsService = {
             })),
           ];
 
-          // Fallback: if no priced items found on the appointment, use the net_amount
           if (items.length === 0) {
             items.push({
               item_type: 'service' as const,
@@ -114,7 +111,7 @@ export const paymentsService = {
             });
           }
 
-          await salesRepository.create({
+          const sale = await salesRepository.create({
             salon_id: data.salon_id,
             client_id: data.client_id,
             appointment_id: data.appointment_id,
@@ -127,9 +124,46 @@ export const paymentsService = {
 
           // Mark the appointment itself as completed
           await appointmentsRepository.updateStatus(data.appointment_id, 'completed');
+
+          // ── WhatsApp Automation: Invoice Generated ──────────────────────────
+          // Fetch enriched sale with client_phone and salon_name
+          const enrichedSale = await salesRepository.findById(sale.id);
+          if (enrichedSale && data.client_id && (enrichedSale as any).client_phone) {
+            whatsappAutomationService.trigger({
+              salonId:       data.salon_id,
+              eventType:     'invoice_generated',
+              clientId:      data.client_id,
+              phone:         (enrichedSale as any).client_phone,
+              countryCode:   (enrichedSale as any).client_phone_code ?? null,
+              variables: {
+                '1': (enrichedSale as any).client_name  ?? 'Valued Customer',
+                '2': enrichedSale.invoice_number        ?? enrichedSale.id.slice(0, 8).toUpperCase(),
+                '3': String(enrichedSale.total_amount   ?? '0'),
+                '4': (enrichedSale as any).salon_name   ?? 'our salon',
+              },
+              referenceId:   enrichedSale.id,
+              referenceType: 'invoice',
+            }).catch(() => {});
+
+            // ── WhatsApp Automation: Payment Received ───────────────────────
+            whatsappAutomationService.trigger({
+              salonId:       data.salon_id,
+              eventType:     'payment_received',
+              clientId:      data.client_id,
+              phone:         (enrichedSale as any).client_phone,
+              countryCode:   (enrichedSale as any).client_phone_code ?? null,
+              variables: {
+                '1': (enrichedSale as any).client_name  ?? 'Valued Customer',
+                '2': String(data.paid_amount            ?? enrichedSale.total_amount ?? '0'),
+                '3': enrichedSale.invoice_number        ?? enrichedSale.id.slice(0, 8).toUpperCase(),
+              },
+              referenceId:   enrichedSale.id,
+              referenceType: 'invoice',
+            }).catch(() => {});
+          }
         }
       } catch (err) {
-        console.error('[paymentsService] Failed to auto-create sale record:', err);
+        logger.error('[paymentsService] Failed to auto-create sale record:', { error: err });
         // Non-fatal: payment is already recorded
       }
     }

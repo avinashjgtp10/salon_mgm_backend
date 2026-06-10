@@ -1,6 +1,7 @@
 import { AppError } from '../../../../middleware/error.middleware'
 import { webhooksRepository } from './webhooks.repository'
 import { inboxService } from '../inbox/inbox.service'
+import { whatsappAutomationService } from '../../../whatsapp-automation/whatsapp-automation.service'
 import pool from '../../../../config/database'
 import logger from '../../../../config/logger'
 
@@ -160,9 +161,30 @@ export const webhooksService = {
       })
     }
 
+    // ── Check campaign contacts first (existing behaviour) ────────────────────
     const contact = await webhooksRepository.findContactByWamid(wamid)
-    if (!contact) return
 
+    if (!contact) {
+      // ── WA-AUTO: Fallback — check if wamid belongs to automation logs ───────
+      // Validate untrusted webhook fields before delegating
+      const allowedTypes = ['SENT', 'DELIVERED', 'READ', 'FAILED']
+      if (
+        typeof wamid === 'string' && wamid.length > 0 &&
+        typeof type  === 'string' && allowedTypes.includes(type) &&
+        timestamp instanceof Date && !isNaN(timestamp.getTime())
+      ) {
+        try {
+          await whatsappAutomationService.handleDeliveryStatus(wamid, type, timestamp)
+        } catch (err: any) {
+          logger.warn('[WA-AUTO] handleDeliveryStatus error:', err?.message)
+        }
+      } else {
+        logger.warn('[WA-AUTO] Skipping automation delivery update — invalid webhook fields', { wamid, type, timestamp })
+      }
+      return
+    }
+
+    // ── Campaign delivery tracking (unchanged) ────────────────────────────────
     if (type === 'DELIVERED') {
       await webhooksRepository.markDelivered(wamid, timestamp)
     } else if (type === 'READ') {
