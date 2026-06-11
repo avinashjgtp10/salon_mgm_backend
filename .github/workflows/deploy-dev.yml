@@ -1,4 +1,4 @@
-name: Deploy Backend - PROD
+name: Deploy Backend - Dev
 
 on:
   push:
@@ -43,5 +43,6 @@ jobs:
             aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com
             cd /home/ubuntu/salonox/dev
             docker-compose pull salonox-backend
+            docker-compose run --rm salonox-backend npx node-pg-migrate -m db-migrations up
             docker-compose up -d salonox-backend
             docker image prune -f
