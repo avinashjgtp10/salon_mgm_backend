@@ -47,6 +47,8 @@ import waAutomationRoutes from "./modules/whatsapp-automation/whatsapp-automatio
 import swaggerUi from "swagger-ui-express";
 import path from "path";
 
+// ── Subscription gate ──────────────────────────────────────────────────────────
+import { subscriptionMiddleware } from "./middleware/subscription.middleware";
 
 const app: Application = express();
 app.set("trust proxy", 1);
@@ -90,6 +92,15 @@ app.get("/health", (_req, res) => {
 app.use("/api/v1/auth", authRoutes);
 // Alias: Google OAuth console uses /api/v1/oauth/google/callback as redirect URI
 app.use("/api/v1/oauth", authRoutes);
+app.use("/api/v1/billing", billingRoutes);
+app.use("/api/v1/subscriptions", subscriptionsRoutes);
+app.use("/api/v1/webhooks",  marketingWebhooksRoutes);
+
+// ── Subscription gate — applied after exempt routes are registered ─────────────
+// Every route registered BELOW this line requires an active/trialing subscription.
+// Routes above (auth, billing, subscriptions, webhooks) are always accessible.
+app.use(subscriptionMiddleware);
+
 app.use("/api/v1/users", usersRoutes);
 app.use("/api/v1/categories", categoriesRoutes);
 app.use("/api/v1/salons", salonsRoutes);
@@ -108,15 +119,12 @@ app.use("/api/v1/bookings", bookingsRoutes);
 app.use("/api/v1/calendar", calendarRoutes);
 app.use("/api/v1/sales", salesRoutes);
 app.use("/api/v1/inventory", inventoryRoutes);
-app.use("/api/v1/billing", billingRoutes);
-app.use("/api/v1/subscriptions", subscriptionsRoutes);
 //app.use('/api/v1//dashboard', marketingDashboardRoutes)
 app.use('/api/v1/marketing/dashboard', marketingDashboardRoutes);
 app.use('/api/v1/marketing/analytics', analyticsRoutes)
 app.use('/api/v1/templates', marketingTemplatesRoutes)
 app.use('/api/v1/campaigns', marketingCampaignsRoutes)
 app.use('/api/v1/wa-config', marketingConfigRoutes)
-app.use('/api/v1/webhooks',  marketingWebhooksRoutes)
 app.use('/api/v1/inbox', inboxRouter);
 app.use("/api/v1/profile",       profileRoutes);
 app.use("/api/v1/dashboard",     salonDashboardRoutes);
