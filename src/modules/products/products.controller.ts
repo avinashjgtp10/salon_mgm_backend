@@ -33,9 +33,12 @@ export const productsController = {
             });
             const {
                 search, category_id, brand_id, retail_sales_enabled,
-                min_price, max_price, stock, sort_by, sort_order, page, limit,
+                min_price, max_price, stock, sort_by, sort_order, page, limit, pageSize,
             } = req.query;
             const salonId = await getSalonId(req);
+            const resolvedLimit = pageSize
+                ? parseInt(pageSize as string, 10)
+                : limit ? parseInt(limit as string, 10) : undefined;
             const result = await productsService.list({
                 requesterUserId: req.user?.userId ?? "anonymous",
                 requesterRole: req.user?.role,
@@ -52,7 +55,7 @@ export const productsController = {
                     sort_by: sort_by as string | undefined,
                     sort_order: sort_order as "ASC" | "DESC" | undefined,
                     page: page ? parseInt(page as string, 10) : undefined,
-                    limit: limit ? parseInt(limit as string, 10) : undefined,
+                    limit: resolvedLimit,
                 },
             });
             return sendSuccess(res, 200, result, "Products fetched successfully");
