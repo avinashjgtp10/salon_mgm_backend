@@ -9,10 +9,13 @@ const EXEMPT_PREFIXES = [
     "/api/v1/webhooks",
     "/api/v1/profile",
     "/api/v1/users/me",
+    "/api-docs",
 ];
 
 function isExempt(path: string): boolean {
-    return EXEMPT_PREFIXES.some((prefix) => path.startsWith(prefix));
+    return EXEMPT_PREFIXES.some(
+        (prefix) => path === prefix || path.startsWith(prefix + "/")
+    );
 }
 
 const BLOCKED = {
@@ -74,7 +77,7 @@ export async function subscriptionMiddleware(
         // Check trial expiry
         if (sub.status === "trialing" && sub.trial_ends_at) {
             if (new Date() > new Date(sub.trial_ends_at)) {
-                pool.query(
+                await pool.query(
                     `UPDATE billing_subscriptions
                      SET status = 'inactive', updated_at = NOW()
                      WHERE salon_id = $1 AND status = 'trialing' AND trial_ends_at < NOW()`,
@@ -89,6 +92,12 @@ export async function subscriptionMiddleware(
         next();
     } catch (err) {
         console.error("[subscriptionMiddleware] DB error:", err);
-        next(); // fail open
+        res.status(503).json({
+            success: false,
+            error: {
+                code: "SERVICE_UNAVAILABLE",
+                message: "Subscription check failed. Please try again later.",
+            },
+        });
     }
 }

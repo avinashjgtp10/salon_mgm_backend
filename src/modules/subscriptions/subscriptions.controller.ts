@@ -4,7 +4,7 @@ import { sendSuccess } from "../utils/response.util"
 import { subscriptionsService } from "./subscriptions.service"
 
 type AuthRequest = Request & {
-    user?: { userId: string; role?: string }
+    user?: { userId: string; role?: string; salonId?: string | null }
 }
 
 export const subscriptionsController = {
@@ -54,9 +54,14 @@ export const subscriptionsController = {
     // ── POST /api/v1/subscriptions/verify/:salonId ────────────────────────────
     // Called by frontend after Razorpay redirects back — verifies directly
     // with Razorpay API, no webhook needed. Works on localhost.
-    async verifySubscription(req: Request, res: Response, next: NextFunction) {
+    async verifySubscription(req: AuthRequest, res: Response, next: NextFunction) {
         try {
-            const result = await subscriptionsService.verifySubscription(req.params.salonId as string)
+            const salonId = req.params.salonId as string
+            if (!salonId) throw new AppError(400, "salonId is required", "VALIDATION_ERROR")
+            if (req.user?.salonId != null && req.user.salonId !== salonId)
+                throw new AppError(403, "Access denied", "FORBIDDEN")
+
+            const result = await subscriptionsService.verifySubscription(salonId)
             if (!result) {
                 throw new AppError(404, "No subscription found", "NOT_FOUND")
             }

@@ -13,7 +13,7 @@
 
 import dotenv from "dotenv";
 dotenv.config({ path: ".env" });
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", override: true });
 
 import Razorpay from "razorpay";
 import pool from "../config/database";
@@ -106,6 +106,7 @@ async function seedPlans() {
 
     } catch (err: any) {
         console.error("❌ Failed:", err.message);
+        throw err;
     } finally {
         await pool.end();
     }

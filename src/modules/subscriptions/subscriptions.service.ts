@@ -90,9 +90,7 @@ export const subscriptionsService = {
     },
 
     async createSubscription(body: CreateSubscriptionBody) {
-        console.log("[createSubscription] body:", JSON.stringify(body))
         const plan = await subscriptionsRepository.findPlanById(body.plan_id)
-        console.log("[createSubscription] plan:", JSON.stringify(plan))
         if (!plan) throw new AppError(404, "Plan not found", "NOT_FOUND")
         if (!plan.razorpay_plan_id)
             throw new AppError(400, "Plan not synced with Razorpay", "INVALID_PLAN")
@@ -167,9 +165,17 @@ export const subscriptionsService = {
         if (!latest.razorpay_subscription_id) return null
 
         // Fetch live status from Razorpay
-        const rzpSub = await razorpay.subscriptions.fetch(
-            latest.razorpay_subscription_id
-        ) as any
+        let rzpSub: any
+        try {
+            rzpSub = await razorpay.subscriptions.fetch(latest.razorpay_subscription_id)
+        } catch (err: any) {
+            console.error("[verifySubscription] Razorpay fetch error:", err)
+            throw new AppError(
+                502,
+                err?.error?.description || err?.message || "Failed to fetch subscription from Razorpay",
+                "RAZORPAY_ERROR"
+            )
+        }
 
         if (rzpSub.status === "active" || rzpSub.status === "authenticated") {
             // Update local DB
@@ -191,10 +197,9 @@ export const subscriptionsService = {
                 `INSERT INTO billing_subscriptions (
                     salon_id, plan_id, status,
                     unit_price, total_amount,
-                    current_period_start, current_period_end,
-                    created_by
+                    current_period_start, current_period_end
                 )
-                VALUES ($1, $2, 'active', $3, $3, $4, $5, $1)
+                VALUES ($1, $2, 'active', $3, $3, $4, $5)
                 ON CONFLICT DO NOTHING`,
                 [
                     salonId,
@@ -238,9 +243,8 @@ export const subscriptionsService = {
                         `INSERT INTO billing_subscriptions (
                             salon_id, plan_id, status,
                             unit_price, total_amount,
-                            current_period_start, current_period_end,
-                            created_by
-                        ) VALUES ($1,$2,'active',$3,$3,$4,$5,$1)
+                            current_period_start, current_period_end
+                        ) VALUES ($1,$2,'active',$3,$3,$4,$5)
                         ON CONFLICT DO NOTHING`,
                         [
                             sub.salon_id, sub.plan_id,
@@ -271,7 +275,7 @@ export const subscriptionsService = {
                             period_start, period_end, paid_at
                         ) VALUES ($1,$2,'paid',$3,$3,$3,$4,$5,NOW())`,
                         [
-                            sub.salon_id, `INV-${Date.now()}`,
+                            sub.salon_id, `INV-${crypto.randomUUID()}`,
                             payEntity.amount / 100,
                             subEntity.current_start ? new Date(subEntity.current_start * 1000).toISOString() : null,
                             subEntity.current_end ? new Date(subEntity.current_end * 1000).toISOString() : null,
