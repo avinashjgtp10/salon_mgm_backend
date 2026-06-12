@@ -100,15 +100,15 @@ export const productsRepository = {
         const limit = filters.limit ?? 20;
         const offset = (page - 1) * limit;
 
-        const { rows: countRows } = await pool.query(
-            `SELECT COUNT(*) AS total FROM products ${where}`, values
-        );
+        const dataIdx = idx;
+        const [{ rows: countRows }, { rows }] = await Promise.all([
+            pool.query(`SELECT COUNT(*) AS total FROM products ${where}`, values),
+            pool.query(
+                `SELECT ${PRODUCT_COLUMNS} FROM products ${where} ORDER BY ${orderCol} ${orderDir} LIMIT $${dataIdx} OFFSET $${dataIdx + 1}`,
+                [...values, limit, offset]
+            ),
+        ]);
         const total = parseInt(countRows[0].total, 10);
-
-        const { rows } = await pool.query(
-            `SELECT ${PRODUCT_COLUMNS} FROM products ${where} ORDER BY ${orderCol} ${orderDir} LIMIT $${idx++} OFFSET $${idx}`,
-            [...values, limit, offset]
-        );
 
         return { data: rows, total };
     },

@@ -41,9 +41,27 @@ export const clientsController = {
     async list(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const salonId = await getSalonId(req);
+            // Parse as positive integer; returns undefined for any invalid/non-integer/< 1 input.
+            const parsePosInt = (v: unknown): number | undefined => {
+                const n = Number(String(v ?? ""));
+                return Number.isInteger(n) && n >= 1 ? n : undefined;
+            };
+            const page    = req.query.page     !== undefined ? parsePosInt(req.query.page)     : undefined;
+            const rawSize = req.query.pageSize  !== undefined ? parsePosInt(req.query.pageSize) : undefined;
+            const rawLim  = req.query.limit     !== undefined ? parsePosInt(req.query.limit)    : undefined;
+            // Max 200 rows per page to prevent runaway queries.
+            const resolvedLimit   = Math.min(rawSize ?? rawLim ?? 20, 200);
+            const resolvedOffset  = Math.max(
+                0,
+                page !== undefined
+                    ? (page - 1) * resolvedLimit
+                    : req.query.offset !== undefined
+                        ? (parsePosInt(req.query.offset) ?? 0)
+                        : 0,
+            );
             const q: ClientsListQuery = {
-                offset: req.query.offset !== undefined ? Number(String(req.query.offset)) : undefined,
-                limit: req.query.limit !== undefined ? Number(String(req.query.limit)) : undefined,
+                offset: resolvedOffset,
+                limit: resolvedLimit,
                 sort_by: req.query.sort_by as any,
                 sort_order: req.query.sort_order as any,
                 search: req.query.search ? String(req.query.search) : undefined,
@@ -54,7 +72,16 @@ export const clientsController = {
                 client_group: req.query.client_group ? (String(req.query.client_group) as any) : undefined,
                 gender: req.query.gender ? (String(req.query.gender) as any) : undefined,
             };
-            const data = await clientsService.list(q, salonId);
+            const raw = await clientsService.list(q, salonId);
+            // When page is absent (offset/limit path), derive from the actual offset used.
+            const currentPage = page ?? Math.max(1, Math.floor(resolvedOffset / resolvedLimit) + 1);
+            const data = {
+                ...raw,
+                page: currentPage,
+                pageSize: resolvedLimit,
+                totalPages: Math.ceil(raw.total / resolvedLimit),
+                totalRecords: raw.total,
+            };
             return sendSuccess(res, 200, data, "Clients fetched successfully");
         } catch (e) { return next(e); }
     },

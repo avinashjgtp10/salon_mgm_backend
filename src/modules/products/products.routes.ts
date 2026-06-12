@@ -10,6 +10,7 @@ import {
     validateCreateBrand,
     validateUpdateBrand,
     validateReorderPhotos,
+    validateListQuery,
 } from "./products.validator";
 
 const router = Router();
@@ -27,7 +28,7 @@ router.get("/export/excel", authMiddleware, roleMiddleware("salon_owner", "admin
 router.get("/export/pdf", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), productsController.exportPDF);
 router.post("/import", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), importUpload.single("file"), productsController.importProducts);
 
-router.get("/", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), productsController.list);
+router.get("/", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), validateListQuery, productsController.list);
 router.get("/:id", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), productsController.getById);
 router.post("/", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), uploadMiddleware.array("photos", 5), validateCreateProduct, productsController.create);
 router.patch("/:id", authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), validateUpdateProduct, productsController.update);

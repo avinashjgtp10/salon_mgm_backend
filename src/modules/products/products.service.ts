@@ -26,7 +26,18 @@ export const productsService = {
     }) {
         const { requesterUserId, requesterRole, salonId, filters } = params;
         logger.info("productsService.list called", { requesterUserId, requesterRole, salonId, filters });
-        return productsRepository.list(filters, salonId);
+        const page = filters.page ?? 1;
+        // Guard against NaN / 0 / negative reaching Math.ceil — all map to default 20.
+        const rawSize = filters.limit ?? 20;
+        const pageSize = Number.isFinite(rawSize) && rawSize > 0 ? rawSize : 20;
+        const { data, total } = await productsRepository.list(filters, salonId);
+        return {
+            data,
+            page,
+            pageSize,
+            totalRecords: total,
+            totalPages: Math.ceil(total / pageSize),
+        };
     },
 
     async getById(id: string, salonId: string): Promise<Product & { photos: ProductPhoto[] }> {

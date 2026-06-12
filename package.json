@@ -13,11 +13,13 @@
     "format": "prettier --write \"src/**/*.ts\"",
     "test": "jest --coverage",
     "test:watch": "jest --watch",
-    "migrate:create": "node-pg-migrate create",
-    "migrate:up": "node-pg-migrate up",
-    "migrate:down": "node-pg-migrate down",
+    "migrate": "node-pg-migrate",
     "migrate:up:dev": "NODE_ENV=development node-pg-migrate up",
     "migrate:up:prod": "NODE_ENV=production node-pg-migrate up",
+   
+    "migrate:up": "node-pg-migrate --envPath .env.local -m db-migrations up",
+"migrate:down": "node-pg-migrate --envPath .env.local -m db-migrations down",
+"migrate:create": "node-pg-migrate -m db-migrations create",
     "seed": "ts-node src/database/seeds/run-seeds.ts"
   },
   "repository": {
@@ -69,7 +71,7 @@
     "nodemailer": "^8.0.1",
     "papaparse": "^5.5.3",
     "pdfkit": "^0.17.2",
-    "pg": "^8.20.0",
+    "pg": "^8.21.0",
     "rate-limit-redis": "^4.3.1",
     "rate-limiter-flexible": "^9.1.1",
     "razorpay": "^2.9.6",
