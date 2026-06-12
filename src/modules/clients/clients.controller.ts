@@ -41,9 +41,15 @@ export const clientsController = {
     async list(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const salonId = await getSalonId(req);
+            const page = req.query.page !== undefined ? Number(String(req.query.page)) : undefined;
+            const pageSize = req.query.pageSize !== undefined ? Number(String(req.query.pageSize)) : undefined;
+            const resolvedLimit = pageSize ?? (req.query.limit !== undefined ? Number(String(req.query.limit)) : 20);
+            const resolvedOffset = page !== undefined
+                ? (page - 1) * resolvedLimit
+                : req.query.offset !== undefined ? Number(String(req.query.offset)) : 0;
             const q: ClientsListQuery = {
-                offset: req.query.offset !== undefined ? Number(String(req.query.offset)) : undefined,
-                limit: req.query.limit !== undefined ? Number(String(req.query.limit)) : undefined,
+                offset: resolvedOffset,
+                limit: resolvedLimit,
                 sort_by: req.query.sort_by as any,
                 sort_order: req.query.sort_order as any,
                 search: req.query.search ? String(req.query.search) : undefined,
@@ -54,7 +60,15 @@ export const clientsController = {
                 client_group: req.query.client_group ? (String(req.query.client_group) as any) : undefined,
                 gender: req.query.gender ? (String(req.query.gender) as any) : undefined,
             };
-            const data = await clientsService.list(q, salonId);
+            const raw = await clientsService.list(q, salonId);
+            const currentPage = page ?? Math.floor(resolvedOffset / resolvedLimit) + 1;
+            const data = {
+                ...raw,
+                page: currentPage,
+                pageSize: resolvedLimit,
+                totalPages: Math.ceil(raw.total / resolvedLimit),
+                totalRecords: raw.total,
+            };
             return sendSuccess(res, 200, data, "Clients fetched successfully");
         } catch (e) { return next(e); }
     },

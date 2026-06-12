@@ -113,25 +113,47 @@ export const clientsService = {
             errors: [],
         };
 
-        const toBody = (r: any): CreateClientBody => ({
-            first_name: String(r.firstName ?? "").trim(),
-            last_name: String(r.lastName ?? "").trim(),
-            email: r.email ? String(r.email).trim() : null,
-            phone_country_code: null,
-            phone_number: r.mobile ? String(r.mobile).trim() : null,
-            additional_email: null,
-            additional_phone_country_code: null,
-            additional_phone_number: null,
-            birthday_day_month: r.birthday ? String(r.birthday).trim() : null,
-            birthday_year: null,
-            client_source: null,
-            preferred_language: null,
-            occupation: null,
-            country: null,
-            gender: r.gender ? String(r.gender).trim() : null,
-            pronouns: null,
-            avatar_url: null,
-        });
+        // Normalize CSV row: build a lowercase-keyed copy (spaces → underscore) so column
+        // matching works regardless of how the user named their columns (e.g. "Mobile Number"
+        // or "mobile" or "Phone" all resolve to the same lookup key).
+        const normalizeRow = (r: any): Record<string, any> => {
+            const out: Record<string, any> = { ...r };
+            for (const [k, v] of Object.entries(r)) {
+                const lk = k.toLowerCase().replace(/\s+/g, '_');
+                out[lk] = v;
+            }
+            return out;
+        };
+
+        const toBody = (raw: any): CreateClientBody => {
+            const r = normalizeRow(raw);
+            const phoneVal = r.mobile ?? r.phone_number ?? r.mobile_number ?? r.phone ?? null;
+            return {
+                first_name: String(r.firstname ?? r.first_name ?? "").trim(),
+                last_name: String(r.lastname ?? r.last_name ?? "").trim(),
+                email: r.email ? String(r.email).trim() : null,
+                phone_country_code: r.phone_country_code ?? null,
+                phone_number: phoneVal != null && String(phoneVal).trim()
+                    ? String(phoneVal).trim()
+                    : null,
+                additional_email: null,
+                additional_phone_country_code: null,
+                additional_phone_number: null,
+                birthday_day_month: r.birthday ? String(r.birthday).trim() : null,
+                birthday_year: null,
+                client_source: null,
+                preferred_language: null,
+                occupation: null,
+                country: null,
+                gender: r.gender ? String(r.gender).trim() : null,
+                pronouns: null,
+                avatar_url: null,
+            };
+        };
+
+        // Track phone numbers and emails seen in this batch to catch within-file duplicates
+        const seenPhones = new Set<string>();
+        const seenEmails = new Set<string>();
 
         for (let i = 0; i < params.rows.length; i++) {
             const rowNum = i + 1;
@@ -144,28 +166,38 @@ export const clientsService = {
                     continue;
                 }
 
-                const existing = await clientsRepository.findExistingByEmailOrPhone(
-                    { email: body.email ?? null, phone_country_code: body.phone_country_code ?? null, phone_number: body.phone_number ?? null },
-                    params.salonId
-                );
+                const phoneKey = body.phone_number?.trim() || null;
+                const emailKey = body.email?.toLowerCase().trim() || null;
 
-                if (params.mode === "create_only") {
-                    if (existing) { result.skipped += 1; continue; }
-                    if (!params.dry_run) await clientsRepository.create(body, params.salonId);
-                    result.imported += 1;
+                // Skip duplicates within this upload batch
+                if (phoneKey && seenPhones.has(phoneKey)) {
+                    result.skipped += 1;
+                    result.errors.push({ row: rowNum, code: "DUPLICATE_IN_BATCH", message: `Phone number ${phoneKey} appears more than once in this file — row skipped` });
+                    continue;
+                }
+                if (emailKey && seenEmails.has(emailKey)) {
+                    result.skipped += 1;
+                    result.errors.push({ row: rowNum, code: "DUPLICATE_IN_BATCH", message: `Email ${emailKey} appears more than once in this file — row skipped` });
                     continue;
                 }
 
-                // upsert
-                if (!existing) {
-                    if (!params.dry_run) await clientsRepository.create(body, params.salonId);
-                    result.imported += 1;
-                } else {
-                    if (!params.dry_run) {
-                        await clientsRepository.update(existing.id, { ...body, is_active: true } as any, params.salonId);
-                    }
-                    result.updated += 1;
+                if (phoneKey) seenPhones.add(phoneKey);
+                if (emailKey) seenEmails.add(emailKey);
+
+                // Check against existing records in the database
+                const existing = await clientsRepository.findExistingByEmailOrPhone(
+                    { email: body.email ?? null, phone_country_code: body.phone_country_code ?? null, phone_number: phoneKey },
+                    params.salonId
+                );
+
+                if (existing) {
+                    // Duplicate found in DB — always skip regardless of mode
+                    result.skipped += 1;
+                    continue;
                 }
+
+                if (!params.dry_run) await clientsRepository.create(body, params.salonId);
+                result.imported += 1;
             } catch (e: any) {
                 result.errors.push({ row: rowNum, code: "IMPORT_ERROR", message: e?.message || "Unknown error" });
             }

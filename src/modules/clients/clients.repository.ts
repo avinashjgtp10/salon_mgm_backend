@@ -88,8 +88,8 @@ export const clientsRepository = {
             }
         }
         if (q.gender && q.gender !== "all") {
-            params.push(q.gender);
-            where.push(`gender = $${params.length}`);
+            params.push(q.gender.toLowerCase());
+            where.push(`LOWER(gender) = $${params.length}`);
         }
         if (q.search && q.search.trim()) {
             const s = `%${q.search.trim().toLowerCase()}%`;
@@ -361,6 +361,14 @@ export const clientsRepository = {
             const r = await pool.query(
                 `SELECT * FROM clients WHERE phone_country_code = $1 AND phone_number = $2 AND salon_id = $3 LIMIT 1`,
                 [pcc, pn, salonId]
+            );
+            if (r.rows[0]) return r.rows[0] as Client;
+        }
+        // Check by phone_number alone (handles imports where country code is unknown)
+        if (pn && !pcc) {
+            const r = await pool.query(
+                `SELECT * FROM clients WHERE TRIM(phone_number) = $1 AND salon_id = $2 LIMIT 1`,
+                [pn, salonId]
             );
             if (r.rows[0]) return r.rows[0] as Client;
         }
