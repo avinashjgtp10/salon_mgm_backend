@@ -83,19 +83,20 @@ export const salesRepository = {
             const total = subtotal - discountAmt + taxAmt + tipAmt;
 
             const invoiceNumber = `INV-${Date.now()}`;
+            const createdAtVal = data.created_at ? new Date(data.created_at + 'T00:00:00.000Z') : new Date();
 
             const saleResult = await client.query(
                 `INSERT INTO sales (
                     salon_id, client_id, appointment_id, staff_id, status, subtotal,
                     discount_amount, tip_amount, tax_amount, total_amount, payment_method,
-                    payment_reference, notes, invoice_number, created_by
-                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+                    payment_reference, notes, invoice_number, created_by, created_at
+                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
                 [
                     data.salon_id, data.client_id || null, data.appointment_id || null, data.staff_id || null,
                     data.status || 'draft', subtotal.toString(), data.discount_amount || '0',
                     data.tip_amount || '0', data.tax_amount || '0', total.toString(),
                     data.payment_method || null, data.payment_reference || null, data.notes || null,
-                    invoiceNumber, createdBy,
+                    invoiceNumber, createdBy, createdAtVal,
                 ]
             );
             const sale = saleResult.rows[0];
@@ -156,11 +157,14 @@ export const salesRepository = {
                 const values: any[]      = [subtotal.toString(), total.toString()];
                 let idx = 3;
 
-                const extraFields = ['client_id', 'discount_amount', 'tip_amount', 'tax_amount', 'notes', 'status', 'payment_method', 'payment_reference'] as const;
+                const extraFields = ['client_id', 'discount_amount', 'tip_amount', 'tax_amount', 'notes', 'status', 'payment_method', 'payment_reference', 'created_at'];
                 for (const key of extraFields) {
                     if (key in salePatch && (salePatch as any)[key] !== undefined) {
                         setParts.push(`${key} = $${idx++}`);
-                        values.push((salePatch as any)[key]);
+                        const val = key === 'created_at' && typeof (salePatch as any)[key] === 'string'
+                            ? new Date((salePatch as any)[key] + 'T00:00:00.000Z')
+                            : (salePatch as any)[key];
+                        values.push(val);
                     }
                 }
                 values.push(id);
@@ -185,7 +189,10 @@ export const salesRepository = {
             const values: any[]      = [];
             keys.forEach((k, i) => {
                 setParts.push(`${String(k)} = $${i + 1}`);
-                values.push((salePatch as any)[k]);
+                const val = k === 'created_at' && typeof (salePatch as any)[k] === 'string'
+                    ? new Date((salePatch as any)[k] + 'T00:00:00.000Z')
+                    : (salePatch as any)[k];
+                values.push(val);
             });
             setParts.push(`updated_at = NOW()`);
             values.push(id);

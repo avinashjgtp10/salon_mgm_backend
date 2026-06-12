@@ -49,6 +49,7 @@ export type CreateSaleBody = {
     payment_method?: PaymentMethod;
     payment_reference?: string;
     notes?: string;
+    created_at?: string;
     items: Array<{
         item_type: SaleItemType;
         item_id?: string;
