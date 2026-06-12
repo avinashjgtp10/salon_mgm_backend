@@ -13,6 +13,8 @@ const auth = [authMiddleware, requireSalon];
 router.get("/",      ...auth, clientPackagesController.list);
 router.post("/",     ...auth, validateCreateClientPackage, clientPackagesController.create);
 router.get("/:id",   ...auth, clientPackagesController.getById);
+router.patch("/:id",  ...auth, clientPackagesController.update);
+router.delete("/:id", ...auth, clientPackagesController.delete);
 router.post("/:id/sessions/complete", ...auth, validateCompleteSession, clientPackagesController.completeSession);
 
 export default router;

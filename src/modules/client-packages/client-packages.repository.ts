@@ -293,4 +293,75 @@ export const clientPackagesRepository = {
       client.release();
     }
   },
+
+  async update(id: string, salonId: string, dto: any): Promise<ClientPackage | null> {
+    const fields: string[] = [];
+    const values: any[] = [];
+    let idx = 1;
+
+    if (dto.packageName !== undefined) {
+      fields.push(`package_name = $${idx++}`);
+      values.push(dto.packageName);
+    }
+    if (dto.category !== undefined) {
+      fields.push(`category = $${idx++}`);
+      values.push(dto.category);
+    }
+    if (dto.expiryDate !== undefined) {
+      fields.push(`expiry_date = $${idx++}`);
+      values.push(dto.expiryDate);
+    }
+    if (dto.status !== undefined) {
+      fields.push(`status = $${idx++}`);
+      values.push(dto.status);
+    }
+    if (dto.paymentStatus !== undefined) {
+      fields.push(`payment_status = $${idx++}`);
+      values.push(dto.paymentStatus);
+    }
+    if (dto.paymentMethod !== undefined) {
+      fields.push(`payment_method = $${idx++}`);
+      values.push(dto.paymentMethod);
+    }
+
+    if (fields.length === 0) {
+      return this.findById(id, salonId);
+    }
+
+    values.push(id, salonId);
+    const query = `
+      UPDATE client_packages
+      SET ${fields.join(", ")}
+      WHERE id = $${idx++} AND salon_id = $${idx++}
+    `;
+
+    await pool.query(query, values);
+    return this.findById(id, salonId);
+  },
+
+  async delete(id: string, salonId: string): Promise<boolean> {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `DELETE FROM client_package_session_history WHERE client_package_id = $1`,
+        [id]
+      );
+      await client.query(
+        `DELETE FROM client_package_services WHERE client_package_id = $1`,
+        [id]
+      );
+      const res = await client.query(
+        `DELETE FROM client_packages WHERE id = $1 AND salon_id = $2`,
+        [id, salonId]
+      );
+      await client.query("COMMIT");
+      return res.rowCount > 0;
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  },
 };

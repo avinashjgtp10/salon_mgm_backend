@@ -34,4 +34,16 @@ export const clientPackagesService = {
     if (!updated) throw { statusCode: 404, message: "Client package not found" };
     return updated;
   },
+
+  async update(id: string, salonId: string, dto: any): Promise<ClientPackage | null> {
+    const updated = await clientPackagesRepository.update(id, salonId, dto);
+    if (!updated) throw { statusCode: 404, message: "Client package not found" };
+    return updated;
+  },
+
+  async delete(id: string, salonId: string): Promise<boolean> {
+    const deleted = await clientPackagesRepository.delete(id, salonId);
+    if (!deleted) throw { statusCode: 404, message: "Client package not found" };
+    return deleted;
+  },
 };

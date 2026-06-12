@@ -50,4 +50,24 @@ export const clientPackagesController = {
       return sendSuccess(res, 200, data, "Session marked as completed");
     } catch (e) { return next(e); }
   },
+
+  async update(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = getSalonId(req);
+      const data = await clientPackagesService.update(
+        req.params.id as string,
+        salonId,
+        req.body,
+      );
+      return sendSuccess(res, 200, data, "Client package updated successfully");
+    } catch (e) { return next(e); }
+  },
+
+  async delete(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = getSalonId(req);
+      await clientPackagesService.delete(req.params.id as string, salonId);
+      return sendSuccess(res, 200, null, "Client package deleted successfully");
+    } catch (e) { return next(e); }
+  },
 };
