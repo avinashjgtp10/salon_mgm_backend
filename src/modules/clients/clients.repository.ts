@@ -1,5 +1,6 @@
 // src/modules/clients/clients.repository.ts
 import pool from "../../config/database";
+import logger from "../../config/logger";
 import {
     Client,
     ClientAddress,
@@ -364,13 +365,23 @@ export const clientsRepository = {
             );
             if (r.rows[0]) return r.rows[0] as Client;
         }
-        // Check by phone_number alone (handles imports where country code is unknown)
+        // Best-effort: match by phone_number only when country code is absent.
+        // WARNING: may return the wrong client if multiple clients share the same local
+        // number under different country codes. The import flow treats this as a
+        // skip (not a merge), so the worst outcome is a false duplicate detection.
         if (pn && !pcc) {
             const r = await pool.query(
                 `SELECT * FROM clients WHERE TRIM(phone_number) = $1 AND salon_id = $2 LIMIT 1`,
                 [pn, salonId]
             );
-            if (r.rows[0]) return r.rows[0] as Client;
+            if (r.rows[0]) {
+                logger.warn("findExistingByEmailOrPhone: phone_country_code missing — best-effort match by phone_number only; may be ambiguous", {
+                    phone_number: pn,
+                    matched_client_id: r.rows[0].id,
+                    salon_id: salonId,
+                });
+                return r.rows[0] as Client;
+            }
         }
         return null;
     },

@@ -101,6 +101,7 @@ export const clientsService = {
     // ---------------- IMPORT ----------------
     async importClients(params: {
         rows: Array<any>;
+        /** @deprecated Imports always skip duplicates (create_only). This param is accepted but ignored. */
         mode: ClientsImportMode;
         dry_run: boolean;
         salonId: string;

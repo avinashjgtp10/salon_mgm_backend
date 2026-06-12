@@ -41,12 +41,24 @@ export const clientsController = {
     async list(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const salonId = await getSalonId(req);
-            const page = req.query.page !== undefined ? Number(String(req.query.page)) : undefined;
-            const pageSize = req.query.pageSize !== undefined ? Number(String(req.query.pageSize)) : undefined;
-            const resolvedLimit = pageSize ?? (req.query.limit !== undefined ? Number(String(req.query.limit)) : 20);
-            const resolvedOffset = page !== undefined
-                ? (page - 1) * resolvedLimit
-                : req.query.offset !== undefined ? Number(String(req.query.offset)) : 0;
+            // Parse as positive integer; returns undefined for any invalid/non-integer/< 1 input.
+            const parsePosInt = (v: unknown): number | undefined => {
+                const n = Number(String(v ?? ""));
+                return Number.isInteger(n) && n >= 1 ? n : undefined;
+            };
+            const page    = req.query.page     !== undefined ? parsePosInt(req.query.page)     : undefined;
+            const rawSize = req.query.pageSize  !== undefined ? parsePosInt(req.query.pageSize) : undefined;
+            const rawLim  = req.query.limit     !== undefined ? parsePosInt(req.query.limit)    : undefined;
+            // Max 200 rows per page to prevent runaway queries.
+            const resolvedLimit   = Math.min(rawSize ?? rawLim ?? 20, 200);
+            const resolvedOffset  = Math.max(
+                0,
+                page !== undefined
+                    ? (page - 1) * resolvedLimit
+                    : req.query.offset !== undefined
+                        ? (parsePosInt(req.query.offset) ?? 0)
+                        : 0,
+            );
             const q: ClientsListQuery = {
                 offset: resolvedOffset,
                 limit: resolvedLimit,
@@ -61,7 +73,8 @@ export const clientsController = {
                 gender: req.query.gender ? (String(req.query.gender) as any) : undefined,
             };
             const raw = await clientsService.list(q, salonId);
-            const currentPage = page ?? Math.floor(resolvedOffset / resolvedLimit) + 1;
+            // When page is absent (offset/limit path), derive from the actual offset used.
+            const currentPage = page ?? Math.max(1, Math.floor(resolvedOffset / resolvedLimit) + 1);
             const data = {
                 ...raw,
                 page: currentPage,

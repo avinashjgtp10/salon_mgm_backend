@@ -146,6 +146,31 @@ export const validateReorderPhotos = (req: Request, _res: Response, next: NextFu
     }
 };
 
+// ─── List Query Validator ─────────────────────────────────────────────────────
+
+export const validateListQuery = (req: Request, _res: Response, next: NextFunction) => {
+    const MAX_PAGE_SIZE = 100;
+    const { page, pageSize, limit } = req.query;
+
+    if (page !== undefined) {
+        const n = parseInt(String(page), 10);
+        if (!Number.isInteger(n) || n < 1) {
+            return next(new AppError(400, "page must be a positive integer", "VALIDATION_ERROR"));
+        }
+    }
+    const sizeParam = pageSize ?? limit;
+    if (sizeParam !== undefined) {
+        const n = parseInt(String(sizeParam), 10);
+        if (!Number.isInteger(n) || n < 1) {
+            return next(new AppError(400, "pageSize must be a positive integer", "VALIDATION_ERROR"));
+        }
+        if (n > MAX_PAGE_SIZE) {
+            return next(new AppError(400, `pageSize must not exceed ${MAX_PAGE_SIZE}`, "VALIDATION_ERROR"));
+        }
+    }
+    return next();
+};
+
 // ─── Brand Validators ─────────────────────────────────────────────────────────
 
 export const validateCreateBrand = (req: Request, _res: Response, next: NextFunction) => {
