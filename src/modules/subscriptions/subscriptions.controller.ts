@@ -58,7 +58,7 @@ export const subscriptionsController = {
         try {
             const salonId = req.params.salonId as string
             if (!salonId) throw new AppError(400, "salonId is required", "VALIDATION_ERROR")
-            if (req.user?.salonId != null && req.user.salonId !== salonId)
+            if (req.user?.role !== "admin" && req.user?.salonId !== salonId)
                 throw new AppError(403, "Access denied", "FORBIDDEN")
 
             const result = await subscriptionsService.verifySubscription(salonId)
