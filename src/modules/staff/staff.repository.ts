@@ -73,7 +73,7 @@ export const staffRepository = {
         return rows[0] || null;
     },
 
-    async create(salonId: string, data: CreateStaffBody): Promise<Staff> {
+    async create(salonId: string, data: CreateStaffBody, passwordHash?: string | null): Promise<Staff> {
         try {
             console.log("[DB DEBUG] staffRepository.create - SQL params:", [
                 salonId, data.first_name, data.last_name ?? null, data.email,
@@ -90,8 +90,10 @@ export const staffRepository = {
             salon_id, first_name, last_name, email, phone, phone_country_code,
             additional_phone, country, calendar_color, designation,
             staff_external_id, employment_type, branch_id, employee_code,
-              experience_years, specialization, login_role, is_active, invitation_status
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,false,'pending')
+              experience_years, specialization, login_role, password_hash,
+              allow_calendar_bookings,
+              is_active, invitation_status
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,false,'pending')
             RETURNING *`,
                 [
                     salonId, data.first_name, data.last_name ?? null, data.email,
@@ -102,6 +104,8 @@ export const staffRepository = {
                     data.branch_id ?? null, data.employee_code ?? null,
                     data.experience_years ?? null, data.specialization ?? [],
                     data.login_role ?? "staff",
+                    passwordHash ?? null,
+                    data.allow_calendar_bookings ?? true,
                 ]
             );
             return rows[0];
@@ -122,9 +126,10 @@ export const staffRepository = {
         );
     },
 
-    async update(id: string, salonId: string, patch: UpdateStaffBody): Promise<Staff> {
+    async update(id: string, salonId: string, patch: UpdateStaffBody, passwordHash?: string | null): Promise<Staff> {
         // Maps UpdateStaffBody keys to actual DB column names (job_title → designation)
-        const COLUMN_MAP: Record<keyof UpdateStaffBody, string> = {
+        // 'password' is excluded here — handled via the passwordHash param
+        const COLUMN_MAP: Record<string, string> = {
             first_name: "first_name",
             email: "email",
             last_name: "last_name",
@@ -141,11 +146,17 @@ export const staffRepository = {
             experience_years: "experience_years",
             specialization: "specialization",
             login_role: "login_role",
+            allow_calendar_bookings: "allow_calendar_bookings",
+            custom_permissions: "custom_permissions",
         };
 
         const entries = (Object.keys(patch) as (keyof UpdateStaffBody)[])
             .filter((k) => k in COLUMN_MAP)
-            .map((k) => [COLUMN_MAP[k], (patch as any)[k]] as [string, unknown]);
+            .map((k) => [COLUMN_MAP[k as string], (patch as any)[k]] as [string, unknown]);
+
+        if (passwordHash !== undefined && passwordHash !== null) {
+            entries.push(["password_hash", passwordHash]);
+        }
 
         if (entries.length === 0) {
             const { rows } = await pool.query(`SELECT * FROM staff WHERE id = $1 AND salon_id = $2`, [id, salonId]);
@@ -162,6 +173,13 @@ export const staffRepository = {
             values
         );
         return rows[0];
+    },
+
+    async activateDirectly(id: string): Promise<void> {
+        await pool.query(
+            `UPDATE staff SET is_active = true, invitation_status = 'accepted', invitation_accepted_at = NOW(), updated_at = NOW() WHERE id = $1`,
+            [id]
+        );
     },
 
     async deactivate(id: string, salonId: string): Promise<boolean> {

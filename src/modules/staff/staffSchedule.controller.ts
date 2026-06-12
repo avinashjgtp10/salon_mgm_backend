@@ -1,10 +1,10 @@
 import { Request, Response } from 'express';
 import { staffSchedulesService } from './staff.service';
-import { sendSuccess, sendError } from '../../utils/response.util';
+import { sendSuccess, sendError } from '../utils/response.util';
 
 export const deleteSingleShift = async (req: Request, res: Response) => {
   const { staffId } = req.params;
-  const { date, salon_id } = req.body;
+  const { date, salon_id } = req.body as { date: string; salon_id: string };
 
   if (!date) {
     return sendError(res, 400, 'MISSING_DATE', 'Date is required');

@@ -1,4 +1,6 @@
 import { clientPackagesRepository } from "./client-packages.repository";
+import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
+import logger from "../../config/logger";
 import type {
   ClientPackage,
   CreateClientPackageDTO,
@@ -22,7 +24,35 @@ export const clientPackagesService = {
   },
 
   async create(salonId: string, dto: CreateClientPackageDTO): Promise<ClientPackage> {
-    return clientPackagesRepository.create(salonId, dto);
+    const pkg = await clientPackagesRepository.create(salonId, dto);
+
+    // ── WhatsApp Automation: Membership / Package Purchased ───────────────────
+    // mobile field on ClientPackage is the client's phone number
+    if (pkg.mobile) {
+      whatsappAutomationService.trigger({
+        salonId:       pkg.salonId,
+        eventType:     "membership_purchased",
+        clientId:      pkg.clientId,
+        phone:         pkg.mobile,
+        countryCode:   null,   // client-packages doesn't store country code separately
+        variables: {
+          "1": pkg.clientName  ?? "Valued Customer",
+          "2": pkg.packageName,
+          "3": pkg.expiryDate
+               ? new Date(pkg.expiryDate).toLocaleDateString("en-IN", {
+                   timeZone: "Asia/Kolkata",
+                   day: "2-digit", month: "short", year: "numeric",
+                 })
+               : "N/A",
+        },
+        referenceId:   pkg.id,
+        referenceType: "membership",
+      }).catch(() => {});
+    } else {
+      logger.info(`[WA-AUTO] Skipping membership_purchased for package ${pkg.id} — no mobile number`)
+    }
+
+    return pkg;
   },
 
   async completeSession(

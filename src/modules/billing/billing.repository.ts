@@ -71,12 +71,16 @@ export const billingSubscriptionsRepository = {
     ): Promise<BillingSubscription> {
         const unitPrice = parseFloat(plan.price_per_unit);
         const totalAmount = unitPrice * data.quantity;
+        const trialMinutes = plan.trial_minutes ?? 0;
         const trialDays = plan.trial_days ?? 0;
+        const hasTrial = trialMinutes > 0 || trialDays > 0;
         const periodExpr = periodEndExpr(plan.interval);
-        const trialExpr = trialDays > 0
+        const trialExpr = trialMinutes > 0
+            ? `NOW() + INTERVAL '${trialMinutes} minutes'`
+            : trialDays > 0
             ? `NOW() + INTERVAL '${trialDays} days'`
             : `NULL`;
-        const initStatus = trialDays > 0 ? "trialing" : "active";
+        const initStatus = hasTrial ? "trialing" : "active";
 
         const { rows } = await pool.query(
             `INSERT INTO billing_subscriptions (
@@ -90,10 +94,10 @@ export const billingSubscriptionsRepository = {
       )
       VALUES (
         $1, $2,
-        $3, $4, $5, $6,
+        $3::billing_status, $4, $5, $6,
         NOW(), ${periodExpr},
         ${trialExpr},
-        $7, $8, $9, $10, $11,
+        NULLIF($7, '')::billing_payment_method, $8, $9, $10, $11,
         $12, $13, $14, $15, $16,
         $17
       )
@@ -115,7 +119,7 @@ export const billingSubscriptionsRepository = {
                 data.billing_last_name ?? null,
                 data.billing_address ?? null,
                 data.vat_number ?? null,
-                createdBy,
+                createdBy ?? null,
             ]
         );
         return rows[0];
@@ -165,7 +169,7 @@ export const billingSubscriptionsRepository = {
     async cancel(id: string, reason?: string): Promise<BillingSubscription> {
         const { rows } = await pool.query(
             `UPDATE billing_subscriptions
-       SET status = 'cancelled',
+       SET status = 'cancelled'::billing_status,
            cancelled_at = NOW(),
            cancel_reason = $1,
            updated_at = NOW()

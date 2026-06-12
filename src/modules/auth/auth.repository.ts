@@ -8,7 +8,14 @@ export const authRepository = {
    */
   async findUserByEmail(email: string) {
     const { rows } = await safeQuery(() =>
-      pool.query(`SELECT * FROM users WHERE email = $1 LIMIT 1`, [email]),
+      pool.query(
+        `SELECT u.*, s.custom_permissions
+         FROM users u
+         LEFT JOIN staff s ON s.user_id = u.id
+         WHERE u.email = $1
+         LIMIT 1`,
+        [email]
+      ),
     );
     return rows[0] || null;
   },
@@ -122,13 +129,19 @@ export const authRepository = {
   },
 
   /**
-   * Get the salon ID owned by this user (null if none)
+   * Get the salon ID for this user — checks ownership first, then staff membership.
    */
   async findSalonIdByUserId(userId: string): Promise<string | null> {
-    const { rows } = await safeQuery(() =>
+    const { rows: owned } = await safeQuery(() =>
       pool.query(`SELECT id FROM salons WHERE owner_id = $1 ORDER BY created_at DESC LIMIT 1`, [userId]),
     );
-    return rows[0]?.id ?? null;
+    if (owned[0]?.id) return owned[0].id;
+
+    // Staff/manager users: salon is on the staff row, not salons.owner_id
+    const { rows: staffRows } = await safeQuery(() =>
+      pool.query(`SELECT salon_id FROM staff WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1`, [userId]),
+    );
+    return staffRows[0]?.salon_id ?? null;
   },
 
   /**

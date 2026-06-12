@@ -43,16 +43,19 @@ import reportsRoutes from "./modules/reports/reports.routes";
 import blockedTimesRoutes from "./modules/blocked_times/blocked_times.routes";
 import analyticsRoutes from './modules/marketing/whatsapp/analytics/analytics.routes'
 import botRoutes from "./modules/bot/bot.routes";
+import waAutomationRoutes from "./modules/whatsapp-automation/whatsapp-automation.routes";
 import swaggerUi from "swagger-ui-express";
 import path from "path";
 
 
 const app: Application = express();
 app.set("trust proxy", 1);
+
 // Security middleware
 app.use(helmet());
 
 app.use(corsMiddleware);
+
 // Body parsing middleware
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
@@ -83,7 +86,7 @@ app.get("/health", (_req, res) => {
   });
 });
 
-// ✅ API ROUT1ES (MUST be before 404)
+// ✅ API ROUTES (MUST be before 404)
 app.use("/api/v1/auth", authRoutes);
 // Alias: Google OAuth console uses /api/v1/oauth/google/callback as redirect URI
 app.use("/api/v1/oauth", authRoutes);
@@ -115,15 +118,15 @@ app.use('/api/v1/campaigns', marketingCampaignsRoutes)
 app.use('/api/v1/wa-config', marketingConfigRoutes)
 app.use('/api/v1/webhooks',  marketingWebhooksRoutes)
 app.use('/api/v1/inbox', inboxRouter);
-app.use("/api/v1/profile",  profileRoutes);
-app.use("/api/v1/dashboard",      salonDashboardRoutes);
-app.use("/api/v1/coupons",        couponsRoutes);
-app.use("/api/v1/payments",       paymentsRoutes);
-app.use("/api/v1/blocked-times",  blockedTimesRoutes);
-app.use("/api/v1/settings",       settingsRoutes);
-app.use("/api/v1/bot",            botRoutes);
-app.use("/api/v1/reports",        reportsRoutes);
-
+app.use("/api/v1/profile",       profileRoutes);
+app.use("/api/v1/dashboard",     salonDashboardRoutes);
+app.use("/api/v1/coupons",       couponsRoutes);
+app.use("/api/v1/payments",      paymentsRoutes);
+app.use("/api/v1/blocked-times", blockedTimesRoutes);
+app.use("/api/v1/settings",      settingsRoutes);
+app.use("/api/v1/bot",           botRoutes);
+app.use("/api/v1/reports",       reportsRoutes);
+app.use("/api/v1/wa-automation", waAutomationRoutes);
 
 // Swagger Documentation
 const swaggerDocument = require(path.join(__dirname, "../docs/api/swagger-gen.json"));

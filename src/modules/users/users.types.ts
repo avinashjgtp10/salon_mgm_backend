@@ -32,6 +32,7 @@ export type SafeUser = {
     country: string | null;
     countryCode: string | null;
     isOnboardingComplete: boolean;
+    custom_permissions: Record<string, boolean> | null;
 };
 
 export type { UpdateUserInput } from "./users.validator";
