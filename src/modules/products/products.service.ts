@@ -26,7 +26,16 @@ export const productsService = {
     }) {
         const { requesterUserId, requesterRole, salonId, filters } = params;
         logger.info("productsService.list called", { requesterUserId, requesterRole, salonId, filters });
-        return productsRepository.list(filters, salonId);
+        const page = filters.page ?? 1;
+        const pageSize = filters.limit ?? 20;
+        const { data, total } = await productsRepository.list(filters, salonId);
+        return {
+            data,
+            page,
+            pageSize,
+            totalRecords: total,
+            totalPages: Math.ceil(total / pageSize),
+        };
     },
 
     async getById(id: string, salonId: string): Promise<Product & { photos: ProductPhoto[] }> {
