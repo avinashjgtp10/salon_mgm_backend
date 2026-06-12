@@ -1,4 +1,7 @@
-export type ReportPeriod = "7d" | "30d" | "90d" | "12m" | "custom";
+import type { EntityId } from "./common.types";
+
+// ── Period & Tab ───────────────────────────────────────────────────────────────
+export type ReportPeriod = "7d" | "30d" | "90d" | "12m";
 export type ReportTab = "revenue" | "appointments" | "clients" | "staff" | "services";
 
 // ── Revenue ───────────────────────────────────────────────────────────────────
@@ -35,6 +38,11 @@ export interface AppointmentVolumePoint {
   noShow: number;
 }
 
+export interface PeakHourPoint {
+  hour: string;
+  count: number;
+}
+
 export interface AppointmentsKPI {
   totalBookings: number;
   completionRate: number;
@@ -50,8 +58,8 @@ export interface AppointmentsKPI {
 
 export interface AppointmentsReport {
   volume: AppointmentVolumePoint[];
+  peakHours: PeakHourPoint[];
   kpi: AppointmentsKPI;
-  peakHours: { hour: string; count: number }[];
 }
 
 // ── Clients ───────────────────────────────────────────────────────────────────
@@ -63,10 +71,11 @@ export interface ClientGrowthPoint {
 }
 
 export interface TopClient {
-  id: string;
+  id: EntityId;
   name: string;
   visits: number;
   spend: number;
+  avatar?: string;
 }
 
 export interface ClientsKPI {
@@ -90,7 +99,7 @@ export interface ClientsReport {
 
 // ── Staff ─────────────────────────────────────────────────────────────────────
 export interface StaffPerformance {
-  id: string;
+  id: EntityId;
   name: string;
   bookings: number;
   revenue: number;
@@ -126,7 +135,7 @@ export interface StaffReport {
 
 // ── Services ──────────────────────────────────────────────────────────────────
 export interface ServicePerformance {
-  id?: string;
+  id?: EntityId;
   name: string;
   bookings: number;
   revenue: number;
@@ -153,10 +162,126 @@ export interface ServicesReport {
   kpi: ServicesKPI;
 }
 
-// ── Filters ───────────────────────────────────────────────────────────────────
-export interface ReportFilters {
+// ── Reports Dashboard (GET /api/v1/reports) ───────────────────────────────────
+
+export interface ReportFilterOption {
+  value: string;
+  label: string;
+}
+
+export interface ReportFilter {
+  key: string;
+  type: "date-single" | "date-range" | "multi-select" | "dropdown";
+  label: string;
+  fromKey?: string;
+  toKey?: string;
+  options?: ReportFilterOption[];
+}
+
+export interface ReportTableColumn {
+  key: string;
+  label: string;
+  type: "text" | "date" | "time" | "number" | "currency" | "badge" | "link";
+  sortable?: boolean;
+}
+
+export interface ReportTableConfig {
+  columns: ReportTableColumn[];
+  rowsPerPage?: number[];
+  rowGrouping?: boolean;
+}
+
+export interface ReportPermissions {
+  view: boolean;
+  export: boolean;
+  saveView: boolean;
+  refresh: boolean;
+}
+
+export interface ReportPagination {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
+
+export interface DashboardReport {
+  id: string;
+  name: string;
+  description: string;
+  tags: string[];
+  isNewVersion: boolean;
+  isBookmarked: boolean;
+  category: string;
+  permissions?: ReportPermissions;
+  filters?: ReportFilter[];
+  tableConfig?: ReportTableConfig;
+  data?: Record<string, unknown>[];
+  pagination?: ReportPagination;
+}
+
+export interface DashboardCategory {
+  key: string;
+  label: string;
+  count: number;
+}
+
+export interface ReportsDashboard {
+  title: string;
+  search: { placeholder: string };
+  categories: DashboardCategory[];
+  bookmarked: {
+    title: string;
+    emptyTitle: string;
+    emptySubtitle: string;
+    items: DashboardReport[];
+  };
+  reports: DashboardReport[];
+}
+
+export interface ReportsDashboardResponse {
+  success: boolean;
+  message: string;
+  timestamp: string;
+  reportsDashboard: ReportsDashboard;
+}
+
+export interface FetchReportsDashboardPayload {
+  search?: string;
+  category?: string;
+}
+
+// ── Query payload ─────────────────────────────────────────────────────────────
+export interface FetchReportPayload {
+  tab: ReportTab;
   period: ReportPeriod;
   from?: string;
   to?: string;
-  salonId: string;
+}
+
+export interface ExportReportPayload {
+  tab: ReportTab;
+  period: ReportPeriod;
+  format: "excel" | "csv";
+}
+
+// ── API responses ─────────────────────────────────────────────────────────────
+export interface RevenueReportResponse {
+  data: RevenueReport;
+}
+
+export interface AppointmentsReportResponse {
+  data: AppointmentsReport;
+}
+
+export interface ClientsReportResponse {
+  data: ClientsReport;
+}
+
+export interface StaffReportResponse {
+  data: StaffReport;
+}
+
+export interface ServicesReportResponse {
+  data: ServicesReport;
 }

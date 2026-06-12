@@ -44,9 +44,6 @@ const ALL_REPORT_CONFIGS = [
         { value: "updated_date",     label: "Updated Date" },
       ]},
       { key: "date", type: "date-range", label: "Date", fromKey: "date_from", toKey: "date_to" },
-      { key: "center", type: "multi-select", label: "Centers", options: [
-        { value: "main_branch", label: "Main Branch" },
-      ]},
       { key: "appointment_status", type: "multi-select", label: "Appointment Status", options: [
         { value: "confirmed", label: "Confirmed" }, { value: "completed", label: "Completed" },
         { value: "cancelled", label: "Cancelled" }, { value: "no_show",   label: "No Show" },
@@ -67,8 +64,8 @@ const ALL_REPORT_CONFIGS = [
         { key: "ticket_no",        label: "Ticket No",        type: "link",   sortable: true },
         { key: "guest_name",       label: "Guest Name",       type: "text",   sortable: true },
         { key: "service_name",     label: "Service Name",     type: "text",   sortable: true },
-        { key: "service_code",     label: "Service Code",     type: "text",   sortable: true },
-        { key: "center_name",      label: "Center Name",      type: "text",   sortable: true },
+        { key: "staff_name",       label: "Staff Name",       type: "text",   sortable: true },
+        { key: "status",           label: "Status",           type: "badge",  sortable: true },
       ],
     },
     data: [], pagination: EMPTY_PAGINATION,
@@ -80,7 +77,6 @@ const ALL_REPORT_CONFIGS = [
     permissions: { view: true, export: true, saveView: true, refresh: true },
     filters: [
       { key: "date", type: "date-range", label: "Last Visit Date", fromKey: "date_from", toKey: "date_to" },
-      { key: "center", type: "multi-select", label: "Centers", options: [{ value: "main_branch", label: "Main Branch" }] },
       { key: "inactive_days", type: "dropdown", label: "Inactive Since", options: [
         { value: "30", label: "30 Days" }, { value: "60", label: "60 Days" },
         { value: "90", label: "90 Days" }, { value: "180", label: "180 Days" },
@@ -89,12 +85,13 @@ const ALL_REPORT_CONFIGS = [
     tableConfig: {
       rowsPerPage: [10, 25, 50, 100],
       columns: [
-        { key: "guest_name",      label: "Guest Name",     type: "text",     sortable: true },
-        { key: "phone",           label: "Phone",          type: "text",     sortable: true },
-        { key: "last_visit_date", label: "Last Visit Date",type: "date",     sortable: true },
-        { key: "total_visits",    label: "Total Visits",   type: "number",   sortable: true },
-        { key: "total_spent",     label: "Total Spent",    type: "currency", sortable: true },
-        { key: "center_name",     label: "Center",         type: "text",     sortable: true },
+        { key: "clientName",     label: "Guest Name",       type: "text",     sortable: true },
+        { key: "phone",          label: "Phone",            type: "text",     sortable: true },
+        { key: "lastVisitDate",  label: "Last Visit Date",  type: "date",     sortable: true },
+        { key: "totalVisits",    label: "Total Visits",     type: "number",   sortable: true },
+        { key: "totalSpent",     label: "Total Spent",      type: "currency", sortable: true },
+        { key: "daysSinceVisit", label: "Days Since Visit", type: "number",   sortable: true },
+        { key: "centerName",     label: "Center",           type: "text",     sortable: true },
       ],
     },
     data: [], pagination: EMPTY_PAGINATION,
@@ -107,7 +104,6 @@ const ALL_REPORT_CONFIGS = [
     permissions: { view: true, export: true, saveView: true, refresh: true },
     filters: [
       { key: "date", type: "date-range", label: "Date", fromKey: "date_from", toKey: "date_to" },
-      { key: "center", type: "multi-select", label: "Centers", options: [{ value: "main_branch", label: "Main Branch" }] },
       { key: "payment_method", type: "multi-select", label: "Payment Method", options: [
         { value: "cash", label: "Cash" }, { value: "card", label: "Card" },
         { value: "upi",  label: "UPI" },  { value: "wallet", label: "Wallet" },
@@ -116,12 +112,14 @@ const ALL_REPORT_CONFIGS = [
     tableConfig: {
       rowsPerPage: [10, 25, 50, 100],
       columns: [
-        { key: "date",           label: "Date",           type: "date",     sortable: true },
-        { key: "ticket_no",      label: "Ticket No",      type: "link",     sortable: true },
-        { key: "guest_name",     label: "Guest Name",     type: "text",     sortable: true },
-        { key: "payment_method", label: "Payment Method", type: "badge",    sortable: true },
-        { key: "amount",         label: "Amount",         type: "currency", sortable: true },
-        { key: "center_name",    label: "Center",         type: "text",     sortable: true },
+        { key: "date",          label: "Date",           type: "date",     sortable: true },
+        { key: "ticketNo",      label: "Ticket No",      type: "link",     sortable: true },
+        { key: "clientName",    label: "Guest Name",     type: "text",     sortable: true },
+        { key: "service",       label: "Service",        type: "text",     sortable: false },
+        { key: "paymentMethod", label: "Payment Method", type: "badge",    sortable: true },
+        { key: "amount",        label: "Amount",         type: "currency", sortable: true },
+        { key: "staff",         label: "Staff",          type: "text",     sortable: true },
+        { key: "center",        label: "Center",         type: "text",     sortable: true },
       ],
     },
     data: [], pagination: EMPTY_PAGINATION,
@@ -133,20 +131,15 @@ const ALL_REPORT_CONFIGS = [
     permissions: { view: true, export: true, saveView: true, refresh: true },
     filters: [
       { key: "date", type: "date-range", label: "Date", fromKey: "date_from", toKey: "date_to" },
-      { key: "center", type: "multi-select", label: "Centers", options: [{ value: "main_branch", label: "Main Branch" }] },
-      { key: "service_category", type: "multi-select", label: "Service Category", options: [
-        { value: "hair", label: "Hair" }, { value: "skin", label: "Skin" },
-        { value: "nails", label: "Nails" }, { value: "spa", label: "Spa" },
-      ]},
     ],
     tableConfig: {
       rowsPerPage: [10, 25, 50, 100],
       columns: [
-        { key: "service_name",     label: "Service Name", type: "text",     sortable: true },
-        { key: "service_category", label: "Category",     type: "text",     sortable: true },
-        { key: "bookings",         label: "Bookings",     type: "number",   sortable: true },
-        { key: "revenue",          label: "Revenue",      type: "currency", sortable: true },
-        { key: "avg_ticket",       label: "Avg Ticket",   type: "currency", sortable: true },
+        { key: "name",      label: "Service Name", type: "text",     sortable: true },
+        { key: "bookings",  label: "Bookings",     type: "number",   sortable: true },
+        { key: "revenue",   label: "Revenue",      type: "currency", sortable: true },
+        { key: "avgTicket", label: "Avg Ticket",   type: "currency", sortable: true },
+        { key: "growth",    label: "Growth %",     type: "number",   sortable: true },
       ],
     },
     data: [], pagination: EMPTY_PAGINATION,
@@ -158,23 +151,26 @@ const ALL_REPORT_CONFIGS = [
     description: "Use this report to know the on-hand stock and the cost of goods based on the FIFO or perpetual average costing method.",
     permissions: { view: true, export: true, saveView: true, refresh: true },
     filters: [
-      { key: "center", type: "multi-select", label: "Centers", options: [{ value: "main_branch", label: "Main Branch" }] },
       { key: "category", type: "multi-select", label: "Product Category", options: [
         { value: "hair_care", label: "Hair Care" }, { value: "hair_color", label: "Hair Color" },
         { value: "nails",     label: "Nails" },      { value: "skin_care",  label: "Skin Care" },
+      ]},
+      { key: "stock_status", type: "dropdown", label: "Stock Status", options: [
+        { value: "All", label: "All" }, { value: "In Stock", label: "In Stock" },
+        { value: "Low Stock", label: "Low Stock" }, { value: "Out of Stock", label: "Out of Stock" },
       ]},
     ],
     tableConfig: {
       rowsPerPage: [10, 25, 50, 100],
       columns: [
-        { key: "product",       label: "Product",       type: "text",     sortable: true },
-        { key: "category",      label: "Category",      type: "text",     sortable: true },
-        { key: "sku",           label: "SKU",           type: "text",     sortable: true },
-        { key: "currentStock",  label: "Current Stock", type: "number",   sortable: true },
-        { key: "reorderLevel",  label: "Reorder Level", type: "number",   sortable: true },
-        { key: "unitCost",      label: "Unit Cost (₹)", type: "currency", sortable: true },
-        { key: "totalValue",    label: "Total Value (₹)",type:"currency", sortable: true },
-        { key: "status",        label: "Status",        type: "badge",    sortable: true },
+        { key: "product",      label: "Product",       type: "text",     sortable: true },
+        { key: "category",     label: "Category",      type: "text",     sortable: true },
+        { key: "sku",          label: "SKU",           type: "text",     sortable: true },
+        { key: "currentStock", label: "Current Stock", type: "number",   sortable: true },
+        { key: "reorderLevel", label: "Reorder Level", type: "number",   sortable: true },
+        { key: "unitCost",     label: "Unit Cost (₹)", type: "currency", sortable: true },
+        { key: "totalValue",   label: "Total Value (₹)",type:"currency", sortable: true },
+        { key: "status",       label: "Status",        type: "badge",    sortable: true },
       ],
     },
     data: [], pagination: EMPTY_PAGINATION,
@@ -186,10 +182,9 @@ const ALL_REPORT_CONFIGS = [
     permissions: { view: true, export: true, saveView: true, refresh: true },
     filters: [
       { key: "date", type: "date-range", label: "Date", fromKey: "date_from", toKey: "date_to" },
-      { key: "center", type: "multi-select", label: "Centers", options: [{ value: "main_branch", label: "Main Branch" }] },
       { key: "type", type: "dropdown", label: "Consumption Type", options: [
-        { value: "all", label: "All" }, { value: "service_use", label: "Service Use" },
-        { value: "retail_sale", label: "Retail Sale" },
+        { value: "All", label: "All" }, { value: "Service Use", label: "Service Use" },
+        { value: "Retail Sale", label: "Retail Sale" },
       ]},
     ],
     tableConfig: {
@@ -213,21 +208,25 @@ const ALL_REPORT_CONFIGS = [
     permissions: { view: true, export: true, saveView: true, refresh: true },
     filters: [
       { key: "date", type: "date-range", label: "Date", fromKey: "date_from", toKey: "date_to" },
-      { key: "center", type: "multi-select", label: "Centers", options: [{ value: "main_branch", label: "Main Branch" }] },
       { key: "provider", type: "multi-select", label: "Provider", options: [
         { value: "razorpay", label: "Razorpay" }, { value: "paytm",    label: "Paytm" },
         { value: "stripe",   label: "Stripe" },   { value: "payu",     label: "PayU" },
+      ]},
+      { key: "status", type: "dropdown", label: "Status", options: [
+        { value: "All", label: "All" }, { value: "Success", label: "Success" },
+        { value: "Pending", label: "Pending" }, { value: "Failed", label: "Failed" },
+        { value: "Refunded", label: "Refunded" },
       ]},
     ],
     tableConfig: {
       rowsPerPage: [10, 25, 50, 100],
       columns: [
-        { key: "date",           label: "Date",           type: "date",     sortable: true },
-        { key: "transactionId",  label: "Transaction ID", type: "link",     sortable: true },
-        { key: "clientName",     label: "Guest Name",     type: "text",     sortable: true },
-        { key: "gateway",        label: "Provider",       type: "badge",    sortable: true },
-        { key: "amount",         label: "Amount",         type: "currency", sortable: true },
-        { key: "status",         label: "Status",         type: "badge",    sortable: true },
+        { key: "date",          label: "Date",           type: "date",     sortable: true },
+        { key: "transactionId", label: "Transaction ID", type: "link",     sortable: true },
+        { key: "clientName",    label: "Guest Name",     type: "text",     sortable: true },
+        { key: "gateway",       label: "Provider",       type: "badge",    sortable: true },
+        { key: "amount",        label: "Amount",         type: "currency", sortable: true },
+        { key: "status",        label: "Status",         type: "badge",    sortable: true },
       ],
     },
     data: [], pagination: EMPTY_PAGINATION,
@@ -239,7 +238,6 @@ const ALL_REPORT_CONFIGS = [
     permissions: { view: true, export: true, saveView: true, refresh: true },
     filters: [
       { key: "date", type: "date-range", label: "Date", fromKey: "date_from", toKey: "date_to" },
-      { key: "center", type: "multi-select", label: "Centers", options: [{ value: "main_branch", label: "Main Branch" }] },
     ],
     tableConfig: {
       rowsPerPage: [10, 25, 50, 100],
@@ -258,8 +256,7 @@ const ALL_REPORT_CONFIGS = [
     description: "View a complete daily summary of appointments, collections, and staff performance for any given date.",
     permissions: { view: true, export: true, saveView: true, refresh: true },
     filters: [
-      { key: "date",   type: "date-single",  label: "Date" },
-      { key: "center", type: "multi-select", label: "Centers", options: [{ value: "main_branch", label: "Main Branch" }] },
+      { key: "date", type: "date-single", label: "Date" },
     ],
     tableConfig: {
       columns: [
@@ -282,20 +279,15 @@ const ALL_REPORT_CONFIGS = [
     permissions: { view: true, export: true, saveView: true, refresh: true },
     filters: [
       { key: "date", type: "date-range", label: "Date", fromKey: "date_from", toKey: "date_to" },
-      { key: "center", type: "multi-select", label: "Centers", options: [{ value: "main_branch", label: "Main Branch" }] },
-      { key: "channel", type: "multi-select", label: "Channel", options: [
-        { value: "whatsapp", label: "WhatsApp" }, { value: "email",     label: "Email" },
-        { value: "sms",      label: "SMS" },       { value: "instagram", label: "Instagram" },
-      ]},
     ],
     tableConfig: {
       rowsPerPage: [10, 25, 50, 100],
       columns: [
-        { key: "clientName",  label: "Client Name",    type: "text",     sortable: true },
-        { key: "phone",       label: "Phone",          type: "text",     sortable: true },
-        { key: "status",      label: "Status",         type: "badge",    sortable: true },
-        { key: "lastActivity",label: "Last Activity",  type: "date",     sortable: true },
-        { key: "totalSales",  label: "Total Sales",    type: "currency", sortable: true },
+        { key: "clientName",  label: "Client Name",   type: "text",     sortable: true },
+        { key: "phone",       label: "Phone",         type: "text",     sortable: true },
+        { key: "status",      label: "Status",        type: "badge",    sortable: true },
+        { key: "lastVisit",   label: "Last Activity", type: "date",     sortable: true },
+        { key: "spend",       label: "Total Sales",   type: "currency", sortable: true },
       ],
     },
     data: [], pagination: EMPTY_PAGINATION,
@@ -307,46 +299,42 @@ const ALL_REPORT_CONFIGS = [
     permissions: { view: true, export: true, saveView: true, refresh: true },
     filters: [
       { key: "date", type: "date-range", label: "Date", fromKey: "date_from", toKey: "date_to" },
-      { key: "center", type: "multi-select", label: "Centers", options: [{ value: "main_branch", label: "Main Branch" }] },
-      { key: "source", type: "multi-select", label: "Source", options: [
-        { value: "online",   label: "Online" },  { value: "walk_in",  label: "Walk-in" },
-        { value: "referral", label: "Referral" },{ value: "instagram",label: "Instagram" },
-      ]},
     ],
     tableConfig: {
       rowsPerPage: [10, 25, 50, 100],
       columns: [
         { key: "clientName", label: "Client Name", type: "text", sortable: true },
         { key: "phone",      label: "Phone",       type: "text", sortable: true },
-        { key: "source",     label: "Source",      type: "badge",sortable: true },
-        { key: "firstVisit", label: "First Visit", type: "date", sortable: true },
+        { key: "email",      label: "Email",       type: "text", sortable: true },
+        { key: "lastVisit",  label: "First Visit", type: "date", sortable: true },
+        { key: "spend",      label: "Spend",       type: "currency", sortable: true },
       ],
     },
     data: [], pagination: EMPTY_PAGINATION,
   },
   // ── Employee (21 reports) ──────────────────────────────────────────────────
   ...[
-    { id: "employee_attendance",         name: "Employee Attendance",              tags: ["Employee"],    description: "Track daily attendance, check-in and check-out times for all staff members across centers." },
-    { id: "employee_performance",        name: "Employee Performance",             tags: ["Performance"], description: "Evaluate individual employee performance based on completed appointments, revenue, and client feedback." },
-    { id: "employee_commission",         name: "Employee Commission",              tags: ["Commissions"], description: "Calculate and review commission earned by each employee based on services and products sold." },
-    { id: "employee_sales",              name: "Employee Sales",                   tags: ["Sales"],       description: "View a detailed breakdown of total sales made by each employee including services and retail products." },
-    { id: "employee_appointment_summary",name: "Employee Appointment Summary",     tags: ["Sales"],       description: "Summary of all appointments handled per employee with status breakdown and revenue contribution." },
-    { id: "attrition",                   name: "Attrition",                        tags: ["Team"],        description: "Track the number of center employees who have either joined or left the organization." },
-    { id: "block_out_time_details",      name: "Block Out Time Details",           tags: ["Time"],        description: "Show times when providers are on break or unavailable using Block Out Time Types." },
-    { id: "booking_productivity",        name: "Booking Productivity",             tags: ["Sales"],       description: "Insight into the types of services requested by your guests by calling your center." },
-    { id: "commissions",                 name: "Commissions",                      tags: ["Commissions"], description: "Commission earned by each employee based on services and products sold." },
-    { id: "commissions_graphical",       name: "Commissions - Graphical",          tags: ["Commissions"], description: "Graphical breakdown of commission earned per employee." },
-    { id: "employee_collections",        name: "Employee Collections",             tags: ["Sales"],       description: "View the collections made by each employee during a selected period." },
-    { id: "employee_collections_by_item",name: "Employee Collections By Item Type",tags: ["Sales"],      description: "View details of the sales for each item type: services, products, memberships." },
-    { id: "employee_sales_metrics",      name: "Employee Sales Metrics",           tags: ["Performance"], description: "Track all sales employees make in a selected time period." },
-    { id: "guest_satisfaction",          name: "Guest Satisfaction",               tags: ["Performance"], description: "Evaluate client satisfaction scores across employees and services." },
-    { id: "leaves",                      name: "Leaves",                           tags: ["Time"],        description: "Track the number of leaves availed by employees of each leave type as well as the status." },
-    { id: "no_show_cancellation",        name: "No-show/Cancellation",             tags: ["Sales"],       description: "View a quick snapshot of guests who either did not come in for their appointments." },
-    { id: "overtime",                    name: "Overtime",                         tags: ["Time"],        description: "Track overtime hours worked by each employee." },
-    { id: "overtime_summary",            name: "Overtime Summary",                 tags: ["Time"],        description: "Track the number of extra hours spent by your center." },
-    { id: "rebooking",                   name: "Rebooking",                        tags: ["Sales"],       description: "Track rebooking rates and patterns for clients and employees." },
-    { id: "staffing",                    name: "Staffing",                         tags: ["Team"],        description: "Track the total number of employees currently working in a center, categorized by role." },
-    { id: "utilization",                 name: "Utilization",                      tags: ["Performance"], description: "Track how effectively employees' working hours are being utilized across services and appointments." },
+    { id: "attrition",                      name: "Attrition",                         tags: ["Team"],        description: "Track the number of center employees who have either joined or left the organization." },
+    { id: "block_out_time_details",         name: "Block Out Time Details",            tags: ["Time"],        description: "Show times when providers are on break or unavailable using Block Out Time Types." },
+    { id: "booking_productivity",           name: "Booking Productivity",              tags: ["Sales"],       description: "Insight into the types of services requested by your guests." },
+    { id: "commissions",                    name: "Commissions",                       tags: ["Commissions"], description: "Calculate and review commission earned by each employee based on services and products sold." },
+    { id: "commissions_graphical",          name: "Commissions - Graphical",           tags: ["Commissions"], description: "Graphical breakdown of commission earned per employee." },
+    { id: "employee_collections",           name: "Employee Collections",              tags: ["Sales"],       description: "View the collections made by each employee during a selected period." },
+    { id: "employee_collections_by_item",   name: "Employee Collections By Item Type", tags: ["Sales"],      description: "View details of the sales for each item type: services, products, memberships." },
+    { id: "employee_sales_metrics",         name: "Employee Sales Metrics",            tags: ["Performance"], description: "Track all sales employees make in a selected time period." },
+    { id: "guest_satisfaction",             name: "Guest Satisfaction",                tags: ["Performance"], description: "Evaluate client satisfaction scores across employees and services." },
+    { id: "leaves",                         name: "Leaves",                            tags: ["Time"],        description: "Track the number of leaves availed by employees of each leave type as well as the status." },
+    { id: "no_show_cancellation",           name: "No-show/Cancellation",              tags: ["Sales"],       description: "View a quick snapshot of guests who either did not come in for their appointments." },
+    { id: "overtime",                       name: "Overtime",                          tags: ["Time"],        description: "Track overtime hours worked by each employee." },
+    { id: "overtime_summary",               name: "Overtime Summary",                  tags: ["Time"],        description: "Track the number of extra hours spent by your center." },
+    { id: "rebooking",                      name: "Rebooking",                         tags: ["Sales"],       description: "Track rebooking rates and patterns for clients and employees." },
+    { id: "sales",                          name: "Sales",                             tags: ["Sales"],       description: "Detailed breakdown of all sales transactions by employee." },
+    { id: "service_revenue_by_category",    name: "Service Revenue By Category",       tags: ["Sales"],       description: "View service revenue broken down by category." },
+    { id: "split_commission",               name: "Split Commission",                  tags: ["Sales"],       description: "Track split commissions across employees for shared services." },
+    { id: "staffing",                       name: "Staffing",                          tags: ["Team"],        description: "Track the total number of employees currently working in a center, categorized by role." },
+    { id: "tip_adjustments",               name: "Tip Adjustments",                   tags: ["Sales"],       description: "View the trail of changes made to tips." },
+    { id: "utilization",                    name: "Utilization",                       tags: ["Performance"], description: "Track how effectively employees' working hours are being utilized." },
+    { id: "employee_performance",           name: "Employee Performance",              tags: ["Performance"], description: "Track individual employee revenue, bookings, and utilization rate." },
   ].map(r => ({
     ...r,
     category: "employee",
@@ -355,16 +343,18 @@ const ALL_REPORT_CONFIGS = [
     permissions: { view: true, export: true, saveView: true, refresh: true },
     filters: [
       { key: "date", type: "date-range", label: "Date", fromKey: "date_from", toKey: "date_to" },
-      { key: "center",   type: "multi-select", label: "Centers",  options: [{ value: "main_branch", label: "Main Branch" }] },
       { key: "employee", type: "multi-select", label: "Employee", options: [] },
     ],
     tableConfig: {
       rowsPerPage: [10, 25, 50, 100],
       columns: [
-        { key: "employee_name", label: "Employee Name", type: "text",     sortable: true },
-        { key: "appointments",  label: "Appointments",  type: "number",   sortable: true },
-        { key: "revenue",       label: "Revenue",       type: "currency", sortable: true },
-        { key: "center_name",   label: "Center",        type: "text",     sortable: true },
+        { key: "name",             label: "Employee Name",    type: "text",     sortable: true },
+        { key: "role",             label: "Role",             type: "text",     sortable: true },
+        { key: "servicesPerformed",label: "Services",         type: "number",   sortable: true },
+        { key: "revenue",          label: "Revenue",          type: "currency", sortable: true },
+        { key: "avgTicket",        label: "Avg Ticket",       type: "currency", sortable: true },
+        { key: "rating",           label: "Rating",           type: "number",   sortable: true },
+        { key: "utilization",      label: "Utilization %",    type: "number",   sortable: true },
       ],
     },
     data: [],
@@ -377,9 +367,7 @@ export const reportsService = {
   // ── Reports Dashboard ────────────────────────────────────────────────────────
   async getReportsDashboard(salonId: string, search: string, category: string) {
     assertSalonId(salonId);
-
     let reports: any[] = ALL_REPORT_CONFIGS;
-
     if (category && category !== "all") {
       reports = reports.filter(r => r.category === category);
     }
@@ -389,7 +377,6 @@ export const reportsService = {
         r => r.name.toLowerCase().includes(q) || r.description.toLowerCase().includes(q),
       );
     }
-
     return {
       title:  "Reports Dashboard",
       search: { placeholder: "Search Report" },
@@ -442,12 +429,13 @@ export const reportsService = {
     return reportsRepository.getExportData(salonId, tab, assertPeriod(period, from, to), from, to);
   },
 
-  // ── Detail views ─────────────────────────────────────────────────────────────
+  // ── Detail views — original ──────────────────────────────────────────────────
   async getAppointmentsDetail(
-    salonId: string, dateType: string, from: string, to: string, statuses: string[],
+    salonId: string, dateType: string, from: string, to: string,
+    statuses: string[], sources: string[] = [],
   ) {
     assertSalonId(salonId);
-    return reportsRepository.getAppointmentsDetail(salonId, dateType, from, to, statuses);
+    return reportsRepository.getAppointmentsDetail(salonId, dateType, from, to, statuses, sources);
   },
 
   async getFinanceDetail(salonId: string, from: string, to: string, method: string) {
@@ -482,5 +470,41 @@ export const reportsService = {
   async getEmployeeDetail(salonId: string, from: string, to: string, role: string, department: string) {
     assertSalonId(salonId);
     return reportsRepository.getEmployeeDetail(salonId, from, to, role, department);
+  },
+
+  // ── Detail views — new ───────────────────────────────────────────────────────
+  async getClientRetentionDetail(salonId: string, inactiveDays: number, from?: string, to?: string) {
+    assertSalonId(salonId);
+    return reportsRepository.getClientRetentionDetail(salonId, inactiveDays, from, to);
+  },
+
+  async getInventoryConsumptionDetail(salonId: string, from: string, to: string, type: string) {
+    assertSalonId(salonId);
+    return reportsRepository.getInventoryConsumptionDetail(salonId, from, to, type);
+  },
+
+  async getPaymentSummaryDetail(salonId: string, from: string, to: string) {
+    assertSalonId(salonId);
+    return reportsRepository.getPaymentSummaryDetail(salonId, from, to);
+  },
+
+  async getCommissionsDetail(salonId: string, from: string, to: string) {
+    assertSalonId(salonId);
+    return reportsRepository.getCommissionsDetail(salonId, from, to);
+  },
+
+  async getNoShowCancellationDetail(salonId: string, from: string, to: string) {
+    assertSalonId(salonId);
+    return reportsRepository.getNoShowCancellationDetail(salonId, from, to);
+  },
+
+  async getStaffingDetail(salonId: string) {
+    assertSalonId(salonId);
+    return reportsRepository.getStaffingDetail(salonId);
+  },
+
+  async getLeavesDetail(salonId: string, from: string, to: string) {
+    assertSalonId(salonId);
+    return reportsRepository.getLeavesDetail(salonId, from, to);
   },
 };

@@ -116,10 +116,12 @@ export const reportsController = {
         from     = new Date().toISOString().slice(0, 10),
         to       = new Date().toISOString().slice(0, 10),
         statuses = "",
+        sources  = "",  // FIX #5: now forwarded
       } = req.query as Record<string, string>;
       const statusList = statuses ? statuses.split(",").filter(Boolean) : [];
+      const sourceList = sources  ? sources.split(",").filter(Boolean)  : [];
       const data = await reportsService.getAppointmentsDetail(
-        salonId, dateType, from, to, statusList,
+        salonId, dateType, from, to, statusList, sourceList,
       );
       return sendSuccess(res, 200, data, "Appointment detail fetched");
     } catch (err) { return next(err); }
@@ -208,6 +210,97 @@ export const reportsController = {
       } = req.query as Record<string, string>;
       const data = await reportsService.getEmployeeDetail(salonId, from, to, role, department);
       return sendSuccess(res, 200, data, "Employee detail fetched");
+    } catch (err) { return next(err); }
+  },
+
+  // GET /api/v1/reports/client-retention/detail?inactiveDays=30&from=&to=
+  async getClientRetentionDetail(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = resolveSalonId(req);
+      const {
+        inactiveDays = "30",
+        from,
+        to,
+      } = req.query as Record<string, string>;
+      const data = await reportsService.getClientRetentionDetail(
+        salonId, parseInt(inactiveDays, 10) || 30, from, to,
+      );
+      return sendSuccess(res, 200, data, "Client retention detail fetched");
+    } catch (err) { return next(err); }
+  },
+
+  // GET /api/v1/reports/inventory-consumption/detail?from=&to=&type=All
+  async getInventoryConsumptionDetail(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = resolveSalonId(req);
+      const {
+        from = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10),
+        to   = new Date().toISOString().slice(0, 10),
+        type = "All",
+      } = req.query as Record<string, string>;
+      const data = await reportsService.getInventoryConsumptionDetail(salonId, from, to, type);
+      return sendSuccess(res, 200, data, "Inventory consumption detail fetched");
+    } catch (err) { return next(err); }
+  },
+
+  // GET /api/v1/reports/payment-summary/detail?from=&to=
+  async getPaymentSummaryDetail(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = resolveSalonId(req);
+      const {
+        from = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10),
+        to   = new Date().toISOString().slice(0, 10),
+      } = req.query as Record<string, string>;
+      const data = await reportsService.getPaymentSummaryDetail(salonId, from, to);
+      return sendSuccess(res, 200, data, "Payment summary detail fetched");
+    } catch (err) { return next(err); }
+  },
+
+  // GET /api/v1/reports/commissions/detail?from=&to=
+  async getCommissionsDetail(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = resolveSalonId(req);
+      const {
+        from = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10),
+        to   = new Date().toISOString().slice(0, 10),
+      } = req.query as Record<string, string>;
+      const data = await reportsService.getCommissionsDetail(salonId, from, to);
+      return sendSuccess(res, 200, data, "Commissions detail fetched");
+    } catch (err) { return next(err); }
+  },
+
+  // GET /api/v1/reports/no-show/detail?from=&to=
+  async getNoShowCancellationDetail(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = resolveSalonId(req);
+      const {
+        from = new Date().toISOString().slice(0, 10),
+        to   = new Date().toISOString().slice(0, 10),
+      } = req.query as Record<string, string>;
+      const data = await reportsService.getNoShowCancellationDetail(salonId, from, to);
+      return sendSuccess(res, 200, data, "No-show/cancellation detail fetched");
+    } catch (err) { return next(err); }
+  },
+
+  // GET /api/v1/reports/staffing/detail
+  async getStaffingDetail(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = resolveSalonId(req);
+      const data = await reportsService.getStaffingDetail(salonId);
+      return sendSuccess(res, 200, data, "Staffing detail fetched");
+    } catch (err) { return next(err); }
+  },
+
+  // GET /api/v1/reports/leaves/detail?from=&to=
+  async getLeavesDetail(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = resolveSalonId(req);
+      const {
+        from = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10),
+        to   = new Date().toISOString().slice(0, 10),
+      } = req.query as Record<string, string>;
+      const data = await reportsService.getLeavesDetail(salonId, from, to);
+      return sendSuccess(res, 200, data, "Leaves detail fetched");
     } catch (err) { return next(err); }
   },
 };
