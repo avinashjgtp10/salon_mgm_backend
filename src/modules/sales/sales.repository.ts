@@ -1,6 +1,12 @@
 import pool, { safeQuery } from "../../config/database";
 import { Sale, SaleItem, CreateSaleBody, UpdateSaleBody } from "./sales.types";
 
+function parseCreatedAt(input: string | undefined | null): Date {
+    if (!input) return new Date();
+    if (input.includes('T') || /\d{4}-\d{2}-\d{2}T/.test(input)) return new Date(input);
+    return new Date(input + 'T00:00:00.000Z');
+}
+
 export const salesRepository = {
     async findById(id: string): Promise<Sale | null> {
         const { rows } = await safeQuery(() => pool.query(
@@ -83,7 +89,7 @@ export const salesRepository = {
             const total = subtotal - discountAmt + taxAmt + tipAmt;
 
             const invoiceNumber = `INV-${Date.now()}`;
-            const createdAtVal = data.created_at ? new Date(data.created_at + 'T00:00:00.000Z') : new Date();
+            const createdAtVal = parseCreatedAt(data.created_at);
 
             const saleResult = await client.query(
                 `INSERT INTO sales (
@@ -161,8 +167,8 @@ export const salesRepository = {
                 for (const key of extraFields) {
                     if (key in salePatch && (salePatch as any)[key] !== undefined) {
                         setParts.push(`${key} = $${idx++}`);
-                        const val = key === 'created_at' && typeof (salePatch as any)[key] === 'string'
-                            ? new Date((salePatch as any)[key] + 'T00:00:00.000Z')
+                        const val = key === 'created_at'
+                            ? parseCreatedAt((salePatch as any)[key])
                             : (salePatch as any)[key];
                         values.push(val);
                     }
@@ -189,8 +195,8 @@ export const salesRepository = {
             const values: any[]      = [];
             keys.forEach((k, i) => {
                 setParts.push(`${String(k)} = $${i + 1}`);
-                const val = k === 'created_at' && typeof (salePatch as any)[k] === 'string'
-                    ? new Date((salePatch as any)[k] + 'T00:00:00.000Z')
+                const val = k === 'created_at'
+                    ? parseCreatedAt((salePatch as any)[k])
                     : (salePatch as any)[k];
                 values.push(val);
             });
