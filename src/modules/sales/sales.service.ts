@@ -62,8 +62,17 @@ export const salesService = {
         return salesRepository.list(filters);
     },
 
-    async getDailySummary(salonId: string, date: string): Promise<{ total: string; count: string }> {
+    async getDailySummary(salonId: string, date?: string): Promise<{ total: string; count: string }> {
         return salesRepository.getDailySummary(salonId, date);
+    },
+
+    async delete(id: string): Promise<Sale> {
+        const existing = await salesRepository.findById(id);
+        if (!existing) throw new AppError(404, "Sale not found", "NOT_FOUND");
+        const deleted = await salesRepository.deleteById(id);
+        if (!deleted) throw new AppError(500, "Failed to delete sale", "INTERNAL_ERROR");
+        logger.info("salesService.delete success", { saleId: id });
+        return deleted;
     },
 
     async update(params: { id: string; requesterUserId: string; requesterRole?: string; patch: UpdateSaleBody }): Promise<{ sale: Sale; items: SaleItem[] }> {
