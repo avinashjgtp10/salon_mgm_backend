@@ -163,6 +163,7 @@ export type Paginated<T> = {
     has_more: boolean;
 };
 
+/** @deprecated Import mode is ignored; all imports behave as create_only (duplicates are skipped). */
 export type ClientsImportMode = "create_only" | "upsert";
 
 export type ClientsImportResult = {
