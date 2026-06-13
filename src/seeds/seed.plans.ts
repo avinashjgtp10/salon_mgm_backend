@@ -64,7 +64,6 @@ async function seedPlans() {
         if (existing.length > 0 && existing[0].razorpay_plan_id) {
             console.log(`⏭  Plan already exists — razorpay_plan_id: ${existing[0].razorpay_plan_id}`);
             console.log("   Delete the row first to re-seed.");
-            await pool.end();
             return;
         }
 
@@ -90,9 +89,16 @@ async function seedPlans() {
                 features, is_active
             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,true)
             ON CONFLICT (slug) DO UPDATE SET
-                razorpay_plan_id = EXCLUDED.razorpay_plan_id,
-                price            = EXCLUDED.price,
-                is_active        = true`,
+                razorpay_plan_id       = EXCLUDED.razorpay_plan_id,
+                price                  = EXCLUDED.price,
+                description            = EXCLUDED.description,
+                billing_cycle          = EXCLUDED.billing_cycle,
+                features               = EXCLUDED.features,
+                max_branches           = EXCLUDED.max_branches,
+                max_staff              = EXCLUDED.max_staff,
+                max_bookings_per_month = EXCLUDED.max_bookings_per_month,
+                ai_features_enabled    = EXCLUDED.ai_features_enabled,
+                is_active              = true`,
             [
                 PLAN.name, PLAN.slug, PLAN.description,
                 PLAN.price, PLAN.billing_cycle, rzpPlan.id,

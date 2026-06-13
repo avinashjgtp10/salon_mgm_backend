@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import pool from "../config/database";
+import { getSalonId } from "../modules/utils/salon.util";
 
 const EXEMPT_PREFIXES = [
     "/api/v1/auth",
@@ -35,8 +36,14 @@ export async function subscriptionMiddleware(
     if (isExempt(req.path)) return next();
     if (req.user.role === "admin") return next();
 
-    const salonId = req.user.salonId;
-    if (!salonId) return next();
+    let salonId: string | null | undefined = req.user.salonId;
+    if (!salonId) {
+        salonId = await getSalonId(req).catch(() => null);
+    }
+    if (!salonId) {
+        res.status(403).json(BLOCKED);
+        return;
+    }
 
     try {
         // Check subscriptions table (Razorpay hosted — new flow)

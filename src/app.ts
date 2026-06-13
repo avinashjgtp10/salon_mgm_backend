@@ -94,10 +94,11 @@ app.use("/api/v1/oauth", authRoutes);
 app.use("/api/v1/billing", billingRoutes);
 app.use("/api/v1/subscriptions", subscriptionsRoutes);
 app.use("/api/v1/webhooks",  marketingWebhooksRoutes);
+app.use("/api/v1/profile",       profileRoutes);
 
 // ── Subscription gate — applied after exempt routes are registered ─────────────
 // Every route registered BELOW this line requires an active/trialing subscription.
-// Routes above (auth, billing, subscriptions, webhooks) are always accessible.
+// Routes above (auth, billing, subscriptions, webhooks, profile) are always accessible.
 app.use(subscriptionMiddleware);
 
 app.use("/api/v1/users", usersRoutes);
@@ -124,7 +125,6 @@ app.use('/api/v1/templates', marketingTemplatesRoutes)
 app.use('/api/v1/campaigns', marketingCampaignsRoutes)
 app.use('/api/v1/wa-config', marketingConfigRoutes)
 app.use('/api/v1/inbox', inboxRouter);
-app.use("/api/v1/profile",       profileRoutes);
 app.use("/api/v1/dashboard",     salonDashboardRoutes);
 app.use("/api/v1/coupons",       couponsRoutes);
 app.use("/api/v1/payments",      paymentsRoutes);

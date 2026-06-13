@@ -200,7 +200,7 @@ export const subscriptionsService = {
                     current_period_start, current_period_end
                 )
                 VALUES ($1, $2, 'active', $3, $3, $4, $5)
-                ON CONFLICT DO NOTHING`,
+                ON CONFLICT (salon_id) WHERE status = 'active' DO NOTHING`,
                 [
                     salonId,
                     latest.plan_id,
@@ -234,8 +234,12 @@ export const subscriptionsService = {
             case "subscription.activated": {
                 await subscriptionsRepository.updateSubscriptionStatus(
                     subEntity.id, "active", {
-                    current_period_start: new Date(subEntity.current_start * 1000).toISOString(),
-                    current_period_end: new Date(subEntity.current_end * 1000).toISOString(),
+                    current_period_start: typeof subEntity.current_start === 'number' && isFinite(subEntity.current_start)
+                        ? new Date(subEntity.current_start * 1000).toISOString()
+                        : undefined,
+                    current_period_end: typeof subEntity.current_end === 'number' && isFinite(subEntity.current_end)
+                        ? new Date(subEntity.current_end * 1000).toISOString()
+                        : undefined,
                 })
                 const sub = await subscriptionsRepository.findByRazorpayId(subEntity.id)
                 if (sub) {
@@ -245,12 +249,16 @@ export const subscriptionsService = {
                             unit_price, total_amount,
                             current_period_start, current_period_end
                         ) VALUES ($1,$2,'active',$3,$3,$4,$5)
-                        ON CONFLICT DO NOTHING`,
+                        ON CONFLICT (salon_id) WHERE status = 'active' DO NOTHING`,
                         [
                             sub.salon_id, sub.plan_id,
                             subEntity.plan_data?.amount ? subEntity.plan_data.amount / 100 : 0,
-                            new Date(subEntity.current_start * 1000).toISOString(),
-                            new Date(subEntity.current_end * 1000).toISOString(),
+                            typeof subEntity.current_start === 'number' && isFinite(subEntity.current_start)
+                                ? new Date(subEntity.current_start * 1000).toISOString()
+                                : new Date().toISOString(),
+                            typeof subEntity.current_end === 'number' && isFinite(subEntity.current_end)
+                                ? new Date(subEntity.current_end * 1000).toISOString()
+                                : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
                         ]
                     )
                 }
