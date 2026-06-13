@@ -64,13 +64,37 @@ export const salesRepository = {
         return rows;
     },
 
-    async getDailySummary(salonId: string, date: string): Promise<{ total: string; count: string }> {
+    async getDailySummary(salonId: string, date?: string): Promise<{ total: string; count: string }> {
+        if (date) {
+            const { rows } = await safeQuery(() => pool.query(
+                `SELECT COALESCE(SUM(total_amount), 0) as total, COUNT(*) as count
+                 FROM sales WHERE salon_id = $1 AND DATE(created_at) = $2 AND status = 'completed'`,
+                [salonId, date]
+            ));
+            return { total: rows[0].total.toString(), count: rows[0].count.toString() };
+        }
         const { rows } = await safeQuery(() => pool.query(
             `SELECT COALESCE(SUM(total_amount), 0) as total, COUNT(*) as count
-             FROM sales WHERE salon_id = $1 AND DATE(created_at) = $2 AND status = 'completed'`,
-            [salonId, date]
+             FROM sales WHERE salon_id = $1 AND status = 'completed'`,
+            [salonId]
         ));
         return { total: rows[0].total.toString(), count: rows[0].count.toString() };
+    },
+
+    async deleteById(id: string): Promise<Sale | null> {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            await client.query(`DELETE FROM sale_items WHERE sale_id = $1`, [id]);
+            const { rows } = await client.query(`DELETE FROM sales WHERE id = $1 RETURNING *`, [id]);
+            await client.query('COMMIT');
+            return rows[0] || null;
+        } catch (e) {
+            await client.query('ROLLBACK');
+            throw e;
+        } finally {
+            client.release();
+        }
     },
 
     async create(data: CreateSaleBody, createdBy: string | null): Promise<Sale> {
