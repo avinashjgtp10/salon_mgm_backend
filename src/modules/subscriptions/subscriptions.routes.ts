@@ -22,6 +22,9 @@ router.get("/plans/:id", subscriptionsController.getPlan)
 router.post("/trial", authMiddleware, validateStartTrial, subscriptionsController.startTrial)
 router.get("/trial/:salonId", authMiddleware, subscriptionsController.getTrialStatus)
 
+// ─── Verify (called after Razorpay redirect — no webhook needed locally) ─────
+router.post("/verify/:salonId", authMiddleware, subscriptionsController.verifySubscription)
+
 // ─── Subscriptions ────────────────────────────────────────────
 router.post("/", authMiddleware, validateCreateSubscription, subscriptionsController.createSubscription)
 router.get("/salon/:salonId", authMiddleware, subscriptionsController.getSubscriptionsBySalon)

@@ -4,12 +4,11 @@ import { sendSuccess } from "../utils/response.util"
 import { subscriptionsService } from "./subscriptions.service"
 
 type AuthRequest = Request & {
-    user?: { userId: string; role?: string }
+    user?: { userId: string; role?: string; salonId?: string | null }
 }
 
 export const subscriptionsController = {
 
-    // POST /api/v1/subscriptions/plans
     async createPlan(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const plan = await subscriptionsService.createPlan(req.body)
@@ -17,7 +16,6 @@ export const subscriptionsController = {
         } catch (err) { return next(err) }
     },
 
-    // GET /api/v1/subscriptions/plans
     async listPlans(_req: Request, res: Response, next: NextFunction) {
         try {
             const plans = await subscriptionsService.listPlans()
@@ -25,7 +23,6 @@ export const subscriptionsController = {
         } catch (err) { return next(err) }
     },
 
-    // GET /api/v1/subscriptions/plans/:id
     async getPlan(req: Request, res: Response, next: NextFunction) {
         try {
             const plan = await subscriptionsService.getPlan(req.params.id as string)
@@ -33,7 +30,6 @@ export const subscriptionsController = {
         } catch (err) { return next(err) }
     },
 
-    // POST /api/v1/subscriptions/trial
     async startTrial(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const result = await subscriptionsService.startTrial(req.body)
@@ -41,7 +37,6 @@ export const subscriptionsController = {
         } catch (err) { return next(err) }
     },
 
-    // GET /api/v1/subscriptions/trial/:salonId
     async getTrialStatus(req: Request, res: Response, next: NextFunction) {
         try {
             const status = await subscriptionsService.getTrialStatus(req.params.salonId as string)
@@ -49,7 +44,6 @@ export const subscriptionsController = {
         } catch (err) { return next(err) }
     },
 
-    // POST /api/v1/subscriptions
     async createSubscription(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const result = await subscriptionsService.createSubscription(req.body)
@@ -57,7 +51,24 @@ export const subscriptionsController = {
         } catch (err) { return next(err) }
     },
 
-    // GET /api/v1/subscriptions/salon/:salonId
+    // ── POST /api/v1/subscriptions/verify/:salonId ────────────────────────────
+    // Called by frontend after Razorpay redirects back — verifies directly
+    // with Razorpay API, no webhook needed. Works on localhost.
+    async verifySubscription(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const salonId = req.params.salonId as string
+            if (!salonId) throw new AppError(400, "salonId is required", "VALIDATION_ERROR")
+            if (req.user?.role !== "admin" && req.user?.salonId !== salonId)
+                throw new AppError(403, "Access denied", "FORBIDDEN")
+
+            const result = await subscriptionsService.verifySubscription(salonId)
+            if (!result) {
+                throw new AppError(404, "No subscription found", "NOT_FOUND")
+            }
+            return sendSuccess(res, 200, result, "Subscription verified")
+        } catch (err) { return next(err) }
+    },
+
     async getSubscriptionsBySalon(req: Request, res: Response, next: NextFunction) {
         try {
             const subs = await subscriptionsService.getSubscriptionsBySalon(req.params.salonId as string)
@@ -65,7 +76,6 @@ export const subscriptionsController = {
         } catch (err) { return next(err) }
     },
 
-    // GET /api/v1/subscriptions/:id
     async getSubscription(req: Request, res: Response, next: NextFunction) {
         try {
             const sub = await subscriptionsService.getSubscription(req.params.id as string)
@@ -73,7 +83,6 @@ export const subscriptionsController = {
         } catch (err) { return next(err) }
     },
 
-    // POST /api/v1/subscriptions/:id/cancel
     async cancelSubscription(req: Request, res: Response, next: NextFunction) {
         try {
             const result = await subscriptionsService.cancelSubscription(req.params.id as string, req.body)
@@ -81,7 +90,6 @@ export const subscriptionsController = {
         } catch (err) { return next(err) }
     },
 
-    // GET /api/v1/subscriptions/:id/payments
     async getPayments(req: Request, res: Response, next: NextFunction) {
         try {
             const payments = await subscriptionsService.getPayments(req.params.id as string)
@@ -89,7 +97,6 @@ export const subscriptionsController = {
         } catch (err) { return next(err) }
     },
 
-    // POST /api/v1/subscriptions/webhook
     async webhook(req: Request, res: Response, next: NextFunction) {
         try {
             const signature = req.headers["x-razorpay-signature"] as string
