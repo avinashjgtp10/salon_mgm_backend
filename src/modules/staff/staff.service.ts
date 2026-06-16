@@ -15,6 +15,7 @@ import bcrypt from "bcrypt";
 import { staffInvitationRepository } from "./staffInvitation.repository";
 import { salonsRepository } from "../salons/salons.repository";
 import { authService } from "../auth/auth.service";
+import { commissionCalculationService } from "../commission/commissionCalculation.service";
 import {
     Staff, StaffAddress, StaffEmergencyContact, StaffLeave, StaffSchedule,
     StaffWageSettings, StaffCommissionSettings, StaffPayRunSettings,
@@ -71,7 +72,6 @@ export const staffService = {
             console.log("[DEBUG] staffService.create - staff created with ID:", staff.id);
 
             if (body.password && passwordHash) {
-                // Admin set a password — create user account immediately, skip invitation email
                 console.log("[DEBUG] staffService.create - Step 3: Admin-set password, creating user account directly...");
                 let user = await authRepository.findUserByEmail(body.email);
                 if (!user) {
@@ -91,7 +91,6 @@ export const staffService = {
                 await staffRepository.activateDirectly(staff.id);
                 console.log("[DEBUG] staffService.create - user account created and staff activated:", user.id);
             } else {
-                // No password — send invitation email so staff sets their own password
                 console.log("[DEBUG] staffService.create - Step 3: Creating invitation...");
                 const invitation = await staffInvitationRepository.create(staff.id, staff.email);
                 console.log("[DEBUG] staffService.create - invitation created:", invitation?.id);
@@ -207,79 +206,97 @@ export const staffService = {
             return isNaN(n) ? null : n;
         };
 
-        for (let i = 0; i < rows.length; i++) {
-            const rowNum = i + 1;
-            const row = rows[i];
-            const email = String(row["Email"] ?? row["email"] ?? "").trim().toLowerCase();
+        const allEmails = rows
+            .map(row => String(row["Email"] ?? row["email"] ?? "").trim().toLowerCase())
+            .filter(Boolean);
+        const existingMap = await staffRepository.findByEmails(salonId, allEmails);
 
-            try {
-                const fullName = String(row["Name"] ?? row["name"] ?? "").trim();
-                if (!fullName && !email) {
-                    result.skipped += 1;
-                    result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: "Name and Email are both empty" });
-                    continue;
-                }
+        const BATCH_SIZE = 5;
+        for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+            const batch = rows.slice(i, i + BATCH_SIZE);
+            const batchResults = await Promise.all(
+                batch.map(async (row, batchIdx) => {
+                    const rowNum = i + batchIdx + 1;
+                    const part = { imported: 0, updated: 0, skipped: 0, errors: [] as StaffImportResult["errors"] };
+                    const email = String(row["Email"] ?? row["email"] ?? "").trim().toLowerCase();
 
-                if (!email) {
-                    result.skipped += 1;
-                    result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: "Email is required" });
-                    continue;
-                }
-
-                const nameParts = fullName.split(" ");
-                const first_name = nameParts[0] || email.split("@")[0];
-                const last_name = nameParts.slice(1).join(" ") || undefined;
-
-                const phone = String(row["Contact"] ?? row["contact"] ?? "").trim() || undefined;
-                const country = String(row["Address"] ?? row["address"] ?? "").trim() || undefined;
-                const job_title = String(row["Designation"] ?? row["designation"] ?? "").trim() || undefined;
-
-                const dojRaw = String(row["DOJ(dd-mm-YYYY)"] ?? row["DOJ"] ?? row["doj"] ?? "").trim();
-                const dobRaw = String(row["DOB(dd-mm-YYYY)"] ?? row["DOB"] ?? row["dob"] ?? "").trim();
-                const hourly_rate = toNum(row["Hourly Rate"] ?? row["hourly_rate"]);
-                const salary_amount = toNum(row["Fixed Salary"] ?? row["fixed_salary"]);
-
-                const joined_date = parseDate(dojRaw);
-                const { birthday_day, birthday_month } = parseDOB(dobRaw);
-
-                const existing = await staffRepository.findByEmail(salonId, email);
-
-                if (existing) {
-                    if (!dry_run) {
-                        await staffRepository.update(existing.id, salonId, {
-                            first_name, last_name, phone, country, job_title,
-                        });
-                        await staffRepository.updateDateFields(existing.id, salonId, { joined_date, birthday_day, birthday_month });
-                        if (hourly_rate !== null || salary_amount !== null) {
-                            await staffWagesRepository.upsert(existing.id, {
-                                wages_enabled: true,
-                                compensation_type: hourly_rate !== null ? "hourly" : "salary",
-                                hourly_rate: hourly_rate ?? undefined,
-                                salary_amount: salary_amount ?? undefined,
-                            });
+                    try {
+                        const fullName = String(row["Name"] ?? row["name"] ?? "").trim();
+                        if (!fullName && !email) {
+                            part.skipped += 1;
+                            part.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: "Name and Email are both empty" });
+                            return part;
                         }
-                    }
-                    result.updated += 1;
-                    continue;
-                }
+                        if (!email) {
+                            part.skipped += 1;
+                            part.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: "Email is required" });
+                            return part;
+                        }
 
-                if (!dry_run) {
-                    const staff = await staffRepository.create(salonId, {
-                        first_name, last_name, email, phone, country, job_title,
-                    });
-                    await staffRepository.updateDateFields(staff.id, salonId, { joined_date, birthday_day, birthday_month });
-                    if (hourly_rate !== null || salary_amount !== null) {
-                        await staffWagesRepository.upsert(staff.id, {
-                            wages_enabled: true,
-                            compensation_type: hourly_rate !== null ? "hourly" : "salary",
-                            hourly_rate: hourly_rate ?? undefined,
-                            salary_amount: salary_amount ?? undefined,
-                        });
+                        const nameParts = fullName.split(" ");
+                        const first_name = nameParts[0] || email.split("@")[0];
+                        const last_name = nameParts.slice(1).join(" ") || undefined;
+
+                        const phone = String(row["Contact"] ?? row["contact"] ?? "").trim() || undefined;
+                        const country = String(row["Address"] ?? row["address"] ?? "").trim() || undefined;
+                        const job_title = String(row["Designation"] ?? row["designation"] ?? "").trim() || undefined;
+
+                        const dojRaw = String(row["DOJ(dd-mm-YYYY)"] ?? row["DOJ"] ?? row["doj"] ?? "").trim();
+                        const dobRaw = String(row["DOB(dd-mm-YYYY)"] ?? row["DOB"] ?? row["dob"] ?? "").trim();
+                        const hourly_rate = toNum(row["Hourly Rate"] ?? row["hourly_rate"]);
+                        const salary_amount = toNum(row["Fixed Salary"] ?? row["fixed_salary"]);
+
+                        const joined_date = parseDate(dojRaw);
+                        const { birthday_day, birthday_month } = parseDOB(dobRaw);
+
+                        const existing = existingMap.get(email);
+
+                        if (existing) {
+                            if (!dry_run) {
+                                await staffRepository.update(existing.id, salonId, {
+                                    first_name, last_name, phone, country, job_title,
+                                });
+                                await staffRepository.updateDateFields(existing.id, salonId, { joined_date, birthday_day, birthday_month });
+                                if (hourly_rate !== null || salary_amount !== null) {
+                                    await staffWagesRepository.upsert(existing.id, {
+                                        wages_enabled: true,
+                                        compensation_type: hourly_rate !== null ? "hourly" : "salary",
+                                        hourly_rate: hourly_rate ?? undefined,
+                                        salary_amount: salary_amount ?? undefined,
+                                    });
+                                }
+                            }
+                            part.updated += 1;
+                        } else {
+                            if (!dry_run) {
+                                const staff = await staffRepository.create(salonId, {
+                                    first_name, last_name, email, phone, country, job_title,
+                                });
+                                await staffRepository.updateDateFields(staff.id, salonId, { joined_date, birthday_day, birthday_month });
+                                if (hourly_rate !== null || salary_amount !== null) {
+                                    await staffWagesRepository.upsert(staff.id, {
+                                        wages_enabled: true,
+                                        compensation_type: hourly_rate !== null ? "hourly" : "salary",
+                                        hourly_rate: hourly_rate ?? undefined,
+                                        salary_amount: salary_amount ?? undefined,
+                                    });
+                                }
+                            }
+                            part.imported += 1;
+                        }
+                    } catch (e: any) {
+                        part.errors.push({ row: rowNum, email, code: "IMPORT_ERROR", message: e?.message || "Unknown error" });
                     }
-                }
-                result.imported += 1;
-            } catch (e: any) {
-                result.errors.push({ row: rowNum, email, code: "IMPORT_ERROR", message: e?.message || "Unknown error" });
+
+                    return part;
+                })
+            );
+
+            for (const part of batchResults) {
+                result.imported += part.imported;
+                result.updated += part.updated;
+                result.skipped += part.skipped;
+                result.errors.push(...part.errors);
             }
         }
 
@@ -327,7 +344,6 @@ export const staffInvitationService = {
                 throw new AppError(400, "Expired token", "BAD_REQUEST");
             }
 
-            // Avoid creating duplicate users: check if user exists
             let user = await authRepository.findUserByEmail(invitation.email);
             const userAlreadyExisted = !!user;
 
@@ -343,18 +359,12 @@ export const staffInvitationService = {
                 } as any);
             } else {
                 logger.info("acceptInvitation: user already exists — updating role to staff", { email: invitation.email, userId: user.id });
-                // Ensure the user carries the staff role regardless of what they registered as
                 await authRepository.updateUserRole(user.id, 'staff');
                 user = { ...user, role: 'staff' };
             }
 
             logger.info("acceptInvitation: linking user to staff", { staffId: invitation.staff_id, userId: user.id });
-            await staffRepository.linkUserToStaff(
-                invitation.staff_id,
-                user.id,
-                body.first_name,
-                body.last_name
-            );
+            await staffRepository.linkUserToStaff(invitation.staff_id, user.id, body.first_name, body.last_name);
 
             logger.info("acceptInvitation: marking user verified", { userId: user.id });
             await authRepository.markUserVerified(user.id);
@@ -364,29 +374,17 @@ export const staffInvitationService = {
 
             logger.info("acceptInvitation: attempting auto-login", { email: invitation.email });
             try {
-                const loginData = await authService.login({
-                    email: invitation.email,
-                    password: body.password
-                });
-
+                const loginData = await authService.login({ email: invitation.email, password: body.password });
                 logger.info("acceptInvitation success with auto-login", { staffId: invitation.staff_id });
                 return {
                     staffId: invitation.staff_id,
                     accessToken: loginData.accessToken,
                     refreshToken: loginData.refreshToken,
                     user: loginData.user,
-                    isOnboardingComplete: loginData.isOnboardingComplete
+                    isOnboardingComplete: loginData.isOnboardingComplete,
                 };
             } catch (loginError: any) {
-                logger.warn("acceptInvitation: auto-login failed", {
-                    email: invitation.email,
-                    error: loginError.message,
-                    userAlreadyExisted
-                });
-
-                // If the user already existed, they might have a different password.
-                // We shouldn't fail the whole invitation acceptance just because auto-login failed.
-                // However, the frontend expects tokens. We'll throw a clear error message.
+                logger.warn("acceptInvitation: auto-login failed", { email: invitation.email, error: loginError.message, userAlreadyExisted });
                 if (userAlreadyExisted) {
                     throw new AppError(401, "Invitation accepted! Please log in with your existing account password.", "LOGIN_REQUIRED");
                 }
@@ -408,10 +406,8 @@ export const staffInvitationService = {
 
         await staffInvitationRepository.markExpired(staffId);
         const invitation = await staffInvitationRepository.create(staffId, staff.email);
-
         logger.info("resendInvitation success", { staffId });
 
-        // Send invitation email (fire-and-forget)
         const salon = await salonsRepository.findById(salonId);
         const resolvedSalonName = salonName ?? salon?.business_name ?? "Our Salon";
 
@@ -420,16 +416,13 @@ export const staffInvitationService = {
             token: invitation.token,
             staffFirstName: staff.first_name ?? "Team Member",
             salonName: resolvedSalonName,
-        }).catch((err) =>
-            logger.warn("resendInvitation: invitation email failed", { staffId, err })
-        );
+        }).catch((err) => logger.warn("resendInvitation: invitation email failed", { staffId, err }));
     },
 
     async cancelInvitation(params: { staffId: string; salonId: string }): Promise<void> {
         const { staffId, salonId } = params;
         const staff = await staffRepository.findById(staffId, salonId);
         if (!staff) throw new AppError(404, "Staff not found", "NOT_FOUND");
-
         await staffInvitationRepository.markCancelled(staffId);
         logger.info("cancelInvitation success", { staffId });
     },
@@ -440,7 +433,6 @@ export const staffInvitationService = {
         if (!staff) throw new AppError(404, "Staff not found", "NOT_FOUND");
 
         const invitation = await staffInvitationRepository.findByStaffId(staffId);
-
         return {
             staff_id: staff.id,
             email: staff.email,
@@ -516,10 +508,46 @@ export const staffWagesService = {
 // ─── Commissions ──────────────────────────────────────────────────────────────
 
 export const staffCommissionsService = {
+    // ── Summary: total earned, paid, pending for the whole salon ─────────────
+    async getSalonSummary(salonId: string, month?: string) {
+        return commissionCalculationService.getSalonSummary(salonId, month);
+    },
+
+    // ── Earned commissions grouped by staff ───────────────────────────────────
+    async getEarnedBySalon(salonId: string, month?: string) {
+        return commissionCalculationService.getEarnedBySalon(salonId, month);
+    },
+
+    // ── Mark all pending commissions as paid for a staff member ───────────────
+    async markStaffCommissionPaid(salonId: string, staffId: string) {
+        return commissionCalculationService.markStaffPaid(salonId, staffId);
+    },
+
+    async upsertSlabs(staffId: string, salonId: string, category: string, slabs: any[]) {
+        return commissionCalculationService.upsertSlabs(staffId, salonId, category, slabs);
+    },
+
+    async getSlabs(staffId: string, category?: string) {
+        return commissionCalculationService.getSlabs(staffId, category);
+    },
+
+    async getStaffHistory(staffId: string, month?: string) {
+        return commissionCalculationService.getStaffHistory(staffId, month);
+    },
+
+    async exportCommissions(salonId: string, month?: string) {
+        return commissionCalculationService.exportBySalon(salonId, month);
+    },
     async list(staffId: string, salonId: string): Promise<StaffCommissionSettings[]> {
         await _ensureStaff(staffId, salonId);
         return staffCommissionsRepository.listByStaffId(staffId);
     },
+
+    // ── NEW: single query for all staff commissions in a salon ────────────────
+    async listBySalon(salonId: string) {
+        return staffCommissionsRepository.listBySalonId(salonId);
+    },
+
     async upsert(staffId: string, salonId: string, data: UpdateCommissionBody): Promise<StaffCommissionSettings> {
         await _ensureStaff(staffId, salonId);
         return staffCommissionsRepository.upsert(staffId, data);
@@ -550,12 +578,10 @@ export const staffSchedulesService = {
         await _ensureStaff(staffId, salonId);
         return staffSchedulesRepository.upsertBulk(staffId, body);
     },
-    /** Delete by exact calendar date (YYYY-MM-DD) */
     async deleteByDate(staffId: string, salonId: string, date: string): Promise<void> {
         await _ensureStaff(staffId, salonId);
         await staffSchedulesRepository.deleteByDate(staffId, date);
     },
-    /** Legacy: delete by day-of-week index */
     async delete(staffId: string, salonId: string, dateStr: string): Promise<void> {
         await _ensureStaff(staffId, salonId);
         const dateObj = new Date(dateStr + "T12:00:00");

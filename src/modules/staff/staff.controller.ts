@@ -32,7 +32,7 @@ export const staffController = {
   async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = req.user?.salonId ?? req.body?.salon_id;
-if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR");
+      if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR");
       logger.info("GET /staff", { salonId });
 
       const query: StaffListQuery = {
@@ -41,9 +41,7 @@ if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR"
         search: req.query.search ? String(req.query.search) : undefined,
         invitation_status: req.query.invitation_status as any,
         employment_type: req.query.employment_type as any,
-        is_active: req.query.is_active !== undefined
-          ? req.query.is_active === "true"
-          : undefined,
+        is_active: req.query.is_active !== undefined ? req.query.is_active === "true" : undefined,
         branch_id: req.query.branch_id ? String(req.query.branch_id) : undefined,
         sort_by: req.query.sort_by as any,
         sort_order: req.query.sort_order as any,
@@ -73,9 +71,7 @@ if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR"
       return sendSuccess(res, 201, result, "Staff member created successfully");
     } catch (error: any) {
       console.error("[DEBUG] Controller: POST /staff FAILED", {
-        message: error.message,
-        code: error.code,
-        stack: error.stack,
+        message: error.message, code: error.code, stack: error.stack,
       });
       if (!(error instanceof AppError)) {
         return res.status(500).json({
@@ -96,7 +92,6 @@ if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR"
       const salonId = getSalonId(req);
       const id = String(req.params.id);
       logger.info("GET /staff/:id", { id, salonId });
-
       const staff = await staffService.getById(id, salonId);
       return sendSuccess(res, 200, staff, "Staff fetched successfully");
     } catch (err) { return next(err); }
@@ -111,13 +106,11 @@ if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR"
 
       const patch = req.body as UpdateStaffBody;
       const updated = await staffService.update({
-        id,
-        salonId,
+        id, salonId,
         requesterUserId: req.user.userId,
         requesterRole: req.user.role,
         patch,
       });
-      // Invalidate per-staff permission cache when custom_permissions changes
       if ("custom_permissions" in patch && updated.user_id) {
         invalidateStaffPermCache(updated.user_id);
       }
@@ -131,11 +124,8 @@ if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR"
       if (!req.user?.userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
       const id = String(req.params.id);
       logger.info("PATCH /staff/:id/deactivate", { id, salonId });
-
       await staffService.deactivate({
-        id, salonId,
-        requesterUserId: req.user.userId,
-        requesterRole: req.user.role,
+        id, salonId, requesterUserId: req.user.userId, requesterRole: req.user.role,
       });
       return sendSuccess(res, 200, null, "Staff deactivated");
     } catch (err) { return next(err); }
@@ -147,11 +137,8 @@ if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR"
       if (!req.user?.userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
       const id = String(req.params.id);
       logger.info("DELETE /staff/:id", { id, salonId });
-
       await staffService.delete({
-        id, salonId,
-        requesterUserId: req.user.userId,
-        requesterRole: req.user.role,
+        id, salonId, requesterUserId: req.user.userId, requesterRole: req.user.role,
       });
       return sendSuccess(res, 200, null, "Staff member deleted successfully");
     } catch (err) { return next(err); }
@@ -163,7 +150,6 @@ if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR"
     try {
       const salonId = getSalonId(req);
       const file = (req as any).file as Express.Multer.File | undefined;
-
       if (!file) throw new AppError(400, "No file uploaded", "VALIDATION_ERROR");
 
       const dry_run = req.query.dry_run === "true";
@@ -173,44 +159,22 @@ if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR"
       const name = file.originalname.toLowerCase();
 
       if (name.endsWith(".csv") || file.mimetype.includes("csv")) {
-        // ── CSV parsing ──────────────────────────────────────────────────────
         const text = file.buffer.toString("utf-8");
-        const parsed = Papa.parse(text, {
-          header: true,
-          skipEmptyLines: true,
-        });
-
-        if (parsed.errors && parsed.errors.length > 0) {
-          logger.warn("CSV parse warnings", { errors: parsed.errors });
-        }
-
+        const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
+        if (parsed.errors && parsed.errors.length > 0) logger.warn("CSV parse warnings", { errors: parsed.errors });
         rows = parsed.data as any[];
       } else {
-        // ── Excel parsing ────────────────────────────────────────────────────
         const wb = XLSX.read(file.buffer, { type: "buffer" });
         const sheetName = wb.SheetNames[0];
         if (!sheetName) throw new AppError(400, "Excel file has no sheets", "VALIDATION_ERROR");
-
-        const ws = wb.Sheets[sheetName];
-        rows = XLSX.utils.sheet_to_json(ws, { defval: "" });
+        rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" });
       }
 
-      if (rows.length === 0) {
-        throw new AppError(400, "File is empty or has no valid rows", "VALIDATION_ERROR");
-      }
-
-      if (rows.length > 1000) {
-        throw new AppError(400, "Max 1000 rows allowed per import", "VALIDATION_ERROR");
-      }
+      if (rows.length === 0) throw new AppError(400, "File is empty or has no valid rows", "VALIDATION_ERROR");
+      if (rows.length > 1000) throw new AppError(400, "Max 1000 rows allowed per import", "VALIDATION_ERROR");
 
       const result = await staffService.importStaff({ rows, salonId, dry_run });
-
-      return sendSuccess(
-        res,
-        200,
-        result,
-        dry_run ? "Dry run complete — no changes saved" : "Import complete"
-      );
+      return sendSuccess(res, 200, result, dry_run ? "Dry run complete — no changes saved" : "Import complete");
     } catch (err) { return next(err); }
   },
 
@@ -221,9 +185,7 @@ if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR"
       search: req.query.search ? String(req.query.search) : undefined,
       invitation_status: req.query.invitation_status as any,
       employment_type: req.query.employment_type as any,
-      is_active: req.query.is_active !== undefined
-        ? req.query.is_active === "true"
-        : undefined,
+      is_active: req.query.is_active !== undefined ? req.query.is_active === "true" : undefined,
       branch_id: req.query.branch_id ? String(req.query.branch_id) : undefined,
       sort_by: (req.query.sort_by ?? "first_name") as any,
       sort_order: (req.query.sort_order ?? "ASC") as any,
@@ -267,9 +229,7 @@ if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR"
     try {
       const salonId = getSalonId(req);
       logger.info("GET /staff/export/excel", { salonId });
-
       const rows = await staffService.exportStaff(salonId, staffController._buildExportQuery(req));
-
       const headers = staffController._exportFields.map(f => f.label);
       const data = rows.map(row =>
         staffController._exportFields.map(f => {
@@ -277,14 +237,10 @@ if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR"
           return Array.isArray(val) ? val.join(", ") : (val ?? "");
         })
       );
-
-      const wsData = [headers, ...data];
-      const ws = XLSX.utils.aoa_to_sheet(wsData);
+      const ws = XLSX.utils.aoa_to_sheet([headers, ...data]);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Staff");
-
       const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
-
       res.setHeader("Content-Disposition", 'attachment; filename="staff_export.xlsx"');
       res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
       return res.status(200).send(buffer);
@@ -295,19 +251,15 @@ if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR"
     try {
       const salonId = getSalonId(req);
       logger.info("GET /staff/export/csv", { salonId });
-
       const rows = await staffService.exportStaff(salonId, staffController._buildExportQuery(req));
-
       const flatRows = rows.map(row => {
         const r: Record<string, unknown> = { ...(row as any) };
         if (Array.isArray(r.specialization)) r.specialization = (r.specialization as string[]).join(", ");
         return r;
       });
-
       const fields = staffController._exportFields.map(f => ({ label: f.label, value: f.value as string }));
       const parser = new CsvParser({ fields });
       const csv = flatRows.length ? parser.parse(flatRows) : fields.map(f => f.label).join(",");
-
       res.setHeader("Content-Disposition", 'attachment; filename="staff_export.csv"');
       res.setHeader("Content-Type", "text/csv");
       return res.status(200).send(csv);
@@ -326,39 +278,27 @@ export const staffInvitationController = {
       return sendSuccess(res, 200, result, "Token verified");
     } catch (err) { return next(err); }
   },
-
   async acceptInvitation(req: Request, res: Response, next: NextFunction) {
     try {
       const result = await staffInvitationService.acceptInvitation(req.body as AcceptInvitationBody);
       return sendSuccess(res, 200, result, "Invitation accepted. You can now log in.");
     } catch (err) { return next(err); }
   },
-
   async getInvitationStatus(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = getSalonId(req);
-      const staffId = String(req.params.id);
-      const result = await staffInvitationService.getInvitationStatus({ staffId, salonId });
+      const result = await staffInvitationService.getInvitationStatus({ staffId: String(req.params.id), salonId: getSalonId(req) });
       return sendSuccess(res, 200, result, "Invitation status fetched");
     } catch (err) { return next(err); }
   },
-
   async resendInvitation(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = getSalonId(req);
-      const staffId = String(req.params.id);
-      await staffInvitationService.resendInvitation({
-        staffId, salonId, salonName: req.body?.salon_name,
-      });
+      await staffInvitationService.resendInvitation({ staffId: String(req.params.id), salonId: getSalonId(req), salonName: req.body?.salon_name });
       return sendSuccess(res, 200, null, "Invitation resent");
     } catch (err) { return next(err); }
   },
-
   async cancelInvitation(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = getSalonId(req);
-      const staffId = String(req.params.id);
-      await staffInvitationService.cancelInvitation({ staffId, salonId });
+      await staffInvitationService.cancelInvitation({ staffId: String(req.params.id), salonId: getSalonId(req) });
       return sendSuccess(res, 200, null, "Invitation cancelled");
     } catch (err) { return next(err); }
   },
@@ -375,26 +315,19 @@ export const staffAddressController = {
   },
   async create(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const data = await staffAddressService.create(
-        String(req.params.staffId), getSalonId(req), req.body as CreateStaffAddressBody
-      );
+      const data = await staffAddressService.create(String(req.params.staffId), getSalonId(req), req.body as CreateStaffAddressBody);
       return sendSuccess(res, 201, data, "Address created successfully");
     } catch (err) { return next(err); }
   },
   async update(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const data = await staffAddressService.update(
-        String(req.params.staffId), getSalonId(req),
-        String(req.params.id), req.body as UpdateStaffAddressBody
-      );
+      const data = await staffAddressService.update(String(req.params.staffId), getSalonId(req), String(req.params.id), req.body as UpdateStaffAddressBody);
       return sendSuccess(res, 200, data, "Address updated successfully");
     } catch (err) { return next(err); }
   },
   async delete(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      await staffAddressService.delete(
-        String(req.params.staffId), getSalonId(req), String(req.params.id)
-      );
+      await staffAddressService.delete(String(req.params.staffId), getSalonId(req), String(req.params.id));
       return sendSuccess(res, 200, null, "Address deleted");
     } catch (err) { return next(err); }
   },
@@ -411,26 +344,19 @@ export const staffEmergencyContactController = {
   },
   async create(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const data = await staffEmergencyContactService.create(
-        String(req.params.staffId), getSalonId(req), req.body as CreateEmergencyContactBody
-      );
+      const data = await staffEmergencyContactService.create(String(req.params.staffId), getSalonId(req), req.body as CreateEmergencyContactBody);
       return sendSuccess(res, 201, data, "Emergency contact created successfully");
     } catch (err) { return next(err); }
   },
   async update(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const data = await staffEmergencyContactService.update(
-        String(req.params.staffId), getSalonId(req),
-        String(req.params.id), req.body as UpdateEmergencyContactBody
-      );
+      const data = await staffEmergencyContactService.update(String(req.params.staffId), getSalonId(req), String(req.params.id), req.body as UpdateEmergencyContactBody);
       return sendSuccess(res, 200, data, "Emergency contact updated successfully");
     } catch (err) { return next(err); }
   },
   async delete(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      await staffEmergencyContactService.delete(
-        String(req.params.staffId), getSalonId(req), String(req.params.id)
-      );
+      await staffEmergencyContactService.delete(String(req.params.staffId), getSalonId(req), String(req.params.id));
       return sendSuccess(res, 200, null, "Emergency contact deleted");
     } catch (err) { return next(err); }
   },
@@ -447,9 +373,7 @@ export const staffWagesController = {
   },
   async upsert(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const data = await staffWagesService.upsert(
-        String(req.params.staffId), getSalonId(req), req.body as UpdateWageSettingsBody
-      );
+      const data = await staffWagesService.upsert(String(req.params.staffId), getSalonId(req), req.body as UpdateWageSettingsBody);
       return sendSuccess(res, 200, data, "Wage settings updated successfully");
     } catch (err) { return next(err); }
   },
@@ -458,17 +382,121 @@ export const staffWagesController = {
 // ─── Commissions ──────────────────────────────────────────────────────────────
 
 export const staffCommissionsController = {
+  // ── Slabs: upsert all slabs for a staff+category ──────────────────────────
+  async upsertSlabs(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId ?? String(req.query.salon_id ?? "");
+      const staffId = String(req.params.staffId);
+      const { category, slabs, min_monthly_revenue } = req.body;
+      if (!category) throw new AppError(400, "category is required", "VALIDATION_ERROR");
+      if (!Array.isArray(slabs) || slabs.length === 0) throw new AppError(400, "slabs array is required", "VALIDATION_ERROR");
+
+      // Also update min_monthly_revenue on the settings row if provided
+      if (typeof min_monthly_revenue === "number") {
+        await staffCommissionsService.upsert(staffId, salonId, {
+          category,
+          min_monthly_revenue,
+        } as any);
+      }
+
+      const data = await staffCommissionsService.upsertSlabs(staffId, salonId, category, slabs);
+      return sendSuccess(res, 200, data, "Commission slabs saved successfully");
+    } catch (err) { return next(err); }
+  },
+
+  // ── Slabs: get slabs for a staff member ────────────────────────────────────
+  async getSlabs(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const staffId  = String(req.params.staffId);
+      const category = req.query.category ? String(req.query.category) : undefined;
+      const data = await staffCommissionsService.getSlabs(staffId, category);
+      return sendSuccess(res, 200, data, "Commission slabs fetched successfully");
+    } catch (err) { return next(err); }
+  },
+
+  // ── History: commission earned per staff ───────────────────────────────────
+  async getStaffHistory(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const staffId = String(req.params.staffId);
+      const month   = req.query.month ? String(req.query.month) : undefined;
+      const data = await staffCommissionsService.getStaffHistory(staffId, month);
+      return sendSuccess(res, 200, data, "Commission history fetched");
+    } catch (err) { return next(err); }
+  },
+
+  // ── Export: commissions CSV for the salon ──────────────────────────────────
+  async exportCommissions(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId ?? String(req.query.salon_id ?? "");
+      const month   = req.query.month ? String(req.query.month) : undefined;
+      const rows = await staffCommissionsService.exportCommissions(salonId, month);
+
+      const header = "Staff Name,Category,Revenue Amount,Commission Kind,Commission Rate,Commission Amount,Status,Earned Date";
+      const csv = [header, ...rows.map((r: any) =>
+        [r.staff_name, r.category, r.revenue_amount, r.commission_kind, r.commission_rate, r.commission_amount, r.status, r.earned_date].join(",")
+      )].join("\n");
+
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", `attachment; filename="commissions${month ? "_" + month : ""}.csv"`);
+      return res.status(200).send(csv);
+    } catch (err) { return next(err); }
+  },
+
+  // ── NEW: commissions earned per staff this month (powers overview panel) ──
+  async getEarnedBySalon(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId ?? String(req.query.salon_id ?? "");
+      if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+      const month = req.query.month ? String(req.query.month) : undefined;
+      const data = await staffCommissionsService.getEarnedBySalon(salonId, month);
+      return sendSuccess(res, 200, data, "Commission earned by staff fetched successfully");
+    } catch (err) { return next(err); }
+  },
+
+  // ── NEW: mark all pending commissions as paid for a staff member ───────────
+  async markStaffCommissionPaid(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId ?? String(req.query.salon_id ?? "");
+      const staffId = String(req.params.staffId);
+      if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+      if (!staffId) throw new AppError(400, "staffId is required", "VALIDATION_ERROR");
+      const count = await staffCommissionsService.markStaffCommissionPaid(salonId, staffId);
+      return sendSuccess(res, 200, { marked_paid: count }, `${count} commission(s) marked as paid`);
+    } catch (err) { return next(err); }
+  },
+
+  // ── NEW: commission earned summary for the salon (powers overview cards) ──
+  async getCommissionSummary(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId ?? String(req.query.salon_id ?? "");
+      if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+      const month = req.query.month ? String(req.query.month) : undefined; // "YYYY-MM"
+      const data = await staffCommissionsService.getSalonSummary(salonId, month);
+      return sendSuccess(res, 200, data, "Commission summary fetched successfully");
+    } catch (err) { return next(err); }
+  },
+
+  // ── NEW: single endpoint — all commissions for the salon in one query ──────
+  async listBySalon(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      // getSalonId reads from JWT; also accept query param as fallback
+      const salonId = req.user?.salonId ?? String(req.query.salon_id ?? "");
+      if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+      const data = await staffCommissionsService.listBySalon(salonId);
+      return sendSuccess(res, 200, data, "All commission settings fetched successfully");
+    } catch (err) { return next(err); }
+  },
+
   async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const data = await staffCommissionsService.list(String(req.params.staffId), getSalonId(req));
       return sendSuccess(res, 200, data, "Commission settings fetched successfully");
     } catch (err) { return next(err); }
   },
+
   async upsert(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const data = await staffCommissionsService.upsert(
-        String(req.params.staffId), getSalonId(req), req.body as UpdateCommissionBody
-      );
+      const data = await staffCommissionsService.upsert(String(req.params.staffId), getSalonId(req), req.body as UpdateCommissionBody);
       return sendSuccess(res, 200, data, "Commission setting updated successfully");
     } catch (err) { return next(err); }
   },
@@ -485,9 +513,7 @@ export const staffPayRunsController = {
   },
   async upsert(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const data = await staffPayRunsService.upsert(
-        String(req.params.staffId), getSalonId(req), req.body as UpdatePayRunBody
-      );
+      const data = await staffPayRunsService.upsert(String(req.params.staffId), getSalonId(req), req.body as UpdatePayRunBody);
       return sendSuccess(res, 200, data, "Pay run settings updated successfully");
     } catch (err) { return next(err); }
   },
@@ -504,20 +530,16 @@ export const staffSchedulesController = {
   },
   async upsert(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const data = await staffSchedulesService.upsert(
-        String(req.params.staffId), getSalonId(req), req.body as UpsertStaffSchedulesBody
-      );
+      const data = await staffSchedulesService.upsert(String(req.params.staffId), getSalonId(req), req.body as UpsertStaffSchedulesBody);
       return sendSuccess(res, 200, data, "Schedules updated successfully");
     } catch (err) { return next(err); }
   },
   async delete(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const staffId = String(req.params.staffId);
-      const salonId = await getSalonId(req);
+      const salonId = getSalonId(req);
       const date = req.query.date ? String(req.query.date) : undefined;
-      if (!date) {
-        throw new AppError(400, "Date is required", "MISSING_DATE");
-      }
+      if (!date) throw new AppError(400, "Date is required", "MISSING_DATE");
       await staffSchedulesService.delete(staffId, salonId, date);
       return sendSuccess(res, 200, null, "Schedule deleted successfully");
     } catch (err) { return next(err); }
@@ -539,26 +561,19 @@ export const staffLeavesController = {
   },
   async create(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const data = await staffLeavesService.create(
-        String(req.params.staffId), getSalonId(req), req.body as CreateStaffLeaveBody
-      );
+      const data = await staffLeavesService.create(String(req.params.staffId), getSalonId(req), req.body as CreateStaffLeaveBody);
       return sendSuccess(res, 201, data, "Leave created successfully");
     } catch (err) { return next(err); }
   },
   async update(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const data = await staffLeavesService.update(
-        String(req.params.staffId), getSalonId(req),
-        String(req.params.id), req.body as UpdateStaffLeaveBody
-      );
+      const data = await staffLeavesService.update(String(req.params.staffId), getSalonId(req), String(req.params.id), req.body as UpdateStaffLeaveBody);
       return sendSuccess(res, 200, data, "Leave updated successfully");
     } catch (err) { return next(err); }
   },
   async delete(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      await staffLeavesService.delete(
-        String(req.params.staffId), getSalonId(req), String(req.params.id)
-      );
+      await staffLeavesService.delete(String(req.params.staffId), getSalonId(req), String(req.params.id));
       return sendSuccess(res, 200, null, "Leave deleted");
     } catch (err) { return next(err); }
   },

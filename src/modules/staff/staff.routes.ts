@@ -30,40 +30,50 @@ router.post("/invite/accept", validateAcceptInvitation, staffInvitationControlle
 router.get("/", auth, ownerAdminStaff, requirePermission("view_team"), staffController.list);
 router.post("/", auth, ownerAdmin, requirePermission("manage_team"), validateCreateStaff, staffController.create);
 
-// ─── Import (must be BEFORE /:id) ────────────────────────────────────────────
-router.post("/import", auth, ownerAdmin, upload.single("file"), staffController.importStaff);
+// ─── Import / Export (must be BEFORE /:id) ───────────────────────────────────
+router.post("/import",       auth, ownerAdmin, upload.single("file"), staffController.importStaff);
+router.get("/export/excel",  auth, ownerAdmin, staffController.exportExcel);
+router.get("/export/csv",    auth, ownerAdmin, staffController.exportCsv);
 
-// ─── Export (must be BEFORE /:id) ────────────────────────────────────────────
-router.get("/export/excel", auth, ownerAdmin, staffController.exportExcel);
-router.get("/export/csv", auth, ownerAdmin, staffController.exportCsv);
+// ─── Commissions — salon-wide (must be BEFORE /:staffId routes) ──────────────
+router.get("/commissions/summary",              auth, ownerAdmin, staffCommissionsController.getCommissionSummary);
+router.get("/commissions/earned",               auth, ownerAdmin, staffCommissionsController.getEarnedBySalon);
+router.get("/commissions/export",               auth, ownerAdmin, staffCommissionsController.exportCommissions);
+router.post("/commissions/:staffId/mark-paid",  auth, ownerAdmin, staffCommissionsController.markStaffCommissionPaid);
+router.get("/commissions/all",                  auth, ownerAdmin, staffCommissionsController.listBySalon);
+
+// ─── Commission Slabs + History — per staff ──────────────────────────────────
+router.get("/:staffId/commissions/slabs",   auth, ownerAdmin, staffCommissionsController.getSlabs);
+router.put("/:staffId/commissions/slabs",   auth, ownerAdmin, staffCommissionsController.upsertSlabs);
+router.get("/:staffId/commissions/history", auth, ownerAdminStaff, staffCommissionsController.getStaffHistory);
 
 // ─── Staff by ID ──────────────────────────────────────────────────────────────
-router.get("/:id", auth, ownerAdminStaff, requirePermission("view_team"), staffController.getById);
-router.patch("/:id", auth, ownerAdmin, requirePermission("manage_team"), validateUpdateStaff, staffController.update);
+router.get("/:id",    auth, ownerAdminStaff, requirePermission("view_team"), staffController.getById);
+router.patch("/:id",  auth, ownerAdmin, requirePermission("manage_team"), validateUpdateStaff, staffController.update);
 router.delete("/:id", auth, ownerAdmin, requirePermission("manage_team"), staffController.delete);
 
 // ─── Invitation management ────────────────────────────────────────────────────
 router.get("/:id/invitation-status", auth, ownerAdmin, staffInvitationController.getInvitationStatus);
-router.post("/:id/resend-invite", auth, ownerAdmin, staffInvitationController.resendInvitation);
-router.delete("/:id/cancel-invite", auth, ownerAdmin, staffInvitationController.cancelInvitation);
+router.post("/:id/resend-invite",    auth, ownerAdmin, staffInvitationController.resendInvitation);
+router.delete("/:id/cancel-invite",  auth, ownerAdmin, staffInvitationController.cancelInvitation);
 
 // ─── Addresses ────────────────────────────────────────────────────────────────
-router.get("/:staffId/addresses", auth, ownerAdminStaff, staffAddressController.list);
-router.post("/:staffId/addresses", auth, ownerAdmin, validateCreateStaffAddress, staffAddressController.create);
-router.patch("/:staffId/addresses/:id", auth, ownerAdmin, validateUpdateStaffAddress, staffAddressController.update);
-router.delete("/:staffId/addresses/:id", auth, ownerAdmin, staffAddressController.delete);
+router.get("/:staffId/addresses",         auth, ownerAdminStaff, staffAddressController.list);
+router.post("/:staffId/addresses",        auth, ownerAdmin, validateCreateStaffAddress, staffAddressController.create);
+router.patch("/:staffId/addresses/:id",   auth, ownerAdmin, validateUpdateStaffAddress, staffAddressController.update);
+router.delete("/:staffId/addresses/:id",  auth, ownerAdmin, staffAddressController.delete);
 
 // ─── Emergency Contacts ───────────────────────────────────────────────────────
-router.get("/:staffId/emergency-contacts", auth, ownerAdminStaff, staffEmergencyContactController.list);
-router.post("/:staffId/emergency-contacts", auth, ownerAdmin, validateCreateEmergencyContact, staffEmergencyContactController.create);
-router.patch("/:staffId/emergency-contacts/:id", auth, ownerAdmin, validateUpdateEmergencyContact, staffEmergencyContactController.update);
+router.get("/:staffId/emergency-contacts",        auth, ownerAdminStaff, staffEmergencyContactController.list);
+router.post("/:staffId/emergency-contacts",       auth, ownerAdmin, validateCreateEmergencyContact, staffEmergencyContactController.create);
+router.patch("/:staffId/emergency-contacts/:id",  auth, ownerAdmin, validateUpdateEmergencyContact, staffEmergencyContactController.update);
 router.delete("/:staffId/emergency-contacts/:id", auth, ownerAdmin, staffEmergencyContactController.delete);
 
 // ─── Wages ────────────────────────────────────────────────────────────────────
 router.get("/:staffId/wages", auth, ownerAdmin, staffWagesController.get);
 router.put("/:staffId/wages", auth, ownerAdmin, validateUpdateWageSettings, staffWagesController.upsert);
 
-// ─── Commissions ──────────────────────────────────────────────────────────────
+// ─── Commissions — per staff ──────────────────────────────────────────────────
 router.get("/:staffId/commissions", auth, ownerAdmin, staffCommissionsController.list);
 router.put("/:staffId/commissions", auth, ownerAdmin, validateUpdateCommission, staffCommissionsController.upsert);
 
@@ -72,14 +82,14 @@ router.get("/:staffId/pay-runs", auth, ownerAdmin, staffPayRunsController.get);
 router.put("/:staffId/pay-runs", auth, ownerAdmin, validateUpdatePayRun, staffPayRunsController.upsert);
 
 // ─── Schedules ────────────────────────────────────────────────────────────────
-router.get("/:staffId/scheduled", auth, ownerAdminStaff, staffSchedulesController.list);
-router.put("/:staffId/scheduled", auth, ownerAdmin, validateUpsertStaffSchedules, staffSchedulesController.upsert);
+router.get("/:staffId/scheduled",    auth, ownerAdminStaff, staffSchedulesController.list);
+router.put("/:staffId/scheduled",    auth, ownerAdmin, validateUpsertStaffSchedules, staffSchedulesController.upsert);
 router.delete("/:staffId/scheduled", auth, ownerAdmin, staffSchedulesController.delete);
 
 // ─── Leaves ───────────────────────────────────────────────────────────────────
-router.get("/:staffId/leaves", auth, ownerAdminStaff, staffLeavesController.list);
-router.post("/:staffId/leaves", auth, ownerAdmin, validateCreateStaffLeave, staffLeavesController.create);
-router.patch("/:staffId/leaves/:id", auth, ownerAdmin, validateUpdateStaffLeave, staffLeavesController.update);
+router.get("/:staffId/leaves",        auth, ownerAdminStaff, staffLeavesController.list);
+router.post("/:staffId/leaves",       auth, ownerAdmin, validateCreateStaffLeave, staffLeavesController.create);
+router.patch("/:staffId/leaves/:id",  auth, ownerAdmin, validateUpdateStaffLeave, staffLeavesController.update);
 router.delete("/:staffId/leaves/:id", auth, ownerAdmin, staffLeavesController.delete);
 
 export default router;

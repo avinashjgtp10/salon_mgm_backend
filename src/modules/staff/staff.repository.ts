@@ -28,7 +28,7 @@ export const staffRepository = {
 
     async list(salonId: string, q: StaffListQuery): Promise<{ data: Staff[]; total: number }> {
         const {
-            page = 1, limit = 20, search, invitation_status,
+            page = 1, limit = 50, search, invitation_status,
             employment_type, is_active, branch_id,
             sort_by = "created_at", sort_order = "DESC",
         } = q;
@@ -71,6 +71,19 @@ export const staffRepository = {
             [salonId, email]
         );
         return rows[0] || null;
+    },
+
+    async findByEmails(salonId: string, emails: string[]): Promise<Map<string, Staff>> {
+        if (emails.length === 0) return new Map();
+        const { rows } = await pool.query(
+            `SELECT * FROM staff WHERE salon_id = $1 AND email = ANY($2)`,
+            [salonId, emails]
+        );
+        const map = new Map<string, Staff>();
+        for (const row of rows) {
+            if (row.email) map.set(row.email.toLowerCase(), row);
+        }
+        return map;
     },
 
     async create(salonId: string, data: CreateStaffBody, passwordHash?: string | null): Promise<Staff> {
