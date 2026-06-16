@@ -54,10 +54,20 @@ export const salesController = {
     async getDailySummary(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const salonId = await getSalonId(req);
-            const { date } = req.query;
-            if (!date) throw new AppError(400, "date query parameter is required", "VALIDATION_ERROR");
-            const summary = await salesService.getDailySummary(salonId, date as string);
-            return sendSuccess(res, 200, summary, "Daily summary fetched successfully");
+            const date = req.query.date as string | undefined;
+            const summary = await salesService.getDailySummary(salonId, date);
+            return sendSuccess(res, 200, summary, "Sales summary fetched successfully");
+        } catch (err) { return next(err); }
+    },
+
+    async delete(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const userId = req.user?.userId;
+            const id = req.params.id as string;
+            if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+            if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
+            const sale = await salesService.delete(id);
+            return sendSuccess(res, 200, sale, "Sale deleted successfully");
         } catch (err) { return next(err); }
     },
 
