@@ -19,8 +19,8 @@ export interface ClientPackageSessionHistory {
 export interface CreateClientPackageDTO {
   clientId:       string;
   packageName:    string;
-  category:       string;
-  branch:         string;
+  category?:      string;
+  branch?:        string;
   expiryDate:     string;
   basePrice:      number;
   gstPercentage:  number;
