@@ -194,7 +194,7 @@ export const clientPackagesRepository = {
         [
           pkgId, salonId, dto.clientId, clientName,
           c.phone_number ?? null, c.email ?? null,
-          dto.packageName, dto.category, dto.branch, dto.expiryDate,
+          dto.packageName, dto.category ?? "", dto.branch ?? "", dto.expiryDate ?? "2099-12-31",
           dto.basePrice, dto.gstPercentage, gstAmount, dto.discount, totalAmount,
           dto.paymentMethod,
           totalAmount,  // paid_amount = full amount on creation
