@@ -27,45 +27,45 @@ router.post("/", authMiddleware, ownerAdminStaff, requirePermission("edit_client
 router.get("/export", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), validateClientsListQuery, clientsController.export);
 
 // IMPORT
-router.post(
-    "/import",
-    authMiddleware,
-    ownerAdmin,
-    upload.single("file"),
-    clientsController.import
-);
+router.post("/import", authMiddleware, ownerAdmin, upload.single("file"), clientsController.import);
 
-// GET  /api/v1/clients/duplicates?phone_number=...
-router.get(
-    "/duplicates",
-    authMiddleware,
-    ownerAdminStaff,
-    requirePermission("view_clients"),
-    clientsController.findDuplicates
-);
+// GET /api/v1/clients/duplicates?phone_number=...
+router.get("/duplicates", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), clientsController.findDuplicates);
 
 // MERGE
 router.post("/merge", authMiddleware, ownerAdmin, validateMergeClients, clientsController.merge);
-
-router.post(
-    "/merge-duplicates",
-    authMiddleware,
-    ownerAdmin,
-    clientsController.mergeAllDuplicates
-);
+router.post("/merge-duplicates", authMiddleware, ownerAdmin, clientsController.mergeAllDuplicates);
 
 // BLOCK / UNBLOCK
 router.post("/block", authMiddleware, ownerAdmin, validateBlockClients, clientsController.block);
 router.patch("/block", authMiddleware, ownerAdmin, validateBlockClients, clientsController.block);
 router.post("/unblock", authMiddleware, ownerAdmin, validateUnblockClients, clientsController.unblock);
 
-// SEARCH  – must be BEFORE /:clientId to avoid "search" being parsed as a UUID
+// SEARCH — must be BEFORE /:clientId
 router.get("/search", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), validateSearchClients, clientsController.search);
 
 // Smart Filter for campaigns — must be BEFORE /:clientId
 router.get("/filter", authMiddleware, ownerAdmin, clientsController.filterForCampaign);
 
-// GET/UPDATE/DELETE by id
+// Clients with history stats (for Client History page filters) — must be BEFORE /:clientId
+router.get(
+    "/with-history-stats",
+    authMiddleware,
+    ownerAdminStaff,
+    requirePermission("view_clients"),
+    clientsController.listWithHistoryStats
+);
+
+// HISTORY for one client — must be BEFORE /:clientId
+router.get(
+    "/:clientId/history",
+    authMiddleware,
+    ownerAdminStaff,
+    requirePermission("view_clients"),
+    clientsController.getHistory
+);
+
+// GET / PATCH / DELETE by id
 router.get("/:clientId", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), clientsController.getById);
 router.patch("/:clientId", authMiddleware, ownerAdminStaff, requirePermission("edit_clients"), validateUpdateClient, clientsController.update);
 router.delete("/:clientId", authMiddleware, ownerAdminStaff, requirePermission("delete_clients"), clientsController.remove);
