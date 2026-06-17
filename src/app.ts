@@ -43,6 +43,7 @@ import blockedTimesRoutes from "./modules/blocked_times/blocked_times.routes";
 import analyticsRoutes from './modules/marketing/whatsapp/analytics/analytics.routes'
 import botRoutes from "./modules/bot/bot.routes";
 import waAutomationRoutes from "./modules/whatsapp-automation/whatsapp-automation.routes";
+import attendanceRoutes from "./modules/attendance/attendance.routes";
 import swaggerUi from "swagger-ui-express";
 import path from "path";
 
@@ -133,6 +134,7 @@ app.use("/api/v1/settings",      settingsRoutes);
 app.use("/api/v1/bot",           botRoutes);
 app.use("/api/v1/reports",       reportsRoutes);
 app.use("/api/v1/wa-automation", waAutomationRoutes);
+app.use("/api/v1/attendance",   attendanceRoutes);
 
 // Swagger Documentation
 const swaggerDocument = require(path.join(__dirname, "../docs/api/swagger-gen.json"));

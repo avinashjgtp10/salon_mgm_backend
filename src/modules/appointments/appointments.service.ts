@@ -8,6 +8,7 @@ import { blockedTimesRepository } from "../blocked_times/blocked_times.repositor
 import { salesService } from "../sales/sales.service";
 import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
 import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
+import { attendanceService } from "../attendance/attendance.service";
 import {
     Appointment,
     CreateAppointmentBody,
@@ -323,6 +324,16 @@ export const appointmentsService = {
                 items:           saleItems,
             }).catch(() => {});
 
+            // Auto-mark attendance (fire-and-forget)
+            if (existing.staff_id) {
+                attendanceService.autoMarkFromAppointment({
+                    salonId:         existing.salon_id,
+                    staffId:         existing.staff_id,
+                    scheduledAt:     existing.scheduled_at,
+                    durationMinutes: existing.duration_minutes,
+                }).catch(() => {});
+            }
+
             // Mark appointment as completed
             const completedAppt = await appointmentsRepository.updateStatus(appointmentId, "completed");
             return { appointment: completedAppt, saleId: preExistingSale.id };
@@ -389,6 +400,16 @@ export const appointmentsService = {
             fallbackStaffId: existing.staff_id ?? null,
             items,
         }).catch(() => {});
+
+        // ── Auto-mark attendance for the staff member (fire-and-forget) ───────
+        if (existing.staff_id) {
+            attendanceService.autoMarkFromAppointment({
+                salonId:         existing.salon_id,
+                staffId:         existing.staff_id,
+                scheduledAt:     existing.scheduled_at,
+                durationMinutes: existing.duration_minutes,
+            }).catch(() => {});
+        }
 
         // ── WhatsApp Automation: Payment Received ─────────────────────────────
         if (existing.client_id && (existing as any).client_phone) {
