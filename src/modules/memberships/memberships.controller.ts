@@ -1,4 +1,4 @@
-﻿import { NextFunction, Request, Response } from "express";
+import { NextFunction, Request, Response } from "express";
 import ExcelJS from "exceljs";
 import { membershipsService } from "./memberships.service";
 import { sendSuccess } from "../utils/response.util";
@@ -14,25 +14,54 @@ const getSalonId = (req: AuthRequest): string => {
   return salonId;
 };
 
-export const membershipsController = {
+const parseOptionalNumber = (value: unknown): number | undefined => {
+  if (value === undefined || value === null || value === "") return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
 
+const getListFilters = (req: AuthRequest) => ({
+  search: req.query.search as string | undefined,
+  sessionType: req.query.sessionType as string | undefined,
+  numberOfSessions: parseOptionalNumber(req.query.numberOfSessions),
+  sessions: req.query.sessions as string | undefined,
+  validFor: req.query.validFor as string | undefined,
+  colour: req.query.colour as string | undefined,
+  onlyAllServices: req.query.onlyAllServices as string | undefined,
+  page: parseOptionalNumber(req.query.page),
+  limit: parseOptionalNumber(req.query.limit),
+});
+
+export const membershipsController = {
   async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = await getSalonId(req);
-      const data = await membershipsService.list(req.query, salonId);
+      const salonId = getSalonId(req);
+      const data = await membershipsService.list(getListFilters(req), salonId);
       return sendSuccess(res, 200, data, "Memberships fetched successfully");
-    } catch (e) { return next(e); }
+    } catch (e) {
+      return next(e);
+    }
+  },
+
+  async filter(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = getSalonId(req);
+      const data = await membershipsService.filter(getListFilters(req), salonId);
+      return sendSuccess(res, 200, data, "Memberships filtered successfully");
+    } catch (e) {
+      return next(e);
+    }
   },
 
   async exportCsv(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = await getSalonId(req);
-      const items = await membershipsService.listAll(req.query, salonId);
+      const salonId = getSalonId(req);
+      const items = await membershipsService.listAll(getListFilters(req), salonId);
 
       const headers = [
         "Name", "Description", "Session Type", "Sessions",
         "Valid For", "Price", "Tax Rate", "Colour",
-        "Online Sales", "Online Redemption", "Services"
+        "Online Sales", "Online Redemption", "Services",
       ];
 
       const escape = (val: any) => {
@@ -61,13 +90,15 @@ export const membershipsController = {
       res.setHeader("Content-Type", "text/csv");
       res.setHeader("Content-Disposition", `attachment; filename="memberships_${Date.now()}.csv"`);
       return res.send(csv);
-    } catch (e) { return next(e); }
+    } catch (e) {
+      return next(e);
+    }
   },
 
   async exportExcel(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = await getSalonId(req);
-      const items = await membershipsService.listAll(req.query, salonId);
+      const salonId = getSalonId(req);
+      const items = await membershipsService.listAll(getListFilters(req), salonId);
 
       const workbook = new ExcelJS.Workbook();
       const sheet = workbook.addWorksheet("Memberships");
@@ -95,27 +126,30 @@ export const membershipsController = {
         ]);
       });
 
-      sheet.columns.forEach((col) => { col.width = 20; });
+      sheet.columns.forEach((col) => {
+        col.width = 20;
+      });
 
       const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
       res.setHeader(
         "Content-Type",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
       );
       res.setHeader(
         "Content-Disposition",
-        `attachment; filename="memberships_${Date.now()}.xlsx"`,
+        `attachment; filename="memberships_${Date.now()}.xlsx"`
       );
       return res.send(buffer);
-    } catch (e) { return next(e); }
+    } catch (e) {
+      return next(e);
+    }
   },
 
   async exportPdf(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = await getSalonId(req);
-      const items = await membershipsService.listAll(req.query, salonId);
+      const salonId = getSalonId(req);
+      const items = await membershipsService.listAll(getListFilters(req), salonId);
 
-      // Build HTML → PDF using pdfkit (already in your backend deps)
       const PDFDocument = require("pdfkit");
       const doc = new PDFDocument({ margin: 40, size: "A4" });
 
@@ -123,26 +157,24 @@ export const membershipsController = {
       res.setHeader("Content-Disposition", `attachment; filename="memberships_${Date.now()}.pdf"`);
       doc.pipe(res);
 
-      // Title
       doc.fontSize(18).font("Helvetica-Bold").text("Memberships Report", { align: "center" });
       doc.moveDown(0.5);
       doc.fontSize(10).font("Helvetica").fillColor("#666")
         .text(`Generated: ${new Date().toLocaleString("en-IN")}`, { align: "center" });
       doc.moveDown(1);
 
-      // Table header
-      const colX    = [40, 180, 270, 340, 400, 460];
+      const colX = [40, 180, 270, 340, 400, 460];
       const colHead = ["Name", "Valid For", "Sessions", "Price", "Tax", "Online Sales"];
 
       doc.fontSize(9).font("Helvetica-Bold").fillColor("#000");
-      colHead.forEach((h, i) => doc.text(h, colX[i], doc.y, { width: 120, continued: i < colHead.length - 1 }));
+      colHead.forEach((h, i) =>
+        doc.text(h, colX[i], doc.y, { width: 120, continued: i < colHead.length - 1 })
+      );
       doc.moveDown(0.3);
 
-      // Divider
       doc.moveTo(40, doc.y).lineTo(555, doc.y).stroke("#ccc");
       doc.moveDown(0.3);
 
-      // Rows
       doc.font("Helvetica").fontSize(8).fillColor("#333");
       items.forEach((m) => {
         const y = doc.y;
@@ -157,58 +189,67 @@ export const membershipsController = {
         cols.forEach((c, i) => doc.text(String(c), colX[i], y, { width: 115 }));
         doc.moveDown(1.2);
 
-        // Services sub-row
         if (m.includedServices.length > 0) {
           doc.fillColor("#888").fontSize(7)
             .text(
               `Services: ${m.includedServices.map((s) => s.serviceName).join(", ")}`,
-              52, doc.y - 8, { width: 500 }
+              52,
+              doc.y - 8,
+              { width: 500 }
             );
           doc.fillColor("#333").fontSize(8);
           doc.moveDown(0.5);
         }
 
-        // Row divider
         doc.moveTo(40, doc.y).lineTo(555, doc.y).stroke("#eee");
         doc.moveDown(0.3);
 
-        // Page break
         if (doc.y > 750) doc.addPage();
       });
 
       doc.end();
-    } catch (e) { return next(e); }
+    } catch (e) {
+      return next(e);
+    }
   },
 
   async create(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = await getSalonId(req);
+      const salonId = getSalonId(req);
       const data = await membershipsService.create(req.body, salonId);
       return sendSuccess(res, 201, data, "Membership created successfully");
-    } catch (e) { return next(e); }
+    } catch (e) {
+      return next(e);
+    }
   },
 
   async getById(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = await getSalonId(req);
+      const salonId = getSalonId(req);
       const data = await membershipsService.getById(req.params.id as string, salonId);
       return sendSuccess(res, 200, data, "Membership fetched successfully");
-    } catch (e) { return next(e); }
+    } catch (e) {
+      return next(e);
+    }
   },
 
   async update(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = await getSalonId(req);
+      const salonId = getSalonId(req);
       const data = await membershipsService.update(req.params.id as string, req.body, salonId);
       return sendSuccess(res, 200, data, "Membership updated successfully");
-    } catch (e) { return next(e); }
+    } catch (e) {
+      return next(e);
+    }
   },
 
   async delete(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const salonId = await getSalonId(req);
+      const salonId = getSalonId(req);
       await membershipsService.delete(req.params.id as string, salonId);
       return sendSuccess(res, 200, {}, "Membership deleted successfully");
-    } catch (e) { return next(e); }
+    } catch (e) {
+      return next(e);
+    }
   },
 };

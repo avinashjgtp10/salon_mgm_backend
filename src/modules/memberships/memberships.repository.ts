@@ -1,8 +1,12 @@
 import pool from "../../config/database";
 import { v4 as uuidv4 } from "uuid";
 import {
-  Membership, MembershipRow, CreateMembershipDTO,
-  UpdateMembershipDTO, MembershipsListQuery, IncludedService,
+  CreateMembershipDTO,
+  IncludedService,
+  Membership,
+  MembershipRow,
+  MembershipsListQuery,
+  UpdateMembershipDTO,
 } from "./memberships.types";
 
 const SELECT_WITH_SERVICES = `
@@ -36,26 +40,102 @@ function toMembership(row: MembershipRow): Membership {
   };
 }
 
+function extractSessionCount(value: string): number | undefined {
+  const match = value.match(/\d+/);
+  if (!match) return undefined;
+
+  const parsed = Number(match[0]);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function applySessionsFilter(
+  sessions: string | undefined,
+  conditions: string[],
+  values: any[],
+  nextIndex: () => number
+) {
+  if (!sessions || sessions === "any number of sessions") {
+    return;
+  }
+
+  if (sessions === "unlimited") {
+    conditions.push(`m.session_type = $${nextIndex()}`);
+    values.push("unlimited");
+    return;
+  }
+
+  const parsedSessions = extractSessionCount(sessions);
+  if (parsedSessions === undefined) {
+    return;
+  }
+
+  conditions.push(`m.session_type = $${nextIndex()}`);
+  values.push("limited");
+  conditions.push(`m.number_of_sessions = $${nextIndex()}`);
+  values.push(parsedSessions);
+}
+
+function buildMembershipFilters(q: MembershipsListQuery, salonId: string) {
+  const conditions: string[] = [];
+  const values: any[] = [];
+  let idx = 1;
+
+  conditions.push(`m.salon_id = $${idx++}`);
+  values.push(salonId);
+
+  if (q.search) {
+    conditions.push(`m.name ILIKE $${idx++}`);
+    values.push(`%${q.search}%`);
+  }
+
+  if (q.sessionType && q.sessionType !== "any") {
+    conditions.push(`m.session_type = $${idx++}`);
+    values.push(q.sessionType);
+  }
+
+  applySessionsFilter(q.sessions, conditions, values, () => idx++);
+
+  if (q.validFor && q.validFor !== "any period") {
+    conditions.push(`m.valid_for = $${idx++}`);
+    values.push(q.validFor);
+  }
+
+  if (q.colour) {
+    conditions.push(`m.colour = $${idx++}`);
+    values.push(q.colour);
+  }
+
+  if (q.onlyAllServices) {
+    conditions.push(`
+      NOT EXISTS (
+        SELECT 1
+        FROM services s_all
+        WHERE s_all.salon_id = m.salon_id
+          AND s_all.is_active = true
+          AND NOT EXISTS (
+            SELECT 1
+            FROM membership_services ms_all
+            WHERE ms_all.membership_id = m.id
+              AND ms_all.service_id = s_all.id
+          )
+      )
+    `);
+  }
+
+  return {
+    where: `WHERE ${conditions.join(" AND ")}`,
+    values,
+    nextIndex: idx,
+  };
+}
+
 export const membershipsRepository = {
-
   async list(q: MembershipsListQuery, salonId: string): Promise<{ items: Membership[]; total: number }> {
-    const conditions: string[] = [];
-    const values: any[] = [];
-    let idx = 1;
-
-    // Always scope to salon
-    conditions.push(`m.salon_id = $${idx++}`);
-    values.push(salonId);
-
-    if (q.search) { conditions.push(`m.name ILIKE $${idx++}`); values.push(`%${q.search}%`); }
-    if (q.sessionType && q.sessionType !== "any") { conditions.push(`m.session_type = $${idx++}`); values.push(q.sessionType); }
-    if (q.validFor && q.validFor !== "Any period") { conditions.push(`m.valid_for = $${idx++}`); values.push(q.validFor); }
-    if (q.colour) { conditions.push(`m.colour = $${idx++}`); values.push(q.colour); }
-
-    const where = `WHERE ${conditions.join(" AND ")}`;
+    const { where, values, nextIndex } = buildMembershipFilters(q, salonId);
 
     const countRes = await pool.query(
-      `SELECT COUNT(DISTINCT m.id) FROM memberships m ${where}`, values
+      `SELECT COUNT(DISTINCT m.id) FROM memberships m ${where}`,
+      values
     );
     const total = parseInt(countRes.rows[0].count, 10);
 
@@ -64,7 +144,7 @@ export const membershipsRepository = {
     const offset = (page - 1) * limit;
 
     const { rows } = await pool.query(
-      `${SELECT_WITH_SERVICES} ${where} GROUP BY m.id ORDER BY m.created_at DESC LIMIT $${idx++} OFFSET $${idx++}`,
+      `${SELECT_WITH_SERVICES} ${where} GROUP BY m.id ORDER BY m.created_at DESC LIMIT $${nextIndex} OFFSET $${nextIndex + 1}`,
       [...values, limit, offset]
     );
 
@@ -72,21 +152,10 @@ export const membershipsRepository = {
   },
 
   async listAll(q: MembershipsListQuery, salonId: string): Promise<Membership[]> {
-    const conditions: string[] = [];
-    const values: any[] = [];
-    let idx = 1;
-
-    conditions.push(`m.salon_id = $${idx++}`);
-    values.push(salonId);
-
-    if (q.search) { conditions.push(`m.name ILIKE $${idx++}`); values.push(`%${q.search}%`); }
-    if (q.sessionType && q.sessionType !== "any") { conditions.push(`m.session_type = $${idx++}`); values.push(q.sessionType); }
-    if (q.validFor && q.validFor !== "Any period") { conditions.push(`m.valid_for = $${idx++}`); values.push(q.validFor); }
-    if (q.colour) { conditions.push(`m.colour = $${idx++}`); values.push(q.colour); }
-
-    const where = `WHERE ${conditions.join(" AND ")}`;
+    const { where, values } = buildMembershipFilters(q, salonId);
     const { rows } = await pool.query(
-      `${SELECT_WITH_SERVICES} ${where} GROUP BY m.id ORDER BY m.created_at DESC`, values
+      `${SELECT_WITH_SERVICES} ${where} GROUP BY m.id ORDER BY m.created_at DESC`,
+      values
     );
     return rows.map(toMembership);
   },
@@ -111,16 +180,25 @@ export const membershipsRepository = {
            enable_online_sales, enable_online_redemption, terms_and_conditions)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
         [
-          membershipId, salonId, data.name, data.description ?? null,
-          data.sessionType, data.numberOfSessions ?? null,
-          data.validFor, data.price, data.taxRate ?? null,
-          data.colour, data.enableOnlineSales,
-          data.enableOnlineRedemption, data.termsAndConditions ?? null,
+          membershipId,
+          salonId,
+          data.name,
+          data.description ?? null,
+          data.sessionType,
+          data.numberOfSessions ?? null,
+          data.validFor,
+          data.price,
+          data.taxRate ?? null,
+          data.colour,
+          data.enableOnlineSales,
+          data.enableOnlineRedemption,
+          data.termsAndConditions ?? null,
         ]
       );
-      await _linkServices(client, membershipId, data.includedServices);
+      await linkServices(client, membershipId, data.includedServices);
       const { rows: full } = await client.query<MembershipRow>(
-        `${SELECT_WITH_SERVICES} WHERE m.id = $1 GROUP BY m.id`, [membershipId]
+        `${SELECT_WITH_SERVICES} WHERE m.id = $1 GROUP BY m.id`,
+        [membershipId]
       );
       await client.query("COMMIT");
       return toMembership(full[0]);
@@ -136,20 +214,32 @@ export const membershipsRepository = {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+
       const colMap: Record<string, string> = {
-        name: "name", description: "description",
-        sessionType: "session_type", numberOfSessions: "number_of_sessions",
-        validFor: "valid_for", price: "price", taxRate: "tax_rate",
-        colour: "colour", enableOnlineSales: "enable_online_sales",
+        name: "name",
+        description: "description",
+        sessionType: "session_type",
+        numberOfSessions: "number_of_sessions",
+        validFor: "valid_for",
+        price: "price",
+        taxRate: "tax_rate",
+        colour: "colour",
+        enableOnlineSales: "enable_online_sales",
         enableOnlineRedemption: "enable_online_redemption",
         termsAndConditions: "terms_and_conditions",
       };
+
       const fields: string[] = [];
       const values: any[] = [];
       let idx = 1;
+
       for (const [key, col] of Object.entries(colMap)) {
-        if (key in data) { fields.push(`${col} = $${idx++}`); values.push((data as any)[key] ?? null); }
+        if (key in data) {
+          fields.push(`${col} = $${idx++}`);
+          values.push((data as Record<string, unknown>)[key] ?? null);
+        }
       }
+
       if (fields.length > 0) {
         values.push(id);
         values.push(salonId);
@@ -161,12 +251,15 @@ export const membershipsRepository = {
         );
         if (res.rowCount === 0) return null;
       }
+
       if (data.includedServices) {
         await client.query(`DELETE FROM membership_services WHERE membership_id = $1`, [id]);
-        await _linkServices(client, id, data.includedServices);
+        await linkServices(client, id, data.includedServices);
       }
+
       const { rows } = await client.query<MembershipRow>(
-        `${SELECT_WITH_SERVICES} WHERE m.id = $1 GROUP BY m.id`, [id]
+        `${SELECT_WITH_SERVICES} WHERE m.id = $1 GROUP BY m.id`,
+        [id]
       );
       await client.query("COMMIT");
       return rows.length ? toMembership(rows[0]) : null;
@@ -180,14 +273,17 @@ export const membershipsRepository = {
 
   async delete(id: string, salonId: string): Promise<boolean> {
     const { rowCount } = await pool.query(
-      `DELETE FROM memberships WHERE id = $1 AND salon_id = $2`, [id, salonId]
+      `DELETE FROM memberships WHERE id = $1 AND salon_id = $2`,
+      [id, salonId]
     );
     return (rowCount ?? 0) > 0;
   },
 };
 
-async function _linkServices(
-  client: any, membershipId: string, services: IncludedService[]
+async function linkServices(
+  client: any,
+  membershipId: string,
+  services: IncludedService[]
 ): Promise<void> {
   for (const svc of services) {
     await client.query(
