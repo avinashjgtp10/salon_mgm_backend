@@ -49,7 +49,7 @@ import swaggerUi from "swagger-ui-express";
 import path from "path";
 
 // ── Subscription gate ──────────────────────────────────────────────────────────
-import { subscriptionMiddleware } from "./middleware/subscription.middleware";
+//import { subscriptionMiddleware } from "./middleware/subscription.middleware";
 
 const app: Application = express();
 app.set("trust proxy", 1);
@@ -106,7 +106,7 @@ app.use("/api/v1/profile",       profileRoutes);
 // ── Subscription gate — applied after exempt routes are registered ─────────────
 // Every route registered BELOW this line requires an active/trialing subscription.
 // Routes above (auth, billing, subscriptions, webhooks, profile) are always accessible.
-app.use(subscriptionMiddleware);
+//app.use(subscriptionMiddleware);
 
 app.use("/api/v1/users", usersRoutes);
 app.use("/api/v1/categories", categoriesRoutes);
