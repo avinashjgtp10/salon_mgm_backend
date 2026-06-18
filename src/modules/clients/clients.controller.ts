@@ -319,6 +319,8 @@ export const clientsController = {
     async listWithHistoryStats(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const salonId = getSalonId(req);
+            const serviceId = String(req.query.service_id || "").trim();
+            const staffId   = String(req.query.staff_id   || "").trim();
 
             const result = await pool.query(
                 `WITH appt_data AS (
@@ -359,7 +361,11 @@ export const clientsController = {
                 [salonId]
             );
 
-            return sendSuccess(res, 200, { items: result.rows }, "Clients with history stats fetched");
+            let items = result.rows;
+            if (serviceId) items = items.filter((r: any) => (r.service_ids ?? []).includes(serviceId));
+            if (staffId)   items = items.filter((r: any) => (r.staff_ids   ?? []).includes(staffId));
+
+            return sendSuccess(res, 200, { items }, "Clients with history stats fetched");
         } catch (e) { return next(e); }
     },
 
