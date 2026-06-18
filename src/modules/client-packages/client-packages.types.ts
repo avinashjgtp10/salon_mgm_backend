@@ -33,6 +33,21 @@ export interface CreateClientPackageDTO {
   }>;
 }
 
+export interface UpdateClientPackageDTO {
+  packageName?:    string;
+  expiryDate?:     string;
+  paymentMethod?:  string;
+  basePrice?:      number;
+  gstPercentage?:  number;
+  discount?:       number;
+  services?: Array<{
+    serviceId:      string;
+    serviceName?:   string;
+    totalSessions?: number;
+    price?:         number;
+  }>;
+}
+
 export interface CompleteSessionDTO {
   serviceId:  string;
   staffName:  string;
