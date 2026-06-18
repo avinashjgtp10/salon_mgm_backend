@@ -4,6 +4,7 @@ import logger from "../../config/logger";
 import type {
   ClientPackage,
   CreateClientPackageDTO,
+  UpdateClientPackageDTO,
   CompleteSessionDTO,
   ClientPackagesListQuery,
 } from "./client-packages.types";
@@ -53,6 +54,17 @@ export const clientPackagesService = {
     }
 
     return pkg;
+  },
+
+  async update(id: string, salonId: string, dto: UpdateClientPackageDTO): Promise<ClientPackage> {
+    const pkg = await clientPackagesRepository.update(id, salonId, dto);
+    if (!pkg) throw { statusCode: 404, message: "Client package not found" };
+    return pkg;
+  },
+
+  async delete(id: string, salonId: string): Promise<void> {
+    const deleted = await clientPackagesRepository.delete(id, salonId);
+    if (!deleted) throw { statusCode: 404, message: "Client package not found" };
   },
 
   async completeSession(
