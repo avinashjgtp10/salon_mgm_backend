@@ -56,10 +56,10 @@ export const bookingsService = {
             client_id = newClient.rows[0].id;
         }
 
-        // 2. Fetch service duration and price
-        const service = await db.query(`SELECT price, duration_minutes FROM services WHERE id = $1`, [body.service_id]);
+        // 2. Fetch service name, duration and price
+        const service = await db.query(`SELECT name, price, duration_minutes FROM services WHERE id = $1`, [body.service_id]);
         if (!service.rows.length) throw new AppError(404, "Service not found", "NOT_FOUND");
-        const { price, duration_minutes } = service.rows[0];
+        const { name: serviceName, price, duration_minutes } = service.rows[0];
 
         // 3. Create appointment
         const ends_at = new Date(new Date(body.scheduled_at).getTime() + duration_minutes * 60000).toISOString();
@@ -74,7 +74,7 @@ export const bookingsService = {
             [
                 body.salon_id, client_id, body.service_id, body.staff_id || null, 'booked',
                 body.scheduled_at, duration_minutes, ends_at, body.notes || null,
-                JSON.stringify([{ service_id: body.service_id, price, quantity: 1, name: 'Service' }])
+                JSON.stringify([{ service_id: body.service_id, price, quantity: 1, name: serviceName }])
             ]
         );
 
