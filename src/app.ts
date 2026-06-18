@@ -43,6 +43,8 @@ import blockedTimesRoutes from "./modules/blocked_times/blocked_times.routes";
 import analyticsRoutes from './modules/marketing/whatsapp/analytics/analytics.routes'
 import botRoutes from "./modules/bot/bot.routes";
 import waAutomationRoutes from "./modules/whatsapp-automation/whatsapp-automation.routes";
+import packageTemplatesRoutes from "./modules/package-templates/package-templates.routes";
+import { ensurePackageTemplateTables } from "./modules/package-templates/package-templates.repository";
 import swaggerUi from "swagger-ui-express";
 import path from "path";
 
@@ -51,6 +53,11 @@ import { subscriptionMiddleware } from "./middleware/subscription.middleware";
 
 const app: Application = express();
 app.set("trust proxy", 1);
+
+// Bootstrap package-template tables (idempotent)
+ensurePackageTemplateTables().catch(err =>
+  logger.warn("package-templates table init warning:", err?.message ?? err),
+);
 
 // Security middleware
 app.use(helmet());
@@ -132,7 +139,8 @@ app.use("/api/v1/blocked-times", blockedTimesRoutes);
 app.use("/api/v1/settings",      settingsRoutes);
 app.use("/api/v1/bot",           botRoutes);
 app.use("/api/v1/reports",       reportsRoutes);
-app.use("/api/v1/wa-automation", waAutomationRoutes);
+app.use("/api/v1/wa-automation",      waAutomationRoutes);
+app.use("/api/v1/package-templates", packageTemplatesRoutes);
 
 // Swagger Documentation
 const swaggerDocument = require(path.join(__dirname, "../docs/api/swagger-gen.json"));
