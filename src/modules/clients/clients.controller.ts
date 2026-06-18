@@ -314,58 +314,101 @@ export const clientsController = {
     },
 
     // GET /api/v1/clients/with-history-stats
-    // Returns all clients enriched with their last visit, service IDs they've taken,
-    // and staff IDs they've been served by. Used by the Client History page filters.
+    // Returns paginated clients with server-side search, gender, last_visit,
+    // service, and staff filtering. Used by the Client History page.
     async listWithHistoryStats(req: AuthRequest, res: Response, next: NextFunction) {
         try {
-            const salonId = getSalonId(req);
+            const salonId   = getSalonId(req);
             const serviceId = String(req.query.service_id || "").trim();
             const staffId   = String(req.query.staff_id   || "").trim();
+            const search    = String(req.query.search     || "").trim();
+            const gender    = String(req.query.gender     || "").trim();
+            const lastVisit = String(req.query.last_visit || "").trim();
+            const page      = Math.max(1, parseInt(String(req.query.page || "1"), 10) || 1);
+            const limit     = 50;
+            const offset    = (page - 1) * limit;
 
-            const result = await pool.query(
-                `WITH appt_data AS (
+            // Whitelist gender and lastVisit to prevent injection in SQL fragments
+            const validGenders    = new Set(["", "all", "male", "female", "other"]);
+            const validLastVisits = new Set(["", "all", "7", "30", "90", "90plus"]);
+            if (!validGenders.has(gender))       throw new AppError(400, "Invalid gender",     "VALIDATION_ERROR");
+            if (!validLastVisits.has(lastVisit)) throw new AppError(400, "Invalid last_visit", "VALIDATION_ERROR");
+
+            // Gender SQL fragment — whitelisted, safe to interpolate
+            let genderCond = "";
+            if (gender === "male" || gender === "female") {
+                genderCond = `AND LOWER(COALESCE(c.gender, '')) = '${gender}'`;
+            } else if (gender === "other") {
+                genderCond = `AND (c.gender IS NULL OR LOWER(c.gender) NOT IN ('male', 'female'))`;
+            }
+
+            // Last-visit SQL fragment — whitelisted, safe to interpolate
+            let lastVisitCond = "";
+            if      (lastVisit === "7")      lastVisitCond = `AND ad.last_visit_at >= NOW() - INTERVAL '7 days'`;
+            else if (lastVisit === "30")     lastVisitCond = `AND ad.last_visit_at >= NOW() - INTERVAL '30 days'`;
+            else if (lastVisit === "90")     lastVisitCond = `AND ad.last_visit_at >= NOW() - INTERVAL '90 days'`;
+            else if (lastVisit === "90plus") lastVisitCond = `AND (ad.last_visit_at IS NULL OR ad.last_visit_at < NOW() - INTERVAL '90 days')`;
+
+            // $1 = salonId  $2 = search pattern  $3 = serviceId  $4 = staffId
+            const params = [salonId, search ? `%${search}%` : "", serviceId, staffId];
+
+            const CTE = `
+                WITH appt_data AS (
                     SELECT
                         a.client_id,
                         MAX(a.scheduled_at) FILTER (WHERE a.status = 'completed') AS last_visit_at,
                         ARRAY_AGG(DISTINCT s_item->>'service_id')
                             FILTER (WHERE s_item->>'service_id' IS NOT NULL) AS service_ids,
                         ARRAY_AGG(DISTINCT s_item->>'staff_id')
-                            FILTER (WHERE s_item->>'staff_id' IS NOT NULL) AS staff_ids
+                            FILTER (WHERE s_item->>'staff_id'   IS NOT NULL) AS staff_ids
                     FROM appointments a
                     LEFT JOIN LATERAL jsonb_array_elements(
                         COALESCE(a.services, '[]'::jsonb)
                     ) s_item ON true
                     WHERE a.salon_id = $1
                     GROUP BY a.client_id
-                )
-                SELECT
-                    c.id,
-                    c.first_name,
-                    c.last_name,
-                    c.full_name,
-                    c.email,
-                    c.phone_number,
-                    c.phone_country_code,
-                    c.gender,
-                    c.is_active,
-                    c.total_sales,
-                    c.created_at,
-                    ad.last_visit_at,
-                    COALESCE(ad.service_ids, '{}') AS service_ids,
-                    COALESCE(ad.staff_ids, '{}') AS staff_ids
-                FROM clients c
-                LEFT JOIN appt_data ad ON ad.client_id = c.id
+                )`;
+
+            const WHERE = `
                 WHERE c.salon_id = $1
-                ORDER BY c.created_at DESC
-                LIMIT 1000`,
-                [salonId]
-            );
+                  AND ($2 = '' OR (c.full_name ILIKE $2 OR c.phone_number ILIKE $2 OR c.email ILIKE $2))
+                  AND ($3 = '' OR $3 = ANY(COALESCE(ad.service_ids, '{}'::text[])))
+                  AND ($4 = '' OR $4 = ANY(COALESCE(ad.staff_ids,   '{}'::text[])))
+                  ${genderCond}
+                  ${lastVisitCond}`;
 
-            let items = result.rows;
-            if (serviceId) items = items.filter((r: any) => (r.service_ids ?? []).includes(serviceId));
-            if (staffId)   items = items.filter((r: any) => (r.staff_ids   ?? []).includes(staffId));
+            const [countRes, dataRes] = await Promise.all([
+                pool.query(
+                    `${CTE}
+                     SELECT COUNT(*)::int AS total
+                     FROM clients c
+                     LEFT JOIN appt_data ad ON ad.client_id = c.id
+                     ${WHERE}`,
+                    params
+                ),
+                pool.query(
+                    `${CTE}
+                     SELECT
+                         c.id, c.first_name, c.last_name, c.full_name,
+                         c.email, c.phone_number, c.phone_country_code,
+                         c.gender, c.is_active, c.total_sales, c.created_at,
+                         ad.last_visit_at,
+                         COALESCE(ad.service_ids, '{}') AS service_ids,
+                         COALESCE(ad.staff_ids,   '{}') AS staff_ids
+                     FROM clients c
+                     LEFT JOIN appt_data ad ON ad.client_id = c.id
+                     ${WHERE}
+                     ORDER BY c.created_at DESC
+                     LIMIT ${limit} OFFSET ${offset}`,
+                    params
+                ),
+            ]);
 
-            return sendSuccess(res, 200, { items }, "Clients with history stats fetched");
+            const total   = countRes.rows[0]?.total ?? 0;
+            const items   = dataRes.rows;
+            const hasMore = offset + items.length < total;
+
+            return sendSuccess(res, 200, { items, total, page, limit, hasMore }, "Clients with history stats fetched");
         } catch (e) { return next(e); }
     },
 
@@ -393,6 +436,7 @@ export const clientsController = {
                         a.cancel_reason,
                         a.services,
                         a.product_items,
+                        a.staff_id,
                         COALESCE(
                             (SELECT SUM(p.net_amount)
                              FROM payments p
