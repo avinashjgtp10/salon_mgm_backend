@@ -1,0 +1,52 @@
+-- Commission Earned table
+-- Tracks every commission credit when a sale is checked out
+
+CREATE TYPE commission_status AS ENUM ('pending', 'paid', 'cancelled');
+
+CREATE TABLE IF NOT EXISTS commission_earned (
+    id               UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+    salon_id         UUID          NOT NULL,
+    staff_id         UUID          NOT NULL REFERENCES staff(id) ON DELETE CASCADE,
+    sale_id          UUID          REFERENCES sales(id) ON DELETE SET NULL,
+    appointment_id   UUID          REFERENCES appointments(id) ON DELETE SET NULL,
+    category         TEXT          NOT NULL,   -- services | products | memberships | gift_cards
+    revenue_amount   NUMERIC(12,2) NOT NULL DEFAULT 0,   -- what staff generated (e.g. 10000)
+    commission_kind  TEXT          NOT NULL DEFAULT 'fixed_rate',  -- percentage | fixed_rate
+    commission_rate  NUMERIC(10,4) NOT NULL DEFAULT 0,   -- the rule's rate (e.g. 10 for 10% or 500 for ₹500)
+    commission_amount NUMERIC(12,2) NOT NULL DEFAULT 0,  -- actual earned (e.g. 1000 or 500)
+    status           commission_status NOT NULL DEFAULT 'pending',
+    earned_at        TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    paid_at          TIMESTAMPTZ,
+    created_at       TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_commission_earned_staff_id   ON commission_earned(staff_id);
+CREATE INDEX IF NOT EXISTS idx_commission_earned_salon_id   ON commission_earned(salon_id);
+CREATE INDEX IF NOT EXISTS idx_commission_earned_sale_id    ON commission_earned(sale_id);
+CREATE INDEX IF NOT EXISTS idx_commission_earned_status     ON commission_earned(status);
+CREATE INDEX IF NOT EXISTS idx_commission_earned_earned_at  ON commission_earned(earned_at);
+-- Month filtering handled by idx_commission_earned_earned_at + idx_commission_earned_salon_id
+
+-- Commission Slabs table — stores multiple revenue/commission tiers per staff per category
+CREATE TABLE IF NOT EXISTS commission_slabs (
+    id               UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+    staff_id         UUID          NOT NULL REFERENCES staff(id) ON DELETE CASCADE,
+    salon_id         UUID          NOT NULL,
+    category         TEXT          NOT NULL,
+    revenue_target   NUMERIC(12,2) NOT NULL DEFAULT 0,   -- e.g. 5000
+    commission_kind  TEXT          NOT NULL DEFAULT 'fixed_rate',  -- percentage | fixed_rate
+    commission_value NUMERIC(12,2) NOT NULL DEFAULT 0,   -- e.g. 200
+    is_enabled       BOOLEAN       NOT NULL DEFAULT true,
+    created_at       TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_commission_slabs_staff_id  ON commission_slabs(staff_id);
+CREATE INDEX IF NOT EXISTS idx_commission_slabs_salon_id  ON commission_slabs(salon_id);
+CREATE INDEX IF NOT EXISTS idx_commission_slabs_staff_cat ON commission_slabs(staff_id, category);
+
+-- Add min_monthly_revenue threshold to commission settings
+-- (Commission only applies if staff hits this monthly revenue minimum)
+ALTER TABLE staff_commission_settings
+    ADD COLUMN IF NOT EXISTS min_monthly_revenue NUMERIC(12,2) NOT NULL DEFAULT 0;
