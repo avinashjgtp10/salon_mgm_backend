@@ -12,13 +12,10 @@ export function validateCreateClientPackage(
   res: Response,
   next: NextFunction,
 ) {
-  const { clientId, packageName, category, branch, expiryDate, basePrice, paymentMethod, services } = req.body;
+  const { clientId, packageName, basePrice, paymentMethod, services } = req.body;
 
   if (!clientId)                          return badRequest(res, "clientId is required");
   if (!packageName?.trim())               return badRequest(res, "packageName is required");
-  if (!category?.trim())                  return badRequest(res, "category is required");
-  if (!branch?.trim())                    return badRequest(res, "branch is required");
-  if (!expiryDate)                        return badRequest(res, "expiryDate is required");
   if (typeof basePrice !== "number" || basePrice < 0)
                                           return badRequest(res, "basePrice must be a non-negative number");
   if (!paymentMethod?.trim())             return badRequest(res, "paymentMethod is required");

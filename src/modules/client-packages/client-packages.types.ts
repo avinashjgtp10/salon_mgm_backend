@@ -19,8 +19,8 @@ export interface ClientPackageSessionHistory {
 export interface CreateClientPackageDTO {
   clientId:       string;
   packageName:    string;
-  category:       string;
-  branch:         string;
+  category?:      string;
+  branch?:        string;
   expiryDate:     string;
   basePrice:      number;
   gstPercentage:  number;
@@ -30,6 +30,21 @@ export interface CreateClientPackageDTO {
     serviceName:    string;
     totalSessions:  number;
     price:          number;
+  }>;
+}
+
+export interface UpdateClientPackageDTO {
+  packageName?:    string;
+  expiryDate?:     string;
+  paymentMethod?:  string;
+  basePrice?:      number;
+  gstPercentage?:  number;
+  discount?:       number;
+  services?: Array<{
+    serviceId:      string;
+    serviceName?:   string;
+    totalSessions?: number;
+    price?:         number;
   }>;
 }
 

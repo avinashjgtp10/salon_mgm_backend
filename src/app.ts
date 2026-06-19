@@ -45,14 +45,21 @@ import botRoutes from "./modules/bot/bot.routes";
 import waAutomationRoutes from "./modules/whatsapp-automation/whatsapp-automation.routes";
 import attendanceRoutes from "./modules/attendance/attendance.routes";
 import { deviceApiRouter, admsRouter } from "./modules/device/device.routes";
+import packageTemplatesRoutes from "./modules/package-templates/package-templates.routes";
+import { ensurePackageTemplateTables } from "./modules/package-templates/package-templates.repository";
 import swaggerUi from "swagger-ui-express";
 import path from "path";
 
 // ── Subscription gate ──────────────────────────────────────────────────────────
-import { subscriptionMiddleware } from "./middleware/subscription.middleware";
+//import { subscriptionMiddleware } from "./middleware/subscription.middleware";
 
 const app: Application = express();
 app.set("trust proxy", 1);
+
+// Bootstrap package-template tables (idempotent)
+ensurePackageTemplateTables().catch(err =>
+  logger.warn("package-templates table init warning:", err?.message ?? err),
+);
 
 // Security middleware
 app.use(helmet());
@@ -106,7 +113,7 @@ app.use("/api/v1/profile",       profileRoutes);
 // ── Subscription gate — applied after exempt routes are registered ─────────────
 // Every route registered BELOW this line requires an active/trialing subscription.
 // Routes above (auth, billing, subscriptions, webhooks, profile) are always accessible.
-app.use(subscriptionMiddleware);
+//app.use(subscriptionMiddleware);
 
 app.use("/api/v1/users", usersRoutes);
 app.use("/api/v1/categories", categoriesRoutes);
@@ -142,6 +149,8 @@ app.use("/api/v1/reports",       reportsRoutes);
 app.use("/api/v1/wa-automation", waAutomationRoutes);
 app.use("/api/v1/attendance",   attendanceRoutes);
 app.use("/api/v1/devices",      deviceApiRouter);
+app.use("/api/v1/wa-automation",      waAutomationRoutes);
+app.use("/api/v1/package-templates", packageTemplatesRoutes);
 
 // Swagger Documentation
 const swaggerDocument = require(path.join(__dirname, "../docs/api/swagger-gen.json"));

@@ -4,6 +4,7 @@ import type {
   ClientPackage,
   ClientPackageRow,
   CreateClientPackageDTO,
+  UpdateClientPackageDTO,
   CompleteSessionDTO,
   ClientPackagesListQuery,
 } from "./client-packages.types";
@@ -194,7 +195,7 @@ export const clientPackagesRepository = {
         [
           pkgId, salonId, dto.clientId, clientName,
           c.phone_number ?? null, c.email ?? null,
-          dto.packageName, dto.category, dto.branch, dto.expiryDate,
+          dto.packageName, dto.category ?? "", dto.branch ?? "", dto.expiryDate ?? "2099-12-31",
           dto.basePrice, dto.gstPercentage, gstAmount, dto.discount, totalAmount,
           dto.paymentMethod,
           totalAmount,  // paid_amount = full amount on creation
@@ -220,6 +221,125 @@ export const clientPackagesRepository = {
 
       await client.query("COMMIT");
       return toClientPackage(rows[0]);
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  },
+
+  async update(
+    id:      string,
+    salonId: string,
+    dto:     UpdateClientPackageDTO,
+  ): Promise<ClientPackage | null> {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const updates: string[] = [];
+      const values:  any[]    = [];
+      let idx = 1;
+
+      if (dto.packageName   !== undefined) { updates.push(`package_name = $${idx++}`);    values.push(dto.packageName); }
+      if (dto.expiryDate    !== undefined) { updates.push(`expiry_date = $${idx++}`);      values.push(dto.expiryDate); }
+      if (dto.paymentMethod !== undefined) { updates.push(`payment_method = $${idx++}`);  values.push(dto.paymentMethod); }
+
+      if (dto.basePrice !== undefined || dto.gstPercentage !== undefined || dto.discount !== undefined) {
+        const cur = await client.query(
+          `SELECT base_price, gst_percentage, discount FROM client_packages WHERE id = $1 AND salon_id = $2`,
+          [id, salonId],
+        );
+        if (!cur.rows.length) throw new Error("Package not found");
+        const row    = cur.rows[0];
+        const base   = dto.basePrice     ?? parseFloat(row.base_price);
+        const gstPct = dto.gstPercentage ?? parseFloat(row.gst_percentage);
+        const disc   = dto.discount      ?? parseFloat(row.discount);
+        const gstAmt = parseFloat(((base - disc) * gstPct / 100).toFixed(2));
+        const total  = parseFloat((base - disc + gstAmt).toFixed(2));
+
+        updates.push(`base_price = $${idx++}`);     values.push(base);
+        updates.push(`gst_percentage = $${idx++}`); values.push(gstPct);
+        updates.push(`gst_amount = $${idx++}`);     values.push(gstAmt);
+        updates.push(`discount = $${idx++}`);       values.push(disc);
+        updates.push(`total_amount = $${idx++}`);   values.push(total);
+        updates.push(`paid_amount = $${idx++}`);    values.push(total);
+        updates.push(`pending_amount = $${idx++}`); values.push(0);
+      }
+
+      if (updates.length > 0) {
+        values.push(id, salonId);
+        await client.query(
+          `UPDATE client_packages SET ${updates.join(", ")} WHERE id = $${idx++} AND salon_id = $${idx++}`,
+          values,
+        );
+      }
+
+      if (dto.services?.length) {
+        for (const svc of dto.services) {
+          const su: string[] = [];
+          const sv: any[]    = [];
+          let si = 1;
+          if (svc.serviceName    !== undefined) { su.push(`service_name = $${si++}`);    sv.push(svc.serviceName); }
+          if (svc.totalSessions  !== undefined) { su.push(`total_sessions = $${si++}`);  sv.push(svc.totalSessions); }
+          if (svc.price          !== undefined) { su.push(`price = $${si++}`);           sv.push(svc.price); }
+          if (su.length > 0) {
+            sv.push(svc.serviceId);
+            await client.query(
+              `UPDATE client_package_services SET ${su.join(", ")} WHERE id = $${si++}`,
+              sv,
+            );
+          }
+        }
+      }
+
+      const { rows } = await client.query(
+        `${SELECT_FULL} WHERE cp.id = $1 AND cp.salon_id = $2 GROUP BY cp.id`,
+        [id, salonId],
+      );
+
+      await client.query("COMMIT");
+      return rows.length ? toClientPackage(rows[0]) : null;
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  },
+
+  async delete(id: string, salonId: string): Promise<boolean> {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      // Verify ownership
+      const check = await client.query(
+        `SELECT id FROM client_packages WHERE id = $1 AND salon_id = $2`,
+        [id, salonId],
+      );
+      if (!check.rows.length) return false;
+
+      // Delete session history, then services, then the package (child rows first)
+      await client.query(
+        `DELETE FROM client_package_session_history
+         WHERE client_package_service_id IN (
+           SELECT id FROM client_package_services WHERE client_package_id = $1
+         )`,
+        [id],
+      );
+      await client.query(
+        `DELETE FROM client_package_services WHERE client_package_id = $1`,
+        [id],
+      );
+      await client.query(
+        `DELETE FROM client_packages WHERE id = $1 AND salon_id = $2`,
+        [id, salonId],
+      );
+
+      await client.query("COMMIT");
+      return true;
     } catch (err) {
       await client.query("ROLLBACK");
       throw err;
