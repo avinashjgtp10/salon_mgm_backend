@@ -2,6 +2,7 @@ import ExcelJS from "exceljs";
 import PDFDocument from "pdfkit";
 import { AppError } from "../../middleware/error.middleware";
 import logger from "../../config/logger";
+import { commissionCalculationService } from "../commission/commissionCalculation.service";
 import { salesRepository } from "./sales.repository";
 import { Sale, SaleItem, CreateSaleBody, UpdateSaleBody, CheckoutSaleBody } from "./sales.types";
 import { paymentsRepository } from "../payments/payments.repository";
@@ -23,10 +24,10 @@ export const salesService = {
     async create(params: { requesterUserId: string; requesterRole?: string; body: CreateSaleBody }): Promise<{ sale: Sale; items: SaleItem[] }> {
         const { requesterUserId, body } = params;
         const rawSale = await salesRepository.create(body, requesterUserId);
-        const items = await salesRepository.findItemsBySaleId(rawSale.id);
 
         // Fetch enriched sale (with client_phone, client_phone_code, salon_name)
-        const sale = (await salesRepository.findById(rawSale.id)) ?? rawSale;
+        const sale  = (await salesRepository.findById(rawSale.id)) ?? rawSale;
+        const items = await salesRepository.findItemsBySaleId(sale.id);
 
         // ── WhatsApp Automation: Invoice Generated ────────────────────────────
         // Only fire when there's a real client (not walk-in) and it's a proper sale
@@ -80,8 +81,14 @@ export const salesService = {
         const existing = await salesRepository.findById(id);
         if (!existing) throw new AppError(404, "Sale not found", "NOT_FOUND");
         const sale = await salesRepository.update(id, patch);
-        const items = await salesRepository.findItemsBySaleId(id);
-        return { sale, items };
+        const updatedItems = await salesRepository.findItemsBySaleId(id);
+
+        // Reverse pending commissions when a sale is cancelled or refunded
+        if (patch.status && ["cancelled", "refunded"].includes(patch.status)) {
+            commissionCalculationService.reverseForSale(id).catch(() => {});
+        }
+
+        return { sale, items: updatedItems };
     },
 
     async checkout(params: { id: string; requesterUserId: string; requesterRole?: string; body: CheckoutSaleBody }): Promise<Sale> {
@@ -97,7 +104,8 @@ export const salesService = {
         });
 
         // Fetch enriched sale (with client_phone, client_phone_code, salon_name)
-        const sale = (await salesRepository.findById(rawSale.id)) ?? rawSale;
+        const sale  = (await salesRepository.findById(rawSale.id)) ?? rawSale;
+        const items = await salesRepository.findItemsBySaleId(sale.id);
 
         let splitDetails: Record<string, number> | undefined = undefined;
         if (body.payment_method === "split" && body.payment_reference) {
@@ -133,6 +141,15 @@ export const salesService = {
                 logger.error("Failed to update appointment status after checkout:", { appointmentId: sale.appointment_id, error })
             }
         }
+
+        // ── Commission Calculation (fire-and-forget — never blocks checkout) ──
+        commissionCalculationService.calculateForSale({
+            salonId:         sale.salon_id,
+            saleId:          sale.id,
+            appointmentId:   sale.appointment_id ?? null,
+            fallbackStaffId: sale.staff_id       ?? null,
+            items,
+        }).catch(() => {}); // already safe internally, double-guard here
 
         // ── WhatsApp Automation: Payment Received ─────────────────────────────
         if (sale.client_id && (sale as any).client_phone) {

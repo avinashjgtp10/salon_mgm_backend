@@ -2,10 +2,13 @@ import ExcelJS from "exceljs";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { appointmentsRepository } from "./appointments.repository";
+import { salesRepository } from "../sales/sales.repository";
+import { commissionCalculationService } from "../commission/commissionCalculation.service";
 import { blockedTimesRepository } from "../blocked_times/blocked_times.repository";
 import { salesService } from "../sales/sales.service";
 import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
 import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
+import { attendanceService } from "../attendance/attendance.service";
 import {
     Appointment,
     CreateAppointmentBody,
@@ -296,6 +299,47 @@ export const appointmentsService = {
             throw new AppError(400, "Appointment is already completed", "BAD_REQUEST");
         if (existing.status === "cancelled")
             throw new AppError(400, "Cannot checkout a cancelled appointment", "BAD_REQUEST");
+
+        // ── Check if payments service already auto-created a sale for this appointment ─
+        // This happens when POST /api/v1/payments runs before checkout.
+        // In that case: use the existing sale, fire commission on it, mark appointment completed.
+        const preExistingSale = await salesRepository.findByAppointmentId(appointmentId);
+        if (preExistingSale) {
+            logger.info("appointmentsService.checkout: using pre-existing sale from payments", {
+                appointmentId, saleId: preExistingSale.id,
+            });
+
+            // Link sale to appointment if not already linked
+            if (!existing.sale_id) {
+                await appointmentsRepository.linkSale(appointmentId, preExistingSale.id);
+            }
+
+            // Fire commission on the existing sale items (fire-and-forget)
+            const saleItems = await salesRepository.findItemsBySaleId(preExistingSale.id);
+            commissionCalculationService.calculateForSale({
+                salonId:         existing.salon_id,
+                saleId:          preExistingSale.id,
+                appointmentId,
+                fallbackStaffId: existing.staff_id ?? null,
+                items:           saleItems,
+            }).catch(() => {});
+
+            // Auto-mark attendance (fire-and-forget)
+            if (existing.staff_id) {
+                attendanceService.autoMarkFromAppointment({
+                    salonId:         existing.salon_id,
+                    staffId:         existing.staff_id,
+                    scheduledAt:     existing.scheduled_at,
+                    durationMinutes: existing.duration_minutes,
+                }).catch(() => {});
+            }
+
+            // Mark appointment as completed
+            const completedAppt = await appointmentsRepository.updateStatus(appointmentId, "completed");
+            return { appointment: completedAppt, saleId: preExistingSale.id };
+        }
+
+        // No pre-existing sale — standard flow
         if (existing.sale_id)
             throw new AppError(400, "Appointment already has a linked sale", "BAD_REQUEST");
 
@@ -332,7 +376,7 @@ export const appointmentsService = {
                 })),
             ];
 
-        const { sale } = await salesService.create({
+        const { sale, items } = await salesService.create({
             requesterUserId,
             requesterRole,
             body: {
@@ -347,6 +391,25 @@ export const appointmentsService = {
         });
 
         const appointment = await appointmentsRepository.linkSale(appointmentId, sale.id);
+
+        // ── Fire commission on the new sale items (fire-and-forget) ──────────
+        commissionCalculationService.calculateForSale({
+            salonId:         existing.salon_id,
+            saleId:          sale.id,
+            appointmentId,
+            fallbackStaffId: existing.staff_id ?? null,
+            items,
+        }).catch(() => {});
+
+        // ── Auto-mark attendance for the staff member (fire-and-forget) ───────
+        if (existing.staff_id) {
+            attendanceService.autoMarkFromAppointment({
+                salonId:         existing.salon_id,
+                staffId:         existing.staff_id,
+                scheduledAt:     existing.scheduled_at,
+                durationMinutes: existing.duration_minutes,
+            }).catch(() => {});
+        }
 
         // ── WhatsApp Automation: Payment Received ─────────────────────────────
         if (existing.client_id && (existing as any).client_phone) {
