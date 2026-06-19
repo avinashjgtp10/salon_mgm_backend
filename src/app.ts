@@ -43,13 +43,15 @@ import blockedTimesRoutes from "./modules/blocked_times/blocked_times.routes";
 import analyticsRoutes from './modules/marketing/whatsapp/analytics/analytics.routes'
 import botRoutes from "./modules/bot/bot.routes";
 import waAutomationRoutes from "./modules/whatsapp-automation/whatsapp-automation.routes";
+import attendanceRoutes from "./modules/attendance/attendance.routes";
+import { deviceApiRouter, admsRouter } from "./modules/device/device.routes";
 import packageTemplatesRoutes from "./modules/package-templates/package-templates.routes";
 import { ensurePackageTemplateTables } from "./modules/package-templates/package-templates.repository";
 import swaggerUi from "swagger-ui-express";
 import path from "path";
 
 // ── Subscription gate ──────────────────────────────────────────────────────────
-import { subscriptionMiddleware } from "./middleware/subscription.middleware";
+//import { subscriptionMiddleware } from "./middleware/subscription.middleware";
 
 const app: Application = express();
 app.set("trust proxy", 1);
@@ -63,6 +65,11 @@ ensurePackageTemplateTables().catch(err =>
 app.use(helmet());
 
 app.use(corsMiddleware);
+
+// ADMS biometric machine protocol — mounted BEFORE body parsers so that
+// ZKTeco/ESSL devices (which send application/x-www-form-urlencoded) don't
+// have their raw text body consumed by the global urlencoded parser.
+app.use("/iclock", admsRouter);
 
 // Body parsing middleware
 app.use(express.json({ limit: "10mb" }));
@@ -106,7 +113,7 @@ app.use("/api/v1/profile",       profileRoutes);
 // ── Subscription gate — applied after exempt routes are registered ─────────────
 // Every route registered BELOW this line requires an active/trialing subscription.
 // Routes above (auth, billing, subscriptions, webhooks, profile) are always accessible.
-app.use(subscriptionMiddleware);
+//app.use(subscriptionMiddleware);
 
 app.use("/api/v1/users", usersRoutes);
 app.use("/api/v1/categories", categoriesRoutes);
@@ -139,6 +146,9 @@ app.use("/api/v1/blocked-times", blockedTimesRoutes);
 app.use("/api/v1/settings",      settingsRoutes);
 app.use("/api/v1/bot",           botRoutes);
 app.use("/api/v1/reports",       reportsRoutes);
+app.use("/api/v1/wa-automation", waAutomationRoutes);
+app.use("/api/v1/attendance",   attendanceRoutes);
+app.use("/api/v1/devices",      deviceApiRouter);
 app.use("/api/v1/wa-automation",      waAutomationRoutes);
 app.use("/api/v1/package-templates", packageTemplatesRoutes);
 

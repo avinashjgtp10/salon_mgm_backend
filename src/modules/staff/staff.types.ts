@@ -208,11 +208,37 @@ export type StaffCommissionSettings = {
     is_enabled: boolean;
     commission_kind: CommissionKind;
     default_rate: number;
+    revenue_target: number;
     use_default_calculation: boolean;
     pass_cancellation_fee_late: boolean;
     pass_cancellation_fee_noshow: boolean;
+    min_monthly_revenue: number;
     created_at: string;
     updated_at: string;
+};
+
+export type CommissionSlab = {
+    id: string;
+    staff_id: string;
+    salon_id: string;
+    category: CommissionCategory;
+    revenue_target: number;
+    commission_kind: CommissionKind;
+    commission_value: number;
+    is_enabled: boolean;
+    created_at: string;
+    updated_at: string;
+};
+
+export type UpsertCommissionSlabsBody = {
+    category: CommissionCategory;
+    salon_id: string;
+    slabs: {
+        revenue_target: number;
+        commission_kind: CommissionKind;
+        commission_value: number;
+    }[];
+    min_monthly_revenue?: number;
 };
 
 export type UpdateCommissionBody = {
@@ -220,6 +246,8 @@ export type UpdateCommissionBody = {
     is_enabled?: boolean;
     commission_kind?: CommissionKind;
     default_rate?: number;
+    revenue_target?: number;
+    min_monthly_revenue?: number;
     use_default_calculation?: boolean;
     pass_cancellation_fee_late?: boolean;
     pass_cancellation_fee_noshow?: boolean;
