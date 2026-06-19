@@ -32,6 +32,38 @@ CREATE TABLE IF NOT EXISTS attendance (
   UNIQUE (salon_id, staff_id, date)
 );
 
-CREATE INDEX IF NOT EXISTS idx_attendance_salon_date   ON attendance (salon_id, date);
-CREATE INDEX IF NOT EXISTS idx_attendance_staff_date   ON attendance (staff_id, date);
-CREATE INDEX IF NOT EXISTS idx_attendance_salon_month  ON attendance (salon_id, date_trunc('month', date));
+CREATE INDEX IF NOT EXISTS idx_attendance_salon_date  ON attendance (salon_id, date);
+CREATE INDEX IF NOT EXISTS idx_attendance_staff_date  ON attendance (staff_id, date);
+
+-- Devices registered to a salon
+CREATE TABLE IF NOT EXISTS devices (
+  id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  salon_id    UUID        NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+  serial_no   TEXT        NOT NULL UNIQUE,
+  name        TEXT        NOT NULL DEFAULT 'Attendance Device',
+  location    TEXT,
+  is_active   BOOLEAN     NOT NULL DEFAULT true,
+  last_seen   TIMESTAMPTZ,
+  last_ip     TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Maps machine enrollment PIN to a staff member
+CREATE TABLE IF NOT EXISTS staff_biometric_mappings (
+  id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  salon_id    UUID        NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+  device_id   UUID        NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  staff_id    UUID        NOT NULL REFERENCES staff(id)   ON DELETE CASCADE,
+  pin         TEXT        NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (device_id, pin),
+  UNIQUE (device_id, staff_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_devices_salon       ON devices (salon_id);
+CREATE INDEX IF NOT EXISTS idx_biometric_device_pin ON staff_biometric_mappings (device_id, pin);
+
+ALTER TABLE staff_commission_settings
+ADD COLUMN IF NOT EXISTS period VARCHAR(10) NOT NULL DEFAULT 'monthly'
+CHECK (period IN ('daily', 'monthly'));

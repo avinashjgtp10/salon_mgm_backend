@@ -44,6 +44,7 @@ import analyticsRoutes from './modules/marketing/whatsapp/analytics/analytics.ro
 import botRoutes from "./modules/bot/bot.routes";
 import waAutomationRoutes from "./modules/whatsapp-automation/whatsapp-automation.routes";
 import attendanceRoutes from "./modules/attendance/attendance.routes";
+import { deviceApiRouter, admsRouter } from "./modules/device/device.routes";
 import swaggerUi from "swagger-ui-express";
 import path from "path";
 
@@ -57,6 +58,11 @@ app.set("trust proxy", 1);
 app.use(helmet());
 
 app.use(corsMiddleware);
+
+// ADMS biometric machine protocol — mounted BEFORE body parsers so that
+// ZKTeco/ESSL devices (which send application/x-www-form-urlencoded) don't
+// have their raw text body consumed by the global urlencoded parser.
+app.use("/iclock", admsRouter);
 
 // Body parsing middleware
 app.use(express.json({ limit: "10mb" }));
@@ -135,6 +141,7 @@ app.use("/api/v1/bot",           botRoutes);
 app.use("/api/v1/reports",       reportsRoutes);
 app.use("/api/v1/wa-automation", waAutomationRoutes);
 app.use("/api/v1/attendance",   attendanceRoutes);
+app.use("/api/v1/devices",      deviceApiRouter);
 
 // Swagger Documentation
 const swaggerDocument = require(path.join(__dirname, "../docs/api/swagger-gen.json"));

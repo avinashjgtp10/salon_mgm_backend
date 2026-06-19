@@ -138,6 +138,19 @@ export const staffService = {
         return updated;
     },
 
+    async activate(params: {
+        id: string; salonId: string; requesterUserId: string; requesterRole?: string;
+    }): Promise<void> {
+        const { id, salonId } = params;
+        logger.info("staffService.activate", { id, salonId });
+
+        const existing = await staffRepository.findById(id, salonId);
+        if (!existing) throw new AppError(404, "Staff not found", "NOT_FOUND");
+
+        await staffRepository.activate(id, salonId);
+        logger.info("staffService.activate success", { staffId: id });
+    },
+
     async deactivate(params: {
         id: string; salonId: string; requesterUserId: string; requesterRole?: string;
     }): Promise<void> {
@@ -271,7 +284,7 @@ export const staffService = {
                             if (!dry_run) {
                                 const staff = await staffRepository.create(salonId, {
                                     first_name, last_name, email, phone, country, job_title,
-                                });
+                                }, null, true); // activateImmediately = true: imported staff don't need email invites
                                 await staffRepository.updateDateFields(staff.id, salonId, { joined_date, birthday_day, birthday_month });
                                 if (hourly_rate !== null || salary_amount !== null) {
                                     await staffWagesRepository.upsert(staff.id, {
@@ -551,6 +564,15 @@ export const staffCommissionsService = {
     async upsert(staffId: string, salonId: string, data: UpdateCommissionBody): Promise<StaffCommissionSettings> {
         await _ensureStaff(staffId, salonId);
         return staffCommissionsRepository.upsert(staffId, data);
+    },
+
+    async bulkConfigure(
+        salonId: string,
+        staffIds: string[],
+        data: UpdateCommissionBody,
+        slabs: { revenue_target: number; commission_kind: string; commission_value: number }[]
+    ) {
+        return staffCommissionsRepository.bulkUpsert(salonId, staffIds, data, slabs);
     },
 };
 

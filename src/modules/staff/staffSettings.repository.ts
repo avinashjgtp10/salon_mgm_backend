@@ -78,7 +78,6 @@ export const staffCommissionsRepository = {
              FROM staff_commission_settings sc
              JOIN staff s ON s.id = sc.staff_id
              WHERE s.salon_id = $1
-               AND s.is_active = true
              ORDER BY s.first_name, sc.category`,
             [salonId]
         );
@@ -96,8 +95,8 @@ export const staffCommissionsRepository = {
         const { rows } = await pool.query(
             `INSERT INTO staff_commission_settings (
                 staff_id, category, is_enabled, commission_kind, default_rate, revenue_target,
-                use_default_calculation, pass_cancellation_fee_late, pass_cancellation_fee_noshow
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+                use_default_calculation, pass_cancellation_fee_late, pass_cancellation_fee_noshow, period
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
             ON CONFLICT (staff_id, category) DO UPDATE SET
                 is_enabled               = EXCLUDED.is_enabled,
                 commission_kind          = EXCLUDED.commission_kind,
@@ -106,6 +105,7 @@ export const staffCommissionsRepository = {
                 use_default_calculation  = EXCLUDED.use_default_calculation,
                 pass_cancellation_fee_late   = EXCLUDED.pass_cancellation_fee_late,
                 pass_cancellation_fee_noshow = EXCLUDED.pass_cancellation_fee_noshow,
+                period                   = EXCLUDED.period,
                 updated_at = NOW()
             RETURNING *`,
             [
@@ -117,9 +117,107 @@ export const staffCommissionsRepository = {
                 data.use_default_calculation     ?? true,
                 data.pass_cancellation_fee_late  ?? false,
                 data.pass_cancellation_fee_noshow ?? false,
+                (data as any).period    ?? "monthly",
             ]
         );
         return rows[0];
+    },
+
+    async bulkUpsert(
+        salonId: string,
+        staffIds: string[],
+        data: UpdateCommissionBody,
+        slabs: { revenue_target: number; commission_kind: string; commission_value: number }[]
+    ): Promise<{ saved: string[]; failed: string[] }> {
+        if (staffIds.length === 0) return { saved: [], failed: [] };
+
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+
+            // 1. Validate all IDs belong to this salon in one query
+            const { rows: validRows } = await client.query(
+                `SELECT id FROM staff WHERE salon_id = $1 AND id = ANY($2::uuid[])`,
+                [salonId, staffIds]
+            );
+            const validIds = validRows.map((r: any) => String(r.id));
+            const validSet = new Set(validIds);
+            const failed   = staffIds.filter((id) => !validSet.has(id));
+
+            if (validIds.length > 0) {
+                // 2. Batch upsert commission settings — single INSERT for all staff
+                const FIELDS = 10;
+                const settingsVals: any[] = [];
+                const settingsRows = validIds.map((staffId, i) => {
+                    const b = i * FIELDS;
+                    settingsVals.push(
+                        staffId,
+                        data.category,
+                        data.is_enabled              ?? true,
+                        data.commission_kind         ?? "percentage",
+                        data.default_rate            ?? 0,
+                        data.revenue_target          ?? 0,
+                        data.use_default_calculation     ?? false,
+                        data.pass_cancellation_fee_late  ?? false,
+                        data.pass_cancellation_fee_noshow ?? false,
+                        (data as any).period         ?? "monthly"
+                    );
+                    return `($${b+1},$${b+2},$${b+3},$${b+4},$${b+5},$${b+6},$${b+7},$${b+8},$${b+9},$${b+10})`;
+                });
+
+                await client.query(
+                    `INSERT INTO staff_commission_settings
+                        (staff_id, category, is_enabled, commission_kind, default_rate, revenue_target,
+                         use_default_calculation, pass_cancellation_fee_late, pass_cancellation_fee_noshow, period)
+                     VALUES ${settingsRows.join(",")}
+                     ON CONFLICT (staff_id, category) DO UPDATE SET
+                        is_enabled               = EXCLUDED.is_enabled,
+                        commission_kind          = EXCLUDED.commission_kind,
+                        default_rate             = EXCLUDED.default_rate,
+                        revenue_target           = EXCLUDED.revenue_target,
+                        use_default_calculation  = EXCLUDED.use_default_calculation,
+                        pass_cancellation_fee_late   = EXCLUDED.pass_cancellation_fee_late,
+                        pass_cancellation_fee_noshow = EXCLUDED.pass_cancellation_fee_noshow,
+                        period                   = EXCLUDED.period,
+                        updated_at = NOW()`,
+                    settingsVals
+                );
+
+                // 3. Handle slabs — delete all then bulk insert (2 queries regardless of staff count)
+                const validSlabs = slabs.filter((s) => s.commission_value > 0);
+                if (validSlabs.length > 0) {
+                    await client.query(
+                        `DELETE FROM commission_slabs WHERE staff_id = ANY($1::uuid[]) AND category = $2`,
+                        [validIds, data.category]
+                    );
+
+                    const slabVals: any[] = [];
+                    const slabRows: string[] = [];
+                    let idx = 1;
+                    for (const staffId of validIds) {
+                        for (const slab of validSlabs) {
+                            slabRows.push(`($${idx},$${idx+1},$${idx+2},$${idx+3},$${idx+4},$${idx+5},true)`);
+                            slabVals.push(staffId, salonId, data.category, slab.revenue_target, slab.commission_kind, slab.commission_value);
+                            idx += 6;
+                        }
+                    }
+                    await client.query(
+                        `INSERT INTO commission_slabs
+                            (staff_id, salon_id, category, revenue_target, commission_kind, commission_value, is_enabled)
+                         VALUES ${slabRows.join(",")}`,
+                        slabVals
+                    );
+                }
+            }
+
+            await client.query("COMMIT");
+            return { saved: validIds, failed };
+        } catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        } finally {
+            client.release();
+        }
     },
 };
 

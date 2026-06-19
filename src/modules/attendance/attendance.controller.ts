@@ -99,8 +99,11 @@ export const attendanceController = {
         try {
             const salonId = req.user?.salonId;
             if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
-            const data = await attendanceService.getToday(salonId);
-            return sendSuccess(res, 200, data, "Today's attendance fetched");
+            const date = String(req.query.date || "").trim() || undefined;
+            if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date))
+                throw new AppError(400, "date must be YYYY-MM-DD", "VALIDATION_ERROR");
+            const data = await attendanceService.getToday(salonId, date);
+            return sendSuccess(res, 200, data, "Attendance fetched");
         } catch (err) { return next(err); }
     },
 

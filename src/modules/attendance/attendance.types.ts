@@ -96,5 +96,6 @@ export type TodayStaffRecord = {
     check_in: string | null;
     check_out: string | null;
     hours_worked: number | null;
+    scheduled_hours: number | null;
     attendance_id: string | null;
 };

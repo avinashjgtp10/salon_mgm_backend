@@ -118,6 +118,19 @@ export const staffController = {
     } catch (err) { return next(err); }
   },
 
+  async activate(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = getSalonId(req);
+      if (!req.user?.userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+      const id = String(req.params.id);
+      logger.info("PATCH /staff/:id/activate", { id, salonId });
+      await staffService.activate({
+        id, salonId, requesterUserId: req.user.userId, requesterRole: req.user.role,
+      });
+      return sendSuccess(res, 200, null, "Staff activated");
+    } catch (err) { return next(err); }
+  },
+
   async deactivate(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = getSalonId(req);
@@ -498,6 +511,19 @@ export const staffCommissionsController = {
     try {
       const data = await staffCommissionsService.upsert(String(req.params.staffId), getSalonId(req), req.body as UpdateCommissionBody);
       return sendSuccess(res, 200, data, "Commission setting updated successfully");
+    } catch (err) { return next(err); }
+  },
+
+  async bulkConfigure(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = getSalonId(req);
+      const { staff_ids, slabs, ...commissionData } = req.body;
+      if (!Array.isArray(staff_ids) || staff_ids.length === 0)
+        throw new AppError(400, "staff_ids must be a non-empty array", "VALIDATION_ERROR");
+      if (!commissionData.category)
+        throw new AppError(400, "category is required", "VALIDATION_ERROR");
+      const result = await staffCommissionsService.bulkConfigure(salonId, staff_ids, commissionData as UpdateCommissionBody, slabs ?? []);
+      return sendSuccess(res, 200, result, `Configured for ${result.saved.length} staff`);
     } catch (err) { return next(err); }
   },
 };

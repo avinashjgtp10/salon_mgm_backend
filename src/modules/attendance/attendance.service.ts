@@ -203,15 +203,18 @@ export const attendanceService = {
 
     // ── Today dashboard ───────────────────────────────────────────────────────
 
-    async getToday(salonId: string): Promise<{
+    async getToday(salonId: string, dateParam?: string): Promise<{
         summary: DailySummary;
         staff: TodayStaffRecord[];
     }> {
-        const date = todayIST();
-        const [allStaff, records, counts] = await Promise.all([
+        const date = dateParam || todayIST();
+        const dayOfWeek = new Date(date + "T12:00:00").getDay(); // 0=Sun…6=Sat, noon avoids DST edge cases
+
+        const [allStaff, records, counts, scheduledMap] = await Promise.all([
             attendanceRepository.getActiveSalonStaff(salonId),
             attendanceRepository.findBySalonAndDate(salonId, date),
             attendanceRepository.getDailySummaryCounts(salonId, date),
+            attendanceRepository.getScheduledHoursForStaff(salonId, date, dayOfWeek),
         ]);
 
         const recordMap = new Map(records.map(r => [r.staff_id, r]));
@@ -226,6 +229,7 @@ export const attendanceService = {
                 check_in: rec?.check_in ?? null,
                 check_out: rec?.check_out ?? null,
                 hours_worked: rec?.hours_worked ?? null,
+                scheduled_hours: scheduledMap.get(s.id) ?? null,
                 attendance_id: rec?.id ?? null,
             };
         });

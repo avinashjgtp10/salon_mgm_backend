@@ -41,6 +41,7 @@ router.get("/commissions/earned",               auth, ownerAdmin, staffCommissio
 router.get("/commissions/export",               auth, ownerAdmin, staffCommissionsController.exportCommissions);
 router.post("/commissions/:staffId/mark-paid",  auth, ownerAdmin, staffCommissionsController.markStaffCommissionPaid);
 router.get("/commissions/all",                  auth, ownerAdmin, staffCommissionsController.listBySalon);
+router.post("/commissions/bulk-configure",      auth, ownerAdmin, staffCommissionsController.bulkConfigure);
 
 // ─── Commission Slabs + History — per staff ──────────────────────────────────
 router.get("/:staffId/commissions/slabs",   auth, ownerAdmin, staffCommissionsController.getSlabs);
@@ -50,6 +51,8 @@ router.get("/:staffId/commissions/history", auth, ownerAdminStaff, staffCommissi
 // ─── Staff by ID ──────────────────────────────────────────────────────────────
 router.get("/:id",    auth, ownerAdminStaff, requirePermission("view_team"), staffController.getById);
 router.patch("/:id",  auth, ownerAdmin, requirePermission("manage_team"), validateUpdateStaff, staffController.update);
+router.patch("/:id/activate",   auth, ownerAdmin, requirePermission("manage_team"), staffController.activate);
+router.patch("/:id/deactivate", auth, ownerAdmin, requirePermission("manage_team"), staffController.deactivate);
 router.delete("/:id", auth, ownerAdmin, requirePermission("manage_team"), staffController.delete);
 
 // ─── Invitation management ────────────────────────────────────────────────────

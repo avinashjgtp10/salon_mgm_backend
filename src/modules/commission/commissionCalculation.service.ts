@@ -238,37 +238,59 @@ export const commissionCalculationService = {
                     const rule = await staffCommissionsRepository.findByCategory(staff_id, category);
                     if (!rule || !rule.is_enabled) continue;
 
-                    // Check minimum monthly revenue threshold
+                    const period = (rule as any).period ?? "monthly";
+
+                    // ── Fetch accumulated period revenue (daily or monthly) ──────────────
+                    // Used for threshold checks; commission amount is always on current sale revenue.
+                    let periodRevenue = revenue;
+                    try {
+                        const IST = "Asia/Kolkata";
+                        const dateClause = period === "daily"
+                            ? `AND date_trunc('day', earned_at AT TIME ZONE '${IST}') = date_trunc('day', NOW() AT TIME ZONE '${IST}')`
+                            : `AND date_trunc('month', earned_at AT TIME ZONE '${IST}') = date_trunc('month', NOW() AT TIME ZONE '${IST}')`;
+
+                        const { rows: prevRows } = await pool.query(
+                            `SELECT COALESCE(SUM(revenue_amount), 0)::float AS total
+                             FROM commission_earned
+                             WHERE staff_id = $1 AND category = $2 AND salon_id = $3 ${dateClause}`,
+                            [staff_id, category, salonId]
+                        );
+                        periodRevenue = revenue + parseFloat(prevRows[0]?.total ?? "0");
+                    } catch (qErr) {
+                        logger.warn("commissionCalculationService: period revenue query failed, using sale revenue", { staff_id, category, qErr });
+                    }
+
+                    // ── Check minimum period revenue threshold ──────────────────────────
                     const minRevenue = Number((rule as any).min_monthly_revenue ?? 0);
-                    if (minRevenue > 0) {
-                        // Sum this staff's total revenue this month from commission_earned
-                        // (approximate using current revenue; for accuracy use a monthly aggregate)
-                        if (revenue < minRevenue) {
-                            logger.info("commissionCalculationService: below min threshold", {
-                                staff_id, category, revenue, minRevenue,
-                            });
-                            continue;
-                        }
+                    if (minRevenue > 0 && periodRevenue < minRevenue) {
+                        logger.info("commissionCalculationService: below min threshold", {
+                            staff_id, category, periodRevenue, minRevenue, period,
+                        });
+                        continue;
                     }
 
                     // ── Try commission_slabs table first (multi-slab rules) ────────────────
                     const slabRows = await commissionSlabsRepository.listByStaffAndCategory(staff_id, category);
 
                     if (slabRows.length > 0) {
-                        // Apply each slab independently and sum all commissions
                         let totalCommission = 0;
                         for (const slab of slabRows) {
                             const target = Number(slab.revenue_target);
                             const value  = Number(slab.commission_value);
                             const kind   = slab.commission_kind;
 
+                            // For revenue-target slabs: check if accumulated period revenue hits the threshold
+                            if (target > 0 && periodRevenue < target) continue;
+
                             let slabCommission = 0;
                             if (kind === "percentage") {
+                                // % of current sale's revenue
                                 slabCommission = parseFloat((revenue * value / 100).toFixed(2));
                             } else if (target > 0) {
-                                // Per occurrence: for every ₹target generated → ₹value
+                                // Fixed: for every ₹target in current sale → ₹value
                                 slabCommission = parseFloat((Math.floor(revenue / target) * value).toFixed(2));
                             } else {
+                                // Flat amount — always apply
                                 slabCommission = value;
                             }
                             totalCommission += slabCommission;
@@ -291,16 +313,25 @@ export const commissionCalculationService = {
                         );
 
                         logger.info("commissionCalculationService: slab commission earned", {
-                            staff_id, saleId, category, revenue, totalCommission, slabCount: slabRows.length,
+                            staff_id, saleId, category, revenue, periodRevenue, period,
+                            totalCommission, slabCount: slabRows.length,
                         });
 
                     } else {
-                        // ── Fallback to staff_commission_settings (legacy single rule) ────
+                        // ── Fallback to staff_commission_settings (single rule) ───────────
                         const rate          = Number(rule.default_rate);
                         const revenueTarget = Number((rule as any).revenue_target ?? 0);
                         const kind          = rule.commission_kind;
 
                         if (rate <= 0) continue;
+
+                        // For revenue-target rules: check if accumulated period revenue hits the threshold
+                        if (revenueTarget > 0 && periodRevenue < revenueTarget) {
+                            logger.info("commissionCalculationService: period revenue below target", {
+                                staff_id, category, periodRevenue, revenueTarget, period,
+                            });
+                            continue;
+                        }
 
                         let commissionAmount: number;
                         if (kind === "percentage") {
@@ -328,7 +359,8 @@ export const commissionCalculationService = {
                         );
 
                         logger.info("commissionCalculationService: legacy commission earned", {
-                            staff_id, saleId, category, revenue, kind, rate, commissionAmount,
+                            staff_id, saleId, category, revenue, periodRevenue, period,
+                            kind, rate, commissionAmount,
                         });
                     }
 

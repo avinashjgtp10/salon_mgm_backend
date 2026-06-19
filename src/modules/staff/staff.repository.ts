@@ -86,17 +86,15 @@ export const staffRepository = {
         return map;
     },
 
-    async create(salonId: string, data: CreateStaffBody, passwordHash?: string | null): Promise<Staff> {
+    async create(
+        salonId: string,
+        data: CreateStaffBody,
+        passwordHash?: string | null,
+        activateImmediately?: boolean
+    ): Promise<Staff> {
         try {
-            console.log("[DB DEBUG] staffRepository.create - SQL params:", [
-                salonId, data.first_name, data.last_name ?? null, data.email,
-                data.phone ?? null, data.phone_country_code ?? null,
-                data.additional_phone ?? null, data.country ?? null,
-                data.calendar_color ?? "blue", data.job_title ?? null,
-                data.staff_external_id ?? null, data.employment_type ?? null,
-                data.branch_id ?? null, data.employee_code ?? null,
-                data.experience_years ?? null, data.specialization ?? [],
-            ]);
+            const isActive = activateImmediately ?? false;
+            const invitationStatus = activateImmediately ? "accepted" : "pending";
 
             const { rows } = await pool.query(
                 `INSERT INTO staff (
@@ -105,8 +103,10 @@ export const staffRepository = {
             staff_external_id, employment_type, branch_id, employee_code,
               experience_years, specialization, password_hash,
               allow_calendar_bookings,
-              is_active, invitation_status
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,false,'pending')
+              is_active, invitation_status,
+              invitation_accepted_at
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+              CASE WHEN $20 = 'accepted' THEN NOW() ELSE NULL END)
             RETURNING *`,
                 [
                     salonId, data.first_name, data.last_name ?? null, data.email,
@@ -118,6 +118,8 @@ export const staffRepository = {
                     data.experience_years ?? null, data.specialization ?? [],
                     passwordHash ?? null,
                     data.allow_calendar_bookings ?? true,
+                    isActive,
+                    invitationStatus,
                 ]
             );
             return rows[0];
@@ -191,6 +193,14 @@ export const staffRepository = {
             `UPDATE staff SET is_active = true, invitation_status = 'accepted', invitation_accepted_at = NOW(), updated_at = NOW() WHERE id = $1`,
             [id]
         );
+    },
+
+    async activate(id: string, salonId: string): Promise<boolean> {
+        const { rowCount } = await pool.query(
+            `UPDATE staff SET is_active = true, updated_at = NOW() WHERE id = $1 AND salon_id = $2`,
+            [id, salonId]
+        );
+        return (rowCount ?? 0) > 0;
     },
 
     async deactivate(id: string, salonId: string): Promise<boolean> {

@@ -40,7 +40,9 @@ export const attendanceRepository = {
 
     async findByStaffAndDate(staffId: string, date: string): Promise<Attendance | null> {
         const { rows } = await pool.query(
-            `SELECT a.*, st.full_name AS staff_name, st.role AS staff_role
+            `SELECT a.*,
+                    TRIM(CONCAT(st.first_name, ' ', COALESCE(st.last_name, ''))) AS staff_name,
+                    COALESCE(st.designation, '') AS staff_role
              FROM attendance a
              JOIN staff st ON st.id = a.staff_id
              WHERE a.staff_id = $1 AND a.date = $2::date`,
@@ -51,7 +53,9 @@ export const attendanceRepository = {
 
     async findById(id: string): Promise<Attendance | null> {
         const { rows } = await pool.query(
-            `SELECT a.*, st.full_name AS staff_name, st.role AS staff_role
+            `SELECT a.*,
+                    TRIM(CONCAT(st.first_name, ' ', COALESCE(st.last_name, ''))) AS staff_name,
+                    COALESCE(st.designation, '') AS staff_role
              FROM attendance a
              JOIN staff st ON st.id = a.staff_id
              WHERE a.id = $1`,
@@ -64,11 +68,13 @@ export const attendanceRepository = {
 
     async findBySalonAndDate(salonId: string, date: string): Promise<Attendance[]> {
         const { rows } = await pool.query(
-            `SELECT a.*, st.full_name AS staff_name, st.role AS staff_role
+            `SELECT a.*,
+                    TRIM(CONCAT(st.first_name, ' ', COALESCE(st.last_name, ''))) AS staff_name,
+                    COALESCE(st.designation, '') AS staff_role
              FROM attendance a
              JOIN staff st ON st.id = a.staff_id
              WHERE a.salon_id = $1 AND a.date = $2::date
-             ORDER BY st.full_name ASC`,
+             ORDER BY st.first_name ASC`,
             [salonId, date]
         );
         return rows;
@@ -79,12 +85,14 @@ export const attendanceRepository = {
     async findBySalonAndMonth(salonId: string, year: number, month: number): Promise<Attendance[]> {
         const startDate = `${year}-${String(month).padStart(2, "0")}-01`;
         const { rows } = await pool.query(
-            `SELECT a.*, st.full_name AS staff_name, st.role AS staff_role
+            `SELECT a.*,
+                    TRIM(CONCAT(st.first_name, ' ', COALESCE(st.last_name, ''))) AS staff_name,
+                    COALESCE(st.designation, '') AS staff_role
              FROM attendance a
              JOIN staff st ON st.id = a.staff_id
              WHERE a.salon_id = $1
                AND date_trunc('month', a.date) = $2::date
-             ORDER BY st.full_name ASC, a.date ASC`,
+             ORDER BY st.first_name ASC, a.date ASC`,
             [salonId, startDate]
         );
         return rows;
@@ -251,10 +259,12 @@ export const attendanceRepository = {
 
     async getActiveSalonStaff(salonId: string): Promise<{ id: string; full_name: string; role: string }[]> {
         const { rows } = await pool.query(
-            `SELECT id, full_name, role
+            `SELECT id,
+                    TRIM(CONCAT(first_name, ' ', COALESCE(last_name, ''))) AS full_name,
+                    COALESCE(designation, '')                               AS role
              FROM staff
-             WHERE salon_id = $1 AND status = 'active'
-             ORDER BY full_name ASC`,
+             WHERE salon_id = $1 AND is_active = true
+             ORDER BY first_name ASC`,
             [salonId]
         );
         return rows;
@@ -265,15 +275,57 @@ export const attendanceRepository = {
     async getMonthlyForExport(salonId: string, year: number, month: number): Promise<Attendance[]> {
         const startDate = `${year}-${String(month).padStart(2, "0")}-01`;
         const { rows } = await pool.query(
-            `SELECT a.*, st.full_name AS staff_name, st.role AS staff_role
+            `SELECT a.*,
+                    TRIM(CONCAT(st.first_name, ' ', COALESCE(st.last_name, ''))) AS staff_name,
+                    COALESCE(st.designation, '') AS staff_role
              FROM attendance a
              JOIN staff st ON st.id = a.staff_id
              WHERE a.salon_id = $1
                AND date_trunc('month', a.date) = $2::date
-             ORDER BY st.full_name ASC, a.date ASC`,
+             ORDER BY st.first_name ASC, a.date ASC`,
             [salonId, startDate]
         );
         return rows;
+    },
+
+    // ── Scheduled hours from shift (for today view) ───────────────────────────
+
+    async getScheduledHoursForStaff(
+        salonId: string,
+        date: string,
+        dayOfWeek: number
+    ): Promise<Map<string, number | null>> {
+        const { rows } = await pool.query(
+            `WITH best_schedule AS (
+               SELECT DISTINCT ON (ss.staff_id)
+                 ss.staff_id,
+                 ss.start_time,
+                 ss.end_time,
+                 ss.is_available
+               FROM staff_schedules ss
+               JOIN staff st ON st.id = ss.staff_id
+               WHERE st.salon_id = $1
+                 AND st.is_active = true
+                 AND (ss.date = $2::date OR (ss.date IS NULL AND ss.day_of_week = $3))
+               ORDER BY ss.staff_id, ss.date NULLS LAST
+             )
+             SELECT
+               staff_id,
+               CASE WHEN is_available AND start_time IS NOT NULL AND end_time IS NOT NULL
+                 THEN ROUND(
+                   EXTRACT(EPOCH FROM (end_time::time - start_time::time)) / 3600.0,
+                   2
+                 )
+                 ELSE NULL
+               END AS scheduled_hours
+             FROM best_schedule`,
+            [salonId, date, dayOfWeek]
+        );
+        const map = new Map<string, number | null>();
+        for (const row of rows) {
+            map.set(row.staff_id, row.scheduled_hours != null ? parseFloat(row.scheduled_hours) : null);
+        }
+        return map;
     },
 
     // ── Leave check ───────────────────────────────────────────────────────────
