@@ -69,6 +69,32 @@ pool.on('error', (err) => {
 
 export default pool;
 
+// Add login_count column if it doesn't exist yet (safe, idempotent)
+setImmediate(() => {
+  pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS login_count INTEGER DEFAULT 0`)
+    .catch((err: any) => console.warn('⚠️  login_count column migration:', err.message));
+});
+
+// Create support_tickets table (safe, idempotent)
+setImmediate(() => {
+  pool.query(`
+    CREATE TABLE IF NOT EXISTS support_tickets (
+      id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      salon_id     UUID REFERENCES salons(id) ON DELETE CASCADE,
+      user_id      UUID REFERENCES users(id)  ON DELETE SET NULL,
+      subject      TEXT NOT NULL,
+      category     TEXT NOT NULL DEFAULT 'general',
+      message      TEXT NOT NULL,
+      priority     TEXT NOT NULL DEFAULT 'medium',
+      status       TEXT NOT NULL DEFAULT 'open',
+      admin_reply  TEXT,
+      replied_at   TIMESTAMPTZ,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch((err: any) => console.warn('⚠️  support_tickets table migration:', err.message));
+});
+
 /**
  * safeQuery — wraps any pool.query() call with a single auto-retry.
  *
