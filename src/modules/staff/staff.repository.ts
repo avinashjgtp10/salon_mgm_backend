@@ -95,6 +95,7 @@ export const staffRepository = {
         try {
             const isActive = activateImmediately ?? false;
             const invitationStatus = activateImmediately ? "accepted" : "pending";
+            const invitationAcceptedAt = activateImmediately ? new Date() : null;
 
             const { rows } = await pool.query(
                 `INSERT INTO staff (
@@ -105,8 +106,7 @@ export const staffRepository = {
               allow_calendar_bookings,
               is_active, invitation_status,
               invitation_accepted_at
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-              CASE WHEN $20 = 'accepted' THEN NOW() ELSE NULL END)
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
             RETURNING *`,
                 [
                     salonId, data.first_name, data.last_name ?? null, data.email,
@@ -120,6 +120,7 @@ export const staffRepository = {
                     data.allow_calendar_bookings ?? true,
                     isActive,
                     invitationStatus,
+                    invitationAcceptedAt,
                 ]
             );
             return rows[0];
