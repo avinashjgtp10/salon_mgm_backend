@@ -159,6 +159,13 @@ export const superAdminService = {
     return { ...user, plainPassword: data.password };
   },
 
+  async deleteSalon(id: string) {
+    if (!id) throw new AppError(400, "Salon ID required", "VALIDATION_ERROR");
+    const result = await superAdminRepository.deleteSalon(id);
+    if (!result) throw new AppError(404, "Salon not found", "NOT_FOUND");
+    return { success: true };
+  },
+
   async getAllUsers(search?: string, role?: string) {
     return superAdminRepository.getAllUsers(search, role);
   },

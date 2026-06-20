@@ -29,6 +29,7 @@ router.get("/salons",                       superAdminController.getAllSalons);
 router.patch("/salons/:id/status",          superAdminController.setSalonStatus);
 router.patch("/salons/:id/onboarding",      superAdminController.forceOnboarding);
 router.post("/salons/:id/impersonate",      superAdminController.impersonateSalon);
+router.delete("/salons/:id",               superAdminController.deleteSalon);
 
 // Users
 router.post("/users/create",                superAdminController.createUser);

@@ -83,6 +83,14 @@ export const superAdminController = {
     } catch (err) { return next(err); }
   },
 
+  async deleteSalon(req: Request, res: Response, next: NextFunction) {
+    try {
+      const id = String(req.params.id);
+      const data = await superAdminService.deleteSalon(id);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
   async impersonateSalon(req: Request, res: Response, next: NextFunction) {
     try {
       const id = String(req.params.id);

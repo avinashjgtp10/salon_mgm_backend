@@ -413,6 +413,41 @@ export const superAdminRepository = {
 
   // ── PAYMENTS ──────────────────────────────────────────────────────────────────
 
+  async deleteSalon(id: string) {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const { rows: salons } = await client.query(
+        `SELECT id, owner_id FROM salons WHERE id = $1 FOR UPDATE`,
+        [id]
+      );
+      if (!salons[0]) {
+        await client.query("ROLLBACK");
+        return null;
+      }
+
+      // Tables with no FK constraint to salons — must delete manually
+      await client.query(`DELETE FROM invoices              WHERE salon_id = $1`, [id]);
+      await client.query(`DELETE FROM billing_subscriptions WHERE salon_id = $1`, [id]);
+
+      // Delete the salon — FK ON DELETE CASCADE handles staff, clients,
+      // appointments, payments, services, categories, salon_settings, bookings, etc.
+      const { rows } = await client.query(
+        `DELETE FROM salons WHERE id = $1 RETURNING id`,
+        [id]
+      );
+
+      await client.query("COMMIT");
+      return rows[0] ?? null;
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  },
+
   async getAllPayments(statusFilter?: string) {
     const { rows } = await pool.query(`
       SELECT
