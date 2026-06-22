@@ -274,7 +274,7 @@ export const superAdminRepository = {
     return rows[0] ?? null;
   },
 
-  async updateSalonPermissions(salonId: string, permissions: Record<string, { owner: boolean; staff: boolean }>) {
+  async updateSalonPermissions(salonId: string, permissions: Record<string, { owner: boolean; staff: boolean; manager?: boolean }>) {
     const value = JSON.stringify(permissions);
     const { rows } = await pool.query(`
       INSERT INTO salon_settings (salon_id, key, value, description)
@@ -311,9 +311,10 @@ export const superAdminRepository = {
     return rows[0];
   },
 
-  async getAllUsers(search?: string, role?: string) {
-    const searchParam = search ? `%${search}%` : null;
-    const roleParam   = role   || null;
+  async getAllUsers(search?: string, role?: string, minLogins?: number) {
+    const searchParam    = search    ? `%${search}%` : null;
+    const roleParam      = role      || null;
+    const minLoginsParam = minLogins ?? null;
     const { rows } = await pool.query(`
       SELECT
         u.id,
@@ -324,6 +325,7 @@ export const superAdminRepository = {
         u.is_active,
         u.last_login,
         u.created_at,
+        COALESCE(u.login_count, 0)                               AS login_count,
         CASE WHEN u.is_active THEN 'active' ELSE 'inactive' END AS status,
         COALESCE(s.business_name, s.slug)                        AS salon_name,
         s.id                                                      AS salon_id
@@ -336,9 +338,10 @@ export const superAdminRepository = {
           OR u.last_name  ILIKE $1
           OR u.phone      ILIKE $1)
         AND ($2::text IS NULL OR u.role = $2)
-      ORDER BY u.created_at DESC
+        AND ($3::int  IS NULL OR COALESCE(u.login_count, 0) >= $3)
+      ORDER BY u.login_count DESC NULLS LAST, u.created_at DESC
       LIMIT 500
-    `, [searchParam, roleParam]);
+    `, [searchParam, roleParam, minLoginsParam]);
     return rows;
   },
 

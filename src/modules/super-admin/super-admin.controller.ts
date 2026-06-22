@@ -149,9 +149,10 @@ export const superAdminController = {
 
   async getAllUsers(req: Request, res: Response, next: NextFunction) {
     try {
-      const search = typeof req.query.search === "string" ? req.query.search : undefined;
-      const role   = typeof req.query.role   === "string" ? req.query.role   : undefined;
-      const data = await superAdminService.getAllUsers(search, role);
+      const search    = typeof req.query.search     === "string" ? req.query.search : undefined;
+      const role      = typeof req.query.role       === "string" ? req.query.role   : undefined;
+      const minLogins = req.query.min_logins ? parseInt(req.query.min_logins as string, 10) : undefined;
+      const data = await superAdminService.getAllUsers(search, role, minLogins);
       return res.json({ success: true, data });
     } catch (err) { return next(err); }
   },

@@ -121,7 +121,7 @@ export const superAdminService = {
     return { salon: { id: salon.id, name: salon.name, owner_email: salon.owner_email, owner_name: salon.owner_name, plan_name: salon.plan_name, is_active: salon.is_active }, permissions };
   },
 
-  async updateSalonPermissions(salonId: string, permissions: Record<string, { owner: boolean; staff: boolean }>) {
+  async updateSalonPermissions(salonId: string, permissions: Record<string, { owner: boolean; staff: boolean; manager?: boolean }>) {
     if (!salonId) throw new AppError(400, "Salon ID required", "VALIDATION_ERROR");
     const result = await superAdminRepository.updateSalonPermissions(salonId, permissions);
     if (!result) throw new AppError(404, "Salon not found", "NOT_FOUND");
@@ -166,8 +166,8 @@ export const superAdminService = {
     return { success: true };
   },
 
-  async getAllUsers(search?: string, role?: string) {
-    return superAdminRepository.getAllUsers(search, role);
+  async getAllUsers(search?: string, role?: string, minLogins?: number) {
+    return superAdminRepository.getAllUsers(search, role, minLogins);
   },
 
   async setUserStatus(id: string, isActive: boolean) {
