@@ -93,7 +93,10 @@ export const authRepository = {
    */
   async updateLastLogin(userId: string) {
     await safeQuery(() =>
-      pool.query(`UPDATE users SET last_login = NOW(), updated_at = NOW() WHERE id = $1`, [userId]),
+      pool.query(
+        `UPDATE users SET last_login = NOW(), login_count = COALESCE(login_count, 0) + 1, updated_at = NOW() WHERE id = $1`,
+        [userId]
+      ),
     );
   },
 
