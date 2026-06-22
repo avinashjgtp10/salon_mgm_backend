@@ -47,6 +47,8 @@ import attendanceRoutes from "./modules/attendance/attendance.routes";
 import { deviceApiRouter, admsRouter } from "./modules/device/device.routes";
 import packageTemplatesRoutes from "./modules/package-templates/package-templates.routes";
 import { ensurePackageTemplateTables } from "./modules/package-templates/package-templates.repository";
+import superAdminRoutes from "./modules/super-admin/super-admin.routes";
+import supportRoutes from "./modules/support/support.routes";
 import swaggerUi from "swagger-ui-express";
 import path from "path";
 
@@ -151,6 +153,8 @@ app.use("/api/v1/attendance",   attendanceRoutes);
 app.use("/api/v1/devices",      deviceApiRouter);
 app.use("/api/v1/wa-automation",      waAutomationRoutes);
 app.use("/api/v1/package-templates", packageTemplatesRoutes);
+app.use("/api/v1/super-admin",       superAdminRoutes);
+app.use("/api/v1/support",           supportRoutes);
 
 // Swagger Documentation
 const swaggerDocument = require(path.join(__dirname, "../docs/api/swagger-gen.json"));
