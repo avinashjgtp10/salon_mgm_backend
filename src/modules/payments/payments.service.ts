@@ -2,6 +2,8 @@ import { paymentsRepository } from './payments.repository';
 import { couponsRepository } from '../coupons/coupons.repository';
 import { appointmentsRepository } from '../appointments/appointments.repository';
 import { salesRepository } from '../sales/sales.repository';
+import { membershipsRepository } from '../memberships/memberships.repository';
+import { clientMembershipsService } from '../client-memberships/client-memberships.service';
 import { CreatePaymentBody, Payment } from './payments.types';
 import type { Appointment } from '../appointments/appointments.types';
 import logger from '../../config/logger';
@@ -165,6 +167,51 @@ export const paymentsService = {
       } catch (err) {
         logger.error('[paymentsService] Failed to auto-create sale record:', { error: err });
         // Non-fatal: payment is already recorded
+      }
+    }
+
+    // ── Auto-create client_memberships when memberships are sold ─────────────
+    // Use membership_items from DB (appt) if available; fall back to items sent in the payment body.
+    // The fallback handles the case where membership was added in the edit UI without saving first,
+    // or when the edit_appointments permission blocked the pre-payment PATCH.
+    const membershipItemsSrc: Array<any> =
+      (appt?.membership_items?.length ? appt.membership_items : null) ??
+      (data.membership_items?.length   ? data.membership_items   : null) ??
+      [];
+    logger.info(`[payments/create] status=${data.status} client_id=${data.client_id} membership_items_src_count=${membershipItemsSrc.length} (db=${appt?.membership_items?.length ?? 0} body=${data.membership_items?.length ?? 0})`);
+    if (data.status === 'completed' && data.client_id && membershipItemsSrc.length > 0) {
+      for (const item of membershipItemsSrc) {
+        const pricePaid = Number(item.price ?? 0) * Number(item.quantity ?? 1);
+        // Fire-and-forget — does not block payment return
+        (async () => {
+          try {
+            // Prefer stored membership_id; fall back to name lookup for legacy records
+            let membershipId: string | null = item.membership_id ?? null;
+            let mem = membershipId
+              ? await membershipsRepository.findById(membershipId, data.salon_id)
+              : null;
+            if (!mem && item.name) {
+              mem = await membershipsRepository.findByName(item.name, data.salon_id);
+              if (mem) membershipId = mem.id;
+            }
+            if (!mem || !membershipId) {
+              logger.warn(`[payments] could not resolve membership for name="${item.name}" id="${item.membership_id}"`);
+              return;
+            }
+            const totalSessions = mem.sessionType === 'limited' ? (mem.numberOfSessions ?? 0) : 0;
+            await clientMembershipsService.autoCreateFromPayment(
+              data.salon_id,
+              data.client_id!,
+              membershipId,
+              item.name || mem.name,
+              totalSessions,
+              pricePaid,
+              mem.colour,
+            );
+          } catch (err: any) {
+            logger.warn('[payments] membership auto-create failed:', err?.message ?? err);
+          }
+        })();
       }
     }
 

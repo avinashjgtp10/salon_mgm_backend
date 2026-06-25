@@ -45,6 +45,8 @@ import botRoutes from "./modules/bot/bot.routes";
 import waAutomationRoutes from "./modules/whatsapp-automation/whatsapp-automation.routes";
 import packageTemplatesRoutes from "./modules/package-templates/package-templates.routes";
 import { ensurePackageTemplateTables } from "./modules/package-templates/package-templates.repository";
+import clientMembershipsRoutes from "./modules/client-memberships/client-memberships.routes";
+import { ensureTable as ensureClientMembershipsTables } from "./modules/client-memberships/client-memberships.repository";
 import swaggerUi from "swagger-ui-express";
 import path from "path";
 
@@ -57,6 +59,11 @@ app.set("trust proxy", 1);
 // Bootstrap package-template tables (idempotent)
 ensurePackageTemplateTables().catch(err =>
   logger.warn("package-templates table init warning:", err?.message ?? err),
+);
+
+// Bootstrap client-memberships tables (idempotent)
+ensureClientMembershipsTables().catch(err =>
+  logger.warn("client-memberships table init warning:", err?.message ?? err),
 );
 
 // Security middleware
@@ -140,7 +147,8 @@ app.use("/api/v1/settings",      settingsRoutes);
 app.use("/api/v1/bot",           botRoutes);
 app.use("/api/v1/reports",       reportsRoutes);
 app.use("/api/v1/wa-automation",      waAutomationRoutes);
-app.use("/api/v1/package-templates", packageTemplatesRoutes);
+app.use("/api/v1/package-templates",    packageTemplatesRoutes);
+app.use("/api/v1/client-memberships",  clientMembershipsRoutes);
 
 // Swagger Documentation
 const swaggerDocument = require(path.join(__dirname, "../docs/api/swagger-gen.json"));
