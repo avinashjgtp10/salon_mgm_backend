@@ -36,4 +36,5 @@ export type CreatePaymentBody = {
   split_details?: Record<string, number>;
   status?: PaymentStatus;
   notes?: string;
+  membership_items?: Array<{ membership_id?: string; name: string; price: number; quantity: number }>;
 };
