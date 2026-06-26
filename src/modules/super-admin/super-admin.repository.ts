@@ -295,20 +295,43 @@ export const superAdminRepository = {
     password_hash: string;
     phone?: string;
     role: string;
+    business_name?: string;
+    address?: string;
   }) {
-    const { rows } = await pool.query(`
-      INSERT INTO users (first_name, last_name, email, password_hash, phone, role, is_active, is_onboarding_complete)
-      VALUES ($1, $2, $3, $4, $5, $6, true, false)
-      RETURNING id, first_name, last_name, email, phone, role, is_active, created_at
-    `, [
-      data.first_name,
-      data.last_name ?? null,
-      data.email.toLowerCase().trim(),
-      data.password_hash,
-      data.phone ?? null,
-      data.role,
-    ]);
-    return rows[0];
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const { rows: userRows } = await client.query(`
+        INSERT INTO users (first_name, last_name, email, password_hash, phone, role, is_active, is_onboarding_complete)
+        VALUES ($1, $2, $3, $4, $5, $6, true, false)
+        RETURNING id, first_name, last_name, email, phone, role, is_active, created_at
+      `, [
+        data.first_name,
+        data.last_name ?? null,
+        data.email.toLowerCase().trim(),
+        data.password_hash,
+        data.phone ?? null,
+        data.role,
+      ]);
+      const user = userRows[0];
+
+      if (data.business_name?.trim() && data.role === "salon_owner") {
+        const slug = data.business_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") + "-" + Date.now();
+        await client.query(`
+          INSERT INTO salons (owner_id, business_name, slug, address, is_active, onboarding_completed)
+          VALUES ($1, $2, $3, $4, true, false)
+        `, [user.id, data.business_name.trim(), slug, data.address?.trim() ?? null]);
+      }
+
+      await client.query("COMMIT");
+      return user;
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
   },
 
   async getAllUsers(search?: string, role?: string, minLogins?: number) {
