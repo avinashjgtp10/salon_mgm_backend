@@ -3,7 +3,7 @@
 import { Request, Response, NextFunction } from "express";
 import { AppError } from "./error.middleware";
 
-export type Role = "admin" | "salon_owner" | "staff" | "client";
+export type Role = "admin" | "salon_owner" | "staff" | "client" | "super_admin";
 
 export type AuthRequest = Request & {
   user?: {
@@ -39,3 +39,11 @@ export const roleMiddleware =
 
 // ✅ This is protect (alias)
 export const protect = roleMiddleware;
+
+// Dedicated guard for super admin only
+export const superAdminMiddleware = (req: AuthRequest, _res: Response, next: NextFunction) => {
+  if (req.user?.role !== "super_admin") {
+    return next(new AppError(403, "Super admin access required", "FORBIDDEN"));
+  }
+  return next();
+};

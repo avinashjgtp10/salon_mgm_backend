@@ -30,8 +30,8 @@ import subscriptionsRoutes from "./modules/subscriptions/subscriptions.routes";
 import marketingDashboardRoutes from './modules/marketing/whatsapp/dashboard/dashboard.routes'
 import marketingTemplatesRoutes from './modules/marketing/whatsapp/templates/templates.routes'
 import marketingCampaignsRoutes from './modules/marketing/whatsapp/campaigns/campaigns.routes'
-import marketingConfigRoutes    from './modules/marketing/whatsapp/config/config.routes'
-import marketingWebhooksRoutes  from './modules/marketing/whatsapp/webhooks/webhooks.routes'
+import marketingConfigRoutes from './modules/marketing/whatsapp/config/config.routes'
+import marketingWebhooksRoutes from './modules/marketing/whatsapp/webhooks/webhooks.routes'
 import profileRoutes from "./modules/profile/profile.routes";
 import inboxRouter from './modules/marketing/whatsapp/inbox/inbox.routes';
 import salonDashboardRoutes from "./modules/salon-dashboard/salon-dashboard.routes";
@@ -43,10 +43,14 @@ import blockedTimesRoutes from "./modules/blocked_times/blocked_times.routes";
 import analyticsRoutes from './modules/marketing/whatsapp/analytics/analytics.routes'
 import botRoutes from "./modules/bot/bot.routes";
 import waAutomationRoutes from "./modules/whatsapp-automation/whatsapp-automation.routes";
+import attendanceRoutes from "./modules/attendance/attendance.routes";
+import { deviceApiRouter, admsRouter } from "./modules/device/device.routes";
 import packageTemplatesRoutes from "./modules/package-templates/package-templates.routes";
 import { ensurePackageTemplateTables } from "./modules/package-templates/package-templates.repository";
 import clientMembershipsRoutes from "./modules/client-memberships/client-memberships.routes";
 import { ensureTable as ensureClientMembershipsTables } from "./modules/client-memberships/client-memberships.repository";
+import superAdminRoutes from "./modules/super-admin/super-admin.routes";
+import supportRoutes from "./modules/support/support.routes";
 import swaggerUi from "swagger-ui-express";
 import path from "path";
 
@@ -70,6 +74,11 @@ ensureClientMembershipsTables().catch(err =>
 app.use(helmet());
 
 app.use(corsMiddleware);
+
+// ADMS biometric machine protocol — mounted BEFORE body parsers so that
+// ZKTeco/ESSL devices (which send application/x-www-form-urlencoded) don't
+// have their raw text body consumed by the global urlencoded parser.
+app.use("/iclock", admsRouter);
 
 // Body parsing middleware
 app.use(express.json({ limit: "10mb" }));
@@ -107,8 +116,8 @@ app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/oauth", authRoutes);
 app.use("/api/v1/billing", billingRoutes);
 app.use("/api/v1/subscriptions", subscriptionsRoutes);
-app.use("/api/v1/webhooks",  marketingWebhooksRoutes);
-app.use("/api/v1/profile",       profileRoutes);
+app.use("/api/v1/webhooks", marketingWebhooksRoutes);
+app.use("/api/v1/profile", profileRoutes);
 
 // ── Subscription gate — applied after exempt routes are registered ─────────────
 // Every route registered BELOW this line requires an active/trialing subscription.
@@ -139,16 +148,21 @@ app.use('/api/v1/templates', marketingTemplatesRoutes)
 app.use('/api/v1/campaigns', marketingCampaignsRoutes)
 app.use('/api/v1/wa-config', marketingConfigRoutes)
 app.use('/api/v1/inbox', inboxRouter);
-app.use("/api/v1/dashboard",     salonDashboardRoutes);
-app.use("/api/v1/coupons",       couponsRoutes);
-app.use("/api/v1/payments",      paymentsRoutes);
+app.use("/api/v1/dashboard", salonDashboardRoutes);
+app.use("/api/v1/coupons", couponsRoutes);
+app.use("/api/v1/payments", paymentsRoutes);
 app.use("/api/v1/blocked-times", blockedTimesRoutes);
-app.use("/api/v1/settings",      settingsRoutes);
-app.use("/api/v1/bot",           botRoutes);
-app.use("/api/v1/reports",       reportsRoutes);
-app.use("/api/v1/wa-automation",      waAutomationRoutes);
-app.use("/api/v1/package-templates",    packageTemplatesRoutes);
-app.use("/api/v1/client-memberships",  clientMembershipsRoutes);
+app.use("/api/v1/settings", settingsRoutes);
+app.use("/api/v1/bot", botRoutes);
+app.use("/api/v1/reports", reportsRoutes);
+app.use("/api/v1/wa-automation", waAutomationRoutes);
+app.use("/api/v1/attendance", attendanceRoutes);
+app.use("/api/v1/devices", deviceApiRouter);
+app.use("/api/v1/wa-automation", waAutomationRoutes);
+app.use("/api/v1/package-templates",  packageTemplatesRoutes);
+app.use("/api/v1/client-memberships", clientMembershipsRoutes);
+app.use("/api/v1/super-admin",        superAdminRoutes);
+app.use("/api/v1/support",            supportRoutes);
 
 // Swagger Documentation
 const swaggerDocument = require(path.join(__dirname, "../docs/api/swagger-gen.json"));

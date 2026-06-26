@@ -124,8 +124,9 @@ export const paymentsService = {
             items,
           }, null);
 
-          // Mark the appointment itself as completed
-          await appointmentsRepository.updateStatus(data.appointment_id, 'completed');
+          // Note: appointment.status is managed by the checkout flow
+          // (POST /api/v1/appointments/:id/checkout) to avoid double-completion
+          // appointment.payment_status is updated above — that's all payments handles here
 
           // ── WhatsApp Automation: Invoice Generated ──────────────────────────
           // Fetch enriched sale with client_phone and salon_name
