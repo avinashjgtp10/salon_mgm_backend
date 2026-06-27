@@ -10,6 +10,12 @@ function resolveSalonId(req: AuthRequest): string {
   return req.user?.salonId ?? "";
 }
 
+function normalizeQueryParam(value: unknown, defaultValue = ""): string {
+  if (Array.isArray(value)) return String(value[0] ?? defaultValue);
+  if (typeof value === "string") return value;
+  return defaultValue;
+}
+
 export const reportsController = {
 
   // GET /api/v1/reports?search=&category=
@@ -27,7 +33,7 @@ export const reportsController = {
     } catch (err) { return next(err); }
   },
 
-  // GET /api/v1/reports/revenue?period=7d[&from=YYYY-MM-DD&to=YYYY-MM-DD]
+  // GET /api/v1/reports/revenue?period=today|7d|15d|30d|60d|90d|12m[&from=YYYY-MM-DD&to=YYYY-MM-DD]
   async getRevenue(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = resolveSalonId(req);
@@ -37,12 +43,114 @@ export const reportsController = {
     } catch (err) { return next(err); }
   },
 
+  // GET /api/v1/reports/revenue-by-service?period=today|7d|15d|30d|60d|90d|12m[&from=YYYY-MM-DD&to=YYYY-MM-DD]
+  async getRevenueByService(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = resolveSalonId(req);
+      const { period = "30d", from, to } = req.query as Record<string, string>;
+      const data = await reportsService.getRevenueByService(salonId, period, from, to);
+      return sendSuccess(res, 200, data, "Revenue by service report fetched");
+    } catch (err) { return next(err); }
+  },
+
+  // GET /api/v1/reports/revenue-by-service/:serviceId/detail?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD[&branchId=]
+  async getRevenueByServiceDetail(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = resolveSalonId(req);
+      const serviceId = normalizeQueryParam(req.params.serviceId);
+      const startDate = normalizeQueryParam(req.query.startDate, normalizeQueryParam(req.query.from));
+      const endDate = normalizeQueryParam(req.query.endDate, normalizeQueryParam(req.query.to));
+      const branchId = normalizeQueryParam(req.query.branchId);
+      const staffId = normalizeQueryParam(req.query.staffId);
+
+      const data = await reportsService.getRevenueByServiceDetail(
+        salonId,
+        serviceId,
+        startDate,
+        endDate,
+        branchId,
+        staffId,
+      );
+      return sendSuccess(res, 200, data, "Revenue by service detail fetched");
+    } catch (err) { return next(err); }
+  },
+
+  // GET /api/v1/reports/service-revenue-by-category?period=30d[&from=YYYY-MM-DD&to=YYYY-MM-DD][&startDate=YYYY-MM-DD&endDate=YYYY-MM-DD][&categoryId=][&branchId=][&staffId=][&search=]
+  async getRevenueByServiceCategory(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = resolveSalonId(req);
+      const period = normalizeQueryParam(req.query.period, "30d");
+      const from = normalizeQueryParam(req.query.startDate, normalizeQueryParam(req.query.from));
+      const to = normalizeQueryParam(req.query.endDate, normalizeQueryParam(req.query.to));
+      const categoryId = normalizeQueryParam(req.query.categoryId, normalizeQueryParam(req.query.category));
+      const branchId = normalizeQueryParam(req.query.branchId);
+      const staffId = normalizeQueryParam(req.query.staffId);
+      const search = normalizeQueryParam(req.query.searchCategoryName, normalizeQueryParam(req.query.search));
+      const sortBy = normalizeQueryParam(req.query.sortBy);
+
+      const data = await reportsService.getRevenueByServiceCategory(
+        salonId,
+        period,
+        from,
+        to,
+        categoryId,
+        branchId,
+        staffId,
+        search,
+        sortBy,
+      );
+      return sendSuccess(res, 200, data, "Revenue by service category report fetched");
+    } catch (err) { return next(err); }
+  },
+
+  // GET /api/v1/reports/service-revenue-by-category/:categoryId?period=30d[&from=YYYY-MM-DD&to=YYYY-MM-DD][&startDate=YYYY-MM-DD&endDate=YYYY-MM-DD][&branchId=][&staffId=]
+  async getRevenueByServiceCategoryDetail(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = resolveSalonId(req);
+      const categoryId = normalizeQueryParam(req.params.categoryId);
+      const period = normalizeQueryParam(req.query.period, "30d");
+      const from = normalizeQueryParam(req.query.startDate, normalizeQueryParam(req.query.from));
+      const to = normalizeQueryParam(req.query.endDate, normalizeQueryParam(req.query.to));
+      const branchId = normalizeQueryParam(req.query.branchId);
+      const staffId = normalizeQueryParam(req.query.staffId);
+      const data = await reportsService.getRevenueByServiceCategoryDetail(
+        salonId,
+        categoryId,
+        period,
+        from,
+        to,
+        branchId,
+        staffId,
+      );
+      return sendSuccess(res, 200, data, "Service revenue by category detail fetched");
+    } catch (err) { return next(err); }
+  },
+
   // GET /api/v1/reports/appointments?period=7d
   async getAppointments(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = resolveSalonId(req);
-      const { period = "30d", from, to } = req.query as Record<string, string>;
-      const data = await reportsService.getAppointments(salonId, period, from, to);
+      const period = normalizeQueryParam(req.query.period, "30d");
+      const from = normalizeQueryParam(req.query.from);
+      const to = normalizeQueryParam(req.query.to);
+      const staffId = normalizeQueryParam(req.query.staffId);
+      const serviceId = normalizeQueryParam(req.query.serviceId);
+      const branchId = normalizeQueryParam(req.query.branchId);
+      const search = normalizeQueryParam(req.query.search);
+      const sortBy = normalizeQueryParam(req.query.sortBy, "appointmentDate");
+      const sortOrder = normalizeQueryParam(req.query.sortOrder, "desc");
+
+      const data = await reportsService.getAppointments(salonId, {
+        period,
+        from,
+        to,
+        staffId,
+        serviceId,
+        branchId,
+        search,
+        sortBy,
+        sortOrder,
+      });
       return sendSuccess(res, 200, data, "Appointments report fetched");
     } catch (err) { return next(err); }
   },
@@ -74,6 +182,140 @@ export const reportsController = {
       const { period = "30d", from, to } = req.query as Record<string, string>;
       const data = await reportsService.getServices(salonId, period, from, to);
       return sendSuccess(res, 200, data, "Services report fetched");
+    } catch (err) { return next(err); }
+  },
+
+  // GET /api/v1/reports/employee-performance?from=YYYY-MM-DD&to=YYYY-MM-DD[&employeeId=][&role=][&department=][&search=][&sortBy=revenue|utilization|bookings][&sortOrder=asc|desc][&page=1][&pageSize=10]
+  async getEmployeePerformance(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = resolveSalonId(req);
+      const {
+        from,
+        to,
+        employeeId,
+        role,
+        department,
+        search,
+        sortBy,
+        sortOrder,
+        page,
+        pageSize,
+      } = req.query as Record<string, string>;
+
+      const data = await reportsService.getEmployeePerformance(salonId, {
+        from,
+        to,
+        employeeId,
+        role,
+        department,
+        search,
+        sortBy,
+        sortOrder,
+        page: page ? Number(page) : undefined,
+        pageSize: pageSize ? Number(pageSize) : undefined,
+      });
+
+      return sendSuccess(res, 200, data, "Employee performance report fetched");
+    } catch (err) { return next(err); }
+  },
+
+  // GET /api/v1/reports/staff-revenue-analytics?from=YYYY-MM-DD&to=YYYY-MM-DD[&staffId=][&role=][&viewType=day|week|month|year]
+  async getStaffRevenueAnalytics(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = resolveSalonId(req);
+      const from = normalizeQueryParam(req.query.from);
+      const to = normalizeQueryParam(req.query.to);
+      const staffId = normalizeQueryParam(req.query.staffId);
+      const role = normalizeQueryParam(req.query.role);
+      const viewType = normalizeQueryParam(req.query.viewType, "day");
+
+      const data = await reportsService.getStaffRevenueAnalytics(salonId, {
+        from,
+        to,
+        staffId,
+        role,
+        viewType,
+      });
+
+      return sendSuccess(res, 200, data, "Staff revenue analytics fetched");
+    } catch (err) { return next(err); }
+  },
+
+  // GET /api/v1/reports/staff-product-sales?from=YYYY-MM-DD&to=YYYY-MM-DD[&staffId=][&role=][&productCategory=][&productName=][&search=][&sortBy=highest_revenue|lowest_revenue|highest_quantity_sold|lowest_quantity_sold|highest_avg_product_value]
+  async getStaffProductSales(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = resolveSalonId(req);
+      const from = normalizeQueryParam(req.query.from);
+      const to = normalizeQueryParam(req.query.to);
+      const staffId = normalizeQueryParam(req.query.staffId);
+      const role = normalizeQueryParam(req.query.role);
+      const productCategory = normalizeQueryParam(req.query.productCategory);
+      const productName = normalizeQueryParam(req.query.productName);
+      const search = normalizeQueryParam(req.query.search);
+      const sortBy = normalizeQueryParam(req.query.sortBy, "highest_revenue");
+
+      const data = await reportsService.getStaffProductSales(salonId, {
+        from,
+        to,
+        staffId,
+        role,
+        productCategory,
+        productName,
+        search,
+        sortBy,
+      });
+
+      return sendSuccess(res, 200, data, "Staff product sales report fetched");
+    } catch (err) { return next(err); }
+  },
+
+  // GET /api/v1/reports/staff-service-sales?from=YYYY-MM-DD&to=YYYY-MM-DD[&staffId=][&role=][&serviceCategory=][&serviceName=][&sortBy=highest_revenue|lowest_revenue|most_services_completed|least_services_completed|most_customers_served]
+  async getStaffServiceSales(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = resolveSalonId(req);
+      const from = normalizeQueryParam(req.query.from);
+      const to = normalizeQueryParam(req.query.to);
+      const staffId = normalizeQueryParam(req.query.staffId);
+      const role = normalizeQueryParam(req.query.role);
+      const serviceCategory = normalizeQueryParam(req.query.serviceCategory);
+      const serviceName = normalizeQueryParam(req.query.serviceName);
+      const sortBy = normalizeQueryParam(req.query.sortBy, "highest_revenue");
+
+      const data = await reportsService.getStaffServiceSales(salonId, {
+        from,
+        to,
+        staffId,
+        role,
+        serviceCategory,
+        serviceName,
+        sortBy,
+      });
+
+      return sendSuccess(res, 200, data, "Staff service sales report fetched");
+    } catch (err) { return next(err); }
+  },
+
+  // GET /api/v1/reports/sales-dashboard?from=YYYY-MM-DD&to=YYYY-MM-DD[&employeeId=][&employeeType=][&activity=][&branchId=][&groupBy=daily|weekly|monthly|yearly][&search=][&sortBy=revenue|servicesSold|productRevenue|averageTicket][&sortOrder=asc|desc][&page=1][&pageSize=10][&sections=filters,kpiCards,...]
+  async getSalesDashboard(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = resolveSalonId(req);
+      const data = await reportsService.getSalesDashboard(salonId, {
+        from: normalizeQueryParam(req.query.from),
+        to: normalizeQueryParam(req.query.to),
+        employeeId: normalizeQueryParam(req.query.employeeId),
+        employeeType: normalizeQueryParam(req.query.employeeType),
+        activity: normalizeQueryParam(req.query.activity, "all"),
+        branchId: normalizeQueryParam(req.query.branchId),
+        groupBy: normalizeQueryParam(req.query.groupBy, "daily"),
+        search: normalizeQueryParam(req.query.search),
+        sortBy: normalizeQueryParam(req.query.sortBy, "revenue"),
+        sortOrder: normalizeQueryParam(req.query.sortOrder, "desc"),
+        page: Number(normalizeQueryParam(req.query.page, "1")),
+        pageSize: Number(normalizeQueryParam(req.query.pageSize, "10")),
+        sections: normalizeQueryParam(req.query.sections),
+      });
+
+      return sendSuccess(res, 200, data, "Sales dashboard fetched");
     } catch (err) { return next(err); }
   },
 

@@ -1,19 +1,286 @@
 import { AppError } from "../../middleware/error.middleware";
+import { normalizeEmployeePerformanceQuery } from "./reports.employee.helpers";
 import { reportsRepository } from "./reports.repository";
-import type { ReportPeriod, ReportTab } from "./reports.types";
+import { normalizeRevenuePeriod, resolveRevenueDateRange } from "./reports.revenue.helpers";
+import type {
+  AppointmentAnalyticsQuery,
+  EmployeePerformanceQuery,
+  ReportPeriod,
+  ReportTab,
+  SalesDashboardEmployeeSortBy,
+  SalesDashboardQuery,
+  SalesDashboardResponse,
+  SalesDashboardSection,
+  SalesDashboardSortOrder,
+  SalesDashboardTrendGroup,
+  StaffProductSalesQuery,
+  StaffProductSalesSortBy,
+  StaffServiceSalesQuery,
+  StaffServiceSalesSortBy,
+  StaffRevenueAnalyticsQuery,
+  StaffRevenueAnalyticsViewType,
+} from "./reports.types";
 
-const VALID_PERIODS: ReportPeriod[] = ["7d", "30d", "90d", "12m", "custom"];
+const VALID_PERIODS: ReportPeriod[] = ["today", "7d", "15d", "30d", "60d", "90d", "12m", "custom"];
 const VALID_TABS:    ReportTab[]    = ["revenue", "appointments", "clients", "staff", "services"];
+const VALID_STAFF_REVENUE_VIEW_TYPES: StaffRevenueAnalyticsViewType[] = ["day", "week", "month", "year"];
+const VALID_STAFF_PRODUCT_SALES_SORTS: StaffProductSalesSortBy[] = [
+  "highest_revenue",
+  "lowest_revenue",
+  "highest_quantity_sold",
+  "lowest_quantity_sold",
+  "highest_avg_product_value",
+];
+const VALID_STAFF_SERVICE_SALES_SORTS: StaffServiceSalesSortBy[] = [
+  "highest_revenue",
+  "lowest_revenue",
+  "most_services_completed",
+  "least_services_completed",
+  "most_customers_served",
+];
+const VALID_SALES_DASHBOARD_GROUPS: SalesDashboardTrendGroup[] = ["daily", "weekly", "monthly", "yearly"];
+const VALID_SALES_DASHBOARD_SORTS: SalesDashboardEmployeeSortBy[] = [
+  "revenue",
+  "servicesSold",
+  "productRevenue",
+  "averageTicket",
+];
+const VALID_SALES_DASHBOARD_SORT_ORDERS: SalesDashboardSortOrder[] = ["asc", "desc"];
+const VALID_SALES_DASHBOARD_SECTIONS: SalesDashboardSection[] = [
+  "filters",
+  "kpiCards",
+  "revenueSources",
+  "paymentCollection",
+  "charts",
+  "employeeSalesTable",
+  "employeeDrillDowns",
+];
 
 function assertSalonId(salonId: string) {
   if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR");
 }
 
 function assertPeriod(period: string, from?: string, to?: string): ReportPeriod {
-  if (period === "custom" && from && to) return "custom";
-  if (!VALID_PERIODS.includes(period as ReportPeriod))
+  if (from || to) {
+    resolveRevenueDateRange(period, from, to);
+    return "custom";
+  }
+
+  const normalized = normalizeRevenuePeriod(period);
+
+  if (normalized === "custom") {
+    throw new AppError(400, "custom period requires both from and to", "VALIDATION_ERROR");
+  }
+
+  if (!VALID_PERIODS.includes(normalized))
     throw new AppError(400, `period must be one of: ${VALID_PERIODS.join(", ")}`, "VALIDATION_ERROR");
-  return period as ReportPeriod;
+
+  return normalized;
+}
+
+function normalizeStaffRevenueAnalyticsQuery(query: StaffRevenueAnalyticsQuery) {
+  const from = String(query.from ?? "").trim();
+  const to = String(query.to ?? "").trim();
+  const staffId = String(query.staffId ?? "").trim() || undefined;
+  const role = String(query.role ?? "").trim() || undefined;
+  const viewType = String(query.viewType ?? "day").trim().toLowerCase() as StaffRevenueAnalyticsViewType;
+
+  if (!from || !to) {
+    throw new AppError(400, "from and to are required", "VALIDATION_ERROR");
+  }
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+    throw new AppError(400, "from and to must be valid dates in YYYY-MM-DD format", "VALIDATION_ERROR");
+  }
+
+  if (new Date(`${from}T00:00:00Z`).getTime() > new Date(`${to}T00:00:00Z`).getTime()) {
+    throw new AppError(400, "from cannot be greater than to", "VALIDATION_ERROR");
+  }
+
+  if (!VALID_STAFF_REVENUE_VIEW_TYPES.includes(viewType)) {
+    throw new AppError(400, `viewType must be one of: ${VALID_STAFF_REVENUE_VIEW_TYPES.join(", ")}`, "VALIDATION_ERROR");
+  }
+
+  return { from, to, staffId, role, viewType };
+}
+
+function normalizeStaffProductSalesQuery(query: StaffProductSalesQuery) {
+  const from = String(query.from ?? "").trim();
+  const to = String(query.to ?? "").trim();
+  const staffId = String(query.staffId ?? "").trim() || undefined;
+  const role = String(query.role ?? "").trim() || undefined;
+  const productCategory = String(query.productCategory ?? "").trim() || undefined;
+  const productName = String(query.productName ?? "").trim() || undefined;
+  const search = String(query.search ?? "").trim() || undefined;
+  const sortBy = String(query.sortBy ?? "highest_revenue").trim().toLowerCase() as StaffProductSalesSortBy;
+
+  if (!from || !to) {
+    throw new AppError(400, "from and to are required", "VALIDATION_ERROR");
+  }
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+    throw new AppError(400, "from and to must be valid dates in YYYY-MM-DD format", "VALIDATION_ERROR");
+  }
+
+  if (new Date(`${from}T00:00:00Z`).getTime() > new Date(`${to}T00:00:00Z`).getTime()) {
+    throw new AppError(400, "from cannot be greater than to", "VALIDATION_ERROR");
+  }
+
+  if (!VALID_STAFF_PRODUCT_SALES_SORTS.includes(sortBy)) {
+    throw new AppError(400, `sortBy must be one of: ${VALID_STAFF_PRODUCT_SALES_SORTS.join(", ")}`, "VALIDATION_ERROR");
+  }
+
+  return { from, to, staffId, role, productCategory, productName, search, sortBy };
+}
+
+function normalizeStaffServiceSalesQuery(query: StaffServiceSalesQuery) {
+  const from = String(query.from ?? "").trim();
+  const to = String(query.to ?? "").trim();
+  const staffId = String(query.staffId ?? "").trim() || undefined;
+  const role = String(query.role ?? "").trim() || undefined;
+  const serviceCategory = String(query.serviceCategory ?? "").trim() || undefined;
+  const serviceName = String(query.serviceName ?? "").trim() || undefined;
+  const sortBy = String(query.sortBy ?? "highest_revenue").trim().toLowerCase() as StaffServiceSalesSortBy;
+
+  if (!from || !to) {
+    throw new AppError(400, "from and to are required", "VALIDATION_ERROR");
+  }
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+    throw new AppError(400, "from and to must be valid dates in YYYY-MM-DD format", "VALIDATION_ERROR");
+  }
+
+  if (new Date(`${from}T00:00:00Z`).getTime() > new Date(`${to}T00:00:00Z`).getTime()) {
+    throw new AppError(400, "from cannot be greater than to", "VALIDATION_ERROR");
+  }
+
+  if (!VALID_STAFF_SERVICE_SALES_SORTS.includes(sortBy)) {
+    throw new AppError(400, `sortBy must be one of: ${VALID_STAFF_SERVICE_SALES_SORTS.join(", ")}`, "VALIDATION_ERROR");
+  }
+
+  return { from, to, staffId, role, serviceCategory, serviceName, sortBy };
+}
+
+function normalizeAppointmentAnalyticsQuery(query: AppointmentAnalyticsQuery) {
+  const period = String(query.period ?? "30d").trim();
+  const from = String(query.from ?? "").trim() || undefined;
+  const to = String(query.to ?? "").trim() || undefined;
+  const staffId = String(query.staffId ?? "").trim() || undefined;
+  const serviceId = String(query.serviceId ?? "").trim() || undefined;
+  const branchId = String(query.branchId ?? "").trim() || undefined;
+  const search = String(query.search ?? "").trim() || undefined;
+  const sortBy = String(query.sortBy ?? "appointmentDate").trim();
+  const sortOrder = String(query.sortOrder ?? "desc").trim().toLowerCase();
+  const normalizedPeriod = assertPeriod(period, from, to);
+
+  if (!["appointmentDate", "amount", "status"].includes(sortBy)) {
+    throw new AppError(400, "sortBy must be one of: appointmentDate, amount, status", "VALIDATION_ERROR");
+  }
+
+  if (!["asc", "desc"].includes(sortOrder)) {
+    throw new AppError(400, "sortOrder must be asc or desc", "VALIDATION_ERROR");
+  }
+
+  return {
+    period: normalizedPeriod,
+    from,
+    to,
+    staffId,
+    serviceId,
+    branchId,
+    search,
+    sortBy: sortBy as "appointmentDate" | "amount" | "status",
+    sortOrder: sortOrder as "asc" | "desc",
+  };
+}
+
+function normalizeSalesDashboardQuery(query: SalesDashboardQuery) {
+  const today = new Date().toISOString().slice(0, 10);
+  const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1)
+    .toISOString()
+    .slice(0, 10);
+
+  const from = String(query.from ?? monthStart).trim() || monthStart;
+  const to = String(query.to ?? today).trim() || today;
+  const employeeId = String(query.employeeId ?? "").trim() || undefined;
+  const employeeType = String(query.employeeType ?? "").trim() || undefined;
+  const activity = String(query.activity ?? "all").trim().toLowerCase() || "all";
+  const branchId = String(query.branchId ?? "").trim() || undefined;
+  const groupBy = String(query.groupBy ?? "daily").trim().toLowerCase() as SalesDashboardTrendGroup;
+  const search = String(query.search ?? "").trim();
+  const sortBy = String(query.sortBy ?? "revenue").trim() as SalesDashboardEmployeeSortBy;
+  const sortOrder = String(query.sortOrder ?? "desc").trim().toLowerCase() as SalesDashboardSortOrder;
+  const page = Math.max(1, Number(query.page ?? 1) || 1);
+  const pageSize = Math.min(100, Math.max(1, Number(query.pageSize ?? 10) || 10));
+  const requestedSections = String(query.sections ?? "").trim();
+  const sections = requestedSections
+    ? Array.from(new Set(
+      requestedSections
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    )) as SalesDashboardSection[]
+    : VALID_SALES_DASHBOARD_SECTIONS;
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+    throw new AppError(400, "from and to must be valid dates in YYYY-MM-DD format", "VALIDATION_ERROR");
+  }
+
+  if (new Date(`${from}T00:00:00Z`).getTime() > new Date(`${to}T00:00:00Z`).getTime()) {
+    throw new AppError(400, "from cannot be greater than to", "VALIDATION_ERROR");
+  }
+
+  if (!VALID_SALES_DASHBOARD_GROUPS.includes(groupBy)) {
+    throw new AppError(
+      400,
+      `groupBy must be one of: ${VALID_SALES_DASHBOARD_GROUPS.join(", ")}`,
+      "VALIDATION_ERROR",
+    );
+  }
+
+  if (!VALID_SALES_DASHBOARD_SORTS.includes(sortBy)) {
+    throw new AppError(
+      400,
+      `sortBy must be one of: ${VALID_SALES_DASHBOARD_SORTS.join(", ")}`,
+      "VALIDATION_ERROR",
+    );
+  }
+
+  if (!VALID_SALES_DASHBOARD_SORT_ORDERS.includes(sortOrder)) {
+    throw new AppError(400, "sortOrder must be asc or desc", "VALIDATION_ERROR");
+  }
+
+  if (sections.some((section) => !VALID_SALES_DASHBOARD_SECTIONS.includes(section))) {
+    throw new AppError(
+      400,
+      `sections must be comma separated values from: ${VALID_SALES_DASHBOARD_SECTIONS.join(", ")}`,
+      "VALIDATION_ERROR",
+    );
+  }
+
+  if (!["all", "service", "product", "package", "membership", "gift_card"].includes(activity)) {
+    throw new AppError(
+      400,
+      "activity must be one of: all, service, product, package, membership, gift_card",
+      "VALIDATION_ERROR",
+    );
+  }
+
+  return {
+    from,
+    to,
+    employeeId,
+    employeeType,
+    activity,
+    branchId,
+    groupBy,
+    search,
+    sortBy,
+    sortOrder,
+    page,
+    pageSize,
+    sections,
+  };
 }
 
 // ── Static reports dashboard configuration ────────────────────────────────────
@@ -410,9 +677,87 @@ export const reportsService = {
     return reportsRepository.getRevenue(salonId, assertPeriod(period, from, to), from, to);
   },
 
-  async getAppointments(salonId: string, period: string, from?: string, to?: string) {
+  async getRevenueByService(salonId: string, period: string, from?: string, to?: string) {
     assertSalonId(salonId);
-    return reportsRepository.getAppointments(salonId, assertPeriod(period, from, to), from, to);
+    return reportsRepository.getRevenueByService(salonId, assertPeriod(period, from, to), from, to);
+  },
+
+  async getRevenueByServiceDetail(
+    salonId: string,
+    serviceId: string,
+    startDate: string,
+    endDate: string,
+    branchId?: string,
+    staffId?: string,
+  ) {
+    assertSalonId(salonId);
+    if (!serviceId) throw new AppError(400, "serviceId is required", "VALIDATION_ERROR");
+    if (!startDate || !endDate) {
+      throw new AppError(400, "startDate and endDate are required", "VALIDATION_ERROR");
+    }
+
+    resolveRevenueDateRange("custom", startDate, endDate);
+
+    return reportsRepository.getRevenueByServiceDetail(
+      salonId,
+      serviceId,
+      startDate,
+      endDate,
+      branchId,
+      staffId,
+    );
+  },
+
+  async getRevenueByServiceCategory(
+    salonId: string,
+    period: string,
+    from?: string,
+    to?: string,
+    categoryId?: string,
+    branchId?: string,
+    staffId?: string,
+    search?: string,
+    sortBy?: string,
+  ) {
+    assertSalonId(salonId);
+    return reportsRepository.getRevenueByServiceCategory(
+      salonId,
+      assertPeriod(period, from, to),
+      from,
+      to,
+      categoryId,
+      branchId,
+      staffId,
+      search,
+      sortBy,
+    );
+  },
+
+  async getRevenueByServiceCategoryDetail(
+    salonId: string,
+    categoryId: string,
+    period: string,
+    from?: string,
+    to?: string,
+    branchId?: string,
+    staffId?: string,
+  ) {
+    assertSalonId(salonId);
+    if (!categoryId) throw new AppError(400, "categoryId is required", "VALIDATION_ERROR");
+    return reportsRepository.getRevenueByServiceCategoryDetail(
+      salonId,
+      categoryId,
+      assertPeriod(period, from, to),
+      from,
+      to,
+      branchId,
+      staffId,
+    );
+  },
+
+  async getAppointments(salonId: string, query: AppointmentAnalyticsQuery) {
+    assertSalonId(salonId);
+    return reportsRepository.getAppointments(salonId, normalizeAppointmentAnalyticsQuery(query));
   },
 
   async getClients(salonId: string, period: string, from?: string, to?: string) {
@@ -428,6 +773,46 @@ export const reportsService = {
   async getServices(salonId: string, period: string, from?: string, to?: string) {
     assertSalonId(salonId);
     return reportsRepository.getServices(salonId, assertPeriod(period, from, to), from, to);
+  },
+
+  async getEmployeePerformance(salonId: string, query: EmployeePerformanceQuery) {
+    assertSalonId(salonId);
+    return reportsRepository.getEmployeePerformance(
+      salonId,
+      normalizeEmployeePerformanceQuery(query),
+    );
+  },
+
+  async getStaffRevenueAnalytics(salonId: string, query: StaffRevenueAnalyticsQuery) {
+    assertSalonId(salonId);
+    return reportsRepository.getStaffRevenueAnalytics(
+      salonId,
+      normalizeStaffRevenueAnalyticsQuery(query),
+    );
+  },
+
+  async getStaffProductSales(salonId: string, query: StaffProductSalesQuery) {
+    assertSalonId(salonId);
+    return reportsRepository.getStaffProductSales(
+      salonId,
+      normalizeStaffProductSalesQuery(query),
+    );
+  },
+
+  async getStaffServiceSales(salonId: string, query: StaffServiceSalesQuery) {
+    assertSalonId(salonId);
+    return reportsRepository.getStaffServiceSales(
+      salonId,
+      normalizeStaffServiceSalesQuery(query),
+    );
+  },
+
+  async getSalesDashboard(salonId: string, query: SalesDashboardQuery): Promise<SalesDashboardResponse> {
+    assertSalonId(salonId);
+    return reportsRepository.getSalesDashboard(
+      salonId,
+      normalizeSalesDashboardQuery(query),
+    );
   },
 
   async exportReport(
