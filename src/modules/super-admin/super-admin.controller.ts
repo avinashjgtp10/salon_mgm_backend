@@ -141,8 +141,8 @@ export const superAdminController = {
 
   async createUser(req: Request, res: Response, next: NextFunction) {
     try {
-      const { first_name, last_name, email, password, phone, role } = req.body;
-      const data = await superAdminService.createUser({ first_name, last_name, email, password, phone, role });
+      const { first_name, last_name, email, password, phone, role, business_name, address } = req.body;
+      const data = await superAdminService.createUser({ first_name, last_name, email, password, phone, role, business_name, address });
       return res.status(201).json({ success: true, data });
     } catch (err) { return next(err); }
   },

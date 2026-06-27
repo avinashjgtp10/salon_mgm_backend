@@ -11,6 +11,8 @@ import { staffRepository } from "../staff/staff.repository";
 import { servicesRepository } from "../services/services.repository";
 import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
 import { notificationsService } from "../notifications/notifications.service";
+import { membershipsRepository } from "../memberships/memberships.repository";
+import { clientMembershipsService } from "../client-memberships/client-memberships.service";
 
 export const salesService = {
 
@@ -176,6 +178,37 @@ export const salesService = {
                 referenceId:   sale.id,
                 referenceType: "invoice",
             }).catch(() => {});
+        }
+
+        // ── Auto-create client_memberships for membership items in this sale ────
+        // Handles the QuickSale flow where there is no appointment
+        if (sale.client_id) {
+            const saleItems = await salesRepository.findItemsBySaleId(sale.id);
+            const membershipItems = saleItems.filter(
+                (i) => i.item_type === "membership" && i.item_id,
+            );
+            for (const item of membershipItems) {
+                const membershipId = item.item_id!;
+                (async () => {
+                    try {
+                        const mem = await membershipsRepository.findById(membershipId, sale.salon_id);
+                        if (!mem) return;
+                        const totalSessions = mem.sessionType === "limited" ? (mem.numberOfSessions ?? 0) : 0;
+                        const pricePaid = parseFloat(item.unit_price) * (item.quantity ?? 1);
+                        await clientMembershipsService.autoCreateFromPayment(
+                            sale.salon_id,
+                            sale.client_id!,
+                            membershipId,
+                            item.name,
+                            totalSessions,
+                            pricePaid,
+                            mem.colour,
+                        );
+                    } catch (err: any) {
+                        logger.warn("[sales/checkout] membership auto-create failed:", err?.message ?? err);
+                    }
+                })();
+            }
         }
 
         return sale;
