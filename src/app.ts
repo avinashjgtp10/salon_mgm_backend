@@ -49,6 +49,7 @@ import packageTemplatesRoutes from "./modules/package-templates/package-template
 import { ensurePackageTemplateTables } from "./modules/package-templates/package-templates.repository";
 import superAdminRoutes from "./modules/super-admin/super-admin.routes";
 import supportRoutes from "./modules/support/support.routes";
+import notificationsRoutes from "./modules/notifications/notifications.routes";
 import swaggerUi from "swagger-ui-express";
 import path from "path";
 
@@ -103,6 +104,53 @@ app.get("/health", (_req, res) => {
   });
 });
 
+// ── Test email endpoint (development only) ─────────────────────────────────────
+app.get("/api/v1/test-email", async (_req, res) => {
+  const smtpInfo = {
+    host: config.smtp.host,
+    port: config.smtp.port,
+    user: config.smtp.user,
+    from: config.smtp.from,
+    passLen: config.smtp.pass?.length ?? 0,
+  };
+  logger.info("[test-email] SMTP config:", smtpInfo);
+
+  try {
+    const { emailService } = await import("./modules/utils/email.service");
+
+    // Step 1: verify SMTP connection
+    try {
+      await emailService.verifyConnection();
+      logger.info("[test-email] SMTP connection verified OK");
+    } catch (verifyErr: any) {
+      logger.error("[test-email] SMTP verify FAILED:", verifyErr?.message ?? verifyErr);
+      return res.status(500).json({
+        success: false,
+        step: "smtp_verify",
+        error: verifyErr?.message ?? "SMTP connection failed",
+        smtpInfo,
+      });
+    }
+
+    // Step 2: send test email — use query param ?to=owner@email.com or defaults to smtp user for diagnostics only
+    const testTo = ((_req as any).query?.to as string) || config.smtp.user;
+    await emailService.sendNewAppointmentEmail({
+      to:            testTo,
+      salonName:     "Test Salon",
+      clientName:    "Test Client",
+      services:      "Haircut, Styling",
+      date:          new Date().toLocaleDateString("en-IN"),
+      time:          new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }),
+      appointmentId: "TEST-001",
+    });
+    logger.info("[test-email] Test email sent successfully to", testTo);
+    res.json({ success: true, message: `Test email sent to ${testTo}`, smtpInfo });
+  } catch (err: any) {
+    logger.error("[test-email] sendMail FAILED:", err?.message ?? err);
+    res.status(500).json({ success: false, step: "send_mail", error: err?.message ?? "Unknown error", smtpInfo });
+  }
+});
+
 // ✅ API ROUTES (MUST be before 404)
 app.use("/api/v1/auth", authRoutes);
 // Alias: Google OAuth console uses /api/v1/oauth/google/callback as redirect URI
@@ -155,6 +203,7 @@ app.use("/api/v1/wa-automation",      waAutomationRoutes);
 app.use("/api/v1/package-templates", packageTemplatesRoutes);
 app.use("/api/v1/super-admin",       superAdminRoutes);
 app.use("/api/v1/support",           supportRoutes);
+app.use("/api/v1/notifications",     notificationsRoutes);
 
 // Swagger Documentation
 const swaggerDocument = require(path.join(__dirname, "../docs/api/swagger-gen.json"));

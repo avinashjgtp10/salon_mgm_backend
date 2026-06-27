@@ -169,6 +169,8 @@ export const paymentsService = {
       }
     }
 
+    // Payment email is handled by appointments.service checkout — skip here to avoid duplicates
+
     return payment;
   },
 

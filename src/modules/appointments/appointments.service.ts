@@ -9,6 +9,10 @@ import { salesService } from "../sales/sales.service";
 import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
 import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
 import { attendanceService } from "../attendance/attendance.service";
+import { notificationsService } from "../notifications/notifications.service";
+import { emailService } from "../utils/email.service";
+import { canSendEmail } from "../utils/notif-prefs";
+import { salonsRepository } from "../salons/salons.repository";
 import {
     Appointment,
     CreateAppointmentBody,
@@ -83,6 +87,14 @@ export const appointmentsService = {
         const appointment = await appointmentsRepository.create(body, requesterUserId);
         logger.info("appointmentsService.create success", { appointmentId: appointment.id });
 
+        // Fire notification (fire-and-forget)
+        notificationsService.create({
+            salon_id: appointment.salon_id,
+            type:     "appointment",
+            title:    "New Appointment Booked",
+            body:     `${appointment.client_name ?? "Walk-in"} — ${formatDate(appointment.scheduled_at)} at ${formatTime(appointment.scheduled_at)}`,
+        }).catch(() => {});
+
         // ── WhatsApp Automation: Appointment Confirmation ─────────────────────
         // Dedup check — NEVER send confirmation twice for the same appointment
         if (appointment.client_id) {
@@ -116,6 +128,32 @@ export const appointmentsService = {
                 // Never block core flow
             }
         }
+
+        // ── Email: New Appointment (to salon owner) ───────────────────────────
+        ;(async () => {
+            try {
+                console.log("[EMAIL DEBUG] newAppointment: starting...");
+                const full = await appointmentsRepository.findById(appointment.id);
+                console.log("[EMAIL DEBUG] newAppointment: full=", full ? "found" : "NULL");
+                if (!full) { console.log("[EMAIL DEBUG] newAppointment: findById returned null"); return; }
+                const ownerEmail = await salonsRepository.findOwnerEmailById(full.salon_id);
+                console.log("[EMAIL DEBUG] newAppointment: ownerEmail=", ownerEmail);
+                if (!ownerEmail) { console.log("[EMAIL DEBUG] newAppointment: no owner email, skipping"); return; }
+                const allowed = await canSendEmail(full.salon_id, "newAppointment");
+                console.log("[EMAIL DEBUG] newAppointment: allowed=", allowed);
+                if (!allowed) { console.log("[EMAIL DEBUG] newAppointment: skipped by preference"); return; }
+                await emailService.sendNewAppointmentEmail({
+                    to:            ownerEmail,
+                    salonName:     (full as any).salon_name  ?? "your salon",
+                    clientName:    full.client_name          ?? "Walk-in",
+                    services:      full.services?.map((s: any) => s.name).join(", ") ?? "Service",
+                    date:          formatDate(full.scheduled_at),
+                    time:          formatTime(full.scheduled_at),
+                    appointmentId: full.id,
+                });
+                console.log("[EMAIL DEBUG] newAppointment: SENT to", ownerEmail);
+            } catch (err: any) { console.error("[EMAIL DEBUG] newAppointment FAILED:", err?.message, err); }
+        })();
 
         return appointment;
     },
@@ -241,6 +279,14 @@ export const appointmentsService = {
 
         const cancelled = await appointmentsRepository.updateStatus(params.appointmentId, "cancelled");
 
+        // ── Push Notification: Appointment Cancelled (to salon owner) ─────────
+        notificationsService.create({
+            salon_id: existing.salon_id,
+            type:     "appointment",
+            title:    "Appointment Cancelled",
+            body:     `${existing.client_name ?? "Walk-in"} — ${formatDate(existing.scheduled_at)} at ${formatTime(existing.scheduled_at)}`,
+        }).catch(() => {});
+
         // ── WhatsApp Automation: Appointment Cancelled ────────────────────────
         if (existing.client_id && (existing as any).client_phone) {
             whatsappAutomationService.trigger({
@@ -259,6 +305,45 @@ export const appointmentsService = {
                 referenceType: "appointment",
             }).catch(() => {});
         }
+
+        // ── Email: Appointment Cancelled (to salon owner) ────────────────────
+        ;(async () => {
+            try {
+                const ownerEmail = await salonsRepository.findOwnerEmailById(existing.salon_id);
+                if (!ownerEmail) { logger.warn("[email] appointmentCancelled (owner): no owner email, skipping"); return; }
+                logger.info(`[email] appointmentCancelled (owner) → to=${ownerEmail}`);
+                const allowed = await canSendEmail(existing.salon_id, "appointmentCancelled");
+                if (!allowed) { logger.info("[email] appointmentCancelled (owner): skipped (preference off)"); return; }
+                await emailService.sendAppointmentCancelledOwnerEmail({
+                    to:            ownerEmail,
+                    salonName:     (existing as any).salon_name ?? "your salon",
+                    clientName:    existing.client_name         ?? "Walk-in",
+                    date:          formatDate(existing.scheduled_at),
+                    time:          formatTime(existing.scheduled_at),
+                    appointmentId: existing.id,
+                });
+                logger.info(`[email] appointmentCancelled (owner) sent to ${ownerEmail}`);
+            } catch (err: any) { logger.error("[email] appointmentCancelled (owner) failed:", err?.message ?? err); }
+        })();
+
+        // ── Email: Appointment Cancelled (to client) ──────────────────────────
+        ;(async () => {
+            try {
+                const clientEmail = (existing as any).client_email;
+                if (!clientEmail) { logger.info("[email] appointmentCancelled: no client email, skipping"); return; }
+                logger.info(`[email] appointmentCancelled → to=${clientEmail}`);
+                const allowed = await canSendEmail(existing.salon_id, "appointmentCancelled");
+                if (!allowed) { logger.info("[email] appointmentCancelled: skipped (preference off)"); return; }
+                await emailService.sendAppointmentCancelledEmail({
+                    to:         clientEmail,
+                    clientName: existing.client_name          ?? "Valued Customer",
+                    salonName:  (existing as any).salon_name  ?? "our salon",
+                    date:       formatDate(existing.scheduled_at),
+                    time:       formatTime(existing.scheduled_at),
+                });
+                logger.info(`[email] appointmentCancelled sent to ${clientEmail}`);
+            } catch (err: any) { logger.error("[email] appointmentCancelled failed:", err?.message ?? err); }
+        })();
 
         return cancelled;
     },
@@ -336,6 +421,50 @@ export const appointmentsService = {
 
             // Mark appointment as completed
             const completedAppt = await appointmentsRepository.updateStatus(appointmentId, "completed");
+
+            // ── Email: Appointment Completed receipt (to client) ──────────────
+            ;(async () => {
+                try {
+                    console.log("[EMAIL DEBUG] appointmentCompleted (preexisting): starting...");
+                    const clientEmail = (existing as any).client_email;
+                    console.log("[EMAIL DEBUG] appointmentCompleted: clientEmail=", clientEmail);
+                    if (!clientEmail) { console.log("[EMAIL DEBUG] appointmentCompleted: no client email, skipping"); return; }
+                    const allowed = await canSendEmail(existing.salon_id, "appointmentCompleted");
+                    console.log("[EMAIL DEBUG] appointmentCompleted: allowed=", allowed);
+                    if (!allowed) { console.log("[EMAIL DEBUG] appointmentCompleted: skipped by preference"); return; }
+                    await emailService.sendAppointmentCompletedEmail({
+                        to:         clientEmail,
+                        clientName: existing.client_name         ?? "Valued Customer",
+                        salonName:  (existing as any).salon_name ?? "our salon",
+                        services:   existing.services?.map((s: any) => s.name).join(", ") ?? "Service",
+                        amount:     String(preExistingSale.total_amount ?? "0"),
+                    });
+                    console.log("[EMAIL DEBUG] appointmentCompleted: SENT to", clientEmail);
+                } catch (err: any) { console.error("[EMAIL DEBUG] appointmentCompleted FAILED:", err?.message, err); }
+            })();
+
+            // ── Email: New Payment (to salon owner) ───────────────────────────
+            ;(async () => {
+                try {
+                    console.log("[EMAIL DEBUG] newPayment (preexisting): starting...");
+                    const ownerEmail = await salonsRepository.findOwnerEmailById(existing.salon_id);
+                    console.log("[EMAIL DEBUG] newPayment (preexisting): ownerEmail=", ownerEmail);
+                    if (!ownerEmail) { console.log("[EMAIL DEBUG] newPayment: no owner email, skipping"); return; }
+                    const allowed = await canSendEmail(existing.salon_id, "newPayment");
+                    console.log("[EMAIL DEBUG] newPayment (preexisting): allowed=", allowed);
+                    if (!allowed) { console.log("[EMAIL DEBUG] newPayment: skipped by preference"); return; }
+                    await emailService.sendNewPaymentEmail({
+                        to:            ownerEmail,
+                        salonName:     (existing as any).salon_name ?? "your salon",
+                        clientName:    existing.client_name         ?? "Walk-in",
+                        amount:        String(preExistingSale.total_amount ?? "0"),
+                        paymentMethod: params.payment_method        ?? "N/A",
+                        invoiceId:     preExistingSale.id.slice(0, 8).toUpperCase(),
+                    });
+                    console.log("[EMAIL DEBUG] newPayment (preexisting): SENT to", ownerEmail);
+                } catch (err: any) { console.error("[EMAIL DEBUG] newPayment (preexisting) FAILED:", err?.message, err); }
+            })();
+
             return { appointment: completedAppt, saleId: preExistingSale.id };
         }
 
@@ -428,6 +557,45 @@ export const appointmentsService = {
                 referenceType: 'invoice',
             }).catch(() => {});
         }
+
+        // ── Email: Appointment Completed receipt (to client) ──────────────────
+        ;(async () => {
+            try {
+                const clientEmail = (existing as any).client_email;
+                if (!clientEmail) { logger.info("[email] appointmentCompleted: no client email, skipping"); return; }
+                logger.info(`[email] appointmentCompleted → to=${clientEmail}`);
+                const allowed = await canSendEmail(existing.salon_id, "appointmentCompleted");
+                if (!allowed) { logger.info("[email] appointmentCompleted: skipped (preference off)"); return; }
+                await emailService.sendAppointmentCompletedEmail({
+                    to:         clientEmail,
+                    clientName: existing.client_name         ?? "Valued Customer",
+                    salonName:  (existing as any).salon_name ?? "our salon",
+                    services:   existing.services?.map((s: any) => s.name).join(", ") ?? "Service",
+                    amount:     String(sale.total_amount     ?? "0"),
+                });
+                logger.info(`[email] appointmentCompleted sent to ${clientEmail}`);
+            } catch (err: any) { logger.error("[email] appointmentCompleted failed:", err?.message ?? err); }
+        })();
+
+        // ── Email: New Payment (to salon owner) ───────────────────────────────
+        ;(async () => {
+            try {
+                const ownerEmail = await salonsRepository.findOwnerEmailById(existing.salon_id);
+                if (!ownerEmail) { logger.warn("[email] newPayment (checkout): owner has no email, skipping"); return; }
+                logger.info(`[email] newPayment (checkout) → to=${ownerEmail}`);
+                const allowed = await canSendEmail(existing.salon_id, "newPayment");
+                if (!allowed) { logger.info("[email] newPayment: skipped (preference off)"); return; }
+                await emailService.sendNewPaymentEmail({
+                    to:            ownerEmail,
+                    salonName:     (existing as any).salon_name ?? "your salon",
+                    clientName:    existing.client_name         ?? "Walk-in",
+                    amount:        String(sale.total_amount     ?? "0"),
+                    paymentMethod: params.payment_method        ?? "N/A",
+                    invoiceId:     sale.id.slice(0, 8).toUpperCase(),
+                });
+                logger.info(`[email] newPayment sent to ${ownerEmail}`);
+            } catch (err: any) { logger.error("[email] newPayment (checkout) failed:", err?.message ?? err); }
+        })();
 
         return { appointment, saleId: sale.id };
     },
