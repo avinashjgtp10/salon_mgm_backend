@@ -117,7 +117,16 @@ export type CreateStaffBody = {
     custom_permissions?: Record<string, boolean> | null;
 };
 
-export type UpdateStaffBody = Partial<CreateStaffBody>;
+export type BlockedTimeInput = {
+    date: string;
+    start_time: string;
+    end_time: string;
+    reason?: string | null;
+};
+
+export type UpdateStaffBody = Partial<CreateStaffBody> & {
+    blocked_times?: BlockedTimeInput[];
+};
 
 // ─── Import ───────────────────────────────────────────────────────────────────
 
