@@ -1,6 +1,11 @@
 // src/modules/clients/clients.service.ts
 import { AppError } from "../../middleware/error.middleware";
 import { clientsRepository } from "./clients.repository";
+import { notificationsService } from "../notifications/notifications.service";
+import { salonsRepository } from "../salons/salons.repository";
+import { emailService } from "../utils/email.service";
+import { canSendEmail } from "../utils/notif-prefs";
+import logger from "../../config/logger";
 import {
     Client,
     ClientWithRelations,
@@ -45,6 +50,34 @@ export const clientsService = {
 
         if (body.addresses?.length) await clientsRepository.replaceUpsertAddresses(created.id, body.addresses);
         if (body.emergency_contacts?.length) await clientsRepository.replaceUpsertEmergencyContacts(created.id, body.emergency_contacts);
+
+        // Fire notification (fire-and-forget)
+        notificationsService.create({
+            salon_id: salonId,
+            type:     "client",
+            title:    "New Client Added",
+            body:     `${created.first_name} ${created.last_name ?? ""}`.trim(),
+        }).catch(() => {});
+
+        // ── Email: New Client (to salon owner) ────────────────────────────────
+        ;(async () => {
+            try {
+                const salon = await salonsRepository.findById(salonId);
+                const ownerEmail = await salonsRepository.findOwnerEmailById(salonId);
+                if (!ownerEmail) { logger.warn("[email] newClient: owner has no email, skipping"); return; }
+                logger.info(`[email] newClient → to=${ownerEmail} salon=${salonId}`);
+                const allowed = await canSendEmail(salonId, "newClient");
+                if (!allowed) { logger.info("[email] newClient: skipped (preference off)"); return; }
+                await emailService.sendNewClientEmail({
+                    to:          ownerEmail,
+                    salonName:   salon?.business_name ?? "your salon",
+                    clientName:  `${created.first_name} ${created.last_name ?? ""}`.trim(),
+                    clientEmail: created.email       ?? undefined,
+                    clientPhone: created.phone_number ?? undefined,
+                });
+                logger.info(`[email] newClient sent to ${ownerEmail}`);
+            } catch (err: any) { logger.error("[email] newClient failed:", err?.message ?? err); }
+        })();
 
         const withRel = await clientsRepository.getByIdWithRelations(created.id, salonId);
         return withRel as ClientWithRelations;

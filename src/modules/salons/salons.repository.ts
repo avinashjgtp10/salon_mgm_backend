@@ -7,6 +7,17 @@ export const salonsRepository = {
         return rows[0] || null;
     },
 
+    async findOwnerEmailById(id: string): Promise<string | null> {
+        const { rows } = await pool.query(
+            `SELECT COALESCE(s.email, u.email) AS email
+             FROM salons s
+             LEFT JOIN users u ON s.owner_id = u.id
+             WHERE s.id = $1`,
+            [id]
+        );
+        return rows[0]?.email || null;
+    },
+
     async findBySlug(slug: string): Promise<Salon | null> {
         const { rows } = await pool.query(`SELECT * FROM salons WHERE slug = $1`, [slug]);
         return rows[0] || null;

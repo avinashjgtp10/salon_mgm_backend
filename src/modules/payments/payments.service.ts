@@ -172,6 +172,8 @@ export const paymentsService = {
       }
     }
 
+    // Payment email is handled by appointments.service checkout — skip here to avoid duplicates
+
     // ── Auto-create client_memberships when memberships are sold ─────────────
     // Use membership_items from DB (appt) if available; fall back to items sent in the payment body.
     // The fallback handles the case where membership was added in the edit UI without saving first,

@@ -6,6 +6,8 @@ import { authRepository } from "./auth.repository";
 import type { RegisterBody, LoginBody } from "./auth.types";
 import { generateOtp, hashOtp, compareOtp, otpExpiry } from "../utils/otp.util";
 import { emailService } from "../utils/email.service";
+import { salonsRepository } from "../salons/salons.repository";
+import { canSendEmail } from "../utils/notif-prefs";
 import { exotelSendSmsOtp, exotelVerifySmsOtp } from "../utils/exotel.service";
 import logger from "../../config/logger";
 import crypto from "crypto";
@@ -187,6 +189,34 @@ export const authService = {
     });
 
     logger.info("[authService.login] Login successful", { email, userId: user.id, role: user.role, salonId });
+
+    // ── Email: Staff Login alert (to salon owner) ─────────────────────────────
+    const STAFF_ROLES = ["staff", "manager", "receptionist", "stylist", "therapist", "technician"];
+    console.log("[EMAIL DEBUG] staffLogin CHECK: role=", user.role, "salonId=", salonId, "inList=", STAFF_ROLES.includes(user.role));
+    if (salonId && STAFF_ROLES.includes(user.role)) {
+      ;(async () => {
+        try {
+          console.log("[EMAIL DEBUG] staffLogin: starting for", email, "role=", user.role);
+          const ownerEmail = await salonsRepository.findOwnerEmailById(salonId);
+          console.log("[EMAIL DEBUG] staffLogin: ownerEmail=", ownerEmail);
+          if (!ownerEmail) { console.log("[EMAIL DEBUG] staffLogin: no owner email, skipping"); return; }
+          const allowed = await canSendEmail(salonId, "staffLogin");
+          console.log("[EMAIL DEBUG] staffLogin: allowed=", allowed);
+          if (!allowed) { console.log("[EMAIL DEBUG] staffLogin: skipped by preference"); return; }
+          const salon = await salonsRepository.findById(salonId);
+          const staffName = [user.first_name, user.last_name].filter(Boolean).join(" ") || email;
+          const loginTime = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" });
+          await emailService.sendStaffLoginEmail({
+            to:         ownerEmail,
+            salonName:  salon?.business_name ?? "your salon",
+            staffName,
+            staffEmail: email,
+            loginTime,
+          });
+          console.log("[EMAIL DEBUG] staffLogin: SENT to", ownerEmail);
+        } catch (err: any) { console.error("[EMAIL DEBUG] staffLogin FAILED:", err?.message, err); }
+      })();
+    }
 
     return {
       accessToken,

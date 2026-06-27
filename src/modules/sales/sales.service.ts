@@ -10,6 +10,7 @@ import { appointmentsRepository } from "../appointments/appointments.repository"
 import { staffRepository } from "../staff/staff.repository";
 import { servicesRepository } from "../services/services.repository";
 import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
+import { notificationsService } from "../notifications/notifications.service";
 import { membershipsRepository } from "../memberships/memberships.repository";
 import { clientMembershipsService } from "../client-memberships/client-memberships.service";
 
@@ -30,6 +31,14 @@ export const salesService = {
         // Fetch enriched sale (with client_phone, client_phone_code, salon_name)
         const sale  = (await salesRepository.findById(rawSale.id)) ?? rawSale;
         const items = await salesRepository.findItemsBySaleId(sale.id);
+
+        // Fire notification (fire-and-forget)
+        notificationsService.create({
+            salon_id: sale.salon_id,
+            type:     "payment",
+            title:    "New Sale Created",
+            body:     `${(sale as any).client_name ?? "Walk-in"} — ₹${sale.total_amount ?? 0}`,
+        }).catch(() => {});
 
         // ── WhatsApp Automation: Invoice Generated ────────────────────────────
         // Only fire when there's a real client (not walk-in) and it's a proper sale

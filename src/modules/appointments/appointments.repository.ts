@@ -15,7 +15,9 @@ export const appointmentsRepository = {
                 c.full_name          AS client_name,
                 c.phone_number       AS client_phone,
                 c.phone_country_code AS client_phone_code,
+                c.email              AS client_email,
                 s.business_name      AS salon_name,
+                COALESCE(s.email, u.email) AS salon_email,
                 CASE
                   WHEN EXISTS (SELECT 1 FROM payments p WHERE p.appointment_id = a.id)
                    AND (SELECT due_amount FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) = 0
@@ -27,8 +29,9 @@ export const appointmentsRepository = {
                 COALESCE((SELECT SUM(paid_amount) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS paid_amount,
                 (SELECT payment_method FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) AS payment_method
              FROM appointments a
-             LEFT JOIN clients c ON a.client_id = c.id
-             LEFT JOIN salons  s ON a.salon_id  = s.id
+             LEFT JOIN clients c ON a.client_id  = c.id
+             LEFT JOIN salons  s ON a.salon_id   = s.id
+             LEFT JOIN users   u ON s.owner_id   = u.id
              WHERE a.id = $1`,
             [id]
         );

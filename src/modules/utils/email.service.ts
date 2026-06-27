@@ -611,6 +611,402 @@ export const emailService = {
     });
   },
 
+  // ── Business Event Notifications ─────────────────────────────────────────────
+
+  async sendNewAppointmentEmail(params: {
+    to: string;
+    salonName: string;
+    clientName: string;
+    services: string;
+    date: string;
+    time: string;
+    appointmentId: string;
+  }) {
+    const { to, salonName, clientName, services, date, time, appointmentId } = params;
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to,
+      subject: `New Appointment Booked — ${clientName}`,
+      html: `
+        <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
+        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
+            <tr><td align="center">
+              <table width="560" cellpadding="0" cellspacing="0"
+                style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.07);max-width:560px;width:100%;">
+                <tr>
+                  <td style="background:#111827;padding:28px 36px;">
+                    <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.7;">${salonName}</p>
+                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">New Appointment Booked</h1>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:32px 36px;">
+                    <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
+                      A new appointment has been booked. Here are the details:
+                    </p>
+                    <table width="100%" cellpadding="0" cellspacing="0"
+                      style="background:#f9fafb;border-radius:10px;border:1px solid #e5e7eb;">
+                      <tr>
+                        <td style="padding:20px 24px;">
+                          <p style="margin:0 0 12px;color:#6b7280;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;">Appointment Details</p>
+                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>Client:</strong> ${escapeHtml(clientName)}</p>
+                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>Service:</strong> ${escapeHtml(services)}</p>
+                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>Date:</strong> ${escapeHtml(date)}</p>
+                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>Time:</strong> ${escapeHtml(time)}</p>
+                          <p style="margin:0;color:#6b7280;font-size:12px;">Ref: ${escapeHtml(appointmentId.slice(0, 8).toUpperCase())}</p>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="background:#f9fafb;padding:16px 36px;border-top:1px solid #e5e7eb;">
+                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">© ${new Date().getFullYear()} SalonOx. Automated notification.</p>
+                  </td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
+        </body></html>`,
+    });
+  },
+
+  async sendAppointmentCancelledEmail(params: {
+    to: string;
+    clientName: string;
+    salonName: string;
+    date: string;
+    time: string;
+  }) {
+    const { to, clientName, salonName, date, time } = params;
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to,
+      subject: `Your Appointment has been Cancelled — ${salonName}`,
+      html: `
+        <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
+        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
+            <tr><td align="center">
+              <table width="560" cellpadding="0" cellspacing="0"
+                style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.07);max-width:560px;width:100%;">
+                <tr>
+                  <td style="background:#dc2626;padding:28px 36px;">
+                    <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.8;">${escapeHtml(salonName)}</p>
+                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">Appointment Cancelled</h1>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:32px 36px;">
+                    <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
+                      Hi <strong>${escapeHtml(clientName)}</strong>, your appointment at <strong>${escapeHtml(salonName)}</strong> has been cancelled.
+                    </p>
+                    <table width="100%" cellpadding="0" cellspacing="0"
+                      style="background:#fef2f2;border-radius:10px;border:1px solid #fecaca;">
+                      <tr>
+                        <td style="padding:20px 24px;">
+                          <p style="margin:0 0 8px;color:#991b1b;font-size:14px;"><strong>Date:</strong> ${escapeHtml(date)}</p>
+                          <p style="margin:0;color:#991b1b;font-size:14px;"><strong>Time:</strong> ${escapeHtml(time)}</p>
+                        </td>
+                      </tr>
+                    </table>
+                    <p style="margin:20px 0 0;color:#6b7280;font-size:13px;line-height:1.6;">
+                      Please contact us if you'd like to rebook or if you have any questions.
+                    </p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="background:#f9fafb;padding:16px 36px;border-top:1px solid #e5e7eb;">
+                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">© ${new Date().getFullYear()} SalonOx. Automated notification.</p>
+                  </td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
+        </body></html>`,
+    });
+  },
+
+  async sendAppointmentCancelledOwnerEmail(params: {
+    to: string;
+    salonName: string;
+    clientName: string;
+    date: string;
+    time: string;
+    appointmentId: string;
+  }) {
+    const { to, salonName, clientName, date, time, appointmentId } = params;
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to,
+      subject: `Appointment Cancelled — ${clientName}`,
+      html: `
+        <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
+        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
+            <tr><td align="center">
+              <table width="560" cellpadding="0" cellspacing="0"
+                style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.07);max-width:560px;width:100%;">
+                <tr>
+                  <td style="background:#dc2626;padding:28px 36px;">
+                    <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.7;">${escapeHtml(salonName)}</p>
+                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">Appointment Cancelled</h1>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:32px 36px;">
+                    <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
+                      An appointment has been cancelled. Here are the details:
+                    </p>
+                    <table width="100%" cellpadding="0" cellspacing="0"
+                      style="background:#fef2f2;border-radius:10px;border:1px solid #fecaca;">
+                      <tr>
+                        <td style="padding:20px 24px;">
+                          <p style="margin:0 0 8px;color:#991b1b;font-size:14px;"><strong>Client:</strong> ${escapeHtml(clientName)}</p>
+                          <p style="margin:0 0 8px;color:#991b1b;font-size:14px;"><strong>Date:</strong> ${escapeHtml(date)}</p>
+                          <p style="margin:0 0 8px;color:#991b1b;font-size:14px;"><strong>Time:</strong> ${escapeHtml(time)}</p>
+                          <p style="margin:0;color:#991b1b;font-size:12px;">Ref: ${escapeHtml(appointmentId.slice(0, 8).toUpperCase())}</p>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="background:#f9fafb;padding:16px 36px;border-top:1px solid #e5e7eb;">
+                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">© ${new Date().getFullYear()} SalonOx. Automated notification.</p>
+                  </td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
+        </body></html>`,
+    });
+  },
+
+  async sendAppointmentCompletedEmail(params: {
+    to: string;
+    clientName: string;
+    salonName: string;
+    services: string;
+    amount: string;
+  }) {
+    const { to, clientName, salonName, services, amount } = params;
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to,
+      subject: `Your Appointment Receipt — ${salonName}`,
+      html: `
+        <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
+        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
+            <tr><td align="center">
+              <table width="560" cellpadding="0" cellspacing="0"
+                style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.07);max-width:560px;width:100%;">
+                <tr>
+                  <td style="background:#16a34a;padding:28px 36px;">
+                    <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.8;">${escapeHtml(salonName)}</p>
+                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">Thank You for Your Visit!</h1>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:32px 36px;">
+                    <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
+                      Hi <strong>${escapeHtml(clientName)}</strong>, thank you for visiting <strong>${escapeHtml(salonName)}</strong>. Here's your receipt:
+                    </p>
+                    <table width="100%" cellpadding="0" cellspacing="0"
+                      style="background:#f0fdf4;border-radius:10px;border:1px solid #bbf7d0;">
+                      <tr>
+                        <td style="padding:20px 24px;">
+                          <p style="margin:0 0 8px;color:#15803d;font-size:14px;"><strong>Services:</strong> ${escapeHtml(services)}</p>
+                          <p style="margin:0;color:#15803d;font-size:16px;font-weight:700;"><strong>Total:</strong> ₹${escapeHtml(amount)}</p>
+                        </td>
+                      </tr>
+                    </table>
+                    <p style="margin:20px 0 0;color:#6b7280;font-size:13px;line-height:1.6;">
+                      We hope to see you again soon!
+                    </p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="background:#f9fafb;padding:16px 36px;border-top:1px solid #e5e7eb;">
+                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">© ${new Date().getFullYear()} SalonOx. Automated notification.</p>
+                  </td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
+        </body></html>`,
+    });
+  },
+
+  async sendNewPaymentEmail(params: {
+    to: string;
+    salonName: string;
+    clientName: string;
+    amount: string;
+    paymentMethod: string;
+    invoiceId: string;
+  }) {
+    const { to, salonName, clientName, amount, paymentMethod, invoiceId } = params;
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to,
+      subject: `Payment Received — ₹${amount}`,
+      html: `
+        <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
+        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
+            <tr><td align="center">
+              <table width="560" cellpadding="0" cellspacing="0"
+                style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.07);max-width:560px;width:100%;">
+                <tr>
+                  <td style="background:#111827;padding:28px 36px;">
+                    <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.7;">${escapeHtml(salonName)}</p>
+                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">Payment Received</h1>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:32px 36px;">
+                    <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
+                      A payment has been recorded for <strong>${escapeHtml(clientName)}</strong>.
+                    </p>
+                    <table width="100%" cellpadding="0" cellspacing="0"
+                      style="background:#f9fafb;border-radius:10px;border:1px solid #e5e7eb;">
+                      <tr>
+                        <td style="padding:20px 24px;">
+                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>Client:</strong> ${escapeHtml(clientName)}</p>
+                          <p style="margin:0 0 8px;color:#111827;font-size:20px;font-weight:800;color:#16a34a;">₹${escapeHtml(amount)}</p>
+                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>Method:</strong> ${escapeHtml(paymentMethod)}</p>
+                          <p style="margin:0;color:#6b7280;font-size:12px;">Invoice: ${escapeHtml(invoiceId)}</p>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="background:#f9fafb;padding:16px 36px;border-top:1px solid #e5e7eb;">
+                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">© ${new Date().getFullYear()} SalonOx. Automated notification.</p>
+                  </td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
+        </body></html>`,
+    });
+  },
+
+  async sendNewClientEmail(params: {
+    to: string;
+    salonName: string;
+    clientName: string;
+    clientEmail?: string;
+    clientPhone?: string;
+  }) {
+    const { to, salonName, clientName, clientEmail, clientPhone } = params;
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to,
+      subject: `New Client Added — ${clientName}`,
+      html: `
+        <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
+        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
+            <tr><td align="center">
+              <table width="560" cellpadding="0" cellspacing="0"
+                style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.07);max-width:560px;width:100%;">
+                <tr>
+                  <td style="background:#111827;padding:28px 36px;">
+                    <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.7;">${escapeHtml(salonName)}</p>
+                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">New Client Added</h1>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:32px 36px;">
+                    <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
+                      A new client has been added to <strong>${escapeHtml(salonName)}</strong>.
+                    </p>
+                    <table width="100%" cellpadding="0" cellspacing="0"
+                      style="background:#f9fafb;border-radius:10px;border:1px solid #e5e7eb;">
+                      <tr>
+                        <td style="padding:20px 24px;">
+                          <p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>Name:</strong> ${escapeHtml(clientName)}</p>
+                          ${clientEmail ? `<p style="margin:0 0 8px;color:#111827;font-size:14px;"><strong>Email:</strong> ${escapeHtml(clientEmail)}</p>` : ""}
+                          ${clientPhone ? `<p style="margin:0;color:#111827;font-size:14px;"><strong>Phone:</strong> ${escapeHtml(clientPhone)}</p>` : ""}
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="background:#f9fafb;padding:16px 36px;border-top:1px solid #e5e7eb;">
+                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">© ${new Date().getFullYear()} SalonOx. Automated notification.</p>
+                  </td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
+        </body></html>`,
+    });
+  },
+
+  async sendStaffLoginEmail(params: {
+    to: string;
+    salonName: string;
+    staffName: string;
+    staffEmail: string;
+    loginTime: string;
+  }) {
+    const { to, salonName, staffName, staffEmail, loginTime } = params;
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to,
+      subject: `Staff Login Alert — ${staffName} signed in`,
+      html: `
+        <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
+        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
+            <tr><td align="center">
+              <table width="560" cellpadding="0" cellspacing="0"
+                style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.07);max-width:560px;width:100%;">
+                <tr>
+                  <td style="background:#1e40af;padding:28px 36px;">
+                    <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.7;">${escapeHtml(salonName)}</p>
+                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">Staff Login Alert</h1>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:32px 36px;">
+                    <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
+                      A team member has signed in to <strong>${escapeHtml(salonName)}</strong>.
+                    </p>
+                    <table width="100%" cellpadding="0" cellspacing="0"
+                      style="background:#eff6ff;border-radius:10px;border:1px solid #bfdbfe;">
+                      <tr>
+                        <td style="padding:20px 24px;">
+                          <p style="margin:0 0 8px;color:#1e40af;font-size:14px;"><strong>Name:</strong> ${escapeHtml(staffName)}</p>
+                          <p style="margin:0 0 8px;color:#1e40af;font-size:14px;"><strong>Email:</strong> ${escapeHtml(staffEmail)}</p>
+                          <p style="margin:0;color:#1e40af;font-size:14px;"><strong>Time:</strong> ${escapeHtml(loginTime)}</p>
+                        </td>
+                      </tr>
+                    </table>
+                    <p style="margin:20px 0 0;color:#6b7280;font-size:13px;line-height:1.6;">
+                      If this login was not expected, please review your team's access permissions.
+                    </p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="background:#f9fafb;padding:16px 36px;border-top:1px solid #e5e7eb;">
+                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">© ${new Date().getFullYear()} SalonOx. Automated notification.</p>
+                  </td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
+        </body></html>`,
+    });
+  },
+
   async sendStaffInvitation(params: {
     to: string;
     token: string;
