@@ -15,18 +15,17 @@ export const appointmentsRepository = {
                 c.full_name          AS client_name,
                 c.phone_number       AS client_phone,
                 c.phone_country_code AS client_phone_code,
-                s.business_name AS salon_name,
-                COALESCE(
-                  (SELECT CASE
-                      WHEN bool_or(p.status = 'completed') THEN 'paid'::text
-                      WHEN bool_or(p.status = 'partial') THEN 'partial'::text
-                      ELSE 'unpaid'::text
-                  END
-                  FROM payments p
-                  WHERE p.appointment_id = a.id),
-                  'unpaid'::text
-                ) AS payment_status,
-                COALESCE((SELECT SUM(net_amount) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS paid_amount
+                s.business_name      AS salon_name,
+                CASE
+                  WHEN EXISTS (SELECT 1 FROM payments p WHERE p.appointment_id = a.id)
+                   AND (SELECT due_amount FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) = 0
+                  THEN 'paid'::text
+                  WHEN EXISTS (SELECT 1 FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial'))
+                  THEN 'partial'::text
+                  ELSE 'unpaid'::text
+                END AS payment_status,
+                COALESCE((SELECT SUM(paid_amount) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS paid_amount,
+                (SELECT payment_method FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) AS payment_method
              FROM appointments a
              LEFT JOIN clients c ON a.client_id = c.id
              LEFT JOIN salons  s ON a.salon_id  = s.id
@@ -88,20 +87,31 @@ export const appointmentsRepository = {
         const totalPages = Math.max(1, Math.ceil(totalRecords / limit));
 
         const { rows } = await pool.query(
-            `SELECT a.*, c.full_name AS client_name,
-                COALESCE(
-                  (SELECT CASE
-                      WHEN bool_or(p.status = 'completed') THEN 'paid'::text
-                      WHEN bool_or(p.status = 'partial') THEN 'partial'::text
-                      ELSE 'unpaid'::text
-                  END
-                  FROM payments p
-                  WHERE p.appointment_id = a.id),
-                  'unpaid'::text
-                ) AS payment_status,
-                COALESCE((SELECT SUM(net_amount) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS paid_amount
+            `WITH pay_agg AS (
+               SELECT
+                 appointment_id,
+                 SUM(paid_amount) FILTER (WHERE status IN ('completed','partial'))  AS total_paid,
+                 MAX(due_amount)  FILTER (WHERE created_at = (
+                   SELECT MAX(created_at) FROM payments p2 WHERE p2.appointment_id = payments.appointment_id
+                 ))                                                                  AS latest_due,
+                 MAX(payment_method) FILTER (WHERE created_at = (
+                   SELECT MAX(created_at) FROM payments p2 WHERE p2.appointment_id = payments.appointment_id
+                 ))                                                                  AS latest_method,
+                 COUNT(*) FILTER (WHERE status IN ('completed','partial'))           AS pay_count
+               FROM payments
+               GROUP BY appointment_id
+             )
+             SELECT a.*, c.full_name AS client_name,
+               CASE
+                 WHEN pa.pay_count > 0 AND COALESCE(pa.latest_due, 1) = 0 THEN 'paid'::text
+                 WHEN pa.pay_count > 0                                      THEN 'partial'::text
+                 ELSE 'unpaid'::text
+               END AS payment_status,
+               COALESCE(pa.total_paid, 0)    AS paid_amount,
+               pa.latest_method              AS payment_method
              FROM appointments a
-             LEFT JOIN clients c ON a.client_id = c.id
+             LEFT JOIN clients c   ON a.client_id = c.id
+             LEFT JOIN pay_agg pa  ON pa.appointment_id = a.id
              WHERE ${whereClause}
              ORDER BY a.scheduled_at DESC
              LIMIT $${idx} OFFSET $${idx + 1}`,

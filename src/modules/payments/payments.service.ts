@@ -22,10 +22,11 @@ export const paymentsService = {
         appt = await appointmentsRepository.findById(data.appointment_id);
         if (appt) {
           // Use Number() guards — JSONB prices can arrive as strings or be undefined
-          const serviceTotal    = (appt.services         || []).reduce((s, i) => s + (Number(i.price) || 0) * (Number(i.quantity) || 0), 0);
-          const packageTotal    = (appt.package_items    || []).reduce((s, i) => s + (Number(i.price) || 0) * (Number(i.quantity) || 0), 0);
-          const productTotal    = (appt.product_items    || []).reduce((s, i) => s + (Number(i.price) || 0) * (Number(i.quantity) || 0), 0);
-          const membershipTotal = (appt.membership_items || []).reduce((s, i) => s + (Number(i.price) || 0) * (Number(i.quantity) || 0), 0);
+          const qty = (i: any) => Number(i.qty) || Number(i.quantity) || 1;
+          const serviceTotal    = (appt.services         || []).reduce((s, i) => s + (Number(i.price) || 0) * qty(i), 0);
+          const packageTotal    = (appt.package_items    || []).reduce((s, i) => s + (Number(i.price) || 0) * qty(i), 0);
+          const productTotal    = (appt.product_items    || []).reduce((s, i) => s + (Number(i.price) || 0) * qty(i), 0);
+          const membershipTotal = (appt.membership_items || []).reduce((s, i) => s + (Number(i.price) || 0) * qty(i), 0);
           const actualBill      = serviceTotal + packageTotal + productTotal + membershipTotal;
 
           // If the appointment has no priced items, fall through to frontend values
