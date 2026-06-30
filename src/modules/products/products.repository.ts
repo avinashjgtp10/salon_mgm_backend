@@ -185,6 +185,28 @@ export const productsRepository = {
             client.release();
         }
     },
+
+    async restoreStock(items: { product_id: string; quantity: number }[], salonId: string): Promise<void> {
+        if (items.length === 0) return;
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            for (const { product_id, quantity } of items) {
+                await client.query(
+                    `UPDATE products
+                     SET amount = amount + $1, updated_at = NOW()
+                     WHERE id = $2 AND salon_id = $3`,
+                    [quantity, product_id, salonId]
+                );
+            }
+            await client.query("COMMIT");
+        } catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        } finally {
+            client.release();
+        }
+    },
 };
 
 // ─── Product Photos Repository ────────────────────────────────────────────────

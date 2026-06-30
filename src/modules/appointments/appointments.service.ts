@@ -3,6 +3,7 @@ import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { appointmentsRepository } from "./appointments.repository";
 import { salesRepository } from "../sales/sales.repository";
+import { productsRepository } from "../products/products.repository";
 import { commissionCalculationService } from "../commission/commissionCalculation.service";
 import { blockedTimesRepository } from "../blocked_times/blocked_times.repository";
 import { salesService } from "../sales/sales.service";
@@ -86,6 +87,15 @@ export const appointmentsService = {
 
         const appointment = await appointmentsRepository.create(body, requesterUserId);
         logger.info("appointmentsService.create success", { appointmentId: appointment.id });
+
+        // Deduct stock for products sold in this appointment (fire-and-forget)
+        const soldProducts = (body.product_items ?? []).filter(p => p.product_id);
+        if (soldProducts.length > 0) {
+            productsRepository.deductStock(
+                soldProducts.map(p => ({ product_id: p.product_id!, quantity: p.quantity })),
+                body.salon_id
+            ).catch(err => logger.warn("Stock deduction failed (non-fatal)", { err: err?.message }));
+        }
 
         // Fire notification (fire-and-forget)
         notificationsService.create({
@@ -215,6 +225,32 @@ export const appointmentsService = {
 
         const updated = await appointmentsRepository.update(appointmentId, patch);
 
+        // Adjust stock when product_items list changes (fire-and-forget)
+        if (patch.product_items !== undefined) {
+            const oldItems = (existing.product_items ?? []).filter(p => p.product_id);
+            const newItems = (patch.product_items ?? []).filter(p => p.product_id);
+
+            const oldMap = new Map(oldItems.map(p => [p.product_id!, p.quantity]));
+            const newMap = new Map(newItems.map(p => [p.product_id!, p.quantity]));
+
+            const toDeduct: { product_id: string; quantity: number }[] = [];
+            const toRestore: { product_id: string; quantity: number }[] = [];
+
+            for (const [id, newQty] of newMap) {
+                const oldQty = oldMap.get(id) ?? 0;
+                if (newQty > oldQty) toDeduct.push({ product_id: id, quantity: newQty - oldQty });
+                else if (newQty < oldQty) toRestore.push({ product_id: id, quantity: oldQty - newQty });
+            }
+            for (const [id, oldQty] of oldMap) {
+                if (!newMap.has(id)) toRestore.push({ product_id: id, quantity: oldQty });
+            }
+
+            if (toDeduct.length > 0)
+                productsRepository.deductStock(toDeduct, existing.salon_id).catch(err => logger.warn("Stock deduction failed (non-fatal)", { err: err?.message }));
+            if (toRestore.length > 0)
+                productsRepository.restoreStock(toRestore, existing.salon_id).catch(err => logger.warn("Stock restore failed (non-fatal)", { err: err?.message }));
+        }
+
         // ── WhatsApp Automation: Appointment Rescheduled ──────────────────────
         // Only fire if scheduled_at actually changed
         if (patch.scheduled_at && existing.client_id) {
@@ -278,6 +314,15 @@ export const appointmentsService = {
             throw new AppError(400, `Appointment is already '${existing.status}'`, "BAD_REQUEST");
 
         const cancelled = await appointmentsRepository.updateStatus(params.appointmentId, "cancelled");
+
+        // Restore stock for cancelled appointment products (fire-and-forget)
+        const cancelledProducts = (existing.product_items ?? []).filter(p => p.product_id);
+        if (cancelledProducts.length > 0) {
+            productsRepository.restoreStock(
+                cancelledProducts.map(p => ({ product_id: p.product_id!, quantity: p.quantity })),
+                existing.salon_id
+            ).catch(err => logger.warn("Stock restore failed (non-fatal)", { err: err?.message }));
+        }
 
         // ── Push Notification: Appointment Cancelled (to salon owner) ─────────
         notificationsService.create({
@@ -354,6 +399,16 @@ export const appointmentsService = {
         const deleted = await appointmentsRepository.deleteById(appointmentId);
         if (!deleted) throw new AppError(500, "Failed to delete appointment", "INTERNAL_ERROR");
         logger.info("appointmentsService.delete success", { appointmentId });
+
+        // Restore stock for deleted appointment products (fire-and-forget)
+        const deletedProducts = (existing.product_items ?? []).filter(p => p.product_id);
+        if (deletedProducts.length > 0) {
+            productsRepository.restoreStock(
+                deletedProducts.map(p => ({ product_id: p.product_id!, quantity: p.quantity })),
+                existing.salon_id
+            ).catch(err => logger.warn("Stock restore failed (non-fatal)", { err: err?.message }));
+        }
+
         return deleted;
     },
 
