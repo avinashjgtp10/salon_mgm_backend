@@ -162,7 +162,8 @@ export const appointmentsRepository = {
                 scheduled_at, duration_minutes,
                 ends_at,
                 colour, created_by,
-                services, package_items, product_items, membership_items
+                services, package_items, product_items, membership_items,
+                discount_value, discount_type, ex_charges, tip_amount, gst_percent
             )
             VALUES (
                 $1, $2, $3, $4, $5,
@@ -170,7 +171,8 @@ export const appointmentsRepository = {
                 $10, $11,
                 ($10::timestamptz + ($11::integer * INTERVAL '1 minute')),
                 $12, $13,
-                $14::jsonb, $15::jsonb, $16::jsonb, $17::jsonb
+                $14::jsonb, $15::jsonb, $16::jsonb, $17::jsonb,
+                $18, $19, $20, $21, $22
             )
             RETURNING *`,
             [
@@ -191,6 +193,11 @@ export const appointmentsRepository = {
                 JSON.stringify(data.package_items    ?? []),
                 JSON.stringify(data.product_items    ?? []),
                 JSON.stringify(data.membership_items ?? []),
+                data.discount_value     ?? 0,
+                data.discount_type      ?? "percentage",
+                data.ex_charges         ?? 0,
+                data.tip_amount         ?? 0,
+                data.gst_percent        ?? 0,
             ]
         );
         return rows[0];
