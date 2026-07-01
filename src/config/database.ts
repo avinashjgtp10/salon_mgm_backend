@@ -39,11 +39,12 @@ const pool = new Pool({
   // that cloud DBs (Supabase/Neon/Render) silently kill, causing
   // "Connection terminated unexpectedly" on the next query.
   min: 0,
-  max: parseInt(process.env.DB_POOL_MAX || '10'),
+  max: parseInt(process.env.DB_POOL_MAX || '20'),
   // Idle connections are closed after 10s — well before cloud DB kills them
   idleTimeoutMillis: 10000,
-  // How long to wait for a new connection to be established
-  connectionTimeoutMillis: 10000,
+  // Raised from 10s to 20s — dashboard fires 6 parallel queries; under load
+  // the pool needs more headroom before giving up on a new connection.
+  connectionTimeoutMillis: 20000,
   // TCP keepalive: sends a heartbeat packet so the OS/network never
   // silently drops a connection that pg-pool still thinks is alive.
   keepAlive: true,
