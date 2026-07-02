@@ -151,10 +151,10 @@ export const cashManagementController = {
       const body = req.body as UpdateExpenseBody;
 
       const result = await cashManagementService.updateExpense(salonId, String(req.params.id || ""), {
-        expense_type: body.expense_type !== undefined ? String(body.expense_type) : undefined,
-        description: body.description !== undefined ? String(body.description) : undefined,
-        amount: body.amount !== undefined ? Number(body.amount) : undefined,
-        expense_date: body.expense_date !== undefined ? String(body.expense_date) : undefined,
+        expense_type: body.expense_type != null ? String(body.expense_type) : undefined,
+        description: body.description != null ? String(body.description) : undefined,
+        amount: body.amount != null ? Number(body.amount) : undefined,
+        expense_date: body.expense_date != null ? String(body.expense_date) : undefined,
       });
 
       return sendSuccess(res, 200, result, "Cash expense updated successfully");

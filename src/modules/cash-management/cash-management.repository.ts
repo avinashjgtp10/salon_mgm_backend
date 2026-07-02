@@ -307,6 +307,13 @@ export const cashManagementRepository = {
       return rows[0];
     } catch (error) {
       await client.query("ROLLBACK");
+      if ((error as any)?.code === "23505") {
+        throw new AppError(
+          409,
+          "An open counter already exists for this salon",
+          "COUNTER_ALREADY_OPEN",
+        );
+      }
       throw error;
     } finally {
       client.release();
@@ -757,15 +764,11 @@ export const cashManagementRepository = {
 
       const counter = await getCounterContext(client, params.cashManagementId, params.salonId);
       if (counter.status !== "open") {
-        const { rows } = await client.query<CashManagementRecord>(
-          `SELECT *
-           FROM cash_management
-           WHERE id = $1
-             AND salon_id = $2`,
-          [params.cashManagementId, params.salonId],
+        throw new AppError(
+          409,
+          "Cash counter is already closed",
+          "COUNTER_ALREADY_CLOSED",
         );
-        await client.query("COMMIT");
-        return rows[0];
       }
 
       const refreshed = await recalculateCounterById(client, params.cashManagementId, params.salonId);
