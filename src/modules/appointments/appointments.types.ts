@@ -15,6 +15,7 @@ export type AppointmentServiceItem = {
     price: number;
     quantity: number;
     time?: string | null; // "HH:MM" slot time
+    is_package_service?: boolean;
 };
 
 export type AppointmentPackageItem = {
@@ -22,6 +23,7 @@ export type AppointmentPackageItem = {
     name: string;
     price: number;
     quantity: number;
+    is_package_service?: boolean;
     staff_id?: string | null;
     start_time?: string | null;
 };
