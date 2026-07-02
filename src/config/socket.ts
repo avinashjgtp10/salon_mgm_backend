@@ -4,10 +4,21 @@ import logger from './logger'
 
 let io: SocketIOServer | null = null
 
+function getAllowedOrigins(): string | string[] | boolean {
+  if (process.env.CORS_ALLOW_ALL_ORIGINS === 'true') return true
+
+  const origins = (process.env.CORS_ALLOWED_ORIGINS || process.env.FRONTEND_URL || 'http://localhost:5173')
+    .split(',')
+    .map(o => o.trim().replace(/\/$/, ''))
+    .filter(Boolean)
+
+  return origins.length === 1 ? origins[0] : origins
+}
+
 export function initSocket(httpServer: HttpServer): SocketIOServer {
   io = new SocketIOServer(httpServer, {
     cors: {
-      origin:      process.env.FRONTEND_URL ?? 'http://localhost:5173',
+      origin:      getAllowedOrigins(),
       methods:     ['GET', 'POST'],
       credentials: true,
     },
@@ -31,7 +42,7 @@ export function initSocket(httpServer: HttpServer): SocketIOServer {
   return io
 }
 
-// Use this anywhere in the backend to emit events
+// Use this anywhere in the backend to emit events to a salon room
 export function getIO(): SocketIOServer {
   if (!io) throw new Error('Socket.io not initialized — call initSocket() first')
   return io

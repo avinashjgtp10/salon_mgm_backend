@@ -15,6 +15,7 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const isDate = (v: unknown) => typeof v === "string" && DATE_RE.test(v) && !isNaN(new Date(v as string).getTime());
 const isOptionalDate = (v: unknown) => v === undefined || isDate(v);
 
+// For standalone POST /blocked-times — client sends salon_id in body
 export const validateCreateBlockedTime = (req: Request, _res: Response, next: NextFunction) => {
   try {
     const b = req.body;
@@ -23,6 +24,26 @@ export const validateCreateBlockedTime = (req: Request, _res: Response, next: Ne
       throw new AppError(400, "salon_id is required and must be a UUID", "VALIDATION_ERROR");
     if (!isUUID(b.staff_id))
       throw new AppError(400, "staff_id is required and must be a UUID", "VALIDATION_ERROR");
+    if (!isDate(b.date))
+      throw new AppError(400, "date is required and must be YYYY-MM-DD", "VALIDATION_ERROR");
+    if (!isTime(b.start_time))
+      throw new AppError(400, "start_time is required and must be HH:MM", "VALIDATION_ERROR");
+    if (!isTime(b.end_time))
+      throw new AppError(400, "end_time is required and must be HH:MM", "VALIDATION_ERROR");
+    if (b.start_time >= b.end_time)
+      throw new AppError(400, "end_time must be after start_time", "VALIDATION_ERROR");
+    if (b.reason !== undefined && typeof b.reason !== "string")
+      throw new AppError(400, "reason must be a string", "VALIDATION_ERROR");
+
+    return next();
+  } catch (err) { return next(err); }
+};
+
+// For staff-scoped POST /staff/:staffId/blocked-times — staff_id from URL param, salon_id from JWT
+export const validateCreateStaffBlockedTime = (req: Request, _res: Response, next: NextFunction) => {
+  try {
+    const b = req.body;
+
     if (!isDate(b.date))
       throw new AppError(400, "date is required and must be YYYY-MM-DD", "VALIDATION_ERROR");
     if (!isTime(b.start_time))

@@ -362,15 +362,26 @@ export const salonDashboardRepository = {
   },
 
   // ── Combined: all dashboard data in one call ────────────────────────────────
+  // Each sub-query is isolated — a DB timeout or slow query on one section
+  // returns a safe empty/zero default instead of crashing the entire response.
   async getAll(salonId: string, period: string = "monthly", date?: string): Promise<DashboardAll> {
+    const safe = <T>(p: Promise<T>, fallback: T): Promise<T> =>
+      p.catch(() => fallback);
+
+    const defaultSummary: DashboardSummary = {
+      totalRevenue: 0, totalAppointments: 0, totalClients: 0,
+      todayRevenue: 0, revenueChange: null, appointmentsChange: null,
+      clientsChange: null, todayRevenueChange: null, todayAppointmentsCount: 0,
+    };
+
     const [summary, todayAppointments, revenueChart, topStaff, serviceMix, services] =
       await Promise.all([
-        this.getSummary(salonId),
-        this.getTodayAppointments(salonId, date),
-        this.getRevenueChart(salonId, period),
-        this.getTopStaff(salonId),
-        this.getServiceMix(salonId),
-        this.getServices(salonId),
+        safe(this.getSummary(salonId),           defaultSummary),
+        safe(this.getTodayAppointments(salonId, date), []),
+        safe(this.getRevenueChart(salonId, period),    []),
+        safe(this.getTopStaff(salonId),          []),
+        safe(this.getServiceMix(salonId),         []),
+        safe(this.getServices(salonId),           []),
       ]);
 
     return { summary, todayAppointments, revenueChart, topStaff, serviceMix, services };

@@ -11,10 +11,12 @@ export type AppointmentStatus =
 export type AppointmentServiceItem = {
     service_id: string;
     staff_id?: string | null;
+    staff_name?: string | null;
     name: string;
     price: number;
     quantity: number;
     time?: string | null; // "HH:MM" slot time
+    is_package_service?: boolean;
 };
 
 export type AppointmentPackageItem = {
@@ -22,6 +24,10 @@ export type AppointmentPackageItem = {
     name: string;
     price: number;
     quantity: number;
+    is_package_service?: boolean;
+    staff_id?: string | null;
+    staff_name?: string | null;
+    start_time?: string | null;
 };
 
 export type AppointmentProductItem = {
@@ -29,14 +35,20 @@ export type AppointmentProductItem = {
     name: string;
     price: number;
     quantity: number;
+    staff_id?: string | null;
+    staff_name?: string | null;
+    start_time?: string | null;
 };
 
 export type AppointmentMembershipItem = {
     membership_id?: string | null;
     name: string;
-    duration?: string | null; // e.g. "1 Month"
+    duration?: string | null;
     price: number;
     quantity: number;
+    staff_id?: string | null;
+    staff_name?: string | null;
+    start_time?: string | null;
 };
 
 export type PaymentStatusField = 'unpaid' | 'paid' | 'partial' | 'refunded';
@@ -65,13 +77,26 @@ export type Appointment = {
     updated_at: string;
     cancelled_at: string | null;
     cancel_reason: string | null;
-    // Joined field
+    // Computed at query time (not stored as a column)
+    invoice_number?: number | null;
+    // Joined fields (from clients / staff tables — not stored as columns)
     client_name?: string | null;
+    client_phone?: string | null;
+    client_email?: string | null;
+    staff_name?: string | null;
+    staff_phone?: string | null;
+    staff_email?: string | null;
     // JSONB columns
     services: AppointmentServiceItem[];
     package_items: AppointmentPackageItem[];
     product_items: AppointmentProductItem[];
     membership_items: AppointmentMembershipItem[];
+    // Charges & discount (estimate, captured pre-payment)
+    discount_value: number;
+    discount_type: 'percentage' | 'flat';
+    ex_charges: number;
+    tip_amount: number;
+    gst_percent: number;
 };
 
 // ─── Request body types ──────────────────────────────────────────────────────
@@ -96,6 +121,12 @@ export type CreateAppointmentBody = {
     package_items?: AppointmentPackageItem[];
     product_items?: AppointmentProductItem[];
     membership_items?: AppointmentMembershipItem[];
+    // Charges & discount (estimate, captured pre-payment)
+    discount_value?: number;
+    discount_type?: 'percentage' | 'flat';
+    ex_charges?: number;
+    tip_amount?: number;
+    gst_percent?: number;
 };
 
 export type UpdateAppointmentBody = Partial<Omit<CreateAppointmentBody, "salon_id">>;

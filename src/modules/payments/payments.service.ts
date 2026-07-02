@@ -17,15 +17,18 @@ export const paymentsService = {
     // (e.g., partial-payment amount instead of the full bill total).
     let appt: Appointment | null = null;
 
-    if (data.appointment_id) {
+    const isPackagePayment = (data.payment_method || '').toLowerCase() === 'package';
+
+    if (data.appointment_id && !isPackagePayment) {
       try {
         appt = await appointmentsRepository.findById(data.appointment_id);
         if (appt) {
           // Use Number() guards — JSONB prices can arrive as strings or be undefined
-          const serviceTotal    = (appt.services         || []).reduce((s, i) => s + (Number(i.price) || 0) * (Number(i.quantity) || 0), 0);
-          const packageTotal    = (appt.package_items    || []).reduce((s, i) => s + (Number(i.price) || 0) * (Number(i.quantity) || 0), 0);
-          const productTotal    = (appt.product_items    || []).reduce((s, i) => s + (Number(i.price) || 0) * (Number(i.quantity) || 0), 0);
-          const membershipTotal = (appt.membership_items || []).reduce((s, i) => s + (Number(i.price) || 0) * (Number(i.quantity) || 0), 0);
+          const qty = (i: any) => Number(i.qty) || Number(i.quantity) || 1;
+          const serviceTotal    = (appt.services         || []).reduce((s, i) => s + (Number(i.price) || 0) * qty(i), 0);
+          const packageTotal    = (appt.package_items    || []).reduce((s, i) => s + (Number(i.price) || 0) * qty(i), 0);
+          const productTotal    = (appt.product_items    || []).reduce((s, i) => s + (Number(i.price) || 0) * qty(i), 0);
+          const membershipTotal = (appt.membership_items || []).reduce((s, i) => s + (Number(i.price) || 0) * qty(i), 0);
           const actualBill      = serviceTotal + packageTotal + productTotal + membershipTotal;
 
           // If the appointment has no priced items, fall through to frontend values
@@ -48,6 +51,16 @@ export const paymentsService = {
       } catch {
         // Non-fatal: fall through and use frontend-supplied values
       }
+    } else if (data.appointment_id && isPackagePayment) {
+      // Package payments: customer already paid via the package purchase.
+      // Trust frontend values (paid=0, due=0, status='completed') and just
+      // fetch the appointment so membership auto-create has appt context.
+      try { appt = await appointmentsRepository.findById(data.appointment_id); } catch { /* non-fatal */ }
+      data.gross_amount = 0;
+      data.net_amount   = 0;
+      data.paid_amount  = 0;
+      data.due_amount   = 0;
+      data.status       = 'completed';
     }
 
     const payment = await paymentsRepository.create(data);
@@ -69,7 +82,8 @@ export const paymentsService = {
     }
 
     // ── Auto-create sale record when calendar payment is fully completed ───────
-    if (data.appointment_id && data.status === 'completed' && appt) {
+    // Skip for package payments — revenue was already counted when the package was purchased.
+    if (data.appointment_id && data.status === 'completed' && appt && !isPackagePayment) {
       try {
         const existingSale = await salesRepository.findByAppointmentId(data.appointment_id);
         if (!existingSale) {
@@ -170,6 +184,8 @@ export const paymentsService = {
         // Non-fatal: payment is already recorded
       }
     }
+
+    // Payment email is handled by appointments.service checkout — skip here to avoid duplicates
 
     // ── Auto-create client_memberships when memberships are sold ─────────────
     // Use membership_items from DB (appt) if available; fall back to items sent in the payment body.

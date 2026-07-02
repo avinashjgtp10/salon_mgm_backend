@@ -536,11 +536,13 @@ export const clientsController = {
                     [clientId, salonId]
                 ),
 
-                // 5. Lifetime spend
+                // 5. Lifetime spend — sum actual paid_amount from payments (covers both
+                //    draft sales and completed sales since a payment record is always
+                //    created when money is collected, regardless of sale status)
                 pool.query(
-                    `SELECT COALESCE(SUM(total_amount), 0) AS lifetime_spend
-                     FROM sales
-                     WHERE client_id = $1 AND salon_id = $2 AND status = 'completed'`,
+                    `SELECT COALESCE(SUM(paid_amount), 0) AS lifetime_spend
+                     FROM payments
+                     WHERE client_id = $1 AND salon_id = $2 AND status IN ('completed', 'partial')`,
                     [clientId, salonId]
                 ),
             ]);
@@ -567,7 +569,11 @@ export const clientsController = {
                     cancellations:          statsRes.rows[0]?.cancellations           ?? 0,
                     lifetime_spend:         Number(totalSpendRes.rows[0]?.lifetime_spend ?? 0),
                     total_sales:            salesRes.rowCount ?? 0,
-                    active_packages:        pkgRows.filter((p) => p.status === "active").length,
+                    active_packages:        pkgRows.filter((p: any) => p.status === "active").length,
+                    // Most recent completed visit; fall back to any appointment date
+                    last_visit_at:          apptRes.rows.find((a: any) => a.status === "completed")?.scheduled_at
+                                              ?? apptRes.rows[0]?.scheduled_at
+                                              ?? null,
                 },
                 appointments: apptRes.rows,
                 sales:        salesRes.rows,

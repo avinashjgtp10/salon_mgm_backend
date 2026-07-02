@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Request, type Response, type NextFunction } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { requirePermission } from "../../middleware/permission.middleware";
@@ -16,6 +16,8 @@ import {
   validateUpsertStaffSchedules, validateCreateStaffLeave, validateUpdateStaffLeave,
   validateAcceptInvitation,
 } from "./staff.validator";
+import { blockedTimesController } from "../blocked_times/blocked_times.controller";
+import { validateCreateStaffBlockedTime, validateUpdateBlockedTime } from "../blocked_times/blocked_times.validator";
 
 const router = Router();
 const auth = authMiddleware;
@@ -94,5 +96,31 @@ router.get("/:staffId/leaves",        auth, ownerAdminStaff, staffLeavesControll
 router.post("/:staffId/leaves",       auth, ownerAdmin, validateCreateStaffLeave, staffLeavesController.create);
 router.patch("/:staffId/leaves/:id",  auth, ownerAdmin, validateUpdateStaffLeave, staffLeavesController.update);
 router.delete("/:staffId/leaves/:id", auth, ownerAdmin, staffLeavesController.delete);
+
+// ─── Blocked Times (staff-scoped) ────────────────────────────────────────────
+router.post(
+  "/:staffId/blocked-times",
+  auth, ownerAdminStaff,
+  (req: Request, _res: Response, next: NextFunction) => { req.body.staff_id = req.params.staffId; next(); },
+  validateCreateStaffBlockedTime,
+  blockedTimesController.create
+);
+router.get(
+  "/:staffId/blocked-times",
+  auth, ownerAdminStaff,
+  (req: Request, _res: Response, next: NextFunction) => { req.query.staff_id = req.params.staffId; next(); },
+  blockedTimesController.list
+);
+router.patch(
+  "/:staffId/blocked-times/:id",
+  auth, ownerAdminStaff,
+  validateUpdateBlockedTime,
+  blockedTimesController.update
+);
+router.delete(
+  "/:staffId/blocked-times/:id",
+  auth, ownerAdminStaff,
+  blockedTimesController.delete
+);
 
 export default router;

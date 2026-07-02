@@ -2,6 +2,7 @@ import { AppError } from '../../../../middleware/error.middleware'
 import { webhooksRepository } from './webhooks.repository'
 import { inboxService } from '../inbox/inbox.service'
 import { whatsappAutomationService } from '../../../whatsapp-automation/whatsapp-automation.service'
+import { notificationsService } from '../../../notifications/notifications.service'
 import pool from '../../../../config/database'
 import logger from '../../../../config/logger'
 
@@ -135,13 +136,22 @@ export const webhooksService = {
 
   async processInboundMessage(salonId: string, msg: any, contact: any) {
     if (msg.type !== 'text') return
+    const senderName = contact?.profile?.name ?? msg.from
+    const messageBody = msg.text?.body ?? ''
     await inboxService.handleInboundMessage({
       salonId,
       phone: msg.from,
-      name:  contact?.profile?.name ?? null,
-      body:  msg.text?.body ?? '',
+      name:  senderName,
+      body:  messageBody,
       wamid: msg.id,
     })
+    // Fire notification for incoming WhatsApp message (fire-and-forget)
+    notificationsService.create({
+      salon_id: salonId,
+      type:     'whatsapp',
+      title:    `WhatsApp: ${senderName}`,
+      body:     messageBody.length > 80 ? messageBody.slice(0, 77) + '…' : messageBody,
+    }).catch(() => {})
   },
 
   async processStatus(status: any) {
