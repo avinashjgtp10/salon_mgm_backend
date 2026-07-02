@@ -49,9 +49,12 @@ import packageTemplatesRoutes from "./modules/package-templates/package-template
 import { ensurePackageTemplateTables } from "./modules/package-templates/package-templates.repository";
 import clientMembershipsRoutes from "./modules/client-memberships/client-memberships.routes";
 import { ensureTable as ensureClientMembershipsTables } from "./modules/client-memberships/client-memberships.repository";
+import cashManagementRoutes from "./modules/cash-management/cash-management.routes";
+import { ensureCashManagementTables } from "./modules/cash-management/cash-management.repository";
 import superAdminRoutes from "./modules/super-admin/super-admin.routes";
 import supportRoutes from "./modules/support/support.routes";
 import notificationsRoutes from "./modules/notifications/notifications.routes";
+import { emailService } from "./modules/utils/email.service";
 import swaggerUi from "swagger-ui-express";
 import path from "path";
 
@@ -69,6 +72,11 @@ ensurePackageTemplateTables().catch(err =>
 // Bootstrap client-memberships tables (idempotent)
 ensureClientMembershipsTables().catch(err =>
   logger.warn("client-memberships table init warning:", err?.message ?? err),
+);
+
+// Bootstrap cash-management tables (idempotent)
+ensureCashManagementTables().catch(err =>
+  logger.warn("cash-management table init warning:", err?.message ?? err),
 );
 
 // Security middleware
@@ -123,8 +131,6 @@ app.get("/api/v1/test-email", async (_req, res) => {
   logger.info("[test-email] SMTP config:", smtpInfo);
 
   try {
-    const { emailService } = await import("./modules/utils/email.service");
-
     // Step 1: verify SMTP connection
     try {
       await emailService.verifyConnection();
@@ -151,10 +157,10 @@ app.get("/api/v1/test-email", async (_req, res) => {
       appointmentId: "TEST-001",
     });
     logger.info("[test-email] Test email sent successfully to", testTo);
-    res.json({ success: true, message: `Test email sent to ${testTo}`, smtpInfo });
+    return res.json({ success: true, message: `Test email sent to ${testTo}`, smtpInfo });
   } catch (err: any) {
     logger.error("[test-email] sendMail FAILED:", err?.message ?? err);
-    res.status(500).json({ success: false, step: "send_mail", error: err?.message ?? "Unknown error", smtpInfo });
+    return res.status(500).json({ success: false, step: "send_mail", error: err?.message ?? "Unknown error", smtpInfo });
   }
 });
 
@@ -203,6 +209,7 @@ app.use("/api/v1/blocked-times", blockedTimesRoutes);
 app.use("/api/v1/settings", settingsRoutes);
 app.use("/api/v1/bot", botRoutes);
 app.use("/api/v1/reports", reportsRoutes);
+app.use("/api/v1/cash-management", cashManagementRoutes);
 app.use("/api/v1/wa-automation", waAutomationRoutes);
 app.use("/api/v1/attendance", attendanceRoutes);
 app.use("/api/v1/devices", deviceApiRouter);
