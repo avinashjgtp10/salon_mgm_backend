@@ -11,10 +11,11 @@ export type AppointmentStatus =
 export type AppointmentServiceItem = {
     service_id: string;
     staff_id?: string | null;
+    staff_name?: string | null;
     name: string;
     price: number;
     quantity: number;
-    time?: string | null; // "HH:MM" slot time
+    time?: string | null;
 };
 
 export type AppointmentPackageItem = {
@@ -23,6 +24,7 @@ export type AppointmentPackageItem = {
     price: number;
     quantity: number;
     staff_id?: string | null;
+    staff_name?: string | null;
     start_time?: string | null;
 };
 
@@ -32,6 +34,7 @@ export type AppointmentProductItem = {
     price: number;
     quantity: number;
     staff_id?: string | null;
+    staff_name?: string | null;
     start_time?: string | null;
 };
 
@@ -42,6 +45,7 @@ export type AppointmentMembershipItem = {
     price: number;
     quantity: number;
     staff_id?: string | null;
+    staff_name?: string | null;
     start_time?: string | null;
 };
 
@@ -71,8 +75,15 @@ export type Appointment = {
     updated_at: string;
     cancelled_at: string | null;
     cancel_reason: string | null;
-    // Joined field
+    // Computed at query time (not stored as a column)
+    invoice_number?: number | null;
+    // Joined fields (from clients / staff tables — not stored as columns)
     client_name?: string | null;
+    client_phone?: string | null;
+    client_email?: string | null;
+    staff_name?: string | null;
+    staff_phone?: string | null;
+    staff_email?: string | null;
     // JSONB columns
     services: AppointmentServiceItem[];
     package_items: AppointmentPackageItem[];

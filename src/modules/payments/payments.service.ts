@@ -17,7 +17,9 @@ export const paymentsService = {
     // (e.g., partial-payment amount instead of the full bill total).
     let appt: Appointment | null = null;
 
-    if (data.appointment_id) {
+    const isPackagePayment = (data.payment_method || '').toLowerCase() === 'package';
+
+    if (data.appointment_id && !isPackagePayment) {
       try {
         appt = await appointmentsRepository.findById(data.appointment_id);
         if (appt) {
@@ -49,6 +51,16 @@ export const paymentsService = {
       } catch {
         // Non-fatal: fall through and use frontend-supplied values
       }
+    } else if (data.appointment_id && isPackagePayment) {
+      // Package payments: customer already paid via the package purchase.
+      // Trust frontend values (paid=0, due=0, status='completed') and just
+      // fetch the appointment so membership auto-create has appt context.
+      try { appt = await appointmentsRepository.findById(data.appointment_id); } catch { /* non-fatal */ }
+      data.gross_amount = 0;
+      data.net_amount   = 0;
+      data.paid_amount  = 0;
+      data.due_amount   = 0;
+      data.status       = 'completed';
     }
 
     const payment = await paymentsRepository.create(data);
@@ -70,7 +82,8 @@ export const paymentsService = {
     }
 
     // ── Auto-create sale record when calendar payment is fully completed ───────
-    if (data.appointment_id && data.status === 'completed' && appt) {
+    // Skip for package payments — revenue was already counted when the package was purchased.
+    if (data.appointment_id && data.status === 'completed' && appt && !isPackagePayment) {
       try {
         const existingSale = await salesRepository.findByAppointmentId(data.appointment_id);
         if (!existingSale) {
