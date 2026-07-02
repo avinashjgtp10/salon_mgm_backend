@@ -24,6 +24,8 @@ export type AppointmentPackageItem = {
     price: number;
     quantity: number;
     is_package_service?: boolean;
+    staff_id?: string | null;
+    start_time?: string | null;
 };
 
 export type AppointmentProductItem = {
@@ -31,14 +33,18 @@ export type AppointmentProductItem = {
     name: string;
     price: number;
     quantity: number;
+    staff_id?: string | null;
+    start_time?: string | null;
 };
 
 export type AppointmentMembershipItem = {
     membership_id?: string | null;
     name: string;
-    duration?: string | null; // e.g. "1 Month"
+    duration?: string | null;
     price: number;
     quantity: number;
+    staff_id?: string | null;
+    start_time?: string | null;
 };
 
 export type PaymentStatusField = 'unpaid' | 'paid' | 'partial' | 'refunded';
@@ -74,6 +80,12 @@ export type Appointment = {
     package_items: AppointmentPackageItem[];
     product_items: AppointmentProductItem[];
     membership_items: AppointmentMembershipItem[];
+    // Charges & discount (estimate, captured pre-payment)
+    discount_value: number;
+    discount_type: 'percentage' | 'flat';
+    ex_charges: number;
+    tip_amount: number;
+    gst_percent: number;
 };
 
 // ─── Request body types ──────────────────────────────────────────────────────
@@ -98,6 +110,12 @@ export type CreateAppointmentBody = {
     package_items?: AppointmentPackageItem[];
     product_items?: AppointmentProductItem[];
     membership_items?: AppointmentMembershipItem[];
+    // Charges & discount (estimate, captured pre-payment)
+    discount_value?: number;
+    discount_type?: 'percentage' | 'flat';
+    ex_charges?: number;
+    tip_amount?: number;
+    gst_percent?: number;
 };
 
 export type UpdateAppointmentBody = Partial<Omit<CreateAppointmentBody, "salon_id">>;
