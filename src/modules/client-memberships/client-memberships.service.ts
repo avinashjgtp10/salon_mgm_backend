@@ -5,6 +5,8 @@ import type {
   CreateClientMembershipDTO,
   ConsumeSessionDTO,
   ClientMembershipsListQuery,
+  WalletDeductionServiceInput,
+  WalletDeductionResult,
 } from './client-memberships.types';
 import logger from '../../config/logger';
 
@@ -28,6 +30,22 @@ export const clientMembershipsService = {
 
   async cancel(id: string, salonId: string) {
     return clientMembershipsRepository.cancel(id, salonId);
+  },
+
+  // Automatic wallet redemption at checkout: draws from the client's single
+  // highest-balance active membership. No-op (all zeros) if the client has
+  // no active membership with a positive balance.
+  async deductWalletForBooking(
+    salonId: string,
+    clientId: string,
+    appointmentId: string,
+    services: WalletDeductionServiceInput[],
+  ): Promise<WalletDeductionResult> {
+    const membership = await clientMembershipsRepository.findActiveWithBalanceForClient(clientId, salonId);
+    if (!membership) return { totalWalletUsed: 0, remainingBalance: 0, perService: [], reused: false };
+    return clientMembershipsRepository.deductOrReuseWalletForAppointment(membership.id, salonId, {
+      appointmentId, services,
+    });
   },
 
   // Backfill: scan paid appointments and completed sales to create missing client_membership records
