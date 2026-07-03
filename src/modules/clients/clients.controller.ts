@@ -436,14 +436,33 @@ export const clientsController = {
                         a.cancel_reason,
                         a.services,
                         a.product_items,
+                        a.membership_items,
                         a.staff_id,
+                        -- Actual cash/tender collected so far (NOT net_amount, which is
+                        -- the recomputed bill total and is nonzero even when unpaid).
                         COALESCE(
-                            (SELECT SUM(p.net_amount)
+                            (SELECT SUM(p.paid_amount)
                              FROM payments p
                              WHERE p.appointment_id = a.id
                                AND p.status IN ('completed', 'partial')),
                             0
                         ) AS amount_paid,
+                        -- Authoritative remaining balance, already net of discount/
+                        -- eWallet/membership-wallet deductions (payments.service.ts).
+                        COALESCE(
+                            (SELECT p.due_amount FROM payments p
+                             WHERE p.appointment_id = a.id
+                             ORDER BY p.created_at DESC LIMIT 1),
+                            0
+                        ) AS due_amount,
+                        -- Actual net bill for a completed appointment (post discount/
+                        -- eWallet/membership-wallet). NULL (not 0) when no completed
+                        -- payment exists yet, so the frontend can tell "not billed"
+                        -- apart from "genuinely billed at ₹0" (e.g. fully wallet/
+                        -- package covered).
+                        (SELECT SUM(p.net_amount) FROM payments p
+                         WHERE p.appointment_id = a.id AND p.status = 'completed'
+                        ) AS net_amount,
                         COALESCE(
                             (SELECT CASE
                                 WHEN bool_or(p.status = 'completed') THEN 'paid'

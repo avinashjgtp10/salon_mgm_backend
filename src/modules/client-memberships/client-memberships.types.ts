@@ -15,6 +15,7 @@ export interface ClientMembership {
   expiresAt?: string;
   status: 'active' | 'expired' | 'exhausted' | 'cancelled';
   pricePaid?: number;
+  membershipWalletBalance: number;
   usageLog?: UsageLogEntry[];
   createdAt: string;
   updatedAt: string;
@@ -28,6 +29,11 @@ export interface UsageLogEntry {
   sessionsConsumed: number;
   notes?: string;
   usedAt: string;
+  amountDeducted?: number;
+  remainingBalance?: number;
+  serviceId?: string;
+  clientId?: string;
+  membershipId?: string;
 }
 
 export interface CreateClientMembershipDTO {
@@ -46,6 +52,19 @@ export interface ConsumeSessionDTO {
   serviceName?: string;
   sessionsToConsume?: number;
   notes?: string;
+}
+
+export interface WalletDeductionServiceInput {
+  serviceId?: string;
+  serviceName?: string;
+  amount: number;
+}
+
+export interface WalletDeductionResult {
+  totalWalletUsed: number;
+  remainingBalance: number;
+  perService: Array<{ serviceId?: string; walletUsed: number; customerPays: number }>;
+  reused: boolean;
 }
 
 export interface ClientMembershipsListQuery {
@@ -73,6 +92,7 @@ export interface ClientMembershipRow {
   expires_at?: string | null;
   status: string;
   price_paid?: string | null;
+  membership_wallet_balance?: string | number | null;
   created_at: string;
   updated_at: string;
 }
@@ -85,4 +105,9 @@ export interface UsageLogRow {
   sessions_consumed: number;
   notes?: string | null;
   used_at: string;
+  amount_deducted?: string | number | null;
+  remaining_balance?: string | number | null;
+  service_id?: string | null;
+  client_id?: string | null;
+  membership_id?: string | null;
 }

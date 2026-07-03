@@ -4,6 +4,7 @@ import { appointmentsRepository } from '../appointments/appointments.repository'
 import { salesRepository } from '../sales/sales.repository';
 import { membershipsRepository } from '../memberships/memberships.repository';
 import { clientMembershipsService } from '../client-memberships/client-memberships.service';
+import { clientMembershipsRepository } from '../client-memberships/client-memberships.repository';
 import { CreatePaymentBody, Payment } from './payments.types';
 import type { Appointment } from '../appointments/appointments.types';
 import logger from '../../config/logger';
@@ -36,7 +37,43 @@ export const paymentsService = {
 
           const discount      = Math.max(0, Number(data.discount_amount) || 0);
           const ewallet       = Math.max(0, Number(data.ewallet_used)    || 0);
-          const effectiveBill = Math.max(0, actualBill - discount - ewallet);
+
+          // ── Membership wallet: redeem against services only ────────────────
+          // Manual opt-in — only deducts when the staff checked "Apply
+          // Membership" (data.apply_membership_wallet). Deducts once per
+          // appointment (idempotent across repeat/partial-payment calls — see
+          // deductOrReuseWalletForAppointment); if a PRIOR payment call for
+          // this appointment already deducted (checkbox was checked then),
+          // that already-spent amount still applies even if this call has the
+          // box unchecked — it can't be un-deducted, so the bill stays
+          // consistent with what was actually taken from the wallet. Never
+          // blocks a payment on a wallet-system error; customer just pays
+          // full price in that case.
+          let membershipWalletUsed = 0;
+          if (data.client_id) {
+            try {
+              if (data.apply_membership_wallet) {
+                const servicesForWallet = (appt.services || []).map(s => ({
+                  serviceId:   s.service_id,
+                  serviceName: s.name,
+                  amount:      (Number(s.price) || 0) * qty(s),
+                }));
+                if (servicesForWallet.length > 0) {
+                  const result = await clientMembershipsService.deductWalletForBooking(
+                    data.salon_id, data.client_id, data.appointment_id, servicesForWallet,
+                  );
+                  membershipWalletUsed = result.totalWalletUsed;
+                }
+              } else {
+                membershipWalletUsed = await clientMembershipsRepository.getWalletUsedForAppointment(data.appointment_id);
+              }
+            } catch (err: any) {
+              logger.warn('[payments] membership wallet deduction failed:', err?.message ?? err);
+            }
+          }
+
+          const effectiveBill = Math.max(0, actualBill - discount - ewallet - membershipWalletUsed);
+          data.membership_wallet_used = membershipWalletUsed;
 
           // Sum previously paid amounts across all prior payments for this appointment
           const existingPaid = await paymentsRepository.getTotalPaidForAppointment(data.appointment_id);

@@ -19,6 +19,7 @@ export type Payment = {
   notes: string | null;
   created_at: string;
   updated_at: string;
+  membership_wallet_used: number;
 };
 
 export type CreatePaymentBody = {
@@ -37,4 +38,6 @@ export type CreatePaymentBody = {
   status?: PaymentStatus;
   notes?: string;
   membership_items?: Array<{ membership_id?: string; name: string; price: number; quantity: number }>;
+  membership_wallet_used?: number;
+  apply_membership_wallet?: boolean;
 };

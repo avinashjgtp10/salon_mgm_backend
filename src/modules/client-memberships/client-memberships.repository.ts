@@ -7,6 +7,8 @@ import type {
   CreateClientMembershipDTO,
   ConsumeSessionDTO,
   ClientMembershipsListQuery,
+  WalletDeductionServiceInput,
+  WalletDeductionResult,
 } from "./client-memberships.types";
 
 export async function ensureTable(): Promise<void> {
@@ -46,6 +48,7 @@ export async function ensureTable(): Promise<void> {
     `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS price_paid      NUMERIC(10,2)`,
     `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS created_at      TIMESTAMPTZ DEFAULT NOW()`,
     `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS updated_at      TIMESTAMPTZ DEFAULT NOW()`,
+    `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS membership_wallet_balance NUMERIC(10,2) NOT NULL DEFAULT 0`,
   ];
   for (const sql of patches) {
     await pool.query(sql);
@@ -62,6 +65,56 @@ export async function ensureTable(): Promise<void> {
       used_at               TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+  const usageLogPatches = [
+    `ALTER TABLE membership_usage_log ADD COLUMN IF NOT EXISTS amount_deducted   NUMERIC(10,2) NOT NULL DEFAULT 0`,
+    `ALTER TABLE membership_usage_log ADD COLUMN IF NOT EXISTS remaining_balance NUMERIC(10,2)`,
+    `ALTER TABLE membership_usage_log ADD COLUMN IF NOT EXISTS service_id        UUID`,
+    `ALTER TABLE membership_usage_log ADD COLUMN IF NOT EXISTS client_id         UUID`,
+    `ALTER TABLE membership_usage_log ADD COLUMN IF NOT EXISTS membership_id     UUID`,
+  ];
+  for (const sql of usageLogPatches) {
+    await pool.query(sql);
+  }
+
+  await backfillLegacyWalletBalances();
+}
+
+// One-time (but safely re-runnable) backfill for rows created before the
+// membership_wallet_balance column existed. Those rows got the column's
+// static DEFAULT 0 instead of a real computed balance. Only touches rows
+// that have literally never been through the wallet-deduction flow (no
+// ledger entries), so a genuinely-exhausted membership is never "revived".
+async function backfillLegacyWalletBalances(): Promise<void> {
+  const { rows: candidates } = await pool.query(`
+    SELECT cm.id, cm.membership_id
+    FROM client_memberships cm
+    WHERE cm.status = 'active'
+      AND cm.membership_wallet_balance = 0
+      AND NOT EXISTS (
+        SELECT 1 FROM membership_usage_log ul
+        WHERE ul.client_membership_id = cm.id AND ul.amount_deducted > 0
+      )
+  `);
+  if (!candidates.length) return;
+
+  for (const row of candidates) {
+    const memRes = await pool.query(
+      `SELECT price, description FROM memberships WHERE id = $1`,
+      [row.membership_id],
+    );
+    const memRow = memRes.rows[0];
+    if (!memRow) continue;
+
+    let bonusCredit = 0;
+    try { bonusCredit = Number(JSON.parse(memRow.description ?? "{}").bonusCredit) || 0; } catch { /* plain text description */ }
+    const walletBalance = (Number(memRow.price) || 0) + bonusCredit;
+    if (walletBalance <= 0) continue;
+
+    await pool.query(
+      `UPDATE client_memberships SET membership_wallet_balance = $1 WHERE id = $2`,
+      [walletBalance, row.id],
+    );
+  }
 }
 
 // ── Row → domain ──────────────────────────────────────────────────────────────
@@ -86,6 +139,7 @@ function toClientMembership(row: ClientMembershipRow, log: UsageLogRow[] = []): 
     expiresAt:          row.expires_at ?? undefined,
     status:             row.status as ClientMembership['status'],
     pricePaid:          row.price_paid ? parseFloat(row.price_paid) : undefined,
+    membershipWalletBalance: Number(row.membership_wallet_balance) || 0,
     usageLog:           log.map(r => ({
       id:                  r.id,
       clientMembershipId:  r.client_membership_id,
@@ -94,10 +148,32 @@ function toClientMembership(row: ClientMembershipRow, log: UsageLogRow[] = []): 
       sessionsConsumed:    r.sessions_consumed,
       notes:               r.notes            ?? undefined,
       usedAt:              r.used_at,
+      amountDeducted:      r.amount_deducted   != null ? Number(r.amount_deducted)   : undefined,
+      remainingBalance:    r.remaining_balance != null ? Number(r.remaining_balance) : undefined,
+      serviceId:           r.service_id        ?? undefined,
+      clientId:            r.client_id         ?? undefined,
+      membershipId:        r.membership_id     ?? undefined,
     })),
     createdAt:          row.created_at,
     updatedAt:          row.updated_at,
   };
+}
+
+// ── Expiry helpers ───────────────────────────────────────────────────────────
+// `end_date` is NOT NULL on client_memberships and is what expiry-reminder
+// queries (e.g. WhatsApp automation) read — it must always be populated.
+
+function computeExpiryDate(validFor: string | undefined | null): Date {
+  const d = new Date();
+  switch (validFor) {
+    case '1 month':  d.setMonth(d.getMonth() + 1); break;
+    case '3 months': d.setMonth(d.getMonth() + 3); break;
+    case '6 months': d.setMonth(d.getMonth() + 6); break;
+    case '1 year':   d.setFullYear(d.getFullYear() + 1); break;
+    case 'lifetime':
+    default:          d.setFullYear(d.getFullYear() + 50); break;
+  }
+  return d;
 }
 
 // ── Repository ────────────────────────────────────────────────────────────────
@@ -188,20 +264,41 @@ export const clientMembershipsRepository = {
       }
     } catch { /* non-fatal */ }
 
+    // Resolve expiry + wallet funding from the catalog membership row itself —
+    // authoritative regardless of what the caller passed, so the wallet is
+    // always funded as (catalog price + bonusCredit) no matter which of the
+    // several sell flows created this row.
+    const memRes = await pool.query(
+      `SELECT valid_for, price, description FROM memberships WHERE id = $1`,
+      [dto.membershipId],
+    );
+    const memRow = memRes.rows[0];
+
+    let expiresAt: Date | string | null = dto.expiresAt ?? null;
+    if (!expiresAt) expiresAt = computeExpiryDate(memRow?.valid_for);
+
+    let walletBalance = dto.pricePaid ?? 0;
+    if (memRow) {
+      let bonusCredit = 0;
+      try { bonusCredit = Number(JSON.parse(memRow.description ?? "{}").bonusCredit) || 0; } catch { /* plain text description */ }
+      walletBalance = (Number(memRow.price) || 0) + bonusCredit;
+    }
+
     const id = uuidv4();
     const { rows } = await pool.query(
       `INSERT INTO client_memberships
         (id, salon_id, client_id, client_name, mobile, email,
          membership_id, membership_name, colour, total_sessions, used_sessions,
-         expires_at, status, price_paid)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$11,'active',$12)
+         expires_at, end_date, status, price_paid, membership_wallet_balance)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$11,$11,'active',$12,$13)
        RETURNING *`,
       [
         id, salonId, dto.clientId, clientName, mobile, email,
         dto.membershipId, dto.membershipName, dto.colour ?? null,
         dto.totalSessions,
-        dto.expiresAt ?? null,
+        expiresAt,
         dto.pricePaid ?? null,
+        walletBalance,
       ],
     );
     return toClientMembership(rows[0]);
@@ -283,5 +380,114 @@ export const clientMembershipsRepository = {
       [id, salonId],
     );
     return (rowCount ?? 0) > 0;
+  },
+
+  // ── Membership wallet ──────────────────────────────────────────────────────
+
+  async findActiveWithBalanceForClient(clientId: string, salonId: string): Promise<ClientMembership | null> {
+    const { rows } = await pool.query(
+      `SELECT * FROM client_memberships
+       WHERE client_id = $1 AND salon_id = $2 AND status = 'active' AND membership_wallet_balance > 0
+       ORDER BY membership_wallet_balance DESC LIMIT 1`,
+      [clientId, salonId],
+    );
+    return rows.length ? toClientMembership(rows[0]) : null;
+  },
+
+  // Read-only — for display/history use only. NOT used to decide reuse-vs-deduct
+  // in the payment flow (that check must happen inside the locked transaction
+  // below to avoid a double-spend race).
+  async getWalletUsedForAppointment(appointmentId: string): Promise<number> {
+    const { rows } = await pool.query(
+      `SELECT COALESCE(SUM(amount_deducted),0) AS total FROM membership_usage_log WHERE appointment_id = $1`,
+      [appointmentId],
+    );
+    return parseFloat(rows[0]?.total ?? '0');
+  },
+
+  async deductOrReuseWalletForAppointment(
+    clientMembershipId: string,
+    salonId: string,
+    params: { appointmentId: string; services: WalletDeductionServiceInput[] },
+  ): Promise<WalletDeductionResult> {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const { rows } = await client.query(
+        `SELECT * FROM client_memberships WHERE id = $1 AND salon_id = $2 FOR UPDATE`,
+        [clientMembershipId, salonId],
+      );
+      if (!rows.length) {
+        await client.query('ROLLBACK');
+        return { totalWalletUsed: 0, remainingBalance: 0, perService: [], reused: false };
+      }
+      const cm = rows[0] as ClientMembershipRow;
+
+      // Idempotency check — MUST happen inside this same locked transaction.
+      // A concurrent request for the same appointment blocks on the FOR UPDATE
+      // above until this transaction commits, then sees the ledger rows below
+      // and no-ops here instead of double-deducting.
+      const { rows: existing } = await client.query(
+        `SELECT COALESCE(SUM(amount_deducted),0) AS total FROM membership_usage_log
+         WHERE appointment_id = $1 AND client_membership_id = $2`,
+        [params.appointmentId, clientMembershipId],
+      );
+      const alreadyUsed = parseFloat(existing[0]?.total ?? '0');
+      if (alreadyUsed > 0) {
+        await client.query('ROLLBACK');
+        return {
+          totalWalletUsed: alreadyUsed,
+          remainingBalance: Number(cm.membership_wallet_balance) || 0,
+          perService: [],
+          reused: true,
+        };
+      }
+
+      let remaining = Number(cm.membership_wallet_balance) || 0;
+      let totalWalletUsed = 0;
+      const perService: WalletDeductionResult['perService'] = [];
+
+      for (const svc of params.services) {
+        const amount = Number(svc.amount) || 0;
+        const used = Math.min(remaining, amount);
+        const customerPays = Math.max(0, amount - used);
+        remaining -= used;
+        totalWalletUsed += used;
+        perService.push({ serviceId: svc.serviceId, walletUsed: used, customerPays });
+
+        if (used > 0) {
+          // service_id is a UUID column — some legacy/off-catalog service rows
+          // can carry a non-UUID or empty id, which would otherwise crash this
+          // insert (and the whole payment) with a type-cast error.
+          const isUuid = typeof svc.serviceId === 'string' &&
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(svc.serviceId);
+          await client.query(
+            `INSERT INTO membership_usage_log
+              (id, client_membership_id, client_id, membership_id, appointment_id,
+               service_id, service_name, sessions_consumed, amount_deducted, remaining_balance, notes)
+             VALUES (gen_random_uuid(), $1,$2,$3,$4,$5,$6,0,$7,$8,NULL)`,
+            [
+              clientMembershipId, cm.client_id, cm.membership_id, params.appointmentId,
+              isUuid ? svc.serviceId : null, svc.serviceName || null, used, remaining,
+            ],
+          );
+        }
+      }
+
+      const newStatus = remaining <= 0 ? 'exhausted' : cm.status;
+      await client.query(
+        `UPDATE client_memberships SET membership_wallet_balance = $1, status = $2, updated_at = NOW() WHERE id = $3`,
+        [remaining, newStatus, clientMembershipId],
+      );
+
+      await client.query('COMMIT');
+      return { totalWalletUsed, remainingBalance: remaining, perService, reused: false };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
   },
 };
