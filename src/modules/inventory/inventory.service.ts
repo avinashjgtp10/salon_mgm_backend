@@ -5,6 +5,8 @@ import {
     stockMovementsRepository,
     stocktakesRepository,
     stockTakeRepository,
+    stockReconciliationRepository,
+    consumableUsageRepository,
 } from "./inventory.repository";
 import {
     Supplier,
@@ -18,6 +20,10 @@ import {
     Stocktake,
     CreateStocktakeBody,
     StocktakeStatus,
+    StockReconciliationRow,
+    SaveReconciliationBody,
+    SaveReconciliationRowBody,
+    SaveConsumableUsageBody,
 } from "./inventory.types";
 
 // ─── Suppliers ────────────────────────────────────────────────────────────────
@@ -156,5 +162,73 @@ export const stockTakeService = {
         });
         logger.info("stockTakeService.process success", { processed: body.items.length, movementsCreated: movements.length });
         return { processed: body.items.length, movements };
+    },
+};
+
+// ─── Stock Reconciliation ─────────────────────────────────────────────────────
+
+export const stockReconciliationService = {
+    async list(params: {
+        branchId: string;
+        salonId: string;
+        search?: string;
+        categoryId?: string;
+    }): Promise<StockReconciliationRow[]> {
+        const { branchId, salonId, search, categoryId } = params;
+        if (!branchId) throw new AppError(400, "branch_id is required", "VALIDATION_ERROR");
+        logger.info("stockReconciliationService.list called", { branchId, salonId });
+        return stockReconciliationRepository.list(branchId, salonId, search, categoryId);
+    },
+
+    async saveAll(params: {
+        requesterUserId: string;
+        salonId: string;
+        body: SaveReconciliationBody;
+    }): Promise<{ processed: number }> {
+        const { requesterUserId, salonId, body } = params;
+        if (!body.branch_id) throw new AppError(400, "branch_id is required", "VALIDATION_ERROR");
+        if (!body.items?.length) throw new AppError(400, "items array is required", "VALIDATION_ERROR");
+        logger.info("stockReconciliationService.saveAll called", { branchId: body.branch_id, count: body.items.length });
+        const processed = await stockReconciliationRepository.upsertBatch(body.branch_id, salonId, body.items, requesterUserId);
+        logger.info("stockReconciliationService.saveAll success", { processed });
+        return { processed };
+    },
+
+    async saveRow(params: {
+        requesterUserId: string;
+        salonId: string;
+        body: SaveReconciliationRowBody;
+    }): Promise<StockReconciliationRow> {
+        const { requesterUserId, salonId, body } = params;
+        if (!body.branch_id) throw new AppError(400, "branch_id is required", "VALIDATION_ERROR");
+        if (!body.product_id) throw new AppError(400, "product_id is required", "VALIDATION_ERROR");
+        logger.info("stockReconciliationService.saveRow called", { productId: body.product_id, branchId: body.branch_id });
+        const row = await stockReconciliationRepository.upsertRow(body.branch_id, salonId, {
+            product_id: body.product_id,
+            adjust_stock: body.adjust_stock,
+            adjust_consumable: body.adjust_consumable,
+            remark: body.remark,
+        }, requesterUserId);
+        if (!row) throw new AppError(404, "Product not found", "NOT_FOUND");
+        logger.info("stockReconciliationService.saveRow success", { productId: body.product_id });
+        return row;
+    },
+};
+
+// ─── Consumable Usage ─────────────────────────────────────────────────────────
+
+export const consumableUsageService = {
+    async save(params: {
+        requesterUserId: string;
+        salonId: string;
+        body: SaveConsumableUsageBody;
+    }): Promise<{ recorded: number }> {
+        const { requesterUserId, salonId, body } = params;
+        if (!body.branch_id) throw new AppError(400, "branch_id is required", "VALIDATION_ERROR");
+        if (!body.items?.length) throw new AppError(400, "items are required", "VALIDATION_ERROR");
+        logger.info("consumableUsageService.save called", { branchId: body.branch_id, count: body.items.length });
+        const recorded = await consumableUsageRepository.create(body, salonId, requesterUserId);
+        logger.info("consumableUsageService.save success", { recorded });
+        return { recorded };
     },
 };
