@@ -26,6 +26,25 @@ export const configController = {
     } catch (e) { return next(e) }
   },
 
+  async setAiReceptionistEnabled(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId
+      if (!salonId) return res.status(400).json({ error: 'salonId missing from token' })
+      const enabled = req.body?.enabled === true
+      const data = await configService.setAiReceptionistEnabled(salonId, enabled)
+      return res.status(200).json({ success: true, data, message: enabled ? 'AI receptionist enabled' : 'AI receptionist disabled' })
+    } catch (e) { return next(e) }
+  },
+
+  async deleteConfig(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId
+      if (!salonId) return res.status(400).json({ error: 'salonId missing from token' })
+      await configService.deleteConfig(salonId)
+      return res.status(200).json({ success: true, message: 'WhatsApp connection removed' })
+    } catch (e) { return next(e) }
+  },
+
   async testConnection(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = req.user?.salonId
@@ -39,21 +58,10 @@ export const configController = {
     try {
       const salonId = req.user?.salonId
       if (!salonId) return res.status(400).json({ error: 'salonId missing from token' })
-      const config = await configRepository.findBySalonId(salonId)
-      if (!config) return res.status(404).json({ error: 'WhatsApp not configured' })
-      const limits = await whatsappMetaApi.fetchPhoneNumberLimits(
-        config.phone_number_id,
-        config.access_token,
-        config.waba_id
-      )
-      await configRepository.setVerified(
-        salonId,
-        config.display_phone ?? '',
-        limits.quality_rating,
-        limits.daily_limit
-      )
-      const updated = await configService.getConfig(salonId)
-      return res.status(200).json(updated)
+      const updated = await configService.syncLimitsForSalon(salonId)
+      if (!updated) return res.status(404).json({ error: 'WhatsApp not configured' })
+      const data = await configService.getConfig(salonId)
+      return res.status(200).json(data)
     } catch (e) { return next(e) }
   },
 

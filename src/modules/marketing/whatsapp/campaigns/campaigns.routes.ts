@@ -22,6 +22,11 @@ router.post('/',
   campaignsController.create
 )
 
+router.post('/:id/resend',
+  authMiddleware, roleMiddleware('salon_owner', 'admin'),
+  campaignsController.resend
+)
+
 router.post('/:id/pause',
   authMiddleware, roleMiddleware('salon_owner', 'admin'),
   campaignsController.pause
