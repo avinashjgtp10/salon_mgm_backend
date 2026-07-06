@@ -17,6 +17,16 @@ router.put('/',
   configController.saveConfig
 )
 
+router.delete('/',
+  authMiddleware, roleMiddleware('salon_owner', 'admin'),
+  configController.deleteConfig
+)
+
+router.patch('/ai-receptionist',
+  authMiddleware, roleMiddleware('salon_owner', 'admin'),
+  configController.setAiReceptionistEnabled
+)
+
 router.post('/test',
   authMiddleware, roleMiddleware('salon_owner', 'admin'),
   configController.testConnection

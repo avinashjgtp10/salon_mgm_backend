@@ -180,3 +180,21 @@ export type ClientsMergeBody = {
     source_client_ids: string[];
     strategy?: MergeStrategy;
 };
+
+// ── Smart Filter (campaign contact targeting) ─────────────────────────────────
+export type CampaignFilterParams = {
+    birth_month?:          number;
+    birth_day_month?:      string;
+    genders?:              string[];
+    client_source?:        string;
+    service_category_ids?: string[];
+    joined_from?:          string;
+    joined_to?:            string;
+    total_spend_min?:      number;
+    total_spend_max?:      number;
+    has_membership?:       boolean;
+    has_package?:          boolean;
+    last_visit_from?:      string;
+    last_visit_to?:        string;
+    customer_type?:        "new" | "repetitive";
+};

@@ -1,7 +1,7 @@
 import axios from 'axios'
 
 const WA_BASE_URL    = process.env.WA_BASE_URL    ?? 'https://graph.facebook.com'
-const WA_API_VERSION = process.env.WA_API_VERSION ?? 'v21.0'
+const WA_API_VERSION = process.env.WA_API_VERSION ?? 'v22.0'
 
 const TIER_LIMIT_MAP: Record<string, number> = {
   TIER_50:        50,
@@ -46,6 +46,36 @@ export const whatsappMetaApi = {
     const res = await axios.post(
       `${WA_BASE_URL}/${WA_API_VERSION}/${params.phoneNumberId}/messages`,
       { messaging_product: 'whatsapp', recipient_type: 'individual', to: params.to, type: 'text', text: { body: params.message } },
+      { headers: { Authorization: `Bearer ${params.accessToken}`, 'Content-Type': 'application/json' } }
+    )
+    return res.data
+  },
+
+  // Freeform document message — only deliverable within 24h of the customer's
+  // last inbound message (Meta's "service window"). Outside that window this
+  // requires a pre-approved media-header template instead; the caller should
+  // treat a failure here as expected, not fatal, and fall back to text-only.
+  async sendDocumentMessage(params: {
+    phoneNumberId: string
+    accessToken:   string
+    to:            string
+    link:          string
+    filename:      string
+    caption?:      string
+  }) {
+    const res = await axios.post(
+      `${WA_BASE_URL}/${WA_API_VERSION}/${params.phoneNumberId}/messages`,
+      {
+        messaging_product: 'whatsapp',
+        recipient_type:    'individual',
+        to:                params.to,
+        type:               'document',
+        document: {
+          link:     params.link,
+          filename: params.filename,
+          ...(params.caption ? { caption: params.caption } : {}),
+        },
+      },
       { headers: { Authorization: `Bearer ${params.accessToken}`, 'Content-Type': 'application/json' } }
     )
     return res.data
@@ -226,7 +256,7 @@ async verifyAccessToken(params: {
 
     try {
       const res = await axios.get(
-        `${WA_BASE_URL}/v20.0/${phoneNumberId}`,
+        `${WA_BASE_URL}/${WA_API_VERSION}/${phoneNumberId}`,
         {
           headers: { Authorization: `Bearer ${accessToken}` },
           params:  { fields: 'messaging_limit_tier,quality_rating' },
@@ -266,6 +296,13 @@ async verifyAccessToken(params: {
       `${WA_BASE_URL}/${WA_API_VERSION}/${params.wabaId}/subscribed_apps`,
       {},
       { headers: { Authorization: `Bearer ${params.accessToken}`, 'Content-Type': 'application/json' } }
+    )
+  },
+
+  async unsubscribeWaba(params: { wabaId: string; accessToken: string }) {
+    await axios.delete(
+      `${WA_BASE_URL}/${WA_API_VERSION}/${params.wabaId}/subscribed_apps`,
+      { headers: { Authorization: `Bearer ${params.accessToken}` } }
     )
   },
 

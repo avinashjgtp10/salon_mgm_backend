@@ -3,6 +3,8 @@ import { webhooksRepository } from './webhooks.repository'
 import { inboxService } from '../inbox/inbox.service'
 import { whatsappAutomationService } from '../../../whatsapp-automation/whatsapp-automation.service'
 import { notificationsService } from '../../../notifications/notifications.service'
+import { aiEngineService } from '../../../ai-engine/ai-engine.service'
+import { aiEngineRepository } from '../../../ai-engine/ai-engine.repository'
 import pool from '../../../../config/database'
 import logger from '../../../../config/logger'
 
@@ -152,6 +154,19 @@ export const webhooksService = {
       title:    `WhatsApp: ${senderName}`,
       body:     messageBody.length > 80 ? messageBody.slice(0, 77) + '…' : messageBody,
     }).catch(() => {})
+
+    // ── LUNOX AI receptionist — opt-in per salon, off by default ────────────
+    // handleIncomingMessage never throws (it catches internally), so this is
+    // safe to await without risking the webhook response.
+    const aiEnabled = await aiEngineRepository.isAiReceptionistEnabled(salonId).catch(() => false)
+    if (aiEnabled) {
+      await aiEngineService.handleIncomingMessage({
+        salonId,
+        phone: msg.from,
+        name:  senderName,
+        text:  messageBody,
+      })
+    }
   },
 
   async processStatus(status: any) {
@@ -207,7 +222,14 @@ export const webhooksService = {
     await webhooksRepository.refreshCampaignCounts(contact.campaign_id)
   },
 
-  async getRecentEvents(salonId: string, campaignId?: string) {
-    return webhooksRepository.getRecentEvents(salonId, campaignId)
+  async getRecentEvents(
+    salonId: string,
+    opts: { campaignId?: string; status?: string; page?: number; limit?: number } = {}
+  ) {
+    return webhooksRepository.getRecentEvents(salonId, opts)
+  },
+
+  async getEventStatusCounts(salonId: string, campaignId?: string) {
+    return webhooksRepository.getEventStatusCounts(salonId, campaignId)
   },
 }

@@ -12,6 +12,7 @@ export type WhatsAppConfig = {
   messaging_tier:       number
   daily_limit:          number
   is_verified:          boolean
+  ai_receptionist_enabled: boolean
   created_at:           string
   updated_at:           string
 }

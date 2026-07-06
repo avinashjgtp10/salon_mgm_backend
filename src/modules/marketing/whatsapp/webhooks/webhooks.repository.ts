@@ -95,10 +95,27 @@ export const webhooksRepository = {
     `, [c.sent_count, c.delivered_count, c.read_count, c.failed_count, c.blocked_count, campaignId])
   },
 
-  async getRecentEvents(salonId: string, campaignId?: string): Promise<WAWebhookEvent[]> {
+  async getRecentEvents(
+    salonId: string,
+    opts: { campaignId?: string; status?: string; page?: number; limit?: number } = {}
+  ): Promise<{ events: WAWebhookEvent[]; total: number }> {
+    const { campaignId, status, page = 1, limit = 10 } = opts
+    const offset = (page - 1) * limit
+
     const params: any[] = [salonId]
-    const campaignFilter = campaignId ? `AND cc.campaign_id = $2` : ''
-    if (campaignId) params.push(campaignId)
+    const filters: string[] = [`c.salon_id = $1`, `cc.status != 'PENDING'`]
+
+    if (campaignId) { params.push(campaignId); filters.push(`cc.campaign_id = $${params.length}`) }
+    if (status)     { params.push(status);     filters.push(`cc.status = $${params.length}`) }
+
+    const whereSql = filters.join(' AND ')
+
+    const { rows: [countRow] } = await pool.query(`
+      SELECT COUNT(*) AS total
+      FROM wa_campaign_contacts cc
+      JOIN wa_campaigns c ON c.id = cc.campaign_id
+      WHERE ${whereSql}
+    `, params)
 
     const { rows } = await pool.query(`
       SELECT
@@ -107,12 +124,32 @@ export const webhooksRepository = {
         cc.sent_at, cc.delivered_at, cc.read_at, cc.updated_at
       FROM wa_campaign_contacts cc
       JOIN wa_campaigns c ON c.id = cc.campaign_id
+      WHERE ${whereSql}
+      ORDER BY cc.updated_at DESC
+      OFFSET $${params.length + 1}
+      LIMIT  $${params.length + 2}
+    `, [...params, offset, limit])
+
+    return { events: rows, total: parseInt(countRow.total) || 0 }
+  },
+
+  async getEventStatusCounts(salonId: string, campaignId?: string): Promise<Record<string, number>> {
+    const params: any[] = [salonId]
+    const campaignFilter = campaignId ? `AND cc.campaign_id = $2` : ''
+    if (campaignId) params.push(campaignId)
+
+    const { rows } = await pool.query(`
+      SELECT cc.status, COUNT(*)::int AS count
+      FROM wa_campaign_contacts cc
+      JOIN wa_campaigns c ON c.id = cc.campaign_id
       WHERE c.salon_id = $1
         AND cc.status != 'PENDING'
         ${campaignFilter}
-      ORDER BY cc.updated_at DESC
-      LIMIT 50
+      GROUP BY cc.status
     `, params)
-    return rows
+
+    const counts: Record<string, number> = {}
+    for (const r of rows) counts[r.status] = r.count
+    return counts
   },
 }

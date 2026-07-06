@@ -8,6 +8,7 @@ import redis from './config/redis'
 import { initSocket } from './config/socket'
 import { startCampaignScheduler, stopCampaignScheduler } from './modules/marketing/whatsapp/queue/campaign.scheduler'
 import { startAutomationScheduler, stopAutomationScheduler } from './modules/whatsapp-automation/whatsapp-automation.scheduler'
+import { startWaLimitSyncScheduler, stopWaLimitSyncScheduler } from './modules/marketing/whatsapp/config/wa-limit-sync.scheduler'
 
 const PORT = config.port
 
@@ -38,6 +39,9 @@ httpServer.listen(PORT, () => {
 
   // Start WhatsApp automation scheduler (separate from campaigns)
   startAutomationScheduler()
+
+  // Keep daily_limit / quality_rating in sync with Meta's tier upgrades
+  startWaLimitSyncScheduler()
 })
 
 // Graceful shutdown
@@ -45,6 +49,7 @@ process.on('SIGTERM', () => {
   logger.info('SIGTERM signal received: closing HTTP server')
   stopCampaignScheduler()
   stopAutomationScheduler()
+  stopWaLimitSyncScheduler()
   httpServer.close(() => {
     logger.info('HTTP server closed')
     db.end()
