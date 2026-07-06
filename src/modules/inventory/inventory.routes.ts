@@ -6,6 +6,8 @@ import {
     stockMovementsController,
     stocktakesController,
     stockTakeController,
+    stockReconciliationController,
+    consumableUsageController,
 } from "./inventory.controller";
 import {
     validateCreateSupplier,
@@ -117,6 +119,42 @@ router.post(
     roleMiddleware("salon_owner", "admin"),
     validateStockTake,
     stockTakeController.process
+);
+
+// ─── Stock Reconciliation ─────────────────────────────────────────────────────
+
+// GET  /inventory/stock-reconciliation?branch_id=&search=&category_id=
+router.get(
+    "/stock-reconciliation",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    stockReconciliationController.list
+);
+
+// POST /inventory/stock-reconciliation  (batch save — Update All)
+router.post(
+    "/stock-reconciliation",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin"),
+    stockReconciliationController.saveAll
+);
+
+// PATCH /inventory/stock-reconciliation/:product_id  (single row save)
+router.patch(
+    "/stock-reconciliation/:product_id",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin"),
+    stockReconciliationController.saveRow
+);
+
+// ─── Consumable Usage (from Calendar appointments) ────────────────────────────
+
+// POST /inventory/consumable-usage
+router.post(
+    "/consumable-usage",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    consumableUsageController.save
 );
 
 export default router;
