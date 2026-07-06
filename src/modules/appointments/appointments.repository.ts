@@ -12,12 +12,20 @@ export const appointmentsRepository = {
     async findById(id: string): Promise<Appointment | null> {
         const { rows } = await pool.query(
             `SELECT a.*,
-                c.full_name          AS client_name,
-                c.phone_number       AS client_phone,
-                c.phone_country_code AS client_phone_code,
-                c.email              AS client_email,
-                s.business_name      AS salon_name,
-                COALESCE(s.email, u.email) AS salon_email,
+                (SELECT COUNT(*) FROM appointments a2
+                 WHERE a2.salon_id = a.salon_id
+                   AND (a2.created_at < a.created_at
+                        OR (a2.created_at = a.created_at AND a2.id <= a.id))
+                ) AS invoice_number,
+                c.full_name                              AS client_name,
+                c.phone_number                           AS client_phone,
+                c.phone_country_code                     AS client_phone_code,
+                c.email                                  AS client_email,
+                TRIM(CONCAT(st.first_name, ' ', COALESCE(st.last_name, ''))) AS staff_name,
+                st.phone                                 AS staff_phone,
+                st.email                                 AS staff_email,
+                s.business_name                          AS salon_name,
+                COALESCE(s.email, u.email)               AS salon_email,
                 CASE
                   WHEN EXISTS (SELECT 1 FROM payments p WHERE p.appointment_id = a.id)
                    AND (SELECT due_amount FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) = 0
@@ -29,9 +37,10 @@ export const appointmentsRepository = {
                 COALESCE((SELECT SUM(paid_amount) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS paid_amount,
                 (SELECT payment_method FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) AS payment_method
              FROM appointments a
-             LEFT JOIN clients c ON a.client_id  = c.id
-             LEFT JOIN salons  s ON a.salon_id   = s.id
-             LEFT JOIN users   u ON s.owner_id   = u.id
+             LEFT JOIN clients c  ON a.client_id = c.id
+             LEFT JOIN staff   st ON a.staff_id  = st.id
+             LEFT JOIN salons  s  ON a.salon_id  = s.id
+             LEFT JOIN users   u  ON s.owner_id  = u.id
              WHERE a.id = $1`,
             [id]
         );
@@ -104,7 +113,16 @@ export const appointmentsRepository = {
                FROM payments
                GROUP BY appointment_id
              )
-             SELECT a.*, c.full_name AS client_name,
+             SELECT a.*,
+               (SELECT COUNT(*) FROM appointments a2
+                WHERE a2.salon_id = a.salon_id
+                  AND (a2.created_at < a.created_at
+                       OR (a2.created_at = a.created_at AND a2.id <= a.id))
+               ) AS invoice_number,
+               c.full_name    AS client_name,
+               c.phone_number AS client_phone,
+               c.email        AS client_email,
+               TRIM(CONCAT(st.first_name, ' ', COALESCE(st.last_name, ''))) AS staff_name,
                CASE
                  WHEN pa.pay_count > 0 AND COALESCE(pa.latest_due, 1) = 0 THEN 'paid'::text
                  WHEN pa.pay_count > 0                                      THEN 'partial'::text
@@ -113,7 +131,8 @@ export const appointmentsRepository = {
                COALESCE(pa.total_paid, 0)    AS paid_amount,
                pa.latest_method              AS payment_method
              FROM appointments a
-             LEFT JOIN clients c   ON a.client_id = c.id
+             LEFT JOIN clients c   ON a.client_id  = c.id
+             LEFT JOIN staff   st  ON a.staff_id   = st.id
              LEFT JOIN pay_agg pa  ON pa.appointment_id = a.id
              WHERE ${whereClause}
              ORDER BY a.scheduled_at DESC

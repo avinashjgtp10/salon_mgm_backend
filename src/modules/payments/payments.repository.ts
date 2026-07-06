@@ -1,6 +1,16 @@
 import pool from '../../config/database';
 import { Payment, CreatePaymentBody } from './payments.types';
 
+// Bootstrap: patch the pre-existing `payments` table with the membership-wallet
+// column (this table itself is created by a formal migration, not by this
+// module — following the same per-module-owns-its-schema convention as
+// client-memberships/cash-management/package-templates for anything added later).
+export async function ensureTable(): Promise<void> {
+  await pool.query(
+    `ALTER TABLE payments ADD COLUMN IF NOT EXISTS membership_wallet_used NUMERIC(10,2) NOT NULL DEFAULT 0`,
+  );
+}
+
 export const paymentsRepository = {
 
   async create(data: CreatePaymentBody): Promise<Payment> {
@@ -11,12 +21,12 @@ export const paymentsRepository = {
         gross_amount, discount_amount, ewallet_used, net_amount,
         paid_amount, due_amount,
         coupon_code, payment_method, split_details,
-        status, paid_at, notes
+        status, paid_at, notes, membership_wallet_used
       ) VALUES (
         gen_random_uuid()::text, $13,
         $1,$2,$3,$4,$5,$6,$7,
         $14,$15,
-        $8,$9,$10::jsonb,$11,NOW(),$12
+        $8,$9,$10::jsonb,$11,NOW(),$12,$16
       )
       RETURNING *`,
       [
@@ -35,6 +45,7 @@ export const paymentsRepository = {
         data.net_amount,          // $13 = amount
         data.paid_amount ?? data.net_amount,  // $14 = paid_amount (defaults to net_amount)
         data.due_amount ?? 0,     // $15 = due_amount
+        data.membership_wallet_used ?? 0, // $16
       ]
     );
     return rows[0];

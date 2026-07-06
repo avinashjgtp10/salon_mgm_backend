@@ -52,6 +52,7 @@ import packageTemplatesRoutes from "./modules/package-templates/package-template
 import { ensurePackageTemplateTables } from "./modules/package-templates/package-templates.repository";
 import clientMembershipsRoutes from "./modules/client-memberships/client-memberships.routes";
 import { ensureTable as ensureClientMembershipsTables } from "./modules/client-memberships/client-memberships.repository";
+import { ensureTable as ensurePaymentsTables } from "./modules/payments/payments.repository";
 import cashManagementRoutes from "./modules/cash-management/cash-management.routes";
 import { ensureCashManagementTables } from "./modules/cash-management/cash-management.repository";
 import superAdminRoutes from "./modules/super-admin/super-admin.routes";
@@ -75,6 +76,11 @@ ensurePackageTemplateTables().catch(err =>
 // Bootstrap client-memberships tables (idempotent)
 ensureClientMembershipsTables().catch(err =>
   logger.warn("client-memberships table init warning:", err?.message ?? err),
+);
+
+// Bootstrap payments table wallet column (idempotent)
+ensurePaymentsTables().catch(err =>
+  logger.warn("payments table init warning:", err?.message ?? err),
 );
 
 // Bootstrap cash-management tables (idempotent)

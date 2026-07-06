@@ -76,6 +76,21 @@ setImmediate(() => {
     .catch((err: any) => console.warn('⚠️  login_count column migration:', err.message));
 });
 
+// Add extra profile fields to salons table (safe, idempotent)
+setImmediate(() => {
+  pool.query(`
+    ALTER TABLE salons
+      ADD COLUMN IF NOT EXISTS address           TEXT,
+      ADD COLUMN IF NOT EXISTS city              TEXT,
+      ADD COLUMN IF NOT EXISTS state             TEXT,
+      ADD COLUMN IF NOT EXISTS country           TEXT,
+      ADD COLUMN IF NOT EXISTS pincode           TEXT,
+      ADD COLUMN IF NOT EXISTS timezone          TEXT DEFAULT 'Asia/Kolkata',
+      ADD COLUMN IF NOT EXISTS currency          TEXT DEFAULT 'INR',
+      ADD COLUMN IF NOT EXISTS business_category TEXT
+  `).catch((err: any) => console.warn('⚠️  salons extra fields migration:', err.message));
+});
+
 // Create support_tickets table (safe, idempotent)
 setImmediate(() => {
   pool.query(`

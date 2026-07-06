@@ -1,4 +1,5 @@
 import { clientPackagesRepository } from "./client-packages.repository";
+import { salesRepository } from "../sales/sales.repository";
 import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
 import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
 import { salonsRepository } from "../salons/salons.repository";
@@ -121,7 +122,30 @@ export const clientPackagesService = {
   async create(salonId: string, dto: CreateClientPackageDTO): Promise<ClientPackage> {
     const pkg = await clientPackagesRepository.create(salonId, dto);
 
-    // ── WhatsApp Automation: Package Purchased ────────────────────────────────
+    // ── Auto-create sale record so package revenue appears in dashboard ────────
+    try {
+      const gstAmt      = Number(pkg.gstAmount  || 0);
+      const discountAmt = Number(pkg.discount    || 0);
+      await salesRepository.create({
+        salon_id:        salonId,
+        client_id:       dto.clientId,
+        status:          'completed',
+        payment_method:  dto.paymentMethod as any,
+        discount_amount: String(discountAmt),
+        tax_amount:      String(gstAmt),
+        items: [{
+          item_type:       'service',
+          name:            pkg.packageName,
+          quantity:        1,
+          unit_price:      String(Number(pkg.basePrice || 0) + discountAmt),
+          discount_amount: String(discountAmt),
+        }],
+      }, null);
+    } catch (err) {
+      logger.error('[clientPackagesService] Failed to auto-create sale for package purchase:', { error: err });
+    }
+
+    // ── WhatsApp Automation: Membership / Package Purchased ───────────────────
     // mobile field on ClientPackage is the client's phone number
     if (pkg.mobile) {
       const salon = await salonsRepository.findById(pkg.salonId);
