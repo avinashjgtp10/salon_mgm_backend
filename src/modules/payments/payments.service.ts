@@ -4,10 +4,16 @@ import { appointmentsRepository } from '../appointments/appointments.repository'
 import { salesRepository } from '../sales/sales.repository';
 import { membershipsRepository } from '../memberships/memberships.repository';
 import { clientMembershipsService } from '../client-memberships/client-memberships.service';
+import { clientMembershipsRepository } from '../client-memberships/client-memberships.repository';
 import { CreatePaymentBody, Payment } from './payments.types';
 import type { Appointment } from '../appointments/appointments.types';
 import logger from '../../config/logger';
 import { whatsappAutomationService } from '../whatsapp-automation/whatsapp-automation.service';
+import { sendReceiptDocument } from '../sales/receipt-whatsapp.service';
+import { salonsRepository } from '../salons/salons.repository';
+import { branchesRepository } from '../branches/branches.repository';
+import { staffService } from '../staff/staff.service';
+import { clientsRepository } from '../clients/clients.repository';
 
 export const paymentsService = {
 
@@ -36,7 +42,43 @@ export const paymentsService = {
 
           const discount      = Math.max(0, Number(data.discount_amount) || 0);
           const ewallet       = Math.max(0, Number(data.ewallet_used)    || 0);
-          const effectiveBill = Math.max(0, actualBill - discount - ewallet);
+
+          // ── Membership wallet: redeem against services only ────────────────
+          // Manual opt-in — only deducts when the staff checked "Apply
+          // Membership" (data.apply_membership_wallet). Deducts once per
+          // appointment (idempotent across repeat/partial-payment calls — see
+          // deductOrReuseWalletForAppointment); if a PRIOR payment call for
+          // this appointment already deducted (checkbox was checked then),
+          // that already-spent amount still applies even if this call has the
+          // box unchecked — it can't be un-deducted, so the bill stays
+          // consistent with what was actually taken from the wallet. Never
+          // blocks a payment on a wallet-system error; customer just pays
+          // full price in that case.
+          let membershipWalletUsed = 0;
+          if (data.client_id) {
+            try {
+              if (data.apply_membership_wallet) {
+                const servicesForWallet = (appt.services || []).map(s => ({
+                  serviceId:   s.service_id,
+                  serviceName: s.name,
+                  amount:      (Number(s.price) || 0) * qty(s),
+                }));
+                if (servicesForWallet.length > 0) {
+                  const result = await clientMembershipsService.deductWalletForBooking(
+                    data.salon_id, data.client_id, data.appointment_id, servicesForWallet,
+                  );
+                  membershipWalletUsed = result.totalWalletUsed;
+                }
+              } else {
+                membershipWalletUsed = await clientMembershipsRepository.getWalletUsedForAppointment(data.appointment_id);
+              }
+            } catch (err: any) {
+              logger.warn('[payments] membership wallet deduction failed:', err?.message ?? err);
+            }
+          }
+
+          const effectiveBill = Math.max(0, actualBill - discount - ewallet - membershipWalletUsed);
+          data.membership_wallet_used = membershipWalletUsed;
 
           // Sum previously paid amounts across all prior payments for this appointment
           const existingPaid = await paymentsRepository.getTotalPaidForAppointment(data.appointment_id);
@@ -134,7 +176,10 @@ export const paymentsService = {
             staff_id: appt.staff_id || undefined,
             status: 'completed',
             discount_amount: String(data.discount_amount || 0),
-            payment_method: data.payment_method as any,
+            // DB constraint only allows lowercase values ('cash','card','upi','bank_transfer'),
+            // but this arrives as the frontend's display label (e.g. "Cash") — normalizing
+            // here since the mismatch was silently failing every sale auto-creation.
+            payment_method: String(data.payment_method || '').toLowerCase() as any,
             items,
           }, null);
 
@@ -142,41 +187,96 @@ export const paymentsService = {
           // (POST /api/v1/appointments/:id/checkout) to avoid double-completion
           // appointment.payment_status is updated above — that's all payments handles here
 
-          // ── WhatsApp Automation: Invoice Generated ──────────────────────────
+          // ── WhatsApp Automation: Purchase confirmation (per item type) ──────
           // Fetch enriched sale with client_phone and salon_name
           const enrichedSale = await salesRepository.findById(sale.id);
           if (enrichedSale && data.client_id && (enrichedSale as any).client_phone) {
-            whatsappAutomationService.trigger({
-              salonId:       data.salon_id,
-              eventType:     'invoice_generated',
-              clientId:      data.client_id,
-              phone:         (enrichedSale as any).client_phone,
-              countryCode:   (enrichedSale as any).client_phone_code ?? null,
-              variables: {
-                '1': (enrichedSale as any).client_name  ?? 'Valued Customer',
-                '2': enrichedSale.invoice_number        ?? enrichedSale.id.slice(0, 8).toUpperCase(),
-                '3': String(enrichedSale.total_amount   ?? '0'),
-                '4': (enrichedSale as any).salon_name   ?? 'our salon',
-              },
-              referenceId:   enrichedSale.id,
-              referenceType: 'invoice',
-            }).catch(() => {});
+            const saleItemsForEvents = await salesRepository.findItemsBySaleId(sale.id);
+            const presentTypes = new Set(saleItemsForEvents.map((i) => i.item_type));
+            const purchaseEvents: Array<{ eventType: 'service_purchased' | 'product_purchased'; itemType: 'service' | 'product' }> = [
+              { eventType: 'service_purchased', itemType: 'service' },
+              { eventType: 'product_purchased', itemType: 'product' },
+            ];
 
-            // ── WhatsApp Automation: Payment Received ───────────────────────
-            whatsappAutomationService.trigger({
-              salonId:       data.salon_id,
-              eventType:     'payment_received',
-              clientId:      data.client_id,
-              phone:         (enrichedSale as any).client_phone,
-              countryCode:   (enrichedSale as any).client_phone_code ?? null,
-              variables: {
-                '1': (enrichedSale as any).client_name  ?? 'Valued Customer',
-                '2': String(data.paid_amount            ?? enrichedSale.total_amount ?? '0'),
-                '3': enrichedSale.invoice_number        ?? enrichedSale.id.slice(0, 8).toUpperCase(),
-              },
-              referenceId:   enrichedSale.id,
-              referenceType: 'invoice',
-            }).catch(() => {});
+            // membership_purchased is NOT fired here — that's centralized in
+            // clientMembershipsService.autoCreateFromPayment(), called below
+            // for this same sale's membership_items, so it's never double-fired.
+            for (const { eventType, itemType } of purchaseEvents) {
+              if (!presentTypes.has(itemType)) continue;
+              const itemName = saleItemsForEvents.find((i) => i.item_type === itemType)?.name ?? 'your purchase';
+              whatsappAutomationService.trigger({
+                salonId:       data.salon_id,
+                eventType,
+                clientId:      data.client_id,
+                phone:         (enrichedSale as any).client_phone,
+                countryCode:   (enrichedSale as any).client_phone_code ?? null,
+                variables: {
+                  '1': (enrichedSale as any).client_name ?? 'Valued Customer',
+                  '2': (enrichedSale as any).salon_name   ?? 'our salon',
+                  '3': itemName,
+                },
+                referenceId:   enrichedSale.id,
+                referenceType: 'invoice',
+              }).catch(() => {});
+            }
+
+            // PDF receipt as a WhatsApp document attachment — best-effort, only
+            // deliverable within 24h of the customer's last message. Failure here
+            // is expected outside that window and never blocks the triggers above.
+            (async () => {
+              const [salonRecord, branches, staffList, clientRecord] = await Promise.all([
+                salonsRepository.findById(data.salon_id),
+                branchesRepository.listBySalonId(data.salon_id),
+                staffService.list(data.salon_id, { is_active: true, limit: 100 } as any),
+                data.client_id ? clientsRepository.findById(data.client_id, data.salon_id) : Promise.resolve(null),
+              ]);
+              const saleItems = saleItemsForEvents;
+
+              const branch = branches.find((b) => b.is_main) ?? branches[0] ?? null;
+              const salonAddress = branch
+                ? [branch.address_line1, branch.address_line2, branch.city, branch.state, branch.pincode].filter(Boolean).join(", ")
+                : null;
+
+              const staffNames: Record<string, string> = {};
+              for (const s of staffList.data as any[]) {
+                staffNames[s.id] = [s.first_name, s.last_name].filter(Boolean).join(" ").trim() || s.email;
+              }
+
+              await sendReceiptDocument({
+                salonId: data.salon_id,
+                phone: (enrichedSale as any).client_phone,
+                countryCode: (enrichedSale as any).client_phone_code ?? null,
+                salon: {
+                  business_name: salonRecord?.business_name ?? (enrichedSale as any).salon_name ?? "our salon",
+                  logo_url: (salonRecord as any)?.logo_url ?? null,
+                  email: salonRecord?.email ?? null,
+                  phone: salonRecord?.phone ?? null,
+                  website_url: salonRecord?.website_url ?? null,
+                  gst_number: salonRecord?.gst_number ?? null,
+                },
+                salonAddress,
+                client: {
+                  name: clientRecord?.full_name ?? (enrichedSale as any).client_name ?? "Valued Customer",
+                  phone: clientRecord?.phone_number ?? (enrichedSale as any).client_phone ?? null,
+                  email: clientRecord?.email ?? null,
+                },
+                sale: enrichedSale,
+                items: saleItems,
+                staffNames,
+                appointment: appt
+                  ? {
+                        id: appt.id,
+                        scheduledAt: appt.scheduled_at,
+                        durationMinutes: appt.duration_minutes,
+                        status: appt.status,
+                        notes: appt.notes,
+                    }
+                  : null,
+                paidAmount: Number(data.paid_amount) || 0,
+                dueAmount: Number(data.due_amount) || 0,
+                couponCode: data.coupon_code ?? null,
+              });
+            })().catch(() => {});
           }
         }
       } catch (err) {

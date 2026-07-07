@@ -6,18 +6,42 @@
 export type AutomationEventType =
   | 'appointment_confirmation'
   | 'appointment_reminder_24h'
+  | 'appointment_reminder_1h'
   | 'appointment_rescheduled'
   | 'appointment_cancelled'
   | 'invoice_generated'
   | 'payment_received'
   | 'pending_payment_reminder'
+  | 'service_purchased'
+  | 'product_purchased'
   | 'membership_purchased'
+  | 'package_purchased'
   | 'membership_renewal_reminder'
+  | 'package_expiring_soon'
+  | 'thank_you'
+  | 'review_request'
+  | 'sessions_remaining'
   | 'birthday_wishes'
   | 'new_year_campaign'
   | 'we_miss_you_30d'
   | 'we_miss_you_60d'
   | 'we_miss_you_90d'
+
+// Salon-owner-editable events — submitted to Meta under the salon's own WABA
+// (see wa-purchase-templates.service.ts), unlike every other event type which
+// still uses the single global admin-managed row. Originally just the 4
+// purchase-completion events, now covers the salon's full lifecycle catalog.
+export const PURCHASE_EVENTS: AutomationEventType[] = [
+  'service_purchased',
+  'product_purchased',
+  'membership_purchased',
+  'package_purchased',
+  'appointment_reminder_1h',
+  'thank_you',
+  'review_request',
+  'package_expiring_soon',
+  'sessions_remaining',
+]
 
 // Transactional events — controlled by client.whatsapp_notifications
 export const TRANSACTIONAL_EVENTS: AutomationEventType[] = [
@@ -28,7 +52,7 @@ export const TRANSACTIONAL_EVENTS: AutomationEventType[] = [
   'invoice_generated',
   'payment_received',
   'pending_payment_reminder',
-  'membership_purchased',
+  ...PURCHASE_EVENTS,
   'membership_renewal_reminder',
 ]
 
@@ -80,22 +104,26 @@ export type AutomationLog = {
 }
 
 // ── DB Row: wa_automation_templates ──────────────────────────────────────────
-// One global row per event type — managed by SalonOx admin only
-export type AutomationTemplate = {
-  id:            string
-  event_type:    AutomationEventType
-  template_name: string    // Meta approved template name
-  language:      string    // e.g. 'en'
-  is_active:     boolean
-  created_at:    string
-  updated_at:    string
-}
+// Legacy rows (salon_id IS NULL) are global, one per event type, managed by
+// SalonOx admin only. Rows for PURCHASE_EVENTS have salon_id set — each salon
+// owns and submits their own copy to Meta under their own WABA.
+export type TemplateSubmissionStatus = 'DRAFT' | 'PENDING' | 'APPROVED' | 'REJECTED'
 
-// ── Platform WA Credentials (from ENV) ───────────────────────────────────────
-export type PlatformWAConfig = {
-  phoneNumberId: string
-  accessToken:   string
-  wabaId:        string
+export type AutomationTemplate = {
+  id:                string
+  salon_id:          string | null
+  event_type:        AutomationEventType
+  template_name:     string    // Meta template name (legacy: pre-set; purchase events: minted on submit)
+  language:          string    // e.g. 'en'
+  is_active:         boolean
+  status:            TemplateSubmissionStatus
+  category:          'UTILITY' | 'MARKETING'
+  body_text:         string | null
+  meta_template_id:  string | null
+  rejection_reason:  string | null
+  approved_at:       string | null
+  created_at:        string
+  updated_at:        string
 }
 
 // ── Trigger Payload ───────────────────────────────────────────────────────────

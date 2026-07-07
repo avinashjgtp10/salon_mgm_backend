@@ -7,7 +7,14 @@ import { whatsappMetaApi } from '../shared/whatsapp.api'
 import { CreateTemplateBody } from './templates.types'
 
 const WA_BASE_URL    = process.env.WA_BASE_URL    ?? 'https://graph.facebook.com'
-const WA_API_VERSION = process.env.WA_API_VERSION ?? 'v21.0'
+const WA_API_VERSION = process.env.WA_API_VERSION ?? 'v22.0'
+
+// Meta's WhatsApp template header media caps
+const MAX_HEADER_FILE_SIZE: Record<string, number> = {
+  image:    5  * 1024 * 1024,
+  video:    16 * 1024 * 1024,
+  document: 10 * 1024 * 1024,
+}
 
 function extractExamples(text: string): string[] {
   const matches = text.match(/{{\d+}}/g) ?? []
@@ -201,6 +208,16 @@ export const templatesService = {
     if (!template) throw new AppError(404, 'Template not found', 'NOT_FOUND')
     if (!template.header_type || template.header_type === 'none' || template.header_type === 'text') {
       throw new AppError(400, 'This template does not have a media header', 'NO_MEDIA_HEADER')
+    }
+    const maxSize = MAX_HEADER_FILE_SIZE[template.header_type]
+    if (maxSize && file.size > maxSize) {
+      const maxMB = maxSize / (1024 * 1024)
+      const fileMB = (file.size / (1024 * 1024)).toFixed(1)
+      throw new AppError(
+        400,
+        `File is too large — max ${maxMB}MB for a ${template.header_type} header (received ${fileMB}MB)`,
+        'VALIDATION_ERROR'
+      )
     }
     const config = await configRepository.findBySalonId(salonId)
     if (!config) throw new AppError(400, 'WhatsApp not configured', 'WA_NOT_CONFIGURED')

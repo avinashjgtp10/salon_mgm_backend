@@ -2,7 +2,14 @@
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
-import { suppliersService, stockMovementsService, stocktakesService, stockTakeService } from "./inventory.service";
+import {
+    suppliersService,
+    stockMovementsService,
+    stocktakesService,
+    stockTakeService,
+    stockReconciliationService,
+    consumableUsageService,
+} from "./inventory.service";
 import {
     CreateSupplierBody,
     UpdateSupplierBody,
@@ -11,6 +18,9 @@ import {
     ListStockMovementsFilters,
     MovementType,
     CreateStocktakeBody,
+    SaveReconciliationBody,
+    SaveReconciliationRowBody,
+    SaveConsumableUsageBody,
 } from "./inventory.types";
 
 type AuthRequest = Request & {
@@ -253,6 +263,93 @@ export const stockTakeController = {
             });
 
             sendSuccess(res, 200, result, "Stock take processed successfully");
+        } catch (err) { next(err); }
+    },
+};
+
+// ─── Stock Reconciliation ─────────────────────────────────────────────────────
+
+export const stockReconciliationController = {
+    /** GET /inventory/stock-reconciliation?branch_id=&search=&category_id= */
+    async list(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const salonId = getSalonId(req);
+            const branchId = String(req.query.branch_id || "").trim();
+            const search = req.query.search as string | undefined;
+            const categoryId = req.query.category_id as string | undefined;
+
+            if (!branchId) throw new AppError(400, "branch_id is required", "VALIDATION_ERROR");
+
+            logger.info("GET /inventory/stock-reconciliation called", { branchId, salonId });
+
+            const rows = await stockReconciliationService.list({ branchId, salonId, search, categoryId });
+            sendSuccess(res, 200, rows, "Stock reconciliation fetched successfully");
+        } catch (err) { next(err); }
+    },
+
+    /** POST /inventory/stock-reconciliation  — batch save (Update All) */
+    async saveAll(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const userId = req.user?.userId;
+            const salonId = getSalonId(req);
+
+            if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+
+            logger.info("POST /inventory/stock-reconciliation called", { userId, salonId });
+
+            const result = await stockReconciliationService.saveAll({
+                requesterUserId: userId,
+                salonId,
+                body: req.body as SaveReconciliationBody,
+            });
+
+            sendSuccess(res, 200, result, "Stock reconciliation saved successfully");
+        } catch (err) { next(err); }
+    },
+
+    /** PATCH /inventory/stock-reconciliation/:product_id  — single row save */
+    async saveRow(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const userId = req.user?.userId;
+            const salonId = getSalonId(req);
+            const productId = String(req.params.product_id || "").trim();
+
+            if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+            if (!productId) throw new AppError(400, "product_id is required", "VALIDATION_ERROR");
+
+            logger.info("PATCH /inventory/stock-reconciliation/:product_id called", { productId, userId, salonId });
+
+            const row = await stockReconciliationService.saveRow({
+                requesterUserId: userId,
+                salonId,
+                body: { ...req.body, product_id: productId } as SaveReconciliationRowBody,
+            });
+
+            sendSuccess(res, 200, row, "Stock reconciliation row saved successfully");
+        } catch (err) { next(err); }
+    },
+};
+
+// ─── Consumable Usage ─────────────────────────────────────────────────────────
+
+export const consumableUsageController = {
+    /** POST /inventory/consumable-usage  — record consumable items from appointments */
+    async save(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const userId = req.user?.userId;
+            const salonId = getSalonId(req);
+
+            if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+
+            logger.info("POST /inventory/consumable-usage called", { userId, salonId });
+
+            const result = await consumableUsageService.save({
+                requesterUserId: userId,
+                salonId,
+                body: req.body as SaveConsumableUsageBody,
+            });
+
+            sendSuccess(res, 200, result, "Consumable usage recorded successfully");
         } catch (err) { next(err); }
     },
 };

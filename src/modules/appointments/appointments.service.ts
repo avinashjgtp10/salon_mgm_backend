@@ -14,6 +14,12 @@ import { notificationsService } from "../notifications/notifications.service";
 import { emailService } from "../utils/email.service";
 import { canSendEmail } from "../utils/notif-prefs";
 import { salonsRepository } from "../salons/salons.repository";
+import { branchesRepository } from "../branches/branches.repository";
+import { staffService } from "../staff/staff.service";
+import { clientsRepository } from "../clients/clients.repository";
+import { sendReceiptDocument } from "../sales/receipt-whatsapp.service";
+import { sendPurchaseReceipt } from "../sales/receipt-send.helper";
+import { notifyAppointmentCompleted } from "./appointment-completed.helper";
 import {
     Appointment,
     CreateAppointmentBody,
@@ -142,16 +148,12 @@ export const appointmentsService = {
         // ── Email: New Appointment (to salon owner) ───────────────────────────
         ;(async () => {
             try {
-                console.log("[EMAIL DEBUG] newAppointment: starting...");
                 const full = await appointmentsRepository.findById(appointment.id);
-                console.log("[EMAIL DEBUG] newAppointment: full=", full ? "found" : "NULL");
-                if (!full) { console.log("[EMAIL DEBUG] newAppointment: findById returned null"); return; }
+                if (!full) return;
                 const ownerEmail = await salonsRepository.findOwnerEmailById(full.salon_id);
-                console.log("[EMAIL DEBUG] newAppointment: ownerEmail=", ownerEmail);
-                if (!ownerEmail) { console.log("[EMAIL DEBUG] newAppointment: no owner email, skipping"); return; }
+                if (!ownerEmail) return;
                 const allowed = await canSendEmail(full.salon_id, "newAppointment");
-                console.log("[EMAIL DEBUG] newAppointment: allowed=", allowed);
-                if (!allowed) { console.log("[EMAIL DEBUG] newAppointment: skipped by preference"); return; }
+                if (!allowed) return;
                 await emailService.sendNewAppointmentEmail({
                     to:            ownerEmail,
                     salonName:     (full as any).salon_name  ?? "your salon",
@@ -161,8 +163,7 @@ export const appointmentsService = {
                     time:          formatTime(full.scheduled_at),
                     appointmentId: full.id,
                 });
-                console.log("[EMAIL DEBUG] newAppointment: SENT to", ownerEmail);
-            } catch (err: any) { console.error("[EMAIL DEBUG] newAppointment FAILED:", err?.message, err); }
+            } catch (err: any) { logger.error("[email] newAppointment failed:", err?.message ?? err); }
         })();
 
         return appointment;
@@ -249,6 +250,21 @@ export const appointmentsService = {
                 productsRepository.deductStock(toDeduct, existing.salon_id).catch(err => logger.warn("Stock deduction failed (non-fatal)", { err: err?.message }));
             if (toRestore.length > 0)
                 productsRepository.restoreStock(toRestore, existing.salon_id).catch(err => logger.warn("Stock restore failed (non-fatal)", { err: err?.message }));
+        }
+
+        // ── Live calendar update ───────────────────────────────────────────────
+        // create()/cancel() already push a "notification" socket event that the
+        // calendar listens to for a live refresh — update() (reschedule, staff
+        // reassignment, or LUNOX's modifyAppointmentServices changing what's
+        // booked/its duration) never did, so any of these silently required a
+        // manual page refresh to appear correctly.
+        if (patch.scheduled_at || patch.staff_id || patch.services || patch.duration_minutes) {
+            notificationsService.create({
+                salon_id: existing.salon_id,
+                type:     "appointment",
+                title:    "Appointment Updated",
+                body:     `${existing.client_name ?? "Walk-in"} — ${formatDate(newScheduledAt)} at ${formatTime(newScheduledAt)}`,
+            }).catch(() => {});
         }
 
         // ── WhatsApp Automation: Appointment Rescheduled ──────────────────────
@@ -477,16 +493,79 @@ export const appointmentsService = {
             // Mark appointment as completed
             const completedAppt = await appointmentsRepository.updateStatus(appointmentId, "completed");
 
+            // ── WhatsApp Automation: Thank You + Review Request (fire-and-forget) ──
+            notifyAppointmentCompleted(appointmentId).catch(() => {});
+
+            // ── WhatsApp Automation: Purchase confirmation + PDF receipt (fallback) ──
+            // payments.service.ts already fires this at payment-creation time when it
+            // auto-creates the sale — this is a dedup-guarded safety net for when that
+            // didn't happen (e.g. no client phone on file yet at payment time), so
+            // completing the appointment doesn't silently leave the customer with only
+            // the plain booking confirmation and no purchase text/PDF.
+            if (existing.client_id && (existing as any).client_phone) {
+                (async () => {
+                    try {
+                        const alreadySent =
+                            (await whatsappAutomationRepository.logExistsForReference(preExistingSale.id, "service_purchased")) ||
+                            (await whatsappAutomationRepository.logExistsForReference(preExistingSale.id, "product_purchased"));
+                        if (alreadySent) return;
+
+                        const presentTypes = new Set(saleItems.map((i) => i.item_type));
+                        const purchaseEvents: Array<{ eventType: "service_purchased" | "product_purchased"; itemType: "service" | "product" }> = [
+                            { eventType: "service_purchased", itemType: "service" },
+                            { eventType: "product_purchased", itemType: "product" },
+                        ];
+                        for (const { eventType, itemType } of purchaseEvents) {
+                            if (!presentTypes.has(itemType)) continue;
+                            const itemName = saleItems.find((i) => i.item_type === itemType)?.name ?? "your purchase";
+                            whatsappAutomationService.trigger({
+                                salonId:       existing.salon_id,
+                                eventType,
+                                clientId:      existing.client_id!,
+                                phone:         (existing as any).client_phone,
+                                countryCode:   (existing as any).client_phone_code ?? null,
+                                variables: {
+                                    "1": existing.client_name         ?? "Valued Customer",
+                                    "2": (existing as any).salon_name ?? "our salon",
+                                    "3": itemName,
+                                },
+                                referenceId:   preExistingSale.id,
+                                referenceType: "invoice",
+                            }).catch(() => {});
+                        }
+
+                        await sendPurchaseReceipt({
+                            salonId:     existing.salon_id,
+                            phone:       (existing as any).client_phone,
+                            countryCode: (existing as any).client_phone_code ?? null,
+                            clientId:    existing.client_id,
+                            clientName:  existing.client_name ?? "Valued Customer",
+                            sale:        preExistingSale,
+                            items:       saleItems,
+                            appointment: {
+                                id:              existing.id,
+                                scheduledAt:     existing.scheduled_at,
+                                durationMinutes: existing.duration_minutes,
+                                status:          "completed",
+                                notes:           existing.notes,
+                            },
+                            paidAmount:  Number(preExistingSale.total_amount ?? 0),
+                            dueAmount:   0,
+                            couponCode:  null,
+                        });
+                    } catch (err: any) {
+                        logger.error("[WA-AUTO] preExistingSale purchase-confirmation fallback failed:", err?.message);
+                    }
+                })();
+            }
+
             // ── Email: Appointment Completed receipt (to client) ──────────────
             ;(async () => {
                 try {
-                    console.log("[EMAIL DEBUG] appointmentCompleted (preexisting): starting...");
                     const clientEmail = (existing as any).client_email;
-                    console.log("[EMAIL DEBUG] appointmentCompleted: clientEmail=", clientEmail);
-                    if (!clientEmail) { console.log("[EMAIL DEBUG] appointmentCompleted: no client email, skipping"); return; }
+                    if (!clientEmail) return;
                     const allowed = await canSendEmail(existing.salon_id, "appointmentCompleted");
-                    console.log("[EMAIL DEBUG] appointmentCompleted: allowed=", allowed);
-                    if (!allowed) { console.log("[EMAIL DEBUG] appointmentCompleted: skipped by preference"); return; }
+                    if (!allowed) return;
                     await emailService.sendAppointmentCompletedEmail({
                         to:         clientEmail,
                         clientName: existing.client_name         ?? "Valued Customer",
@@ -494,20 +573,16 @@ export const appointmentsService = {
                         services:   existing.services?.map((s: any) => s.name).join(", ") ?? "Service",
                         amount:     String(preExistingSale.total_amount ?? "0"),
                     });
-                    console.log("[EMAIL DEBUG] appointmentCompleted: SENT to", clientEmail);
-                } catch (err: any) { console.error("[EMAIL DEBUG] appointmentCompleted FAILED:", err?.message, err); }
+                } catch (err: any) { logger.error("[email] appointmentCompleted (preexisting) failed:", err?.message ?? err); }
             })();
 
             // ── Email: New Payment (to salon owner) ───────────────────────────
             ;(async () => {
                 try {
-                    console.log("[EMAIL DEBUG] newPayment (preexisting): starting...");
                     const ownerEmail = await salonsRepository.findOwnerEmailById(existing.salon_id);
-                    console.log("[EMAIL DEBUG] newPayment (preexisting): ownerEmail=", ownerEmail);
-                    if (!ownerEmail) { console.log("[EMAIL DEBUG] newPayment: no owner email, skipping"); return; }
+                    if (!ownerEmail) return;
                     const allowed = await canSendEmail(existing.salon_id, "newPayment");
-                    console.log("[EMAIL DEBUG] newPayment (preexisting): allowed=", allowed);
-                    if (!allowed) { console.log("[EMAIL DEBUG] newPayment: skipped by preference"); return; }
+                    if (!allowed) return;
                     await emailService.sendNewPaymentEmail({
                         to:            ownerEmail,
                         salonName:     (existing as any).salon_name ?? "your salon",
@@ -516,8 +591,7 @@ export const appointmentsService = {
                         paymentMethod: params.payment_method        ?? "N/A",
                         invoiceId:     preExistingSale.id.slice(0, 8).toUpperCase(),
                     });
-                    console.log("[EMAIL DEBUG] newPayment (preexisting): SENT to", ownerEmail);
-                } catch (err: any) { console.error("[EMAIL DEBUG] newPayment (preexisting) FAILED:", err?.message, err); }
+                } catch (err: any) { logger.error("[email] newPayment (preexisting) failed:", err?.message ?? err); }
             })();
 
             return { appointment: completedAppt, saleId: preExistingSale.id };
@@ -611,6 +685,61 @@ export const appointmentsService = {
                 referenceId:   sale.id,
                 referenceType: 'invoice',
             }).catch(() => {});
+
+            // PDF receipt as a WhatsApp document attachment — best-effort, only
+            // deliverable within 24h of the customer's last message. Failure here
+            // is expected outside that window and never blocks the text confirmation above.
+            (async () => {
+                const [salonRecord, branches, staffList, clientRecord] = await Promise.all([
+                    salonsRepository.findById(existing.salon_id),
+                    branchesRepository.listBySalonId(existing.salon_id),
+                    staffService.list(existing.salon_id, { is_active: true, limit: 100 } as any),
+                    existing.client_id ? clientsRepository.findById(existing.client_id, existing.salon_id) : Promise.resolve(null),
+                ]);
+
+                const branch = branches.find((b) => b.is_main) ?? branches[0] ?? null;
+                const salonAddress = branch
+                    ? [branch.address_line1, branch.address_line2, branch.city, branch.state, branch.pincode].filter(Boolean).join(", ")
+                    : null;
+
+                const staffNames: Record<string, string> = {};
+                for (const s of staffList.data as any[]) {
+                    staffNames[s.id] = [s.first_name, s.last_name].filter(Boolean).join(" ").trim() || s.email;
+                }
+
+                await sendReceiptDocument({
+                    salonId: existing.salon_id,
+                    phone: (existing as any).client_phone,
+                    countryCode: (existing as any).client_phone_code ?? null,
+                    salon: {
+                        business_name: salonRecord?.business_name ?? (existing as any).salon_name ?? "our salon",
+                        logo_url: (salonRecord as any)?.logo_url ?? null,
+                        email: salonRecord?.email ?? null,
+                        phone: salonRecord?.phone ?? null,
+                        website_url: salonRecord?.website_url ?? null,
+                        gst_number: salonRecord?.gst_number ?? null,
+                    },
+                    salonAddress,
+                    client: {
+                        name: clientRecord?.full_name ?? existing.client_name ?? "Valued Customer",
+                        phone: clientRecord?.phone_number ?? (existing as any).client_phone ?? null,
+                        email: clientRecord?.email ?? null,
+                    },
+                    sale,
+                    items,
+                    staffNames,
+                    appointment: {
+                        id: existing.id,
+                        scheduledAt: existing.scheduled_at,
+                        durationMinutes: existing.duration_minutes,
+                        status: existing.status,
+                        notes: existing.notes,
+                    },
+                    paidAmount: Number(sale.total_amount) || 0,
+                    dueAmount: 0,
+                    couponCode: null,
+                });
+            })().catch(() => {});
         }
 
         // ── Email: Appointment Completed receipt (to client) ──────────────────
