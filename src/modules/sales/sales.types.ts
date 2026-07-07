@@ -21,6 +21,9 @@ export type Sale = {
     created_by: string | null;
     created_at: string;
     updated_at: string;
+    coupon_code: string | null;
+    discount_percent: string | null;
+    discount_type: string | null;
 };
 
 export type SaleItem = {
@@ -50,6 +53,9 @@ export type CreateSaleBody = {
     payment_reference?: string;
     notes?: string;
     created_at?: string;
+    coupon_code?: string;
+    discount_percent?: string;
+    discount_type?: string;
     items: Array<{
         item_type: SaleItemType;
         item_id?: string;

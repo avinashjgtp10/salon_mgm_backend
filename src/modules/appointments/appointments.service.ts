@@ -55,15 +55,8 @@ export const appointmentsService = {
         const { requesterUserId, body } = params;
 
         if (body.staff_id && body.staff_id.trim().length > 0) {
-            const conflict = await appointmentsRepository.hasConflict({
-                staffId: body.staff_id,
-                scheduledAt: body.scheduled_at,
-                durationMinutes: body.duration_minutes,
-            });
-            if (conflict) {
-                throw new AppError(409, "Staff member already has an appointment at this time", "CONFLICT");
-            }
-
+            // Overlapping appointments for the same staff are allowed (e.g. hair color
+            // processing time) — the receptionist books intentionally, not by mistake.
             const apptDate = new Date(body.scheduled_at);
             const dateStr  = apptDate.toISOString().slice(0, 10);
             const pad = (n: number) => String(n).padStart(2, "0");
@@ -209,20 +202,8 @@ export const appointmentsService = {
         if (["completed", "cancelled", "no_show"].includes(existing.status))
             throw new AppError(400, `Cannot update an appointment with status '${existing.status}'`, "BAD_REQUEST");
 
-        const newStaffId     = patch.staff_id         ?? existing.staff_id;
-        const newScheduledAt = patch.scheduled_at     ?? existing.scheduled_at;
-        const newDuration    = patch.duration_minutes ?? existing.duration_minutes;
-
-        if (newStaffId && (patch.scheduled_at || patch.staff_id || patch.duration_minutes)) {
-            const conflict = await appointmentsRepository.hasConflict({
-                staffId: newStaffId,
-                scheduledAt: newScheduledAt,
-                durationMinutes: newDuration,
-                excludeId: appointmentId,
-            });
-            if (conflict)
-                throw new AppError(409, "Staff member already has an appointment at this time", "CONFLICT");
-        }
+        // Overlapping appointments for the same staff are allowed (e.g. hair color
+        // processing time) — no conflict check on reschedule/staff/duration changes.
 
         const updated = await appointmentsRepository.update(appointmentId, patch);
 

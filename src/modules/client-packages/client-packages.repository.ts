@@ -381,9 +381,9 @@ export const clientPackagesRepository = {
 
       await client.query(
         `INSERT INTO client_package_session_history
-          (id, client_package_id, client_package_service_id, session_no, staff_name, status)
-         VALUES ($1,$2,$3,$4,$5,$6)`,
-        [uuidv4(), packageId, svc.id, newCompleted, dto.staffName, "Completed"],
+          (id, client_package_id, client_package_service_id, session_no, staff_name, status, appointment_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [uuidv4(), packageId, svc.id, newCompleted, dto.staffName, "Completed", dto.appointmentId ?? null],
       );
 
       // If all services fully done → mark package Completed

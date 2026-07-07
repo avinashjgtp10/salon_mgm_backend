@@ -45,6 +45,8 @@ export type Client = {
     sms_marketing: boolean;
     whatsapp_marketing: boolean;
 
+    reward_points_balance: string; // pg decimal returns string
+
     created_at: string;
     updated_at: string;
 };

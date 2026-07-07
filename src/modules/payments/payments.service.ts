@@ -5,6 +5,8 @@ import { salesRepository } from '../sales/sales.repository';
 import { membershipsRepository } from '../memberships/memberships.repository';
 import { clientMembershipsService } from '../client-memberships/client-memberships.service';
 import { clientMembershipsRepository } from '../client-memberships/client-memberships.repository';
+import { rewardPointsRepository } from '../reward-points/reward-points.repository';
+import { ewalletRepository } from '../ewallet/ewallet.repository';
 import { CreatePaymentBody, Payment } from './payments.types';
 import type { Appointment } from '../appointments/appointments.types';
 import logger from '../../config/logger';
@@ -22,6 +24,9 @@ export const paymentsService = {
     // This prevents bugs where the frontend sends a wrong gross_amount
     // (e.g., partial-payment amount instead of the full bill total).
     let appt: Appointment | null = null;
+    let rewardPointsRedeemed = 0;
+    let rewardPointsValue = 0;
+    let ewalletUsedActual = 0;
 
     const isPackagePayment = (data.payment_method || '').toLowerCase() === 'package';
 
@@ -40,8 +45,23 @@ export const paymentsService = {
           // If the appointment has no priced items, fall through to frontend values
           if (!isFinite(actualBill) || actualBill <= 0) throw new Error('no_priced_items');
 
-          const discount      = Math.max(0, Number(data.discount_amount) || 0);
-          const ewallet       = Math.max(0, Number(data.ewallet_used)    || 0);
+          const discount        = Math.max(0, Number(data.discount_amount) || 0);
+          const ewalletRequested = Math.max(0, Number(data.ewallet_used)    || 0);
+
+          // ── eWallet: recompute server-side from the client's real balance ──
+          // Never trust a ₹ amount sent from the frontend — cap it at what the
+          // client actually has, same principle as reward points redemption.
+          let ewallet = 0;
+          if (data.client_id && ewalletRequested > 0) {
+            try {
+              const balance = await ewalletRepository.getBalance(data.client_id);
+              ewallet = Math.min(ewalletRequested, balance);
+            } catch (err: any) {
+              logger.warn('[payments] ewallet balance check failed:', err?.message ?? err);
+            }
+          }
+          ewalletUsedActual = ewallet;
+          data.ewallet_used = ewallet;
 
           // ── Membership wallet: redeem against services only ────────────────
           // Manual opt-in — only deducts when the staff checked "Apply
@@ -77,8 +97,28 @@ export const paymentsService = {
             }
           }
 
-          const effectiveBill = Math.max(0, actualBill - discount - ewallet - membershipWalletUsed);
+          // ── Reward points redemption ────────────────────────────────────────
+          // Manual opt-in via the checkbox (data.reward_points_redeemed > 0).
+          // Recompute the ₹ value server-side from the salon's own configured
+          // rate — never trust a discount amount sent from the frontend — and
+          // cap it at the client's actual balance so it can't go negative.
+          if (data.client_id && Number(data.reward_points_redeemed) > 0) {
+            try {
+              const config = await rewardPointsRepository.getConfig(data.salon_id);
+              const balance = await rewardPointsRepository.getBalance(data.client_id);
+              const requested = Math.min(Number(data.reward_points_redeemed), balance);
+              if (config.active && config.redeem_points > 0 && requested > 0) {
+                rewardPointsRedeemed = requested;
+                rewardPointsValue = (requested / config.redeem_points) * config.redeem_value;
+              }
+            } catch (err: any) {
+              logger.warn('[payments] reward points redemption failed:', err?.message ?? err);
+            }
+          }
+
+          const effectiveBill = Math.max(0, actualBill - discount - ewallet - membershipWalletUsed - rewardPointsValue);
           data.membership_wallet_used = membershipWalletUsed;
+          data.reward_points_value    = rewardPointsValue;
 
           // Sum previously paid amounts across all prior payments for this appointment
           const existingPaid = await paymentsRepository.getTotalPaidForAppointment(data.appointment_id);
@@ -106,6 +146,66 @@ export const paymentsService = {
     }
 
     const payment = await paymentsRepository.create(data);
+
+    // ── eWallet: actually deduct the real balance now that the payment row exists ──
+    if (data.client_id && ewalletUsedActual > 0) {
+      try {
+        await ewalletRepository.applyLedgerEntry({
+          clientId: data.client_id,
+          salonId: data.salon_id,
+          type: 'redeem',
+          delta: -ewalletUsedActual,
+          sourceType: 'payment',
+          sourceId: payment.id,
+          note: `Used for ₹${ewalletUsedActual.toFixed(2)} payment`,
+        });
+      } catch (err: any) {
+        logger.warn('[payments] ewallet redeem ledger write failed:', err?.message ?? err);
+      }
+    }
+
+    // ── Reward points: redeem now, earn only once the bill is fully paid ─────
+    // Points redeemed already reduced net_amount above; deduct them from the
+    // client's balance here now that the payment row exists to link against.
+    if (data.client_id && rewardPointsRedeemed > 0) {
+      try {
+        await rewardPointsRepository.applyLedgerEntry({
+          clientId: data.client_id,
+          salonId: data.salon_id,
+          type: 'redeem',
+          delta: -rewardPointsRedeemed,
+          sourceType: 'payment',
+          sourceId: payment.id,
+          note: `Redeemed for ₹${rewardPointsValue.toFixed(2)} off`,
+        });
+      } catch (err: any) {
+        logger.warn('[payments] reward points redeem ledger write failed:', err?.message ?? err);
+      }
+    }
+    // Earn only on a fully-paid bill — a Partial payment doesn't award points
+    // yet, since the sale isn't settled (matches how eWallet/wallet are only
+    // ever debited, never speculatively credited before the bill is closed).
+    if (data.client_id && data.status === 'completed' && !isPackagePayment) {
+      try {
+        const config = await rewardPointsRepository.getConfig(data.salon_id);
+        if (config.active && config.spend_amount > 0) {
+          const pointsEarned = Math.floor((Number(data.net_amount) / config.spend_amount) * config.points_earned);
+          if (pointsEarned > 0) {
+            await rewardPointsRepository.applyLedgerEntry({
+              clientId: data.client_id,
+              salonId: data.salon_id,
+              type: 'earn',
+              delta: pointsEarned,
+              sourceType: 'payment',
+              sourceId: payment.id,
+              note: `Earned on ₹${Number(data.net_amount).toFixed(2)} payment`,
+            });
+          }
+        }
+      } catch (err: any) {
+        logger.warn('[payments] reward points earn ledger write failed:', err?.message ?? err);
+      }
+    }
 
     // Increment coupon used_count
     if (data.coupon_code) {
@@ -176,6 +276,10 @@ export const paymentsService = {
             staff_id: appt.staff_id || undefined,
             status: 'completed',
             discount_amount: String(data.discount_amount || 0),
+            payment_method: data.payment_method as any,
+            coupon_code: data.coupon_code || undefined,
+            discount_type: appt.discount_type || undefined,
+            discount_percent: appt.discount_type === 'percentage' ? String(appt.discount_value ?? 0) : undefined,
             // DB constraint only allows lowercase values ('cash','card','upi','bank_transfer'),
             // but this arrives as the frontend's display label (e.g. "Cash") — normalizing
             // here since the mismatch was silently failing every sale auto-creation.

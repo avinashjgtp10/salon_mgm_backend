@@ -1,5 +1,6 @@
 import { clientMembershipsRepository } from './client-memberships.repository';
 import { membershipsRepository } from '../memberships/memberships.repository';
+import { salesRepository } from '../sales/sales.repository';
 import pool from '../../config/database';
 import type {
   CreateClientMembershipDTO,
@@ -138,6 +139,29 @@ export const clientMembershipsService = {
 
   async purchase(salonId: string, dto: CreateClientMembershipDTO) {
     const membership = await clientMembershipsRepository.create(salonId, dto);
+
+    // ── Auto-create sale record so membership revenue appears in reports ────────
+    // Mirrors client-packages.service.ts's create() — without this, a membership
+    // sold directly (not through an appointment) never shows up in sales/sale_items
+    // at all, so any Sales/Revenue page built from those tables misses it entirely.
+    try {
+      const pricePaid = Number(membership.pricePaid || 0);
+      await salesRepository.create({
+        salon_id:   salonId,
+        client_id:  dto.clientId,
+        status:     'completed',
+        items: [{
+          item_type:  'membership',
+          item_id:    dto.membershipId,
+          name:       membership.membershipName,
+          quantity:   1,
+          unit_price: String(pricePaid),
+        }],
+      }, null);
+    } catch (err) {
+      logger.error('[clientMembershipsService] Failed to auto-create sale for membership purchase:', { error: err });
+    }
+
     notifyMembershipPurchased(membership).catch(() => {});
     return membership;
   },
