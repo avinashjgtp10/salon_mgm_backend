@@ -37,6 +37,9 @@ function buildSyntheticSale(pkg: ClientPackage): { sale: Sale; items: SaleItem[]
     created_by: null,
     created_at: pkg.createdDate,
     updated_at: pkg.createdDate,
+    coupon_code: null,
+    discount_percent: null,
+    discount_type: null,
   };
 
   const items: SaleItem[] =

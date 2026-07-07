@@ -79,6 +79,8 @@ export type Appointment = {
     cancel_reason: string | null;
     // Computed at query time (not stored as a column)
     invoice_number?: number | null;
+    reward_points_value?: number | null;
+    tax_breakdown?: { name: string; rate: number; amount: number; inclusive: boolean }[] | null;
     // Joined fields (from clients / staff tables — not stored as columns)
     client_name?: string | null;
     client_phone?: string | null;

@@ -1,0 +1,2 @@
+ALTER TABLE payments
+  ADD COLUMN IF NOT EXISTS reward_points_value NUMERIC(10,2) NOT NULL DEFAULT 0;
