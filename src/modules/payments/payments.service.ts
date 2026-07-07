@@ -276,14 +276,13 @@ export const paymentsService = {
             staff_id: appt.staff_id || undefined,
             status: 'completed',
             discount_amount: String(data.discount_amount || 0),
-            payment_method: data.payment_method as any,
-            coupon_code: data.coupon_code || undefined,
-            discount_type: appt.discount_type || undefined,
-            discount_percent: appt.discount_type === 'percentage' ? String(appt.discount_value ?? 0) : undefined,
             // DB constraint only allows lowercase values ('cash','card','upi','bank_transfer'),
             // but this arrives as the frontend's display label (e.g. "Cash") — normalizing
             // here since the mismatch was silently failing every sale auto-creation.
             payment_method: String(data.payment_method || '').toLowerCase() as any,
+            coupon_code: data.coupon_code || undefined,
+            discount_type: appt.discount_type || undefined,
+            discount_percent: appt.discount_type === 'percentage' ? String(appt.discount_value ?? 0) : undefined,
             items,
           }, null);
 
