@@ -10,6 +10,14 @@ export const configRepository = {
     return rows[0] || null
   },
 
+  // ── All verified configs — used by the background limit-sync job ─────────
+  async findAllVerified(): Promise<WhatsAppConfig[]> {
+    const { rows } = await pool.query(
+      `SELECT * FROM whatsapp_configs WHERE is_verified = true AND access_token IS NOT NULL`
+    )
+    return rows
+  },
+
   // ── Check if verify token is taken by another salon ───────────────────────
   async isVerifyTokenTaken(token: string, salonId: string): Promise<boolean> {
     const { rows } = await pool.query(
@@ -55,22 +63,37 @@ export const configRepository = {
     return rows[0]
   },
 
+  async delete(salonId: string): Promise<void> {
+    await pool.query(`DELETE FROM whatsapp_configs WHERE salon_id = $1`, [salonId])
+  },
+
+  async setAiReceptionistEnabled(salonId: string, enabled: boolean): Promise<WhatsAppConfig | null> {
+    const { rows } = await pool.query(`
+      UPDATE whatsapp_configs SET
+        ai_receptionist_enabled = $2,
+        updated_at              = NOW()
+      WHERE salon_id = $1
+      RETURNING *
+    `, [salonId, enabled])
+    return rows[0] || null
+  },
+
   async setVerified(
     salonId:      string,
     displayPhone: string,
     qualityRating: string,
-    tier:         number
+    dailyLimit:   number
   ): Promise<WhatsAppConfig> {
     const { rows } = await pool.query(`
       UPDATE whatsapp_configs SET
         is_verified    = true,
         display_phone  = $2,
         quality_rating = $3,
-        messaging_tier = $4,
+        daily_limit    = $4,
         updated_at     = NOW()
       WHERE salon_id = $1
       RETURNING *
-    `, [salonId, displayPhone, qualityRating, tier])
+    `, [salonId, displayPhone, qualityRating, dailyLimit])
     return rows[0]
   },
 }

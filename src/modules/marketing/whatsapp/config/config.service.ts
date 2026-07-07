@@ -25,6 +25,12 @@ export const configService = {
     }
   },
 
+  async setAiReceptionistEnabled(salonId: string, enabled: boolean) {
+    const updated = await configRepository.setAiReceptionistEnabled(salonId, enabled)
+    if (!updated) throw new AppError(400, 'WhatsApp not configured for this salon', 'WA_NOT_CONFIGURED')
+    return { ai_receptionist_enabled: updated.ai_receptionist_enabled }
+  },
+
   async saveConfig(salonId: string, body: SaveConfigBody) {
 
     // ── Check verify token uniqueness ─────────────────────────────────────────
@@ -112,23 +118,77 @@ export const configService = {
     }
   },
 
+  // ── Disconnect — removes this salon's WhatsApp connection ─────────────────
+  // Templates, campaigns and message history are untouched; only the
+  // credentials/config row is deleted so the salon can reconnect fresh.
+  async deleteConfig(salonId: string) {
+    const config = await configRepository.findBySalonId(salonId)
+    if (!config) throw new AppError(404, 'WhatsApp not configured for this salon', 'WA_NOT_CONFIGURED')
+
+    if (config.waba_id && config.access_token) {
+      try {
+        await whatsappMetaApi.unsubscribeWaba({ wabaId: config.waba_id, accessToken: config.access_token })
+      } catch (err: any) {
+        logger.warn(`⚠️  Failed to unsubscribe WABA for salon ${salonId} during disconnect: ${err?.message}`)
+      }
+    }
+
+    await configRepository.delete(salonId)
+  },
+
+  // ── Refresh daily_limit + quality_rating from Meta ────────────────────────
+  // Shared by the manual /sync-limits endpoint and the background scheduler.
+  async syncLimitsForSalon(salonId: string) {
+    const config = await configRepository.findBySalonId(salonId)
+    if (!config) return null
+
+    const limits = await whatsappMetaApi.fetchPhoneNumberLimits(
+      config.phone_number_id,
+      config.access_token,
+      config.waba_id
+    )
+    // fetchPhoneNumberLimits returns daily_limit: 0 when every Meta lookup
+    // fails — don't let a transient failure wipe out a known-good limit
+    const resolvedLimit = limits.daily_limit > 0 ? limits.daily_limit : config.daily_limit
+
+    return configRepository.setVerified(
+      salonId,
+      config.display_phone ?? '',
+      limits.quality_rating,
+      resolvedLimit
+    )
+  },
+
   async testConnection(salonId: string): Promise<TestConnectionResult> {
     const config = await configRepository.findBySalonId(salonId)
     if (!config) throw new AppError(400, 'WhatsApp not configured for this salon', 'WA_NOT_CONFIGURED')
 
     const d = await whatsappMetaApi.testConnection(config.phone_number_id, config.access_token)
 
+    // testConnection's own payload doesn't reliably carry the messaging limit
+    // (Meta returns it as a tier code, not a plain field) — reuse the same
+    // robust lookup that /sync-limits uses so we don't overwrite daily_limit
+    // with a wrong value on every "Test Connection" click.
+    const limits = await whatsappMetaApi.fetchPhoneNumberLimits(
+      config.phone_number_id,
+      config.access_token,
+      config.waba_id
+    )
+    // fetchPhoneNumberLimits returns daily_limit: 0 when every Meta lookup
+    // fails — don't let a transient failure wipe out a known-good limit
+    const resolvedLimit = limits.daily_limit > 0 ? limits.daily_limit : config.daily_limit
+
     await configRepository.setVerified(
       salonId,
       d.display_phone_number,
-      d.quality_rating       ?? 'GREEN',
-      d.messaging_limit_tier ?? 1
+      d.quality_rating ?? limits.quality_rating ?? 'GREEN',
+      resolvedLimit
     )
 
     return {
       success:       true,
-      tier:          String(d.messaging_limit_tier ?? 1),
-      qualityRating: d.quality_rating ?? 'GREEN',
+      tier:          String(resolvedLimit),
+      qualityRating: d.quality_rating ?? limits.quality_rating ?? 'GREEN',
     }
   },
 }

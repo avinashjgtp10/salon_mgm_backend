@@ -21,6 +21,13 @@ const BODY_LIMIT   = 1024
 const FOOTER_LIMIT = 60
 const HEADER_LIMIT = 60
 
+// Meta's WhatsApp template header media caps
+const MAX_HEADER_FILE_SIZE: Record<string, number> = {
+  image:    5  * 1024 * 1024,
+  video:    16 * 1024 * 1024,
+  document: 10 * 1024 * 1024,
+}
+
 export const validateCreateTemplate = (req: Request, _res: Response, next: NextFunction) => {
   try {
     const b = req.body
@@ -56,6 +63,17 @@ export const validateCreateTemplate = (req: Request, _res: Response, next: NextF
       throw new AppError(400, 'header_text is required when header_type is text', 'VALIDATION_ERROR')
     if (b.header_type === 'text' && b.header_text?.length > HEADER_LIMIT)
       throw new AppError(400, `header_text must be under ${HEADER_LIMIT} characters`, 'VALIDATION_ERROR')
+
+    const maxSize = MAX_HEADER_FILE_SIZE[b.header_type]
+    if (maxSize && (req as any).file && (req as any).file.size > maxSize) {
+      const maxMB = maxSize / (1024 * 1024)
+      const fileMB = ((req as any).file.size / (1024 * 1024)).toFixed(1)
+      throw new AppError(
+        400,
+        `File is too large — max ${maxMB}MB for a ${b.header_type} header (received ${fileMB}MB)`,
+        'VALIDATION_ERROR'
+      )
+    }
 
     // ── Body ──────────────────────────────────────────────────────────────────
     if (!isNonEmpty(b.body_text) || b.body_text.trim().length < 10)

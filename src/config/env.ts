@@ -47,6 +47,11 @@ interface Config {
     url: string;
   };
 
+  // Publicly-reachable URL for links handed to external services (e.g. WhatsApp
+  // fetching a receipt PDF). In local dev this is the ngrok tunnel, not APP_BASE_URL
+  // (a LAN address Meta's servers can't reach). Must end without a trailing slash.
+  publicBaseUrl: string;
+
   logging: {
     level: string;
   };
@@ -64,6 +69,14 @@ interface Config {
   };
 
   groq: {
+    apiKey: string;
+  };
+
+  gemini: {
+    apiKey: string;
+  };
+
+  mistral: {
     apiKey: string;
   };
 }
@@ -104,6 +117,8 @@ const config: Config = {
     url: process.env.FRONTEND_URL || 'http://localhost:3001',
   },
 
+  publicBaseUrl: (process.env.PUBLIC_BASE_URL || process.env.APP_BASE_URL || '').replace(/\/$/, ''),
+
   logging: {
     level: process.env.LOG_LEVEL || 'info',
   },
@@ -122,6 +137,14 @@ const config: Config = {
 
   groq: {
     apiKey: process.env.GROQ_API_KEY || '',
+  },
+
+  gemini: {
+    apiKey: process.env.GEMINI_API_KEY || '',
+  },
+
+  mistral: {
+    apiKey: process.env.MISTRAL_API_KEY || '',
   },
 };
 

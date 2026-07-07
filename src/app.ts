@@ -42,7 +42,10 @@ import reportsRoutes from "./modules/reports/reports.routes";
 import blockedTimesRoutes from "./modules/blocked_times/blocked_times.routes";
 import analyticsRoutes from './modules/marketing/whatsapp/analytics/analytics.routes'
 import botRoutes from "./modules/bot/bot.routes";
+import aiEngineRoutes from "./modules/ai-engine/ai-engine.routes";
+import { ensureTable as ensureAiEngineTables } from "./modules/ai-engine/ai-engine.repository";
 import waAutomationRoutes from "./modules/whatsapp-automation/whatsapp-automation.routes";
+import waPurchaseTemplatesRoutes from "./modules/whatsapp-automation/wa-purchase-templates.routes";
 import attendanceRoutes from "./modules/attendance/attendance.routes";
 import { deviceApiRouter, admsRouter } from "./modules/device/device.routes";
 import packageTemplatesRoutes from "./modules/package-templates/package-templates.routes";
@@ -84,6 +87,11 @@ ensurePaymentsTables().catch(err =>
 // Bootstrap cash-management tables (idempotent)
 ensureCashManagementTables().catch(err =>
   logger.warn("cash-management table init warning:", err?.message ?? err),
+);
+
+// Bootstrap ai-engine (LUNOX) tables (idempotent)
+ensureAiEngineTables().catch(err =>
+  logger.warn("ai-engine table init warning:", err?.message ?? err),
 );
 
 // Security middleware
@@ -215,9 +223,11 @@ app.use("/api/v1/payments", paymentsRoutes);
 app.use("/api/v1/blocked-times", blockedTimesRoutes);
 app.use("/api/v1/settings", settingsRoutes);
 app.use("/api/v1/bot", botRoutes);
+app.use("/api/v1/ai-engine", aiEngineRoutes);
 app.use("/api/v1/reports", reportsRoutes);
 app.use("/api/v1/cash-management", cashManagementRoutes);
 app.use("/api/v1/wa-automation", waAutomationRoutes);
+app.use("/api/v1/wa-automation/purchase-templates", waPurchaseTemplatesRoutes);
 app.use("/api/v1/attendance", attendanceRoutes);
 app.use("/api/v1/devices", deviceApiRouter);
 app.use("/api/v1/package-templates", packageTemplatesRoutes);

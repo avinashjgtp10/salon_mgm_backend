@@ -8,7 +8,7 @@ import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { clientsService } from "./clients.service";
 import { clientsRepository } from "./clients.repository";
-import { ClientsListQuery, CreateClientBody, UpdateClientBody } from "./clients.types";
+import { ClientsListQuery, CreateClientBody, UpdateClientBody, CampaignFilterParams } from "./clients.types";
 import pool from "../../config/database";
 
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string } };
@@ -285,22 +285,40 @@ export const clientsController = {
             const salonId = getSalonId(req);
             const {
                 birth_month, birth_day_month, gender,
-                service_category_id, preview,
+                service_category_ids, preview,
                 client_source, joined_from, joined_to,
+                total_spend_min, total_spend_max,
+                has_membership, has_package,
+                last_visit_from, last_visit_to,
+                customer_type,
             } = req.query;
 
             const genders = gender
                 ? (gender as string).split(",").map((g: string) => g.trim()).filter(Boolean)
                 : undefined;
 
-            const filters = {
-                birth_month:         birth_month ? parseInt(birth_month as string) : undefined,
-                birth_day_month:     birth_day_month as string | undefined,
+            const categoryIds = service_category_ids
+                ? (service_category_ids as string).split(",").map((s: string) => s.trim()).filter(Boolean)
+                : undefined;
+
+            const toBool = (v: unknown): boolean | undefined =>
+                v === "true" ? true : v === "false" ? false : undefined;
+
+            const filters: CampaignFilterParams = {
+                birth_month:          birth_month ? parseInt(birth_month as string) : undefined,
+                birth_day_month:      birth_day_month as string | undefined,
                 genders,
-                service_category_id: service_category_id as string | undefined,
-                client_source:       client_source as string | undefined,
-                joined_from:         joined_from as string | undefined,
-                joined_to:           joined_to as string | undefined,
+                service_category_ids: categoryIds,
+                client_source:        client_source as string | undefined,
+                joined_from:          joined_from as string | undefined,
+                joined_to:            joined_to as string | undefined,
+                total_spend_min:      total_spend_min != null ? parseFloat(total_spend_min as string) : undefined,
+                total_spend_max:      total_spend_max != null ? parseFloat(total_spend_max as string) : undefined,
+                has_membership:       toBool(has_membership),
+                has_package:          toBool(has_package),
+                last_visit_from:      last_visit_from as string | undefined,
+                last_visit_to:        last_visit_to   as string | undefined,
+                customer_type:        customer_type === "new" || customer_type === "repetitive" ? customer_type : undefined,
             };
 
             if (preview === "true") {
