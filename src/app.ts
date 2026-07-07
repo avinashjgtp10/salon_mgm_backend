@@ -49,6 +49,7 @@ import packageTemplatesRoutes from "./modules/package-templates/package-template
 import { ensurePackageTemplateTables } from "./modules/package-templates/package-templates.repository";
 import clientMembershipsRoutes from "./modules/client-memberships/client-memberships.routes";
 import { ensureTable as ensureClientMembershipsTables } from "./modules/client-memberships/client-memberships.repository";
+import ewalletRoutes from "./modules/ewallet/ewallet.routes";
 import { ensureTable as ensurePaymentsTables } from "./modules/payments/payments.repository";
 import cashManagementRoutes from "./modules/cash-management/cash-management.routes";
 import { ensureCashManagementTables } from "./modules/cash-management/cash-management.repository";
@@ -221,6 +222,7 @@ app.use("/api/v1/attendance", attendanceRoutes);
 app.use("/api/v1/devices", deviceApiRouter);
 app.use("/api/v1/package-templates", packageTemplatesRoutes);
 app.use("/api/v1/client-memberships", clientMembershipsRoutes);
+app.use("/api/v1/ewallet", ewalletRoutes);
 app.use("/api/v1/super-admin", superAdminRoutes);
 app.use("/api/v1/support", supportRoutes);
 app.use("/api/v1/notifications", notificationsRoutes);

@@ -51,6 +51,7 @@ export interface UpdateClientPackageDTO {
 export interface CompleteSessionDTO {
   serviceId:  string;
   staffName:  string;
+  appointmentId?: string;
 }
 
 export interface ClientPackage {

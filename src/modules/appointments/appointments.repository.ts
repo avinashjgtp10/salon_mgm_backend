@@ -35,7 +35,9 @@ export const appointmentsRepository = {
                   ELSE 'unpaid'::text
                 END AS payment_status,
                 COALESCE((SELECT SUM(paid_amount) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS paid_amount,
-                (SELECT payment_method FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) AS payment_method
+                (SELECT payment_method FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) AS payment_method,
+                COALESCE((SELECT SUM(reward_points_value) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS reward_points_value,
+                (SELECT tax_breakdown FROM payments p WHERE p.appointment_id = a.id AND p.tax_breakdown IS NOT NULL ORDER BY p.created_at DESC LIMIT 1) AS tax_breakdown
              FROM appointments a
              LEFT JOIN clients c  ON a.client_id = c.id
              LEFT JOIN staff   st ON a.staff_id  = st.id
@@ -109,7 +111,8 @@ export const appointmentsRepository = {
                  MAX(payment_method) FILTER (WHERE created_at = (
                    SELECT MAX(created_at) FROM payments p2 WHERE p2.appointment_id = payments.appointment_id
                  ))                                                                  AS latest_method,
-                 COUNT(*) FILTER (WHERE status IN ('completed','partial'))           AS pay_count
+                 COUNT(*) FILTER (WHERE status IN ('completed','partial'))           AS pay_count,
+                 SUM(reward_points_value) FILTER (WHERE status IN ('completed','partial')) AS total_reward_points_value
                FROM payments
                GROUP BY appointment_id
              )
@@ -129,7 +132,9 @@ export const appointmentsRepository = {
                  ELSE 'unpaid'::text
                END AS payment_status,
                COALESCE(pa.total_paid, 0)    AS paid_amount,
-               pa.latest_method              AS payment_method
+               pa.latest_method              AS payment_method,
+               COALESCE(pa.total_reward_points_value, 0) AS reward_points_value,
+               (SELECT tax_breakdown FROM payments p WHERE p.appointment_id = a.id AND p.tax_breakdown IS NOT NULL ORDER BY p.created_at DESC LIMIT 1) AS tax_breakdown
              FROM appointments a
              LEFT JOIN clients c   ON a.client_id  = c.id
              LEFT JOIN staff   st  ON a.staff_id   = st.id

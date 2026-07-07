@@ -9,6 +9,12 @@ export async function ensureTable(): Promise<void> {
   await pool.query(
     `ALTER TABLE payments ADD COLUMN IF NOT EXISTS membership_wallet_used NUMERIC(10,2) NOT NULL DEFAULT 0`,
   );
+  await pool.query(
+    `ALTER TABLE payments ADD COLUMN IF NOT EXISTS reward_points_value NUMERIC(10,2) NOT NULL DEFAULT 0`,
+  );
+  await pool.query(
+    `ALTER TABLE payments ADD COLUMN IF NOT EXISTS tax_breakdown JSONB`,
+  );
 }
 
 export const paymentsRepository = {
@@ -21,12 +27,12 @@ export const paymentsRepository = {
         gross_amount, discount_amount, ewallet_used, net_amount,
         paid_amount, due_amount,
         coupon_code, payment_method, split_details,
-        status, paid_at, notes, membership_wallet_used
+        status, paid_at, notes, membership_wallet_used, reward_points_value, tax_breakdown
       ) VALUES (
         gen_random_uuid()::text, $13,
         $1,$2,$3,$4,$5,$6,$7,
         $14,$15,
-        $8,$9,$10::jsonb,$11,NOW(),$12,$16
+        $8,$9,$10::jsonb,$11,NOW(),$12,$16,$17,$18::jsonb
       )
       RETURNING *`,
       [
@@ -46,6 +52,8 @@ export const paymentsRepository = {
         data.paid_amount ?? data.net_amount,  // $14 = paid_amount (defaults to net_amount)
         data.due_amount ?? 0,     // $15 = due_amount
         data.membership_wallet_used ?? 0, // $16
+        data.reward_points_value ?? 0,    // $17
+        data.tax_breakdown ? JSON.stringify(data.tax_breakdown) : null, // $18
       ]
     );
     return rows[0];
