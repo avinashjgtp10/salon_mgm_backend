@@ -244,7 +244,7 @@ export const appointmentsService = {
                 salon_id: existing.salon_id,
                 type:     "appointment",
                 title:    "Appointment Updated",
-                body:     `${existing.client_name ?? "Walk-in"} — ${formatDate(newScheduledAt)} at ${formatTime(newScheduledAt)}`,
+                body:     `${existing.client_name ?? "Walk-in"} — ${formatDate(updated.scheduled_at)} at ${formatTime(updated.scheduled_at)}`,
             }).catch(() => {});
         }
 

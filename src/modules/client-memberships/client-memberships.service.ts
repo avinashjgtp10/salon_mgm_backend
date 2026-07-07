@@ -43,6 +43,9 @@ function buildSyntheticSale(membership: ClientMembership): { sale: Sale; items: 
     created_by: null,
     created_at: now,
     updated_at: now,
+    coupon_code: null,
+    discount_percent: null,
+    discount_type: null,
   };
 
   const items: SaleItem[] = [
