@@ -99,6 +99,10 @@ export type Appointment = {
     ex_charges: number;
     tip_amount: number;
     gst_percent: number;
+    // Persisted "Apply Membership" checkbox state — independent of whether a
+    // payment has actually been made (payments.membership_wallet_used only
+    // exists once checkout happens), so the checkbox survives Save/reopen.
+    apply_membership_wallet: boolean;
 };
 
 // ─── Request body types ──────────────────────────────────────────────────────
@@ -129,6 +133,7 @@ export type CreateAppointmentBody = {
     ex_charges?: number;
     tip_amount?: number;
     gst_percent?: number;
+    apply_membership_wallet?: boolean;
 };
 
 export type UpdateAppointmentBody = Partial<Omit<CreateAppointmentBody, "salon_id">>;

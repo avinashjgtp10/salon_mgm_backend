@@ -5,6 +5,18 @@ import {
     UpdateAppointmentBody,
 } from "./appointments.types";
 
+// Bootstrap: patch the pre-existing `appointments` table with a persisted flag
+// for the "Apply Membership" checkbox — unlike package coverage (which is
+// baked into each service row's is_package_service/total=0), membership wallet
+// coverage was previously only ever recorded via the payments table at actual
+// checkout, so re-opening an unpaid appointment always showed the checkbox
+// unchecked even when staff had explicitly applied it and saved.
+export async function ensureTable(): Promise<void> {
+    await pool.query(
+        `ALTER TABLE appointments ADD COLUMN IF NOT EXISTS apply_membership_wallet BOOLEAN NOT NULL DEFAULT FALSE`,
+    );
+}
+
 export const appointmentsRepository = {
 
     // ✅ FIX — LEFT JOIN payments so payment_status reflects actual payment records
@@ -37,6 +49,7 @@ export const appointmentsRepository = {
                 COALESCE((SELECT SUM(paid_amount) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS paid_amount,
                 (SELECT payment_method FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) AS payment_method,
                 COALESCE((SELECT SUM(reward_points_value) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS reward_points_value,
+                COALESCE((SELECT SUM(membership_wallet_used) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS membership_wallet_used,
                 (SELECT tax_breakdown FROM payments p WHERE p.appointment_id = a.id AND p.tax_breakdown IS NOT NULL ORDER BY p.created_at DESC LIMIT 1) AS tax_breakdown
              FROM appointments a
              LEFT JOIN clients c  ON a.client_id = c.id
@@ -112,7 +125,8 @@ export const appointmentsRepository = {
                    SELECT MAX(created_at) FROM payments p2 WHERE p2.appointment_id = payments.appointment_id
                  ))                                                                  AS latest_method,
                  COUNT(*) FILTER (WHERE status IN ('completed','partial'))           AS pay_count,
-                 SUM(reward_points_value) FILTER (WHERE status IN ('completed','partial')) AS total_reward_points_value
+                 SUM(reward_points_value) FILTER (WHERE status IN ('completed','partial')) AS total_reward_points_value,
+                 SUM(membership_wallet_used) FILTER (WHERE status IN ('completed','partial')) AS total_membership_wallet_used
                FROM payments
                GROUP BY appointment_id
              )
@@ -134,6 +148,7 @@ export const appointmentsRepository = {
                COALESCE(pa.total_paid, 0)    AS paid_amount,
                pa.latest_method              AS payment_method,
                COALESCE(pa.total_reward_points_value, 0) AS reward_points_value,
+               COALESCE(pa.total_membership_wallet_used, 0) AS membership_wallet_used,
                (SELECT tax_breakdown FROM payments p WHERE p.appointment_id = a.id AND p.tax_breakdown IS NOT NULL ORDER BY p.created_at DESC LIMIT 1) AS tax_breakdown
              FROM appointments a
              LEFT JOIN clients c   ON a.client_id  = c.id
@@ -187,7 +202,8 @@ export const appointmentsRepository = {
                 ends_at,
                 colour, created_by,
                 services, package_items, product_items, membership_items,
-                discount_value, discount_type, ex_charges, tip_amount, gst_percent
+                discount_value, discount_type, ex_charges, tip_amount, gst_percent,
+                apply_membership_wallet
             )
             VALUES (
                 $1, $2, $3, $4, $5,
@@ -196,7 +212,8 @@ export const appointmentsRepository = {
                 ($10::timestamptz + ($11::integer * INTERVAL '1 minute')),
                 $12, $13,
                 $14::jsonb, $15::jsonb, $16::jsonb, $17::jsonb,
-                $18, $19, $20, $21, $22
+                $18, $19, $20, $21, $22,
+                $23
             )
             RETURNING *`,
             [
@@ -222,6 +239,7 @@ export const appointmentsRepository = {
                 data.ex_charges         ?? 0,
                 data.tip_amount         ?? 0,
                 data.gst_percent        ?? 0,
+                data.apply_membership_wallet ?? false,
             ]
         );
         return rows[0];

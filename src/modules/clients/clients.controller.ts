@@ -489,7 +489,24 @@ export const clientsController = {
                             END
                             FROM payments p WHERE p.appointment_id = a.id),
                             'unpaid'
-                        ) AS payment_status
+                        ) AS payment_status,
+                        -- Method of the most recent payment — 'package' when the visit
+                        -- was covered by a client's pre-purchased package (see
+                        -- appointments.repository.ts for the same pattern used by the
+                        -- calendar listing).
+                        (SELECT p.payment_method FROM payments p
+                         WHERE p.appointment_id = a.id
+                         ORDER BY p.created_at DESC LIMIT 1) AS payment_method,
+                        -- How much of the bill was covered by the client's membership
+                        -- wallet (see payments.service.ts) — nonzero means this visit
+                        -- was paid for, at least in part, through a membership.
+                        COALESCE(
+                            (SELECT SUM(p.membership_wallet_used)
+                             FROM payments p
+                             WHERE p.appointment_id = a.id
+                               AND p.status IN ('completed', 'partial')),
+                            0
+                        ) AS membership_wallet_used
                      FROM appointments a
                      WHERE a.client_id = $1 AND a.salon_id = $2
                      ORDER BY a.scheduled_at DESC

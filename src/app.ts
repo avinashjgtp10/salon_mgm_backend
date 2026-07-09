@@ -54,6 +54,7 @@ import clientMembershipsRoutes from "./modules/client-memberships/client-members
 import { ensureTable as ensureClientMembershipsTables } from "./modules/client-memberships/client-memberships.repository";
 import ewalletRoutes from "./modules/ewallet/ewallet.routes";
 import { ensureTable as ensurePaymentsTables } from "./modules/payments/payments.repository";
+import { ensureTable as ensureAppointmentsTables } from "./modules/appointments/appointments.repository";
 import cashManagementRoutes from "./modules/cash-management/cash-management.routes";
 import { ensureCashManagementTables } from "./modules/cash-management/cash-management.repository";
 import superAdminRoutes from "./modules/super-admin/super-admin.routes";
@@ -82,6 +83,11 @@ ensureClientMembershipsTables().catch(err =>
 // Bootstrap payments table wallet column (idempotent)
 ensurePaymentsTables().catch(err =>
   logger.warn("payments table init warning:", err?.message ?? err),
+);
+
+// Bootstrap appointments table apply_membership_wallet column (idempotent)
+ensureAppointmentsTables().catch(err =>
+  logger.warn("appointments table init warning:", err?.message ?? err),
 );
 
 // Bootstrap cash-management tables (idempotent)
