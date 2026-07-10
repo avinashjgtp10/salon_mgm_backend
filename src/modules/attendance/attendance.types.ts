@@ -29,6 +29,8 @@ export type AttendanceSettings = {
     min_half_day_hours: number;
     attendance_bonus: number;
     commission_threshold_days: number;
+    active: boolean;             // Half Day Rule enabled
+    threshold_hours: number;     // late-by-more-than-this = half_day
     created_at: string;
     updated_at: string;
 };
@@ -36,6 +38,7 @@ export type AttendanceSettings = {
 export type CheckInBody = {
     staff_id: string;
     check_in?: string;   // ISO timestamp; defaults to NOW()
+    status?: AttendanceStatus; // caller-supplied status (e.g. frontend's owner-configured Half Day Rule); falls back to server-side calc if omitted/invalid
     note?: string;
 };
 
@@ -76,6 +79,8 @@ export type UpdateSettingsBody = {
     min_half_day_hours?: number;
     attendance_bonus?: number;
     commission_threshold_days?: number;
+    active?: boolean;
+    threshold_hours?: number;
 };
 
 export type DailySummary = {

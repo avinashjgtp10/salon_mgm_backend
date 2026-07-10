@@ -53,6 +53,27 @@ function calcStatus(
     return isLate ? "late" : "present";
 }
 
+const VALID_STATUSES: AttendanceStatus[] = ["present", "absent", "half_day", "late", "on_leave"];
+
+// upsertSettings() builds its SQL column list directly from this object's keys,
+// so only real attendance_settings columns may pass through — otherwise any
+// unexpected body field (e.g. salon_id, id) becomes a literal SQL column
+// reference and breaks or corrupts the query.
+const UPDATABLE_SETTINGS_FIELDS: (keyof UpdateSettingsBody)[] = [
+    "shift_start", "shift_end", "grace_minutes",
+    "min_full_day_hours", "min_half_day_hours",
+    "attendance_bonus", "commission_threshold_days",
+    "active", "threshold_hours",
+];
+
+function sanitizeSettingsUpdate(data: UpdateSettingsBody): UpdateSettingsBody {
+    const clean: UpdateSettingsBody = {};
+    for (const key of UPDATABLE_SETTINGS_FIELDS) {
+        if (data[key] !== undefined) (clean as any)[key] = data[key];
+    }
+    return clean;
+}
+
 function defaultSettings(): Omit<AttendanceSettings, "id" | "salon_id" | "created_at" | "updated_at"> {
     return {
         shift_start: "09:00",
@@ -62,6 +83,8 @@ function defaultSettings(): Omit<AttendanceSettings, "id" | "salon_id" | "create
         min_half_day_hours: 3.5,
         attendance_bonus: 0,
         commission_threshold_days: 0,
+        active: false,
+        threshold_hours: 2,
     };
 }
 
@@ -85,23 +108,34 @@ export const attendanceService = {
     },
 
     async updateSettings(salonId: string, data: UpdateSettingsBody): Promise<AttendanceSettings> {
-        if (Object.keys(data).length === 0)
+        const clean = sanitizeSettingsUpdate(data);
+        if (Object.keys(clean).length === 0)
             throw new AppError(400, "No fields provided to update", "VALIDATION_ERROR");
-        return attendanceRepository.upsertSettings(salonId, data);
+        return attendanceRepository.upsertSettings(salonId, clean);
     },
 
     // ── Check In ──────────────────────────────────────────────────────────────
 
     async checkIn(salonId: string, body: CheckInBody): Promise<Attendance> {
-        const { staff_id, check_in, note } = body;
+        const { staff_id, check_in, status: clientStatus, note } = body;
         const checkInTs = check_in || new Date().toISOString();
         const date = new Date(checkInTs).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
 
         const onLeave = await attendanceRepository.hasApprovedLeave(staff_id, date);
         if (onLeave) throw new AppError(400, "Staff member is on approved leave today", "ON_LEAVE");
 
-        const settings = await attendanceService.getSettings(salonId);
-        const status = calcStatus(checkInTs, null, settings);
+        // The owner's Half Day Rule (configured in Settings) is evaluated on the
+        // frontend against the staff's shift start time, so a caller-supplied
+        // status takes priority here. Callers that can't compute it themselves
+        // (e.g. biometric device push) omit it and fall back to the shift/grace
+        // based calculation below.
+        let status: AttendanceStatus;
+        if (clientStatus && VALID_STATUSES.includes(clientStatus)) {
+            status = clientStatus;
+        } else {
+            const settings = await attendanceService.getSettings(salonId);
+            status = calcStatus(checkInTs, null, settings);
+        }
 
         const record = await attendanceRepository.upsertCheckIn({
             salonId, staffId: staff_id, date, checkIn: checkInTs, status, source: "manual", note,
@@ -122,9 +156,16 @@ export const attendanceService = {
         if (!existing.check_in) throw new AppError(400, "Staff has not checked in yet", "NOT_CHECKED_IN");
         if (existing.check_out) throw new AppError(400, "Staff has already checked out", "ALREADY_CHECKED_OUT");
 
-        const settings = await attendanceService.getSettings(salonId);
         const hours = hoursFromTimestamps(existing.check_in, checkOutTs);
-        const status = calcStatus(existing.check_in, checkOutTs, settings);
+
+        // Half day already decided at check-in time by the owner's Half Day Rule
+        // takes precedence — don't let the duration-based calculation below
+        // silently flip it back to present/absent once check-out is recorded.
+        let status: AttendanceStatus = existing.status;
+        if (status !== "half_day") {
+            const settings = await attendanceService.getSettings(salonId);
+            status = calcStatus(existing.check_in, checkOutTs, settings);
+        }
 
         const record = await attendanceRepository.upsertCheckOut({
             salonId, staffId: staff_id, date, checkOut: checkOutTs, status, hoursWorked: hours, note,

@@ -91,6 +91,15 @@ setImmediate(() => {
   `).catch((err: any) => console.warn('⚠️  salons extra fields migration:', err.message));
 });
 
+// Add owner-configurable Half Day Rule fields to attendance_settings (safe, idempotent)
+setImmediate(() => {
+  pool.query(`
+    ALTER TABLE attendance_settings
+      ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT false,
+      ADD COLUMN IF NOT EXISTS threshold_hours NUMERIC(4,2) NOT NULL DEFAULT 2.0
+  `).catch((err: any) => console.warn('⚠️  attendance_settings half-day-rule migration:', err.message));
+});
+
 // Create support_tickets table (safe, idempotent)
 setImmediate(() => {
   pool.query(`
