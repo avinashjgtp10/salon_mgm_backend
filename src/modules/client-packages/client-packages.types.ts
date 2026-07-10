@@ -26,6 +26,8 @@ export interface CreateClientPackageDTO {
   gstPercentage:  number;
   discount:       number;
   paymentMethod:  string;
+  /** Method -> amount breakdown, present only when paymentMethod === "split". */
+  splitDetails?:  Record<string, number>;
   services: Array<{
     serviceName:    string;
     totalSessions:  number;
@@ -73,6 +75,7 @@ export interface ClientPackage {
   discount:       number;
   totalAmount:    number;
   paymentMethod:  string;
+  splitDetails:   Record<string, number> | null;
   paidAmount:     number;
   pendingAmount:  number;
   paymentStatus:  string;
@@ -108,6 +111,7 @@ export interface ClientPackageRow {
   discount:       string;
   total_amount:   string;
   payment_method: string;
+  split_details:  Record<string, number> | null;
   paid_amount:    string;
   pending_amount: string;
   payment_status: string;

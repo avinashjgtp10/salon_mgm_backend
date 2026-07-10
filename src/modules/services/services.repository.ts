@@ -10,16 +10,19 @@ import {
   CreateAddOnGroupBody,
   CreateAddOnOptionBody,
   CreateBundleBody,
+  CreateConsultationFormBody,
   CreateServiceBody,
   ListBundlesQuery,
   ListServicesQuery,
   Service,
+  ServiceConsultationForm,
   ServiceDetail,
   ServiceListResponse,
   ServiceStaff,
   UpdateAddOnGroupBody,
   UpdateAddOnOptionBody,
   UpdateBundleBody,
+  UpdateConsultationFormBody,
   UpdateServiceBody,
 } from "./services.types";
 
@@ -332,22 +335,79 @@ export const servicesRepository = {
     await pool.query(`DELETE FROM service_add_on_options WHERE id = $1`, [optionId]);
   },
 
+  async listConsultationForms(serviceId: string): Promise<ServiceConsultationForm[]> {
+    const { rows } = await pool.query(
+      `SELECT id, service_id, name, is_selected, field_values AS values, created_at, updated_at
+       FROM service_consultation_forms
+       WHERE service_id = $1
+       ORDER BY created_at ASC`,
+      [serviceId]
+    );
+    return rows;
+  },
+
+  async createConsultationForm(serviceId: string, data: CreateConsultationFormBody): Promise<ServiceConsultationForm> {
+    const { rows } = await pool.query(
+      `INSERT INTO service_consultation_forms (service_id, name)
+       VALUES ($1,$2)
+       RETURNING id, service_id, name, is_selected, field_values AS values, created_at, updated_at`,
+      [serviceId, data.name]
+    );
+    return rows[0];
+  },
+
+  async updateConsultationForm(formId: string, patch: UpdateConsultationFormBody): Promise<ServiceConsultationForm> {
+    // Map camelCase-ish request keys to actual column names (values → field_values).
+    const COLUMN: Record<string, string> = { name: "name", is_selected: "is_selected", values: "field_values" };
+    const keys = (Object.keys(patch) as (keyof UpdateConsultationFormBody)[]).filter((k) => k in COLUMN);
+
+    if (!keys.length) {
+      const { rows } = await pool.query(
+        `SELECT id, service_id, name, is_selected, field_values AS values, created_at, updated_at
+         FROM service_consultation_forms WHERE id = $1`,
+        [formId]
+      );
+      return rows[0];
+    }
+
+    const setParts = keys.map((k, i) => `${COLUMN[k]} = $${i + 1}`);
+    const values: unknown[] = keys.map((k) =>
+      k === "values" ? JSON.stringify(patch[k] ?? null) : patch[k],
+    );
+    setParts.push(`updated_at = NOW()`);
+    values.push(formId);
+
+    const { rows } = await pool.query(
+      `UPDATE service_consultation_forms SET ${setParts.join(", ")}
+       WHERE id = $${values.length}
+       RETURNING id, service_id, name, is_selected, field_values AS values, created_at, updated_at`,
+      values
+    );
+    return rows[0];
+  },
+
+  async deleteConsultationForm(formId: string): Promise<void> {
+    await pool.query(`DELETE FROM service_consultation_forms WHERE id = $1`, [formId]);
+  },
+
   async getDetailById(serviceId: string, salonId: string): Promise<ServiceDetail | null> {
     const svc = await this.findById(serviceId, salonId);
     if (!svc) return null;
 
     let staff: ServiceStaff[] = [];
     let add_on_groups: AddOnGroupDetail[] = [];
+    let consultation_forms: ServiceConsultationForm[] = [];
     try {
-      [staff, add_on_groups] = await Promise.all([
+      [staff, add_on_groups, consultation_forms] = await Promise.all([
         this.getStaff(serviceId),
         this.listAddOnGroupsWithOptions(serviceId),
+        this.listConsultationForms(serviceId),
       ]);
     } catch {
       // Secondary tables may not exist yet; return base service data
     }
 
-    return { ...svc, staff, add_on_groups };
+    return { ...svc, staff, add_on_groups, consultation_forms };
   },
 };
 
