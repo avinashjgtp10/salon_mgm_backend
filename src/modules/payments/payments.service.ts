@@ -7,6 +7,7 @@ import { clientMembershipsService } from '../client-memberships/client-membershi
 import { clientMembershipsRepository } from '../client-memberships/client-memberships.repository';
 import { rewardPointsRepository } from '../reward-points/reward-points.repository';
 import { ewalletRepository } from '../ewallet/ewallet.repository';
+import { referralRepository } from '../referral/referral.repository';
 import { CreatePaymentBody, Payment } from './payments.types';
 import type { Appointment } from '../appointments/appointments.types';
 import logger from '../../config/logger';
@@ -24,9 +25,8 @@ export const paymentsService = {
     // This prevents bugs where the frontend sends a wrong gross_amount
     // (e.g., partial-payment amount instead of the full bill total).
     let appt: Appointment | null = null;
-    let rewardPointsRedeemed = 0;
-    let rewardPointsValue = 0;
     let ewalletUsedActual = 0;
+    let refereeWalletCredit = 0;
 
     const isPackagePayment = (data.payment_method || '').toLowerCase() === 'package';
 
@@ -45,8 +45,59 @@ export const paymentsService = {
           // If the appointment has no priced items, fall through to frontend values
           if (!isFinite(actualBill) || actualBill <= 0) throw new Error('no_priced_items');
 
-          const discount        = Math.max(0, Number(data.discount_amount) || 0);
+          const frontendDiscount = Math.max(0, Number(data.discount_amount) || 0);
           const ewalletRequested = Math.max(0, Number(data.ewallet_used)    || 0);
+
+          // Sum previously paid amounts across all prior payments for this appointment.
+          // Computed early — the referral discount below must only ever apply on the
+          // FIRST payment attempt for an appointment, never re-applied on a second
+          // (e.g. completing) call for the same bill.
+          const existingPaid = await paymentsRepository.getTotalPaidForAppointment(data.appointment_id);
+
+          // ── Refer & Earn: welcome reward for the referred client's first
+          // qualifying bill ────────────────────────────────────────────────────
+          // If the bill meets min_bill_amount, applied immediately as a price
+          // reduction on this bill (like a coupon). If it doesn't, the reward
+          // isn't forfeited — it's credited straight to the client's eWallet
+          // instead, so a small first visit doesn't cost them the reward.
+          // Gated on referral_referee_rewarded (not referral_reward_status,
+          // which tracks the REFERRER's separate payout) so this can only ever
+          // fire once per referred client, and doesn't block the referrer's
+          // own reward from still firing later once a qualifying bill occurs.
+          let referralDiscount = 0;
+          if (data.client_id && !isPackagePayment && existingPaid === 0) {
+            try {
+              const referredClient = await clientsRepository.findById(data.client_id, data.salon_id);
+              if (referredClient?.referred_by_client_id && !referredClient.referral_referee_rewarded) {
+                const refConfig = await referralRepository.getConfig(data.salon_id);
+                if (refConfig.active && refConfig.referee_reward_amount > 0) {
+                  if (actualBill >= refConfig.min_bill_amount) {
+                    referralDiscount = Math.min(refConfig.referee_reward_amount, actualBill);
+                  } else {
+                    refereeWalletCredit = refConfig.referee_reward_amount;
+                    await ewalletRepository.applyLedgerEntry({
+                      clientId: data.client_id,
+                      salonId: data.salon_id,
+                      type: 'topup',
+                      delta: refereeWalletCredit,
+                      sourceType: 'referral',
+                      sourceId: data.client_id,
+                      note: `Referral welcome reward — bill below ₹${refConfig.min_bill_amount} minimum for an instant discount, credited to wallet instead`,
+                    });
+                  }
+                  await clientsRepository.markRefereeRewarded(data.client_id);
+                }
+              }
+            } catch (err: any) {
+              logger.warn('[payments] referral discount check failed:', err?.message ?? err);
+            }
+          }
+          data.referral_discount_applied = referralDiscount;
+          const discount = frontendDiscount + referralDiscount;
+          // Persist the combined figure — the sale-creation block below reads
+          // data.discount_amount to net revenue, and it must include this
+          // referral piece too, same as it already does for coupon/manual.
+          data.discount_amount = discount;
 
           // ── eWallet: recompute server-side from the client's real balance ──
           // Never trust a ₹ amount sent from the frontend — cap it at what the
@@ -97,32 +148,22 @@ export const paymentsService = {
             }
           }
 
-          // ── Reward points redemption ────────────────────────────────────────
-          // Manual opt-in via the checkbox (data.reward_points_redeemed > 0).
-          // Recompute the ₹ value server-side from the salon's own configured
-          // rate — never trust a discount amount sent from the frontend — and
-          // cap it at the client's actual balance so it can't go negative.
-          if (data.client_id && Number(data.reward_points_redeemed) > 0) {
-            try {
-              const config = await rewardPointsRepository.getConfig(data.salon_id);
-              const balance = await rewardPointsRepository.getBalance(data.client_id);
-              const requested = Math.min(Number(data.reward_points_redeemed), balance);
-              if (config.active && config.redeem_points > 0 && requested > 0) {
-                rewardPointsRedeemed = requested;
-                rewardPointsValue = (requested / config.redeem_points) * config.redeem_value;
-              }
-            } catch (err: any) {
-              logger.warn('[payments] reward points redemption failed:', err?.message ?? err);
-            }
-          }
-
-          const effectiveBill = Math.max(0, actualBill - discount - ewallet - membershipWalletUsed - rewardPointsValue);
+          // Reward points no longer exist as a separately redeemable balance —
+          // earned value is credited straight into eWallet (see the "earn" block
+          // below), so there is nothing to redeem here; eWallet redemption above
+          // already covers whatever reward money the client has.
+          const effectiveBill = Math.max(0, actualBill - discount - ewallet - membershipWalletUsed);
           data.membership_wallet_used = membershipWalletUsed;
-          data.reward_points_value    = rewardPointsValue;
 
-          // Sum previously paid amounts across all prior payments for this appointment
-          const existingPaid = await paymentsRepository.getTotalPaidForAppointment(data.appointment_id);
-          const thisPaid     = Math.max(0, Number(data.paid_amount) || Number(data.net_amount) || Number(data.gross_amount) || 0);
+          // `|| ` treats 0 as "not provided" and falls through to gross_amount — which
+          // silently records the full pre-discount catalog price as "paid" whenever a
+          // coupon/wallet/points deduction legitimately brings paid_amount to ₹0 (e.g. a
+          // 100%-off coupon), overcharging the customer's recorded payment by the full bill.
+          const thisPaid = Math.max(0, (
+            data.paid_amount != null ? Number(data.paid_amount)
+            : data.net_amount  != null ? Number(data.net_amount)
+            : Number(data.gross_amount) || 0
+          ));
 
           data.gross_amount = actualBill;
           data.net_amount   = effectiveBill;
@@ -164,52 +205,79 @@ export const paymentsService = {
       }
     }
 
-    // ── Reward points: redeem now, earn only once the bill is fully paid ─────
-    // Points redeemed already reduced net_amount above; deduct them from the
-    // client's balance here now that the payment row exists to link against.
-    if (data.client_id && rewardPointsRedeemed > 0) {
-      try {
-        await rewardPointsRepository.applyLedgerEntry({
-          clientId: data.client_id,
-          salonId: data.salon_id,
-          type: 'redeem',
-          delta: -rewardPointsRedeemed,
-          sourceType: 'payment',
-          sourceId: payment.id,
-          note: `Redeemed for ₹${rewardPointsValue.toFixed(2)} off`,
-        });
-      } catch (err: any) {
-        logger.warn('[payments] reward points redeem ledger write failed:', err?.message ?? err);
-      }
-    }
-    // Earn only on a fully-paid bill — a Partial payment doesn't award points
-    // yet, since the sale isn't settled (matches how eWallet/wallet are only
-    // ever debited, never speculatively credited before the bill is closed).
+    // ── Reward earnings: credited straight into eWallet, not a separate
+    // points balance ────────────────────────────────────────────────────────
+    // Reward points and referral credits are both just eWallet money now —
+    // one balance, one "Use eWallet" toggle at checkout. The salon's rate is
+    // still configured in points-like terms (spend X, earn Y points, Y points
+    // = ₹Z) purely so Settings stays familiar; internally that's converted to
+    // a ₹ value and credited immediately, same as a referral reward.
+    // Earn only on a fully-paid bill — a Partial payment doesn't earn yet,
+    // since the sale isn't settled (matches how eWallet/wallet are only ever
+    // debited, never speculatively credited before the bill is closed).
     if (data.client_id && data.status === 'completed' && !isPackagePayment) {
       try {
         const config = await rewardPointsRepository.getConfig(data.salon_id);
-        if (config.active && config.spend_amount > 0) {
+        if (config.active && config.spend_amount > 0 && config.redeem_points > 0) {
           const pointsEarned = Math.floor((Number(data.net_amount) / config.spend_amount) * config.points_earned);
-          if (pointsEarned > 0) {
-            await rewardPointsRepository.applyLedgerEntry({
+          const earnedValue = (pointsEarned / config.redeem_points) * config.redeem_value;
+          if (earnedValue > 0) {
+            await ewalletRepository.applyLedgerEntry({
               clientId: data.client_id,
               salonId: data.salon_id,
-              type: 'earn',
-              delta: pointsEarned,
-              sourceType: 'payment',
+              type: 'topup',
+              delta: earnedValue,
+              sourceType: 'reward',
               sourceId: payment.id,
               note: `Earned on ₹${Number(data.net_amount).toFixed(2)} payment`,
             });
           }
         }
       } catch (err: any) {
-        logger.warn('[payments] reward points earn ledger write failed:', err?.message ?? err);
+        logger.warn('[payments] reward earn ledger write failed:', err?.message ?? err);
+      }
+    }
+
+    // ── Refer & Earn: credit the referrer's wallet once the referred client's
+    // first bill is fully paid ─────────────────────────────────────────────
+    // The referee's own reward was already applied above as an instant
+    // discount on this same bill — this only handles the referrer's side.
+    // Re-fetched fresh rather than reusing state from the block above, because
+    // the discount and the completion can happen on different calls: a partial
+    // payment gets the discount on call 1 (existingPaid === 0), but the bill
+    // might only reach status 'completed' on a later call once the remaining
+    // due is cleared — this must still fire then.
+    // Gated on referral_reward_status === 'pending' so it can only ever fire
+    // once per referred client, regardless of how many payments follow.
+    if (data.client_id && data.status === 'completed' && !isPackagePayment) {
+      try {
+        const referredClient = await clientsRepository.findById(data.client_id, data.salon_id);
+        if (referredClient?.referred_by_client_id && referredClient.referral_reward_status === 'pending') {
+          const config = await referralRepository.getConfig(data.salon_id);
+          const billAmount = Number(data.gross_amount) || 0;
+          if (config.active && billAmount >= config.min_bill_amount) {
+            if (config.referrer_reward_amount > 0) {
+              await ewalletRepository.applyLedgerEntry({
+                clientId: referredClient.referred_by_client_id,
+                salonId: data.salon_id,
+                type: 'topup',
+                delta: config.referrer_reward_amount,
+                sourceType: 'referral',
+                sourceId: data.client_id,
+                note: 'Referral reward for referring a new customer',
+              });
+            }
+            await clientsRepository.markReferralRewarded(data.client_id);
+          }
+        }
+      } catch (err: any) {
+        logger.warn('[payments] referral reward crediting failed:', err?.message ?? err);
       }
     }
 
     // Increment coupon used_count
     if (data.coupon_code) {
-      const coupon = await couponsRepository.findByCode(data.coupon_code);
+      const coupon = await couponsRepository.findByCodeForSalon(data.coupon_code, data.salon_id);
       if (coupon) await couponsRepository.incrementUsed(coupon.id);
     }
 
@@ -275,7 +343,13 @@ export const paymentsService = {
             appointment_id: data.appointment_id,
             staff_id: appt.staff_id || undefined,
             status: 'completed',
-            discount_amount: String(data.discount_amount || 0),
+            // Membership wallet usage must reduce recognized revenue here — that
+            // money was already counted as revenue when the membership itself was
+            // purchased. Without this, every visit that draws down the wallet
+            // counts the same money as revenue a second time. (eWallet, by
+            // contrast, is correctly NOT subtracted — top-ups and referral
+            // credits are never counted as revenue when added, only when spent.)
+            discount_amount: String((Number(data.discount_amount) || 0) + (Number(data.membership_wallet_used) || 0)),
             // DB constraint only allows lowercase values ('cash','card','upi','bank_transfer'),
             // but this arrives as the frontend's display label (e.g. "Cash") — normalizing
             // here since the mismatch was silently failing every sale auto-creation.
@@ -435,7 +509,7 @@ export const paymentsService = {
       }
     }
 
-    return payment;
+    return refereeWalletCredit > 0 ? { ...payment, referral_wallet_credited: refereeWalletCredit } : payment;
   },
 
   async getByAppointmentId(appointmentId: string): Promise<Payment | null> {

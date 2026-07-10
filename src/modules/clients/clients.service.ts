@@ -5,6 +5,8 @@ import { notificationsService } from "../notifications/notifications.service";
 import { salonsRepository } from "../salons/salons.repository";
 import { emailService } from "../utils/email.service";
 import { canSendEmail } from "../utils/notif-prefs";
+import { generateReferralCode } from "../referral/referral.types";
+import { paymentsRepository } from "../payments/payments.repository";
 import logger from "../../config/logger";
 import {
     Client,
@@ -19,6 +21,20 @@ import {
 } from "./clients.types";
 
 const safeTrim = (v: any) => (v === null || v === undefined ? v : String(v).trim());
+
+// Regenerates with an incrementing suffix until the code is free within this
+// salon — the base code is time-based (not random), so collisions are
+// expected when two same-initial customers join in the same clock hour.
+async function generateUniqueReferralCode(name: string, salonId: string): Promise<string> {
+    const base = generateReferralCode(name);
+    let candidate = base;
+    let suffix = 0;
+    while (await clientsRepository.isReferralCodeTaken(candidate, salonId)) {
+        suffix += 1;
+        candidate = `${base}${suffix}`;
+    }
+    return candidate;
+}
 
 const normalizeCreateBody = (b: CreateClientBody): CreateClientBody => ({
     ...b,
@@ -46,7 +62,28 @@ export const clientsService = {
     },
 
     async create(body: CreateClientBody, salonId: string): Promise<ClientWithRelations> {
-        const created = await clientsRepository.create(normalizeCreateBody(body), salonId);
+        const normalized = normalizeCreateBody(body);
+
+        // Referral codes only ever apply at creation (a client's first visit) —
+        // there is no later "add/edit referral code" path, by design.
+        let referredByClientId = normalized.referred_by_client_id ?? null;
+        if (body.referred_by_code && body.referred_by_code.trim()) {
+            const code = body.referred_by_code.trim().toUpperCase();
+            const referrer = await clientsRepository.findByReferralCode(code, salonId);
+            if (!referrer) throw new AppError(400, "Invalid referral code", "VALIDATION_ERROR");
+            referredByClientId = referrer.id;
+        }
+        normalized.referred_by_client_id = referredByClientId;
+
+        const referralCode = await generateUniqueReferralCode(
+            normalized.first_name || normalized.last_name || "CLI",
+            salonId,
+        );
+
+        const created = await clientsRepository.create(normalized, salonId, {
+            code: referralCode,
+            rewardStatus: referredByClientId ? "pending" : null,
+        });
 
         if (body.addresses?.length) await clientsRepository.replaceUpsertAddresses(created.id, body.addresses);
         if (body.emergency_contacts?.length) await clientsRepository.replaceUpsertEmergencyContacts(created.id, body.emergency_contacts);
@@ -91,7 +128,8 @@ export const clientsService = {
         const client = await clientsRepository.findById(clientId, salonId);
         if (!client) throw new AppError(404, "Client not found", "NOT_FOUND");
 
-        const result: ClientWithRelations = client as any;
+        const referralStats = await clientsRepository.getReferralStats(clientId);
+        const result: ClientWithRelations = { ...client, ...referralStats } as any;
         if (includeSet.has("addresses") || includeSet.has("emergency_contacts")) {
             const rel = await clientsRepository.getRelations(clientId);
             if (includeSet.has("addresses")) result.addresses = rel.addresses;
@@ -103,6 +141,27 @@ export const clientsService = {
     async update(clientId: string, patch: UpdateClientBody, salonId: string): Promise<ClientWithRelations> {
         const exists = await clientsRepository.findById(clientId, salonId);
         if (!exists) throw new AppError(404, "Client not found", "NOT_FOUND");
+
+        // Referral codes can be applied post-creation too (e.g. at checkout, via
+        // "Referred by" on the payment panel) — but only once, and only before
+        // the client's first completed payment. Handled here rather than in the
+        // generic column whitelist below so a normal PATCH can never set
+        // referral_reward_status directly.
+        if (patch.referred_by_code && patch.referred_by_code.trim()) {
+            if (exists.referred_by_client_id) {
+                throw new AppError(400, "A referral code has already been applied to this client", "VALIDATION_ERROR");
+            }
+            const completedCount = await paymentsRepository.countCompletedForClient(clientId);
+            if (completedCount > 0) {
+                throw new AppError(400, "Referral codes can only be applied before the client's first payment", "VALIDATION_ERROR");
+            }
+            const code = patch.referred_by_code.trim().toUpperCase();
+            const referrer = await clientsRepository.findByReferralCode(code, salonId);
+            if (!referrer) throw new AppError(400, "Invalid referral code", "VALIDATION_ERROR");
+            if (referrer.id === clientId) throw new AppError(400, "A client cannot refer themselves", "VALIDATION_ERROR");
+            await clientsRepository.linkReferrer(clientId, referrer.id);
+        }
+        delete (patch as any).referred_by_code;
 
         const updated = await clientsRepository.update(clientId, patch, salonId);
 
@@ -230,7 +289,10 @@ export const clientsService = {
                     continue;
                 }
 
-                if (!params.dry_run) await clientsRepository.create(body, params.salonId);
+                if (!params.dry_run) {
+                    const referralCode = await generateUniqueReferralCode(body.first_name, params.salonId);
+                    await clientsRepository.create(body, params.salonId, { code: referralCode, rewardStatus: null });
+                }
                 result.imported += 1;
             } catch (e: any) {
                 result.errors.push({ row: rowNum, code: "IMPORT_ERROR", message: e?.message || "Unknown error" });

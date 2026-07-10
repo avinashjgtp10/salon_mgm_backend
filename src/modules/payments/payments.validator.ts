@@ -26,8 +26,6 @@ export const validateCreatePayment = (req: Request, _res: Response, next: NextFu
             throw new AppError(400, "discount_amount must be a non-negative number", "VALIDATION_ERROR");
         if (b.ewallet_used !== undefined && (typeof b.ewallet_used !== "number" || b.ewallet_used < 0))
             throw new AppError(400, "ewallet_used must be a non-negative number", "VALIDATION_ERROR");
-        if (b.reward_points_redeemed !== undefined && (typeof b.reward_points_redeemed !== "number" || b.reward_points_redeemed < 0))
-            throw new AppError(400, "reward_points_redeemed must be a non-negative number", "VALIDATION_ERROR");
         if (typeof b.payment_method !== "string" || b.payment_method.trim().length === 0)
             throw new AppError(400, "payment_method is required", "VALIDATION_ERROR");
         if (!isOptionalString(b.coupon_code))
