@@ -28,7 +28,12 @@ export type Payment = {
   updated_at: string;
   membership_wallet_used: number;
   reward_points_value: number;
+  referral_discount_applied: number;
   tax_breakdown: TaxBreakdownEntry[] | null;
+  // Response-only, not a persisted column — set when the referred client's
+  // welcome reward couldn't apply as an instant discount (bill below
+  // min_bill_amount) and was credited to their eWallet instead.
+  referral_wallet_credited?: number;
 };
 
 export type CreatePaymentBody = {
@@ -49,8 +54,9 @@ export type CreatePaymentBody = {
   membership_items?: Array<{ membership_id?: string; name: string; price: number; quantity: number }>;
   membership_wallet_used?: number;
   apply_membership_wallet?: boolean;
-  reward_points_redeemed?: number;
-  reward_points_value?: number;
+  // Server-computed only — never trust a value sent by the frontend for this
+  // (see payments.service.ts's Refer & Earn block).
+  referral_discount_applied?: number;
   // Snapshot of the itemized tax breakdown (CGST/SGST/etc.) at the moment of
   // payment — computed on the frontend from the salon's active tax settings.
   // Persisted as-is so a reprinted receipt shows what was actually charged,

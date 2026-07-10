@@ -18,3 +18,14 @@ export type TopUpEwalletBody = {
   amount: number;
   note?: string;
 };
+
+// Powers the "ⓘ" wallet breakdown popup on a client's profile. `reward_credits`
+// is informational only — the ₹ value of the client's separate reward-points
+// balance, which is redeemed at checkout rather than ever landing in this ledger.
+export type WalletBreakdown = {
+  referral_rewards: number;
+  reward_credits: number;
+  other_credits: number;
+  wallet_debits: number;
+  balance: number;
+};

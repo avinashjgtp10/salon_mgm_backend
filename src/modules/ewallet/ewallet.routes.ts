@@ -23,5 +23,11 @@ router.get(
   roleMiddleware('salon_owner', 'admin', 'staff'),
   ewalletController.listLedger
 );
+router.get(
+  '/:clientId/breakdown',
+  authMiddleware,
+  roleMiddleware('salon_owner', 'admin', 'staff'),
+  ewalletController.getBreakdown
+);
 
 export default router;

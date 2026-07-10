@@ -46,4 +46,15 @@ export const ewalletController = {
       return sendSuccess(res, 200, result, 'eWallet ledger fetched successfully');
     } catch (err) { return next(err); }
   },
+
+  async getBreakdown(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId;
+      if (!salonId) throw new AppError(403, 'Salon context required', 'NO_SALON_CONTEXT');
+      const clientId = String(req.params.clientId || '').trim();
+      if (!clientId) throw new AppError(400, 'clientId is required', 'VALIDATION_ERROR');
+      const result = await ewalletService.getBreakdown(clientId, salonId);
+      return sendSuccess(res, 200, result, 'eWallet breakdown fetched successfully');
+    } catch (err) { return next(err); }
+  },
 };

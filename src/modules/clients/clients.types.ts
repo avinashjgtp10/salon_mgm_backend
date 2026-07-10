@@ -34,6 +34,12 @@ export type Client = {
     reviews_avg: string | null;
     reviews_count: number;
 
+    // ── Refer & Earn ──────────────────────────────────────────────────────────
+    referral_code: string | null;               // this client's own permanent referral code
+    referral_reward_status: "pending" | "completed" | null; // status of the REFERRER's reward
+    referral_referee_rewarded: boolean;          // whether THIS client's own welcome reward has been granted
+    ewallet_balance: string;                     // pg decimal returns string
+
     is_active: boolean;
     block_reason: string | null;
 
@@ -84,6 +90,8 @@ export type ClientEmergencyContact = {
 export type ClientWithRelations = Client & {
     addresses?: ClientAddress[];
     emergency_contacts?: ClientEmergencyContact[];
+    total_referral_earnings?: number;
+    total_successful_referrals?: number;
 };
 
 export type CreateClientAddressInput = Omit<ClientAddress, "id" | "client_id" | "created_at" | "updated_at">;
@@ -112,6 +120,10 @@ export type CreateClientBody = {
 
     client_source?: string | null;
     referred_by_client_id?: string | null;
+    // Referral code of the client who referred this one — only meaningful at
+    // creation time (a client's first visit); resolved to referred_by_client_id
+    // by the service layer. Never persisted directly.
+    referred_by_code?: string | null;
 
     preferred_language?: string | null;
     occupation?: string | null;
