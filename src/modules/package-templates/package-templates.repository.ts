@@ -30,6 +30,15 @@ export async function ensurePackageTemplateTables(): Promise<void> {
       price          DECIMAL(10,2) NOT NULL DEFAULT 0
     );
   `);
+  // expiry_months alone can't represent an exact calendar day (a "3 month"
+  // duration reconstructed from different reference dates lands on different
+  // days). expiry_days stores the exact day-count the user picked so it can be
+  // reproduced precisely, regardless of when the template is reopened or a
+  // client package is later sold from it.
+  await pool.query(`
+    ALTER TABLE package_templates
+      ADD COLUMN IF NOT EXISTS expiry_days INTEGER DEFAULT NULL
+  `);
 }
 
 // ── Mapper ────────────────────────────────────────────────────────────────────
@@ -40,6 +49,7 @@ function toTemplate(row: any, services: any[]): PackageTemplate {
     salonId:       row.salon_id,
     name:          row.name,
     expiryMonths:  row.expiry_months,
+    expiryDays:    row.expiry_days,
     neverExpires:  row.never_expires,
     basePrice:     parseFloat(row.base_price),
     gstPercentage: parseFloat(row.gst_percentage),
@@ -97,11 +107,12 @@ export const packageTemplatesRepository = {
 
       await client.query(
         `INSERT INTO package_templates
-          (id, salon_id, name, expiry_months, never_expires, base_price, gst_percentage, discount, payment_method)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+          (id, salon_id, name, expiry_months, expiry_days, never_expires, base_price, gst_percentage, discount, payment_method)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
         [
           id, salonId, dto.name,
           dto.neverExpires ? null : (dto.expiryMonths ?? null),
+          dto.neverExpires ? null : (dto.expiryDays ?? null),
           dto.neverExpires ?? false,
           dto.basePrice,
           dto.gstPercentage ?? 0,
@@ -142,6 +153,7 @@ export const packageTemplatesRepository = {
       if (dto.name           !== undefined) { sets.push(`name = $${idx++}`);           vals.push(dto.name); }
       if (dto.neverExpires   !== undefined) { sets.push(`never_expires = $${idx++}`);  vals.push(dto.neverExpires); }
       if (dto.expiryMonths   !== undefined) { sets.push(`expiry_months = $${idx++}`);  vals.push(dto.neverExpires ? null : dto.expiryMonths); }
+      if (dto.expiryDays     !== undefined) { sets.push(`expiry_days = $${idx++}`);    vals.push(dto.neverExpires ? null : dto.expiryDays); }
       if (dto.basePrice      !== undefined) { sets.push(`base_price = $${idx++}`);     vals.push(dto.basePrice); }
       if (dto.gstPercentage  !== undefined) { sets.push(`gst_percentage = $${idx++}`); vals.push(dto.gstPercentage); }
       if (dto.discount       !== undefined) { sets.push(`discount = $${idx++}`);       vals.push(dto.discount); }

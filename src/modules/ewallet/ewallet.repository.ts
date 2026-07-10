@@ -55,4 +55,23 @@ export const ewalletRepository = {
     );
     return rows;
   },
+
+  async getLedgerAggregate(clientId: string): Promise<{ referral_rewards: number; reward_credits: number; other_credits: number; wallet_debits: number }> {
+    const { rows } = await pool.query(
+      `SELECT
+         COALESCE(SUM(amount) FILTER (WHERE type = 'topup' AND source_type = 'referral'), 0) AS referral_rewards,
+         COALESCE(SUM(amount) FILTER (WHERE type = 'topup' AND source_type IN ('reward', 'reward_migration')), 0) AS reward_credits,
+         COALESCE(SUM(amount) FILTER (WHERE type = 'topup' AND (source_type IS NULL OR source_type NOT IN ('referral', 'reward', 'reward_migration'))), 0) AS other_credits,
+         COALESCE(SUM(-amount) FILTER (WHERE amount < 0), 0) AS wallet_debits
+       FROM ewallet_ledger
+       WHERE client_id = $1`,
+      [clientId],
+    );
+    return {
+      referral_rewards: parseFloat(rows[0]?.referral_rewards ?? '0'),
+      reward_credits: parseFloat(rows[0]?.reward_credits ?? '0'),
+      other_credits: parseFloat(rows[0]?.other_credits ?? '0'),
+      wallet_debits: parseFloat(rows[0]?.wallet_debits ?? '0'),
+    };
+  },
 };

@@ -133,7 +133,14 @@ export const clientsRepository = {
     },
 
     // ---------------- CREATE ----------------
-    async create(body: CreateClientBody, salonId: string): Promise<Client> {
+    // `referral` is computed by the service layer (code generation + uniqueness
+    // check, referred_by_code → referred_by_client_id resolution) — kept out of
+    // CreateClientBody so a caller can never set their own referral_code directly.
+    async create(
+        body: CreateClientBody,
+        salonId: string,
+        referral: { code: string; rewardStatus: "pending" | null },
+    ): Promise<Client> {
         const fullName = buildFullName(body.first_name, body.last_name);
 
         const { rows } = await pool.query(
@@ -147,7 +154,8 @@ export const clientsRepository = {
         client_source,referred_by_client_id,
         preferred_language,occupation,country,avatar_url,
         email_notifications,sms_notifications,whatsapp_notifications,
-        email_marketing,sms_marketing,whatsapp_marketing
+        email_marketing,sms_marketing,whatsapp_marketing,
+        referral_code,referral_reward_status
       ) VALUES (
         $1,$2,$3,$4,
         $5,$6,$7,
@@ -157,7 +165,8 @@ export const clientsRepository = {
         $15,$16,
         $17,$18,$19,$20,
         $21,$22,$23,
-        $24,$25,$26
+        $24,$25,$26,
+        $27,$28
       ) RETURNING *`,
             [
                 salonId,
@@ -186,10 +195,77 @@ export const clientsRepository = {
                 body.email_marketing ?? false,
                 body.sms_marketing ?? false,
                 body.whatsapp_marketing ?? false,
+                referral.code,
+                referral.rewardStatus,
             ]
         );
 
         return rows[0];
+    },
+
+    // ---------------- REFERRAL ----------------
+    async isReferralCodeTaken(code: string, salonId: string): Promise<boolean> {
+        const { rows } = await pool.query(
+            `SELECT 1 FROM clients WHERE salon_id = $1 AND referral_code = $2 LIMIT 1`,
+            [salonId, code]
+        );
+        return rows.length > 0;
+    },
+
+    async findByReferralCode(code: string, salonId: string): Promise<Client | null> {
+        const { rows } = await pool.query(
+            `SELECT * FROM clients WHERE salon_id = $1 AND referral_code = $2`,
+            [salonId, code]
+        );
+        return rows[0] || null;
+    },
+
+    async markReferralRewarded(clientId: string): Promise<void> {
+        await pool.query(
+            `UPDATE clients SET referral_reward_status = 'completed' WHERE id = $1`,
+            [clientId]
+        );
+    },
+
+    // Marks THIS client's own one-time welcome reward as granted (instant
+    // discount or eWallet-credit fallback) — independent of
+    // referral_reward_status, which only tracks the referrer's payout.
+    async markRefereeRewarded(clientId: string): Promise<void> {
+        await pool.query(
+            `UPDATE clients SET referral_referee_rewarded = TRUE WHERE id = $1`,
+            [clientId]
+        );
+    },
+
+    // Links a referred_by_code applied post-creation (e.g. at checkout) — kept
+    // separate from the generic update() whitelist so a caller can never set
+    // referral_reward_status directly through a normal client PATCH.
+    async linkReferrer(clientId: string, referrerId: string): Promise<void> {
+        await pool.query(
+            `UPDATE clients SET referred_by_client_id = $1, referral_reward_status = 'pending' WHERE id = $2`,
+            [referrerId, clientId]
+        );
+    },
+
+    // Aggregated off ewallet_ledger (rather than a denormalized counter) so it
+    // can never drift from what was actually credited. Scoped through the
+    // referred clients themselves (c.referred_by_client_id = this client) so a
+    // client's own one-time "referee welcome bonus" ledger entry — which also
+    // has source_type='referral' but belongs to a *different* referral — is
+    // never counted as this client's referrer earnings.
+    async getReferralStats(clientId: string): Promise<{ total_referral_earnings: number; total_successful_referrals: number }> {
+        const { rows } = await pool.query(
+            `SELECT COALESCE(SUM(el.amount), 0)::numeric AS total_earnings, COUNT(DISTINCT c.id)::int AS total_count
+       FROM clients c
+       JOIN ewallet_ledger el
+         ON el.client_id = $1 AND el.source_type = 'referral' AND el.source_id = c.id
+       WHERE c.referred_by_client_id = $1 AND c.referral_reward_status = 'completed'`,
+            [clientId]
+        );
+        return {
+            total_referral_earnings: parseFloat(rows[0]?.total_earnings ?? '0'),
+            total_successful_referrals: Number(rows[0]?.total_count) || 0,
+        };
     },
 
     // ---------------- UPDATE ----------------
