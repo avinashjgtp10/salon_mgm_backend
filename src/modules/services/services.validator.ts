@@ -108,6 +108,25 @@ export const validateUpdateAddOnOption = (req: Request, _res: Response, next: Ne
   } catch (err) { return next(err); }
 };
 
+export const validateCreateConsultationForm = (req: Request, _res: Response, next: NextFunction) => {
+  try {
+    const b = req.body;
+    if (!isNonEmptyString(b.name)) throw new AppError(400, "name is required", "VALIDATION_ERROR");
+    return next();
+  } catch (err) { return next(err); }
+};
+
+export const validateUpdateConsultationForm = (req: Request, _res: Response, next: NextFunction) => {
+  try {
+    const b = req.body;
+    if (b.name !== undefined && !isNonEmptyString(b.name)) throw new AppError(400, "name must be a non-empty string", "VALIDATION_ERROR");
+    if (!isOptionalBool(b.is_selected)) throw new AppError(400, "is_selected must be a boolean", "VALIDATION_ERROR");
+    if (b.values !== undefined && b.values !== null && (typeof b.values !== "object" || Array.isArray(b.values)))
+      throw new AppError(400, "values must be an object", "VALIDATION_ERROR");
+    return next();
+  } catch (err) { return next(err); }
+};
+
 // ─── Bundles ──────────────────────────────────────────────────────────────────
 
 export const validateCreateBundle = (req: Request, _res: Response, next: NextFunction) => {

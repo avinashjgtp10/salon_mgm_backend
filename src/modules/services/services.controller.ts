@@ -10,12 +10,14 @@ import {
   CreateAddOnGroupBody,
   CreateAddOnOptionBody,
   CreateBundleBody,
+  CreateConsultationFormBody,
   CreateServiceBody,
   ListBundlesQuery,
   ListServicesQuery,
   UpdateAddOnGroupBody,
   UpdateAddOnOptionBody,
   UpdateBundleBody,
+  UpdateConsultationFormBody,
   UpdateServiceBody,
 } from "./services.types";
 
@@ -232,6 +234,70 @@ export const servicesController = {
       if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
       if (!id || !groupId || !optionId) throw new AppError(400, "id, groupId, optionId required", "VALIDATION_ERROR");
       await servicesService.deleteAddOnOption({ serviceId: id, groupId, optionId, salonId });
+      return res.status(204).send();
+    } catch (err) {
+      return next(err);
+    }
+  },
+
+  async listConsultationForms(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = await getSalonId(req);
+      const id = String(req.params.id || "").trim();
+      if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
+      const forms = await servicesService.listConsultationForms(id, salonId);
+      return sendSuccess(res, 200, forms, "Consultation forms fetched successfully");
+    } catch (err) {
+      return next(err);
+    }
+  },
+
+  async createConsultationForm(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user?.userId;
+      const salonId = await getSalonId(req);
+      const id = String(req.params.id || "").trim();
+      if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+      if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
+      const created = await servicesService.createConsultationForm({
+        serviceId: id, requesterUserId: userId, requesterRole: req.user?.role,
+        salonId, body: req.body as CreateConsultationFormBody,
+      });
+      return sendSuccess(res, 201, created, "Consultation form created successfully");
+    } catch (err) {
+      return next(err);
+    }
+  },
+
+  async updateConsultationForm(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user?.userId;
+      const salonId = await getSalonId(req);
+      const id = String(req.params.id || "").trim();
+      const formId = String(req.params.formId || "").trim();
+      if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+      if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
+      if (!formId) throw new AppError(400, "formId is required", "VALIDATION_ERROR");
+      const updated = await servicesService.updateConsultationForm({
+        serviceId: id, formId, requesterUserId: userId,
+        requesterRole: req.user?.role, salonId, patch: req.body as UpdateConsultationFormBody,
+      });
+      return sendSuccess(res, 200, updated, "Consultation form updated successfully");
+    } catch (err) {
+      return next(err);
+    }
+  },
+
+  async deleteConsultationForm(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user?.userId;
+      const salonId = await getSalonId(req);
+      const id = String(req.params.id || "").trim();
+      const formId = String(req.params.formId || "").trim();
+      if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+      if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
+      if (!formId) throw new AppError(400, "formId is required", "VALIDATION_ERROR");
+      await servicesService.deleteConsultationForm({ serviceId: id, formId, salonId });
       return res.status(204).send();
     } catch (err) {
       return next(err);
