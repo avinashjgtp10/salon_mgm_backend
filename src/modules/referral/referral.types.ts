@@ -13,7 +13,7 @@ export const DEFAULT_REFERRAL_CONFIG: ReferralConfig = {
   referrer_reward_amount: 100,
   referee_reward_amount: 50,
   min_bill_amount: 1000,
-  max_wallet_usage_pct: 30,
+  max_wallet_usage_pct: 100,
 };
 
 // first 3 letters of the customer's name (uppercase) + hour (12-hour clock,

@@ -50,6 +50,8 @@ export const appointmentsRepository = {
                 (SELECT payment_method FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) AS payment_method,
                 COALESCE((SELECT SUM(reward_points_value) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS reward_points_value,
                 COALESCE((SELECT SUM(membership_wallet_used) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS membership_wallet_used,
+                COALESCE((SELECT SUM(ewallet_used) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS ewallet_used,
+                (SELECT split_details FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) AS split_details,
                 (SELECT tax_breakdown FROM payments p WHERE p.appointment_id = a.id AND p.tax_breakdown IS NOT NULL ORDER BY p.created_at DESC LIMIT 1) AS tax_breakdown
              FROM appointments a
              LEFT JOIN clients c  ON a.client_id = c.id
@@ -126,7 +128,8 @@ export const appointmentsRepository = {
                  ))                                                                  AS latest_method,
                  COUNT(*) FILTER (WHERE status IN ('completed','partial'))           AS pay_count,
                  SUM(reward_points_value) FILTER (WHERE status IN ('completed','partial')) AS total_reward_points_value,
-                 SUM(membership_wallet_used) FILTER (WHERE status IN ('completed','partial')) AS total_membership_wallet_used
+                 SUM(membership_wallet_used) FILTER (WHERE status IN ('completed','partial')) AS total_membership_wallet_used,
+                 SUM(ewallet_used) FILTER (WHERE status IN ('completed','partial')) AS total_ewallet_used
                FROM payments
                GROUP BY appointment_id
              )
@@ -149,6 +152,8 @@ export const appointmentsRepository = {
                pa.latest_method              AS payment_method,
                COALESCE(pa.total_reward_points_value, 0) AS reward_points_value,
                COALESCE(pa.total_membership_wallet_used, 0) AS membership_wallet_used,
+               COALESCE(pa.total_ewallet_used, 0) AS ewallet_used,
+               (SELECT split_details FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) AS split_details,
                (SELECT tax_breakdown FROM payments p WHERE p.appointment_id = a.id AND p.tax_breakdown IS NOT NULL ORDER BY p.created_at DESC LIMIT 1) AS tax_breakdown
              FROM appointments a
              LEFT JOIN clients c   ON a.client_id  = c.id
