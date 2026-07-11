@@ -679,10 +679,14 @@ export const clientsRepository = {
 
         // Total spend — clients.total_sales is never written anywhere in the codebase
         // (dead column), so compute the real figure the same way Client History does.
+        // Excludes eWallet/membership-wallet contributions, same reasoning as lifetime_spend
+        // in clients.controller.ts — wallet-settled visits aren't new money for the salon.
         if (filters.total_spend_min != null || filters.total_spend_max != null) {
             joins.push(`
                 LEFT JOIN (
-                    SELECT client_id, COALESCE(SUM(paid_amount), 0) AS total_spend
+                    SELECT client_id, COALESCE(SUM(
+                        GREATEST(0, paid_amount - COALESCE(ewallet_used, 0) - COALESCE(membership_wallet_used, 0))
+                    ), 0) AS total_spend
                     FROM payments
                     WHERE salon_id = $1 AND status IN ('completed', 'partial')
                     GROUP BY client_id

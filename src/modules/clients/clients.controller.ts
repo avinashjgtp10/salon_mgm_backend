@@ -506,7 +506,18 @@ export const clientsController = {
                              WHERE p.appointment_id = a.id
                                AND p.status IN ('completed', 'partial')),
                             0
-                        ) AS membership_wallet_used
+                        ) AS membership_wallet_used,
+                        -- How much of amount_paid above came from the client's eWallet —
+                        -- needed so the frontend can subtract it back out when computing
+                        -- revenue (amount_paid intentionally includes it for "is this
+                        -- settled" purposes, but eWallet isn't new money for the salon).
+                        COALESCE(
+                            (SELECT SUM(p.ewallet_used)
+                             FROM payments p
+                             WHERE p.appointment_id = a.id
+                               AND p.status IN ('completed', 'partial')),
+                            0
+                        ) AS ewallet_used
                      FROM appointments a
                      WHERE a.client_id = $1 AND a.salon_id = $2
                      ORDER BY a.scheduled_at DESC
@@ -592,9 +603,15 @@ export const clientsController = {
 
                 // 5. Lifetime spend — sum actual paid_amount from payments (covers both
                 //    draft sales and completed sales since a payment record is always
-                //    created when money is collected, regardless of sale status)
+                //    created when money is collected, regardless of sale status), minus
+                //    eWallet/membership-wallet contributions — the salon receives no new
+                //    money when a visit is settled from a wallet balance (that value was
+                //    already recognized as revenue when the wallet was funded/the
+                //    membership was sold), so it shouldn't inflate a client's spend.
                 pool.query(
-                    `SELECT COALESCE(SUM(paid_amount), 0) AS lifetime_spend
+                    `SELECT COALESCE(SUM(
+                        GREATEST(0, paid_amount - COALESCE(ewallet_used, 0) - COALESCE(membership_wallet_used, 0))
+                     ), 0) AS lifetime_spend
                      FROM payments
                      WHERE client_id = $1 AND salon_id = $2 AND status IN ('completed', 'partial')`,
                     [clientId, salonId]

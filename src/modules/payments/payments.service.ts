@@ -17,6 +17,7 @@ import { salonsRepository } from '../salons/salons.repository';
 import { branchesRepository } from '../branches/branches.repository';
 import { staffService } from '../staff/staff.service';
 import { clientsRepository } from '../clients/clients.repository';
+import { getIO } from '../../config/socket';
 
 export const paymentsService = {
 
@@ -36,10 +37,22 @@ export const paymentsService = {
         if (appt) {
           // Use Number() guards — JSONB prices can arrive as strings or be undefined
           const qty = (i: any) => Number(i.qty) || Number(i.quantity) || 1;
-          const serviceTotal    = (appt.services         || []).reduce((s, i) => s + (Number(i.price) || 0) * qty(i), 0);
-          const packageTotal    = (appt.package_items    || []).reduce((s, i) => s + (Number(i.price) || 0) * qty(i), 0);
-          const productTotal    = (appt.product_items    || []).reduce((s, i) => s + (Number(i.price) || 0) * qty(i), 0);
-          const membershipTotal = (appt.membership_items || []).reduce((s, i) => s + (Number(i.price) || 0) * qty(i), 0);
+          // Prefer each item's own `total` (set by the frontend's per-row "Disc %"
+          // field — see ServiceRow.tsx calcTotal()) over price × qty, which is the
+          // undiscounted unit price. Packages/products/memberships never send a
+          // `total` field (no per-row discount UI for them), so they always fall
+          // through to price × qty unchanged. Without this, any per-row service
+          // discount was silently dropped here, inflating actualBill/net_amount
+          // above what the client was actually charged — the gap then showed up
+          // as a phantom due_amount equal to the discount.
+          const lineTotal = (i: any) => {
+            const t = Number(i.total);
+            return (i.total !== undefined && i.total !== null && isFinite(t)) ? t : (Number(i.price) || 0) * qty(i);
+          };
+          const serviceTotal    = (appt.services         || []).reduce((s, i) => s + lineTotal(i), 0);
+          const packageTotal    = (appt.package_items    || []).reduce((s, i) => s + lineTotal(i), 0);
+          const productTotal    = (appt.product_items    || []).reduce((s, i) => s + lineTotal(i), 0);
+          const membershipTotal = (appt.membership_items || []).reduce((s, i) => s + lineTotal(i), 0);
           const actualBill      = serviceTotal + packageTotal + productTotal + membershipTotal;
 
           // If the appointment has no priced items, fall through to frontend values
@@ -507,6 +520,22 @@ export const paymentsService = {
           }
         })();
       }
+    }
+
+    // Live calendar sync — appointments.service.ts already does this for
+    // create/cancel via notificationsService.create() (which also writes a
+    // bell notification row). A payment happens far more often than a
+    // create/cancel, so this uses a lighter direct socket emit instead —
+    // same "push to everyone in the salon room" mechanism, no DB row, no
+    // bell spam on every checkout. useBookings.ts listens for this alongside
+    // the "notification" event to refetch the visible calendar range.
+    try {
+      getIO().to(`salon:${data.salon_id}`).emit('payment_updated', {
+        appointment_id: data.appointment_id,
+        salon_id: data.salon_id,
+      });
+    } catch {
+      // socket not ready — ignore, client will see it on next manual refresh
     }
 
     return refereeWalletCredit > 0 ? { ...payment, referral_wallet_credited: refereeWalletCredit } : payment;
