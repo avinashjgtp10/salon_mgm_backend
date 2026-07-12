@@ -1,5 +1,8 @@
 export interface DashboardSummary {
   totalRevenue: number;
+  // True all-time total, unlike totalRevenue above which is scoped to the
+  // current calendar month.
+  allTimeRevenue: number;
   totalAppointments: number;
   totalClients: number;
   todayRevenue: number;
@@ -8,6 +11,64 @@ export interface DashboardSummary {
   clientsChange: number | null;
   todayRevenueChange: number | null;
   todayAppointmentsCount: number;
+  // Total revenue this month / count of completed sales this month — 0 when
+  // there are no completed sales yet, so the UI can show "—" instead of ₹0.
+  avgBillValue: number;
+  avgBillValueChange: number | null;
+  // Raw comparison figures for the KPI flip cards (back face) — the front
+  // face already has the "this period" value + % change; the back face shows
+  // the actual prior-period number being compared against.
+  lastMonthRevenue: number;
+  yesterdayRevenue: number;
+  newClientsToday: number;
+  newClientsThisMonth: number;
+}
+
+export interface StaffRevenueEntry {
+  id: string;
+  name: string;
+  role: string;
+  revenue: number;
+}
+
+export interface TodayOverview {
+  bookings: number;
+  waiting: number;
+  delayed: number;
+  paymentDue: number;
+  runningLate: number;
+}
+
+export interface TimelineSlot {
+  hour: string;
+  count: number;
+}
+
+export interface PendingPayments {
+  count: number;
+  amount: number;
+}
+
+export interface BirthdayClient {
+  id: string;
+  name: string;
+}
+
+export interface TodaysBirthdays {
+  count: number;
+  clients: BirthdayClient[];
+}
+
+export interface InactiveClients {
+  count: number;
+}
+
+export interface ActivityItem {
+  id: string;
+  type: string;
+  title: string;
+  body: string | null;
+  createdAt: string;
 }
 
 export interface TodayAppointment {
@@ -16,7 +77,7 @@ export interface TodayAppointment {
   service: string;
   staffName: string;
   time: string;
-  status: "completed" | "in-progress" | "upcoming" | "cancelled";
+  status: "completed" | "in-progress" | "upcoming" | "cancelled" | "no-show" | "deleted";
   amount: number;
 }
 
@@ -58,4 +119,10 @@ export interface DashboardAll {
   topStaff: TopStaffMember[];
   serviceMix: ServiceMixItem[];
   services: DashboardService[];
+  todayOverview: TodayOverview;
+  todayTimeline: TimelineSlot[];
+  pendingPayments: PendingPayments;
+  todaysBirthdays: TodaysBirthdays;
+  inactiveClients: InactiveClients;
+  recentActivity: ActivityItem[];
 }

@@ -463,6 +463,31 @@ export const clientsRepository = {
         return null;
     },
 
+    // Enforces "one active client per phone number" at creation/edit time —
+    // archived (is_active = false) clients are excluded so a genuinely removed
+    // client's old number can be reused by someone new. excludeClientId lets
+    // update() check without tripping over the client's own unchanged number.
+    async findActiveByPhone(
+        phone_country_code: string | null | undefined,
+        phone_number: string | null | undefined,
+        salonId: string,
+        excludeClientId?: string,
+    ): Promise<Client | null> {
+        const pn = phone_number ? String(phone_number).trim() : "";
+        if (!pn) return null;
+        const pcc = phone_country_code ? String(phone_country_code).trim() : null;
+        const { rows } = await pool.query(
+            `SELECT * FROM clients
+             WHERE salon_id = $1 AND is_active = true
+               AND TRIM(phone_number) = $2
+               AND ($3::text IS NULL OR phone_country_code = $3)
+               AND ($4::uuid IS NULL OR id != $4)
+             LIMIT 1`,
+            [salonId, pn, pcc, excludeClientId ?? null]
+        );
+        return rows[0] || null;
+    },
+
     async findDuplicatesByPhone(phone_number: string, salonId: string): Promise<Client[]> {
         const { rows } = await pool.query(
             `SELECT * FROM clients
