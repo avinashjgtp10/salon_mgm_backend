@@ -31,6 +31,10 @@ router.patch("/salons/:id/onboarding",      superAdminController.forceOnboarding
 router.post("/salons/:id/impersonate",      superAdminController.impersonateSalon);
 router.delete("/salons/:id",               superAdminController.deleteSalon);
 
+// Demo Inquiries (landing page "Schedule a Free Demo" submissions)
+router.get("/demo-requests",                superAdminController.getAllDemoRequests);
+router.patch("/demo-requests/:id/status",   superAdminController.setDemoRequestStatus);
+
 // Users
 router.post("/users/create",                superAdminController.createUser);
 router.get("/users",                        superAdminController.getAllUsers);

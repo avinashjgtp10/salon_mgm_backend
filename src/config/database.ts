@@ -120,6 +120,24 @@ setImmediate(() => {
   `).catch((err: any) => console.warn('⚠️  support_tickets table migration:', err.message));
 });
 
+// Create demo_requests table — landing page "Schedule a Free Demo" submissions (safe, idempotent)
+setImmediate(() => {
+  pool.query(`
+    CREATE TABLE IF NOT EXISTS demo_requests (
+      id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name             TEXT NOT NULL,
+      email            TEXT NOT NULL,
+      phone            TEXT,
+      salon_name       TEXT,
+      city             TEXT,
+      locations_count  TEXT,
+      status           TEXT NOT NULL DEFAULT 'new',
+      created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch((err: any) => console.warn('⚠️  demo_requests table migration:', err.message));
+});
+
 /**
  * safeQuery — wraps any pool.query() call with a single auto-retry.
  *

@@ -98,6 +98,23 @@ export const attendanceRepository = {
         return rows;
     },
 
+    // ── Date-range view ──────────────────────────────────────────────────────
+
+    async findBySalonAndRange(salonId: string, startDate: string, endDate: string): Promise<Attendance[]> {
+        const { rows } = await pool.query(
+            `SELECT a.*,
+                    TRIM(CONCAT(st.first_name, ' ', COALESCE(st.last_name, ''))) AS staff_name,
+                    COALESCE(st.designation, '') AS staff_role
+             FROM attendance a
+             JOIN staff st ON st.id = a.staff_id
+             WHERE a.salon_id = $1
+               AND a.date BETWEEN $2::date AND $3::date
+             ORDER BY st.first_name ASC, a.date ASC`,
+            [salonId, startDate, endDate]
+        );
+        return rows;
+    },
+
     // ── Upsert check-in ──────────────────────────────────────────────────────
 
     async upsertCheckIn(params: {

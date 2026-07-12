@@ -301,6 +301,19 @@ export const attendanceService = {
         return { staff: allStaff, records };
     },
 
+    // ── Date-range view ──────────────────────────────────────────────────────
+
+    async getRange(salonId: string, startDate: string, endDate: string): Promise<{
+        staff: { id: string; full_name: string; role: string }[];
+        records: Attendance[];
+    }> {
+        const [allStaff, records] = await Promise.all([
+            attendanceRepository.getActiveSalonStaff(salonId),
+            attendanceRepository.findBySalonAndRange(salonId, startDate, endDate),
+        ]);
+        return { staff: allStaff, records };
+    },
+
     // ── Daily summary counts ─────────────────────────────────────────────────
 
     async getDailySummary(salonId: string, date: string): Promise<DailySummary> {
