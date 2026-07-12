@@ -110,6 +110,12 @@ export const validateCreateClient = (req: Request, _res: Response, next: NextFun
             throw new AppError(400, "referred_by_client_id must be uuid", "VALIDATION_ERROR");
         }
 
+        if (b.referred_by_code !== undefined && b.referred_by_code !== null && b.referred_by_code !== "") {
+            if (typeof b.referred_by_code !== "string" || !/^[A-Za-z0-9]{3,20}$/.test(b.referred_by_code.trim())) {
+                throw new AppError(400, "referred_by_code must be a valid referral code", "VALIDATION_ERROR");
+            }
+        }
+
         if (!isOptionalMMDD(b.birthday_day_month)) throw new AppError(400, "birthday_day_month is invalid", "VALIDATION_ERROR");
         if (!isOptionalNumber(b.birthday_year)) throw new AppError(400, "birthday_year must be number", "VALIDATION_ERROR");
 
@@ -165,6 +171,12 @@ export const validateUpdateClient = (req: Request, _res: Response, next: NextFun
 
         if (b.referred_by_client_id !== undefined && b.referred_by_client_id !== null && !isUUID(b.referred_by_client_id)) {
             throw new AppError(400, "referred_by_client_id must be uuid", "VALIDATION_ERROR");
+        }
+
+        if (b.referred_by_code !== undefined && b.referred_by_code !== null && b.referred_by_code !== "") {
+            if (typeof b.referred_by_code !== "string" || !/^[A-Za-z0-9]{3,20}$/.test(b.referred_by_code.trim())) {
+                throw new AppError(400, "referred_by_code must be a valid referral code", "VALIDATION_ERROR");
+            }
         }
 
         if (!isOptionalMMDD(b.birthday_day_month)) throw new AppError(400, "birthday_day_month is invalid", "VALIDATION_ERROR");

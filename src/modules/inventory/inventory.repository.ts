@@ -2,6 +2,7 @@ import pool from "../../config/database";
 import {
     Supplier, CreateSupplierBody, UpdateSupplierBody,
     StockMovement, CreateStockMovementBody, ListStockMovementsFilters,
+    StockReconciliationRow, ReconciliationItemBody, SaveConsumableUsageBody,
 } from "./inventory.types";
 
 // ─── Suppliers ────────────────────────────────────────────────────────────────
@@ -156,6 +157,237 @@ export const stockMovementsRepository = {
             ]
         );
         return rows[0];
+    },
+};
+
+// ─── Stock Reconciliation ─────────────────────────────────────────────────────
+
+export const stockReconciliationRepository = {
+    /**
+     * Fetch all products for the salon joined with their saved reconciliation
+     * data and aggregated consumable usage totals.
+     */
+    async list(branchId: string, salonId: string, search?: string, categoryId?: string): Promise<StockReconciliationRow[]> {
+        const conditions: string[] = [
+            `p.salon_id = $1`,
+        ];
+        const values: unknown[] = [salonId];
+        let idx = 3; // $1=salonId, $2=branchId are fixed; extras start at $3
+
+        if (search) {
+            conditions.push(`p.name ILIKE $${idx++}`);
+            values.push(`%${search}%`);
+        }
+        if (categoryId) {
+            conditions.push(`p.category_id = $${idx++}`);
+            values.push(categoryId);
+        }
+
+        const where = conditions.join(" AND ");
+
+        const { rows } = await pool.query(
+            `SELECT
+               p.id                                                          AS product_id,
+               COALESCE(c.name, '')                                          AS category_name,
+               p.name                                                        AS item_name,
+               COALESCE(p.amount, 0)                                         AS actual_stock,
+               COALESCE(sr.adjust_stock,  p.amount, 0)                       AS adjust_stock,
+               COALESCE(sr.adjust_stock,  p.amount, 0) - COALESCE(p.amount, 0) AS stock_difference,
+               ROUND(COALESCE(p.amount, 0) * COALESCE(p.retail_price::numeric, 0), 2) AS stock_value,
+               COALESCE(SUM(cu.qty), 0)                                      AS actual_consumable,
+               COALESCE(sr.adjust_consumable, SUM(cu.qty), 0)                AS adjust_consumable,
+               COALESCE(p.measure_unit, '—')                                 AS unit,
+               COALESCE(sr.adjust_consumable, 0) - COALESCE(SUM(cu.qty), 0) AS consumable_difference,
+               COALESCE(sr.remark, '')                                        AS remark
+             FROM products p
+             LEFT JOIN service_categories c   ON c.id = p.category_id
+             LEFT JOIN stock_reconciliation sr
+                    ON sr.product_id = p.id AND sr.branch_id = $2
+             LEFT JOIN consumable_usage cu
+                    ON cu.product_id = p.id AND cu.branch_id = $2
+             WHERE ${where}
+             GROUP BY p.id, c.name, p.amount, p.retail_price, p.measure_unit,
+                      sr.adjust_stock, sr.adjust_consumable, sr.remark
+             ORDER BY c.name NULLS LAST, p.name`,
+            [salonId, branchId, ...values.slice(1)]
+        );
+        return rows;
+    },
+
+    /**
+     * Upsert a single product's reconciliation row.
+     * Uses ON CONFLICT to update if the row already exists.
+     */
+    async upsertRow(
+        branchId: string,
+        salonId: string,
+        item: ReconciliationItemBody,
+        userId: string
+    ): Promise<StockReconciliationRow | null> {
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+
+            // Save reconciliation adjustments
+            await client.query(
+                `INSERT INTO stock_reconciliation
+                   (salon_id, branch_id, product_id, adjust_stock, adjust_consumable, remark, reconciled_by, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+                 ON CONFLICT (branch_id, product_id)
+                 DO UPDATE SET
+                   adjust_stock      = EXCLUDED.adjust_stock,
+                   adjust_consumable = EXCLUDED.adjust_consumable,
+                   remark            = EXCLUDED.remark,
+                   reconciled_by     = EXCLUDED.reconciled_by,
+                   updated_at        = NOW()`,
+                [salonId, branchId, item.product_id, item.adjust_stock, item.adjust_consumable, item.remark ?? null, userId]
+            );
+
+            // Write the physically-counted qty back to actual stock
+            await client.query(
+                `UPDATE products SET amount = $1, updated_at = NOW()
+                 WHERE id = $2 AND salon_id = $3`,
+                [item.adjust_stock, item.product_id, salonId]
+            );
+
+            await client.query("COMMIT");
+        } catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        } finally {
+            client.release();
+        }
+
+        // Return the merged row so the frontend can update its local state
+        const { rows } = await pool.query(
+            `SELECT
+               p.id                                                AS product_id,
+               COALESCE(c.name, '')                                AS category_name,
+               p.name                                              AS item_name,
+               COALESCE(p.amount, 0)                              AS actual_stock,
+               $3::numeric                                         AS adjust_stock,
+               $3::numeric - COALESCE(p.amount, 0)               AS stock_difference,
+               ROUND(COALESCE(p.amount,0)*COALESCE(p.retail_price::numeric,0),2) AS stock_value,
+               COALESCE(SUM(cu.qty), 0)                           AS actual_consumable,
+               $4::numeric                                         AS adjust_consumable,
+               COALESCE(p.measure_unit,'—')                        AS unit,
+               $4::numeric - COALESCE(SUM(cu.qty),0)              AS consumable_difference,
+               COALESCE($5,'')                                     AS remark
+             FROM products p
+             LEFT JOIN service_categories c ON c.id = p.category_id
+             LEFT JOIN consumable_usage cu ON cu.product_id = p.id AND cu.branch_id = $2
+             WHERE p.id = $1 AND p.salon_id = $6
+             GROUP BY p.id, c.name`,
+            [item.product_id, branchId, item.adjust_stock, item.adjust_consumable, item.remark ?? null, salonId]
+        );
+        return rows[0] || null;
+    },
+
+    /**
+     * Batch upsert for "Update All" — wraps all items in a single transaction.
+     */
+    async upsertBatch(
+        branchId: string,
+        salonId: string,
+        items: ReconciliationItemBody[],
+        userId: string
+    ): Promise<number> {
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            for (const item of items) {
+                await client.query(
+                    `INSERT INTO stock_reconciliation
+                       (salon_id, branch_id, product_id, adjust_stock, adjust_consumable, remark, reconciled_by, updated_at)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+                     ON CONFLICT (branch_id, product_id)
+                     DO UPDATE SET
+                       adjust_stock      = EXCLUDED.adjust_stock,
+                       adjust_consumable = EXCLUDED.adjust_consumable,
+                       remark            = EXCLUDED.remark,
+                       reconciled_by     = EXCLUDED.reconciled_by,
+                       updated_at        = NOW()`,
+                    [salonId, branchId, item.product_id, item.adjust_stock, item.adjust_consumable, item.remark ?? null, userId]
+                );
+
+                // Write the physically-counted qty back to actual stock
+                await client.query(
+                    `UPDATE products SET amount = $1, updated_at = NOW()
+                     WHERE id = $2 AND salon_id = $3`,
+                    [item.adjust_stock, item.product_id, salonId]
+                );
+            }
+            await client.query("COMMIT");
+            return items.length;
+        } catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        } finally {
+            client.release();
+        }
+    },
+};
+
+// ─── Consumable Usage ─────────────────────────────────────────────────────────
+
+export const consumableUsageRepository = {
+    async create(body: SaveConsumableUsageBody, salonId: string, userId: string): Promise<number> {
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+
+            let recorded = 0;
+            for (const item of body.items) {
+                // Verify product belongs to this salon
+                const { rows: prodRows } = await client.query(
+                    `SELECT id, amount FROM products WHERE id = $1 AND salon_id = $2`,
+                    [item.product_id, salonId]
+                );
+                if (!prodRows.length) continue; // skip unknown products silently
+
+                // Record the usage event
+                await client.query(
+                    `INSERT INTO consumable_usage
+                       (salon_id, branch_id, product_id, booking_id, qty, unit, used_by)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                    [
+                        salonId, body.branch_id, item.product_id,
+                        body.booking_id ?? null, item.qty,
+                        item.unit ?? null, userId,
+                    ]
+                );
+
+                // Reduce actual stock — GREATEST prevents negative qty
+                await client.query(
+                    `UPDATE products
+                     SET amount = GREATEST(amount - $1, 0), updated_at = NOW()
+                     WHERE id = $2 AND salon_id = $3`,
+                    [item.qty, item.product_id, salonId]
+                );
+
+                // Audit trail in stock_movements
+                await client.query(
+                    `INSERT INTO stock_movements
+                       (branch_id, product_id, movement_type, quantity, notes, created_by)
+                     VALUES ($1, $2, 'out', $3, $4, $5)`,
+                    [
+                        body.branch_id, item.product_id, item.qty,
+                        `Consumable used in appointment${body.booking_id ? ` (booking ${body.booking_id})` : ''}`,
+                        userId,
+                    ]
+                );
+
+                recorded++;
+            }
+
+            await client.query("COMMIT");
+            return recorded;
+        } catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        } finally {
+            client.release();
+        }
     },
 };
 

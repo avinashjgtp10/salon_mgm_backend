@@ -3,12 +3,23 @@ import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { appointmentsRepository } from "./appointments.repository";
 import { salesRepository } from "../sales/sales.repository";
+import { productsRepository } from "../products/products.repository";
 import { commissionCalculationService } from "../commission/commissionCalculation.service";
 import { blockedTimesRepository } from "../blocked_times/blocked_times.repository";
 import { salesService } from "../sales/sales.service";
 import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
 import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
 import { attendanceService } from "../attendance/attendance.service";
+import { notificationsService } from "../notifications/notifications.service";
+import { emailService } from "../utils/email.service";
+import { canSendEmail } from "../utils/notif-prefs";
+import { salonsRepository } from "../salons/salons.repository";
+import { branchesRepository } from "../branches/branches.repository";
+import { staffService } from "../staff/staff.service";
+import { clientsRepository } from "../clients/clients.repository";
+import { sendReceiptDocument } from "../sales/receipt-whatsapp.service";
+import { sendPurchaseReceipt } from "../sales/receipt-send.helper";
+import { notifyAppointmentCompleted } from "./appointment-completed.helper";
 import {
     Appointment,
     CreateAppointmentBody,
@@ -44,15 +55,8 @@ export const appointmentsService = {
         const { requesterUserId, body } = params;
 
         if (body.staff_id && body.staff_id.trim().length > 0) {
-            const conflict = await appointmentsRepository.hasConflict({
-                staffId: body.staff_id,
-                scheduledAt: body.scheduled_at,
-                durationMinutes: body.duration_minutes,
-            });
-            if (conflict) {
-                throw new AppError(409, "Staff member already has an appointment at this time", "CONFLICT");
-            }
-
+            // Overlapping appointments for the same staff are allowed (e.g. hair color
+            // processing time) — the receptionist books intentionally, not by mistake.
             const apptDate = new Date(body.scheduled_at);
             const dateStr  = apptDate.toISOString().slice(0, 10);
             const pad = (n: number) => String(n).padStart(2, "0");
@@ -82,6 +86,23 @@ export const appointmentsService = {
 
         const appointment = await appointmentsRepository.create(body, requesterUserId);
         logger.info("appointmentsService.create success", { appointmentId: appointment.id });
+
+        // Deduct stock for products sold in this appointment (fire-and-forget)
+        const soldProducts = (body.product_items ?? []).filter(p => p.product_id);
+        if (soldProducts.length > 0) {
+            productsRepository.deductStock(
+                soldProducts.map(p => ({ product_id: p.product_id!, quantity: p.quantity })),
+                body.salon_id
+            ).catch(err => logger.warn("Stock deduction failed (non-fatal)", { err: err?.message }));
+        }
+
+        // Fire notification (fire-and-forget)
+        notificationsService.create({
+            salon_id: appointment.salon_id,
+            type:     "appointment",
+            title:    "New Appointment Booked",
+            body:     `${appointment.client_name ?? "Walk-in"} — ${formatDate(appointment.scheduled_at)} at ${formatTime(appointment.scheduled_at)}`,
+        }).catch(() => {});
 
         // ── WhatsApp Automation: Appointment Confirmation ─────────────────────
         // Dedup check — NEVER send confirmation twice for the same appointment
@@ -116,6 +137,27 @@ export const appointmentsService = {
                 // Never block core flow
             }
         }
+
+        // ── Email: New Appointment (to salon owner) ───────────────────────────
+        ;(async () => {
+            try {
+                const full = await appointmentsRepository.findById(appointment.id);
+                if (!full) return;
+                const ownerEmail = await salonsRepository.findOwnerEmailById(full.salon_id);
+                if (!ownerEmail) return;
+                const allowed = await canSendEmail(full.salon_id, "newAppointment");
+                if (!allowed) return;
+                await emailService.sendNewAppointmentEmail({
+                    to:            ownerEmail,
+                    salonName:     (full as any).salon_name  ?? "your salon",
+                    clientName:    full.client_name          ?? "Walk-in",
+                    services:      full.services?.map((s: any) => s.name).join(", ") ?? "Service",
+                    date:          formatDate(full.scheduled_at),
+                    time:          formatTime(full.scheduled_at),
+                    appointmentId: full.id,
+                });
+            } catch (err: any) { logger.error("[email] newAppointment failed:", err?.message ?? err); }
+        })();
 
         return appointment;
     },
@@ -160,22 +202,51 @@ export const appointmentsService = {
         if (["completed", "cancelled", "no_show"].includes(existing.status))
             throw new AppError(400, `Cannot update an appointment with status '${existing.status}'`, "BAD_REQUEST");
 
-        const newStaffId     = patch.staff_id         ?? existing.staff_id;
-        const newScheduledAt = patch.scheduled_at     ?? existing.scheduled_at;
-        const newDuration    = patch.duration_minutes ?? existing.duration_minutes;
-
-        if (newStaffId && (patch.scheduled_at || patch.staff_id || patch.duration_minutes)) {
-            const conflict = await appointmentsRepository.hasConflict({
-                staffId: newStaffId,
-                scheduledAt: newScheduledAt,
-                durationMinutes: newDuration,
-                excludeId: appointmentId,
-            });
-            if (conflict)
-                throw new AppError(409, "Staff member already has an appointment at this time", "CONFLICT");
-        }
+        // Overlapping appointments for the same staff are allowed (e.g. hair color
+        // processing time) — no conflict check on reschedule/staff/duration changes.
 
         const updated = await appointmentsRepository.update(appointmentId, patch);
+
+        // Adjust stock when product_items list changes (fire-and-forget)
+        if (patch.product_items !== undefined) {
+            const oldItems = (existing.product_items ?? []).filter(p => p.product_id);
+            const newItems = (patch.product_items ?? []).filter(p => p.product_id);
+
+            const oldMap = new Map(oldItems.map(p => [p.product_id!, p.quantity]));
+            const newMap = new Map(newItems.map(p => [p.product_id!, p.quantity]));
+
+            const toDeduct: { product_id: string; quantity: number }[] = [];
+            const toRestore: { product_id: string; quantity: number }[] = [];
+
+            for (const [id, newQty] of newMap) {
+                const oldQty = oldMap.get(id) ?? 0;
+                if (newQty > oldQty) toDeduct.push({ product_id: id, quantity: newQty - oldQty });
+                else if (newQty < oldQty) toRestore.push({ product_id: id, quantity: oldQty - newQty });
+            }
+            for (const [id, oldQty] of oldMap) {
+                if (!newMap.has(id)) toRestore.push({ product_id: id, quantity: oldQty });
+            }
+
+            if (toDeduct.length > 0)
+                productsRepository.deductStock(toDeduct, existing.salon_id).catch(err => logger.warn("Stock deduction failed (non-fatal)", { err: err?.message }));
+            if (toRestore.length > 0)
+                productsRepository.restoreStock(toRestore, existing.salon_id).catch(err => logger.warn("Stock restore failed (non-fatal)", { err: err?.message }));
+        }
+
+        // ── Live calendar update ───────────────────────────────────────────────
+        // create()/cancel() already push a "notification" socket event that the
+        // calendar listens to for a live refresh — update() (reschedule, staff
+        // reassignment, or LUNOX's modifyAppointmentServices changing what's
+        // booked/its duration) never did, so any of these silently required a
+        // manual page refresh to appear correctly.
+        if (patch.scheduled_at || patch.staff_id || patch.services || patch.duration_minutes) {
+            notificationsService.create({
+                salon_id: existing.salon_id,
+                type:     "appointment",
+                title:    "Appointment Updated",
+                body:     `${existing.client_name ?? "Walk-in"} — ${formatDate(updated.scheduled_at)} at ${formatTime(updated.scheduled_at)}`,
+            }).catch(() => {});
+        }
 
         // ── WhatsApp Automation: Appointment Rescheduled ──────────────────────
         // Only fire if scheduled_at actually changed
@@ -229,6 +300,26 @@ export const appointmentsService = {
         return appointmentsRepository.updateStatus(appointmentId, "in_progress");
     },
 
+    async serviceCheckIn(appointmentId: string): Promise<Appointment> {
+        const existing = await appointmentsRepository.findById(appointmentId);
+        if (!existing || existing.deleted_at) throw new AppError(404, "Appointment not found", "NOT_FOUND");
+        if (["cancelled", "no_show"].includes(existing.status))
+            throw new AppError(400, `Cannot check in a '${existing.status}' appointment`, "BAD_REQUEST");
+        const updated = await appointmentsRepository.serviceCheckIn(appointmentId);
+        if (!updated) throw new AppError(404, "Appointment not found", "NOT_FOUND");
+        return updated;
+    },
+
+    async serviceCheckOut(appointmentId: string): Promise<Appointment> {
+        const existing = await appointmentsRepository.findById(appointmentId);
+        if (!existing || existing.deleted_at) throw new AppError(404, "Appointment not found", "NOT_FOUND");
+        if (!existing.service_started_at)
+            throw new AppError(400, "Appointment must be checked in before it can be checked out", "BAD_REQUEST");
+        const updated = await appointmentsRepository.serviceCheckOut(appointmentId);
+        if (!updated) throw new AppError(404, "Appointment not found", "NOT_FOUND");
+        return updated;
+    },
+
     async cancel(params: {
         appointmentId: string;
         requesterUserId: string;
@@ -240,6 +331,23 @@ export const appointmentsService = {
             throw new AppError(400, `Appointment is already '${existing.status}'`, "BAD_REQUEST");
 
         const cancelled = await appointmentsRepository.updateStatus(params.appointmentId, "cancelled");
+
+        // Restore stock for cancelled appointment products (fire-and-forget)
+        const cancelledProducts = (existing.product_items ?? []).filter(p => p.product_id);
+        if (cancelledProducts.length > 0) {
+            productsRepository.restoreStock(
+                cancelledProducts.map(p => ({ product_id: p.product_id!, quantity: p.quantity })),
+                existing.salon_id
+            ).catch(err => logger.warn("Stock restore failed (non-fatal)", { err: err?.message }));
+        }
+
+        // ── Push Notification: Appointment Cancelled (to salon owner) ─────────
+        notificationsService.create({
+            salon_id: existing.salon_id,
+            type:     "appointment",
+            title:    "Appointment Cancelled",
+            body:     `${existing.client_name ?? "Walk-in"} — ${formatDate(existing.scheduled_at)} at ${formatTime(existing.scheduled_at)}`,
+        }).catch(() => {});
 
         // ── WhatsApp Automation: Appointment Cancelled ────────────────────────
         if (existing.client_id && (existing as any).client_phone) {
@@ -260,6 +368,45 @@ export const appointmentsService = {
             }).catch(() => {});
         }
 
+        // ── Email: Appointment Cancelled (to salon owner) ────────────────────
+        ;(async () => {
+            try {
+                const ownerEmail = await salonsRepository.findOwnerEmailById(existing.salon_id);
+                if (!ownerEmail) { logger.warn("[email] appointmentCancelled (owner): no owner email, skipping"); return; }
+                logger.info(`[email] appointmentCancelled (owner) → to=${ownerEmail}`);
+                const allowed = await canSendEmail(existing.salon_id, "appointmentCancelled");
+                if (!allowed) { logger.info("[email] appointmentCancelled (owner): skipped (preference off)"); return; }
+                await emailService.sendAppointmentCancelledOwnerEmail({
+                    to:            ownerEmail,
+                    salonName:     (existing as any).salon_name ?? "your salon",
+                    clientName:    existing.client_name         ?? "Walk-in",
+                    date:          formatDate(existing.scheduled_at),
+                    time:          formatTime(existing.scheduled_at),
+                    appointmentId: existing.id,
+                });
+                logger.info(`[email] appointmentCancelled (owner) sent to ${ownerEmail}`);
+            } catch (err: any) { logger.error("[email] appointmentCancelled (owner) failed:", err?.message ?? err); }
+        })();
+
+        // ── Email: Appointment Cancelled (to client) ──────────────────────────
+        ;(async () => {
+            try {
+                const clientEmail = (existing as any).client_email;
+                if (!clientEmail) { logger.info("[email] appointmentCancelled: no client email, skipping"); return; }
+                logger.info(`[email] appointmentCancelled → to=${clientEmail}`);
+                const allowed = await canSendEmail(existing.salon_id, "appointmentCancelled");
+                if (!allowed) { logger.info("[email] appointmentCancelled: skipped (preference off)"); return; }
+                await emailService.sendAppointmentCancelledEmail({
+                    to:         clientEmail,
+                    clientName: existing.client_name          ?? "Valued Customer",
+                    salonName:  (existing as any).salon_name  ?? "our salon",
+                    date:       formatDate(existing.scheduled_at),
+                    time:       formatTime(existing.scheduled_at),
+                });
+                logger.info(`[email] appointmentCancelled sent to ${clientEmail}`);
+            } catch (err: any) { logger.error("[email] appointmentCancelled failed:", err?.message ?? err); }
+        })();
+
         return cancelled;
     },
 
@@ -269,6 +416,16 @@ export const appointmentsService = {
         const deleted = await appointmentsRepository.deleteById(appointmentId);
         if (!deleted) throw new AppError(500, "Failed to delete appointment", "INTERNAL_ERROR");
         logger.info("appointmentsService.delete success", { appointmentId });
+
+        // Restore stock for deleted appointment products (fire-and-forget)
+        const deletedProducts = (existing.product_items ?? []).filter(p => p.product_id);
+        if (deletedProducts.length > 0) {
+            productsRepository.restoreStock(
+                deletedProducts.map(p => ({ product_id: p.product_id!, quantity: p.quantity })),
+                existing.salon_id
+            ).catch(err => logger.warn("Stock restore failed (non-fatal)", { err: err?.message }));
+        }
+
         return deleted;
     },
 
@@ -336,6 +493,108 @@ export const appointmentsService = {
 
             // Mark appointment as completed
             const completedAppt = await appointmentsRepository.updateStatus(appointmentId, "completed");
+
+            // ── WhatsApp Automation: Thank You + Review Request (fire-and-forget) ──
+            notifyAppointmentCompleted(appointmentId).catch(() => {});
+
+            // ── WhatsApp Automation: Purchase confirmation + PDF receipt (fallback) ──
+            // payments.service.ts already fires this at payment-creation time when it
+            // auto-creates the sale — this is a dedup-guarded safety net for when that
+            // didn't happen (e.g. no client phone on file yet at payment time), so
+            // completing the appointment doesn't silently leave the customer with only
+            // the plain booking confirmation and no purchase text/PDF.
+            if (existing.client_id && (existing as any).client_phone) {
+                (async () => {
+                    try {
+                        const alreadySent =
+                            (await whatsappAutomationRepository.logExistsForReference(preExistingSale.id, "service_purchased")) ||
+                            (await whatsappAutomationRepository.logExistsForReference(preExistingSale.id, "product_purchased"));
+                        if (alreadySent) return;
+
+                        const presentTypes = new Set(saleItems.map((i) => i.item_type));
+                        const purchaseEvents: Array<{ eventType: "service_purchased" | "product_purchased"; itemType: "service" | "product" }> = [
+                            { eventType: "service_purchased", itemType: "service" },
+                            { eventType: "product_purchased", itemType: "product" },
+                        ];
+                        for (const { eventType, itemType } of purchaseEvents) {
+                            if (!presentTypes.has(itemType)) continue;
+                            const itemName = saleItems.find((i) => i.item_type === itemType)?.name ?? "your purchase";
+                            whatsappAutomationService.trigger({
+                                salonId:       existing.salon_id,
+                                eventType,
+                                clientId:      existing.client_id!,
+                                phone:         (existing as any).client_phone,
+                                countryCode:   (existing as any).client_phone_code ?? null,
+                                variables: {
+                                    "1": existing.client_name         ?? "Valued Customer",
+                                    "2": (existing as any).salon_name ?? "our salon",
+                                    "3": itemName,
+                                },
+                                referenceId:   preExistingSale.id,
+                                referenceType: "invoice",
+                            }).catch(() => {});
+                        }
+
+                        await sendPurchaseReceipt({
+                            salonId:     existing.salon_id,
+                            phone:       (existing as any).client_phone,
+                            countryCode: (existing as any).client_phone_code ?? null,
+                            clientId:    existing.client_id,
+                            clientName:  existing.client_name ?? "Valued Customer",
+                            sale:        preExistingSale,
+                            items:       saleItems,
+                            appointment: {
+                                id:              existing.id,
+                                scheduledAt:     existing.scheduled_at,
+                                durationMinutes: existing.duration_minutes,
+                                status:          "completed",
+                                notes:           existing.notes,
+                            },
+                            paidAmount:  Number(preExistingSale.total_amount ?? 0),
+                            dueAmount:   0,
+                            couponCode:  null,
+                        });
+                    } catch (err: any) {
+                        logger.error("[WA-AUTO] preExistingSale purchase-confirmation fallback failed:", err?.message);
+                    }
+                })();
+            }
+
+            // ── Email: Appointment Completed receipt (to client) ──────────────
+            ;(async () => {
+                try {
+                    const clientEmail = (existing as any).client_email;
+                    if (!clientEmail) return;
+                    const allowed = await canSendEmail(existing.salon_id, "appointmentCompleted");
+                    if (!allowed) return;
+                    await emailService.sendAppointmentCompletedEmail({
+                        to:         clientEmail,
+                        clientName: existing.client_name         ?? "Valued Customer",
+                        salonName:  (existing as any).salon_name ?? "our salon",
+                        services:   existing.services?.map((s: any) => s.name).join(", ") ?? "Service",
+                        amount:     String(preExistingSale.total_amount ?? "0"),
+                    });
+                } catch (err: any) { logger.error("[email] appointmentCompleted (preexisting) failed:", err?.message ?? err); }
+            })();
+
+            // ── Email: New Payment (to salon owner) ───────────────────────────
+            ;(async () => {
+                try {
+                    const ownerEmail = await salonsRepository.findOwnerEmailById(existing.salon_id);
+                    if (!ownerEmail) return;
+                    const allowed = await canSendEmail(existing.salon_id, "newPayment");
+                    if (!allowed) return;
+                    await emailService.sendNewPaymentEmail({
+                        to:            ownerEmail,
+                        salonName:     (existing as any).salon_name ?? "your salon",
+                        clientName:    existing.client_name         ?? "Walk-in",
+                        amount:        String(preExistingSale.total_amount ?? "0"),
+                        paymentMethod: params.payment_method        ?? "N/A",
+                        invoiceId:     preExistingSale.id.slice(0, 8).toUpperCase(),
+                    });
+                } catch (err: any) { logger.error("[email] newPayment (preexisting) failed:", err?.message ?? err); }
+            })();
+
             return { appointment: completedAppt, saleId: preExistingSale.id };
         }
 
@@ -427,7 +686,101 @@ export const appointmentsService = {
                 referenceId:   sale.id,
                 referenceType: 'invoice',
             }).catch(() => {});
+
+            // PDF receipt as a WhatsApp document attachment — best-effort, only
+            // deliverable within 24h of the customer's last message. Failure here
+            // is expected outside that window and never blocks the text confirmation above.
+            (async () => {
+                const [salonRecord, branches, staffList, clientRecord] = await Promise.all([
+                    salonsRepository.findById(existing.salon_id),
+                    branchesRepository.listBySalonId(existing.salon_id),
+                    staffService.list(existing.salon_id, { is_active: true, limit: 100 } as any),
+                    existing.client_id ? clientsRepository.findById(existing.client_id, existing.salon_id) : Promise.resolve(null),
+                ]);
+
+                const branch = branches.find((b) => b.is_main) ?? branches[0] ?? null;
+                const salonAddress = branch
+                    ? [branch.address_line1, branch.address_line2, branch.city, branch.state, branch.pincode].filter(Boolean).join(", ")
+                    : null;
+
+                const staffNames: Record<string, string> = {};
+                for (const s of staffList.data as any[]) {
+                    staffNames[s.id] = [s.first_name, s.last_name].filter(Boolean).join(" ").trim() || s.email;
+                }
+
+                await sendReceiptDocument({
+                    salonId: existing.salon_id,
+                    phone: (existing as any).client_phone,
+                    countryCode: (existing as any).client_phone_code ?? null,
+                    salon: {
+                        business_name: salonRecord?.business_name ?? (existing as any).salon_name ?? "our salon",
+                        logo_url: (salonRecord as any)?.logo_url ?? null,
+                        email: salonRecord?.email ?? null,
+                        phone: salonRecord?.phone ?? null,
+                        website_url: salonRecord?.website_url ?? null,
+                        gst_number: salonRecord?.gst_number ?? null,
+                    },
+                    salonAddress,
+                    client: {
+                        name: clientRecord?.full_name ?? existing.client_name ?? "Valued Customer",
+                        phone: clientRecord?.phone_number ?? (existing as any).client_phone ?? null,
+                        email: clientRecord?.email ?? null,
+                    },
+                    sale,
+                    items,
+                    staffNames,
+                    appointment: {
+                        id: existing.id,
+                        scheduledAt: existing.scheduled_at,
+                        durationMinutes: existing.duration_minutes,
+                        status: existing.status,
+                        notes: existing.notes,
+                    },
+                    paidAmount: Number(sale.total_amount) || 0,
+                    dueAmount: 0,
+                    couponCode: null,
+                });
+            })().catch(() => {});
         }
+
+        // ── Email: Appointment Completed receipt (to client) ──────────────────
+        ;(async () => {
+            try {
+                const clientEmail = (existing as any).client_email;
+                if (!clientEmail) { logger.info("[email] appointmentCompleted: no client email, skipping"); return; }
+                logger.info(`[email] appointmentCompleted → to=${clientEmail}`);
+                const allowed = await canSendEmail(existing.salon_id, "appointmentCompleted");
+                if (!allowed) { logger.info("[email] appointmentCompleted: skipped (preference off)"); return; }
+                await emailService.sendAppointmentCompletedEmail({
+                    to:         clientEmail,
+                    clientName: existing.client_name         ?? "Valued Customer",
+                    salonName:  (existing as any).salon_name ?? "our salon",
+                    services:   existing.services?.map((s: any) => s.name).join(", ") ?? "Service",
+                    amount:     String(sale.total_amount     ?? "0"),
+                });
+                logger.info(`[email] appointmentCompleted sent to ${clientEmail}`);
+            } catch (err: any) { logger.error("[email] appointmentCompleted failed:", err?.message ?? err); }
+        })();
+
+        // ── Email: New Payment (to salon owner) ───────────────────────────────
+        ;(async () => {
+            try {
+                const ownerEmail = await salonsRepository.findOwnerEmailById(existing.salon_id);
+                if (!ownerEmail) { logger.warn("[email] newPayment (checkout): owner has no email, skipping"); return; }
+                logger.info(`[email] newPayment (checkout) → to=${ownerEmail}`);
+                const allowed = await canSendEmail(existing.salon_id, "newPayment");
+                if (!allowed) { logger.info("[email] newPayment: skipped (preference off)"); return; }
+                await emailService.sendNewPaymentEmail({
+                    to:            ownerEmail,
+                    salonName:     (existing as any).salon_name ?? "your salon",
+                    clientName:    existing.client_name         ?? "Walk-in",
+                    amount:        String(sale.total_amount     ?? "0"),
+                    paymentMethod: params.payment_method        ?? "N/A",
+                    invoiceId:     sale.id.slice(0, 8).toUpperCase(),
+                });
+                logger.info(`[email] newPayment sent to ${ownerEmail}`);
+            } catch (err: any) { logger.error("[email] newPayment (checkout) failed:", err?.message ?? err); }
+        })();
 
         return { appointment, saleId: sale.id };
     },

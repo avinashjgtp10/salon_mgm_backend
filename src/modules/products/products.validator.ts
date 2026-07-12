@@ -12,6 +12,9 @@ const isOptionalString = (v: unknown) => v === undefined || typeof v === "string
 const isOptionalNumber = (v: unknown) =>
     v === undefined || (typeof v === "number" && Number.isFinite(v));
 
+const isOptionalNonNeg = (v: unknown) =>
+    v === undefined || (typeof v === "number" && Number.isFinite(v) && v >= 0);
+
 const isOptionalBoolean = (v: unknown) => v === undefined || typeof v === "boolean";
 
 const UUID_RE =
@@ -71,8 +74,8 @@ const validateProductFields = (b: Record<string, unknown>, requireName = false) 
     if (b.measure_unit !== undefined && !VALID_MEASURE_UNITS.includes(b.measure_unit as MeasureUnit)) {
         throw new AppError(400, `measure_unit must be one of: ${VALID_MEASURE_UNITS.join(", ")}`, "VALIDATION_ERROR");
     }
-    if (!isOptionalNumber(b.amount)) {
-        throw new AppError(400, "amount must be a number", "VALIDATION_ERROR");
+    if (!isOptionalNonNeg(b.amount)) {
+        throw new AppError(400, "amount must be a non-negative number", "VALIDATION_ERROR");
     }
     if (!isOptionalString(b.short_description)) {
         throw new AppError(400, "short_description must be a string", "VALIDATION_ERROR");
@@ -86,14 +89,14 @@ const validateProductFields = (b: Record<string, unknown>, requireName = false) 
     if (typeof b.description === "string" && b.description.length > 1000) {
         throw new AppError(400, "description must be at most 1000 characters", "VALIDATION_ERROR");
     }
-    if (!isOptionalNumber(b.supply_price)) {
-        throw new AppError(400, "supply_price must be a number", "VALIDATION_ERROR");
+    if (!isOptionalNonNeg(b.supply_price)) {
+        throw new AppError(400, "supply_price must be a non-negative number", "VALIDATION_ERROR");
     }
     if (!isOptionalBoolean(b.retail_sales_enabled)) {
         throw new AppError(400, "retail_sales_enabled must be a boolean", "VALIDATION_ERROR");
     }
-    if (!isOptionalNumber(b.retail_price)) {
-        throw new AppError(400, "retail_price must be a number", "VALIDATION_ERROR");
+    if (!isOptionalNonNeg(b.retail_price)) {
+        throw new AppError(400, "retail_price must be a non-negative number", "VALIDATION_ERROR");
     }
     if (!isOptionalNumber(b.markup_percentage)) {
         throw new AppError(400, "markup_percentage must be a number", "VALIDATION_ERROR");

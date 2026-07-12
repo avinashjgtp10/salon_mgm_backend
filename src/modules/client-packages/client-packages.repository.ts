@@ -39,6 +39,7 @@ function toClientPackage(row: ClientPackageRow): ClientPackage {
     discount:      discount,
     totalAmount:   total,
     paymentMethod: row.payment_method,
+    splitDetails:  row.split_details ?? null,
     paidAmount:    paid,
     pendingAmount: pending,
     paymentStatus: row.payment_status,
@@ -190,14 +191,15 @@ export const clientPackagesRepository = {
           (id, salon_id, client_id, client_name, mobile, email,
            package_name, category, branch, expiry_date,
            base_price, gst_percentage, gst_amount, discount, total_amount,
-           payment_method, paid_amount, pending_amount, payment_status, status)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
+           payment_method, split_details, paid_amount, pending_amount, payment_status, status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
         [
           pkgId, salonId, dto.clientId, clientName,
           c.phone_number ?? null, c.email ?? null,
           dto.packageName, dto.category ?? "", dto.branch ?? "", dto.expiryDate ?? "2099-12-31",
           dto.basePrice, dto.gstPercentage, gstAmount, dto.discount, totalAmount,
           dto.paymentMethod,
+          dto.splitDetails ? JSON.stringify(dto.splitDetails) : null,
           totalAmount,  // paid_amount = full amount on creation
           0,            // pending_amount
           "Paid",
@@ -381,9 +383,9 @@ export const clientPackagesRepository = {
 
       await client.query(
         `INSERT INTO client_package_session_history
-          (id, client_package_id, client_package_service_id, session_no, staff_name, status)
-         VALUES ($1,$2,$3,$4,$5,$6)`,
-        [uuidv4(), packageId, svc.id, newCompleted, dto.staffName, "Completed"],
+          (id, client_package_id, client_package_service_id, session_no, staff_name, status, appointment_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [uuidv4(), packageId, svc.id, newCompleted, dto.staffName, "Completed", dto.appointmentId ?? null],
       );
 
       // If all services fully done → mark package Completed

@@ -140,3 +140,55 @@ export type ListStockMovementsFilters = {
     page?: number;
     limit?: number;
 };
+
+// ─── Stock Reconciliation ────────────────────────────────────────────────────
+
+export type StockReconciliationRow = {
+    product_id: string;
+    category_name: string;
+    item_name: string;
+    actual_stock: number;
+    adjust_stock: number;
+    stock_difference: number;
+    stock_value: number;
+    actual_consumable: number;
+    adjust_consumable: number;
+    unit: string;
+    consumable_difference: number;
+    remark: string;
+};
+
+export type ReconciliationItemBody = {
+    product_id: string;
+    adjust_stock: number;
+    adjust_consumable: number;
+    remark?: string;
+};
+
+export type SaveReconciliationBody = {
+    branch_id: string;
+    items: ReconciliationItemBody[];
+};
+
+export type SaveReconciliationRowBody = {
+    branch_id: string;
+    product_id: string;
+    adjust_stock: number;
+    adjust_consumable: number;
+    remark?: string;
+};
+
+// ─── Consumable Usage ────────────────────────────────────────────────────────
+
+export type ConsumableUsageItem = {
+    product_id: string;
+    product_name?: string;
+    qty: number;
+    unit?: string;
+};
+
+export type SaveConsumableUsageBody = {
+    branch_id: string;
+    booking_id?: string;
+    items: ConsumableUsageItem[];
+};

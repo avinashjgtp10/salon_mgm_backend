@@ -9,6 +9,7 @@ import {
     staffWagesRepository, staffCommissionsRepository,
     staffPayRunsRepository, staffSchedulesRepository,
 } from "./staffSettings.repository";
+import { blockedTimesRepository } from "../blocked_times/blocked_times.repository";
 
 import { authRepository } from "../auth/auth.repository";
 import bcrypt from "bcrypt";
@@ -128,12 +129,37 @@ export const staffService = {
         const existing = await staffRepository.findById(id, salonId);
         if (!existing) throw new AppError(404, "Staff not found", "NOT_FOUND");
 
-        let passwordHash: string | null | undefined = undefined;
-        if (patch.password) {
-            passwordHash = await bcrypt.hash(patch.password, 10);
+        // Split out blocked_times — handled separately, not a staff table column
+        const { blocked_times: blockedTimesToCreate, ...staffPatch } = patch as any;
+
+        // Create any embedded blocked times
+        const createdBlockedTimes: any[] = [];
+        if (Array.isArray(blockedTimesToCreate) && blockedTimesToCreate.length > 0) {
+            for (const bt of blockedTimesToCreate) {
+                const created = await blockedTimesRepository.create(
+                    { salon_id: salonId, staff_id: id, date: bt.date, start_time: bt.start_time, end_time: bt.end_time, reason: bt.reason ?? null },
+                    requesterUserId
+                );
+                createdBlockedTimes.push(created);
+            }
+            logger.info("staffService.update: blocked times created", { count: createdBlockedTimes.length, staffId: id });
         }
 
-        const updated = await staffRepository.update(id, salonId, patch, passwordHash);
+        // Only update staff columns if there is other data besides blocked_times
+        let updated: Staff = existing;
+        if (Object.keys(staffPatch).length > 0) {
+            let passwordHash: string | null | undefined = undefined;
+            if (staffPatch.password) {
+                passwordHash = await bcrypt.hash(staffPatch.password, 10);
+            }
+            updated = await staffRepository.update(id, salonId, staffPatch, passwordHash);
+        }
+
+        // Attach newly created blocked times to the response so the frontend can replace the temp ID
+        if (createdBlockedTimes.length > 0) {
+            (updated as any).blocked_times = createdBlockedTimes;
+        }
+
         logger.info("staffService.update success", { staffId: updated.id });
         return updated;
     },

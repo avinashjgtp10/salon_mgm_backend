@@ -11,6 +11,7 @@ import {
     ClientsListQuery,
     Paginated,
     MergeStrategy,
+    CampaignFilterParams,
 } from "./clients.types";
 
 const buildFullName = (first: string, last?: string | null) =>
@@ -132,7 +133,14 @@ export const clientsRepository = {
     },
 
     // ---------------- CREATE ----------------
-    async create(body: CreateClientBody, salonId: string): Promise<Client> {
+    // `referral` is computed by the service layer (code generation + uniqueness
+    // check, referred_by_code → referred_by_client_id resolution) — kept out of
+    // CreateClientBody so a caller can never set their own referral_code directly.
+    async create(
+        body: CreateClientBody,
+        salonId: string,
+        referral: { code: string; rewardStatus: "pending" | null },
+    ): Promise<Client> {
         const fullName = buildFullName(body.first_name, body.last_name);
 
         const { rows } = await pool.query(
@@ -146,7 +154,8 @@ export const clientsRepository = {
         client_source,referred_by_client_id,
         preferred_language,occupation,country,avatar_url,
         email_notifications,sms_notifications,whatsapp_notifications,
-        email_marketing,sms_marketing,whatsapp_marketing
+        email_marketing,sms_marketing,whatsapp_marketing,
+        referral_code,referral_reward_status
       ) VALUES (
         $1,$2,$3,$4,
         $5,$6,$7,
@@ -156,7 +165,8 @@ export const clientsRepository = {
         $15,$16,
         $17,$18,$19,$20,
         $21,$22,$23,
-        $24,$25,$26
+        $24,$25,$26,
+        $27,$28
       ) RETURNING *`,
             [
                 salonId,
@@ -185,10 +195,77 @@ export const clientsRepository = {
                 body.email_marketing ?? false,
                 body.sms_marketing ?? false,
                 body.whatsapp_marketing ?? false,
+                referral.code,
+                referral.rewardStatus,
             ]
         );
 
         return rows[0];
+    },
+
+    // ---------------- REFERRAL ----------------
+    async isReferralCodeTaken(code: string, salonId: string): Promise<boolean> {
+        const { rows } = await pool.query(
+            `SELECT 1 FROM clients WHERE salon_id = $1 AND referral_code = $2 LIMIT 1`,
+            [salonId, code]
+        );
+        return rows.length > 0;
+    },
+
+    async findByReferralCode(code: string, salonId: string): Promise<Client | null> {
+        const { rows } = await pool.query(
+            `SELECT * FROM clients WHERE salon_id = $1 AND referral_code = $2`,
+            [salonId, code]
+        );
+        return rows[0] || null;
+    },
+
+    async markReferralRewarded(clientId: string): Promise<void> {
+        await pool.query(
+            `UPDATE clients SET referral_reward_status = 'completed' WHERE id = $1`,
+            [clientId]
+        );
+    },
+
+    // Marks THIS client's own one-time welcome reward as granted (instant
+    // discount or eWallet-credit fallback) — independent of
+    // referral_reward_status, which only tracks the referrer's payout.
+    async markRefereeRewarded(clientId: string): Promise<void> {
+        await pool.query(
+            `UPDATE clients SET referral_referee_rewarded = TRUE WHERE id = $1`,
+            [clientId]
+        );
+    },
+
+    // Links a referred_by_code applied post-creation (e.g. at checkout) — kept
+    // separate from the generic update() whitelist so a caller can never set
+    // referral_reward_status directly through a normal client PATCH.
+    async linkReferrer(clientId: string, referrerId: string): Promise<void> {
+        await pool.query(
+            `UPDATE clients SET referred_by_client_id = $1, referral_reward_status = 'pending' WHERE id = $2`,
+            [referrerId, clientId]
+        );
+    },
+
+    // Aggregated off ewallet_ledger (rather than a denormalized counter) so it
+    // can never drift from what was actually credited. Scoped through the
+    // referred clients themselves (c.referred_by_client_id = this client) so a
+    // client's own one-time "referee welcome bonus" ledger entry — which also
+    // has source_type='referral' but belongs to a *different* referral — is
+    // never counted as this client's referrer earnings.
+    async getReferralStats(clientId: string): Promise<{ total_referral_earnings: number; total_successful_referrals: number }> {
+        const { rows } = await pool.query(
+            `SELECT COALESCE(SUM(el.amount), 0)::numeric AS total_earnings, COUNT(DISTINCT c.id)::int AS total_count
+       FROM clients c
+       JOIN ewallet_ledger el
+         ON el.client_id = $1 AND el.source_type = 'referral' AND el.source_id = c.id
+       WHERE c.referred_by_client_id = $1 AND c.referral_reward_status = 'completed'`,
+            [clientId]
+        );
+        return {
+            total_referral_earnings: parseFloat(rows[0]?.total_earnings ?? '0'),
+            total_successful_referrals: Number(rows[0]?.total_count) || 0,
+        };
     },
 
     // ---------------- UPDATE ----------------
@@ -386,6 +463,31 @@ export const clientsRepository = {
         return null;
     },
 
+    // Enforces "one active client per phone number" at creation/edit time —
+    // archived (is_active = false) clients are excluded so a genuinely removed
+    // client's old number can be reused by someone new. excludeClientId lets
+    // update() check without tripping over the client's own unchanged number.
+    async findActiveByPhone(
+        phone_country_code: string | null | undefined,
+        phone_number: string | null | undefined,
+        salonId: string,
+        excludeClientId?: string,
+    ): Promise<Client | null> {
+        const pn = phone_number ? String(phone_number).trim() : "";
+        if (!pn) return null;
+        const pcc = phone_country_code ? String(phone_country_code).trim() : null;
+        const { rows } = await pool.query(
+            `SELECT * FROM clients
+             WHERE salon_id = $1 AND is_active = true
+               AND TRIM(phone_number) = $2
+               AND ($3::text IS NULL OR phone_country_code = $3)
+               AND ($4::uuid IS NULL OR id != $4)
+             LIMIT 1`,
+            [salonId, pn, pcc, excludeClientId ?? null]
+        );
+        return rows[0] || null;
+    },
+
     async findDuplicatesByPhone(phone_number: string, salonId: string): Promise<Client[]> {
         const { rows } = await pool.query(
             `SELECT * FROM clients
@@ -562,16 +664,7 @@ export const clientsRepository = {
         return rows as Client[];
     },
     // ── NEW: Smart Filter for campaigns ──────────────────────────────────────
-    async filterForCampaign(salonId: string, filters: {
-        birth_month?:         number;
-        birth_day_month?:     string;
-        genders?:              string[];
-        client_source?:       string;
-        service_category_id?: string;
-        joined_from?:         string;
-        joined_to?:           string;
-    }): Promise<{ id: string; full_name: string; phone: string }[]> {
-
+    _buildCampaignFilterSql(salonId: string, filters: CampaignFilterParams): { joinSql: string; where: string[]; params: any[] } {
         const where: string[] = [
             'c.salon_id = $1',
             'c.is_active = true',
@@ -580,19 +673,50 @@ export const clientsRepository = {
             'c.phone_country_code IS NOT NULL',
             "TRIM(c.phone_country_code) <> ''",
         ]
-        const params: any[]   = [salonId]
+        const params: any[] = [salonId]
+        const joins: string[] = []
 
-        let joinSql = ''
-        if (filters.service_category_id) {
-            params.push(filters.service_category_id)
-            joinSql = `
+        if (filters.service_category_ids && filters.service_category_ids.length > 0) {
+            params.push(filters.service_category_ids)
+            joins.push(`
                 JOIN appointments a ON a.client_id = c.id AND a.salon_id = $1
                 JOIN services s ON s.id = ANY(
                     SELECT (item->>'service_id')::uuid
                     FROM jsonb_array_elements(a.services) AS item
                 )
-            `
-            where.push(`s.category_id = $${params.length}`)
+            `)
+            where.push(`s.category_id = ANY($${params.length}::uuid[])`)
+        }
+
+        // Last-visit / new-vs-repetitive customer — shared computed join
+        if (filters.last_visit_from || filters.last_visit_to || filters.customer_type) {
+            joins.push(`
+                LEFT JOIN (
+                    SELECT client_id,
+                           MAX(scheduled_at) FILTER (WHERE status = 'completed') AS last_visit_at,
+                           COUNT(*)          FILTER (WHERE status = 'completed') AS completed_count
+                    FROM appointments
+                    WHERE salon_id = $1 AND deleted_at IS NULL
+                    GROUP BY client_id
+                ) av ON av.client_id = c.id
+            `)
+        }
+
+        // Total spend — clients.total_sales is never written anywhere in the codebase
+        // (dead column), so compute the real figure the same way Client History does.
+        // Excludes eWallet/membership-wallet contributions, same reasoning as lifetime_spend
+        // in clients.controller.ts — wallet-settled visits aren't new money for the salon.
+        if (filters.total_spend_min != null || filters.total_spend_max != null) {
+            joins.push(`
+                LEFT JOIN (
+                    SELECT client_id, COALESCE(SUM(
+                        GREATEST(0, paid_amount - COALESCE(ewallet_used, 0) - COALESCE(membership_wallet_used, 0))
+                    ), 0) AS total_spend
+                    FROM payments
+                    WHERE salon_id = $1 AND status IN ('completed', 'partial')
+                    GROUP BY client_id
+                ) ps ON ps.client_id = c.id
+            `)
         }
 
         if (filters.birth_month) {
@@ -604,10 +728,9 @@ export const clientsRepository = {
             where.push(`c.birthday_day_month = $${params.length}`)
         }
         if (filters.genders && filters.genders.length > 0) {
-     params.push(filters.genders.map((g: string) => g.toLowerCase()))
-    where.push(`LOWER(c.gender) = ANY($${params.length}::text[])`)
-}
-
+            params.push(filters.genders.map((g: string) => g.toLowerCase()))
+            where.push(`LOWER(c.gender) = ANY($${params.length}::text[])`)
+        }
         if (filters.client_source && filters.client_source !== 'all') {
             params.push(filters.client_source)
             where.push(`c.client_source = $${params.length}`)
@@ -620,12 +743,49 @@ export const clientsRepository = {
             params.push(filters.joined_to)
             where.push(`c.created_at::date <= $${params.length}::date`)
         }
+        if (filters.total_spend_min != null) {
+            params.push(filters.total_spend_min)
+            where.push(`COALESCE(ps.total_spend, 0) >= $${params.length}`)
+        }
+        if (filters.total_spend_max != null) {
+            params.push(filters.total_spend_max)
+            where.push(`COALESCE(ps.total_spend, 0) <= $${params.length}`)
+        }
+        if (filters.has_membership === true) {
+            where.push(`EXISTS (SELECT 1 FROM client_memberships cm WHERE cm.client_id = c.id AND LOWER(cm.status) = 'active')`)
+        } else if (filters.has_membership === false) {
+            where.push(`NOT EXISTS (SELECT 1 FROM client_memberships cm WHERE cm.client_id = c.id AND LOWER(cm.status) = 'active')`)
+        }
+        if (filters.has_package === true) {
+            where.push(`EXISTS (SELECT 1 FROM client_packages cp WHERE cp.client_id = c.id AND LOWER(cp.status) = 'active')`)
+        } else if (filters.has_package === false) {
+            where.push(`NOT EXISTS (SELECT 1 FROM client_packages cp WHERE cp.client_id = c.id AND LOWER(cp.status) = 'active')`)
+        }
+        if (filters.last_visit_from) {
+            params.push(filters.last_visit_from)
+            where.push(`av.last_visit_at::date >= $${params.length}::date`)
+        }
+        if (filters.last_visit_to) {
+            params.push(filters.last_visit_to)
+            where.push(`av.last_visit_at::date <= $${params.length}::date`)
+        }
+        if (filters.customer_type === 'new') {
+            where.push(`COALESCE(av.completed_count, 0) = 0`)
+        } else if (filters.customer_type === 'repetitive') {
+            where.push(`COALESCE(av.completed_count, 0) > 0`)
+        }
+
+        return { joinSql: joins.join('\n'), where, params }
+    },
+
+    async filterForCampaign(salonId: string, filters: CampaignFilterParams): Promise<{ id: string; full_name: string; phone: string }[]> {
+        const { joinSql, where, params } = this._buildCampaignFilterSql(salonId, filters)
 
         const { rows } = await pool.query(`
             SELECT DISTINCT
                 c.id,
                 c.full_name,
-                CASE 
+                CASE
                 WHEN c.phone_number LIKE '+%' THEN c.phone_number
                 ELSE CONCAT(COALESCE(c.phone_country_code, '+91'), c.phone_number)
                 END AS phone
@@ -638,63 +798,8 @@ export const clientsRepository = {
         return rows
     },
 
-    async countFilterForCampaign(salonId: string, filters: {
-        birth_month?:         number;
-        birth_day_month?:     string;
-        genders?:             string[];
-        client_source?:       string;
-        service_category_id?: string;
-        joined_from?:         string;
-        joined_to?:           string;
-    }): Promise<number> {
-
-        const where: string[] = [
-            'c.salon_id = $1',
-            'c.is_active = true',
-            'c.phone_number IS NOT NULL',
-            "TRIM(c.phone_number) <> ''",
-            'c.phone_country_code IS NOT NULL',
-            "TRIM(c.phone_country_code) <> ''",
-        ]
-        const params: any[]   = [salonId]
-
-        let joinSql = ''
-        if (filters.service_category_id) {
-            params.push(filters.service_category_id)
-            joinSql = `
-     JOIN appointments a ON a.client_id = c.id AND a.salon_id = $1
-    JOIN services s ON s.id = ANY(
-        SELECT (item->>'service_id')::uuid
-        FROM jsonb_array_elements(a.services) AS item
-    )
-`
-            where.push(`s.category_id = $${params.length}`)
-        }
-
-        if (filters.birth_month) {
-            params.push(filters.birth_month)
-            where.push(`EXTRACT(MONTH FROM TO_DATE(c.birthday_day_month, 'MM-DD')) = $${params.length}`)
-        }
-        if (filters.birth_day_month) {
-            params.push(filters.birth_day_month)
-            where.push(`c.birthday_day_month = $${params.length}`)
-        }
-        if (filters.genders && filters.genders.length > 0) {
-    params.push(filters.genders.map((g: string) => g.toLowerCase()))
-    where.push(`LOWER(c.gender) = ANY($${params.length}::text[])`)
-         }
-        if (filters.client_source && filters.client_source !== 'all') {
-            params.push(filters.client_source)
-            where.push(`c.client_source = $${params.length}`)
-        }
-        if (filters.joined_from) {
-            params.push(filters.joined_from)
-            where.push(`c.created_at::date >= $${params.length}::date`)
-        }
-        if (filters.joined_to) {
-            params.push(filters.joined_to)
-            where.push(`c.created_at::date <= $${params.length}::date`)
-        }
+    async countFilterForCampaign(salonId: string, filters: CampaignFilterParams): Promise<number> {
+        const { joinSql, where, params } = this._buildCampaignFilterSql(salonId, filters)
 
         const { rows } = await pool.query(`
             SELECT COUNT(DISTINCT c.id)::int AS total

@@ -5,6 +5,7 @@ import type {
   TodayAppointment,
   RevenueDataPoint,
   TopStaffMember,
+  StaffRevenueEntry,
   ServiceMixItem,
   DashboardService,
   DashboardAll,
@@ -29,6 +30,11 @@ export const salonDashboardService = {
   async getTopStaff(salonId: string): Promise<TopStaffMember[]> {
     if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR");
     return salonDashboardRepository.getTopStaff(salonId);
+  },
+
+  async getStaffRevenue(salonId: string, period?: string): Promise<StaffRevenueEntry[]> {
+    if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR");
+    return salonDashboardRepository.getStaffRevenue(salonId, period);
   },
 
   async getServiceMix(salonId: string): Promise<ServiceMixItem[]> {

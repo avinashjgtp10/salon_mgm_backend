@@ -39,11 +39,12 @@ const pool = new Pool({
   // that cloud DBs (Supabase/Neon/Render) silently kill, causing
   // "Connection terminated unexpectedly" on the next query.
   min: 0,
-  max: parseInt(process.env.DB_POOL_MAX || '10'),
+  max: parseInt(process.env.DB_POOL_MAX || '20'),
   // Idle connections are closed after 10s — well before cloud DB kills them
   idleTimeoutMillis: 10000,
-  // How long to wait for a new connection to be established
-  connectionTimeoutMillis: 10000,
+  // Raised from 10s to 20s — dashboard fires 6 parallel queries; under load
+  // the pool needs more headroom before giving up on a new connection.
+  connectionTimeoutMillis: 20000,
   // TCP keepalive: sends a heartbeat packet so the OS/network never
   // silently drops a connection that pg-pool still thinks is alive.
   keepAlive: true,
@@ -73,6 +74,30 @@ export default pool;
 setImmediate(() => {
   pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS login_count INTEGER DEFAULT 0`)
     .catch((err: any) => console.warn('⚠️  login_count column migration:', err.message));
+});
+
+// Add extra profile fields to salons table (safe, idempotent)
+setImmediate(() => {
+  pool.query(`
+    ALTER TABLE salons
+      ADD COLUMN IF NOT EXISTS address           TEXT,
+      ADD COLUMN IF NOT EXISTS city              TEXT,
+      ADD COLUMN IF NOT EXISTS state             TEXT,
+      ADD COLUMN IF NOT EXISTS country           TEXT,
+      ADD COLUMN IF NOT EXISTS pincode           TEXT,
+      ADD COLUMN IF NOT EXISTS timezone          TEXT DEFAULT 'Asia/Kolkata',
+      ADD COLUMN IF NOT EXISTS currency          TEXT DEFAULT 'INR',
+      ADD COLUMN IF NOT EXISTS business_category TEXT
+  `).catch((err: any) => console.warn('⚠️  salons extra fields migration:', err.message));
+});
+
+// Add owner-configurable Half Day Rule fields to attendance_settings (safe, idempotent)
+setImmediate(() => {
+  pool.query(`
+    ALTER TABLE attendance_settings
+      ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT false,
+      ADD COLUMN IF NOT EXISTS threshold_hours NUMERIC(4,2) NOT NULL DEFAULT 2.0
+  `).catch((err: any) => console.warn('⚠️  attendance_settings half-day-rule migration:', err.message));
 });
 
 // Create support_tickets table (safe, idempotent)

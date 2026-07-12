@@ -11,8 +11,8 @@ export const validateCreateMembership = (req: Request, _res: Response, next: Nex
       throw new AppError(400, "name is required", "VALIDATION_ERROR");
     if (!Array.isArray(includedServices))
       throw new AppError(400, "includedServices must be an array", "VALIDATION_ERROR");
-    if (price === undefined || isNaN(Number(price)))
-      throw new AppError(400, "price is required and must be a number", "VALIDATION_ERROR");
+    if (price === undefined || isNaN(Number(price)) || Number(price) < 0)
+      throw new AppError(400, "price is required and must be a non-negative number", "VALIDATION_ERROR");
     if (!sessionType)
       throw new AppError(400, "sessionType is required", "VALIDATION_ERROR");
     if (!validFor)
@@ -28,8 +28,15 @@ export const validateCreateMembership = (req: Request, _res: Response, next: Nex
 };
 
 export const validateUpdateMembership = (
-  _req: Request, _res: Response, next: NextFunction
-) => next();
+  req: Request, _res: Response, next: NextFunction
+) => {
+  try {
+    const { price } = req.body;
+    if (price !== undefined && (isNaN(Number(price)) || Number(price) < 0))
+      throw new AppError(400, "price must be a non-negative number", "VALIDATION_ERROR");
+    return next();
+  } catch (e) { return next(e); }
+};
 
 export const validateMembershipsListQuery = (
   req: Request, _res: Response, next: NextFunction

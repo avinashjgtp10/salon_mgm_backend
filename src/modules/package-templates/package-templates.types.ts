@@ -11,6 +11,9 @@ export interface PackageTemplate {
   salonId:        string;
   name:           string;
   expiryMonths:   number | null;
+  /** Exact day-count for the picked expiry date — the precise source of truth;
+   *  expiryMonths is kept only as a rounded, human-friendly label. */
+  expiryDays:     number | null;
   neverExpires:   boolean;
   basePrice:      number;
   gstPercentage:  number;
@@ -23,6 +26,7 @@ export interface PackageTemplate {
 export interface CreatePackageTemplateDTO {
   name:           string;
   expiryMonths?:  number | null;
+  expiryDays?:    number | null;
   neverExpires?:  boolean;
   basePrice:      number;
   gstPercentage?: number;

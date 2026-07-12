@@ -10,38 +10,42 @@ import {
   AutomationTemplate,
   ListAutomationLogsFilters,
   UpdateSalonAutomationSettingBody,
+  PURCHASE_EVENTS,
 } from './whatsapp-automation.types'
+import { DEFAULT_PURCHASE_TEMPLATES, isPurchaseEventType } from './wa-automation-defaults'
 
 export const whatsappAutomationRepository = {
 
-  // ── Platform WA Credentials ───────────────────────────────────────────────
-  // Reads from ENV — single set of credentials for entire SalonOx platform
-  getPlatformConfig() {
-    const phoneNumberId = process.env.WA_PHONE_NUMBER_ID
-    const accessToken   = process.env.WA_ACCESS_TOKEN
-    const wabaId        = process.env.WA_WABA_ID
-
-    if (!phoneNumberId || !accessToken || !wabaId) {
-      throw new Error('WhatsApp platform credentials missing in environment variables (WA_PHONE_NUMBER_ID, WA_ACCESS_TOKEN, WA_WABA_ID)')
-    }
-
-    return { phoneNumberId, accessToken, wabaId }
-  },
-
   // ── Global Template Config ────────────────────────────────────────────────
-  // One row per event type — same for all salons
-  async findTemplate(eventType: AutomationEventType): Promise<AutomationTemplate | null> {
+  // Legacy events (salon_id IS NULL): one row per event type, same for all
+  // salons. Purchase events: each salon owns its own row, submitted to Meta
+  // under their own WABA — only an APPROVED salon row is ever sent from,
+  // never a fallback to a global row (a template approved under one salon's
+  // WABA can't be used to send from another salon's phone number).
+  async findTemplate(eventType: AutomationEventType, salonId?: string): Promise<AutomationTemplate | null> {
+    if (salonId) {
+      const { rows } = await pool.query(
+        `SELECT * FROM wa_automation_templates
+         WHERE event_type = $1 AND salon_id = $2 AND is_active = TRUE AND status = 'APPROVED'`,
+        [eventType, salonId]
+      )
+      if (rows[0]) return rows[0]
+      if (PURCHASE_EVENTS.includes(eventType)) return null
+    }
     const { rows } = await pool.query(
       `SELECT * FROM wa_automation_templates
-       WHERE event_type = $1 AND is_active = TRUE`,
+       WHERE event_type = $1 AND salon_id IS NULL AND is_active = TRUE`,
       [eventType]
     )
     return rows[0] ?? null
   },
 
+  // Legacy global rows only (salon_id IS NULL) — admin-managed reminders/
+  // campaigns. Purchase-event salon rows are managed via the methods below,
+  // never through these admin endpoints, now that event_type alone isn't unique.
   async findAllTemplates(): Promise<AutomationTemplate[]> {
     const { rows } = await pool.query(
-      `SELECT * FROM wa_automation_templates ORDER BY event_type`
+      `SELECT * FROM wa_automation_templates WHERE salon_id IS NULL ORDER BY event_type`
     )
     return rows
   },
@@ -50,7 +54,7 @@ export const whatsappAutomationRepository = {
     const { rows } = await pool.query(
       `UPDATE wa_automation_templates
        SET template_name = $1, language = $2, updated_at = NOW()
-       WHERE event_type = $3
+       WHERE event_type = $3 AND salon_id IS NULL
        RETURNING *`,
       [templateName, language, eventType]
     )
@@ -62,11 +66,100 @@ export const whatsappAutomationRepository = {
     const { rows } = await pool.query(
       `UPDATE wa_automation_templates
        SET is_active = $1, updated_at = NOW()
-       WHERE event_type = $2
+       WHERE event_type = $2 AND salon_id IS NULL
        RETURNING *`,
       [isActive, eventType]
     )
     if (!rows[0]) throw new Error(`AutomationTemplate not found for eventType=${eventType}`)
+    return rows[0]
+  },
+
+  // ── Salon Purchase Templates (salon-owner editable, Meta-submitted) ────────
+  // One row per (salon_id, event_type) for the 4 PURCHASE_EVENTS — lazily
+  // seeded from DEFAULT_PURCHASE_TEMPLATES on first access.
+  async findOrSeedSalonPurchaseTemplate(salonId: string, eventType: AutomationEventType): Promise<AutomationTemplate> {
+    const { rows } = await pool.query(
+      `SELECT * FROM wa_automation_templates WHERE salon_id = $1 AND event_type = $2`,
+      [salonId, eventType]
+    )
+    if (rows[0]) return rows[0]
+    if (!isPurchaseEventType(eventType)) throw new Error(`Not a purchase event type: ${eventType}`)
+
+    const defaults = DEFAULT_PURCHASE_TEMPLATES[eventType]
+    const { rows: inserted } = await pool.query(
+      `INSERT INTO wa_automation_templates
+         (salon_id, event_type, template_name, language, is_active, status, category, body_text)
+       VALUES ($1, $2, $3, $4, TRUE, 'DRAFT', $5, $6)
+       ON CONFLICT (salon_id, event_type) WHERE salon_id IS NOT NULL DO NOTHING
+       RETURNING *`,
+      [salonId, eventType, `${eventType}_draft`, defaults.language, defaults.category, defaults.bodyText]
+    )
+    if (inserted[0]) return inserted[0]
+
+    // Lost a race with a concurrent request that seeded the row first.
+    const { rows: retry } = await pool.query(
+      `SELECT * FROM wa_automation_templates WHERE salon_id = $1 AND event_type = $2`,
+      [salonId, eventType]
+    )
+    return retry[0]
+  },
+
+  async findAllSalonPurchaseTemplates(salonId: string): Promise<AutomationTemplate[]> {
+    const results: AutomationTemplate[] = []
+    for (const eventType of PURCHASE_EVENTS) {
+      results.push(await whatsappAutomationRepository.findOrSeedSalonPurchaseTemplate(salonId, eventType))
+    }
+    return results
+  },
+
+  async upsertDraftTemplate(salonId: string, eventType: AutomationEventType, bodyText: string): Promise<AutomationTemplate> {
+    await whatsappAutomationRepository.findOrSeedSalonPurchaseTemplate(salonId, eventType)
+    const { rows } = await pool.query(
+      `UPDATE wa_automation_templates
+       SET body_text = $1, updated_at = NOW()
+       WHERE salon_id = $2 AND event_type = $3 AND status IN ('DRAFT', 'REJECTED')
+       RETURNING *`,
+      [bodyText, salonId, eventType]
+    )
+    if (!rows[0]) throw new Error('Template wording can only be edited while in DRAFT or REJECTED status')
+    return rows[0]
+  },
+
+  async markSubmitted(
+    salonId: string,
+    eventType: AutomationEventType,
+    templateName: string,
+    metaTemplateId: string | undefined,
+    status: 'PENDING' | 'APPROVED'
+  ): Promise<AutomationTemplate> {
+    const { rows } = await pool.query(
+      `UPDATE wa_automation_templates
+       SET template_name = $1, meta_template_id = $2, status = $3, rejection_reason = NULL, updated_at = NOW()
+       WHERE salon_id = $4 AND event_type = $5
+       RETURNING *`,
+      [templateName, metaTemplateId ?? null, status, salonId, eventType]
+    )
+    if (!rows[0]) throw new Error(`Salon template not found for eventType=${eventType}`)
+    return rows[0]
+  },
+
+  async updateSyncedStatus(
+    salonId: string,
+    eventType: AutomationEventType,
+    status: 'PENDING' | 'APPROVED' | 'REJECTED',
+    rejectionReason: string | null
+  ): Promise<AutomationTemplate> {
+    const { rows } = await pool.query(
+      `UPDATE wa_automation_templates
+       SET status = $1::varchar,
+           rejection_reason = $2,
+           approved_at = CASE WHEN $1::varchar = 'APPROVED' THEN NOW() ELSE approved_at END,
+           updated_at = NOW()
+       WHERE salon_id = $3 AND event_type = $4
+       RETURNING *`,
+      [status, rejectionReason, salonId, eventType]
+    )
+    if (!rows[0]) throw new Error(`Salon template not found for eventType=${eventType}`)
     return rows[0]
   },
 
@@ -314,6 +407,7 @@ export const whatsappAutomationRepository = {
        LEFT JOIN clients c ON c.id = a.client_id
        LEFT JOIN salons  s ON s.id = a.salon_id
        WHERE a.status IN ('booked','confirmed')
+         AND a.deleted_at IS NULL
          AND a.scheduled_at BETWEEN NOW() + INTERVAL '23 hours 30 minutes'
                                 AND NOW() + INTERVAL '24 hours 30 minutes'
          AND c.phone_number           IS NOT NULL
@@ -324,6 +418,85 @@ export const whatsappAutomationRepository = {
              AND l.event_type   = 'appointment_reminder_24h'
              AND l.status NOT IN ('FAILED','SKIPPED')
          )`
+    )
+    return rows
+  },
+
+  // Appointments in a tight window around exactly 1 hour from now
+  async getAppointmentsForReminder1h(): Promise<Array<{
+    appointment_id:         string
+    salon_id:               string
+    client_id:              string | null
+    phone_number:           string | null
+    phone_country_code:     string | null
+    client_name:            string | null
+    salon_name:             string | null
+    scheduled_at:           string
+    service_name:           string | null
+    whatsapp_notifications: boolean
+  }>> {
+    const { rows } = await pool.query(
+      `SELECT
+         a.id                    AS appointment_id,
+         a.salon_id,
+         a.client_id,
+         c.phone_number,
+         c.phone_country_code,
+         c.full_name             AS client_name,
+         s.business_name AS salon_name,
+         a.scheduled_at,
+         (a.services->0->>'name') AS service_name,
+         c.whatsapp_notifications
+       FROM appointments a
+       LEFT JOIN clients c ON c.id = a.client_id
+       LEFT JOIN salons  s ON s.id = a.salon_id
+       WHERE a.status IN ('booked','confirmed')
+         AND a.deleted_at IS NULL
+         AND a.scheduled_at BETWEEN NOW() + INTERVAL '50 minutes'
+                                AND NOW() + INTERVAL '70 minutes'
+         AND c.phone_number           IS NOT NULL
+         AND c.whatsapp_notifications = TRUE
+         AND NOT EXISTS (
+           SELECT 1 FROM wa_automation_logs l
+           WHERE l.reference_id = a.id::text
+             AND l.event_type   = 'appointment_reminder_1h'
+             AND l.status NOT IN ('FAILED','SKIPPED')
+         )`
+    )
+    return rows
+  },
+
+  // Packages expiring in exactly 7 days (IST) — mirrors getMembershipsExpiringIn7Days
+  async getPackagesExpiringIn7Days(): Promise<Array<{
+    package_id:             string
+    client_id:              string
+    salon_id:               string
+    phone_number:           string | null
+    phone_country_code:     string | null
+    client_name:            string | null
+    package_name:           string
+    expiry_date:            string
+    whatsapp_notifications: boolean
+  }>> {
+    const { rows } = await pool.query(
+      `SELECT
+         cp.id               AS package_id,
+         cp.client_id,
+         cp.salon_id,
+         cp.mobile           AS phone_number,
+         c.phone_country_code,
+         cp.client_name,
+         cp.package_name,
+         cp.expiry_date,
+         c.whatsapp_notifications
+       FROM client_packages cp
+       LEFT JOIN clients c ON c.id = cp.client_id
+       WHERE cp.status       = 'Active'
+         AND cp.expiry_date IS NOT NULL
+         AND (cp.expiry_date)::date
+             = ((NOW() AT TIME ZONE 'Asia/Kolkata') + INTERVAL '7 days')::date
+         AND cp.mobile                IS NOT NULL
+         AND c.whatsapp_notifications = TRUE`
     )
     return rows
   },
@@ -463,6 +636,7 @@ export const whatsappAutomationRepository = {
            WHERE a.client_id = c.id
              AND a.salon_id  = c.salon_id
              AND a.status    = 'completed'
+             AND a.deleted_at IS NULL
          ) BETWEEN
            NOW() - ($1 || ' days')::INTERVAL - INTERVAL '1 day'
            AND

@@ -34,6 +34,12 @@ export type Client = {
     reviews_avg: string | null;
     reviews_count: number;
 
+    // ── Refer & Earn ──────────────────────────────────────────────────────────
+    referral_code: string | null;               // this client's own permanent referral code
+    referral_reward_status: "pending" | "completed" | null; // status of the REFERRER's reward
+    referral_referee_rewarded: boolean;          // whether THIS client's own welcome reward has been granted
+    ewallet_balance: string;                     // pg decimal returns string
+
     is_active: boolean;
     block_reason: string | null;
 
@@ -44,6 +50,8 @@ export type Client = {
     email_marketing: boolean;
     sms_marketing: boolean;
     whatsapp_marketing: boolean;
+
+    reward_points_balance: string; // pg decimal returns string
 
     created_at: string;
     updated_at: string;
@@ -82,6 +90,8 @@ export type ClientEmergencyContact = {
 export type ClientWithRelations = Client & {
     addresses?: ClientAddress[];
     emergency_contacts?: ClientEmergencyContact[];
+    total_referral_earnings?: number;
+    total_successful_referrals?: number;
 };
 
 export type CreateClientAddressInput = Omit<ClientAddress, "id" | "client_id" | "created_at" | "updated_at">;
@@ -110,6 +120,10 @@ export type CreateClientBody = {
 
     client_source?: string | null;
     referred_by_client_id?: string | null;
+    // Referral code of the client who referred this one — only meaningful at
+    // creation time (a client's first visit); resolved to referred_by_client_id
+    // by the service layer. Never persisted directly.
+    referred_by_code?: string | null;
 
     preferred_language?: string | null;
     occupation?: string | null;
@@ -179,4 +193,22 @@ export type ClientsMergeBody = {
     target_client_id: string;
     source_client_ids: string[];
     strategy?: MergeStrategy;
+};
+
+// ── Smart Filter (campaign contact targeting) ─────────────────────────────────
+export type CampaignFilterParams = {
+    birth_month?:          number;
+    birth_day_month?:      string;
+    genders?:              string[];
+    client_source?:        string;
+    service_category_ids?: string[];
+    joined_from?:          string;
+    joined_to?:            string;
+    total_spend_min?:      number;
+    total_spend_max?:      number;
+    has_membership?:       boolean;
+    has_package?:          boolean;
+    last_visit_from?:      string;
+    last_visit_to?:        string;
+    customer_type?:        "new" | "repetitive";
 };

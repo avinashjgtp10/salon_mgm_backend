@@ -119,14 +119,16 @@ export const salesRepository = {
                 `INSERT INTO sales (
                     salon_id, client_id, appointment_id, staff_id, status, subtotal,
                     discount_amount, tip_amount, tax_amount, total_amount, payment_method,
-                    payment_reference, notes, invoice_number, created_by, created_at
-                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
+                    payment_reference, notes, invoice_number, created_by, created_at,
+                    coupon_code, discount_percent, discount_type
+                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING *`,
                 [
                     data.salon_id, data.client_id || null, data.appointment_id || null, data.staff_id || null,
                     data.status || 'draft', subtotal.toString(), data.discount_amount || '0',
                     data.tip_amount || '0', data.tax_amount || '0', total.toString(),
-                    data.payment_method || null, data.payment_reference || null, data.notes || null,
+                    data.payment_method ? data.payment_method.toLowerCase() : null, data.payment_reference || null, data.notes || null,
                     invoiceNumber, createdBy, createdAtVal,
+                    data.coupon_code || null, data.discount_percent || null, data.discount_type || null,
                 ]
             );
             const sale = saleResult.rows[0];
@@ -193,6 +195,8 @@ export const salesRepository = {
                         setParts.push(`${key} = $${idx++}`);
                         const val = key === 'created_at'
                             ? parseCreatedAt((salePatch as any)[key])
+                            : key === 'payment_method' && typeof (salePatch as any)[key] === 'string'
+                            ? (salePatch as any)[key].toLowerCase()
                             : (salePatch as any)[key];
                         values.push(val);
                     }
@@ -221,6 +225,8 @@ export const salesRepository = {
                 setParts.push(`${String(k)} = $${i + 1}`);
                 const val = k === 'created_at'
                     ? parseCreatedAt((salePatch as any)[k])
+                    : k === 'payment_method' && typeof (salePatch as any)[k] === 'string'
+                    ? (salePatch as any)[k].toLowerCase()
                     : (salePatch as any)[k];
                 values.push(val);
             });
@@ -244,7 +250,7 @@ export const salesRepository = {
     async checkout(id: string, params: { payment_method: string; payment_reference?: string; status?: "completed" }): Promise<Sale> {
         const { rows } = await safeQuery(() => pool.query(
             `UPDATE sales SET payment_method = $2, payment_reference = $3, status = $4, updated_at = NOW() WHERE id = $1 RETURNING *`,
-            [id, params.payment_method, params.payment_reference || null, params.status || 'completed']
+            [id, params.payment_method?.toLowerCase() ?? null, params.payment_reference || null, params.status || 'completed']
         ));
         return rows[0];
     },

@@ -87,6 +87,26 @@ export const appointmentsController = {
         } catch (err) { return next(err); }
     },
 
+    async serviceCheckIn(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const userId = req.user?.userId;
+            const id = String(req.params.id || "").trim();
+            if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+            const appointment = await appointmentsService.serviceCheckIn(id);
+            return sendSuccess(res, 200, appointment, "Service started");
+        } catch (err) { return next(err); }
+    },
+
+    async serviceCheckOut(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const userId = req.user?.userId;
+            const id = String(req.params.id || "").trim();
+            if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+            const appointment = await appointmentsService.serviceCheckOut(id);
+            return sendSuccess(res, 200, appointment, "Service ended");
+        } catch (err) { return next(err); }
+    },
+
     async cancel(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const userId = req.user?.userId;

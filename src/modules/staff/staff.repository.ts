@@ -56,7 +56,29 @@ export const staffRepository = {
 
         const [{ rows: data }, { rows: countRows }] = await Promise.all([
             pool.query(
-                `SELECT * FROM staff WHERE ${where} ORDER BY ${safeSortBy} ${safeSortOrder} LIMIT $${idx} OFFSET $${idx + 1}`,
+                `SELECT s.*, bt_agg.blocked_times
+                 FROM (
+                   SELECT * FROM staff
+                   WHERE ${where}
+                   ORDER BY ${safeSortBy} ${safeSortOrder}
+                   LIMIT $${idx} OFFSET $${idx + 1}
+                 ) s
+                 LEFT JOIN LATERAL (
+                   SELECT COALESCE(
+                     json_agg(
+                       json_build_object(
+                         'id',         bt.id,
+                         'staff_id',   bt.staff_id,
+                         'date',       to_char(bt.date,       'YYYY-MM-DD'),
+                         'start_time', to_char(bt.start_time, 'HH24:MI'),
+                         'end_time',   to_char(bt.end_time,   'HH24:MI'),
+                         'reason',     bt.reason
+                       ) ORDER BY bt.date, bt.start_time
+                     ) FILTER (WHERE bt.id IS NOT NULL),
+                     '[]'::json
+                   ) AS blocked_times
+                   FROM blocked_times bt WHERE bt.staff_id = s.id
+                 ) bt_agg ON true`,
                 [...values, limit, offset]
             ),
             pool.query(`SELECT COUNT(*)::int AS total FROM staff WHERE ${where}`, values),

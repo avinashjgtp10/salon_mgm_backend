@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import multer from 'multer';
 import logger from '../config/logger';
 
 export class AppError extends Error {
@@ -36,6 +37,18 @@ export const errorHandler = (
         message: err.message,
         details: err.details,
       },
+    });
+  }
+
+  // Multer file-upload errors (e.g. file exceeds the configured size limit)
+  if (err instanceof multer.MulterError) {
+    logger.warn(`MulterError: ${err.message}`, { code: err.code, url: req.url, method: req.method });
+    const message = err.code === 'LIMIT_FILE_SIZE'
+      ? 'File is too large.'
+      : err.message;
+    return res.status(400).json({
+      success: false,
+      error: { code: err.code, message },
     });
   }
 

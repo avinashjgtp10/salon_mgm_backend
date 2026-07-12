@@ -10,6 +10,11 @@ import { appointmentsRepository } from "../appointments/appointments.repository"
 import { staffRepository } from "../staff/staff.repository";
 import { servicesRepository } from "../services/services.repository";
 import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
+import { notificationsService } from "../notifications/notifications.service";
+import { membershipsRepository } from "../memberships/memberships.repository";
+import { clientMembershipsService } from "../client-memberships/client-memberships.service";
+import { sendPurchaseReceipt } from "./receipt-send.helper";
+import { notifyAppointmentCompleted } from "../appointments/appointment-completed.helper";
 
 export const salesService = {
 
@@ -28,6 +33,14 @@ export const salesService = {
         // Fetch enriched sale (with client_phone, client_phone_code, salon_name)
         const sale  = (await salesRepository.findById(rawSale.id)) ?? rawSale;
         const items = await salesRepository.findItemsBySaleId(sale.id);
+
+        // Fire notification (fire-and-forget)
+        notificationsService.create({
+            salon_id: sale.salon_id,
+            type:     "payment",
+            title:    "New Sale Created",
+            body:     `${(sale as any).client_name ?? "Walk-in"} — ₹${sale.total_amount ?? 0}`,
+        }).catch(() => {});
 
         // ── WhatsApp Automation: Invoice Generated ────────────────────────────
         // Only fire when there's a real client (not walk-in) and it's a proper sale
@@ -137,6 +150,8 @@ export const salesService = {
         if (sale.appointment_id) {
             try {
                 await appointmentsRepository.updateStatus(sale.appointment_id, "completed");
+                // ── WhatsApp Automation: Thank You + Review Request (fire-and-forget) ──
+                notifyAppointmentCompleted(sale.appointment_id).catch(() => {});
             } catch (error) {
                 logger.error("Failed to update appointment status after checkout:", { appointmentId: sale.appointment_id, error })
             }
@@ -151,22 +166,85 @@ export const salesService = {
             items,
         }).catch(() => {}); // already safe internally, double-guard here
 
-        // ── WhatsApp Automation: Payment Received ─────────────────────────────
+        // ── WhatsApp Automation: Purchase confirmation (per item type) ─────────
+        // service_purchased / product_purchased fire once each if that item type
+        // is present — a mixed sale (e.g. one service + one product) intentionally
+        // sends one text per type, not a single combined message. Membership items
+        // are NOT fired here — that's centralized in clientMembershipsService
+        // .autoCreateFromPayment() below, the single call site every membership
+        // purchase path (QuickSale, calendar) already funnels through.
         if (sale.client_id && (sale as any).client_phone) {
-            whatsappAutomationService.trigger({
-                salonId:       sale.salon_id,
-                eventType:     "payment_received",
-                clientId:      sale.client_id,
-                phone:         (sale as any).client_phone,
-                countryCode:   (sale as any).client_phone_code ?? null,
-                variables: {
-                    "1": (sale as any).client_name ?? "Valued Customer",
-                    "2": String(sale.total_amount  ?? "0"),
-                    "3": sale.id.slice(0, 8).toUpperCase(),
-                },
-                referenceId:   sale.id,
-                referenceType: "invoice",
+            const presentTypes = new Set(items.map((i) => i.item_type));
+            const purchaseEvents: Array<{ eventType: "service_purchased" | "product_purchased"; itemType: "service" | "product" }> = [
+                { eventType: "service_purchased", itemType: "service" },
+                { eventType: "product_purchased", itemType: "product" },
+            ];
+
+            for (const { eventType, itemType } of purchaseEvents) {
+                if (!presentTypes.has(itemType)) continue;
+                const itemName = items.find((i) => i.item_type === itemType)?.name ?? "your purchase";
+                whatsappAutomationService.trigger({
+                    salonId:       sale.salon_id,
+                    eventType,
+                    clientId:      sale.client_id,
+                    phone:         (sale as any).client_phone,
+                    countryCode:   (sale as any).client_phone_code ?? null,
+                    variables: {
+                        "1": (sale as any).client_name ?? "Valued Customer",
+                        "2": (sale as any).salon_name   ?? "our salon",
+                        "3": itemName,
+                    },
+                    referenceId:   sale.id,
+                    referenceType: "invoice",
+                }).catch(() => {});
+            }
+
+            // PDF receipt as a WhatsApp document attachment — best-effort, only
+            // deliverable within 24h of the customer's last message. Failure here
+            // is expected outside that window and never blocks the triggers above.
+            sendPurchaseReceipt({
+                salonId:     sale.salon_id,
+                phone:       (sale as any).client_phone,
+                countryCode: (sale as any).client_phone_code ?? null,
+                clientId:    sale.client_id,
+                clientName:  (sale as any).client_name ?? "Valued Customer",
+                sale,
+                items,
+                appointment: null,
+                paidAmount:  body.amount_paid,
+                dueAmount:   Math.max(0, parseFloat(sale.total_amount) - body.amount_paid),
+                couponCode:  null,
             }).catch(() => {});
+        }
+
+        // ── Auto-create client_memberships for membership items in this sale ────
+        // Handles the QuickSale flow where there is no appointment
+        if (sale.client_id) {
+            const membershipItems = items.filter(
+                (i) => i.item_type === "membership" && i.item_id,
+            );
+            for (const item of membershipItems) {
+                const membershipId = item.item_id!;
+                (async () => {
+                    try {
+                        const mem = await membershipsRepository.findById(membershipId, sale.salon_id);
+                        if (!mem) return;
+                        const totalSessions = mem.sessionType === "limited" ? (mem.numberOfSessions ?? 0) : 0;
+                        const pricePaid = parseFloat(item.unit_price) * (item.quantity ?? 1);
+                        await clientMembershipsService.autoCreateFromPayment(
+                            sale.salon_id,
+                            sale.client_id!,
+                            membershipId,
+                            item.name,
+                            totalSessions,
+                            pricePaid,
+                            mem.colour,
+                        );
+                    } catch (err: any) {
+                        logger.warn("[sales/checkout] membership auto-create failed:", err?.message ?? err);
+                    }
+                })();
+            }
         }
 
         return sale;

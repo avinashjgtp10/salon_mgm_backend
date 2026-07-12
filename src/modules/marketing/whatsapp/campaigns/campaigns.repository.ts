@@ -98,6 +98,15 @@ export const campaignsRepository = {
     return rows.map(r => r.id)
   },
 
+  // ── Full original contact list for resend — includes everyone regardless of status ──
+  async getAllContactsForResend(campaignId: string): Promise<Array<{ phone: string; name: string | null; variables: Record<string, any> }>> {
+    const { rows } = await pool.query(
+      `SELECT phone, name, variables FROM wa_campaign_contacts WHERE campaign_id = $1`,
+      [campaignId]
+    )
+    return rows.map(r => ({ phone: r.phone, name: r.name, variables: r.variables ?? {} }))
+  },
+
   async getPendingContactIds(campaignId: string): Promise<string[]> {
     const { rows } = await pool.query(
       `SELECT id FROM wa_campaign_contacts

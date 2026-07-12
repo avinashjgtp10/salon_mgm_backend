@@ -5,7 +5,6 @@ import { AppError } from "../../middleware/error.middleware";
 const isNonEmptyString      = (v: unknown): v is string => typeof v === "string" && v.trim().length > 0;
 const isOptionalString      = (v: unknown) => v === undefined || typeof v === "string";
 const isOptionalBool        = (v: unknown) => v === undefined || typeof v === "boolean";
-const isOptionalNumber      = (v: unknown) => v === undefined || (typeof v === "number" && Number.isFinite(v));
 const isOptionalInt         = (v: unknown) => v === undefined || (typeof v === "number" && Number.isInteger(v));
 const isOptionalNonNeg      = (v: unknown) => v === undefined || (typeof v === "number" && Number.isFinite(v) && v >= 0);
 const isOptionalStringArray = (v: unknown): v is string[] | undefined =>
@@ -33,7 +32,7 @@ export const validateCreateService = (req: Request, _res: Response, next: NextFu
     if (!isOptionalString(b.treatment_type)) throw new AppError(400, "treatment_type must be a string", "VALIDATION_ERROR");
     if (!isOptionalString(b.description))    throw new AppError(400, "description must be a string", "VALIDATION_ERROR");
     if (!isEnum(b.price_type, ["fixed", "from", "free"])) throw new AppError(400, "price_type must be: fixed | from | free", "VALIDATION_ERROR");
-    if (!isOptionalNumber(b.price))          throw new AppError(400, "price must be a number", "VALIDATION_ERROR");
+    if (!isOptionalNonNeg(b.price))          throw new AppError(400, "price must be a non-negative number", "VALIDATION_ERROR");
     if (!isOptionalInt(b.duration))          throw new AppError(400, "duration must be an integer (minutes)", "VALIDATION_ERROR");
     if (!isOptionalBool(b.online_booking))   throw new AppError(400, "online_booking must be a boolean", "VALIDATION_ERROR");
     if (!isOptionalBool(b.commission_enabled)) throw new AppError(400, "commission_enabled must be a boolean", "VALIDATION_ERROR");
@@ -51,7 +50,7 @@ export const validateUpdateService = (req: Request, _res: Response, next: NextFu
     if (!isOptionalString(b.treatment_type)) throw new AppError(400, "treatment_type must be a string", "VALIDATION_ERROR");
     if (!isOptionalString(b.description))    throw new AppError(400, "description must be a string", "VALIDATION_ERROR");
     if (!isEnum(b.price_type, ["fixed", "from", "free"])) throw new AppError(400, "price_type must be: fixed | from | free", "VALIDATION_ERROR");
-    if (!isOptionalNumber(b.price))          throw new AppError(400, "price must be a number", "VALIDATION_ERROR");
+    if (!isOptionalNonNeg(b.price))          throw new AppError(400, "price must be a non-negative number", "VALIDATION_ERROR");
     if (!isOptionalInt(b.duration))          throw new AppError(400, "duration must be an integer", "VALIDATION_ERROR");
     if (!isOptionalBool(b.online_booking))   throw new AppError(400, "online_booking must be a boolean", "VALIDATION_ERROR");
     if (!isOptionalBool(b.commission_enabled)) throw new AppError(400, "commission_enabled must be a boolean", "VALIDATION_ERROR");
@@ -91,7 +90,7 @@ export const validateCreateAddOnOption = (req: Request, _res: Response, next: Ne
     const b = req.body;
     if (!isNonEmptyString(b.name))             throw new AppError(400, "name is required", "VALIDATION_ERROR");
     if (!isOptionalString(b.description))      throw new AppError(400, "description must be a string", "VALIDATION_ERROR");
-    if (!isOptionalNumber(b.additional_price)) throw new AppError(400, "additional_price must be a number", "VALIDATION_ERROR");
+    if (!isOptionalNonNeg(b.additional_price)) throw new AppError(400, "additional_price must be a non-negative number", "VALIDATION_ERROR");
     if (!isOptionalInt(b.additional_duration)) throw new AppError(400, "additional_duration must be an integer", "VALIDATION_ERROR");
     return next();
   } catch (err) { return next(err); }
@@ -102,8 +101,27 @@ export const validateUpdateAddOnOption = (req: Request, _res: Response, next: Ne
     const b = req.body;
     if (b.name !== undefined && !isNonEmptyString(b.name)) throw new AppError(400, "name must be a non-empty string", "VALIDATION_ERROR");
     if (!isOptionalString(b.description))      throw new AppError(400, "description must be a string", "VALIDATION_ERROR");
-    if (!isOptionalNumber(b.additional_price)) throw new AppError(400, "additional_price must be a number", "VALIDATION_ERROR");
+    if (!isOptionalNonNeg(b.additional_price)) throw new AppError(400, "additional_price must be a non-negative number", "VALIDATION_ERROR");
     if (!isOptionalInt(b.additional_duration)) throw new AppError(400, "additional_duration must be an integer", "VALIDATION_ERROR");
+    return next();
+  } catch (err) { return next(err); }
+};
+
+export const validateCreateConsultationForm = (req: Request, _res: Response, next: NextFunction) => {
+  try {
+    const b = req.body;
+    if (!isNonEmptyString(b.name)) throw new AppError(400, "name is required", "VALIDATION_ERROR");
+    return next();
+  } catch (err) { return next(err); }
+};
+
+export const validateUpdateConsultationForm = (req: Request, _res: Response, next: NextFunction) => {
+  try {
+    const b = req.body;
+    if (b.name !== undefined && !isNonEmptyString(b.name)) throw new AppError(400, "name must be a non-empty string", "VALIDATION_ERROR");
+    if (!isOptionalBool(b.is_selected)) throw new AppError(400, "is_selected must be a boolean", "VALIDATION_ERROR");
+    if (b.values !== undefined && b.values !== null && (typeof b.values !== "object" || Array.isArray(b.values)))
+      throw new AppError(400, "values must be an object", "VALIDATION_ERROR");
     return next();
   } catch (err) { return next(err); }
 };

@@ -8,7 +8,7 @@ import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { clientsService } from "./clients.service";
 import { clientsRepository } from "./clients.repository";
-import { ClientsListQuery, CreateClientBody, UpdateClientBody } from "./clients.types";
+import { ClientsListQuery, CreateClientBody, UpdateClientBody, CampaignFilterParams } from "./clients.types";
 import pool from "../../config/database";
 
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string } };
@@ -285,22 +285,40 @@ export const clientsController = {
             const salonId = getSalonId(req);
             const {
                 birth_month, birth_day_month, gender,
-                service_category_id, preview,
+                service_category_ids, preview,
                 client_source, joined_from, joined_to,
+                total_spend_min, total_spend_max,
+                has_membership, has_package,
+                last_visit_from, last_visit_to,
+                customer_type,
             } = req.query;
 
             const genders = gender
                 ? (gender as string).split(",").map((g: string) => g.trim()).filter(Boolean)
                 : undefined;
 
-            const filters = {
-                birth_month:         birth_month ? parseInt(birth_month as string) : undefined,
-                birth_day_month:     birth_day_month as string | undefined,
+            const categoryIds = service_category_ids
+                ? (service_category_ids as string).split(",").map((s: string) => s.trim()).filter(Boolean)
+                : undefined;
+
+            const toBool = (v: unknown): boolean | undefined =>
+                v === "true" ? true : v === "false" ? false : undefined;
+
+            const filters: CampaignFilterParams = {
+                birth_month:          birth_month ? parseInt(birth_month as string) : undefined,
+                birth_day_month:      birth_day_month as string | undefined,
                 genders,
-                service_category_id: service_category_id as string | undefined,
-                client_source:       client_source as string | undefined,
-                joined_from:         joined_from as string | undefined,
-                joined_to:           joined_to as string | undefined,
+                service_category_ids: categoryIds,
+                client_source:        client_source as string | undefined,
+                joined_from:          joined_from as string | undefined,
+                joined_to:            joined_to as string | undefined,
+                total_spend_min:      total_spend_min != null ? parseFloat(total_spend_min as string) : undefined,
+                total_spend_max:      total_spend_max != null ? parseFloat(total_spend_max as string) : undefined,
+                has_membership:       toBool(has_membership),
+                has_package:          toBool(has_package),
+                last_visit_from:      last_visit_from as string | undefined,
+                last_visit_to:        last_visit_to   as string | undefined,
+                customer_type:        customer_type === "new" || customer_type === "repetitive" ? customer_type : undefined,
             };
 
             if (preview === "true") {
@@ -436,14 +454,33 @@ export const clientsController = {
                         a.cancel_reason,
                         a.services,
                         a.product_items,
+                        a.membership_items,
                         a.staff_id,
+                        -- Actual cash/tender collected so far (NOT net_amount, which is
+                        -- the recomputed bill total and is nonzero even when unpaid).
                         COALESCE(
-                            (SELECT SUM(p.net_amount)
+                            (SELECT SUM(p.paid_amount)
                              FROM payments p
                              WHERE p.appointment_id = a.id
                                AND p.status IN ('completed', 'partial')),
                             0
                         ) AS amount_paid,
+                        -- Authoritative remaining balance, already net of discount/
+                        -- eWallet/membership-wallet deductions (payments.service.ts).
+                        COALESCE(
+                            (SELECT p.due_amount FROM payments p
+                             WHERE p.appointment_id = a.id
+                             ORDER BY p.created_at DESC LIMIT 1),
+                            0
+                        ) AS due_amount,
+                        -- Actual net bill for a completed appointment (post discount/
+                        -- eWallet/membership-wallet). NULL (not 0) when no completed
+                        -- payment exists yet, so the frontend can tell "not billed"
+                        -- apart from "genuinely billed at ₹0" (e.g. fully wallet/
+                        -- package covered).
+                        (SELECT SUM(p.net_amount) FROM payments p
+                         WHERE p.appointment_id = a.id AND p.status = 'completed'
+                        ) AS net_amount,
                         COALESCE(
                             (SELECT CASE
                                 WHEN bool_or(p.status = 'completed') THEN 'paid'
@@ -452,9 +489,37 @@ export const clientsController = {
                             END
                             FROM payments p WHERE p.appointment_id = a.id),
                             'unpaid'
-                        ) AS payment_status
+                        ) AS payment_status,
+                        -- Method of the most recent payment — 'package' when the visit
+                        -- was covered by a client's pre-purchased package (see
+                        -- appointments.repository.ts for the same pattern used by the
+                        -- calendar listing).
+                        (SELECT p.payment_method FROM payments p
+                         WHERE p.appointment_id = a.id
+                         ORDER BY p.created_at DESC LIMIT 1) AS payment_method,
+                        -- How much of the bill was covered by the client's membership
+                        -- wallet (see payments.service.ts) — nonzero means this visit
+                        -- was paid for, at least in part, through a membership.
+                        COALESCE(
+                            (SELECT SUM(p.membership_wallet_used)
+                             FROM payments p
+                             WHERE p.appointment_id = a.id
+                               AND p.status IN ('completed', 'partial')),
+                            0
+                        ) AS membership_wallet_used,
+                        -- How much of amount_paid above came from the client's eWallet —
+                        -- needed so the frontend can subtract it back out when computing
+                        -- revenue (amount_paid intentionally includes it for "is this
+                        -- settled" purposes, but eWallet isn't new money for the salon).
+                        COALESCE(
+                            (SELECT SUM(p.ewallet_used)
+                             FROM payments p
+                             WHERE p.appointment_id = a.id
+                               AND p.status IN ('completed', 'partial')),
+                            0
+                        ) AS ewallet_used
                      FROM appointments a
-                     WHERE a.client_id = $1 AND a.salon_id = $2
+                     WHERE a.client_id = $1 AND a.salon_id = $2 AND a.deleted_at IS NULL
                      ORDER BY a.scheduled_at DESC
                      LIMIT 200`,
                     [clientId, salonId]
@@ -525,22 +590,42 @@ export const clientsController = {
                 ),
 
                 // 4. Appointment stats
+                //    "Completed" here means the visit was actually paid for, not just
+                //    that staff flipped the appointment's own status field to
+                //    'completed' — many salons never bother updating that field once a
+                //    bill is settled, which would otherwise undercount a client's real
+                //    visit history (see payment_status derivation above for the same
+                //    payments-table-is-authoritative convention).
                 pool.query(
                     `SELECT
                         COUNT(*)::int                                               AS total_appointments,
-                        COUNT(*) FILTER (WHERE status = 'completed')::int          AS completed_appointments,
-                        COUNT(*) FILTER (WHERE status = 'no_show')::int            AS no_shows,
-                        COUNT(*) FILTER (WHERE status = 'cancelled')::int          AS cancellations
-                     FROM appointments
-                     WHERE client_id = $1 AND salon_id = $2`,
+                        COUNT(*) FILTER (
+                            WHERE a.status = 'completed'
+                               OR EXISTS (
+                                   SELECT 1 FROM payments p
+                                   WHERE p.appointment_id = a.id AND p.status = 'completed'
+                               )
+                        )::int                                                      AS completed_appointments,
+                        COUNT(*) FILTER (WHERE a.status = 'no_show')::int           AS no_shows,
+                        COUNT(*) FILTER (WHERE a.status = 'cancelled')::int         AS cancellations
+                     FROM appointments a
+                     WHERE a.client_id = $1 AND a.salon_id = $2 AND a.deleted_at IS NULL`,
                     [clientId, salonId]
                 ),
 
-                // 5. Lifetime spend
+                // 5. Lifetime spend — sum actual paid_amount from payments (covers both
+                //    draft sales and completed sales since a payment record is always
+                //    created when money is collected, regardless of sale status), minus
+                //    eWallet/membership-wallet contributions — the salon receives no new
+                //    money when a visit is settled from a wallet balance (that value was
+                //    already recognized as revenue when the wallet was funded/the
+                //    membership was sold), so it shouldn't inflate a client's spend.
                 pool.query(
-                    `SELECT COALESCE(SUM(total_amount), 0) AS lifetime_spend
-                     FROM sales
-                     WHERE client_id = $1 AND salon_id = $2 AND status = 'completed'`,
+                    `SELECT COALESCE(SUM(
+                        GREATEST(0, paid_amount - COALESCE(ewallet_used, 0) - COALESCE(membership_wallet_used, 0))
+                     ), 0) AS lifetime_spend
+                     FROM payments
+                     WHERE client_id = $1 AND salon_id = $2 AND status IN ('completed', 'partial')`,
                     [clientId, salonId]
                 ),
             ]);
@@ -567,7 +652,12 @@ export const clientsController = {
                     cancellations:          statsRes.rows[0]?.cancellations           ?? 0,
                     lifetime_spend:         Number(totalSpendRes.rows[0]?.lifetime_spend ?? 0),
                     total_sales:            salesRes.rowCount ?? 0,
-                    active_packages:        pkgRows.filter((p) => p.status === "active").length,
+                    active_packages:        pkgRows.filter((p: any) => p.status === "active").length,
+                    // Most recent paid visit (payments table is authoritative — see
+                    // completed_appointments above); fall back to any appointment date.
+                    last_visit_at:          apptRes.rows.find((a: any) => a.status === "completed" || a.payment_status === "paid")?.scheduled_at
+                                              ?? apptRes.rows[0]?.scheduled_at
+                                              ?? null,
                 },
                 appointments: apptRes.rows,
                 sales:        salesRes.rows,
