@@ -407,6 +407,7 @@ export const whatsappAutomationRepository = {
        LEFT JOIN clients c ON c.id = a.client_id
        LEFT JOIN salons  s ON s.id = a.salon_id
        WHERE a.status IN ('booked','confirmed')
+         AND a.deleted_at IS NULL
          AND a.scheduled_at BETWEEN NOW() + INTERVAL '23 hours 30 minutes'
                                 AND NOW() + INTERVAL '24 hours 30 minutes'
          AND c.phone_number           IS NOT NULL
@@ -450,6 +451,7 @@ export const whatsappAutomationRepository = {
        LEFT JOIN clients c ON c.id = a.client_id
        LEFT JOIN salons  s ON s.id = a.salon_id
        WHERE a.status IN ('booked','confirmed')
+         AND a.deleted_at IS NULL
          AND a.scheduled_at BETWEEN NOW() + INTERVAL '50 minutes'
                                 AND NOW() + INTERVAL '70 minutes'
          AND c.phone_number           IS NOT NULL
@@ -634,6 +636,7 @@ export const whatsappAutomationRepository = {
            WHERE a.client_id = c.id
              AND a.salon_id  = c.salon_id
              AND a.status    = 'completed'
+             AND a.deleted_at IS NULL
          ) BETWEEN
            NOW() - ($1 || ' days')::INTERVAL - INTERVAL '1 day'
            AND

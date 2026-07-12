@@ -103,6 +103,12 @@ export type Appointment = {
     // payment has actually been made (payments.membership_wallet_used only
     // exists once checkout happens), so the checkbox survives Save/reopen.
     apply_membership_wallet: boolean;
+    // Client's service check-in/check-out — purely informational timestamps,
+    // deliberately independent of `status` (which drives chip colour/payment
+    // logic elsewhere). NULL means "not yet checked in/out".
+    service_started_at: string | null;
+    service_ended_at: string | null;
+    deleted_at?: string | null;
 };
 
 // ─── Request body types ──────────────────────────────────────────────────────
