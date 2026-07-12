@@ -64,6 +64,17 @@ export const clientsService = {
     async create(body: CreateClientBody, salonId: string): Promise<ClientWithRelations> {
         const normalized = normalizeCreateBody(body);
 
+        // One active client per phone number — same number under a different
+        // name is almost always a duplicate/mistake, not two real clients.
+        if (normalized.phone_number) {
+            const dup = await clientsRepository.findActiveByPhone(
+                normalized.phone_country_code, normalized.phone_number, salonId,
+            );
+            if (dup) {
+                throw new AppError(409, `This phone number is already registered to ${dup.full_name}`, "DUPLICATE_PHONE");
+            }
+        }
+
         // Referral codes only ever apply at creation (a client's first visit) —
         // there is no later "add/edit referral code" path, by design.
         let referredByClientId = normalized.referred_by_client_id ?? null;
@@ -141,6 +152,17 @@ export const clientsService = {
     async update(clientId: string, patch: UpdateClientBody, salonId: string): Promise<ClientWithRelations> {
         const exists = await clientsRepository.findById(clientId, salonId);
         if (!exists) throw new AppError(404, "Client not found", "NOT_FOUND");
+
+        // Only re-check when the phone is actually changing — editing an
+        // unrelated field on a client shouldn't trip over their own number.
+        if (patch.phone_number && patch.phone_number.trim() !== (exists.phone_number || "").trim()) {
+            const dup = await clientsRepository.findActiveByPhone(
+                patch.phone_country_code ?? exists.phone_country_code, patch.phone_number, salonId, clientId,
+            );
+            if (dup) {
+                throw new AppError(409, `This phone number is already registered to ${dup.full_name}`, "DUPLICATE_PHONE");
+            }
+        }
 
         // Referral codes can be applied post-creation too (e.g. at checkout, via
         // "Referred by" on the payment panel) — but only once, and only before
