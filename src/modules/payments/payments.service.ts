@@ -18,6 +18,7 @@ import { branchesRepository } from '../branches/branches.repository';
 import { staffService } from '../staff/staff.service';
 import { clientsRepository } from '../clients/clients.repository';
 import { getIO } from '../../config/socket';
+import { getActiveTaxes, computeExclusiveTaxAddOn } from '../settings/tax.util';
 
 export const paymentsService = {
 
@@ -53,11 +54,12 @@ export const paymentsService = {
           const packageTotal    = (appt.package_items    || []).reduce((s, i) => s + lineTotal(i), 0);
           const productTotal    = (appt.product_items    || []).reduce((s, i) => s + lineTotal(i), 0);
           const membershipTotal = (appt.membership_items || []).reduce((s, i) => s + lineTotal(i), 0);
+          const rawSubtotal     = serviceTotal + packageTotal + productTotal + membershipTotal;
           // Rounded to the nearest whole rupee — matches computeTotals() on the
           // frontend (totalsUtils.ts), which is what the client actually sees/
           // pays. Rounding here (not after discount/wallet deductions) keeps
           // gross_amount consistent with the frontend's rounded grandTotal.
-          const actualBill      = Math.round(serviceTotal + packageTotal + productTotal + membershipTotal);
+          const actualBill      = Math.round(rawSubtotal);
 
           // If the appointment has no priced items, fall through to frontend values
           if (!isFinite(actualBill) || actualBill <= 0) throw new Error('no_priced_items');
@@ -165,11 +167,32 @@ export const paymentsService = {
             }
           }
 
+          // ── Tax: apply the same active/applicable rates + bucket allocation
+          // the frontend uses (totalsUtils.ts computeBucketTax) — the amount
+          // actually owed must include exclusive tax, not just item prices
+          // minus discount. Previously this was skipped entirely here, so the
+          // receipt correctly displayed tax but the appointment could be
+          // marked "Paid" for less than what was shown to the client.
+          let taxAmount = 0;
+          try {
+            const activeTaxes = await getActiveTaxes(data.salon_id);
+            const discRatio = rawSubtotal > 0 ? Math.min(1, discount / rawSubtotal) : 0;
+            taxAmount = computeExclusiveTaxAddOn([
+              { type: 'service',    base: serviceTotal    - serviceTotal    * discRatio },
+              { type: 'packages',   base: packageTotal    - packageTotal    * discRatio },
+              { type: 'product',    base: productTotal    - productTotal    * discRatio },
+              { type: 'membership', base: membershipTotal - membershipTotal * discRatio },
+            ], activeTaxes);
+          } catch (err: any) {
+            logger.warn('[payments] tax computation failed:', err?.message ?? err);
+          }
+
           // Reward points no longer exist as a separately redeemable balance —
           // earned value is credited straight into eWallet (see the "earn" block
           // below), so there is nothing to redeem here; eWallet redemption above
           // already covers whatever reward money the client has.
-          const effectiveBill = Math.max(0, actualBill - discount - ewallet - membershipWalletUsed);
+          const grandTotal    = Math.round(actualBill - discount + taxAmount);
+          const effectiveBill = Math.max(0, grandTotal - ewallet - membershipWalletUsed);
           data.membership_wallet_used = membershipWalletUsed;
 
           // `|| ` treats 0 as "not provided" and falls through to gross_amount — which
