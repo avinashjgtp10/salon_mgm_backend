@@ -53,7 +53,11 @@ export const paymentsService = {
           const packageTotal    = (appt.package_items    || []).reduce((s, i) => s + lineTotal(i), 0);
           const productTotal    = (appt.product_items    || []).reduce((s, i) => s + lineTotal(i), 0);
           const membershipTotal = (appt.membership_items || []).reduce((s, i) => s + lineTotal(i), 0);
-          const actualBill      = serviceTotal + packageTotal + productTotal + membershipTotal;
+          // Rounded to the nearest whole rupee — matches computeTotals() on the
+          // frontend (totalsUtils.ts), which is what the client actually sees/
+          // pays. Rounding here (not after discount/wallet deductions) keeps
+          // gross_amount consistent with the frontend's rounded grandTotal.
+          const actualBill      = Math.round(serviceTotal + packageTotal + productTotal + membershipTotal);
 
           // If the appointment has no priced items, fall through to frontend values
           if (!isFinite(actualBill) || actualBill <= 0) throw new Error('no_priced_items');

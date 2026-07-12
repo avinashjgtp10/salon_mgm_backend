@@ -15,6 +15,22 @@ export async function ensureTable(): Promise<void> {
     await pool.query(
         `ALTER TABLE appointments ADD COLUMN IF NOT EXISTS apply_membership_wallet BOOLEAN NOT NULL DEFAULT FALSE`,
     );
+    // "Delete Appointment" used to be a real SQL DELETE — switched to soft
+    // delete so a removed booking can still show on the calendar (greyed out,
+    // "Deleted" on the tooltip) instead of vanishing without a trace. NULL
+    // (the default for every pre-existing row) means "not deleted".
+    await pool.query(
+        `ALTER TABLE appointments ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ NULL`,
+    );
+    // Client's service check-in/check-out toggle on the calendar tooltip —
+    // separate from `status`/payment_status so it never interferes with
+    // existing chip-colour logic.
+    await pool.query(
+        `ALTER TABLE appointments ADD COLUMN IF NOT EXISTS service_started_at TIMESTAMPTZ NULL`,
+    );
+    await pool.query(
+        `ALTER TABLE appointments ADD COLUMN IF NOT EXISTS service_ended_at TIMESTAMPTZ NULL`,
+    );
 }
 
 export const appointmentsRepository = {
@@ -316,9 +332,40 @@ export const appointmentsRepository = {
         return rows[0];
     },
 
+    // Check-in: client's service starts now — moves the booking to the live
+    // time slot (scheduled_at = NOW, keeping the original duration so ends_at
+    // shifts by the same amount) so the calendar block visually slides to
+    // where the service is actually happening.
+    async serviceCheckIn(id: string): Promise<Appointment | null> {
+        const { rows } = await pool.query(
+            `UPDATE appointments
+             SET service_started_at = NOW(),
+                 scheduled_at = NOW(),
+                 ends_at = NOW() + (duration_minutes * INTERVAL '1 minute'),
+                 updated_at = NOW()
+             WHERE id = $1
+             RETURNING *`,
+            [id]
+        );
+        return rows[0] || null;
+    },
+
+    // Check-out: client's service ends now — timestamp only, no reschedule
+    // (the block is already positioned correctly from check-in).
+    async serviceCheckOut(id: string): Promise<Appointment | null> {
+        const { rows } = await pool.query(
+            `UPDATE appointments
+             SET service_ended_at = NOW(), updated_at = NOW()
+             WHERE id = $1
+             RETURNING *`,
+            [id]
+        );
+        return rows[0] || null;
+    },
+
     async deleteById(id: string): Promise<Appointment | null> {
         const { rows } = await pool.query(
-            `DELETE FROM appointments WHERE id = $1 RETURNING *`,
+            `UPDATE appointments SET deleted_at = NOW() WHERE id = $1 RETURNING *`,
             [id]
         );
         return rows[0] || null;

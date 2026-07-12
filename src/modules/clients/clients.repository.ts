@@ -671,7 +671,7 @@ export const clientsRepository = {
                            MAX(scheduled_at) FILTER (WHERE status = 'completed') AS last_visit_at,
                            COUNT(*)          FILTER (WHERE status = 'completed') AS completed_count
                     FROM appointments
-                    WHERE salon_id = $1
+                    WHERE salon_id = $1 AND deleted_at IS NULL
                     GROUP BY client_id
                 ) av ON av.client_id = c.id
             `)
