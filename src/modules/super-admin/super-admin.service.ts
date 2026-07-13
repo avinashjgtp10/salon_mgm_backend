@@ -1,5 +1,6 @@
 import { superAdminRepository } from "./super-admin.repository";
 import { authRepository } from "../auth/auth.repository";
+import { demoRequestsService } from "../demo-requests/demo-requests.service";
 import { emailService } from "../utils/email.service";
 import { AppError } from "../../middleware/error.middleware";
 import bcrypt from "bcrypt";
@@ -171,6 +172,14 @@ export const superAdminService = {
 
   async getAllUsers(search?: string, role?: string, minLogins?: number) {
     return superAdminRepository.getAllUsers(search, role, minLogins);
+  },
+
+  async getAllDemoRequests(search?: string) {
+    return demoRequestsService.list(search);
+  },
+
+  async setDemoRequestStatus(id: string, status: string) {
+    return demoRequestsService.updateStatus(id, status);
   },
 
   async setUserStatus(id: string, isActive: boolean) {

@@ -460,8 +460,10 @@ export const staffCommissionsController = {
     try {
       const salonId = req.user?.salonId ?? String(req.query.salon_id ?? "");
       if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
-      const month = req.query.month ? String(req.query.month) : undefined;
-      const data = await staffCommissionsService.getEarnedBySalon(salonId, month);
+      const month     = req.query.month      ? String(req.query.month)      : undefined;
+      const startDate = req.query.start_date ? String(req.query.start_date) : undefined;
+      const endDate   = req.query.end_date   ? String(req.query.end_date)   : undefined;
+      const data = await staffCommissionsService.getEarnedBySalon(salonId, month, startDate, endDate);
       return sendSuccess(res, 200, data, "Commission earned by staff fetched successfully");
     } catch (err) { return next(err); }
   },
@@ -483,8 +485,10 @@ export const staffCommissionsController = {
     try {
       const salonId = req.user?.salonId ?? String(req.query.salon_id ?? "");
       if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
-      const month = req.query.month ? String(req.query.month) : undefined; // "YYYY-MM"
-      const data = await staffCommissionsService.getSalonSummary(salonId, month);
+      const month     = req.query.month      ? String(req.query.month)      : undefined; // "YYYY-MM"
+      const startDate = req.query.start_date ? String(req.query.start_date) : undefined;
+      const endDate   = req.query.end_date   ? String(req.query.end_date)   : undefined;
+      const data = await staffCommissionsService.getSalonSummary(salonId, month, startDate, endDate);
       return sendSuccess(res, 200, data, "Commission summary fetched successfully");
     } catch (err) { return next(err); }
   },

@@ -122,6 +122,21 @@ export const attendanceController = {
         } catch (err) { return next(err); }
     },
 
+    // ── Date-range view ──────────────────────────────────────────────────────
+
+    async getRange(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const salonId = req.user?.salonId;
+            if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+            const startDate = String(req.query.start_date || "").trim();
+            const endDate   = String(req.query.end_date   || "").trim();
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate))
+                throw new AppError(400, "start_date and end_date (YYYY-MM-DD) are required", "VALIDATION_ERROR");
+            const data = await attendanceService.getRange(salonId, startDate, endDate);
+            return sendSuccess(res, 200, data, "Attendance range fetched");
+        } catch (err) { return next(err); }
+    },
+
     // ── Daily summary ─────────────────────────────────────────────────────────
 
     async getDailySummary(req: AuthRequest, res: Response, next: NextFunction) {

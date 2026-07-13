@@ -14,6 +14,7 @@ router.put("/settings",    authMiddleware, ownerAdmin,      attendanceController
 // Dashboard + grid
 router.get("/today",       authMiddleware, ownerAdminStaff, attendanceController.getToday);
 router.get("/monthly",     authMiddleware, ownerAdminStaff, attendanceController.getMonthly);
+router.get("/range",       authMiddleware, ownerAdminStaff, attendanceController.getRange);
 router.get("/summary",     authMiddleware, ownerAdminStaff, attendanceController.getDailySummary);
 router.get("/export",      authMiddleware, ownerAdmin,      attendanceController.exportCSV);
 

@@ -157,6 +157,23 @@ export const superAdminController = {
     } catch (err) { return next(err); }
   },
 
+  async getAllDemoRequests(req: Request, res: Response, next: NextFunction) {
+    try {
+      const search = typeof req.query.search === "string" ? req.query.search : undefined;
+      const data = await superAdminService.getAllDemoRequests(search);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
+  async setDemoRequestStatus(req: Request, res: Response, next: NextFunction) {
+    try {
+      const id = String(req.params.id);
+      const { status } = req.body;
+      const data = await superAdminService.setDemoRequestStatus(id, status);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
   async setUserStatus(req: Request, res: Response, next: NextFunction) {
     try {
       const id = String(req.params.id);
