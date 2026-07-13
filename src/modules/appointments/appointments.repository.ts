@@ -332,33 +332,34 @@ export const appointmentsRepository = {
         return rows[0];
     },
 
-    // Check-in: client's service starts now — moves the booking to the live
-    // time slot (scheduled_at = NOW, keeping the original duration so ends_at
+    // Check-in: client's service starts — moves the booking to that time slot
+    // (scheduled_at = the start time, keeping the original duration so ends_at
     // shifts by the same amount) so the calendar block visually slides to
-    // where the service is actually happening.
-    async serviceCheckIn(id: string): Promise<Appointment | null> {
+    // where the service is actually happening. Staff can enter the actual
+    // start time (e.g. logging it a few minutes late) instead of always NOW().
+    async serviceCheckIn(id: string, startedAt?: string): Promise<Appointment | null> {
         const { rows } = await pool.query(
             `UPDATE appointments
-             SET service_started_at = NOW(),
-                 scheduled_at = NOW(),
-                 ends_at = NOW() + (duration_minutes * INTERVAL '1 minute'),
+             SET service_started_at = COALESCE($2::timestamptz, NOW()),
+                 scheduled_at = COALESCE($2::timestamptz, NOW()),
+                 ends_at = COALESCE($2::timestamptz, NOW()) + (duration_minutes * INTERVAL '1 minute'),
                  updated_at = NOW()
              WHERE id = $1
              RETURNING *`,
-            [id]
+            [id, startedAt ?? null]
         );
         return rows[0] || null;
     },
 
-    // Check-out: client's service ends now — timestamp only, no reschedule
+    // Check-out: client's service ends — timestamp only, no reschedule
     // (the block is already positioned correctly from check-in).
-    async serviceCheckOut(id: string): Promise<Appointment | null> {
+    async serviceCheckOut(id: string, endedAt?: string): Promise<Appointment | null> {
         const { rows } = await pool.query(
             `UPDATE appointments
-             SET service_ended_at = NOW(), updated_at = NOW()
+             SET service_ended_at = COALESCE($2::timestamptz, NOW()), updated_at = NOW()
              WHERE id = $1
              RETURNING *`,
-            [id]
+            [id, endedAt ?? null]
         );
         return rows[0] || null;
     },
