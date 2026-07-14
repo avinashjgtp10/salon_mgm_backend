@@ -337,10 +337,11 @@ export const paymentsService = {
       try {
         const existingSale = await salesRepository.findByAppointmentId(data.appointment_id);
         if (!existingSale) {
-          const items: Array<{ item_type: 'service' | 'product' | 'membership'; item_id?: string; name: string; quantity: number; unit_price: string }> = [
+          const items: Array<{ item_type: 'service' | 'product' | 'membership'; item_id?: string; staff_id?: string; name: string; quantity: number; unit_price: string }> = [
             ...(appt.services || []).map(s => ({
               item_type: 'service' as const,
               item_id: s.service_id,
+              staff_id: s.staff_id || undefined,
               name: s.name || 'Service',
               quantity: Number(s.quantity) || 1,
               unit_price: String(Number(s.price) || 0),
@@ -348,6 +349,7 @@ export const paymentsService = {
             ...(appt.package_items || []).map(p => ({
               item_type: 'service' as const,
               item_id: p.package_id,
+              staff_id: p.staff_id || undefined,
               name: p.name || 'Package',
               quantity: Number(p.quantity) || 1,
               unit_price: String(Number(p.price) || 0),
@@ -355,6 +357,7 @@ export const paymentsService = {
             ...(appt.product_items || []).map(p => ({
               item_type: 'product' as const,
               item_id: p.product_id || undefined,
+              staff_id: p.staff_id || undefined,
               name: p.name || 'Product',
               quantity: Number(p.quantity) || 1,
               unit_price: String(Number(p.price) || 0),
@@ -362,6 +365,7 @@ export const paymentsService = {
             ...(appt.membership_items || []).map(m => ({
               item_type: 'membership' as const,
               item_id: m.membership_id || undefined,
+              staff_id: m.staff_id || undefined,
               name: m.name || 'Membership',
               quantity: Number(m.quantity) || 1,
               unit_price: String(Number(m.price) || 0),

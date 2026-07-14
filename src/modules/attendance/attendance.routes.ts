@@ -16,6 +16,7 @@ router.get("/today",       authMiddleware, ownerAdminStaff, attendanceController
 router.get("/monthly",     authMiddleware, ownerAdminStaff, attendanceController.getMonthly);
 router.get("/summary",     authMiddleware, ownerAdminStaff, attendanceController.getDailySummary);
 router.get("/export",      authMiddleware, ownerAdmin,      attendanceController.exportCSV);
+router.get("/staff/:staffId", authMiddleware, ownerAdminStaff, attendanceController.getForStaff);
 
 // Check in/out
 router.post("/check-in",   authMiddleware, ownerAdminStaff, attendanceController.checkIn);

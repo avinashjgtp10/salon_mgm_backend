@@ -64,9 +64,21 @@ pool.on('connect', (client) => {
 pool.on('error', (err) => {
   console.error('❌ Database error:', err);
   // Do NOT exit the process on idle client errors. The pg pool will automatically remove
-  // the errored client and create a new one when a query is issued. 
+  // the errored client and create a new one when a query is issued.
   // Exiting here causes the entire backend to crash unnecessarily.
 });
+
+// ── Auto-retry every pool.query() call, app-wide ────────────────────────────
+// The remote RDS connection intermittently blips (DNS resolution failures,
+// connection timeouts) — previously only call sites explicitly wrapped in
+// safeQuery() were protected, which meant hitting this on any of the ~500+
+// unwrapped call sites (e.g. GET /salons/me) still 500'd on the first blip.
+// Patching pool.query itself here means every call gets the same retry
+// behavior for free, with zero changes needed in individual repositories.
+// Only the plain Promise-returning form is used anywhere in this codebase
+// (no callback-style pool.query calls), so wrapping it this way is safe.
+const rawQuery: (...args: any[]) => Promise<any> = pool.query.bind(pool);
+pool.query = ((...args: any[]) => safeQuery(() => rawQuery(...args))) as typeof pool.query;
 
 export default pool;
 
@@ -121,18 +133,18 @@ setImmediate(() => {
 });
 
 /**
- * safeQuery — wraps any pool.query() call with a single auto-retry.
+ * safeQuery — wraps any pool.query() call with auto-retry.
  *
  * WHY: Cloud databases (Supabase, Neon, Render, Railway, etc.) silently
  * terminate idle PostgreSQL connections. pg-pool doesn't detect this until
  * the next query attempt, causing "Connection terminated unexpectedly".
- * One retry is enough because the pool discards the dead client and opens
- * a fresh connection for the second attempt.
+ * Two retries with a short backoff ride out short-lived DNS/connection
+ * blips that a single immediate retry can still land inside of.
  *
  * USAGE:
  *   const { rows } = await safeQuery(() => pool.query(sql, params));
  */
-export async function safeQuery<T>(queryFn: () => Promise<T>, retries = 1): Promise<T> {
+export async function safeQuery<T>(queryFn: () => Promise<T>, retries = 2): Promise<T> {
   try {
     return await queryFn();
   } catch (err: any) {
@@ -140,10 +152,13 @@ export async function safeQuery<T>(queryFn: () => Promise<T>, retries = 1): Prom
       err?.message?.includes('Connection terminated unexpectedly') ||
       err?.message?.includes('terminating connection') ||
       err?.message?.includes('Connection terminated') ||
-      err?.code === 'ECONNRESET';
+      err?.message?.includes('timeout exceeded when trying to connect') ||
+      err?.code === 'ECONNRESET' ||
+      err?.code === 'ENOTFOUND';
 
     if (retries > 0 && isStaleConn) {
       console.warn('🔁 [safeQuery] Stale DB connection detected — retrying query...');
+      await new Promise((resolve) => setTimeout(resolve, 400));
       return safeQuery(queryFn, retries - 1);
     }
     throw err;

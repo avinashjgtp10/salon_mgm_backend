@@ -479,6 +479,7 @@ export const appointmentsService = {
                 appointmentId,
                 fallbackStaffId: existing.staff_id ?? null,
                 items:           saleItems,
+                packageItemIds:  new Set((existing.package_items ?? []).map(p => p.package_id)),
             }).catch(() => {});
 
             // Auto-mark attendance (fire-and-forget)
@@ -608,6 +609,7 @@ export const appointmentsService = {
                 ...existing.services.map(s => ({
                     item_type: "service",
                     item_id: s.service_id,
+                    staff_id: s.staff_id ?? undefined,
                     name: s.name,
                     quantity: s.quantity,
                     unit_price: s.price,
@@ -615,6 +617,7 @@ export const appointmentsService = {
                 ...existing.package_items.map(p => ({
                     item_type: "service",
                     item_id: p.package_id,
+                    staff_id: p.staff_id ?? undefined,
                     name: p.name,
                     quantity: p.quantity,
                     unit_price: p.price,
@@ -622,6 +625,7 @@ export const appointmentsService = {
                 ...existing.product_items.map(pr => ({
                     item_type: "product",
                     item_id: pr.product_id ?? undefined,
+                    staff_id: pr.staff_id ?? undefined,
                     name: pr.name,
                     quantity: pr.quantity,
                     unit_price: pr.price,
@@ -629,6 +633,7 @@ export const appointmentsService = {
                 ...existing.membership_items.map(m => ({
                     item_type: "membership",
                     item_id: m.membership_id ?? undefined,
+                    staff_id: m.staff_id ?? undefined,
                     name: m.name,
                     quantity: m.quantity,
                     unit_price: m.price,
@@ -658,6 +663,7 @@ export const appointmentsService = {
             appointmentId,
             fallbackStaffId: existing.staff_id ?? null,
             items,
+            packageItemIds:  new Set((existing.package_items ?? []).map(p => p.package_id)),
         }).catch(() => {});
 
         // ── Auto-mark attendance for the staff member (fire-and-forget) ───────

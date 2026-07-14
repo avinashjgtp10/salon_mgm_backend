@@ -1,4 +1,4 @@
-import pool from "../../config/database";
+import pool, { safeQuery } from "../../config/database";
 import {
     Attendance,
     AttendanceSettings,
@@ -51,6 +51,32 @@ export const attendanceRepository = {
         return rows[0] || null;
     },
 
+    // ── Single staff, date range (for Staff History Attendance tab / Timeline) ──
+    async findByStaffAndDateRange(staffId: string, startDate?: string, endDate?: string, limit?: number): Promise<Attendance[]> {
+        const conditions: string[] = [`a.staff_id = $1`];
+        const values: any[] = [staffId];
+        let idx = 2;
+
+        if (startDate) { conditions.push(`a.date >= $${idx++}::date`); values.push(startDate); }
+        if (endDate) { conditions.push(`a.date <= $${idx++}::date`); values.push(endDate); }
+
+        const limitClause = limit ? `LIMIT $${idx++}` : "";
+        if (limit) values.push(limit);
+
+        const { rows } = await safeQuery(() => pool.query(
+            `SELECT a.*,
+                    TRIM(CONCAT(st.first_name, ' ', COALESCE(st.last_name, ''))) AS staff_name,
+                    COALESCE(st.designation, '') AS staff_role
+             FROM attendance a
+             JOIN staff st ON st.id = a.staff_id
+             WHERE ${conditions.join(" AND ")}
+             ORDER BY a.date DESC
+             ${limitClause}`,
+            values
+        ));
+        return rows;
+    },
+
     async findById(id: string): Promise<Attendance | null> {
         const { rows } = await pool.query(
             `SELECT a.*,
@@ -67,7 +93,7 @@ export const attendanceRepository = {
     // ── Today view ───────────────────────────────────────────────────────────
 
     async findBySalonAndDate(salonId: string, date: string): Promise<Attendance[]> {
-        const { rows } = await pool.query(
+        const { rows } = await safeQuery(() => pool.query(
             `SELECT a.*,
                     TRIM(CONCAT(st.first_name, ' ', COALESCE(st.last_name, ''))) AS staff_name,
                     COALESCE(st.designation, '') AS staff_role
@@ -76,7 +102,7 @@ export const attendanceRepository = {
              WHERE a.salon_id = $1 AND a.date = $2::date
              ORDER BY st.first_name ASC`,
             [salonId, date]
-        );
+        ));
         return rows;
     },
 
@@ -235,7 +261,7 @@ export const attendanceRepository = {
     async getDailySummaryCounts(salonId: string, date: string): Promise<{
         present: number; absent: number; late: number; on_leave: number; half_day: number;
     }> {
-        const { rows } = await pool.query(
+        const { rows } = await safeQuery(() => pool.query(
             `SELECT
                COUNT(*) FILTER (WHERE status = 'present')  AS present,
                COUNT(*) FILTER (WHERE status = 'absent')   AS absent,
@@ -245,7 +271,7 @@ export const attendanceRepository = {
              FROM attendance
              WHERE salon_id = $1 AND date = $2::date`,
             [salonId, date]
-        );
+        ));
         return {
             present:  parseInt(rows[0]?.present  ?? "0", 10),
             absent:   parseInt(rows[0]?.absent   ?? "0", 10),
@@ -258,7 +284,7 @@ export const attendanceRepository = {
     // ── Staff list for a salon (for today view) ───────────────────────────────
 
     async getActiveSalonStaff(salonId: string): Promise<{ id: string; full_name: string; role: string }[]> {
-        const { rows } = await pool.query(
+        const { rows } = await safeQuery(() => pool.query(
             `SELECT id,
                     TRIM(CONCAT(first_name, ' ', COALESCE(last_name, ''))) AS full_name,
                     COALESCE(designation, '')                               AS role
@@ -266,7 +292,7 @@ export const attendanceRepository = {
              WHERE salon_id = $1 AND is_active = true
              ORDER BY first_name ASC`,
             [salonId]
-        );
+        ));
         return rows;
     },
 
@@ -295,7 +321,7 @@ export const attendanceRepository = {
         date: string,
         dayOfWeek: number
     ): Promise<Map<string, number | null>> {
-        const { rows } = await pool.query(
+        const { rows } = await safeQuery(() => pool.query(
             `WITH best_schedule AS (
                SELECT DISTINCT ON (ss.staff_id)
                  ss.staff_id,
@@ -320,7 +346,7 @@ export const attendanceRepository = {
                END AS scheduled_hours
              FROM best_schedule`,
             [salonId, date, dayOfWeek]
-        );
+        ));
         const map = new Map<string, number | null>();
         for (const row of rows) {
             map.set(row.staff_id, row.scheduled_hours != null ? parseFloat(row.scheduled_hours) : null);

@@ -288,6 +288,12 @@ export const attendanceService = {
         return { summary, staff };
     },
 
+    // ── Single staff, date range (Staff History page) ───────────────────────────
+
+    async getForStaff(staffId: string, startDate?: string, endDate?: string, limit?: number): Promise<Attendance[]> {
+        return attendanceRepository.findByStaffAndDateRange(staffId, startDate, endDate, limit);
+    },
+
     // ── Monthly grid ─────────────────────────────────────────────────────────
 
     async getMonthly(salonId: string, year: number, month: number): Promise<{
