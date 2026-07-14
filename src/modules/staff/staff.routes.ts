@@ -3,6 +3,7 @@ import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { requirePermission } from "../../middleware/permission.middleware";
 import { upload } from "./staff.upload";
+import { uploadMiddleware } from "../../middleware/upload.middleware";
 import {
   staffController, staffInvitationController, staffAddressController,
   staffEmergencyContactController, staffWagesController, staffCommissionsController,
@@ -31,6 +32,9 @@ router.post("/invite/accept", validateAcceptInvitation, staffInvitationControlle
 // ─── Staff CRUD ───────────────────────────────────────────────────────────────
 router.get("/", auth, ownerAdminStaff, requirePermission("view_team"), staffController.list);
 router.post("/", auth, ownerAdmin, requirePermission("manage_team"), validateCreateStaff, staffController.create);
+
+// ─── Avatar upload (stateless — must be BEFORE /:id) ─────────────────────────
+router.post("/upload-avatar", auth, ownerAdmin, uploadMiddleware.single("avatar"), staffController.uploadAvatar);
 
 // ─── Import / Export (must be BEFORE /:id) ───────────────────────────────────
 router.post("/import",       auth, ownerAdmin, upload.single("file"), staffController.importStaff);

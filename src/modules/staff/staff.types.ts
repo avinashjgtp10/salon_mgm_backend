@@ -115,6 +115,19 @@ export type CreateStaffBody = {
     permission_level?: string;
     allow_calendar_bookings?: boolean;
     custom_permissions?: Record<string, boolean> | null;
+    /** ISO date string "YYYY-MM-DD" — date of joining */
+    joined_date?: string;
+    birthday_day?: number;
+    birthday_month?: number;
+    // ── Pending DB migration (migrations/add_employee_profile_fields_to_staff.sql) ──
+    // Accepted here so the frontend can send them today, but staff.repository.ts does
+    // NOT yet write these columns — they are silently dropped until that migration
+    // is applied and the repository create()/update() column lists are updated.
+    gender?: string;
+    address?: string;
+    avatar_url?: string;
+    working_hours_per_day?: number;
+    holidays?: number;
 };
 
 export type BlockedTimeInput = {

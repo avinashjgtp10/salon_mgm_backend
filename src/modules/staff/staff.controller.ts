@@ -6,6 +6,7 @@ import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { invalidateStaffPermCache } from "../../middleware/permission.middleware";
 import { sendSuccess } from "../utils/response.util";
+import { uploadAvatarToS3 } from "../utils/avatar.upload";
 import {
   staffService, staffInvitationService, staffAddressService,
   staffEmergencyContactService, staffWagesService, staffCommissionsService,
@@ -85,6 +86,25 @@ export const staffController = {
       }
       throw error;
     }
+  },
+
+  /**
+   * POST /api/v1/staff/upload-avatar
+   * Uploads a profile photo (multer → S3, or local /uploads fallback) and returns
+   * its URL. Stateless — does not persist to a staff row, since the staff record
+   * may not exist yet (create flow). The caller sends the returned url back as
+   * `avatar_url` in the create/update payload.
+   */
+  async uploadAvatar(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const file = (req as any).file as Express.Multer.File | undefined;
+      if (!file) throw new AppError(400, "No image file provided", "FILE_REQUIRED");
+
+      const key = `staff-${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+      const url = await uploadAvatarToS3(file.path, key, file.mimetype);
+
+      return sendSuccess(res, 200, { url }, "Avatar uploaded successfully");
+    } catch (err) { return next(err); }
   },
 
   async getById(req: AuthRequest, res: Response, next: NextFunction) {
