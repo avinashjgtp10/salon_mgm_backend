@@ -300,22 +300,26 @@ export const appointmentsService = {
         return appointmentsRepository.updateStatus(appointmentId, "in_progress");
     },
 
-    async serviceCheckIn(appointmentId: string): Promise<Appointment> {
+    async serviceCheckIn(appointmentId: string, startedAt?: string): Promise<Appointment> {
         const existing = await appointmentsRepository.findById(appointmentId);
         if (!existing || existing.deleted_at) throw new AppError(404, "Appointment not found", "NOT_FOUND");
         if (["cancelled", "no_show"].includes(existing.status))
             throw new AppError(400, `Cannot check in a '${existing.status}' appointment`, "BAD_REQUEST");
-        const updated = await appointmentsRepository.serviceCheckIn(appointmentId);
+        if (startedAt && isNaN(new Date(startedAt).getTime()))
+            throw new AppError(400, "Invalid started_at timestamp", "BAD_REQUEST");
+        const updated = await appointmentsRepository.serviceCheckIn(appointmentId, startedAt);
         if (!updated) throw new AppError(404, "Appointment not found", "NOT_FOUND");
         return updated;
     },
 
-    async serviceCheckOut(appointmentId: string): Promise<Appointment> {
+    async serviceCheckOut(appointmentId: string, endedAt?: string): Promise<Appointment> {
         const existing = await appointmentsRepository.findById(appointmentId);
         if (!existing || existing.deleted_at) throw new AppError(404, "Appointment not found", "NOT_FOUND");
         if (!existing.service_started_at)
             throw new AppError(400, "Appointment must be checked in before it can be checked out", "BAD_REQUEST");
-        const updated = await appointmentsRepository.serviceCheckOut(appointmentId);
+        if (endedAt && isNaN(new Date(endedAt).getTime()))
+            throw new AppError(400, "Invalid ended_at timestamp", "BAD_REQUEST");
+        const updated = await appointmentsRepository.serviceCheckOut(appointmentId, endedAt);
         if (!updated) throw new AppError(404, "Appointment not found", "NOT_FOUND");
         return updated;
     },
@@ -479,6 +483,7 @@ export const appointmentsService = {
                 appointmentId,
                 fallbackStaffId: existing.staff_id ?? null,
                 items:           saleItems,
+                packageItemIds:  new Set((existing.package_items ?? []).map(p => p.package_id)),
             }).catch(() => {});
 
             // Auto-mark attendance (fire-and-forget)
@@ -608,6 +613,7 @@ export const appointmentsService = {
                 ...existing.services.map(s => ({
                     item_type: "service",
                     item_id: s.service_id,
+                    staff_id: s.staff_id ?? undefined,
                     name: s.name,
                     quantity: s.quantity,
                     unit_price: s.price,
@@ -615,6 +621,7 @@ export const appointmentsService = {
                 ...existing.package_items.map(p => ({
                     item_type: "service",
                     item_id: p.package_id,
+                    staff_id: p.staff_id ?? undefined,
                     name: p.name,
                     quantity: p.quantity,
                     unit_price: p.price,
@@ -622,6 +629,7 @@ export const appointmentsService = {
                 ...existing.product_items.map(pr => ({
                     item_type: "product",
                     item_id: pr.product_id ?? undefined,
+                    staff_id: pr.staff_id ?? undefined,
                     name: pr.name,
                     quantity: pr.quantity,
                     unit_price: pr.price,
@@ -629,6 +637,7 @@ export const appointmentsService = {
                 ...existing.membership_items.map(m => ({
                     item_type: "membership",
                     item_id: m.membership_id ?? undefined,
+                    staff_id: m.staff_id ?? undefined,
                     name: m.name,
                     quantity: m.quantity,
                     unit_price: m.price,
@@ -658,6 +667,7 @@ export const appointmentsService = {
             appointmentId,
             fallbackStaffId: existing.staff_id ?? null,
             items,
+            packageItemIds:  new Set((existing.package_items ?? []).map(p => p.package_id)),
         }).catch(() => {});
 
         // ── Auto-mark attendance for the staff member (fire-and-forget) ───────

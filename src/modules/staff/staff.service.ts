@@ -59,6 +59,19 @@ export const staffService = {
                 throw new AppError(409, "A staff member with this email already exists", "DUPLICATE_EMAIL");
             }
 
+            // Guard against silently hijacking a salon_owner/admin account: without this
+            // check, the "admin sets password directly" branch below would find that
+            // user by email and overwrite their role to "staff" via updateUserRole().
+            const existingUser = await authRepository.findUserByEmail(body.email);
+            if (existingUser && (existingUser.role === "salon_owner" || existingUser.role === "admin")) {
+                console.log("[DEBUG] staffService.create - Email belongs to an existing", existingUser.role, ":", body.email);
+                throw new AppError(
+                    409,
+                    `This email already exists as the ${existingUser.role === "salon_owner" ? "salon owner" : "admin"} and cannot be added as a staff member.`,
+                    "EMAIL_IS_OWNER_OR_ADMIN",
+                );
+            }
+
             let passwordHash: string | null = null;
             if (body.password) {
                 passwordHash = await bcrypt.hash(body.password, 10);
@@ -548,13 +561,13 @@ export const staffWagesService = {
 
 export const staffCommissionsService = {
     // ── Summary: total earned, paid, pending for the whole salon ─────────────
-    async getSalonSummary(salonId: string, month?: string) {
-        return commissionCalculationService.getSalonSummary(salonId, month);
+    async getSalonSummary(salonId: string, month?: string, startDate?: string, endDate?: string) {
+        return commissionCalculationService.getSalonSummary(salonId, month, startDate, endDate);
     },
 
     // ── Earned commissions grouped by staff ───────────────────────────────────
-    async getEarnedBySalon(salonId: string, month?: string) {
-        return commissionCalculationService.getEarnedBySalon(salonId, month);
+    async getEarnedBySalon(salonId: string, month?: string, startDate?: string, endDate?: string) {
+        return commissionCalculationService.getEarnedBySalon(salonId, month, startDate, endDate);
     },
 
     // ── Mark all pending commissions as paid for a staff member ───────────────

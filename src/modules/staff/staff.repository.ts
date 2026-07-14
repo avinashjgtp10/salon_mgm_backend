@@ -127,8 +127,10 @@ export const staffRepository = {
               experience_years, specialization, password_hash,
               allow_calendar_bookings,
               is_active, invitation_status,
-              invitation_accepted_at
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+              invitation_accepted_at,
+              permission_level, custom_permissions,
+              joined_date, birthday_day, birthday_month
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
             RETURNING *`,
                 [
                     salonId, data.first_name, data.last_name ?? null, data.email,
@@ -143,6 +145,11 @@ export const staffRepository = {
                     isActive,
                     invitationStatus,
                     invitationAcceptedAt,
+                    data.permission_level ?? "low",
+                    data.custom_permissions ?? null,
+                    data.joined_date ?? null,
+                    data.birthday_day ?? null,
+                    data.birthday_month ?? null,
                 ]
             );
             return rows[0];
@@ -184,6 +191,10 @@ export const staffRepository = {
             specialization: "specialization",
             allow_calendar_bookings: "allow_calendar_bookings",
             custom_permissions: "custom_permissions",
+            permission_level: "permission_level",
+            joined_date: "joined_date",
+            birthday_day: "birthday_day",
+            birthday_month: "birthday_month",
         };
 
         const entries = (Object.keys(patch) as (keyof UpdateStaffBody)[])

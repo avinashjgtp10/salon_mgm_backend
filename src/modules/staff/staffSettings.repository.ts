@@ -299,11 +299,8 @@ export const commissionHistoryRepository = {
         const params: any[] = [staffId];
         if (month) params.push(month);
         const { rows } = await pool.query(
-            `SELECT
-                ce.*,
-                s.name AS service_name
+            `SELECT ce.*
              FROM commission_earned ce
-             LEFT JOIN sales sa ON sa.id = ce.sale_id
              WHERE ce.staff_id = $1 ${dateFilter}
              ORDER BY ce.earned_at DESC`,
             params

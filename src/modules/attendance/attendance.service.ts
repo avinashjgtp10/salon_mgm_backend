@@ -288,6 +288,12 @@ export const attendanceService = {
         return { summary, staff };
     },
 
+    // ── Single staff, date range (Staff History page) ───────────────────────────
+
+    async getForStaff(staffId: string, startDate?: string, endDate?: string, limit?: number): Promise<Attendance[]> {
+        return attendanceRepository.findByStaffAndDateRange(staffId, startDate, endDate, limit);
+    },
+
     // ── Monthly grid ─────────────────────────────────────────────────────────
 
     async getMonthly(salonId: string, year: number, month: number): Promise<{
@@ -297,6 +303,19 @@ export const attendanceService = {
         const [allStaff, records] = await Promise.all([
             attendanceRepository.getActiveSalonStaff(salonId),
             attendanceRepository.findBySalonAndMonth(salonId, year, month),
+        ]);
+        return { staff: allStaff, records };
+    },
+
+    // ── Date-range view ──────────────────────────────────────────────────────
+
+    async getRange(salonId: string, startDate: string, endDate: string): Promise<{
+        staff: { id: string; full_name: string; role: string }[];
+        records: Attendance[];
+    }> {
+        const [allStaff, records] = await Promise.all([
+            attendanceRepository.getActiveSalonStaff(salonId),
+            attendanceRepository.findBySalonAndRange(salonId, startDate, endDate),
         ]);
         return { staff: allStaff, records };
     },

@@ -1,11 +1,12 @@
 import pool from "../../config/database";
 import logger from "../../config/logger";
 import { staffCommissionsRepository, commissionSlabsRepository, commissionHistoryRepository } from "../staff/staffSettings.repository";
+import { commissionRulesRepository } from "../commissionRules/commissionRules.repository";
 import { SaleItem } from "../sales/sales.types";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type CommissionCategory = "services" | "products" | "memberships" | "gift_cards" | "cancellation";
+type CommissionCategory = "services" | "products" | "memberships" | "gift_cards" | "cancellation" | "packages";
 
 const ITEM_TYPE_TO_CATEGORY: Record<string, CommissionCategory> = {
     service:    "services",
@@ -25,6 +26,8 @@ interface CommissionEarned {
     commission_amount: number;
     status: string;
     earned_at: string;
+    rule_id?: string | null;
+    tier_id?: string | null;
 }
 
 // ─── Repository ───────────────────────────────────────────────────────────────
@@ -40,12 +43,15 @@ const commissionEarnedRepository = {
         commission_kind: string;
         commission_rate: number;
         commission_amount: number;
+        rule_id?: string | null;
+        tier_id?: string | null;
     }): Promise<CommissionEarned> {
         const { rows } = await pool.query(
             `INSERT INTO commission_earned
                 (salon_id, staff_id, sale_id, appointment_id, category,
-                 revenue_amount, commission_kind, commission_rate, commission_amount, status)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending')
+                 revenue_amount, commission_kind, commission_rate, commission_amount, status,
+                 rule_id, tier_id)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10,$11)
              RETURNING *`,
             [
                 params.salon_id,
@@ -57,6 +63,8 @@ const commissionEarnedRepository = {
                 params.commission_kind,
                 params.commission_rate,
                 params.commission_amount,
+                params.rule_id ?? null,
+                params.tier_id ?? null,
             ]
         );
         return rows[0];
@@ -81,16 +89,22 @@ const commissionEarnedRepository = {
         return rows;
     },
 
-    async summaryBySalon(salonId: string, month?: string): Promise<{
+    async summaryBySalon(salonId: string, month?: string, startDate?: string, endDate?: string): Promise<{
         total_commission: number;
         total_revenue: number;
         pending_payout: number;
         paid_out: number;
         count: number;
     }> {
-        const dateFilter = month
-            ? `AND date_trunc('month', earned_at) = date_trunc('month', '${month}-01'::date)`
-            : "";
+        const params: any[] = [salonId];
+        let dateFilter = "";
+        if (startDate && endDate) {
+            dateFilter = `AND earned_at::date BETWEEN $2::date AND $3::date`;
+            params.push(startDate, endDate);
+        } else if (month) {
+            dateFilter = `AND date_trunc('month', earned_at) = date_trunc('month', $2::date)`;
+            params.push(`${month}-01`);
+        }
         const { rows } = await pool.query(
             `SELECT
                 COALESCE(SUM(commission_amount), 0)                           AS total_commission,
@@ -100,7 +114,7 @@ const commissionEarnedRepository = {
                 COUNT(*)                                                      AS count
              FROM commission_earned
              WHERE salon_id = $1 ${dateFilter}`,
-            [salonId]
+            params
         );
         return {
             total_commission: parseFloat(rows[0].total_commission),
@@ -111,7 +125,7 @@ const commissionEarnedRepository = {
         };
     },
 
-    async earnedBySalon(salonId: string, month?: string): Promise<{
+    async earnedBySalon(salonId: string, month?: string, startDate?: string, endDate?: string): Promise<{
         staff_id: string;
         staff_first_name: string;
         staff_last_name: string | null;
@@ -125,11 +139,15 @@ const commissionEarnedRepository = {
         transaction_count: number;
         categories: string[];
     }[]> {
-        const dateFilter = month
-            ? `AND date_trunc('month', ce.earned_at) = date_trunc('month', ($2 || '-01')::date)`
-            : "";
         const params: any[] = [salonId];
-        if (month) params.push(month);
+        let dateFilter = "";
+        if (startDate && endDate) {
+            dateFilter = `AND ce.earned_at::date BETWEEN $2::date AND $3::date`;
+            params.push(startDate, endDate);
+        } else if (month) {
+            dateFilter = `AND date_trunc('month', ce.earned_at) = date_trunc('month', $2::date)`;
+            params.push(`${month}-01`);
+        }
 
         const { rows } = await pool.query(
             `SELECT
@@ -180,6 +198,115 @@ const commissionEarnedRepository = {
     },
 };
 
+// ─── New-engine (commission_rules) evaluation ────────────────────────────────
+
+/**
+ * Evaluates the new commission_rules engine for one (staff_id, category) group.
+ * Returns true if a matching ACTIVE rule was found and handled (whether or not
+ * it actually produced a payout this time — e.g. a milestone tier not yet
+ * reached still counts as "handled" so the legacy system doesn't double-count).
+ */
+async function tryNewEngineRule(params: {
+    salonId: string;
+    saleId: string;
+    appointmentId?: string | null;
+    staff_id: string;
+    category: CommissionCategory;
+    revenue: number;
+    inserts: Promise<any>[];
+}): Promise<boolean> {
+    const { salonId, saleId, appointmentId, staff_id, category, revenue, inserts } = params;
+    // services/products/memberships/packages map 1:1 onto the new engine's source enum
+    const source = category as "services" | "products" | "memberships" | "packages";
+
+    const { rows: staffRows } = await pool.query(`SELECT designation FROM staff WHERE id = $1`, [staff_id]);
+    const designation = staffRows[0]?.designation ?? null;
+
+    const rule = await commissionRulesRepository.findActiveForCalculation(salonId, source, staff_id, designation);
+    if (!rule) return false;
+
+    // ── Threshold gate (applies to all 3 types) ──────────────────────────────────
+    // "They receive [rate] when they generate [condition_target] based on [condition_metric]"
+    let periodMetric: number | null = null;
+    if (rule.condition_target && rule.condition_metric) {
+        const IST = "Asia/Kolkata";
+        // Threshold always resets monthly — there's no separate period selector for the
+        // condition itself in the simplified single-reward model (frequency governs payout
+        // cadence, not the threshold window).
+        const dateClause = `AND date_trunc('month', earned_at AT TIME ZONE '${IST}') = date_trunc('month', NOW() AT TIME ZONE '${IST}')`;
+
+        const { rows: metricRows } = await pool.query(
+            rule.condition_metric === "count"
+                ? `SELECT COUNT(*)::float AS total FROM commission_earned WHERE staff_id=$1 AND rule_id=$2 ${dateClause}`
+                : `SELECT COALESCE(SUM(revenue_amount),0)::float AS total FROM commission_earned WHERE staff_id=$1 AND rule_id=$2 ${dateClause}`,
+            [staff_id, rule.id]
+        );
+        const priorMetric = parseFloat(metricRows[0]?.total ?? "0");
+        periodMetric = priorMetric + (rule.condition_metric === "count" ? 1 : revenue);
+
+        if (periodMetric < Number(rule.condition_target)) {
+            logger.info("commissionCalculationService: below condition threshold", {
+                staff_id, category, ruleId: rule.id, periodMetric, target: rule.condition_target,
+            });
+            return true; // handled — just didn't earn anything yet
+        }
+    }
+
+    const rate = Number(rule.rate);
+
+    if (rule.type === "milestone") {
+        // One-time bonus per period once the threshold is crossed — check it hasn't
+        // already been paid out this month before awarding again.
+        const IST = "Asia/Kolkata";
+        const dateClause = `AND date_trunc('month', earned_at AT TIME ZONE '${IST}') = date_trunc('month', NOW() AT TIME ZONE '${IST}')`;
+        const { rows: alreadyPaidRows } = await pool.query(
+            `SELECT 1 FROM commission_earned WHERE staff_id=$1 AND rule_id=$2 ${dateClause} LIMIT 1`,
+            [staff_id, rule.id]
+        );
+        if (alreadyPaidRows.length > 0) return true; // already awarded this period
+
+        inserts.push(
+            commissionEarnedRepository.insert({
+                salon_id: salonId, staff_id, sale_id: saleId,
+                appointment_id: appointmentId ?? null,
+                category, revenue_amount: parseFloat(revenue.toFixed(2)),
+                commission_kind: "fixed_rate",
+                commission_rate: rate,
+                commission_amount: rate,
+                rule_id: rule.id,
+            })
+        );
+        logger.info("commissionCalculationService: milestone bonus awarded", {
+            staff_id, saleId, category, ruleId: rule.id, reward: rate, periodMetric,
+        });
+        return true;
+    }
+
+    // percentage / fixed
+    const commissionAmount = rule.type === "percentage"
+        ? parseFloat((revenue * rate / 100).toFixed(2))
+        : rate;
+
+    if (commissionAmount > 0) {
+        inserts.push(
+            commissionEarnedRepository.insert({
+                salon_id: salonId, staff_id, sale_id: saleId,
+                appointment_id: appointmentId ?? null,
+                category, revenue_amount: parseFloat(revenue.toFixed(2)),
+                commission_kind: rule.type === "percentage" ? "percentage" : "fixed_rate",
+                commission_rate: rate,
+                commission_amount: commissionAmount,
+                rule_id: rule.id,
+            })
+        );
+        logger.info("commissionCalculationService: new-engine commission earned", {
+            staff_id, saleId, category, ruleId: rule.id, type: rule.type, commissionAmount,
+        });
+    }
+
+    return true;
+}
+
 // ─── Calculation Service ──────────────────────────────────────────────────────
 
 export const commissionCalculationService = {
@@ -197,8 +324,14 @@ export const commissionCalculationService = {
         appointmentId?: string | null;
         fallbackStaffId?: string | null;  // sale.staff_id (used when item has no staff)
         items:         SaleItem[];
+        // sale_items has no 'package' item_type (DB CHECK constraint only allows
+        // service/product/membership/gift_card/quick), so package line items are
+        // stored as item_type='service' — this is how callers tell us which of
+        // those item_ids are actually packages, so they get the "packages" rate
+        // instead of silently being billed at the "services" rate.
+        packageItemIds?: Set<string>;
     }): Promise<void> {
-        const { salonId, saleId, appointmentId, fallbackStaffId, items } = params;
+        const { salonId, saleId, appointmentId, fallbackStaffId, items, packageItemIds } = params;
 
         if (!items || items.length === 0) return;
 
@@ -214,7 +347,9 @@ export const commissionCalculationService = {
                 const staffId = item.staff_id || fallbackStaffId;
                 if (!staffId) continue; // no staff assigned — skip
 
-                const category = ITEM_TYPE_TO_CATEGORY[item.item_type];
+                const category = (item.item_id && packageItemIds?.has(item.item_id))
+                    ? "packages"
+                    : ITEM_TYPE_TO_CATEGORY[item.item_type];
                 if (!category) continue; // unknown item type — skip
 
                 const key      = `${staffId}::${category}`;
@@ -234,6 +369,20 @@ export const commissionCalculationService = {
 
             for (const { staff_id, category, revenue } of groups.values()) {
                 try {
+                    // ── New-engine commission_rules first — services/products/memberships only;
+                    // gift_cards/cancellation aren't covered by the new engine yet, so those always
+                    // fall through to the legacy path below. ──────────────────────────────────
+                    if (category !== "gift_cards" && category !== "cancellation") {
+                        const handled = await tryNewEngineRule({
+                            salonId, saleId, appointmentId, staff_id, category, revenue, inserts,
+                        });
+                        if (handled) continue;
+                    }
+
+                    // Legacy staff_commission_settings predates "packages" as a category —
+                    // packages are new-engine only, so there's nothing to fall back to here.
+                    if (category === "packages") continue;
+
                     // Check if commission is enabled for this staff + category
                     const rule = await staffCommissionsRepository.findByCategory(staff_id, category);
                     if (!rule || !rule.is_enabled) continue;
@@ -394,16 +543,16 @@ export const commissionCalculationService = {
     },
 
     // Expose repository methods for the overview/payroll pages
-    async getSalonSummary(salonId: string, month?: string) {
-        return commissionEarnedRepository.summaryBySalon(salonId, month);
+    async getSalonSummary(salonId: string, month?: string, startDate?: string, endDate?: string) {
+        return commissionEarnedRepository.summaryBySalon(salonId, month, startDate, endDate);
     },
 
     async getStaffEarnings(staffId: string, month?: string) {
         return commissionEarnedRepository.listByStaff(staffId, month);
     },
 
-    async getEarnedBySalon(salonId: string, month?: string) {
-        return commissionEarnedRepository.earnedBySalon(salonId, month);
+    async getEarnedBySalon(salonId: string, month?: string, startDate?: string, endDate?: string) {
+        return commissionEarnedRepository.earnedBySalon(salonId, month, startDate, endDate);
     },
 
     async markStaffPaid(salonId: string, staffId: string) {

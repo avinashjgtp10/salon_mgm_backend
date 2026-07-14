@@ -58,10 +58,14 @@ export const validateUpdateAppointment = (req: Request, _res: Response, next: Ne
 export const validateCheckoutAppointment = (req: Request, _res: Response, next: NextFunction) => {
     try {
         const b = req.body;
-        if (!Array.isArray(b.items) || b.items.length === 0)
-            throw new AppError(400, "items must be a non-empty array", "VALIDATION_ERROR");
+        // items is optional — when omitted, appointmentsService.checkout() derives
+        // them from the appointment's own saved services/products/etc (or, if a
+        // payment already auto-created a sale, from that sale directly). Only
+        // validate shape when the caller actually sent items.
+        if (b.items !== undefined && !Array.isArray(b.items))
+            throw new AppError(400, "items must be an array", "VALIDATION_ERROR");
         const VALID_ITEM_TYPES = ["service", "product", "membership", "gift_card"];
-        for (const [i, item] of b.items.entries()) {
+        for (const [i, item] of (b.items ?? []).entries()) {
             if (!VALID_ITEM_TYPES.includes(item.item_type))
                 throw new AppError(400, `items[${i}].item_type is invalid`, "VALIDATION_ERROR");
             if (typeof item.name !== "string" || item.name.trim().length === 0)
