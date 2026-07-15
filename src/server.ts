@@ -9,6 +9,7 @@ import { initSocket } from './config/socket'
 import { startCampaignScheduler, stopCampaignScheduler } from './modules/marketing/whatsapp/queue/campaign.scheduler'
 import { startAutomationScheduler, stopAutomationScheduler } from './modules/whatsapp-automation/whatsapp-automation.scheduler'
 import { startWaLimitSyncScheduler, stopWaLimitSyncScheduler } from './modules/marketing/whatsapp/config/wa-limit-sync.scheduler'
+import { startNoShowScheduler, stopNoShowScheduler } from './modules/appointments/appointments.scheduler'
 
 const PORT = config.port
 
@@ -42,6 +43,9 @@ httpServer.listen(PORT, () => {
 
   // Keep daily_limit / quality_rating in sync with Meta's tier upgrades
   startWaLimitSyncScheduler()
+
+  // Auto-flip overdue unpaid appointments to no-show
+  startNoShowScheduler()
 })
 
 // Graceful shutdown
@@ -50,6 +54,7 @@ process.on('SIGTERM', () => {
   stopCampaignScheduler()
   stopAutomationScheduler()
   stopWaLimitSyncScheduler()
+  stopNoShowScheduler()
   httpServer.close(() => {
     logger.info('HTTP server closed')
     db.end()

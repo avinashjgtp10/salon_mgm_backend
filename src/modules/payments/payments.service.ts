@@ -321,11 +321,14 @@ export const paymentsService = {
       if (coupon) await couponsRepository.incrementUsed(coupon.id);
     }
 
-    // Mark appointment payment_status based on computed due_amount
+    // Mark appointment status based on computed due_amount — but never downgrade
+    // a terminal state (cancelled/deleted) that may have raced ahead of this call.
     if (data.appointment_id) {
       try {
-        const apptStatus = (data.due_amount ?? 0) > 0 ? 'partial' : 'paid';
-        await appointmentsRepository.updatePaymentStatus(data.appointment_id, apptStatus);
+        if (!appt || !['cancelled', 'deleted'].includes(appt.status)) {
+          const apptStatus = (data.due_amount ?? 0) > 0 ? 'partial' : 'paid';
+          await appointmentsRepository.updateStatus(data.appointment_id, apptStatus);
+        }
       } catch {
         // Non-fatal: payment is still recorded
       }

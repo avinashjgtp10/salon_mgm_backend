@@ -22,20 +22,10 @@ export async function ensureTable(): Promise<void> {
     await pool.query(
         `ALTER TABLE appointments ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ NULL`,
     );
-    // Client's service check-in/check-out toggle on the calendar tooltip —
-    // separate from `status`/payment_status so it never interferes with
-    // existing chip-colour logic.
-    await pool.query(
-        `ALTER TABLE appointments ADD COLUMN IF NOT EXISTS service_started_at TIMESTAMPTZ NULL`,
-    );
-    await pool.query(
-        `ALTER TABLE appointments ADD COLUMN IF NOT EXISTS service_ended_at TIMESTAMPTZ NULL`,
-    );
 }
 
 export const appointmentsRepository = {
 
-    // ✅ FIX — LEFT JOIN payments so payment_status reflects actual payment records
     // ✅ WA-AUTO — Added client phone, phone_country_code, salon_name for WhatsApp automation
     async findById(id: string): Promise<Appointment | null> {
         const { rows } = await pool.query(
@@ -54,14 +44,6 @@ export const appointmentsRepository = {
                 st.email                                 AS staff_email,
                 s.business_name                          AS salon_name,
                 COALESCE(s.email, u.email)               AS salon_email,
-                CASE
-                  WHEN EXISTS (SELECT 1 FROM payments p WHERE p.appointment_id = a.id)
-                   AND (SELECT due_amount FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) = 0
-                  THEN 'paid'::text
-                  WHEN EXISTS (SELECT 1 FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial'))
-                  THEN 'partial'::text
-                  ELSE 'unpaid'::text
-                END AS payment_status,
                 COALESCE((SELECT SUM(paid_amount) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS paid_amount,
                 (SELECT payment_method FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) AS payment_method,
                 COALESCE((SELECT SUM(reward_points_value) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS reward_points_value,
@@ -159,11 +141,6 @@ export const appointmentsRepository = {
                c.phone_number AS client_phone,
                c.email        AS client_email,
                TRIM(CONCAT(st.first_name, ' ', COALESCE(st.last_name, ''))) AS staff_name,
-               CASE
-                 WHEN pa.pay_count > 0 AND COALESCE(pa.latest_due, 1) = 0 THEN 'paid'::text
-                 WHEN pa.pay_count > 0                                      THEN 'partial'::text
-                 ELSE 'unpaid'::text
-               END AS payment_status,
                COALESCE(pa.total_paid, 0)    AS paid_amount,
                pa.latest_method              AS payment_method,
                COALESCE(pa.total_reward_points_value, 0) AS reward_points_value,
@@ -202,7 +179,7 @@ export const appointmentsRepository = {
         const query = `
             SELECT 1 FROM appointments
             WHERE staff_id = $1
-              AND LOWER(status::text) NOT IN ('cancelled', 'no_show', 'completed')
+              AND LOWER(status::text) NOT IN ('cancelled', 'no-show', 'paid', 'deleted')
               AND scheduled_at < ($2::timestamptz + ($3 * interval '1 minute'))
               AND (scheduled_at + (duration_minutes * interval '1 minute')) > $2::timestamptz
               ${excludeId ? `AND id != $4` : ""}
@@ -324,49 +301,24 @@ export const appointmentsRepository = {
         return rows[0];
     },
 
-    async updatePaymentStatus(id: string, paymentStatus: string): Promise<Appointment> {
-        const { rows } = await pool.query(
-            `UPDATE appointments SET payment_status = $2, updated_at = NOW() WHERE id = $1 RETURNING *`,
-            [id, paymentStatus]
-        );
-        return rows[0];
-    },
-
-    // Check-in: client's service starts — moves the booking to that time slot
-    // (scheduled_at = the start time, keeping the original duration so ends_at
-    // shifts by the same amount) so the calendar block visually slides to
-    // where the service is actually happening. Staff can enter the actual
-    // start time (e.g. logging it a few minutes late) instead of always NOW().
-    async serviceCheckIn(id: string, startedAt?: string): Promise<Appointment | null> {
+    // Bulk-flips overdue, never-paid appointments to no-show. Deliberately
+    // scoped to `status = 'booked'` only — a `partial` appointment (deposit
+    // already paid) is left alone even once its time passes, so staff can
+    // still resolve the remaining due manually instead of it silently
+    // reclassifying as a no-show.
+    async markNoShowBatch(): Promise<{ id: string }[]> {
         const { rows } = await pool.query(
             `UPDATE appointments
-             SET service_started_at = COALESCE($2::timestamptz, NOW()),
-                 scheduled_at = COALESCE($2::timestamptz, NOW()),
-                 ends_at = COALESCE($2::timestamptz, NOW()) + (duration_minutes * INTERVAL '1 minute'),
-                 updated_at = NOW()
-             WHERE id = $1
-             RETURNING *`,
-            [id, startedAt ?? null]
+             SET status = 'no-show', updated_at = NOW()
+             WHERE status = 'booked' AND ends_at < NOW() AND deleted_at IS NULL
+             RETURNING id`
         );
-        return rows[0] || null;
-    },
-
-    // Check-out: client's service ends — timestamp only, no reschedule
-    // (the block is already positioned correctly from check-in).
-    async serviceCheckOut(id: string, endedAt?: string): Promise<Appointment | null> {
-        const { rows } = await pool.query(
-            `UPDATE appointments
-             SET service_ended_at = COALESCE($2::timestamptz, NOW()), updated_at = NOW()
-             WHERE id = $1
-             RETURNING *`,
-            [id, endedAt ?? null]
-        );
-        return rows[0] || null;
+        return rows;
     },
 
     async deleteById(id: string): Promise<Appointment | null> {
         const { rows } = await pool.query(
-            `UPDATE appointments SET deleted_at = NOW() WHERE id = $1 RETURNING *`,
+            `UPDATE appointments SET status = 'deleted', deleted_at = NOW() WHERE id = $1 RETURNING *`,
             [id]
         );
         return rows[0] || null;
@@ -375,7 +327,7 @@ export const appointmentsRepository = {
     async linkSale(id: string, saleId: string): Promise<Appointment> {
         const { rows } = await pool.query(
             `UPDATE appointments
-             SET sale_id = $2, status = 'completed', updated_at = NOW()
+             SET sale_id = $2, status = 'paid', updated_at = NOW()
              WHERE id = $1 RETURNING *`,
             [id, saleId]
         );

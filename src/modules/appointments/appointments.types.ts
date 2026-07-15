@@ -1,10 +1,10 @@
 export type AppointmentStatus =
     | "booked"
-    | "confirmed"
-    | "in_progress"
-    | "completed"
+    | "paid"
+    | "partial"
     | "cancelled"
-    | "no_show";
+    | "no-show"
+    | "deleted";
 
 // ─── JSONB item types ────────────────────────────────────────────────────────
 
@@ -51,8 +51,6 @@ export type AppointmentMembershipItem = {
     start_time?: string | null;
 };
 
-export type PaymentStatusField = 'unpaid' | 'paid' | 'partial' | 'refunded';
-
 // ─── Core Appointment type ───────────────────────────────────────────────────
 
 export type Appointment = {
@@ -66,7 +64,6 @@ export type Appointment = {
     notes: string | null;
     staff_alert: string | null;
     status: AppointmentStatus;
-    payment_status: PaymentStatusField;
     scheduled_at: string;
     duration_minutes: number;
     ends_at: string | null;
@@ -103,11 +100,6 @@ export type Appointment = {
     // payment has actually been made (payments.membership_wallet_used only
     // exists once checkout happens), so the checkbox survives Save/reopen.
     apply_membership_wallet: boolean;
-    // Client's service check-in/check-out — purely informational timestamps,
-    // deliberately independent of `status` (which drives chip colour/payment
-    // logic elsewhere). NULL means "not yet checked in/out".
-    service_started_at: string | null;
-    service_ended_at: string | null;
     deleted_at?: string | null;
 };
 

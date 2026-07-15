@@ -17,27 +17,19 @@ import type {
   ActivityItem,
 } from "./salon-dashboard.types";
 
-// Map appointment status → frontend display status. The appointments table's
-// own `status` column is only ever flipped to 'completed' if staff manually
-// do so — most salons never bother once the bill is paid — so a booked/
-// confirmed appointment that's actually been paid in full is treated as
-// completed too. Same payments-table-is-authoritative convention used in
-// clients.controller.ts's payment_status derivation.
-function mapStatus(
-  s: string,
-  isFullyPaid: boolean
-): "completed" | "in-progress" | "upcoming" | "cancelled" | "no-show" {
+// Map the unified appointments.status directly to the dashboard's display
+// status — payment state and lifecycle state are the same column now, so
+// there's no separate "is it actually paid" lookup needed anymore.
+function mapStatus(s: string): "completed" | "upcoming" | "cancelled" | "no-show" {
   switch (s) {
-    case "completed":
-      return "completed";
-    case "in_progress":
-      return "in-progress";
     case "cancelled":
       return "cancelled";
-    case "no_show":
+    case "no-show":
       return "no-show";
+    case "paid":
+      return "completed";
     default:
-      return isFullyPaid ? "completed" : "upcoming"; // booked, confirmed
+      return "upcoming"; // booked, partial
   }
 }
 
@@ -97,7 +89,7 @@ export const salonDashboardRepository = {
          FROM appointments
          WHERE salon_id = $1
            AND deleted_at IS NULL
-           AND status NOT IN ('cancelled', 'no_show')
+           AND status NOT IN ('cancelled', 'no-show')
            AND scheduled_at >= date_trunc('month', NOW() - INTERVAL '1 month')`,
         [salonId]
       ),
@@ -206,7 +198,6 @@ export const salonDashboardRepository = {
       time: string;
       status: string;
       amount: string;
-      is_fully_paid: boolean;
       is_deleted: boolean;
     }>(
       `SELECT
@@ -229,10 +220,6 @@ export const salonDashboardRepository = {
             ) AS item),
            0
          )::numeric AS amount,
-         COALESCE(
-           (SELECT bool_or(p.status = 'completed') FROM payments p WHERE p.appointment_id = a.id),
-           false
-         ) AS is_fully_paid,
          (a.deleted_at IS NOT NULL) AS is_deleted
        FROM appointments a
        LEFT JOIN clients c ON c.id = a.client_id
@@ -249,7 +236,7 @@ export const salonDashboardRepository = {
       service: row.service,
       staffName: row.staff_name || "—",
       time: row.time,
-      status: row.is_deleted ? "deleted" : mapStatus(row.status, row.is_fully_paid),
+      status: row.is_deleted ? "deleted" : mapStatus(row.status),
       amount: parseFloat(row.amount),
     }));
   },
@@ -378,7 +365,7 @@ export const salonDashboardRepository = {
          WHERE salon_id = $1
            AND deleted_at IS NULL
            AND date_trunc('month', scheduled_at) = date_trunc('month', NOW())
-           AND status = 'completed'
+           AND status = 'paid'
          GROUP BY staff_id
        ),
        sales_stats AS (
@@ -438,7 +425,7 @@ export const salonDashboardRepository = {
        WHERE a.salon_id = $1
          AND a.deleted_at IS NULL
          AND date_trunc('month', a.scheduled_at) = date_trunc('month', NOW())
-         AND a.status = 'completed'
+         AND a.status = 'paid'
          AND (item->>'name') IS NOT NULL
          AND (item->>'name') != ''
        GROUP BY (item->>'name')
@@ -507,11 +494,11 @@ export const salonDashboardRepository = {
       // backend — the real due amount lives on the most recent payments row
       // per appointment (see getPendingPayments above for the same fix).
       `SELECT
-         COUNT(*) FILTER (WHERE a.status NOT IN ('cancelled', 'no_show'))
+         COUNT(*) FILTER (WHERE a.status NOT IN ('cancelled', 'no-show'))
            AS bookings,
-         COUNT(*) FILTER (WHERE a.status IN ('booked', 'confirmed') AND a.scheduled_at > NOW())
+         COUNT(*) FILTER (WHERE a.status IN ('booked', 'partial') AND a.scheduled_at > NOW())
            AS waiting,
-         COUNT(*) FILTER (WHERE a.status IN ('booked', 'confirmed') AND a.scheduled_at <= NOW())
+         COUNT(*) FILTER (WHERE a.status IN ('booked', 'partial') AND a.scheduled_at <= NOW())
            AS delayed,
          COUNT(*) FILTER (WHERE COALESCE(latest.due_amount, 0) > 0)
            AS payment_due
@@ -547,7 +534,7 @@ export const salonDashboardRepository = {
        FROM appointments
        WHERE salon_id = $1
          AND DATE(scheduled_at AT TIME ZONE 'UTC') = CURRENT_DATE
-         AND status NOT IN ('cancelled', 'no_show')
+         AND status NOT IN ('cancelled', 'no-show')
          AND deleted_at IS NULL
        GROUP BY date_trunc('hour', scheduled_at AT TIME ZONE 'UTC')
        ORDER BY sort_key ASC`,
@@ -617,12 +604,12 @@ export const salonDashboardRepository = {
          AND EXISTS (
            SELECT 1 FROM appointments a
            WHERE a.client_id = c.id AND a.salon_id = $1 AND a.deleted_at IS NULL
-             AND a.status NOT IN ('cancelled', 'no_show')
+             AND a.status NOT IN ('cancelled', 'no-show')
          )
          AND NOT EXISTS (
            SELECT 1 FROM appointments a2
            WHERE a2.client_id = c.id AND a2.salon_id = $1 AND a2.deleted_at IS NULL
-             AND a2.status NOT IN ('cancelled', 'no_show')
+             AND a2.status NOT IN ('cancelled', 'no-show')
              AND a2.scheduled_at >= NOW() - INTERVAL '30 days'
          )`,
       [salonId]

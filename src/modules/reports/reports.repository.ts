@@ -852,7 +852,7 @@ const buildProductRevenueSourceQuery = (
   const appointmentWhere = [
     "a.salon_id = $1",
     "NOT EXISTS (SELECT 1 FROM sales sx WHERE sx.appointment_id = a.id)",
-    "LOWER(COALESCE(a.status::text, '')) NOT IN ('cancelled', 'no_show')",
+    "LOWER(COALESCE(a.status::text, '')) NOT IN ('cancelled', 'no-show')",
   ];
 
   let index = 2;
@@ -1366,7 +1366,7 @@ const buildStaffCommissionSourceQuery = (
             2
           ) AS commission_amount,
           CASE
-            WHEN LOWER(COALESCE(ali.status::text, '')) IN ('cancelled', 'no_show')
+            WHEN LOWER(COALESCE(ali.status::text, '')) IN ('cancelled', 'no-show')
                  OR LOWER(COALESCE(ali.payment_state, '')) = 'refunded'
             THEN 'Cancelled'
             ELSE 'Pending'
@@ -2242,7 +2242,7 @@ async getSalesSummaryTable(
   const appointmentWhere = [
     "a.salon_id = $1",
     "NOT EXISTS (SELECT 1 FROM sales sx WHERE sx.appointment_id = a.id)",
-    "LOWER(COALESCE(a.status::text, '')) NOT IN ('cancelled', 'no_show')",
+    "LOWER(COALESCE(a.status::text, '')) NOT IN ('cancelled', 'no-show')",
   ];
 
   let index = 2;
@@ -5684,7 +5684,7 @@ async getAppointmentCards(
         COUNT(*) FILTER (WHERE m.payment_state = 'paid') AS completed,
         COUNT(*) FILTER (WHERE m.payment_state = 'unpaid') AS pending,
         COUNT(*) FILTER (WHERE m.status = 'cancelled') AS cancelled,
-        COUNT(*) FILTER (WHERE m.status = 'no_show') AS no_show,
+        COUNT(*) FILTER (WHERE m.status = 'no-show') AS no_show,
         COUNT(*) FILTER (WHERE m.booking_source = 'Walk-in') AS walk_in_bookings,
         COUNT(*) FILTER (WHERE m.booking_source = 'Online') AS online_bookings,
         COALESCE(ROUND(AVG(m.appointment_amount) FILTER (WHERE m.payment_state = 'paid'), 2), 0) AS average_booking_value
@@ -5762,7 +5762,7 @@ async getAppointmentCharts(
         UNION ALL
         SELECT 'Cancelled' AS name, COUNT(*) FILTER (WHERE m.status = 'cancelled') AS value FROM metrics m WHERE ${where.join(" AND ")}
         UNION ALL
-        SELECT 'No Show' AS name, COUNT(*) FILTER (WHERE m.status = 'no_show') AS value FROM metrics m WHERE ${where.join(" AND ")}
+        SELECT 'No Show' AS name, COUNT(*) FILTER (WHERE m.status = 'no-show') AS value FROM metrics m WHERE ${where.join(" AND ")}
       ) q
       `,
       values
@@ -6034,7 +6034,7 @@ async getAppointmentTable(
         UPPER(COALESCE(m.payment_method, 'N/A')) AS payment,
         CASE
           WHEN m.status = 'cancelled' THEN 'Cancelled'
-          WHEN m.status = 'no_show' THEN 'No Show'
+          WHEN m.status = 'no-show' THEN 'No Show'
           WHEN LOWER(m.payment_state) = 'paid' THEN 'Completed'
           WHEN LOWER(m.payment_state) = 'unpaid' THEN 'Pending'
           ELSE 'Pending'
@@ -6612,7 +6612,7 @@ async getGuestCollectionReport(
         ON TRUE
       WHERE
         m.salon_id = $1
-        AND LOWER(COALESCE(m.status::text, '')) NOT IN ('cancelled', 'no_show')
+        AND LOWER(COALESCE(m.status::text, '')) NOT IN ('cancelled', 'no-show')
     ),
     standalone_sales_base AS (
       SELECT
@@ -7114,7 +7114,7 @@ async getStaffAttendanceReport(
       SELECT
         a.staff_id,
         DATE(a.scheduled_at) AS appointment_date,
-        COUNT(*) FILTER (WHERE a.status = 'completed') AS completed_appointments
+        COUNT(*) FILTER (WHERE a.status = 'paid') AS completed_appointments
       FROM appointments a
       JOIN active_staff s
         ON s.id = a.staff_id
@@ -8522,7 +8522,7 @@ async getBalanceReceivedReport(
       WHERE
         p.salon_id = $1
         AND p.appointment_id IS NOT NULL
-        AND LOWER(COALESCE(a.status::text, '')) NOT IN ('cancelled', 'no_show')
+        AND LOWER(COALESCE(a.status::text, '')) NOT IN ('cancelled', 'no-show')
         AND LOWER(COALESCE(p.status, '')) IN ('partial', 'completed')
         AND COALESCE(p.paid_amount, p.net_amount, 0) > 0
     ),
@@ -8572,7 +8572,7 @@ async getBalanceReceivedReport(
         ON ast.appointment_id = m.id
       WHERE
         m.salon_id = $1
-        AND LOWER(COALESCE(m.status::text, '')) NOT IN ('cancelled', 'no_show')
+        AND LOWER(COALESCE(m.status::text, '')) NOT IN ('cancelled', 'no-show')
     ),
     current_period AS (
       SELECT *
