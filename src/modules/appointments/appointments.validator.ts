@@ -9,7 +9,7 @@ const isOptionalString = (v: unknown) => v === undefined || typeof v === "string
 const isISODatetime = (v: unknown) => typeof v === "string" && !isNaN(new Date(v).getTime());
 
 const VALID_STATUSES: AppointmentStatus[] = [
-    "booked", "confirmed", "in_progress", "completed", "cancelled", "no_show",
+    "booked", "paid", "partial", "cancelled", "no-show", "deleted",
 ];
 
 export const validateCreateAppointment = (req: Request, _res: Response, next: NextFunction) => {
