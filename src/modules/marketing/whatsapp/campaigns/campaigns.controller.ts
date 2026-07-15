@@ -33,6 +33,15 @@ export const campaignsController = {
     } catch (e) { return next(e) }
   },
 
+  async resend(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId
+      if (!salonId) return res.status(400).json({ error: 'salonId missing from token' })
+      const data = await campaignsService.resend(req.params.id as string, salonId)
+      return sendSuccess(res, 201, data, 'Campaign resent successfully')
+    } catch (e) { return next(e) }
+  },
+
   async pause(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = req.user?.salonId

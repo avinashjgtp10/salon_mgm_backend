@@ -12,13 +12,21 @@ export function validateCreateClientPackage(
   res: Response,
   next: NextFunction,
 ) {
-  const { clientId, packageName, basePrice, paymentMethod, services } = req.body;
+  const { clientId, packageName, basePrice, paymentMethod, splitDetails, services } = req.body;
 
   if (!clientId)                          return badRequest(res, "clientId is required");
   if (!packageName?.trim())               return badRequest(res, "packageName is required");
   if (typeof basePrice !== "number" || basePrice < 0)
                                           return badRequest(res, "basePrice must be a non-negative number");
   if (!paymentMethod?.trim())             return badRequest(res, "paymentMethod is required");
+  if (splitDetails !== undefined) {
+    if (typeof splitDetails !== "object" || splitDetails === null || Array.isArray(splitDetails))
+                                          return badRequest(res, "splitDetails must be an object of method -> amount");
+    for (const [method, amount] of Object.entries(splitDetails)) {
+      if (typeof amount !== "number" || amount < 0)
+                                          return badRequest(res, `splitDetails.${method} must be a non-negative number`);
+    }
+  }
   if (!Array.isArray(services) || services.length === 0)
                                           return badRequest(res, "At least one service is required");
 

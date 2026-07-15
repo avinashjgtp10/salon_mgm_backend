@@ -39,11 +39,12 @@ const pool = new Pool({
   // that cloud DBs (Supabase/Neon/Render) silently kill, causing
   // "Connection terminated unexpectedly" on the next query.
   min: 0,
-  max: parseInt(process.env.DB_POOL_MAX || '10'),
+  max: parseInt(process.env.DB_POOL_MAX || '20'),
   // Idle connections are closed after 10s — well before cloud DB kills them
   idleTimeoutMillis: 10000,
-  // How long to wait for a new connection to be established
-  connectionTimeoutMillis: 10000,
+  // Raised from 10s to 20s — dashboard fires 6 parallel queries; under load
+  // the pool needs more headroom before giving up on a new connection.
+  connectionTimeoutMillis: 20000,
   // TCP keepalive: sends a heartbeat packet so the OS/network never
   // silently drops a connection that pg-pool still thinks is alive.
   keepAlive: true,
@@ -63,9 +64,21 @@ pool.on('connect', (client) => {
 pool.on('error', (err) => {
   console.error('❌ Database error:', err);
   // Do NOT exit the process on idle client errors. The pg pool will automatically remove
-  // the errored client and create a new one when a query is issued. 
+  // the errored client and create a new one when a query is issued.
   // Exiting here causes the entire backend to crash unnecessarily.
 });
+
+// ── Auto-retry every pool.query() call, app-wide ────────────────────────────
+// The remote RDS connection intermittently blips (DNS resolution failures,
+// connection timeouts) — previously only call sites explicitly wrapped in
+// safeQuery() were protected, which meant hitting this on any of the ~500+
+// unwrapped call sites (e.g. GET /salons/me) still 500'd on the first blip.
+// Patching pool.query itself here means every call gets the same retry
+// behavior for free, with zero changes needed in individual repositories.
+// Only the plain Promise-returning form is used anywhere in this codebase
+// (no callback-style pool.query calls), so wrapping it this way is safe.
+const rawQuery: (...args: any[]) => Promise<any> = pool.query.bind(pool);
+pool.query = ((...args: any[]) => safeQuery(() => rawQuery(...args))) as typeof pool.query;
 
 export default pool;
 
@@ -73,6 +86,30 @@ export default pool;
 setImmediate(() => {
   pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS login_count INTEGER DEFAULT 0`)
     .catch((err: any) => console.warn('⚠️  login_count column migration:', err.message));
+});
+
+// Add extra profile fields to salons table (safe, idempotent)
+setImmediate(() => {
+  pool.query(`
+    ALTER TABLE salons
+      ADD COLUMN IF NOT EXISTS address           TEXT,
+      ADD COLUMN IF NOT EXISTS city              TEXT,
+      ADD COLUMN IF NOT EXISTS state             TEXT,
+      ADD COLUMN IF NOT EXISTS country           TEXT,
+      ADD COLUMN IF NOT EXISTS pincode           TEXT,
+      ADD COLUMN IF NOT EXISTS timezone          TEXT DEFAULT 'Asia/Kolkata',
+      ADD COLUMN IF NOT EXISTS currency          TEXT DEFAULT 'INR',
+      ADD COLUMN IF NOT EXISTS business_category TEXT
+  `).catch((err: any) => console.warn('⚠️  salons extra fields migration:', err.message));
+});
+
+// Add owner-configurable Half Day Rule fields to attendance_settings (safe, idempotent)
+setImmediate(() => {
+  pool.query(`
+    ALTER TABLE attendance_settings
+      ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT false,
+      ADD COLUMN IF NOT EXISTS threshold_hours NUMERIC(4,2) NOT NULL DEFAULT 2.0
+  `).catch((err: any) => console.warn('⚠️  attendance_settings half-day-rule migration:', err.message));
 });
 
 // Create support_tickets table (safe, idempotent)
@@ -95,19 +132,37 @@ setImmediate(() => {
   `).catch((err: any) => console.warn('⚠️  support_tickets table migration:', err.message));
 });
 
+// Create demo_requests table — landing page "Schedule a Free Demo" submissions (safe, idempotent)
+setImmediate(() => {
+  pool.query(`
+    CREATE TABLE IF NOT EXISTS demo_requests (
+      id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name             TEXT NOT NULL,
+      email            TEXT NOT NULL,
+      phone            TEXT,
+      salon_name       TEXT,
+      city             TEXT,
+      locations_count  TEXT,
+      status           TEXT NOT NULL DEFAULT 'new',
+      created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch((err: any) => console.warn('⚠️  demo_requests table migration:', err.message));
+});
+
 /**
- * safeQuery — wraps any pool.query() call with a single auto-retry.
+ * safeQuery — wraps any pool.query() call with auto-retry.
  *
  * WHY: Cloud databases (Supabase, Neon, Render, Railway, etc.) silently
  * terminate idle PostgreSQL connections. pg-pool doesn't detect this until
  * the next query attempt, causing "Connection terminated unexpectedly".
- * One retry is enough because the pool discards the dead client and opens
- * a fresh connection for the second attempt.
+ * Two retries with a short backoff ride out short-lived DNS/connection
+ * blips that a single immediate retry can still land inside of.
  *
  * USAGE:
  *   const { rows } = await safeQuery(() => pool.query(sql, params));
  */
-export async function safeQuery<T>(queryFn: () => Promise<T>, retries = 1): Promise<T> {
+export async function safeQuery<T>(queryFn: () => Promise<T>, retries = 2): Promise<T> {
   try {
     return await queryFn();
   } catch (err: any) {
@@ -115,10 +170,13 @@ export async function safeQuery<T>(queryFn: () => Promise<T>, retries = 1): Prom
       err?.message?.includes('Connection terminated unexpectedly') ||
       err?.message?.includes('terminating connection') ||
       err?.message?.includes('Connection terminated') ||
-      err?.code === 'ECONNRESET';
+      err?.message?.includes('timeout exceeded when trying to connect') ||
+      err?.code === 'ECONNRESET' ||
+      err?.code === 'ENOTFOUND';
 
     if (retries > 0 && isStaleConn) {
       console.warn('🔁 [safeQuery] Stale DB connection detected — retrying query...');
+      await new Promise((resolve) => setTimeout(resolve, 400));
       return safeQuery(queryFn, retries - 1);
     }
     throw err;

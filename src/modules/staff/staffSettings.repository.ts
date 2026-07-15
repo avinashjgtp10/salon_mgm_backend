@@ -94,14 +94,14 @@ export const staffCommissionsRepository = {
     async upsert(staffId: string, data: UpdateCommissionBody): Promise<StaffCommissionSettings> {
         const { rows } = await pool.query(
             `INSERT INTO staff_commission_settings (
-                staff_id, category, is_enabled, commission_kind, default_rate, revenue_target,
+                staff_id, category, is_enabled, commission_kind, default_rate, min_monthly_revenue,
                 use_default_calculation, pass_cancellation_fee_late, pass_cancellation_fee_noshow, period
             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
             ON CONFLICT (staff_id, category) DO UPDATE SET
                 is_enabled               = EXCLUDED.is_enabled,
                 commission_kind          = EXCLUDED.commission_kind,
                 default_rate             = EXCLUDED.default_rate,
-                revenue_target           = EXCLUDED.revenue_target,
+                min_monthly_revenue      = EXCLUDED.min_monthly_revenue,
                 use_default_calculation  = EXCLUDED.use_default_calculation,
                 pass_cancellation_fee_late   = EXCLUDED.pass_cancellation_fee_late,
                 pass_cancellation_fee_noshow = EXCLUDED.pass_cancellation_fee_noshow,
@@ -113,7 +113,7 @@ export const staffCommissionsRepository = {
                 data.is_enabled         ?? false,
                 data.commission_kind    ?? "percentage",
                 data.default_rate       ?? 0,
-                data.revenue_target     ?? 0,
+                data.min_monthly_revenue ?? data.revenue_target ?? 0,
                 data.use_default_calculation     ?? true,
                 data.pass_cancellation_fee_late  ?? false,
                 data.pass_cancellation_fee_noshow ?? false,
@@ -156,7 +156,7 @@ export const staffCommissionsRepository = {
                         data.is_enabled              ?? true,
                         data.commission_kind         ?? "percentage",
                         data.default_rate            ?? 0,
-                        data.revenue_target          ?? 0,
+                        data.min_monthly_revenue ?? data.revenue_target ?? 0,
                         data.use_default_calculation     ?? false,
                         data.pass_cancellation_fee_late  ?? false,
                         data.pass_cancellation_fee_noshow ?? false,
@@ -167,14 +167,14 @@ export const staffCommissionsRepository = {
 
                 await client.query(
                     `INSERT INTO staff_commission_settings
-                        (staff_id, category, is_enabled, commission_kind, default_rate, revenue_target,
+                        (staff_id, category, is_enabled, commission_kind, default_rate, min_monthly_revenue,
                          use_default_calculation, pass_cancellation_fee_late, pass_cancellation_fee_noshow, period)
                      VALUES ${settingsRows.join(",")}
                      ON CONFLICT (staff_id, category) DO UPDATE SET
                         is_enabled               = EXCLUDED.is_enabled,
                         commission_kind          = EXCLUDED.commission_kind,
                         default_rate             = EXCLUDED.default_rate,
-                        revenue_target           = EXCLUDED.revenue_target,
+                        min_monthly_revenue      = EXCLUDED.min_monthly_revenue,
                         use_default_calculation  = EXCLUDED.use_default_calculation,
                         pass_cancellation_fee_late   = EXCLUDED.pass_cancellation_fee_late,
                         pass_cancellation_fee_noshow = EXCLUDED.pass_cancellation_fee_noshow,
@@ -299,11 +299,8 @@ export const commissionHistoryRepository = {
         const params: any[] = [staffId];
         if (month) params.push(month);
         const { rows } = await pool.query(
-            `SELECT
-                ce.*,
-                s.name AS service_name
+            `SELECT ce.*
              FROM commission_earned ce
-             LEFT JOIN sales sa ON sa.id = ce.sale_id
              WHERE ce.staff_id = $1 ${dateFilter}
              ORDER BY ce.earned_at DESC`,
             params

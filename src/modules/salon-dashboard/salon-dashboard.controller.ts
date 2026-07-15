@@ -48,6 +48,17 @@ export const salonDashboardController = {
     }
   },
 
+  async getStaffRevenue(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = await getSalonId(req);
+      const period = typeof req.query.period === "string" ? req.query.period : undefined;
+      const data = await salonDashboardService.getStaffRevenue(salonId, period);
+      return sendSuccess(res, 200, data, "Staff revenue fetched successfully");
+    } catch (err) {
+      return next(err);
+    }
+  },
+
   async getServiceMix(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = await getSalonId(req);

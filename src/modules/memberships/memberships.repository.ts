@@ -99,6 +99,14 @@ export const membershipsRepository = {
     return rows.length ? toMembership(rows[0]) : null;
   },
 
+  async findByName(name: string, salonId: string): Promise<Membership | null> {
+    const { rows } = await pool.query(
+      `${SELECT_WITH_SERVICES} WHERE m.salon_id = $1 AND LOWER(m.name) = LOWER($2) GROUP BY m.id LIMIT 1`,
+      [salonId, name]
+    );
+    return rows.length ? toMembership(rows[0]) : null;
+  },
+
   async create(data: CreateMembershipDTO, salonId: string): Promise<Membership> {
     const client = await pool.connect();
     try {

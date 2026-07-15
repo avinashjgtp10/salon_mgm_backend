@@ -1,33 +1,183 @@
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
-import { requireSalon } from "../../middleware/salon.middleware";
+import { subscriptionMiddleware } from "../../middleware/subscription.middleware";
 import { reportsController } from "./reports.controller";
 
 const router = Router();
 
-const guard = [authMiddleware, requireSalon, roleMiddleware("salon_owner", "admin", "staff")];
+const guard = [
+    authMiddleware,
+    subscriptionMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff", "super_admin"),
+];
 
-// ── Reports Dashboard (32 reports listing) ────────────────────────────────────
-router.get("/",             ...guard, reportsController.getReportsDashboard);
+// ======================================================
+// SALES SUMMARY
+// ======================================================
 
-// ── Analytics tabs ─────────────────────────────────────────────────────────────
-router.get("/revenue",      ...guard, reportsController.getRevenue);
-router.get("/appointments", ...guard, reportsController.getAppointments);
-router.get("/clients",      ...guard, reportsController.getClients);
-router.get("/staff",        ...guard, reportsController.getStaff);
-router.get("/services",     ...guard, reportsController.getServices);
+router.get(
+    "/sales-summary",
+    ...guard,
+    reportsController.getSalesSummary
+);
 
-// ── Export ────────────────────────────────────────────────────────────────────
-router.get("/export",       ...guard, reportsController.exportReport);
+router.get(
+    "/sales-summary/table",
+    ...guard,
+    reportsController.getSalesSummaryTable
+);
 
-// ── Detail views ──────────────────────────────────────────────────────────────
-router.get("/appointments/detail", ...guard, reportsController.getAppointmentsDetail);
-router.get("/finance/detail",      ...guard, reportsController.getFinanceDetail);
-router.get("/inventory/detail",    ...guard, reportsController.getInventoryDetail);
-router.get("/payments/detail",     ...guard, reportsController.getPaymentsDetail);
-router.get("/daily/detail",        ...guard, reportsController.getDailyDetail);
-router.get("/marketing/detail",    ...guard, reportsController.getMarketingDetail);
-router.get("/employee/detail",     ...guard, reportsController.getEmployeeDetail);
+// ======================================================
+// PRODUCT REVENUE REPORT
+// ======================================================
+
+router.get(
+    "/product-revenue",
+    ...guard,
+    reportsController.getProductRevenueReport
+);
+
+router.get(
+    "/product-revenue/table",
+    ...guard,
+    reportsController.getProductRevenueTable
+);
+
+// ======================================================
+// STAFF REVENUE REPORT
+// ======================================================
+
+router.get(
+    "/service-revenue",
+    ...guard,
+    reportsController.getServiceRevenue
+);
+
+router.get(
+    "/service-revenue/table",
+    ...guard,
+    reportsController.getServiceRevenueTable
+);
+
+router.get(
+    "/stylist-revenue",
+    ...guard,
+    reportsController.getStylistRevenue
+);
+
+router.get(
+    "/stylist-revenue/table",
+    ...guard,
+    reportsController.getStylistRevenueTable
+);
+
+router.get(
+    "/staff-commission",
+    ...guard,
+    reportsController.getStaffCommissionReport
+);
+
+router.get(
+    "/staff-commission/table",
+    ...guard,
+    reportsController.getStaffCommissionTable
+);
+
+router.get(
+    "/tip-report",
+    ...guard,
+    reportsController.getTipReport
+);
+
+router.get(
+    "/tip-report/table",
+    ...guard,
+    reportsController.getTipReportTable
+);
+
+router.get(
+    "/appointment-report",
+    ...guard,
+    reportsController.getAppointmentReport
+);
+
+router.get(
+    "/appointment-report/table",
+    ...guard,
+    reportsController.getAppointmentReportTable
+);
+
+router.get(
+    "/service-reminder",
+    ...guard,
+    reportsController.getServiceReminderReport
+);
+
+router.get(
+    "/service-reminder/table",
+    ...guard,
+    reportsController.getServiceReminderTable
+);
+
+router.get(
+    "/guest-collection",
+    ...guard,
+    reportsController.getGuestCollectionReport
+);
+
+router.get(
+    "/guest-collection/table",
+    ...guard,
+    reportsController.getGuestCollectionTable
+);
+
+router.get(
+    "/staff-attendance",
+    ...guard,
+    reportsController.getStaffAttendanceReport
+);
+
+router.get(
+    "/staff-attendance/table",
+    ...guard,
+    reportsController.getStaffAttendanceTable
+);
+
+router.get(
+    "/balance-received",
+    ...guard,
+    reportsController.getBalanceReceivedReport
+);
+
+router.get(
+    "/balance-received/table",
+    ...guard,
+    reportsController.getBalanceReceivedTable
+);
+
+router.get(
+    "/day-wise",
+    ...guard,
+    reportsController.getDayWiseReport
+);
+
+router.get(
+    "/day-wise/table",
+    ...guard,
+    reportsController.getDayWiseTable
+);
+
+router.get(
+    "/coupon-redemption",
+    ...guard,
+    reportsController.getCouponRedemptionReport
+);
+
+router.get(
+    "/coupon-redemption/table",
+    ...guard,
+    reportsController.getCouponRedemptionTable
+);
 
 export default router;

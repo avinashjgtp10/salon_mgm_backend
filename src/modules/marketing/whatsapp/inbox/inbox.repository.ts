@@ -24,6 +24,10 @@ export const inboxRepository = {
   ): Promise<string> {
     const normalizedPhone = normalizePhone(phone)   // ← normalize before insert
 
+    // Sending a reply is not the same as reading the conversation — only
+    // markConversationRead() (triggered by actually opening the chat) should
+    // clear unread_count. Previously this zeroed it out on every outbound
+    // send, hiding unread messages the staff never actually viewed.
     const { rows } = await pool.query(`
       INSERT INTO wa_conversations
         (id, salon_id, contact_phone, contact_name, last_message, last_message_at, unread_count)
@@ -34,7 +38,7 @@ export const inboxRepository = {
         last_message_at = NOW(),
         unread_count    = CASE
                             WHEN $6 = 1 THEN wa_conversations.unread_count + 1
-                            ELSE 0
+                            ELSE wa_conversations.unread_count
                           END,
         updated_at      = NOW()
       RETURNING id

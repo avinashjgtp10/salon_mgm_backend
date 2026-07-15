@@ -6,7 +6,9 @@ import { templatesController } from './templates.controller'
 import { validateCreateTemplate } from './templates.validator'
 
 const router = Router()
-const upload = multer({ storage: multer.memoryStorage() })
+// 16MB — Meta's largest template-header media cap (video); per-type caps
+// (image 5MB, document 10MB) are enforced in validateCreateTemplate.
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 16 * 1024 * 1024 } })
 
 // GET /api/v1/templates
 router.get(

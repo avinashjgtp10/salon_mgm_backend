@@ -1,5 +1,6 @@
 import { superAdminRepository } from "./super-admin.repository";
 import { authRepository } from "../auth/auth.repository";
+import { demoRequestsService } from "../demo-requests/demo-requests.service";
 import { emailService } from "../utils/email.service";
 import { AppError } from "../../middleware/error.middleware";
 import bcrypt from "bcrypt";
@@ -130,12 +131,13 @@ export const superAdminService = {
 
   // ── USERS ─────────────────────────────────────────────────────────────────────
 
-  async createUser(data: { first_name: string; last_name?: string; email: string; password: string; phone?: string; role: string }) {
+  async createUser(data: { first_name: string; last_name?: string; email: string; password: string; phone?: string; role: string; business_name?: string; address?: string }) {
     const allowed = ["salon_owner", "admin", "staff", "client"];
     if (!allowed.includes(data.role)) throw new AppError(400, "Invalid role", "VALIDATION_ERROR");
     if (!data.email?.trim()) throw new AppError(400, "Email is required", "VALIDATION_ERROR");
     if (!data.password || data.password.length < 6) throw new AppError(400, "Password must be at least 6 characters", "VALIDATION_ERROR");
     if (!data.first_name?.trim()) throw new AppError(400, "First name is required", "VALIDATION_ERROR");
+    if (data.role === "salon_owner" && !data.business_name?.trim()) throw new AppError(400, "Business name is required for Salon Owner", "VALIDATION_ERROR");
 
     const password_hash = await bcrypt.hash(data.password, 10);
     const user = await superAdminRepository.createUser({
@@ -145,6 +147,8 @@ export const superAdminService = {
       password_hash,
       phone: data.phone?.trim(),
       role: data.role,
+      business_name: data.business_name?.trim(),
+      address: data.address?.trim(),
     });
 
     // Send credentials email (fire-and-forget — don't fail account creation if mail fails)
@@ -168,6 +172,14 @@ export const superAdminService = {
 
   async getAllUsers(search?: string, role?: string, minLogins?: number) {
     return superAdminRepository.getAllUsers(search, role, minLogins);
+  },
+
+  async getAllDemoRequests(search?: string) {
+    return demoRequestsService.list(search);
+  },
+
+  async setDemoRequestStatus(id: string, status: string) {
+    return demoRequestsService.updateStatus(id, status);
   },
 
   async setUserStatus(id: string, isActive: boolean) {

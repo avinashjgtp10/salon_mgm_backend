@@ -8,6 +8,7 @@ import {
   CreateAddOnGroupBody,
   CreateAddOnOptionBody,
   CreateBundleBody,
+  CreateConsultationFormBody,
   CreateServiceBody,
   ListBundlesQuery,
   ListServicesQuery,
@@ -17,6 +18,7 @@ import {
   UpdateAddOnGroupBody,
   UpdateAddOnOptionBody,
   UpdateBundleBody,
+  UpdateConsultationFormBody,
   UpdateServiceBody,
 } from "./services.types";
 
@@ -73,6 +75,49 @@ export const servicesService = {
     const existing = await servicesRepository.findById(serviceId, salonId);
     if (!existing) throw new AppError(404, "Service not found", "NOT_FOUND");
     await servicesRepository.delete(serviceId, salonId);
+  },
+
+  async listConsultationForms(serviceId: string, salonId: string) {
+    const existing = await servicesRepository.findById(serviceId, salonId);
+    if (!existing) throw new AppError(404, "Service not found", "NOT_FOUND");
+    return servicesRepository.listConsultationForms(serviceId);
+  },
+
+  async createConsultationForm(params: {
+    serviceId: string;
+    requesterUserId: string;
+    requesterRole?: string;
+    salonId: string;
+    body: CreateConsultationFormBody;
+  }) {
+    const existing = await servicesRepository.findById(params.serviceId, params.salonId);
+    if (!existing) throw new AppError(404, "Service not found", "NOT_FOUND");
+    return servicesRepository.createConsultationForm(params.serviceId, params.body);
+  },
+
+  async updateConsultationForm(params: {
+    serviceId: string;
+    formId: string;
+    requesterUserId: string;
+    requesterRole?: string;
+    salonId: string;
+    patch: UpdateConsultationFormBody;
+  }) {
+    const existing = await servicesRepository.findById(params.serviceId, params.salonId);
+    if (!existing) throw new AppError(404, "Service not found", "NOT_FOUND");
+    const forms = await servicesRepository.listConsultationForms(params.serviceId);
+    if (!forms.some((f) => f.id === params.formId))
+      throw new AppError(404, "Consultation form not found for this service", "NOT_FOUND");
+    return servicesRepository.updateConsultationForm(params.formId, params.patch);
+  },
+
+  async deleteConsultationForm(params: { serviceId: string; formId: string; salonId: string }) {
+    const existing = await servicesRepository.findById(params.serviceId, params.salonId);
+    if (!existing) throw new AppError(404, "Service not found", "NOT_FOUND");
+    const forms = await servicesRepository.listConsultationForms(params.serviceId);
+    if (!forms.some((f) => f.id === params.formId))
+      throw new AppError(404, "Consultation form not found for this service", "NOT_FOUND");
+    await servicesRepository.deleteConsultationForm(params.formId);
   },
 
   async listAddOnGroups(serviceId: string, salonId: string) {

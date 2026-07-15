@@ -78,6 +78,43 @@ export const campaignsService = {
     }
   },
 
+  // ── Resend — relaunches the same campaign to its full original contact list ──
+  async resend(id: string, salonId: string) {
+    const campaign = await this.getById(id, salonId)
+    if (['SENDING', 'RUNNING', 'SCHEDULED'].includes(campaign.status)) {
+      throw new AppError(400, 'Campaign is still in progress — wait for it to finish (or pause it) before resending', 'CAMPAIGN_IN_PROGRESS')
+    }
+
+    const { rows: tmpl } = await pool.query(
+      `SELECT id FROM wa_templates WHERE id = $1 AND salon_id = $2 AND status = 'APPROVED'`,
+      [campaign.template_id, salonId]
+    )
+    if (!tmpl[0]) throw new AppError(400, 'Original template is no longer approved — cannot resend', 'TEMPLATE_NOT_APPROVED')
+
+    const contacts = await campaignsRepository.getAllContactsForResend(id)
+    if (contacts.length === 0) throw new AppError(400, 'This campaign has no contacts to resend', 'NO_CONTACTS')
+
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      const newCampaignId = await campaignsRepository.create(
+        salonId, campaign.template_id, `${campaign.name} (Resend)`, campaign.batch_size,
+        contacts.length, null
+      )
+      await campaignsRepository.bulkInsertContacts(newCampaignId, contacts)
+      await client.query('COMMIT')
+
+      await queueCampaignBatches(newCampaignId, salonId, campaign.batch_size)
+
+      return campaignsRepository.findById(newCampaignId, salonId)
+    } catch (err) {
+      await client.query('ROLLBACK')
+      throw err
+    } finally {
+      client.release()
+    }
+  },
+
   async pause(id: string, salonId: string) {
     await this.getById(id, salonId)
     return campaignsRepository.updateStatus(id, 'PAUSED')

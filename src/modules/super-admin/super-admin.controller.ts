@@ -141,8 +141,8 @@ export const superAdminController = {
 
   async createUser(req: Request, res: Response, next: NextFunction) {
     try {
-      const { first_name, last_name, email, password, phone, role } = req.body;
-      const data = await superAdminService.createUser({ first_name, last_name, email, password, phone, role });
+      const { first_name, last_name, email, password, phone, role, business_name, address } = req.body;
+      const data = await superAdminService.createUser({ first_name, last_name, email, password, phone, role, business_name, address });
       return res.status(201).json({ success: true, data });
     } catch (err) { return next(err); }
   },
@@ -153,6 +153,23 @@ export const superAdminController = {
       const role      = typeof req.query.role       === "string" ? req.query.role   : undefined;
       const minLogins = req.query.min_logins ? parseInt(req.query.min_logins as string, 10) : undefined;
       const data = await superAdminService.getAllUsers(search, role, minLogins);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
+  async getAllDemoRequests(req: Request, res: Response, next: NextFunction) {
+    try {
+      const search = typeof req.query.search === "string" ? req.query.search : undefined;
+      const data = await superAdminService.getAllDemoRequests(search);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
+  async setDemoRequestStatus(req: Request, res: Response, next: NextFunction) {
+    try {
+      const id = String(req.params.id);
+      const { status } = req.body;
+      const data = await superAdminService.setDemoRequestStatus(id, status);
       return res.json({ success: true, data });
     } catch (err) { return next(err); }
   },

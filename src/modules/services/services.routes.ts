@@ -7,9 +7,9 @@ import { upload } from "./services.upload";
 import { downloadCatalogueCsv, downloadCatalogueExcel, downloadCataloguePdf } from "./services.download.controller.ts";
 import {
   validateCreateAddOnGroup, validateCreateAddOnOption,
-  validateCreateBundle, validateCreateService,
+  validateCreateBundle, validateCreateConsultationForm, validateCreateService,
   validateUpdateAddOnGroup, validateUpdateAddOnOption,
-  validateUpdateBundle, validateUpdateService,
+  validateUpdateBundle, validateUpdateConsultationForm, validateUpdateService,
 } from "./services.validator";
 
 const router = Router();
@@ -43,6 +43,12 @@ router.delete("/:id/add-on-groups/:groupId", ...authBase, editCatalog, servicesC
 router.post("/:id/add-on-groups/:groupId/options",            ...authBase, editCatalog, validateCreateAddOnOption, servicesController.createAddOnOption);
 router.patch("/:id/add-on-groups/:groupId/options/:optionId", ...authBase, editCatalog, validateUpdateAddOnOption, servicesController.updateAddOnOption);
 router.delete("/:id/add-on-groups/:groupId/options/:optionId",...authBase, editCatalog, servicesController.deleteAddOnOption);
+
+// ─── Consultation forms ───────────────────────────────────────────────────────
+router.get("/:id/consultation-forms",           ...authBase, viewCatalog, servicesController.listConsultationForms);
+router.post("/:id/consultation-forms",          ...authBase, editCatalog, validateCreateConsultationForm, servicesController.createConsultationForm);
+router.patch("/:id/consultation-forms/:formId", ...authBase, editCatalog, validateUpdateConsultationForm, servicesController.updateConsultationForm);
+router.delete("/:id/consultation-forms/:formId",...authBase, editCatalog, servicesController.deleteConsultationForm);
 
 // ─── Bundles CRUD ─────────────────────────────────────────────────────────────
 router.get("/bundles",    ...authBase, viewCatalog, bundlesController.list);

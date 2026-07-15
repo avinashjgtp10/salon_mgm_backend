@@ -46,8 +46,22 @@ export const salesController = {
                 salon_id: salonId,
                 client_id: req.query.client_id as string,
                 status: req.query.status as string,
+                staff_id: req.query.staff_id as string,
             });
             return sendSuccess(res, 200, sales, "Sales fetched successfully");
+        } catch (err) { return next(err); }
+    },
+
+    // ── Service/product line items performed by a single staff member ──────────
+    async listItemsByStaff(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const salonId = await getSalonId(req);
+            const staffId = String(req.params.staffId);
+            const items = await salesService.listItemsByStaff(salonId, staffId, {
+                item_type: req.query.item_type as string,
+                limit: req.query.limit ? parseInt(req.query.limit as string, 10) : undefined,
+            });
+            return sendSuccess(res, 200, items, "Staff service history fetched successfully");
         } catch (err) { return next(err); }
     },
 

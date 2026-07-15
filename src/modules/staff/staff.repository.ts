@@ -56,7 +56,29 @@ export const staffRepository = {
 
         const [{ rows: data }, { rows: countRows }] = await Promise.all([
             pool.query(
-                `SELECT * FROM staff WHERE ${where} ORDER BY ${safeSortBy} ${safeSortOrder} LIMIT $${idx} OFFSET $${idx + 1}`,
+                `SELECT s.*, bt_agg.blocked_times
+                 FROM (
+                   SELECT * FROM staff
+                   WHERE ${where}
+                   ORDER BY ${safeSortBy} ${safeSortOrder}
+                   LIMIT $${idx} OFFSET $${idx + 1}
+                 ) s
+                 LEFT JOIN LATERAL (
+                   SELECT COALESCE(
+                     json_agg(
+                       json_build_object(
+                         'id',         bt.id,
+                         'staff_id',   bt.staff_id,
+                         'date',       to_char(bt.date,       'YYYY-MM-DD'),
+                         'start_time', to_char(bt.start_time, 'HH24:MI'),
+                         'end_time',   to_char(bt.end_time,   'HH24:MI'),
+                         'reason',     bt.reason
+                       ) ORDER BY bt.date, bt.start_time
+                     ) FILTER (WHERE bt.id IS NOT NULL),
+                     '[]'::json
+                   ) AS blocked_times
+                   FROM blocked_times bt WHERE bt.staff_id = s.id
+                 ) bt_agg ON true`,
                 [...values, limit, offset]
             ),
             pool.query(`SELECT COUNT(*)::int AS total FROM staff WHERE ${where}`, values),
@@ -105,8 +127,10 @@ export const staffRepository = {
               experience_years, specialization, password_hash,
               allow_calendar_bookings,
               is_active, invitation_status,
-              invitation_accepted_at
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+              invitation_accepted_at,
+              permission_level, custom_permissions,
+              joined_date, birthday_day, birthday_month
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
             RETURNING *`,
                 [
                     salonId, data.first_name, data.last_name ?? null, data.email,
@@ -121,6 +145,11 @@ export const staffRepository = {
                     isActive,
                     invitationStatus,
                     invitationAcceptedAt,
+                    data.permission_level ?? "low",
+                    data.custom_permissions ?? null,
+                    data.joined_date ?? null,
+                    data.birthday_day ?? null,
+                    data.birthday_month ?? null,
                 ]
             );
             return rows[0];
@@ -162,6 +191,10 @@ export const staffRepository = {
             specialization: "specialization",
             allow_calendar_bookings: "allow_calendar_bookings",
             custom_permissions: "custom_permissions",
+            permission_level: "permission_level",
+            joined_date: "joined_date",
+            birthday_day: "birthday_day",
+            birthday_month: "birthday_month",
         };
 
         const entries = (Object.keys(patch) as (keyof UpdateStaffBody)[])

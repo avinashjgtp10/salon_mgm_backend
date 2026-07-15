@@ -99,10 +99,18 @@ export const salonsService = {
         }
     },
 
-    async mySalon(ownerId: string): Promise<Salon> {
+    async mySalon(ownerId: string, salonId?: string | null): Promise<Salon> {
+        // Salon owners: look up by owner_id
         const salon = await salonsRepository.findByOwnerId(ownerId);
-        if (!salon) throw new AppError(404, "Salon not found", "NOT_FOUND");
-        return salon;
+        if (salon) return salon;
+
+        // Staff users: they don't own a salon but their JWT carries salonId
+        if (salonId) {
+            const bySalonId = await salonsRepository.findById(salonId);
+            if (bySalonId) return bySalonId;
+        }
+
+        throw new AppError(404, "Salon not found", "NOT_FOUND");
     },
 
     async getById(id: string): Promise<Salon> {

@@ -87,6 +87,31 @@ export const appointmentsController = {
         } catch (err) { return next(err); }
     },
 
+    async serviceCheckIn(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const userId = req.user?.userId;
+            const id = String(req.params.id || "").trim();
+            if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+            // Optional — staff can pick the actual time the service started
+            // instead of always logging "now" (e.g. entering it a few minutes
+            // late). Falls back to the current time when omitted.
+            const startedAt = typeof req.body?.started_at === "string" ? req.body.started_at : undefined;
+            const appointment = await appointmentsService.serviceCheckIn(id, startedAt);
+            return sendSuccess(res, 200, appointment, "Service started");
+        } catch (err) { return next(err); }
+    },
+
+    async serviceCheckOut(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const userId = req.user?.userId;
+            const id = String(req.params.id || "").trim();
+            if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+            const endedAt = typeof req.body?.ended_at === "string" ? req.body.ended_at : undefined;
+            const appointment = await appointmentsService.serviceCheckOut(id, endedAt);
+            return sendSuccess(res, 200, appointment, "Service ended");
+        } catch (err) { return next(err); }
+    },
+
     async cancel(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const userId = req.user?.userId;

@@ -4,6 +4,7 @@
 
 import logger from '../../config/logger'
 import { whatsappMetaApi } from '../marketing/whatsapp/shared/whatsapp.api'
+import { configRepository } from '../marketing/whatsapp/config/config.repository'
 import { whatsappAutomationRepository } from './whatsapp-automation.repository'
 import {
   AutomationEventType,
@@ -15,7 +16,7 @@ import {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 // Format phone to E.164 e.g. "+91" + "9876543210" → "919876543210"
-function formatPhone(phone: string, countryCode?: string | null): string {
+export function formatPhone(phone: string, countryCode?: string | null): string {
   const digits = phone.replace(/\D/g, '')
   if (countryCode) {
     const cc = countryCode.replace(/\D/g, '')
@@ -79,7 +80,7 @@ export const whatsappAutomationService = {
    * 1. Check client opted in (whatsapp_notifications or whatsapp_marketing)
    * 2. Check salon has this automation enabled
    * 3. Fetch global template config
-   * 4. Get platform WA credentials from ENV
+   * 4. Get the salon's own WA credentials (same account used for marketing campaigns)
    * 5. Format phone
    * 6. Create log entry
    * 7. Send via Meta API with retry
@@ -101,15 +102,19 @@ export const whatsappAutomationService = {
         return
       }
 
-      // 3. Fetch global template
-      const template = await whatsappAutomationRepository.findTemplate(eventType)
+      // 3. Fetch template — salon's own approved copy for purchase events, else the global row
+      const template = await whatsappAutomationRepository.findTemplate(eventType, salonId)
       if (!template) {
         logger.info(`[WA-AUTO] No active template for ${eventType} — skipping`)
         return
       }
 
-      // 4. Get platform credentials from ENV
-      const waConfig = whatsappAutomationRepository.getPlatformConfig()
+      // 4. Get the salon's own WA credentials — billed to the salon, not the platform
+      const salonConfig = await configRepository.findBySalonId(salonId)
+      if (!salonConfig?.phone_number_id || !salonConfig?.access_token) {
+        logger.info(`[WA-AUTO] Salon ${salonId} has no WhatsApp configured — skipping ${eventType}`)
+        return
+      }
 
       // 5. Format phone
       const formattedPhone = formatPhone(phone, countryCode)
@@ -129,8 +134,8 @@ export const whatsappAutomationService = {
       // 7. Send with retry
       await this.sendWithRetry({
         logId:         log.id,
-        phoneNumberId: waConfig.phoneNumberId,
-        accessToken:   waConfig.accessToken,
+        phoneNumberId: salonConfig.phone_number_id,
+        accessToken:   salonConfig.access_token,
         to:            formattedPhone,
         templateName:  template.template_name,
         language:      template.language,
@@ -284,6 +289,67 @@ export const whatsappAutomationService = {
       }
     } catch (err: any) {
       logger.error('[WA-AUTO] runAppointmentReminders error:', err?.message)
+    }
+  },
+
+  async runAppointmentReminders1h(): Promise<void> {
+    logger.info('[WA-AUTO] Running 1-hour appointment reminder job...')
+    try {
+      const appointments = await whatsappAutomationRepository.getAppointmentsForReminder1h()
+      logger.info(`[WA-AUTO] ${appointments.length} appointments to remind (1h)`)
+
+      for (const appt of appointments) {
+        if (!appt.phone_number) continue
+
+        await this.trigger({
+          salonId:       appt.salon_id,
+          eventType:     'appointment_reminder_1h',
+          clientId:      appt.client_id,
+          phone:         appt.phone_number,
+          countryCode:   appt.phone_country_code,
+          variables: {
+            '1': appt.client_name  ?? 'Valued Customer',
+            '2': appt.salon_name   ?? 'our salon',
+            '3': formatTimeIST(appt.scheduled_at),
+          },
+          referenceId:   appt.appointment_id,
+          referenceType: 'appointment',
+        })
+      }
+    } catch (err: any) {
+      logger.error('[WA-AUTO] runAppointmentReminders1h error:', err?.message)
+    }
+  },
+
+  async runPackageExpiringReminders(): Promise<void> {
+    logger.info('[WA-AUTO] Running package expiring reminder job...')
+    try {
+      const packages = await whatsappAutomationRepository.getPackagesExpiringIn7Days()
+
+      for (const pkg of packages) {
+        if (!pkg.phone_number) continue
+
+        const guardKey = `package-expiring:${pkg.package_id}`
+        const inserted = await whatsappAutomationRepository.guardInsertIfNotExists(guardKey)
+        if (!inserted) continue
+
+        await this.trigger({
+          salonId:       pkg.salon_id,
+          eventType:     'package_expiring_soon',
+          clientId:      pkg.client_id,
+          phone:         pkg.phone_number,
+          countryCode:   pkg.phone_country_code,
+          variables: {
+            '1': pkg.client_name  ?? 'Valued Customer',
+            '2': pkg.package_name,
+            '3': formatDateIST(pkg.expiry_date),
+          },
+          referenceId:   pkg.package_id,
+          referenceType: 'package',
+        })
+      }
+    } catch (err: any) {
+      logger.error('[WA-AUTO] runPackageExpiringReminders error:', err?.message)
     }
   },
 

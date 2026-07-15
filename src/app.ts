@@ -12,6 +12,7 @@ import categoriesRoutes from "./modules/categories/categories.routes";
 import salonsRoutes from "./modules/salons/salons.routes";
 import branchesRoutes from "./modules/branches/branches.routes";
 import staffRoutes from "./modules/staff/staff.routes";
+import commissionRulesRoutes from "./modules/commissionRules/commissionRules.routes";
 import clientsRoutes from "./modules/clients/clients.routes";
 import servicesRoutes from "./modules/services/services.routes";
 import { corsMiddleware } from "./middleware/cors.middleware";
@@ -30,8 +31,8 @@ import subscriptionsRoutes from "./modules/subscriptions/subscriptions.routes";
 import marketingDashboardRoutes from './modules/marketing/whatsapp/dashboard/dashboard.routes'
 import marketingTemplatesRoutes from './modules/marketing/whatsapp/templates/templates.routes'
 import marketingCampaignsRoutes from './modules/marketing/whatsapp/campaigns/campaigns.routes'
-import marketingConfigRoutes    from './modules/marketing/whatsapp/config/config.routes'
-import marketingWebhooksRoutes  from './modules/marketing/whatsapp/webhooks/webhooks.routes'
+import marketingConfigRoutes from './modules/marketing/whatsapp/config/config.routes'
+import marketingWebhooksRoutes from './modules/marketing/whatsapp/webhooks/webhooks.routes'
 import profileRoutes from "./modules/profile/profile.routes";
 import inboxRouter from './modules/marketing/whatsapp/inbox/inbox.routes';
 import salonDashboardRoutes from "./modules/salon-dashboard/salon-dashboard.routes";
@@ -42,13 +43,26 @@ import reportsRoutes from "./modules/reports/reports.routes";
 import blockedTimesRoutes from "./modules/blocked_times/blocked_times.routes";
 import analyticsRoutes from './modules/marketing/whatsapp/analytics/analytics.routes'
 import botRoutes from "./modules/bot/bot.routes";
+import aiEngineRoutes from "./modules/ai-engine/ai-engine.routes";
+import { ensureTable as ensureAiEngineTables } from "./modules/ai-engine/ai-engine.repository";
 import waAutomationRoutes from "./modules/whatsapp-automation/whatsapp-automation.routes";
+import waPurchaseTemplatesRoutes from "./modules/whatsapp-automation/wa-purchase-templates.routes";
 import attendanceRoutes from "./modules/attendance/attendance.routes";
 import { deviceApiRouter, admsRouter } from "./modules/device/device.routes";
 import packageTemplatesRoutes from "./modules/package-templates/package-templates.routes";
 import { ensurePackageTemplateTables } from "./modules/package-templates/package-templates.repository";
+import clientMembershipsRoutes from "./modules/client-memberships/client-memberships.routes";
+import { ensureTable as ensureClientMembershipsTables } from "./modules/client-memberships/client-memberships.repository";
+import ewalletRoutes from "./modules/ewallet/ewallet.routes";
+import { ensureTable as ensurePaymentsTables } from "./modules/payments/payments.repository";
+import { ensureTable as ensureAppointmentsTables } from "./modules/appointments/appointments.repository";
+import cashManagementRoutes from "./modules/cash-management/cash-management.routes";
+import { ensureCashManagementTables } from "./modules/cash-management/cash-management.repository";
 import superAdminRoutes from "./modules/super-admin/super-admin.routes";
+import demoRequestsRoutes from "./modules/demo-requests/demo-requests.routes";
 import supportRoutes from "./modules/support/support.routes";
+import notificationsRoutes from "./modules/notifications/notifications.routes";
+import { emailService } from "./modules/utils/email.service";
 import swaggerUi from "swagger-ui-express";
 import path from "path";
 
@@ -61,6 +75,31 @@ app.set("trust proxy", 1);
 // Bootstrap package-template tables (idempotent)
 ensurePackageTemplateTables().catch(err =>
   logger.warn("package-templates table init warning:", err?.message ?? err),
+);
+
+// Bootstrap client-memberships tables (idempotent)
+ensureClientMembershipsTables().catch(err =>
+  logger.warn("client-memberships table init warning:", err?.message ?? err),
+);
+
+// Bootstrap payments table wallet column (idempotent)
+ensurePaymentsTables().catch(err =>
+  logger.warn("payments table init warning:", err?.message ?? err),
+);
+
+// Bootstrap appointments table apply_membership_wallet column (idempotent)
+ensureAppointmentsTables().catch(err =>
+  logger.warn("appointments table init warning:", err?.message ?? err),
+);
+
+// Bootstrap cash-management tables (idempotent)
+ensureCashManagementTables().catch(err =>
+  logger.warn("cash-management table init warning:", err?.message ?? err),
+);
+
+// Bootstrap ai-engine (LUNOX) tables (idempotent)
+ensureAiEngineTables().catch(err =>
+  logger.warn("ai-engine table init warning:", err?.message ?? err),
 );
 
 // Security middleware
@@ -103,14 +142,59 @@ app.get("/health", (_req, res) => {
   });
 });
 
+// ── Test email endpoint (development only) ─────────────────────────────────────
+app.get("/api/v1/test-email", async (_req, res) => {
+  const smtpInfo = {
+    host: config.smtp.host,
+    port: config.smtp.port,
+    user: config.smtp.user,
+    from: config.smtp.from,
+    passLen: config.smtp.pass?.length ?? 0,
+  };
+  logger.info("[test-email] SMTP config:", smtpInfo);
+
+  try {
+    // Step 1: verify SMTP connection
+    try {
+      await emailService.verifyConnection();
+      logger.info("[test-email] SMTP connection verified OK");
+    } catch (verifyErr: any) {
+      logger.error("[test-email] SMTP verify FAILED:", verifyErr?.message ?? verifyErr);
+      return res.status(500).json({
+        success: false,
+        step: "smtp_verify",
+        error: verifyErr?.message ?? "SMTP connection failed",
+        smtpInfo,
+      });
+    }
+
+    // Step 2: send test email — use query param ?to=owner@email.com or defaults to smtp user for diagnostics only
+    const testTo = ((_req as any).query?.to as string) || config.smtp.user;
+    await emailService.sendNewAppointmentEmail({
+      to:            testTo,
+      salonName:     "Test Salon",
+      clientName:    "Test Client",
+      services:      "Haircut, Styling",
+      date:          new Date().toLocaleDateString("en-IN"),
+      time:          new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }),
+      appointmentId: "TEST-001",
+    });
+    logger.info("[test-email] Test email sent successfully to", testTo);
+    return res.json({ success: true, message: `Test email sent to ${testTo}`, smtpInfo });
+  } catch (err: any) {
+    logger.error("[test-email] sendMail FAILED:", err?.message ?? err);
+    return res.status(500).json({ success: false, step: "send_mail", error: err?.message ?? "Unknown error", smtpInfo });
+  }
+});
+
 // ✅ API ROUTES (MUST be before 404)
 app.use("/api/v1/auth", authRoutes);
 // Alias: Google OAuth console uses /api/v1/oauth/google/callback as redirect URI
 app.use("/api/v1/oauth", authRoutes);
 app.use("/api/v1/billing", billingRoutes);
 app.use("/api/v1/subscriptions", subscriptionsRoutes);
-app.use("/api/v1/webhooks",  marketingWebhooksRoutes);
-app.use("/api/v1/profile",       profileRoutes);
+app.use("/api/v1/webhooks", marketingWebhooksRoutes);
+app.use("/api/v1/profile", profileRoutes);
 
 // ── Subscription gate — applied after exempt routes are registered ─────────────
 // Every route registered BELOW this line requires an active/trialing subscription.
@@ -122,6 +206,7 @@ app.use("/api/v1/categories", categoriesRoutes);
 app.use("/api/v1/salons", salonsRoutes);
 app.use("/api/v1/branches", branchesRoutes);
 app.use("/api/v1/staff", staffRoutes);
+app.use("/api/v1/commission-rules", commissionRulesRoutes);
 app.use("/api/v1/clients", clientsRoutes);
 app.use("/api/v1/services", servicesRoutes);
 app.use("/api/v1/marketplace", marketplaceRoutes);
@@ -141,20 +226,26 @@ app.use('/api/v1/templates', marketingTemplatesRoutes)
 app.use('/api/v1/campaigns', marketingCampaignsRoutes)
 app.use('/api/v1/wa-config', marketingConfigRoutes)
 app.use('/api/v1/inbox', inboxRouter);
-app.use("/api/v1/dashboard",     salonDashboardRoutes);
-app.use("/api/v1/coupons",       couponsRoutes);
-app.use("/api/v1/payments",      paymentsRoutes);
+app.use("/api/v1/dashboard", salonDashboardRoutes);
+app.use("/api/v1/coupons", couponsRoutes);
+app.use("/api/v1/payments", paymentsRoutes);
 app.use("/api/v1/blocked-times", blockedTimesRoutes);
-app.use("/api/v1/settings",      settingsRoutes);
-app.use("/api/v1/bot",           botRoutes);
-app.use("/api/v1/reports",       reportsRoutes);
+app.use("/api/v1/settings", settingsRoutes);
+app.use("/api/v1/bot", botRoutes);
+app.use("/api/v1/ai-engine", aiEngineRoutes);
+app.use("/api/v1/reports", reportsRoutes);
+app.use("/api/v1/cash-management", cashManagementRoutes);
 app.use("/api/v1/wa-automation", waAutomationRoutes);
-app.use("/api/v1/attendance",   attendanceRoutes);
-app.use("/api/v1/devices",      deviceApiRouter);
-app.use("/api/v1/wa-automation",      waAutomationRoutes);
+app.use("/api/v1/wa-automation/purchase-templates", waPurchaseTemplatesRoutes);
+app.use("/api/v1/attendance", attendanceRoutes);
+app.use("/api/v1/devices", deviceApiRouter);
 app.use("/api/v1/package-templates", packageTemplatesRoutes);
-app.use("/api/v1/super-admin",       superAdminRoutes);
-app.use("/api/v1/support",           supportRoutes);
+app.use("/api/v1/client-memberships", clientMembershipsRoutes);
+app.use("/api/v1/ewallet", ewalletRoutes);
+app.use("/api/v1/super-admin", superAdminRoutes);
+app.use("/api/v1/demo-requests", demoRequestsRoutes);
+app.use("/api/v1/support", supportRoutes);
+app.use("/api/v1/notifications", notificationsRoutes);
 
 // Swagger Documentation
 const swaggerDocument = require(path.join(__dirname, "../docs/api/swagger-gen.json"));

@@ -15,6 +15,7 @@ router.get("/", authMiddleware, ownerAdminStaff, requirePermission("view_sales")
 router.get("/summary", authMiddleware, ownerAdminStaff, requirePermission("view_sales"), salesController.getDailySummary);
 router.get("/export", authMiddleware, ownerAdminStaff, requirePermission("view_sales"), salesController.exportSales);
 router.get("/init", authMiddleware, ownerAdminStaff, requirePermission("create_sales"), salesController.getInit);
+router.get("/staff/:staffId/items", authMiddleware, ownerAdminStaff, requirePermission("view_sales"), salesController.listItemsByStaff);
 router.get("/:id", authMiddleware, roleMiddleware("salon_owner", "admin", "staff", "client"), requirePermission("view_sales"), salesController.getById);
 router.patch("/:id", authMiddleware, ownerAdminStaff, requirePermission("create_sales"), validateUpdateSale, salesController.update);
 router.post("/:id/checkout", authMiddleware, ownerAdminStaff, requirePermission("create_sales"), validateCheckoutSale, salesController.checkout);

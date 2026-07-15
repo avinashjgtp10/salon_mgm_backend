@@ -55,9 +55,20 @@ export type AddOnGroupDetail = AddOnGroup & {
   options: AddOnOption[];
 };
 
+export type ServiceConsultationForm = {
+  id: string;
+  service_id: string;
+  name: string;
+  is_selected: boolean;
+  values: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type ServiceDetail = Service & {
   staff: ServiceStaff[];
   add_on_groups: AddOnGroupDetail[];
+  consultation_forms: ServiceConsultationForm[];
 };
 
 export type ListServicesQuery = {
@@ -109,6 +120,16 @@ export type CreateAddOnOptionBody = {
 };
 
 export type UpdateAddOnOptionBody = Partial<CreateAddOnOptionBody>;
+
+export type CreateConsultationFormBody = {
+  name: string;
+};
+
+export type UpdateConsultationFormBody = {
+  name?: string;
+  is_selected?: boolean;
+  values?: Record<string, unknown> | null;
+};
 
 // ─── Bundle ───────────────────────────────────────────────────────────────────
 export type Bundle = {

@@ -15,6 +15,14 @@ export type Salon = {
     is_verified: boolean;
     is_active: boolean;
     onboarding_completed: boolean;
+    address: string | null;
+    city: string | null;
+    state: string | null;
+    country: string | null;
+    pincode: string | null;
+    timezone: string | null;
+    currency: string | null;
+    business_category: string | null;
     created_at: string;
     updated_at: string;
 };
@@ -31,6 +39,14 @@ export type CreateSalonBody = {
     website_url?: string;
     gst_number?: string;
     pan_number?: string;
+    address?: string;
+    city?: string;
+    state?: string;
+    country?: string;
+    pincode?: string;
+    timezone?: string;
+    currency?: string;
+    business_category?: string;
 };
 
 export type UpdateSalonBody = Partial<CreateSalonBody> & {

@@ -9,6 +9,7 @@ import {
     staffWagesRepository, staffCommissionsRepository,
     staffPayRunsRepository, staffSchedulesRepository,
 } from "./staffSettings.repository";
+import { blockedTimesRepository } from "../blocked_times/blocked_times.repository";
 
 import { authRepository } from "../auth/auth.repository";
 import bcrypt from "bcrypt";
@@ -56,6 +57,19 @@ export const staffService = {
             if (existing) {
                 console.log("[DEBUG] staffService.create - Email already exists:", body.email);
                 throw new AppError(409, "A staff member with this email already exists", "DUPLICATE_EMAIL");
+            }
+
+            // Guard against silently hijacking a salon_owner/admin account: without this
+            // check, the "admin sets password directly" branch below would find that
+            // user by email and overwrite their role to "staff" via updateUserRole().
+            const existingUser = await authRepository.findUserByEmail(body.email);
+            if (existingUser && (existingUser.role === "salon_owner" || existingUser.role === "admin")) {
+                console.log("[DEBUG] staffService.create - Email belongs to an existing", existingUser.role, ":", body.email);
+                throw new AppError(
+                    409,
+                    `This email already exists as the ${existingUser.role === "salon_owner" ? "salon owner" : "admin"} and cannot be added as a staff member.`,
+                    "EMAIL_IS_OWNER_OR_ADMIN",
+                );
             }
 
             let passwordHash: string | null = null;
@@ -128,12 +142,37 @@ export const staffService = {
         const existing = await staffRepository.findById(id, salonId);
         if (!existing) throw new AppError(404, "Staff not found", "NOT_FOUND");
 
-        let passwordHash: string | null | undefined = undefined;
-        if (patch.password) {
-            passwordHash = await bcrypt.hash(patch.password, 10);
+        // Split out blocked_times — handled separately, not a staff table column
+        const { blocked_times: blockedTimesToCreate, ...staffPatch } = patch as any;
+
+        // Create any embedded blocked times
+        const createdBlockedTimes: any[] = [];
+        if (Array.isArray(blockedTimesToCreate) && blockedTimesToCreate.length > 0) {
+            for (const bt of blockedTimesToCreate) {
+                const created = await blockedTimesRepository.create(
+                    { salon_id: salonId, staff_id: id, date: bt.date, start_time: bt.start_time, end_time: bt.end_time, reason: bt.reason ?? null },
+                    requesterUserId
+                );
+                createdBlockedTimes.push(created);
+            }
+            logger.info("staffService.update: blocked times created", { count: createdBlockedTimes.length, staffId: id });
         }
 
-        const updated = await staffRepository.update(id, salonId, patch, passwordHash);
+        // Only update staff columns if there is other data besides blocked_times
+        let updated: Staff = existing;
+        if (Object.keys(staffPatch).length > 0) {
+            let passwordHash: string | null | undefined = undefined;
+            if (staffPatch.password) {
+                passwordHash = await bcrypt.hash(staffPatch.password, 10);
+            }
+            updated = await staffRepository.update(id, salonId, staffPatch, passwordHash);
+        }
+
+        // Attach newly created blocked times to the response so the frontend can replace the temp ID
+        if (createdBlockedTimes.length > 0) {
+            (updated as any).blocked_times = createdBlockedTimes;
+        }
+
         logger.info("staffService.update success", { staffId: updated.id });
         return updated;
     },
@@ -522,13 +561,13 @@ export const staffWagesService = {
 
 export const staffCommissionsService = {
     // ── Summary: total earned, paid, pending for the whole salon ─────────────
-    async getSalonSummary(salonId: string, month?: string) {
-        return commissionCalculationService.getSalonSummary(salonId, month);
+    async getSalonSummary(salonId: string, month?: string, startDate?: string, endDate?: string) {
+        return commissionCalculationService.getSalonSummary(salonId, month, startDate, endDate);
     },
 
     // ── Earned commissions grouped by staff ───────────────────────────────────
-    async getEarnedBySalon(salonId: string, month?: string) {
-        return commissionCalculationService.getEarnedBySalon(salonId, month);
+    async getEarnedBySalon(salonId: string, month?: string, startDate?: string, endDate?: string) {
+        return commissionCalculationService.getEarnedBySalon(salonId, month, startDate, endDate);
     },
 
     // ── Mark all pending commissions as paid for a staff member ───────────────

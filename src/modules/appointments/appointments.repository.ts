@@ -5,6 +5,34 @@ import {
     UpdateAppointmentBody,
 } from "./appointments.types";
 
+// Bootstrap: patch the pre-existing `appointments` table with a persisted flag
+// for the "Apply Membership" checkbox — unlike package coverage (which is
+// baked into each service row's is_package_service/total=0), membership wallet
+// coverage was previously only ever recorded via the payments table at actual
+// checkout, so re-opening an unpaid appointment always showed the checkbox
+// unchecked even when staff had explicitly applied it and saved.
+export async function ensureTable(): Promise<void> {
+    await pool.query(
+        `ALTER TABLE appointments ADD COLUMN IF NOT EXISTS apply_membership_wallet BOOLEAN NOT NULL DEFAULT FALSE`,
+    );
+    // "Delete Appointment" used to be a real SQL DELETE — switched to soft
+    // delete so a removed booking can still show on the calendar (greyed out,
+    // "Deleted" on the tooltip) instead of vanishing without a trace. NULL
+    // (the default for every pre-existing row) means "not deleted".
+    await pool.query(
+        `ALTER TABLE appointments ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ NULL`,
+    );
+    // Client's service check-in/check-out toggle on the calendar tooltip —
+    // separate from `status`/payment_status so it never interferes with
+    // existing chip-colour logic.
+    await pool.query(
+        `ALTER TABLE appointments ADD COLUMN IF NOT EXISTS service_started_at TIMESTAMPTZ NULL`,
+    );
+    await pool.query(
+        `ALTER TABLE appointments ADD COLUMN IF NOT EXISTS service_ended_at TIMESTAMPTZ NULL`,
+    );
+}
+
 export const appointmentsRepository = {
 
     // ✅ FIX — LEFT JOIN payments so payment_status reflects actual payment records
@@ -12,24 +40,40 @@ export const appointmentsRepository = {
     async findById(id: string): Promise<Appointment | null> {
         const { rows } = await pool.query(
             `SELECT a.*,
-                c.full_name          AS client_name,
-                c.phone_number       AS client_phone,
-                c.phone_country_code AS client_phone_code,
-                s.business_name AS salon_name,
-                COALESCE(
-                  (SELECT CASE
-                      WHEN bool_or(p.status = 'completed') THEN 'paid'::text
-                      WHEN bool_or(p.status = 'partial') THEN 'partial'::text
-                      ELSE 'unpaid'::text
-                  END
-                  FROM payments p
-                  WHERE p.appointment_id = a.id),
-                  'unpaid'::text
-                ) AS payment_status,
-                COALESCE((SELECT SUM(net_amount) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS paid_amount
+                (SELECT COUNT(*) FROM appointments a2
+                 WHERE a2.salon_id = a.salon_id
+                   AND (a2.created_at < a.created_at
+                        OR (a2.created_at = a.created_at AND a2.id <= a.id))
+                ) AS invoice_number,
+                c.full_name                              AS client_name,
+                c.phone_number                           AS client_phone,
+                c.phone_country_code                     AS client_phone_code,
+                c.email                                  AS client_email,
+                TRIM(CONCAT(st.first_name, ' ', COALESCE(st.last_name, ''))) AS staff_name,
+                st.phone                                 AS staff_phone,
+                st.email                                 AS staff_email,
+                s.business_name                          AS salon_name,
+                COALESCE(s.email, u.email)               AS salon_email,
+                CASE
+                  WHEN EXISTS (SELECT 1 FROM payments p WHERE p.appointment_id = a.id)
+                   AND (SELECT due_amount FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) = 0
+                  THEN 'paid'::text
+                  WHEN EXISTS (SELECT 1 FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial'))
+                  THEN 'partial'::text
+                  ELSE 'unpaid'::text
+                END AS payment_status,
+                COALESCE((SELECT SUM(paid_amount) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS paid_amount,
+                (SELECT payment_method FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) AS payment_method,
+                COALESCE((SELECT SUM(reward_points_value) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS reward_points_value,
+                COALESCE((SELECT SUM(membership_wallet_used) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS membership_wallet_used,
+                COALESCE((SELECT SUM(ewallet_used) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS ewallet_used,
+                (SELECT split_details FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) AS split_details,
+                (SELECT tax_breakdown FROM payments p WHERE p.appointment_id = a.id AND p.tax_breakdown IS NOT NULL ORDER BY p.created_at DESC LIMIT 1) AS tax_breakdown
              FROM appointments a
-             LEFT JOIN clients c ON a.client_id = c.id
-             LEFT JOIN salons  s ON a.salon_id  = s.id
+             LEFT JOIN clients c  ON a.client_id = c.id
+             LEFT JOIN staff   st ON a.staff_id  = st.id
+             LEFT JOIN salons  s  ON a.salon_id  = s.id
+             LEFT JOIN users   u  ON s.owner_id  = u.id
              WHERE a.id = $1`,
             [id]
         );
@@ -88,20 +132,49 @@ export const appointmentsRepository = {
         const totalPages = Math.max(1, Math.ceil(totalRecords / limit));
 
         const { rows } = await pool.query(
-            `SELECT a.*, c.full_name AS client_name,
-                COALESCE(
-                  (SELECT CASE
-                      WHEN bool_or(p.status = 'completed') THEN 'paid'::text
-                      WHEN bool_or(p.status = 'partial') THEN 'partial'::text
-                      ELSE 'unpaid'::text
-                  END
-                  FROM payments p
-                  WHERE p.appointment_id = a.id),
-                  'unpaid'::text
-                ) AS payment_status,
-                COALESCE((SELECT SUM(net_amount) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS paid_amount
+            `WITH pay_agg AS (
+               SELECT
+                 appointment_id,
+                 SUM(paid_amount) FILTER (WHERE status IN ('completed','partial'))  AS total_paid,
+                 MAX(due_amount)  FILTER (WHERE created_at = (
+                   SELECT MAX(created_at) FROM payments p2 WHERE p2.appointment_id = payments.appointment_id
+                 ))                                                                  AS latest_due,
+                 MAX(payment_method) FILTER (WHERE created_at = (
+                   SELECT MAX(created_at) FROM payments p2 WHERE p2.appointment_id = payments.appointment_id
+                 ))                                                                  AS latest_method,
+                 COUNT(*) FILTER (WHERE status IN ('completed','partial'))           AS pay_count,
+                 SUM(reward_points_value) FILTER (WHERE status IN ('completed','partial')) AS total_reward_points_value,
+                 SUM(membership_wallet_used) FILTER (WHERE status IN ('completed','partial')) AS total_membership_wallet_used,
+                 SUM(ewallet_used) FILTER (WHERE status IN ('completed','partial')) AS total_ewallet_used
+               FROM payments
+               GROUP BY appointment_id
+             )
+             SELECT a.*,
+               (SELECT COUNT(*) FROM appointments a2
+                WHERE a2.salon_id = a.salon_id
+                  AND (a2.created_at < a.created_at
+                       OR (a2.created_at = a.created_at AND a2.id <= a.id))
+               ) AS invoice_number,
+               c.full_name    AS client_name,
+               c.phone_number AS client_phone,
+               c.email        AS client_email,
+               TRIM(CONCAT(st.first_name, ' ', COALESCE(st.last_name, ''))) AS staff_name,
+               CASE
+                 WHEN pa.pay_count > 0 AND COALESCE(pa.latest_due, 1) = 0 THEN 'paid'::text
+                 WHEN pa.pay_count > 0                                      THEN 'partial'::text
+                 ELSE 'unpaid'::text
+               END AS payment_status,
+               COALESCE(pa.total_paid, 0)    AS paid_amount,
+               pa.latest_method              AS payment_method,
+               COALESCE(pa.total_reward_points_value, 0) AS reward_points_value,
+               COALESCE(pa.total_membership_wallet_used, 0) AS membership_wallet_used,
+               COALESCE(pa.total_ewallet_used, 0) AS ewallet_used,
+               (SELECT split_details FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) AS split_details,
+               (SELECT tax_breakdown FROM payments p WHERE p.appointment_id = a.id AND p.tax_breakdown IS NOT NULL ORDER BY p.created_at DESC LIMIT 1) AS tax_breakdown
              FROM appointments a
-             LEFT JOIN clients c ON a.client_id = c.id
+             LEFT JOIN clients c   ON a.client_id  = c.id
+             LEFT JOIN staff   st  ON a.staff_id   = st.id
+             LEFT JOIN pay_agg pa  ON pa.appointment_id = a.id
              WHERE ${whereClause}
              ORDER BY a.scheduled_at DESC
              LIMIT $${idx} OFFSET $${idx + 1}`,
@@ -149,7 +222,9 @@ export const appointmentsRepository = {
                 scheduled_at, duration_minutes,
                 ends_at,
                 colour, created_by,
-                services, package_items, product_items, membership_items
+                services, package_items, product_items, membership_items,
+                discount_value, discount_type, ex_charges, tip_amount, gst_percent,
+                apply_membership_wallet
             )
             VALUES (
                 $1, $2, $3, $4, $5,
@@ -157,7 +232,9 @@ export const appointmentsRepository = {
                 $10, $11,
                 ($10::timestamptz + ($11::integer * INTERVAL '1 minute')),
                 $12, $13,
-                $14::jsonb, $15::jsonb, $16::jsonb, $17::jsonb
+                $14::jsonb, $15::jsonb, $16::jsonb, $17::jsonb,
+                $18, $19, $20, $21, $22,
+                $23
             )
             RETURNING *`,
             [
@@ -178,6 +255,12 @@ export const appointmentsRepository = {
                 JSON.stringify(data.package_items    ?? []),
                 JSON.stringify(data.product_items    ?? []),
                 JSON.stringify(data.membership_items ?? []),
+                data.discount_value     ?? 0,
+                data.discount_type      ?? "percentage",
+                data.ex_charges         ?? 0,
+                data.tip_amount         ?? 0,
+                data.gst_percent        ?? 0,
+                data.apply_membership_wallet ?? false,
             ]
         );
         return rows[0];
@@ -249,9 +332,41 @@ export const appointmentsRepository = {
         return rows[0];
     },
 
+    // Check-in: client's service starts — moves the booking to that time slot
+    // (scheduled_at = the start time, keeping the original duration so ends_at
+    // shifts by the same amount) so the calendar block visually slides to
+    // where the service is actually happening. Staff can enter the actual
+    // start time (e.g. logging it a few minutes late) instead of always NOW().
+    async serviceCheckIn(id: string, startedAt?: string): Promise<Appointment | null> {
+        const { rows } = await pool.query(
+            `UPDATE appointments
+             SET service_started_at = COALESCE($2::timestamptz, NOW()),
+                 scheduled_at = COALESCE($2::timestamptz, NOW()),
+                 ends_at = COALESCE($2::timestamptz, NOW()) + (duration_minutes * INTERVAL '1 minute'),
+                 updated_at = NOW()
+             WHERE id = $1
+             RETURNING *`,
+            [id, startedAt ?? null]
+        );
+        return rows[0] || null;
+    },
+
+    // Check-out: client's service ends — timestamp only, no reschedule
+    // (the block is already positioned correctly from check-in).
+    async serviceCheckOut(id: string, endedAt?: string): Promise<Appointment | null> {
+        const { rows } = await pool.query(
+            `UPDATE appointments
+             SET service_ended_at = COALESCE($2::timestamptz, NOW()), updated_at = NOW()
+             WHERE id = $1
+             RETURNING *`,
+            [id, endedAt ?? null]
+        );
+        return rows[0] || null;
+    },
+
     async deleteById(id: string): Promise<Appointment | null> {
         const { rows } = await pool.query(
-            `DELETE FROM appointments WHERE id = $1 RETURNING *`,
+            `UPDATE appointments SET deleted_at = NOW() WHERE id = $1 RETURNING *`,
             [id]
         );
         return rows[0] || null;

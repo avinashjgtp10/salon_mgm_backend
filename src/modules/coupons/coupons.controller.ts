@@ -34,4 +34,59 @@ export const couponsController = {
       return sendSuccess(res, 200, coupons, 'Coupons fetched successfully');
     } catch (err) { return next(err); }
   },
+
+  // ---------------- MANAGEMENT (Settings → Coupons) ----------------
+  async listOwn(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId;
+      if (!salonId) throw new AppError(403, 'Salon context required', 'NO_SALON_CONTEXT');
+      const coupons = await couponsService.listOwn(salonId);
+      return sendSuccess(res, 200, coupons, 'Coupons fetched successfully');
+    } catch (err) { return next(err); }
+  },
+
+  async create(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId;
+      if (!salonId) throw new AppError(403, 'Salon context required', 'NO_SALON_CONTEXT');
+      const coupon = await couponsService.create(req.body, salonId);
+      return sendSuccess(res, 201, coupon, 'Coupon created successfully');
+    } catch (err) { return next(err); }
+  },
+
+  async update(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId;
+      if (!salonId) throw new AppError(403, 'Salon context required', 'NO_SALON_CONTEXT');
+      const coupon = await couponsService.update(String(req.params.id), req.body, salonId);
+      return sendSuccess(res, 200, coupon, 'Coupon updated successfully');
+    } catch (err) { return next(err); }
+  },
+
+  async remove(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId;
+      if (!salonId) throw new AppError(403, 'Salon context required', 'NO_SALON_CONTEXT');
+      await couponsService.remove(String(req.params.id), salonId);
+      return sendSuccess(res, 200, null, 'Coupon deleted successfully');
+    } catch (err) { return next(err); }
+  },
+
+  async removeBatch(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId;
+      if (!salonId) throw new AppError(403, 'Salon context required', 'NO_SALON_CONTEXT');
+      const deleted = await couponsService.removeBatch(String(req.params.batchId), salonId);
+      return sendSuccess(res, 200, { deleted }, `${deleted} coupons deleted successfully`);
+    } catch (err) { return next(err); }
+  },
+
+  async createBulk(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId;
+      if (!salonId) throw new AppError(403, 'Salon context required', 'NO_SALON_CONTEXT');
+      const coupons = await couponsService.createBulk(req.body, salonId);
+      return sendSuccess(res, 201, coupons, `${coupons.length} coupons created successfully`);
+    } catch (err) { return next(err); }
+  },
 };

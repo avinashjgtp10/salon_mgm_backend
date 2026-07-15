@@ -45,7 +45,7 @@ export const salesRepository = {
         return rows;
     },
 
-    async list(filters: { salon_id?: string; client_id?: string; status?: string }): Promise<Sale[]> {
+    async list(filters: { salon_id?: string; client_id?: string; status?: string; staff_id?: string }): Promise<Sale[]> {
         const conditions: string[] = [];
         const values: any[] = [];
         let idx = 1;
@@ -53,6 +53,7 @@ export const salesRepository = {
         if (filters.salon_id) { conditions.push(`s.salon_id = $${idx++}`); values.push(filters.salon_id); }
         if (filters.client_id) { conditions.push(`s.client_id = $${idx++}`); values.push(filters.client_id); }
         if (filters.status) { conditions.push(`s.status = $${idx++}`); values.push(filters.status); }
+        if (filters.staff_id) { conditions.push(`s.staff_id = $${idx++}`); values.push(filters.staff_id); }
 
         const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
         const query = `SELECT s.*, c.full_name AS client_name
@@ -61,6 +62,42 @@ export const salesRepository = {
                        ${whereClause}
                        ORDER BY s.created_at DESC`;
         const { rows } = await safeQuery(() => pool.query(query, values));
+        return rows;
+    },
+
+    // ── Service/product line items performed by a single staff member ──────────
+    // (for the Staff History "Services" tab — item_type filter narrows to just
+    // services when needed; staff attribution falls back to the sale's own
+    // staff_id when the line item itself has none, matching the same COALESCE
+    // pattern used by findItemsBySaleId/commission calculation.)
+    async listItemsByStaff(
+        salonId: string,
+        staffId: string,
+        filters: { item_type?: string; limit?: number } = {}
+    ): Promise<(SaleItem & { sale_created_at: string; client_name: string | null })[]> {
+        const conditions: string[] = [`s.salon_id = $1`, `COALESCE(si.staff_id, s.staff_id) = $2`];
+        const values: any[] = [salonId, staffId];
+        let idx = 3;
+
+        if (filters.item_type) { conditions.push(`si.item_type = $${idx++}`); values.push(filters.item_type); }
+
+        const limitClause = filters.limit ? `LIMIT $${idx++}` : "";
+        if (filters.limit) values.push(filters.limit);
+
+        const { rows } = await safeQuery(() => pool.query(
+            `SELECT si.id, si.sale_id, si.item_type, si.item_id,
+                    COALESCE(si.staff_id, s.staff_id) AS staff_id,
+                    si.name, si.quantity, si.unit_price, si.discount_amount, si.total_price, si.created_at,
+                    s.created_at AS sale_created_at,
+                    c.full_name  AS client_name
+             FROM sale_items si
+             JOIN sales s   ON si.sale_id = s.id
+             LEFT JOIN clients c ON s.client_id = c.id
+             WHERE ${conditions.join(" AND ")}
+             ORDER BY s.created_at DESC
+             ${limitClause}`,
+            values
+        ));
         return rows;
     },
 
@@ -119,14 +156,16 @@ export const salesRepository = {
                 `INSERT INTO sales (
                     salon_id, client_id, appointment_id, staff_id, status, subtotal,
                     discount_amount, tip_amount, tax_amount, total_amount, payment_method,
-                    payment_reference, notes, invoice_number, created_by, created_at
-                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
+                    payment_reference, notes, invoice_number, created_by, created_at,
+                    coupon_code, discount_percent, discount_type
+                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING *`,
                 [
                     data.salon_id, data.client_id || null, data.appointment_id || null, data.staff_id || null,
                     data.status || 'draft', subtotal.toString(), data.discount_amount || '0',
                     data.tip_amount || '0', data.tax_amount || '0', total.toString(),
-                    data.payment_method || null, data.payment_reference || null, data.notes || null,
+                    data.payment_method ? data.payment_method.toLowerCase() : null, data.payment_reference || null, data.notes || null,
                     invoiceNumber, createdBy, createdAtVal,
+                    data.coupon_code || null, data.discount_percent || null, data.discount_type || null,
                 ]
             );
             const sale = saleResult.rows[0];
@@ -193,6 +232,8 @@ export const salesRepository = {
                         setParts.push(`${key} = $${idx++}`);
                         const val = key === 'created_at'
                             ? parseCreatedAt((salePatch as any)[key])
+                            : key === 'payment_method' && typeof (salePatch as any)[key] === 'string'
+                            ? (salePatch as any)[key].toLowerCase()
                             : (salePatch as any)[key];
                         values.push(val);
                     }
@@ -221,6 +262,8 @@ export const salesRepository = {
                 setParts.push(`${String(k)} = $${i + 1}`);
                 const val = k === 'created_at'
                     ? parseCreatedAt((salePatch as any)[k])
+                    : k === 'payment_method' && typeof (salePatch as any)[k] === 'string'
+                    ? (salePatch as any)[k].toLowerCase()
                     : (salePatch as any)[k];
                 values.push(val);
             });
@@ -244,7 +287,7 @@ export const salesRepository = {
     async checkout(id: string, params: { payment_method: string; payment_reference?: string; status?: "completed" }): Promise<Sale> {
         const { rows } = await safeQuery(() => pool.query(
             `UPDATE sales SET payment_method = $2, payment_reference = $3, status = $4, updated_at = NOW() WHERE id = $1 RETURNING *`,
-            [id, params.payment_method, params.payment_reference || null, params.status || 'completed']
+            [id, params.payment_method?.toLowerCase() ?? null, params.payment_reference || null, params.status || 'completed']
         ));
         return rows[0];
     },

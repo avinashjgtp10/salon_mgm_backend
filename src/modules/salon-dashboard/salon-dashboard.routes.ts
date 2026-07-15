@@ -19,6 +19,9 @@ router.get("/appointments/today", ...guard, salonDashboardController.getTodayApp
 // GET /api/v1/dashboard/staff/top
 router.get("/staff/top", ...guard, salonDashboardController.getTopStaff);
 
+// GET /api/v1/dashboard/staff/revenue
+router.get("/staff/revenue", ...guard, salonDashboardController.getStaffRevenue);
+
 // GET /api/v1/dashboard/services/mix
 router.get("/services/mix", ...guard, salonDashboardController.getServiceMix);
 

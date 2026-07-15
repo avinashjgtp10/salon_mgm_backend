@@ -107,6 +107,19 @@ export const attendanceController = {
         } catch (err) { return next(err); }
     },
 
+    // ── Single staff, date range (Staff History page) ───────────────────────────
+
+    async getForStaff(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const staffId = String(req.params.staffId);
+            const startDate = req.query.start_date ? String(req.query.start_date) : undefined;
+            const endDate = req.query.end_date ? String(req.query.end_date) : undefined;
+            const limit = req.query.limit ? parseInt(String(req.query.limit), 10) : undefined;
+            const data = await attendanceService.getForStaff(staffId, startDate, endDate, limit);
+            return sendSuccess(res, 200, data, "Staff attendance fetched");
+        } catch (err) { return next(err); }
+    },
+
     // ── Monthly grid ─────────────────────────────────────────────────────────
 
     async getMonthly(req: AuthRequest, res: Response, next: NextFunction) {
@@ -119,6 +132,21 @@ export const attendanceController = {
                 throw new AppError(400, "Valid year and month (1-12) are required", "VALIDATION_ERROR");
             const data = await attendanceService.getMonthly(salonId, year, month);
             return sendSuccess(res, 200, data, "Monthly attendance fetched");
+        } catch (err) { return next(err); }
+    },
+
+    // ── Date-range view ──────────────────────────────────────────────────────
+
+    async getRange(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const salonId = req.user?.salonId;
+            if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+            const startDate = String(req.query.start_date || "").trim();
+            const endDate   = String(req.query.end_date   || "").trim();
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate))
+                throw new AppError(400, "start_date and end_date (YYYY-MM-DD) are required", "VALIDATION_ERROR");
+            const data = await attendanceService.getRange(salonId, startDate, endDate);
+            return sendSuccess(res, 200, data, "Attendance range fetched");
         } catch (err) { return next(err); }
     },
 

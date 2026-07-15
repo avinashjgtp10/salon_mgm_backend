@@ -54,7 +54,9 @@ export const salonsController = {
 
             if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
 
-            const salon = await salonsService.mySalon(userId);
+            // For staff users the JWT carries salonId; fall back to query param
+            const salonId = req.user?.salonId ?? (req.query.salon_id as string | undefined) ?? null;
+            const salon = await salonsService.mySalon(userId, salonId);
 
             logger.info("GET /salons/me success", {
                 userId,

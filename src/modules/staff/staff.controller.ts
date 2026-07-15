@@ -6,6 +6,7 @@ import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { invalidateStaffPermCache } from "../../middleware/permission.middleware";
 import { sendSuccess } from "../utils/response.util";
+import { uploadAvatarToS3 } from "../utils/avatar.upload";
 import {
   staffService, staffInvitationService, staffAddressService,
   staffEmergencyContactService, staffWagesService, staffCommissionsService,
@@ -85,6 +86,25 @@ export const staffController = {
       }
       throw error;
     }
+  },
+
+  /**
+   * POST /api/v1/staff/upload-avatar
+   * Uploads a profile photo (multer → S3, or local /uploads fallback) and returns
+   * its URL. Stateless — does not persist to a staff row, since the staff record
+   * may not exist yet (create flow). The caller sends the returned url back as
+   * `avatar_url` in the create/update payload.
+   */
+  async uploadAvatar(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const file = (req as any).file as Express.Multer.File | undefined;
+      if (!file) throw new AppError(400, "No image file provided", "FILE_REQUIRED");
+
+      const key = `staff-${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+      const url = await uploadAvatarToS3(file.path, key, file.mimetype);
+
+      return sendSuccess(res, 200, { url }, "Avatar uploaded successfully");
+    } catch (err) { return next(err); }
   },
 
   async getById(req: AuthRequest, res: Response, next: NextFunction) {
@@ -460,8 +480,10 @@ export const staffCommissionsController = {
     try {
       const salonId = req.user?.salonId ?? String(req.query.salon_id ?? "");
       if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
-      const month = req.query.month ? String(req.query.month) : undefined;
-      const data = await staffCommissionsService.getEarnedBySalon(salonId, month);
+      const month     = req.query.month      ? String(req.query.month)      : undefined;
+      const startDate = req.query.start_date ? String(req.query.start_date) : undefined;
+      const endDate   = req.query.end_date   ? String(req.query.end_date)   : undefined;
+      const data = await staffCommissionsService.getEarnedBySalon(salonId, month, startDate, endDate);
       return sendSuccess(res, 200, data, "Commission earned by staff fetched successfully");
     } catch (err) { return next(err); }
   },
@@ -483,8 +505,10 @@ export const staffCommissionsController = {
     try {
       const salonId = req.user?.salonId ?? String(req.query.salon_id ?? "");
       if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
-      const month = req.query.month ? String(req.query.month) : undefined; // "YYYY-MM"
-      const data = await staffCommissionsService.getSalonSummary(salonId, month);
+      const month     = req.query.month      ? String(req.query.month)      : undefined; // "YYYY-MM"
+      const startDate = req.query.start_date ? String(req.query.start_date) : undefined;
+      const endDate   = req.query.end_date   ? String(req.query.end_date)   : undefined;
+      const data = await staffCommissionsService.getSalonSummary(salonId, month, startDate, endDate);
       return sendSuccess(res, 200, data, "Commission summary fetched successfully");
     } catch (err) { return next(err); }
   },
