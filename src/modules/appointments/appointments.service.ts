@@ -6,7 +6,7 @@ import { salesRepository } from "../sales/sales.repository";
 import { productsRepository } from "../products/products.repository";
 import { commissionCalculationService } from "../commission/commissionCalculation.service";
 import { blockedTimesRepository } from "../blocked_times/blocked_times.repository";
-import { salesService } from "../sales/sales.service";
+import { recordTransaction } from "../transactions/transaction-recorder.service";
 import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
 import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
 import { attendanceService } from "../attendance/attendance.service";
@@ -410,6 +410,7 @@ export const appointmentsService = {
         discount_amount?: number;
         tip_amount?: number;
         tax_amount?: number;
+        ex_charges?: number;
         payment_method?: string;
         notes?: string;
     }): Promise<{ appointment: Appointment; saleId: string }> {
@@ -568,8 +569,22 @@ export const appointmentsService = {
         }
 
         // No pre-existing sale — standard flow
-        if (existing.sale_id)
-            throw new AppError(400, "Appointment already has a linked sale", "BAD_REQUEST");
+        if (existing.sale_id) {
+            // A sale_id can be set but dangling — the sale it points at was
+            // hard-deleted with no cleanup on this side (no FK existed before).
+            // Without this check, a checkout on such an appointment would be
+            // permanently stuck: it can never re-create a sale (blocked here)
+            // and can never self-heal (findByAppointmentId already returned
+            // null above, since that sale doesn't exist).
+            const linkedSale = await salesRepository.findById(existing.sale_id);
+            if (linkedSale) {
+                throw new AppError(400, "Appointment already has a linked sale", "BAD_REQUEST");
+            }
+            logger.warn("appointmentsService.checkout: clearing dangling sale_id, falling through to re-create", {
+                appointmentId, staleSaleId: existing.sale_id,
+            });
+            await appointmentsRepository.clearSaleId(appointmentId);
+        }
 
         const resolvedItems = (saleItems && saleItems.length > 0)
             ? saleItems
@@ -583,7 +598,7 @@ export const appointmentsService = {
                     unit_price: s.price,
                 })),
                 ...existing.package_items.map(p => ({
-                    item_type: "service",
+                    item_type: "package",
                     item_id: p.package_id,
                     staff_id: p.staff_id ?? undefined,
                     name: p.name,
@@ -608,18 +623,23 @@ export const appointmentsService = {
                 })),
             ];
 
-        const { sale, items } = await salesService.create({
-            requesterUserId,
-            requesterRole,
-            body: {
-                salon_id:       existing.salon_id,
-                client_id:      existing.client_id  ?? undefined,
-                appointment_id: appointmentId,
-                staff_id:       existing.staff_id   ?? undefined,
-                status:         "draft",
-                items:          resolvedItems,
-                ...saleExtras,
-            } as any,
+        const { sale, items } = await recordTransaction({
+            salon_id:        existing.salon_id,
+            client_id:       existing.client_id  ?? undefined,
+            appointment_id:  appointmentId,
+            staff_id:        existing.staff_id   ?? undefined,
+            origin:          "quick_sell",
+            payment_label:   saleExtras.payment_method || "",
+            discount_amount: saleExtras.discount_amount,
+            tax_amount:      saleExtras.tax_amount,
+            // ex_charges counts as revenue, tip_amount does not (passes through
+            // to staff) — see recordTransaction()/salesRepository.create().
+            // Fall back to the appointment's own stored values when the caller
+            // (this fallback path) doesn't explicitly pass them.
+            ex_charges:      saleExtras.ex_charges ?? existing.ex_charges,
+            tip_amount:      saleExtras.tip_amount ?? existing.tip_amount,
+            notes:           saleExtras.notes,
+            items:           resolvedItems as any,
         });
 
         const appointment = await appointmentsRepository.linkSale(appointmentId, sale.id);
