@@ -1,5 +1,5 @@
 import { clientPackagesRepository } from "./client-packages.repository";
-import { salesRepository } from "../sales/sales.repository";
+import { recordTransaction } from "../transactions/transaction-recorder.service";
 import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
 import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
 import { salonsRepository } from "../salons/salons.repository";
@@ -29,6 +29,7 @@ function buildSyntheticSale(pkg: ClientPackage): { sale: Sale; items: SaleItem[]
     discount_amount: String(pkg.discount ?? 0),
     tip_amount: "0",
     tax_amount: String(pkg.gstAmount ?? 0),
+    ex_charges: "0",
     total_amount: String(pkg.totalAmount ?? 0),
     payment_method: (pkg.paymentMethod?.toLowerCase() as any) ?? null,
     payment_reference: null,
@@ -129,21 +130,22 @@ export const clientPackagesService = {
     try {
       const gstAmt      = Number(pkg.gstAmount  || 0);
       const discountAmt = Number(pkg.discount    || 0);
-      await salesRepository.create({
+      await recordTransaction({
         salon_id:        salonId,
         client_id:       dto.clientId,
-        status:          'completed',
-        payment_method:  dto.paymentMethod as any,
-        discount_amount: String(discountAmt),
-        tax_amount:      String(gstAmt),
+        origin:          "package_purchase",
+        payment_label:   dto.paymentMethod,
+        split_details:   dto.splitDetails ?? undefined,
+        discount_amount: discountAmt,
+        tax_amount:      gstAmt,
         items: [{
-          item_type:       'service',
+          item_type:       "package",
           name:            pkg.packageName,
           quantity:        1,
-          unit_price:      String(Number(pkg.basePrice || 0) + discountAmt),
-          discount_amount: String(discountAmt),
+          unit_price:      Number(pkg.basePrice || 0) + discountAmt,
+          discount_amount: discountAmt,
         }],
-      }, null);
+      });
     } catch (err) {
       logger.error('[clientPackagesService] Failed to auto-create sale for package purchase:', { error: err });
     }

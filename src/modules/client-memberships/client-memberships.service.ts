@@ -1,6 +1,6 @@
 import { clientMembershipsRepository } from './client-memberships.repository';
 import { membershipsRepository } from '../memberships/memberships.repository';
-import { salesRepository } from '../sales/sales.repository';
+import { recordTransaction } from '../transactions/transaction-recorder.service';
 import pool from '../../config/database';
 import type {
   CreateClientMembershipDTO,
@@ -35,6 +35,7 @@ function buildSyntheticSale(membership: ClientMembership): { sale: Sale; items: 
     discount_amount: '0',
     tip_amount: '0',
     tax_amount: '0',
+    ex_charges: '0',
     total_amount: String(price),
     payment_method: null,
     payment_reference: null,
@@ -149,18 +150,20 @@ export const clientMembershipsService = {
     // at all, so any Sales/Revenue page built from those tables misses it entirely.
     try {
       const pricePaid = Number(membership.pricePaid || 0);
-      await salesRepository.create({
-        salon_id:   salonId,
-        client_id:  dto.clientId,
-        status:     'completed',
+      await recordTransaction({
+        salon_id:      salonId,
+        client_id:     dto.clientId,
+        origin:        'membership_purchase',
+        payment_label: dto.paymentMethod || '',
+        split_details: dto.splitDetails ?? undefined,
         items: [{
           item_type:  'membership',
           item_id:    dto.membershipId,
           name:       membership.membershipName,
           quantity:   1,
-          unit_price: String(pricePaid),
+          unit_price: pricePaid,
         }],
-      }, null);
+      });
     } catch (err) {
       logger.error('[clientMembershipsService] Failed to auto-create sale for membership purchase:', { error: err });
     }

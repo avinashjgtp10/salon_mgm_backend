@@ -1,7 +1,7 @@
 import { paymentsRepository } from './payments.repository';
 import { couponsRepository } from '../coupons/coupons.repository';
 import { appointmentsRepository } from '../appointments/appointments.repository';
-import { salesRepository } from '../sales/sales.repository';
+import { recordTransaction } from '../transactions/transaction-recorder.service';
 import { membershipsRepository } from '../memberships/memberships.repository';
 import { clientMembershipsService } from '../client-memberships/client-memberships.service';
 import { clientMembershipsRepository } from '../client-memberships/client-memberships.repository';
@@ -29,6 +29,18 @@ export const paymentsService = {
     let appt: Appointment | null = null;
     let ewalletUsedActual = 0;
     let refereeWalletCredit = 0;
+    // Hoisted out of the inner `if` block below (where it's computed) so the
+    // sale-creation call further down can actually read it — previously it
+    // went out of scope before reaching there, which is why sales.total_amount
+    // never included tax even though payments.net_amount always did.
+    let taxAmount = 0;
+    // Same hoisting for ex_charges/tip — appt.ex_charges/appt.tip_amount used
+    // to never be read anywhere in this recompute at all (not just scoping),
+    // so a client-facing surcharge or tip never actually became part of what
+    // was owed/collected. ex_charges counts as salon revenue; tip does not —
+    // it passes straight through to staff (see recordTransaction() call below).
+    let exChargesAmt = 0;
+    let tipAmt = 0;
 
     const isPackagePayment = (data.payment_method || '').toLowerCase() === 'package';
 
@@ -173,7 +185,6 @@ export const paymentsService = {
           // minus discount. Previously this was skipped entirely here, so the
           // receipt correctly displayed tax but the appointment could be
           // marked "Paid" for less than what was shown to the client.
-          let taxAmount = 0;
           try {
             const activeTaxes = await getActiveTaxes(data.salon_id);
             const discRatio = rawSubtotal > 0 ? Math.min(1, discount / rawSubtotal) : 0;
@@ -187,11 +198,18 @@ export const paymentsService = {
             logger.warn('[payments] tax computation failed:', err?.message ?? err);
           }
 
+          // Both are real amounts the client actually pays alongside the bill —
+          // an ex-charge (business keeps it) and a tip (passed to staff) — so
+          // both must be part of what's owed/collected here, even though only
+          // ex_charges counts as revenue once it reaches the sale record.
+          exChargesAmt = Number(appt.ex_charges) || 0;
+          tipAmt       = Number(appt.tip_amount) || 0;
+
           // Reward points no longer exist as a separately redeemable balance —
           // earned value is credited straight into eWallet (see the "earn" block
           // below), so there is nothing to redeem here; eWallet redemption above
           // already covers whatever reward money the client has.
-          const grandTotal    = Math.round(actualBill - discount + taxAmount);
+          const grandTotal    = Math.round(actualBill - discount + taxAmount + exChargesAmt + tipAmt);
           const effectiveBill = Math.max(0, grandTotal - ewallet - membershipWalletUsed);
           data.membership_wallet_used = membershipWalletUsed;
 
@@ -338,84 +356,84 @@ export const paymentsService = {
     // Skip for package payments — revenue was already counted when the package was purchased.
     if (data.appointment_id && data.status === 'completed' && appt && !isPackagePayment) {
       try {
-        const existingSale = await salesRepository.findByAppointmentId(data.appointment_id);
-        if (!existingSale) {
-          const items: Array<{ item_type: 'service' | 'product' | 'membership'; item_id?: string; staff_id?: string; name: string; quantity: number; unit_price: string }> = [
-            ...(appt.services || []).map(s => ({
-              item_type: 'service' as const,
-              item_id: s.service_id,
-              staff_id: s.staff_id || undefined,
-              name: s.name || 'Service',
-              quantity: Number(s.quantity) || 1,
-              unit_price: String(Number(s.price) || 0),
-            })),
-            ...(appt.package_items || []).map(p => ({
-              item_type: 'service' as const,
-              item_id: p.package_id,
-              staff_id: p.staff_id || undefined,
-              name: p.name || 'Package',
-              quantity: Number(p.quantity) || 1,
-              unit_price: String(Number(p.price) || 0),
-            })),
-            ...(appt.product_items || []).map(p => ({
-              item_type: 'product' as const,
-              item_id: p.product_id || undefined,
-              staff_id: p.staff_id || undefined,
-              name: p.name || 'Product',
-              quantity: Number(p.quantity) || 1,
-              unit_price: String(Number(p.price) || 0),
-            })),
-            ...(appt.membership_items || []).map(m => ({
-              item_type: 'membership' as const,
-              item_id: m.membership_id || undefined,
-              staff_id: m.staff_id || undefined,
-              name: m.name || 'Membership',
-              quantity: Number(m.quantity) || 1,
-              unit_price: String(Number(m.price) || 0),
-            })),
-          ];
+        const items: Array<{ item_type: 'service' | 'package' | 'product' | 'membership'; item_id?: string; staff_id?: string; name: string; quantity: number; unit_price: number }> = [
+          ...(appt.services || []).map(s => ({
+            item_type: 'service' as const,
+            item_id: s.service_id,
+            staff_id: s.staff_id || undefined,
+            name: s.name || 'Service',
+            quantity: Number(s.quantity) || 1,
+            unit_price: Number(s.price) || 0,
+          })),
+          ...(appt.package_items || []).map(p => ({
+            item_type: 'package' as const,
+            item_id: p.package_id,
+            staff_id: p.staff_id || undefined,
+            name: p.name || 'Package',
+            quantity: Number(p.quantity) || 1,
+            unit_price: Number(p.price) || 0,
+          })),
+          ...(appt.product_items || []).map(p => ({
+            item_type: 'product' as const,
+            item_id: p.product_id || undefined,
+            staff_id: p.staff_id || undefined,
+            name: p.name || 'Product',
+            quantity: Number(p.quantity) || 1,
+            unit_price: Number(p.price) || 0,
+          })),
+          ...(appt.membership_items || []).map(m => ({
+            item_type: 'membership' as const,
+            item_id: m.membership_id || undefined,
+            staff_id: m.staff_id || undefined,
+            name: m.name || 'Membership',
+            quantity: Number(m.quantity) || 1,
+            unit_price: Number(m.price) || 0,
+          })),
+        ];
 
-          if (items.length === 0) {
-            items.push({
-              item_type: 'service' as const,
-              name: appt.title || 'Appointment Service',
-              quantity: 1,
-              unit_price: String(data.net_amount || data.gross_amount || 0),
-            });
-          }
+        if (items.length === 0) {
+          items.push({
+            item_type: 'service' as const,
+            name: appt.title || 'Appointment Service',
+            quantity: 1,
+            unit_price: Number(data.net_amount || data.gross_amount || 0),
+          });
+        }
 
-          const sale = await salesRepository.create({
-            salon_id: data.salon_id,
-            client_id: data.client_id,
-            appointment_id: data.appointment_id,
-            staff_id: appt.staff_id || undefined,
-            status: 'completed',
-            // Membership wallet usage must reduce recognized revenue here — that
-            // money was already counted as revenue when the membership itself was
-            // purchased. Without this, every visit that draws down the wallet
-            // counts the same money as revenue a second time. (eWallet, by
-            // contrast, is correctly NOT subtracted — top-ups and referral
-            // credits are never counted as revenue when added, only when spent.)
-            discount_amount: String((Number(data.discount_amount) || 0) + (Number(data.membership_wallet_used) || 0)),
-            // DB constraint only allows lowercase values ('cash','card','upi','bank_transfer'),
-            // but this arrives as the frontend's display label (e.g. "Cash") — normalizing
-            // here since the mismatch was silently failing every sale auto-creation.
-            payment_method: String(data.payment_method || '').toLowerCase() as any,
-            coupon_code: data.coupon_code || undefined,
-            discount_type: appt.discount_type || undefined,
-            discount_percent: appt.discount_type === 'percentage' ? String(appt.discount_value ?? 0) : undefined,
-            items,
-          }, null);
+        const { sale, items: saleItemsForEvents, wasIdempotentReuse } = await recordTransaction({
+          salon_id: data.salon_id,
+          client_id: data.client_id,
+          appointment_id: data.appointment_id,
+          staff_id: appt.staff_id || undefined,
+          origin: 'calendar_checkout',
+          // Membership wallet usage must reduce recognized revenue here — that
+          // money was already counted as revenue when the membership itself was
+          // purchased. Without this, every visit that draws down the wallet
+          // counts the same money as revenue a second time. (eWallet, by
+          // contrast, is correctly NOT subtracted — top-ups and referral
+          // credits are never counted as revenue when added, only when spent.)
+          discount_amount: (Number(data.discount_amount) || 0) + (Number(data.membership_wallet_used) || 0),
+          tax_amount: taxAmount,
+          ex_charges: exChargesAmt,
+          tip_amount: tipAmt,
+          payment_label: data.payment_method || '',
+          split_details: data.split_details ?? undefined,
+          coupon_code: data.coupon_code || undefined,
+          discount_type: appt.discount_type || undefined,
+          discount_percent: appt.discount_type === 'percentage' ? Number(appt.discount_value ?? 0) : undefined,
+          items,
+        });
 
-          // Note: appointment.status is managed by the checkout flow
-          // (POST /api/v1/appointments/:id/checkout) to avoid double-completion
-          // appointment.payment_status is updated above — that's all payments handles here
+        // Note: appointment.status is managed by the checkout flow
+        // (POST /api/v1/appointments/:id/checkout) to avoid double-completion
+        // appointment.payment_status is updated above — that's all payments handles here
 
-          // ── WhatsApp Automation: Purchase confirmation (per item type) ──────
-          // Fetch enriched sale with client_phone and salon_name
-          const enrichedSale = await salesRepository.findById(sale.id);
+        // ── WhatsApp Automation: Purchase confirmation (per item type) ──────
+        // Skip entirely on idempotent reuse — an existing sale means these
+        // events already fired the first time this appointment was paid.
+        if (!wasIdempotentReuse) {
+          const enrichedSale = sale;
           if (enrichedSale && data.client_id && (enrichedSale as any).client_phone) {
-            const saleItemsForEvents = await salesRepository.findItemsBySaleId(sale.id);
             const presentTypes = new Set(saleItemsForEvents.map((i) => i.item_type));
             const purchaseEvents: Array<{ eventType: 'service_purchased' | 'product_purchased'; itemType: 'service' | 'product' }> = [
               { eventType: 'service_purchased', itemType: 'service' },

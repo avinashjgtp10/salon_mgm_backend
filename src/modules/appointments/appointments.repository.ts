@@ -334,6 +334,16 @@ export const appointmentsRepository = {
         return rows[0];
     },
 
+    // Clears a stale sale_id reference (e.g. the sale it pointed at was
+    // hard-deleted) so checkout can fall through and create a fresh one
+    // instead of permanently refusing with "already has a linked sale".
+    async clearSaleId(id: string): Promise<void> {
+        await pool.query(
+            `UPDATE appointments SET sale_id = NULL, updated_at = NOW() WHERE id = $1`,
+            [id]
+        );
+    },
+
     async exportList(filters: {
         salon_id?: string;
         status?: string;
