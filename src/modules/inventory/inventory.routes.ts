@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
+import { requirePermission } from "../../middleware/permission.middleware";
 import {
     suppliersController,
     stockMovementsController,
@@ -17,6 +18,9 @@ import {
 } from "./inventory.validator";
 
 const router = Router();
+const viewInventory = requirePermission("view_inventory");
+const stockAdjustment = requirePermission("stock_adjustment");
+const manageInventory = requirePermission("manage_inventory");
 
 // ─── Suppliers ────────────────────────────────────────────────────────────────
 
@@ -32,6 +36,7 @@ router.get(
     "/suppliers",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
     suppliersController.list
 );
 
@@ -39,6 +44,7 @@ router.get(
     "/suppliers/:id",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
     suppliersController.getById
 );
 
@@ -63,6 +69,7 @@ router.post(
     "/stock-movements",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
+    stockAdjustment,
     validateCreateStockMovement,
     stockMovementsController.create
 );
@@ -71,6 +78,7 @@ router.get(
     "/stock-movements",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
     stockMovementsController.list
 );
 
@@ -78,6 +86,7 @@ router.get(
     "/stock-movements/:id",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
     stockMovementsController.getById
 );
 
@@ -94,6 +103,7 @@ router.get(
     "/stock-takes",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
     stocktakesController.list
 );
 
@@ -101,6 +111,7 @@ router.get(
     "/stock-takes/:id",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
     stocktakesController.getById
 );
 
@@ -128,6 +139,7 @@ router.get(
     "/stock-reconciliation",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
     stockReconciliationController.list
 );
 
@@ -154,6 +166,7 @@ router.post(
     "/consumable-usage",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
+    manageInventory,
     consumableUsageController.save
 );
 

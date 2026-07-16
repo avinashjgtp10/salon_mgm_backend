@@ -1,9 +1,7 @@
 -- Migration: add Create Employee page fields to staff table
--- NOT YET APPLIED — written per request but deliberately not run against the DB.
--- Run this manually against salonoxdb_dev (or via your usual migration process)
--- when ready, then let the backend repository code know so it can start writing
--- these columns (see the "Pending DB migration" comment block in
--- src/modules/staff/staff.types.ts and staff.repository.ts create()/update()).
+-- Superseded by db-migrations/1784106508184_add-employee-profile-fields-to-staff.js,
+-- which node-pg-migrate applies via `npm run migrate:up`. This file is kept only
+-- as historical reference — run the db-migrations version, not this one.
 --
 -- Safe to run multiple times (uses ADD COLUMN IF NOT EXISTS).
 
