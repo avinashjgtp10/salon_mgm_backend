@@ -31,7 +31,7 @@ router.post("/invite/accept", validateAcceptInvitation, staffInvitationControlle
 
 // ─── Staff CRUD ───────────────────────────────────────────────────────────────
 router.get("/", auth, ownerAdminStaff, requirePermission("view_team"), staffController.list);
-router.post("/", auth, ownerAdmin, requirePermission("manage_team"), validateCreateStaff, staffController.create);
+router.post("/", auth, ownerAdmin, requirePermission("add_team_member"), validateCreateStaff, staffController.create);
 
 // ─── Avatar upload (stateless — must be BEFORE /:id) ─────────────────────────
 router.post("/upload-avatar", auth, ownerAdmin, uploadMiddleware.single("avatar"), staffController.uploadAvatar);
@@ -56,10 +56,10 @@ router.get("/:staffId/commissions/history", auth, ownerAdminStaff, staffCommissi
 
 // ─── Staff by ID ──────────────────────────────────────────────────────────────
 router.get("/:id",    auth, ownerAdminStaff, requirePermission("view_team"), staffController.getById);
-router.patch("/:id",  auth, ownerAdmin, requirePermission("manage_team"), validateUpdateStaff, staffController.update);
-router.patch("/:id/activate",   auth, ownerAdmin, requirePermission("manage_team"), staffController.activate);
-router.patch("/:id/deactivate", auth, ownerAdmin, requirePermission("manage_team"), staffController.deactivate);
-router.delete("/:id", auth, ownerAdmin, requirePermission("manage_team"), staffController.delete);
+router.patch("/:id",  auth, ownerAdmin, requirePermission("edit_team_member"), validateUpdateStaff, staffController.update);
+router.patch("/:id/activate",   auth, ownerAdmin, requirePermission("edit_team_member"), staffController.activate);
+router.patch("/:id/deactivate", auth, ownerAdmin, requirePermission("edit_team_member"), staffController.deactivate);
+router.delete("/:id", auth, ownerAdmin, requirePermission("edit_team_member"), staffController.delete);
 
 // ─── Invitation management ────────────────────────────────────────────────────
 router.get("/:id/invitation-status", auth, ownerAdmin, staffInvitationController.getInvitationStatus);

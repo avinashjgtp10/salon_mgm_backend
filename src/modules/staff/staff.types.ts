@@ -93,6 +93,10 @@ export type Staff = {
     permission_level: string | null;
     allow_calendar_bookings: boolean;
     custom_permissions: Record<string, boolean> | null;
+    gender: string | null;
+    address: string | null;
+    working_hours_per_day: number | null;
+    holidays: number | null;
 };
 
 export type CreateStaffBody = {
@@ -119,10 +123,6 @@ export type CreateStaffBody = {
     joined_date?: string;
     birthday_day?: number;
     birthday_month?: number;
-    // ── Pending DB migration (migrations/add_employee_profile_fields_to_staff.sql) ──
-    // Accepted here so the frontend can send them today, but staff.repository.ts does
-    // NOT yet write these columns — they are silently dropped until that migration
-    // is applied and the repository create()/update() column lists are updated.
     gender?: string;
     address?: string;
     avatar_url?: string;

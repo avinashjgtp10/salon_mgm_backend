@@ -514,7 +514,7 @@ export const paymentsService = {
     // ── Auto-create client_memberships when memberships are sold ─────────────
     // Use membership_items from DB (appt) if available; fall back to items sent in the payment body.
     // The fallback handles the case where membership was added in the edit UI without saving first,
-    // or when the edit_appointments permission blocked the pre-payment PATCH.
+    // or when the manage_calendar permission blocked the pre-payment PATCH.
     const membershipItemsSrc: Array<any> =
       (appt?.membership_items?.length ? appt.membership_items : null) ??
       (data.membership_items?.length   ? data.membership_items   : null) ??
