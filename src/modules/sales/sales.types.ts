@@ -1,6 +1,6 @@
 export type SaleStatus = "draft" | "completed" | "cancelled" | "refunded";
-export type PaymentMethod = "cash" | "card" | "gift_card" | "split" | "upi";
-export type SaleItemType = "service" | "product" | "membership" | "gift_card" | "quick";
+export type PaymentMethod = "cash" | "card" | "gift_card" | "split" | "upi" | "wallet";
+export type SaleItemType = "service" | "product" | "membership" | "gift_card" | "quick" | "package";
 
 export type Sale = {
     id: string;
@@ -11,8 +11,12 @@ export type Sale = {
     status: SaleStatus;
     subtotal: string;
     discount_amount: string;
+    // Passes through to staff, not the salon — tracked here but deliberately
+    // excluded from total_amount (see salesRepository.create()).
     tip_amount: string;
     tax_amount: string;
+    // Counts as revenue — included in total_amount, unlike tip_amount.
+    ex_charges: string;
     total_amount: string;
     payment_method: PaymentMethod | null;
     payment_reference: string | null;
@@ -49,6 +53,7 @@ export type CreateSaleBody = {
     discount_amount?: string;
     tip_amount?: string;
     tax_amount?: string;
+    ex_charges?: string;
     payment_method?: PaymentMethod;
     payment_reference?: string;
     notes?: string;

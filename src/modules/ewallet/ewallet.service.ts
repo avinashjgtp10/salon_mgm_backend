@@ -8,11 +8,15 @@ export const ewalletService = {
     clientId: string,
     salonId: string,
     amount: number,
+    paymentMethod: string | undefined,
     note: string | undefined,
     createdBy: string,
   ): Promise<{ balance: number }> {
     if (!isFinite(amount) || amount <= 0) {
       throw new AppError(400, "amount must be a positive number", "VALIDATION_ERROR");
+    }
+    if (!paymentMethod || !["cash", "card", "upi"].includes(paymentMethod.toLowerCase())) {
+      throw new AppError(400, "payment_method must be one of cash, card, upi", "VALIDATION_ERROR");
     }
     const client = await clientsRepository.findById(clientId, salonId);
     if (!client) throw new AppError(404, "Client not found", "NOT_FOUND");
@@ -23,6 +27,7 @@ export const ewalletService = {
       type: "topup",
       delta: amount,
       sourceType: "manual",
+      paymentMethod: paymentMethod.toLowerCase(),
       note: note || undefined,
       createdBy,
     });

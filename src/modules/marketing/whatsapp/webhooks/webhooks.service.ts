@@ -153,6 +153,7 @@ export const webhooksService = {
       type:     'whatsapp',
       title:    `WhatsApp: ${senderName}`,
       body:     messageBody.length > 80 ? messageBody.slice(0, 77) + '…' : messageBody,
+      event_key: 'newMessage',
     }).catch(() => {})
 
     // ── LUNOX AI receptionist — opt-in per salon, off by default ────────────

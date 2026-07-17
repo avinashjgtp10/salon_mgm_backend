@@ -1,5 +1,10 @@
 export interface ClientPackageService {
   serviceId:          string;
+  // Real catalog services.id — lets redemption/coverage matching be exact
+  // even when two catalog services share a display name (e.g. two "Hair
+  // Cut" entries at different prices). Null on packages sold before this
+  // existed; callers fall back to name-matching in that case.
+  catalogServiceId:   string | null;
   serviceName:        string;
   totalSessions:      number;
   completedSessions:  number;
@@ -29,6 +34,8 @@ export interface CreateClientPackageDTO {
   /** Method -> amount breakdown, present only when paymentMethod === "split". */
   splitDetails?:  Record<string, number>;
   services: Array<{
+    /** Real catalog services.id, when the frontend picked one from the catalog search. */
+    serviceId?:     string;
     serviceName:    string;
     totalSessions:  number;
     price:          number;
@@ -117,6 +124,7 @@ export interface ClientPackageRow {
   payment_status: string;
   services:       Array<{
     service_id:          string;
+    catalog_service_id:  string | null;
     service_name:        string;
     total_sessions:      number;
     completed_sessions:  number;

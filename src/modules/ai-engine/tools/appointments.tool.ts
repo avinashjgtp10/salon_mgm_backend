@@ -240,7 +240,6 @@ export const checkAppointmentStatusTool: Tool = {
                 // name-matching a booked service.
                 services: appt.services?.map((s) => ({ service_id: s.service_id, name: s.name, price: s.price })) ?? [],
                 staff_id: appt.staff_id,
-                payment_status: appt.payment_status,
             };
         }
 
@@ -248,7 +247,7 @@ export const checkAppointmentStatusTool: Tool = {
         const all = await appointmentsRepository.listByClientId(ctx.clientId);
         const now = Date.now();
         const upcoming = all
-            .filter((a) => !["completed", "cancelled", "no_show"].includes(a.status) && new Date(a.scheduled_at).getTime() >= now)
+            .filter((a) => !["paid", "cancelled", "no-show", "deleted"].includes(a.status) && new Date(a.scheduled_at).getTime() >= now)
             .sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime());
 
         return {
@@ -258,7 +257,6 @@ export const checkAppointmentStatusTool: Tool = {
                 scheduled_at: a.scheduled_at,
                 services: a.services?.map((s) => ({ service_id: s.service_id, name: s.name, price: s.price })) ?? [],
                 staff_id: a.staff_id,
-                payment_status: a.payment_status,
             })),
         };
     },

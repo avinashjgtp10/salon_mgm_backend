@@ -1,6 +1,6 @@
 import { clientMembershipsRepository } from './client-memberships.repository';
 import { membershipsRepository } from '../memberships/memberships.repository';
-import { salesRepository } from '../sales/sales.repository';
+import { recordTransaction } from '../transactions/transaction-recorder.service';
 import pool from '../../config/database';
 import type {
   CreateClientMembershipDTO,
@@ -35,6 +35,7 @@ function buildSyntheticSale(membership: ClientMembership): { sale: Sale; items: 
     discount_amount: '0',
     tip_amount: '0',
     tax_amount: '0',
+    ex_charges: '0',
     total_amount: String(price),
     payment_method: null,
     payment_reference: null,
@@ -149,18 +150,20 @@ export const clientMembershipsService = {
     // at all, so any Sales/Revenue page built from those tables misses it entirely.
     try {
       const pricePaid = Number(membership.pricePaid || 0);
-      await salesRepository.create({
-        salon_id:   salonId,
-        client_id:  dto.clientId,
-        status:     'completed',
+      await recordTransaction({
+        salon_id:      salonId,
+        client_id:     dto.clientId,
+        origin:        'membership_purchase',
+        payment_label: dto.paymentMethod || '',
+        split_details: dto.splitDetails ?? undefined,
         items: [{
           item_type:  'membership',
           item_id:    dto.membershipId,
           name:       membership.membershipName,
           quantity:   1,
-          unit_price: String(pricePaid),
+          unit_price: pricePaid,
         }],
-      }, null);
+      });
     } catch (err) {
       logger.error('[clientMembershipsService] Failed to auto-create sale for membership purchase:', { error: err });
     }
@@ -187,20 +190,28 @@ export const clientMembershipsService = {
     return clientMembershipsRepository.cancel(id, salonId);
   },
 
-  // Automatic wallet redemption at checkout: draws from the client's single
-  // highest-balance active membership. No-op (all zeros) if the client has
-  // no active membership with a positive balance.
+  // Automatic wallet redemption at checkout: draws from ALL of the client's
+  // active memberships with a balance, highest-balance first, moving to the
+  // next one once the current is exhausted. No-op (all zeros) if the client
+  // has no active membership with a positive balance.
   async deductWalletForBooking(
     salonId: string,
     clientId: string,
     appointmentId: string,
     services: WalletDeductionServiceInput[],
   ): Promise<WalletDeductionResult> {
-    const membership = await clientMembershipsRepository.findActiveWithBalanceForClient(clientId, salonId);
-    if (!membership) return { totalWalletUsed: 0, remainingBalance: 0, perService: [], reused: false };
-    return clientMembershipsRepository.deductOrReuseWalletForAppointment(membership.id, salonId, {
-      appointmentId, services,
-    });
+    const memberships = await clientMembershipsRepository.findAllActiveWithBalanceForClient(clientId, salonId);
+    if (memberships.length === 0) return { totalWalletUsed: 0, remainingBalance: 0, perService: [], reused: false };
+    return clientMembershipsRepository.deductWalletAcrossMemberships(
+      memberships.map((m) => m.id), salonId, { appointmentId, services },
+    );
+  },
+
+  // Gate for whether payments.service.ts should include product items in the
+  // wallet-deduction input — true only if at least one of the client's active,
+  // spendable memberships has appliesToProducts enabled.
+  async isProductEligible(salonId: string, clientId: string): Promise<boolean> {
+    return clientMembershipsRepository.hasProductEligibleMembership(clientId, salonId);
   },
 
   // Backfill: scan paid appointments and completed sales to create missing client_membership records

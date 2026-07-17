@@ -31,6 +31,13 @@ export type AutomationEventType =
 // (see wa-purchase-templates.service.ts), unlike every other event type which
 // still uses the single global admin-managed row. Originally just the 4
 // purchase-completion events, now covers the salon's full lifecycle catalog.
+//
+// appointment_confirmation/appointment_reminder_24h/appointment_rescheduled
+// moved in here from the legacy global-row model — that model assumed one
+// Meta template submission works for every salon, which is impossible since
+// template approval is per-WABA and every salon has their own. Confirmed live
+// in prod: both were failing for every salon with Meta error (#132001)
+// "Template name does not exist in the translation" for exactly this reason.
 export const PURCHASE_EVENTS: AutomationEventType[] = [
   'service_purchased',
   'product_purchased',
@@ -41,6 +48,9 @@ export const PURCHASE_EVENTS: AutomationEventType[] = [
   'review_request',
   'package_expiring_soon',
   'sessions_remaining',
+  'appointment_confirmation',
+  'appointment_reminder_24h',
+  'appointment_rescheduled',
 ]
 
 // Transactional events — controlled by client.whatsapp_notifications

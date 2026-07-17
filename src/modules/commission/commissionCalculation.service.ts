@@ -336,6 +336,73 @@ export const commissionCalculationService = {
         if (!items || items.length === 0) return;
 
         try {
+            // ── Membership-wallet-covered revenue must not earn services commission
+            // again ─────────────────────────────────────────────────────────────
+            // Redeeming a membership wallet balance for a service only reduces the
+            // bill at the payment level (payments.net_amount/membership_wallet_used)
+            // — sale_items.total_price keeps showing the full catalog price. Without
+            // this, the staff who sold the membership earns "memberships" commission
+            // on that money once, and the staff who performs the redeemed service
+            // would earn "services" commission on the exact same money again. Wallet
+            // redemption is services-only (payments.service.ts only ever builds its
+            // servicesForWallet list from appt.services), so this ratio is applied
+            // only to the "services" category below — products/memberships/packages/
+            // gift_cards are untouched.
+            let servicesSubtotal = 0;
+            for (const item of items) {
+                const isPackage = !!(item.item_id && packageItemIds?.has(item.item_id));
+                if (!isPackage && item.item_type === "service") {
+                    servicesSubtotal += parseFloat(String(item.total_price)) * (item.quantity ?? 1);
+                }
+            }
+
+            let walletRatio = 0;
+            if (appointmentId && servicesSubtotal > 0) {
+                try {
+                    const { rows: walletRows } = await pool.query(
+                        `SELECT COALESCE(SUM(membership_wallet_used), 0)::numeric AS wallet_used
+                         FROM payments
+                         WHERE appointment_id = $1 AND status IN ('completed', 'partial')`,
+                        [appointmentId]
+                    );
+                    const walletUsed = parseFloat(walletRows[0]?.wallet_used ?? "0");
+                    walletRatio = Math.min(1, walletUsed / servicesSubtotal);
+                } catch (qErr) {
+                    logger.warn("commissionCalculationService: membership wallet ratio query failed, treating as 0", { appointmentId, qErr });
+                }
+            }
+
+            // ── Fully package-covered services must not earn services commission
+            // either ─────────────────────────────────────────────────────────────
+            // A fully-covered row correctly computes total=0 in the booking UI, but
+            // useAppointment.ts's buildServiceApiItems() restores the full catalog
+            // price before sending it (sending 0 fails appointment validation) — so
+            // sale_items.total_price ends up at full price for these rows too,
+            // exactly like the membership case, except here it's a per-service
+            // binary flag rather than a bill-level ratio: appointments.services[]
+            // already carries is_package_service + service_id for each line, keyed
+            // the same way sale_items.item_id is populated. A *partially* covered
+            // row already sends its true reduced total (see ServiceRow.tsx/
+            // buildServiceApiItems), so this only ever needs to zero out fully-
+            // covered ones — no ratio math needed here, unlike wallet coverage above.
+            let packageCoveredServiceIds = new Set<string>();
+            if (appointmentId) {
+                try {
+                    const { rows: apptRows } = await pool.query(
+                        `SELECT services FROM appointments WHERE id = $1`,
+                        [appointmentId]
+                    );
+                    const services: any[] = apptRows[0]?.services ?? [];
+                    packageCoveredServiceIds = new Set(
+                        services
+                            .filter((s) => s?.is_package_service === true && s?.service_id)
+                            .map((s) => String(s.service_id))
+                    );
+                } catch (qErr) {
+                    logger.warn("commissionCalculationService: package coverage lookup failed, treating as none covered", { appointmentId, qErr });
+                }
+            }
+
             // Step 1: Group items by (staff_id, category) and sum revenue
             const groups = new Map<string, {
                 staff_id: string;
@@ -353,7 +420,14 @@ export const commissionCalculationService = {
                 if (!category) continue; // unknown item type — skip
 
                 const key      = `${staffId}::${category}`;
-                const revenue  = parseFloat(String(item.total_price)) * (item.quantity ?? 1);
+                let revenue    = parseFloat(String(item.total_price)) * (item.quantity ?? 1);
+                if (category === "services") {
+                    if (item.item_id && packageCoveredServiceIds.has(String(item.item_id))) {
+                        revenue = 0;
+                    } else if (walletRatio > 0) {
+                        revenue = revenue * (1 - walletRatio);
+                    }
+                }
 
                 if (groups.has(key)) {
                     groups.get(key)!.revenue += revenue;

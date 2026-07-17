@@ -76,15 +76,61 @@ export function invalidateStaffPermCache(userId: string) {
 }
 
 // ── Default staff permissions (used when nothing has been configured) ─────────
+// Mirrors the "staff" column defaults in src/features/settings/data/permissionMatrix.ts
+// on the frontend — keep the two in sync when adding a new requirePermission() key.
 const DEFAULT_STAFF_PERMS: Record<string, boolean> = {
-    view_dashboard: true,
-    view_appointments: true,
-    create_appointments: true,
+    view_calendar: true,
+    manage_calendar: false,
     view_clients: true,
+    create_clients: true,
+    edit_clients: true,
+    delete_clients: false,
     view_sales: true,
     create_sales: true,
-    view_catalog: true,
+    view_services: true,
+    create_services: false,
+    edit_services: false,
+    view_products: true,
+    create_products: false,
+    view_packages: true,
+    create_packages: false,
+    view_memberships: true,
+    create_memberships: false,
+    view_inventory: true,
+    manage_inventory: false,
+    stock_adjustment: false,
+    view_booking: true,
+    manage_booking: false,
+    view_team: true,
+    add_team_member: false,
+    edit_team_member: false,
+    manage_shifts: false,
+    view_payroll: false,
+    view_reports: false,
+    export_reports: false,
+    general_settings: false,
 };
+
+// ── Core resolver ──────────────────────────────────────────────────────────────
+// Returns whether the given permKey is allowed for this staff member. Callers
+// that already know the request is owner/admin (or don't need to short-circuit
+// on missing salon context with a specific error) can use this directly.
+async function staffHasPermission(user: PermUser, permKey: string): Promise<boolean> {
+    const salonId = user.salonId;
+    if (!salonId) return false;
+
+    // 1. Check per-staff custom permissions first
+    const customPerms = await loadStaffCustomPerms(user.userId, salonId);
+    if (customPerms !== null) {
+        return customPerms[permKey] ?? false;
+    }
+
+    // 2. Fall back to global role-level permissions
+    const rolePerms = await loadRolePerms(salonId);
+    return Object.keys(rolePerms).length > 0
+        ? (rolePerms[permKey]?.staff ?? false)
+        : (DEFAULT_STAFF_PERMS[permKey] ?? false);
+}
 
 // ── Middleware factory ────────────────────────────────────────────────────────
 export const requirePermission = (permKey: string) =>
@@ -97,30 +143,9 @@ export const requirePermission = (permKey: string) =>
             if (user.role === "salon_owner" || user.role === "admin") return next();
 
             if (user.role === "staff") {
-                const salonId = user.salonId;
-                if (!salonId) return next(new AppError(403, "No salon context", "FORBIDDEN"));
+                if (!user.salonId) return next(new AppError(403, "No salon context", "FORBIDDEN"));
 
-                // 1. Check per-staff custom permissions first
-                const customPerms = await loadStaffCustomPerms(user.userId, salonId);
-                if (customPerms !== null) {
-                    const allowed = customPerms[permKey] ?? false;
-                    if (!allowed) {
-                        return next(new AppError(
-                            403,
-                            `You do not have permission to perform this action (${permKey})`,
-                            "FORBIDDEN"
-                        ));
-                    }
-                    return next();
-                }
-
-                // 2. Fall back to global role-level permissions
-                const rolePerms = await loadRolePerms(salonId);
-                const allowed =
-                    Object.keys(rolePerms).length > 0
-                        ? (rolePerms[permKey]?.staff ?? false)
-                        : (DEFAULT_STAFF_PERMS[permKey] ?? false);
-
+                const allowed = await staffHasPermission(user, permKey);
                 if (!allowed) {
                     return next(new AppError(
                         403,
@@ -128,6 +153,39 @@ export const requirePermission = (permKey: string) =>
                         "FORBIDDEN"
                     ));
                 }
+            }
+
+            return next();
+        } catch (err) {
+            return next(err);
+        }
+    };
+
+// ── Middleware factory (any-of) ────────────────────────────────────────────────
+// Passes if the staff member has AT LEAST ONE of the given keys. Use this for
+// reads that multiple independent features legitimately depend on — e.g. Quick
+// Sale and the Calendar both need to read the product/membership catalog to
+// build a sale or appointment, even for staff who weren't separately granted
+// Catalog view permissions.
+export const requireAnyPermission = (permKeys: string[]) =>
+    async (req: Request & { user?: PermUser }, _res: Response, next: NextFunction) => {
+        try {
+            const user = req.user;
+            if (!user?.userId) return next(new AppError(401, "Unauthorized", "UNAUTHORIZED"));
+
+            if (user.role === "salon_owner" || user.role === "admin") return next();
+
+            if (user.role === "staff") {
+                if (!user.salonId) return next(new AppError(403, "No salon context", "FORBIDDEN"));
+
+                for (const key of permKeys) {
+                    if (await staffHasPermission(user, key)) return next();
+                }
+                return next(new AppError(
+                    403,
+                    `You do not have permission to perform this action (${permKeys.join(" / ")})`,
+                    "FORBIDDEN"
+                ));
             }
 
             return next();

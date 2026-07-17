@@ -693,8 +693,8 @@ export const clientsRepository = {
             joins.push(`
                 LEFT JOIN (
                     SELECT client_id,
-                           MAX(scheduled_at) FILTER (WHERE status = 'completed') AS last_visit_at,
-                           COUNT(*)          FILTER (WHERE status = 'completed') AS completed_count
+                           MAX(scheduled_at) FILTER (WHERE status = 'paid') AS last_visit_at,
+                           COUNT(*)          FILTER (WHERE status = 'paid') AS completed_count
                     FROM appointments
                     WHERE salon_id = $1 AND deleted_at IS NULL
                     GROUP BY client_id

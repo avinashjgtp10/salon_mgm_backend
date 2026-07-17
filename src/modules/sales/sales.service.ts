@@ -40,6 +40,7 @@ export const salesService = {
             type:     "payment",
             title:    "New Sale Created",
             body:     `${(sale as any).client_name ?? "Walk-in"} — ₹${sale.total_amount ?? 0}`,
+            event_key: "newPayment",
         }).catch(() => {});
 
         // ── WhatsApp Automation: Invoice Generated ────────────────────────────
@@ -131,6 +132,8 @@ export const salesService = {
             } catch (e) {}
         }
 
+        const saleDueAmount = Math.max(0, parseFloat(sale.total_amount) - body.amount_paid);
+
         try {
             await paymentsRepository.create({
                 salon_id:       sale.salon_id,
@@ -140,7 +143,7 @@ export const salesService = {
                 discount_amount: parseFloat(sale.discount_amount),
                 net_amount:     parseFloat(sale.total_amount),
                 paid_amount:    body.amount_paid,
-                due_amount:     Math.max(0, parseFloat(sale.total_amount) - body.amount_paid),
+                due_amount:     saleDueAmount,
                 payment_method: body.payment_method,
                 split_details:  splitDetails,
                 status:         "completed",
@@ -150,12 +153,18 @@ export const salesService = {
             logger.error("Failed to create payment record for sale:", { saleId: sale.id, salonId: sale.salon_id, error })
         }
 
-        // Mark the linked appointment as completed when the sale is checked out
+        // Mark the linked appointment paid/partial based on whether this checkout
+        // actually covered the full bill — a deposit-only checkout (amount_paid <
+        // total) must not read as fully paid everywhere else (reports, client
+        // history, dashboard) that now key off appointments.status directly.
         if (sale.appointment_id) {
             try {
-                await appointmentsRepository.updateStatus(sale.appointment_id, "completed");
-                // ── WhatsApp Automation: Thank You + Review Request (fire-and-forget) ──
-                notifyAppointmentCompleted(sale.appointment_id).catch(() => {});
+                const apptStatus = saleDueAmount > 0 ? "partial" : "paid";
+                await appointmentsRepository.updateStatus(sale.appointment_id, apptStatus);
+                // Only a fully-paid checkout should trigger the thank-you/review-request message.
+                if (apptStatus === "paid") {
+                    notifyAppointmentCompleted(sale.appointment_id).catch(() => {});
+                }
             } catch (error) {
                 logger.error("Failed to update appointment status after checkout:", { appointmentId: sale.appointment_id, error })
             }

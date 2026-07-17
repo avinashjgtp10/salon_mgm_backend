@@ -66,8 +66,12 @@ export const campaignWorker = new Worker<CampaignJobData>(
       return
     }
 
+    // Only PENDING — if this job is a BullMQ retry after a partial failure
+    // (e.g. the job threw after some contacts were already marked SENT/FAILED/
+    // BLOCKED but before finishing), this must not re-fetch and re-send to
+    // contacts already handled in the previous attempt.
     const { rows: contacts } = await pool.query(
-      `SELECT * FROM wa_campaign_contacts WHERE id = ANY($1::uuid[])`,
+      `SELECT * FROM wa_campaign_contacts WHERE id = ANY($1::uuid[]) AND status = 'PENDING'`,
       [contactIds]
     )
 
@@ -204,7 +208,12 @@ export const campaignWorker = new Worker<CampaignJobData>(
       )
     }
   },
-  { connection: redisConnection, concurrency: 100 }
+  // concurrency was 100 against a Postgres pool capped at 20 (config/database.ts) —
+  // with 20+ batch jobs hitting the DB nearly simultaneously, pool contention/
+  // timeouts on the unprotected top-of-job queries was the main driver of
+  // batches failing outright at scale. 10 leaves real headroom for the rest
+  // of the app sharing the same pool.
+  { connection: redisConnection, concurrency: 10 }
 )
 
 campaignWorker.on('completed', j     => console.log(`✅ WA Job ${j.id} completed`))

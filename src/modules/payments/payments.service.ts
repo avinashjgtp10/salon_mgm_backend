@@ -1,7 +1,7 @@
 import { paymentsRepository } from './payments.repository';
 import { couponsRepository } from '../coupons/coupons.repository';
 import { appointmentsRepository } from '../appointments/appointments.repository';
-import { salesRepository } from '../sales/sales.repository';
+import { recordTransaction } from '../transactions/transaction-recorder.service';
 import { membershipsRepository } from '../memberships/memberships.repository';
 import { clientMembershipsService } from '../client-memberships/client-memberships.service';
 import { clientMembershipsRepository } from '../client-memberships/client-memberships.repository';
@@ -29,6 +29,22 @@ export const paymentsService = {
     let appt: Appointment | null = null;
     let ewalletUsedActual = 0;
     let refereeWalletCredit = 0;
+    // Hoisted so the post-payment 'redeem' ledger-write block (mirroring the
+    // existing eWallet redeem block) can read the actual amounts redeemed.
+    let rewardPointsRedeemedActual = 0;
+    let referralCreditUsedActual = 0;
+    // Hoisted out of the inner `if` block below (where it's computed) so the
+    // sale-creation call further down can actually read it — previously it
+    // went out of scope before reaching there, which is why sales.total_amount
+    // never included tax even though payments.net_amount always did.
+    let taxAmount = 0;
+    // Same hoisting for ex_charges/tip — appt.ex_charges/appt.tip_amount used
+    // to never be read anywhere in this recompute at all (not just scoping),
+    // so a client-facing surcharge or tip never actually became part of what
+    // was owed/collected. ex_charges counts as salon revenue; tip does not —
+    // it passes straight through to staff (see recordTransaction() call below).
+    let exChargesAmt = 0;
+    let tipAmt = 0;
 
     const isPackagePayment = (data.payment_method || '').toLowerCase() === 'package';
 
@@ -94,14 +110,15 @@ export const paymentsService = {
                     referralDiscount = Math.min(refConfig.referee_reward_amount, actualBill);
                   } else {
                     refereeWalletCredit = refConfig.referee_reward_amount;
-                    await ewalletRepository.applyLedgerEntry({
+                    // Own dedicated referral balance now — no longer eWallet money.
+                    await referralRepository.applyLedgerEntry({
                       clientId: data.client_id,
                       salonId: data.salon_id,
-                      type: 'topup',
+                      type: 'earn',
                       delta: refereeWalletCredit,
-                      sourceType: 'referral',
+                      sourceType: 'referral_welcome',
                       sourceId: data.client_id,
-                      note: `Referral welcome reward — bill below ₹${refConfig.min_bill_amount} minimum for an instant discount, credited to wallet instead`,
+                      note: `Referral welcome reward — bill below ₹${refConfig.min_bill_amount} minimum for an instant discount, credited to referral balance instead`,
                     });
                   }
                   await clientsRepository.markRefereeRewarded(data.client_id);
@@ -133,7 +150,8 @@ export const paymentsService = {
           ewalletUsedActual = ewallet;
           data.ewallet_used = ewallet;
 
-          // ── Membership wallet: redeem against services only ────────────────
+          // ── Membership wallet: redeem against services, plus products when the
+          // client's membership opted in ──────────────────────────────────────
           // Manual opt-in — only deducts when the staff checked "Apply
           // Membership" (data.apply_membership_wallet). Deducts once per
           // appointment (idempotent across repeat/partial-payment calls — see
@@ -148,14 +166,28 @@ export const paymentsService = {
           if (data.client_id) {
             try {
               if (data.apply_membership_wallet) {
-                const servicesForWallet = (appt.services || []).map(s => ({
+                const itemsForWallet = (appt.services || []).map(s => ({
                   serviceId:   s.service_id,
                   serviceName: s.name,
                   amount:      (Number(s.price) || 0) * qty(s),
                 }));
-                if (servicesForWallet.length > 0) {
+                // Per-membership toggle — a product only becomes redeemable once
+                // at least one of the client's active memberships explicitly
+                // allows it (memberships.applies_to_products); by default
+                // products are excluded, same as before this feature existed.
+                const productsEligible = await clientMembershipsService.isProductEligible(data.salon_id, data.client_id);
+                if (productsEligible) {
+                  itemsForWallet.push(...(appt.product_items || [])
+                    .filter(p => !!p.product_id)
+                    .map(p => ({
+                      serviceId:   p.product_id as string,
+                      serviceName: p.name,
+                      amount:      (Number(p.price) || 0) * qty(p),
+                    })));
+                }
+                if (itemsForWallet.length > 0) {
                   const result = await clientMembershipsService.deductWalletForBooking(
-                    data.salon_id, data.client_id, data.appointment_id, servicesForWallet,
+                    data.salon_id, data.client_id, data.appointment_id, itemsForWallet,
                   );
                   membershipWalletUsed = result.totalWalletUsed;
                 }
@@ -167,13 +199,52 @@ export const paymentsService = {
             }
           }
 
+          // ── Reward points redemption: own dedicated balance now, not eWallet.
+          // Never trust a points count sent from the frontend — cap it at the
+          // client's real balance, same principle as eWallet above. Converted
+          // to ₹ via the salon's configured redeem rate at redemption time
+          // (earning no longer does this conversion — see the earn block below).
+          let rewardPointsRedeemedValue = 0;
+          const rewardPointsRequested = Math.max(0, Number(data.reward_points_used) || 0);
+          if (data.client_id && rewardPointsRequested > 0) {
+            try {
+              const [rpConfig, rpBalance] = await Promise.all([
+                rewardPointsRepository.getConfig(data.salon_id),
+                rewardPointsRepository.getBalance(data.client_id),
+              ]);
+              const pointsToRedeem = Math.min(rewardPointsRequested, rpBalance);
+              if (pointsToRedeem > 0 && rpConfig.redeem_points > 0) {
+                rewardPointsRedeemedActual = pointsToRedeem;
+                rewardPointsRedeemedValue = (pointsToRedeem / rpConfig.redeem_points) * rpConfig.redeem_value;
+              }
+            } catch (err: any) {
+              logger.warn('[payments] reward points balance check failed:', err?.message ?? err);
+            }
+          }
+          data.reward_points_used = rewardPointsRedeemedActual;
+
+          // ── Referral credit redemption: own dedicated balance now, not
+          // eWallet. Never trust a ₹ amount sent from the frontend — cap it
+          // at the client's real balance, same principle as eWallet above.
+          let referralCreditRequestedValue = 0;
+          const referralCreditRequested = Math.max(0, Number(data.referral_credit_used) || 0);
+          if (data.client_id && referralCreditRequested > 0) {
+            try {
+              const referralBalance = await referralRepository.getBalance(data.client_id);
+              referralCreditUsedActual = Math.min(referralCreditRequested, referralBalance);
+              referralCreditRequestedValue = referralCreditUsedActual;
+            } catch (err: any) {
+              logger.warn('[payments] referral balance check failed:', err?.message ?? err);
+            }
+          }
+          data.referral_credit_used = referralCreditUsedActual;
+
           // ── Tax: apply the same active/applicable rates + bucket allocation
           // the frontend uses (totalsUtils.ts computeBucketTax) — the amount
           // actually owed must include exclusive tax, not just item prices
           // minus discount. Previously this was skipped entirely here, so the
           // receipt correctly displayed tax but the appointment could be
           // marked "Paid" for less than what was shown to the client.
-          let taxAmount = 0;
           try {
             const activeTaxes = await getActiveTaxes(data.salon_id);
             const discRatio = rawSubtotal > 0 ? Math.min(1, discount / rawSubtotal) : 0;
@@ -187,12 +258,15 @@ export const paymentsService = {
             logger.warn('[payments] tax computation failed:', err?.message ?? err);
           }
 
-          // Reward points no longer exist as a separately redeemable balance —
-          // earned value is credited straight into eWallet (see the "earn" block
-          // below), so there is nothing to redeem here; eWallet redemption above
-          // already covers whatever reward money the client has.
-          const grandTotal    = Math.round(actualBill - discount + taxAmount);
-          const effectiveBill = Math.max(0, grandTotal - ewallet - membershipWalletUsed);
+          // Both are real amounts the client actually pays alongside the bill —
+          // an ex-charge (business keeps it) and a tip (passed to staff) — so
+          // both must be part of what's owed/collected here, even though only
+          // ex_charges counts as revenue once it reaches the sale record.
+          exChargesAmt = Number(appt.ex_charges) || 0;
+          tipAmt       = Number(appt.tip_amount) || 0;
+
+          const grandTotal    = Math.round(actualBill - discount + taxAmount + exChargesAmt + tipAmt);
+          const effectiveBill = Math.max(0, grandTotal - ewallet - membershipWalletUsed - rewardPointsRedeemedValue - referralCreditRequestedValue);
           data.membership_wallet_used = membershipWalletUsed;
 
           // `|| ` treats 0 as "not provided" and falls through to gross_amount — which
@@ -245,29 +319,62 @@ export const paymentsService = {
       }
     }
 
-    // ── Reward earnings: credited straight into eWallet, not a separate
-    // points balance ────────────────────────────────────────────────────────
-    // Reward points and referral credits are both just eWallet money now —
-    // one balance, one "Use eWallet" toggle at checkout. The salon's rate is
-    // still configured in points-like terms (spend X, earn Y points, Y points
-    // = ₹Z) purely so Settings stays familiar; internally that's converted to
-    // a ₹ value and credited immediately, same as a referral reward.
+    // ── Reward points: actually deduct the real balance now that the payment
+    // row exists — mirrors the eWallet redeem block above exactly.
+    if (data.client_id && rewardPointsRedeemedActual > 0) {
+      try {
+        await rewardPointsRepository.applyLedgerEntry({
+          clientId: data.client_id,
+          salonId: data.salon_id,
+          type: 'redeem',
+          delta: -rewardPointsRedeemedActual,
+          sourceType: 'payment',
+          sourceId: payment.id,
+          note: `Redeemed ${rewardPointsRedeemedActual} points on payment`,
+        });
+      } catch (err: any) {
+        logger.warn('[payments] reward points redeem ledger write failed:', err?.message ?? err);
+      }
+    }
+
+    // ── Referral credit: actually deduct the real balance now that the
+    // payment row exists — mirrors the eWallet redeem block above exactly.
+    if (data.client_id && referralCreditUsedActual > 0) {
+      try {
+        await referralRepository.applyLedgerEntry({
+          clientId: data.client_id,
+          salonId: data.salon_id,
+          type: 'redeem',
+          delta: -referralCreditUsedActual,
+          sourceType: 'payment',
+          sourceId: payment.id,
+          note: `Used ₹${referralCreditUsedActual.toFixed(2)} referral credit for payment`,
+        });
+      } catch (err: any) {
+        logger.warn('[payments] referral credit redeem ledger write failed:', err?.message ?? err);
+      }
+    }
+
+    // ── Reward earnings: credited to their own dedicated points balance —
+    // no longer converted to ₹ and folded into eWallet. Reviving the
+    // pre-existing (previously dormant) reward_points_balance/ledger
+    // mechanism. Conversion to ₹ now only happens at redemption time
+    // (see the redemption block above / near ewalletUsedActual).
     // Earn only on a fully-paid bill — a Partial payment doesn't earn yet,
     // since the sale isn't settled (matches how eWallet/wallet are only ever
     // debited, never speculatively credited before the bill is closed).
     if (data.client_id && data.status === 'completed' && !isPackagePayment) {
       try {
         const config = await rewardPointsRepository.getConfig(data.salon_id);
-        if (config.active && config.spend_amount > 0 && config.redeem_points > 0) {
+        if (config.active && config.spend_amount > 0) {
           const pointsEarned = Math.floor((Number(data.net_amount) / config.spend_amount) * config.points_earned);
-          const earnedValue = (pointsEarned / config.redeem_points) * config.redeem_value;
-          if (earnedValue > 0) {
-            await ewalletRepository.applyLedgerEntry({
+          if (pointsEarned > 0) {
+            await rewardPointsRepository.applyLedgerEntry({
               clientId: data.client_id,
               salonId: data.salon_id,
-              type: 'topup',
-              delta: earnedValue,
-              sourceType: 'reward',
+              type: 'earn',
+              delta: pointsEarned,
+              sourceType: 'payment',
               sourceId: payment.id,
               note: `Earned on ₹${Number(data.net_amount).toFixed(2)} payment`,
             });
@@ -297,12 +404,13 @@ export const paymentsService = {
           const billAmount = Number(data.gross_amount) || 0;
           if (config.active && billAmount >= config.min_bill_amount) {
             if (config.referrer_reward_amount > 0) {
-              await ewalletRepository.applyLedgerEntry({
+              // Own dedicated referral balance now — no longer eWallet money.
+              await referralRepository.applyLedgerEntry({
                 clientId: referredClient.referred_by_client_id,
                 salonId: data.salon_id,
-                type: 'topup',
+                type: 'earn',
                 delta: config.referrer_reward_amount,
-                sourceType: 'referral',
+                sourceType: 'referral_payout',
                 sourceId: data.client_id,
                 note: 'Referral reward for referring a new customer',
               });
@@ -321,11 +429,14 @@ export const paymentsService = {
       if (coupon) await couponsRepository.incrementUsed(coupon.id);
     }
 
-    // Mark appointment payment_status based on computed due_amount
+    // Mark appointment status based on computed due_amount — but never downgrade
+    // a terminal state (cancelled/deleted) that may have raced ahead of this call.
     if (data.appointment_id) {
       try {
-        const apptStatus = (data.due_amount ?? 0) > 0 ? 'partial' : 'paid';
-        await appointmentsRepository.updatePaymentStatus(data.appointment_id, apptStatus);
+        if (!appt || !['cancelled', 'deleted'].includes(appt.status)) {
+          const apptStatus = (data.due_amount ?? 0) > 0 ? 'partial' : 'paid';
+          await appointmentsRepository.updateStatus(data.appointment_id, apptStatus);
+        }
       } catch {
         // Non-fatal: payment is still recorded
       }
@@ -335,84 +446,84 @@ export const paymentsService = {
     // Skip for package payments — revenue was already counted when the package was purchased.
     if (data.appointment_id && data.status === 'completed' && appt && !isPackagePayment) {
       try {
-        const existingSale = await salesRepository.findByAppointmentId(data.appointment_id);
-        if (!existingSale) {
-          const items: Array<{ item_type: 'service' | 'product' | 'membership'; item_id?: string; staff_id?: string; name: string; quantity: number; unit_price: string }> = [
-            ...(appt.services || []).map(s => ({
-              item_type: 'service' as const,
-              item_id: s.service_id,
-              staff_id: s.staff_id || undefined,
-              name: s.name || 'Service',
-              quantity: Number(s.quantity) || 1,
-              unit_price: String(Number(s.price) || 0),
-            })),
-            ...(appt.package_items || []).map(p => ({
-              item_type: 'service' as const,
-              item_id: p.package_id,
-              staff_id: p.staff_id || undefined,
-              name: p.name || 'Package',
-              quantity: Number(p.quantity) || 1,
-              unit_price: String(Number(p.price) || 0),
-            })),
-            ...(appt.product_items || []).map(p => ({
-              item_type: 'product' as const,
-              item_id: p.product_id || undefined,
-              staff_id: p.staff_id || undefined,
-              name: p.name || 'Product',
-              quantity: Number(p.quantity) || 1,
-              unit_price: String(Number(p.price) || 0),
-            })),
-            ...(appt.membership_items || []).map(m => ({
-              item_type: 'membership' as const,
-              item_id: m.membership_id || undefined,
-              staff_id: m.staff_id || undefined,
-              name: m.name || 'Membership',
-              quantity: Number(m.quantity) || 1,
-              unit_price: String(Number(m.price) || 0),
-            })),
-          ];
+        const items: Array<{ item_type: 'service' | 'package' | 'product' | 'membership'; item_id?: string; staff_id?: string; name: string; quantity: number; unit_price: number }> = [
+          ...(appt.services || []).map(s => ({
+            item_type: 'service' as const,
+            item_id: s.service_id,
+            staff_id: s.staff_id || undefined,
+            name: s.name || 'Service',
+            quantity: Number(s.quantity) || 1,
+            unit_price: Number(s.price) || 0,
+          })),
+          ...(appt.package_items || []).map(p => ({
+            item_type: 'package' as const,
+            item_id: p.package_id,
+            staff_id: p.staff_id || undefined,
+            name: p.name || 'Package',
+            quantity: Number(p.quantity) || 1,
+            unit_price: Number(p.price) || 0,
+          })),
+          ...(appt.product_items || []).map(p => ({
+            item_type: 'product' as const,
+            item_id: p.product_id || undefined,
+            staff_id: p.staff_id || undefined,
+            name: p.name || 'Product',
+            quantity: Number(p.quantity) || 1,
+            unit_price: Number(p.price) || 0,
+          })),
+          ...(appt.membership_items || []).map(m => ({
+            item_type: 'membership' as const,
+            item_id: m.membership_id || undefined,
+            staff_id: m.staff_id || undefined,
+            name: m.name || 'Membership',
+            quantity: Number(m.quantity) || 1,
+            unit_price: Number(m.price) || 0,
+          })),
+        ];
 
-          if (items.length === 0) {
-            items.push({
-              item_type: 'service' as const,
-              name: appt.title || 'Appointment Service',
-              quantity: 1,
-              unit_price: String(data.net_amount || data.gross_amount || 0),
-            });
-          }
+        if (items.length === 0) {
+          items.push({
+            item_type: 'service' as const,
+            name: appt.title || 'Appointment Service',
+            quantity: 1,
+            unit_price: Number(data.net_amount || data.gross_amount || 0),
+          });
+        }
 
-          const sale = await salesRepository.create({
-            salon_id: data.salon_id,
-            client_id: data.client_id,
-            appointment_id: data.appointment_id,
-            staff_id: appt.staff_id || undefined,
-            status: 'completed',
-            // Membership wallet usage must reduce recognized revenue here — that
-            // money was already counted as revenue when the membership itself was
-            // purchased. Without this, every visit that draws down the wallet
-            // counts the same money as revenue a second time. (eWallet, by
-            // contrast, is correctly NOT subtracted — top-ups and referral
-            // credits are never counted as revenue when added, only when spent.)
-            discount_amount: String((Number(data.discount_amount) || 0) + (Number(data.membership_wallet_used) || 0)),
-            // DB constraint only allows lowercase values ('cash','card','upi','bank_transfer'),
-            // but this arrives as the frontend's display label (e.g. "Cash") — normalizing
-            // here since the mismatch was silently failing every sale auto-creation.
-            payment_method: String(data.payment_method || '').toLowerCase() as any,
-            coupon_code: data.coupon_code || undefined,
-            discount_type: appt.discount_type || undefined,
-            discount_percent: appt.discount_type === 'percentage' ? String(appt.discount_value ?? 0) : undefined,
-            items,
-          }, null);
+        const { sale, items: saleItemsForEvents, wasIdempotentReuse } = await recordTransaction({
+          salon_id: data.salon_id,
+          client_id: data.client_id,
+          appointment_id: data.appointment_id,
+          staff_id: appt.staff_id || undefined,
+          origin: 'calendar_checkout',
+          // Membership wallet usage must reduce recognized revenue here — that
+          // money was already counted as revenue when the membership itself was
+          // purchased. Without this, every visit that draws down the wallet
+          // counts the same money as revenue a second time. (eWallet, by
+          // contrast, is correctly NOT subtracted — top-ups and referral
+          // credits are never counted as revenue when added, only when spent.)
+          discount_amount: (Number(data.discount_amount) || 0) + (Number(data.membership_wallet_used) || 0),
+          tax_amount: taxAmount,
+          ex_charges: exChargesAmt,
+          tip_amount: tipAmt,
+          payment_label: data.payment_method || '',
+          split_details: data.split_details ?? undefined,
+          coupon_code: data.coupon_code || undefined,
+          discount_type: appt.discount_type || undefined,
+          discount_percent: appt.discount_type === 'percentage' ? Number(appt.discount_value ?? 0) : undefined,
+          items,
+        });
 
-          // Note: appointment.status is managed by the checkout flow
-          // (POST /api/v1/appointments/:id/checkout) to avoid double-completion
-          // appointment.payment_status is updated above — that's all payments handles here
+        // Note: appointment.status is managed by the checkout flow
+        // (POST /api/v1/appointments/:id/checkout) to avoid double-completion
+        // appointment.payment_status is updated above — that's all payments handles here
 
-          // ── WhatsApp Automation: Purchase confirmation (per item type) ──────
-          // Fetch enriched sale with client_phone and salon_name
-          const enrichedSale = await salesRepository.findById(sale.id);
+        // ── WhatsApp Automation: Purchase confirmation (per item type) ──────
+        // Skip entirely on idempotent reuse — an existing sale means these
+        // events already fired the first time this appointment was paid.
+        if (!wasIdempotentReuse) {
+          const enrichedSale = sale;
           if (enrichedSale && data.client_id && (enrichedSale as any).client_phone) {
-            const saleItemsForEvents = await salesRepository.findItemsBySaleId(sale.id);
             const presentTypes = new Set(saleItemsForEvents.map((i) => i.item_type));
             const purchaseEvents: Array<{ eventType: 'service_purchased' | 'product_purchased'; itemType: 'service' | 'product' }> = [
               { eventType: 'service_purchased', itemType: 'service' },
@@ -511,7 +622,7 @@ export const paymentsService = {
     // ── Auto-create client_memberships when memberships are sold ─────────────
     // Use membership_items from DB (appt) if available; fall back to items sent in the payment body.
     // The fallback handles the case where membership was added in the edit UI without saving first,
-    // or when the edit_appointments permission blocked the pre-payment PATCH.
+    // or when the manage_calendar permission blocked the pre-payment PATCH.
     const membershipItemsSrc: Array<any> =
       (appt?.membership_items?.length ? appt.membership_items : null) ??
       (data.membership_items?.length   ? data.membership_items   : null) ??
