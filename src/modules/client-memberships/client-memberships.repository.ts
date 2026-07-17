@@ -140,6 +140,7 @@ function toClientMembership(row: ClientMembershipRow, log: UsageLogRow[] = []): 
     status:             row.status as ClientMembership['status'],
     pricePaid:          row.price_paid ? parseFloat(row.price_paid) : undefined,
     membershipWalletBalance: Number(row.membership_wallet_balance) || 0,
+    appliesToProducts:  row.applies_to_products ?? false,
     usageLog:           log.map(r => ({
       id:                  r.id,
       clientMembershipId:  r.client_membership_id,
@@ -185,17 +186,20 @@ export const clientMembershipsRepository = {
     query: ClientMembershipsListQuery,
   ): Promise<{ items: ClientMembership[]; total: number }> {
     const conds: string[]  = ['salon_id = $1'];
+    const condsJoined: string[] = ['cm.salon_id = $1'];
     const vals:  any[]     = [salonId];
     let idx = 2;
 
-    if (query.clientId) { conds.push(`client_id = $${idx++}`); vals.push(query.clientId); }
-    if (query.status)   { conds.push(`status = $${idx++}`);    vals.push(query.status); }
+    if (query.clientId) { conds.push(`client_id = $${idx}`); condsJoined.push(`cm.client_id = $${idx}`); idx++; vals.push(query.clientId); }
+    if (query.status)   { conds.push(`status = $${idx}`);    condsJoined.push(`cm.status = $${idx}`);    idx++; vals.push(query.status); }
     if (query.search) {
       conds.push(`(client_name ILIKE $${idx} OR membership_name ILIKE $${idx})`);
+      condsJoined.push(`(cm.client_name ILIKE $${idx} OR cm.membership_name ILIKE $${idx})`);
       vals.push(`%${query.search}%`); idx++;
     }
 
-    const where  = `WHERE ${conds.join(' AND ')}`;
+    const where       = `WHERE ${conds.join(' AND ')}`;
+    const whereJoined = `WHERE ${condsJoined.join(' AND ')}`;
     const page   = Math.max(1, query.page  ?? 1);
     const limit  = Math.min(100, query.limit ?? 20);
     const offset = (page - 1) * limit;
@@ -205,7 +209,11 @@ export const clientMembershipsRepository = {
     );
 
     const { rows } = await pool.query(
-      `SELECT * FROM client_memberships ${where} ORDER BY purchased_at DESC LIMIT $${idx++} OFFSET $${idx++}`,
+      `SELECT cm.*, m.applies_to_products
+       FROM client_memberships cm
+       LEFT JOIN memberships m ON m.id = cm.membership_id
+       ${whereJoined}
+       ORDER BY cm.purchased_at DESC LIMIT $${idx++} OFFSET $${idx++}`,
       [...vals, limit, offset],
     );
 
@@ -395,6 +403,22 @@ export const clientMembershipsRepository = {
       [clientId, salonId],
     );
     return rows.map((r) => toClientMembership(r));
+  },
+
+  // True if any of the client's active, spendable memberships opted in to
+  // covering products (per-membership toggle) — gates whether payments.service.ts
+  // should feed product items into deductWalletAcrossMemberships at all.
+  async hasProductEligibleMembership(clientId: string, salonId: string): Promise<boolean> {
+    const { rows } = await pool.query(
+      `SELECT EXISTS (
+         SELECT 1 FROM client_memberships cm
+         JOIN memberships m ON m.id = cm.membership_id
+         WHERE cm.client_id = $1 AND cm.salon_id = $2 AND cm.status = 'active'
+           AND cm.membership_wallet_balance > 0 AND m.applies_to_products = true
+       ) AS exists`,
+      [clientId, salonId],
+    );
+    return rows[0]?.exists === true;
   },
 
   // Read-only — for display/history use only. NOT used to decide reuse-vs-deduct

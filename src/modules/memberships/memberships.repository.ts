@@ -31,6 +31,7 @@ function toMembership(row: MembershipRow): Membership {
     enableOnlineSales: row.enable_online_sales,
     enableOnlineRedemption: row.enable_online_redemption,
     termsAndConditions: row.terms_and_conditions ?? undefined,
+    appliesToProducts: row.applies_to_products,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -116,14 +117,16 @@ export const membershipsRepository = {
         `INSERT INTO memberships
           (id, salon_id, name, description, session_type, number_of_sessions,
            valid_for, price, tax_rate, colour,
-           enable_online_sales, enable_online_redemption, terms_and_conditions)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+           enable_online_sales, enable_online_redemption, terms_and_conditions,
+           applies_to_products)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
         [
           membershipId, salonId, data.name, data.description ?? null,
           data.sessionType, data.numberOfSessions ?? null,
           data.validFor, data.price, data.taxRate ?? null,
           data.colour, data.enableOnlineSales,
           data.enableOnlineRedemption, data.termsAndConditions ?? null,
+          data.appliesToProducts ?? false,
         ]
       );
       await _linkServices(client, membershipId, data.includedServices);
@@ -151,6 +154,7 @@ export const membershipsRepository = {
         colour: "colour", enableOnlineSales: "enable_online_sales",
         enableOnlineRedemption: "enable_online_redemption",
         termsAndConditions: "terms_and_conditions",
+        appliesToProducts: "applies_to_products",
       };
       const fields: string[] = [];
       const values: any[] = [];

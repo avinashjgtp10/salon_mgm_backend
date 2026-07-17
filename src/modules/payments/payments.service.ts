@@ -150,7 +150,8 @@ export const paymentsService = {
           ewalletUsedActual = ewallet;
           data.ewallet_used = ewallet;
 
-          // ── Membership wallet: redeem against services only ────────────────
+          // ── Membership wallet: redeem against services, plus products when the
+          // client's membership opted in ──────────────────────────────────────
           // Manual opt-in — only deducts when the staff checked "Apply
           // Membership" (data.apply_membership_wallet). Deducts once per
           // appointment (idempotent across repeat/partial-payment calls — see
@@ -165,14 +166,28 @@ export const paymentsService = {
           if (data.client_id) {
             try {
               if (data.apply_membership_wallet) {
-                const servicesForWallet = (appt.services || []).map(s => ({
+                const itemsForWallet = (appt.services || []).map(s => ({
                   serviceId:   s.service_id,
                   serviceName: s.name,
                   amount:      (Number(s.price) || 0) * qty(s),
                 }));
-                if (servicesForWallet.length > 0) {
+                // Per-membership toggle — a product only becomes redeemable once
+                // at least one of the client's active memberships explicitly
+                // allows it (memberships.applies_to_products); by default
+                // products are excluded, same as before this feature existed.
+                const productsEligible = await clientMembershipsService.isProductEligible(data.salon_id, data.client_id);
+                if (productsEligible) {
+                  itemsForWallet.push(...(appt.product_items || [])
+                    .filter(p => !!p.product_id)
+                    .map(p => ({
+                      serviceId:   p.product_id as string,
+                      serviceName: p.name,
+                      amount:      (Number(p.price) || 0) * qty(p),
+                    })));
+                }
+                if (itemsForWallet.length > 0) {
                   const result = await clientMembershipsService.deductWalletForBooking(
-                    data.salon_id, data.client_id, data.appointment_id, servicesForWallet,
+                    data.salon_id, data.client_id, data.appointment_id, itemsForWallet,
                   );
                   membershipWalletUsed = result.totalWalletUsed;
                 }

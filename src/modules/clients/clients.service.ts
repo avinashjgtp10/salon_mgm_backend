@@ -286,6 +286,18 @@ export const clientsService = {
                     result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: "mobile number is required" });
                     continue;
                 }
+                // Mirror the manual Add Client form's rule (frontend
+                // AddClientPage.tsx: /^\d{10}$/) — imports must not be a side
+                // door for malformed numbers. Excel-style separators
+                // (spaces, dashes, parens, dots) are tolerated, but after
+                // stripping them the number must be exactly 10 digits.
+                const phoneDigits = String(body.phone_number).replace(/[\s\-().]/g, "");
+                if (!/^\d{10}$/.test(phoneDigits)) {
+                    result.skipped += 1;
+                    result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: `Invalid mobile number "${body.phone_number}". Please enter a valid 10-digit mobile number.` });
+                    continue;
+                }
+                body.phone_number = phoneDigits;
                 if (!body.gender) {
                     result.skipped += 1;
                     result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: "gender is required" });
