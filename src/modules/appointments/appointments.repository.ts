@@ -49,6 +49,7 @@ export const appointmentsRepository = {
                 COALESCE((SELECT SUM(reward_points_value) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS reward_points_value,
                 COALESCE((SELECT SUM(membership_wallet_used) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS membership_wallet_used,
                 COALESCE((SELECT SUM(ewallet_used) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS ewallet_used,
+                COALESCE((SELECT SUM(referral_credit_used) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS referral_credit_used,
                 (SELECT split_details FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) AS split_details,
                 (SELECT tax_breakdown FROM payments p WHERE p.appointment_id = a.id AND p.tax_breakdown IS NOT NULL ORDER BY p.created_at DESC LIMIT 1) AS tax_breakdown
              FROM appointments a
@@ -127,7 +128,8 @@ export const appointmentsRepository = {
                  COUNT(*) FILTER (WHERE status IN ('completed','partial'))           AS pay_count,
                  SUM(reward_points_value) FILTER (WHERE status IN ('completed','partial')) AS total_reward_points_value,
                  SUM(membership_wallet_used) FILTER (WHERE status IN ('completed','partial')) AS total_membership_wallet_used,
-                 SUM(ewallet_used) FILTER (WHERE status IN ('completed','partial')) AS total_ewallet_used
+                 SUM(ewallet_used) FILTER (WHERE status IN ('completed','partial')) AS total_ewallet_used,
+                 SUM(referral_credit_used) FILTER (WHERE status IN ('completed','partial')) AS total_referral_credit_used
                FROM payments
                GROUP BY appointment_id
              )
@@ -146,6 +148,7 @@ export const appointmentsRepository = {
                COALESCE(pa.total_reward_points_value, 0) AS reward_points_value,
                COALESCE(pa.total_membership_wallet_used, 0) AS membership_wallet_used,
                COALESCE(pa.total_ewallet_used, 0) AS ewallet_used,
+               COALESCE(pa.total_referral_credit_used, 0) AS referral_credit_used,
                (SELECT split_details FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) AS split_details,
                (SELECT tax_breakdown FROM payments p WHERE p.appointment_id = a.id AND p.tax_breakdown IS NOT NULL ORDER BY p.created_at DESC LIMIT 1) AS tax_breakdown
              FROM appointments a

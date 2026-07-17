@@ -16,6 +16,7 @@ export interface ClientMembership {
   status: 'active' | 'expired' | 'exhausted' | 'cancelled';
   pricePaid?: number;
   membershipWalletBalance: number;
+  appliesToProducts?: boolean;
   usageLog?: UsageLogEntry[];
   createdAt: string;
   updatedAt: string;
@@ -101,6 +102,7 @@ export interface ClientMembershipRow {
   status: string;
   price_paid?: string | null;
   membership_wallet_balance?: string | number | null;
+  applies_to_products?: boolean | null;
   created_at: string;
   updated_at: string;
 }

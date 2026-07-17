@@ -207,6 +207,13 @@ export const clientMembershipsService = {
     );
   },
 
+  // Gate for whether payments.service.ts should include product items in the
+  // wallet-deduction input — true only if at least one of the client's active,
+  // spendable memberships has appliesToProducts enabled.
+  async isProductEligible(salonId: string, clientId: string): Promise<boolean> {
+    return clientMembershipsRepository.hasProductEligibleMembership(clientId, salonId);
+  },
+
   // Backfill: scan paid appointments and completed sales to create missing client_membership records
   async syncFromAppointments(salonId: string): Promise<{ created: number; skipped: number; debug?: any }> {
     let created = 0;
