@@ -27,6 +27,7 @@ export interface CreateMembershipDTO {
   enableOnlineSales:      boolean;
   enableOnlineRedemption: boolean;
   termsAndConditions?:    string;
+  appliesToProducts?:     boolean;
 }
 
 export interface UpdateMembershipDTO extends Partial<CreateMembershipDTO> {}
@@ -50,6 +51,7 @@ export interface MembershipRow {
   enable_online_sales:      boolean;
   enable_online_redemption: boolean;
   terms_and_conditions:     string | null;
+  applies_to_products:      boolean;
   created_at:               Date;
   updated_at:               Date;
   services:                 IncludedService[] | null;

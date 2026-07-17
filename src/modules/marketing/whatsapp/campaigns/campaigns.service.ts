@@ -138,6 +138,44 @@ export const campaignsService = {
     return campaignsRepository.updateStatus(id, 'SENDING')
   },
 
+  // ── Self-heal campaigns whose batch jobs died with no automatic retry left ──
+  // (or the worker was down when they failed) — otherwise a stalled campaign
+  // sits at whatever partial progress it reached forever, only fixable by an
+  // admin manually finding it and clicking resume.
+  async reconcileStalledCampaigns() {
+    const stalled = await campaignsRepository.findStalledSending()
+    if (stalled.length === 0) return
+
+    logger.info(`🔁 Found ${stalled.length} stalled campaign(s) — reconciling`)
+
+    for (const campaign of stalled) {
+      try {
+        const pending = await campaignsRepository.getPendingContactIds(campaign.id)
+        if (pending.length === 0) {
+          // Everything was actually processed — just the final completion
+          // update itself never landed. Finish it, nothing left to send.
+          await campaignsRepository.updateStatus(campaign.id, 'COMPLETED')
+          continue
+        }
+
+        const batches = chunk(pending, campaign.batch_size)
+        for (let i = 0; i < batches.length; i++) {
+          await campaignQueue.add('send-batch', {
+            campaignId: campaign.id, salonId: campaign.salon_id,
+            batchIndex: i,
+            contactIds: batches[i],
+          }, { delay: i * 500 })
+        }
+        // Touches updated_at so this campaign isn't picked up again next tick
+        // while the just-requeued batches are still working through it.
+        await campaignsRepository.updateStatus(campaign.id, 'SENDING')
+        logger.info(`✅ Reconciled campaign "${campaign.name}" — re-queued ${pending.length} pending contacts`)
+      } catch (err: any) {
+        logger.error(`❌ Failed to reconcile campaign ${campaign.id}: ${err.message}`)
+      }
+    }
+  },
+
   // ── Run all scheduled campaigns that are due ──────────────────────────────
   async runDueScheduledCampaigns() {
     const due = await campaignsRepository.findDueScheduled()

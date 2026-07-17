@@ -1,5 +1,6 @@
 import pool, { safeQuery } from "../../config/database";
 import { Sale, SaleItem, CreateSaleBody, UpdateSaleBody } from "./sales.types";
+import { getTaxModuleConfig } from "../settings/tax.util";
 
 function parseCreatedAt(input: string | undefined | null): Date {
     if (!input) return new Date();
@@ -146,23 +147,30 @@ export const salesRepository = {
             });
             const discountAmt = data.discount_amount ? parseFloat(data.discount_amount) : 0;
             const taxAmt      = data.tax_amount      ? parseFloat(data.tax_amount)      : 0;
-            const tipAmt      = data.tip_amount      ? parseFloat(data.tip_amount)      : 0;
-            const total = subtotal - discountAmt + taxAmt + tipAmt;
+            const exChargesAmt = data.ex_charges     ? parseFloat(data.ex_charges)      : 0;
+            // tip_amount is still stored as its own column (below) but deliberately
+            // excluded from this total — it passes through to staff, not
+            // the salon, so it must never count as revenue. ex_charges DOES count
+            // (a client-facing surcharge the business actually keeps), unlike tip.
+            const total = subtotal - discountAmt + taxAmt + exChargesAmt;
 
-            const invoiceNumber = `INV-${Date.now()}`;
+            // Timestamp alone collides under concurrent inserts (e.g. a backfill
+            // running in a tight loop) since sales_invoice_number_key is UNIQUE.
+            const { invoice_prefix } = await getTaxModuleConfig(data.salon_id);
+            const invoiceNumber = `${invoice_prefix || "INV"}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
             const createdAtVal = parseCreatedAt(data.created_at);
 
             const saleResult = await client.query(
                 `INSERT INTO sales (
                     salon_id, client_id, appointment_id, staff_id, status, subtotal,
-                    discount_amount, tip_amount, tax_amount, total_amount, payment_method,
+                    discount_amount, tip_amount, tax_amount, ex_charges, total_amount, payment_method,
                     payment_reference, notes, invoice_number, created_by, created_at,
                     coupon_code, discount_percent, discount_type
-                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING *`,
+                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING *`,
                 [
                     data.salon_id, data.client_id || null, data.appointment_id || null, data.staff_id || null,
                     data.status || 'draft', subtotal.toString(), data.discount_amount || '0',
-                    data.tip_amount || '0', data.tax_amount || '0', total.toString(),
+                    data.tip_amount || '0', data.tax_amount || '0', data.ex_charges || '0', total.toString(),
                     data.payment_method ? data.payment_method.toLowerCase() : null, data.payment_reference || null, data.notes || null,
                     invoiceNumber, createdBy, createdAtVal,
                     data.coupon_code || null, data.discount_percent || null, data.discount_type || null,
@@ -217,16 +225,17 @@ export const salesRepository = {
                     );
                 }
 
-                const discountAmt = salePatch.discount_amount ? parseFloat(salePatch.discount_amount) : 0;
-                const taxAmt      = salePatch.tax_amount      ? parseFloat(salePatch.tax_amount)      : 0;
-                const tipAmt      = salePatch.tip_amount      ? parseFloat(salePatch.tip_amount)      : 0;
-                const total       = subtotal - discountAmt + taxAmt + tipAmt;
+                const discountAmt  = salePatch.discount_amount ? parseFloat(salePatch.discount_amount) : 0;
+                const taxAmt       = salePatch.tax_amount      ? parseFloat(salePatch.tax_amount)      : 0;
+                const exChargesAmt = salePatch.ex_charges      ? parseFloat(salePatch.ex_charges)      : 0;
+                // tip_amount excluded from total — see create()'s comment.
+                const total        = subtotal - discountAmt + taxAmt + exChargesAmt;
 
                 const setParts: string[] = ['subtotal = $1', 'total_amount = $2', 'updated_at = NOW()'];
                 const values: any[]      = [subtotal.toString(), total.toString()];
                 let idx = 3;
 
-                const extraFields = ['client_id', 'discount_amount', 'tip_amount', 'tax_amount', 'notes', 'status', 'payment_method', 'payment_reference', 'created_at'];
+                const extraFields = ['client_id', 'discount_amount', 'tip_amount', 'tax_amount', 'ex_charges', 'notes', 'status', 'payment_method', 'payment_reference', 'created_at'];
                 for (const key of extraFields) {
                     if (key in salePatch && (salePatch as any)[key] !== undefined) {
                         setParts.push(`${key} = $${idx++}`);

@@ -45,6 +45,7 @@ function toClientPackage(row: ClientPackageRow): ClientPackage {
     paymentStatus: row.payment_status,
     services: (row.services ?? []).map(s => ({
       serviceId:         s.service_id,
+      catalogServiceId:  s.catalog_service_id ?? null,
       serviceName:       s.service_name,
       totalSessions:     s.total_sessions,
       completedSessions: s.completed_sessions,
@@ -73,6 +74,7 @@ const SELECT_FULL = `
       json_agg(
         json_build_object(
           'service_id',         cps.id,
+          'catalog_service_id', cps.catalog_service_id,
           'service_name',       cps.service_name,
           'total_sessions',     cps.total_sessions,
           'completed_sessions', cps.completed_sessions,
@@ -210,9 +212,9 @@ export const clientPackagesRepository = {
       for (const svc of dto.services) {
         await client.query(
           `INSERT INTO client_package_services
-            (id, client_package_id, service_name, total_sessions, completed_sessions, price)
-           VALUES ($1,$2,$3,$4,$5,$6)`,
-          [uuidv4(), pkgId, svc.serviceName, svc.totalSessions, 0, svc.price],
+            (id, client_package_id, service_name, catalog_service_id, total_sessions, completed_sessions, price)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+          [uuidv4(), pkgId, svc.serviceName, svc.serviceId ?? null, svc.totalSessions, 0, svc.price],
         );
       }
 

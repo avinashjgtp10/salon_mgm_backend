@@ -52,6 +52,7 @@ export type Client = {
     whatsapp_marketing: boolean;
 
     reward_points_balance: string; // pg decimal returns string
+    referral_balance: string;      // pg decimal returns string — own dedicated balance now, not folded into ewallet_balance
 
     created_at: string;
     updated_at: string;

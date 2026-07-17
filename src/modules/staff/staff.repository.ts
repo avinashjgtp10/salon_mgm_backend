@@ -115,7 +115,13 @@ export const staffRepository = {
         activateImmediately?: boolean
     ): Promise<Staff> {
         try {
-            const isActive = activateImmediately ?? false;
+            // is_active means "enabled in the system", independent of whether the
+            // invitation has actually been accepted yet — a newly added staff
+            // member should show as Active immediately, not wait on them setting
+            // up login. Only an explicit `false` here (never currently passed by
+            // any caller) opts a record out of that. invitation_status is the
+            // separate, correct place to track pending-vs-accepted login setup.
+            const isActive = activateImmediately !== false;
             const invitationStatus = activateImmediately ? "accepted" : "pending";
             const invitationAcceptedAt = activateImmediately ? new Date() : null;
 
@@ -129,8 +135,9 @@ export const staffRepository = {
               is_active, invitation_status,
               invitation_accepted_at,
               permission_level, custom_permissions,
-              joined_date, birthday_day, birthday_month
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
+              joined_date, birthday_day, birthday_month,
+              gender, address, avatar_url, working_hours_per_day, holidays
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31)
             RETURNING *`,
                 [
                     salonId, data.first_name, data.last_name ?? null, data.email,
@@ -150,6 +157,11 @@ export const staffRepository = {
                     data.joined_date ?? null,
                     data.birthday_day ?? null,
                     data.birthday_month ?? null,
+                    data.gender ?? null,
+                    data.address ?? null,
+                    data.avatar_url ?? null,
+                    data.working_hours_per_day ?? null,
+                    data.holidays ?? null,
                 ]
             );
             return rows[0];
@@ -195,6 +207,11 @@ export const staffRepository = {
             joined_date: "joined_date",
             birthday_day: "birthday_day",
             birthday_month: "birthday_month",
+            gender: "gender",
+            address: "address",
+            avatar_url: "avatar_url",
+            working_hours_per_day: "working_hours_per_day",
+            holidays: "holidays",
         };
 
         const entries = (Object.keys(patch) as (keyof UpdateStaffBody)[])

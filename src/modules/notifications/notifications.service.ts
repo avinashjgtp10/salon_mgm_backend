@@ -1,8 +1,19 @@
 import { notificationsRepository } from "./notifications.repository";
 import { getIO } from "../../config/socket";
+import { canSendPush } from "../utils/notif-prefs";
 
 export const notificationsService = {
-  async create(data: { salon_id: string; type: string; title: string; body?: string }) {
+  async create(data: { salon_id: string; type: string; title: string; body?: string; event_key?: string }) {
+    // `event_key` matches Settings → Notifications' per-event keys (newAppointment,
+    // newClient, ...). Omitted by call sites with no matching settings toggle —
+    // those always fire, same as before. When present, this is the single choke
+    // point every notification-creating call site goes through, so gating here
+    // covers both the bell/DB row and the live push in one place instead of
+    // needing every caller to check for itself.
+    if (data.event_key) {
+      const allowed = await canSendPush(data.salon_id, data.event_key);
+      if (!allowed) return null;
+    }
     const notification = await notificationsRepository.create(data);
     // Push to all connected clients in this salon room in real-time
     try {

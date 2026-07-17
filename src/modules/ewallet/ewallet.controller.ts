@@ -19,7 +19,7 @@ export const ewalletController = {
       if (!clientId) throw new AppError(400, 'clientId is required', 'VALIDATION_ERROR');
 
       const body = req.body as TopUpEwalletBody;
-      const result = await ewalletService.topUp(clientId, salonId, Number(body.amount), body.note, userId);
+      const result = await ewalletService.topUp(clientId, salonId, Number(body.amount), body.payment_method, body.note, userId);
       return sendSuccess(res, 201, result, 'eWallet topped up successfully');
     } catch (err) { return next(err); }
   },

@@ -2,6 +2,7 @@ import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { subscriptionMiddleware } from "../../middleware/subscription.middleware";
+import { requirePermission } from "../../middleware/permission.middleware";
 import { reportsController } from "./reports.controller";
 
 const router = Router();
@@ -10,6 +11,7 @@ const guard = [
     authMiddleware,
     subscriptionMiddleware,
     roleMiddleware("salon_owner", "admin", "staff", "super_admin"),
+    requirePermission("view_reports"),
 ];
 
 // ======================================================

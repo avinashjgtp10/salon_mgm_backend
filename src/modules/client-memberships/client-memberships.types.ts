@@ -16,6 +16,7 @@ export interface ClientMembership {
   status: 'active' | 'expired' | 'exhausted' | 'cancelled';
   pricePaid?: number;
   membershipWalletBalance: number;
+  appliesToProducts?: boolean;
   usageLog?: UsageLogEntry[];
   createdAt: string;
   updatedAt: string;
@@ -45,6 +46,14 @@ export interface CreateClientMembershipDTO {
   expiresAt?: string;
   pricePaid?: number;
   notes?: string;
+  // Optional here since clientMembershipsRepository.create() is also called
+  // internally (autoCreateFromPayment, when a membership is one line item
+  // within a larger appointment payment) where the sale/payment recording
+  // already happened elsewhere — only clientMembershipsService.purchase()
+  // (the direct "sell membership" flow) actually requires this.
+  paymentMethod?: string;
+  /** Method -> amount breakdown, present only when paymentMethod is a split combo. */
+  splitDetails?: Record<string, number>;
 }
 
 export interface ConsumeSessionDTO {
@@ -93,6 +102,7 @@ export interface ClientMembershipRow {
   status: string;
   price_paid?: string | null;
   membership_wallet_balance?: string | number | null;
+  applies_to_products?: boolean | null;
   created_at: string;
   updated_at: string;
 }

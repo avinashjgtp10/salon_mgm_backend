@@ -16,6 +16,21 @@ export const DEFAULT_REFERRAL_CONFIG: ReferralConfig = {
   max_wallet_usage_pct: 100,
 };
 
+export type ReferralLedgerType = 'earn' | 'redeem' | 'adjust';
+
+export type ReferralLedgerEntry = {
+  id: string;
+  client_id: string;
+  salon_id: string;
+  type: ReferralLedgerType;
+  amount: number;
+  balance_after: number;
+  source_type: string | null;
+  source_id: string | null;
+  note: string | null;
+  created_at: string;
+};
+
 // first 3 letters of the customer's name (uppercase) + hour (12-hour clock,
 // zero-padded 01-12) + 2-digit year, e.g. "Nishant" at 11 AM in 2026 → "NIS1126".
 export function generateReferralCode(name: string, date: Date = new Date()): string {

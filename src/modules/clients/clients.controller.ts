@@ -374,7 +374,7 @@ export const clientsController = {
                 WITH appt_data AS (
                     SELECT
                         a.client_id,
-                        MAX(a.scheduled_at) FILTER (WHERE a.status = 'completed') AS last_visit_at,
+                        MAX(a.scheduled_at) FILTER (WHERE a.status = 'paid') AS last_visit_at,
                         ARRAY_AGG(DISTINCT s_item->>'service_id')
                             FILTER (WHERE s_item->>'service_id' IS NOT NULL) AS service_ids,
                         ARRAY_AGG(DISTINCT s_item->>'staff_id')
@@ -481,15 +481,13 @@ export const clientsController = {
                         (SELECT SUM(p.net_amount) FROM payments p
                          WHERE p.appointment_id = a.id AND p.status = 'completed'
                         ) AS net_amount,
-                        COALESCE(
-                            (SELECT CASE
-                                WHEN bool_or(p.status = 'completed') THEN 'paid'
-                                WHEN bool_or(p.status = 'partial')   THEN 'partial'
-                                ELSE 'unpaid'
-                            END
-                            FROM payments p WHERE p.appointment_id = a.id),
-                            'unpaid'
-                        ) AS payment_status,
+                        -- a.status IS the payment state now (booked/paid/partial/...) —
+                        -- no more need for a live payments-table lookup here.
+                        CASE a.status
+                            WHEN 'paid'    THEN 'paid'
+                            WHEN 'partial' THEN 'partial'
+                            ELSE 'unpaid'
+                        END AS payment_status,
                         -- Method of the most recent payment — 'package' when the visit
                         -- was covered by a client's pre-purchased package (see
                         -- appointments.repository.ts for the same pattern used by the
@@ -589,25 +587,15 @@ export const clientsController = {
                     [clientId, salonId]
                 ),
 
-                // 4. Appointment stats
-                //    "Completed" here means the visit was actually paid for, not just
-                //    that staff flipped the appointment's own status field to
-                //    'completed' — many salons never bother updating that field once a
-                //    bill is settled, which would otherwise undercount a client's real
-                //    visit history (see payment_status derivation above for the same
-                //    payments-table-is-authoritative convention).
+                // 4. Appointment stats — a.status IS the payment state now (paid/
+                //    partial/booked/...), so "completed" here is just a.status = 'paid'
+                //    directly, no more payments-table lookup needed.
                 pool.query(
                     `SELECT
-                        COUNT(*)::int                                               AS total_appointments,
-                        COUNT(*) FILTER (
-                            WHERE a.status = 'completed'
-                               OR EXISTS (
-                                   SELECT 1 FROM payments p
-                                   WHERE p.appointment_id = a.id AND p.status = 'completed'
-                               )
-                        )::int                                                      AS completed_appointments,
-                        COUNT(*) FILTER (WHERE a.status = 'no_show')::int           AS no_shows,
-                        COUNT(*) FILTER (WHERE a.status = 'cancelled')::int         AS cancellations
+                        COUNT(*)::int                                        AS total_appointments,
+                        COUNT(*) FILTER (WHERE a.status = 'paid')::int       AS completed_appointments,
+                        COUNT(*) FILTER (WHERE a.status = 'no-show')::int    AS no_shows,
+                        COUNT(*) FILTER (WHERE a.status = 'cancelled')::int  AS cancellations
                      FROM appointments a
                      WHERE a.client_id = $1 AND a.salon_id = $2 AND a.deleted_at IS NULL`,
                     [clientId, salonId]
@@ -653,9 +641,8 @@ export const clientsController = {
                     lifetime_spend:         Number(totalSpendRes.rows[0]?.lifetime_spend ?? 0),
                     total_sales:            salesRes.rowCount ?? 0,
                     active_packages:        pkgRows.filter((p: any) => p.status === "active").length,
-                    // Most recent paid visit (payments table is authoritative — see
-                    // completed_appointments above); fall back to any appointment date.
-                    last_visit_at:          apptRes.rows.find((a: any) => a.status === "completed" || a.payment_status === "paid")?.scheduled_at
+                    // Most recent paid visit; fall back to any appointment date.
+                    last_visit_at:          apptRes.rows.find((a: any) => a.status === "paid")?.scheduled_at
                                               ?? apptRes.rows[0]?.scheduled_at
                                               ?? null,
                 },

@@ -140,6 +140,7 @@ function toClientMembership(row: ClientMembershipRow, log: UsageLogRow[] = []): 
     status:             row.status as ClientMembership['status'],
     pricePaid:          row.price_paid ? parseFloat(row.price_paid) : undefined,
     membershipWalletBalance: Number(row.membership_wallet_balance) || 0,
+    appliesToProducts:  row.applies_to_products ?? false,
     usageLog:           log.map(r => ({
       id:                  r.id,
       clientMembershipId:  r.client_membership_id,
@@ -185,17 +186,20 @@ export const clientMembershipsRepository = {
     query: ClientMembershipsListQuery,
   ): Promise<{ items: ClientMembership[]; total: number }> {
     const conds: string[]  = ['salon_id = $1'];
+    const condsJoined: string[] = ['cm.salon_id = $1'];
     const vals:  any[]     = [salonId];
     let idx = 2;
 
-    if (query.clientId) { conds.push(`client_id = $${idx++}`); vals.push(query.clientId); }
-    if (query.status)   { conds.push(`status = $${idx++}`);    vals.push(query.status); }
+    if (query.clientId) { conds.push(`client_id = $${idx}`); condsJoined.push(`cm.client_id = $${idx}`); idx++; vals.push(query.clientId); }
+    if (query.status)   { conds.push(`status = $${idx}`);    condsJoined.push(`cm.status = $${idx}`);    idx++; vals.push(query.status); }
     if (query.search) {
       conds.push(`(client_name ILIKE $${idx} OR membership_name ILIKE $${idx})`);
+      condsJoined.push(`(cm.client_name ILIKE $${idx} OR cm.membership_name ILIKE $${idx})`);
       vals.push(`%${query.search}%`); idx++;
     }
 
-    const where  = `WHERE ${conds.join(' AND ')}`;
+    const where       = `WHERE ${conds.join(' AND ')}`;
+    const whereJoined = `WHERE ${condsJoined.join(' AND ')}`;
     const page   = Math.max(1, query.page  ?? 1);
     const limit  = Math.min(100, query.limit ?? 20);
     const offset = (page - 1) * limit;
@@ -205,7 +209,11 @@ export const clientMembershipsRepository = {
     );
 
     const { rows } = await pool.query(
-      `SELECT * FROM client_memberships ${where} ORDER BY purchased_at DESC LIMIT $${idx++} OFFSET $${idx++}`,
+      `SELECT cm.*, m.applies_to_products
+       FROM client_memberships cm
+       LEFT JOIN memberships m ON m.id = cm.membership_id
+       ${whereJoined}
+       ORDER BY cm.purchased_at DESC LIMIT $${idx++} OFFSET $${idx++}`,
       [...vals, limit, offset],
     );
 
@@ -384,14 +392,33 @@ export const clientMembershipsRepository = {
 
   // ── Membership wallet ──────────────────────────────────────────────────────
 
-  async findActiveWithBalanceForClient(clientId: string, salonId: string): Promise<ClientMembership | null> {
+  // All active memberships with a spendable balance, highest-balance first —
+  // powers combined-total display and multi-membership checkout deduction
+  // (deductWalletAcrossMemberships draws them down in this same order).
+  async findAllActiveWithBalanceForClient(clientId: string, salonId: string): Promise<ClientMembership[]> {
     const { rows } = await pool.query(
       `SELECT * FROM client_memberships
        WHERE client_id = $1 AND salon_id = $2 AND status = 'active' AND membership_wallet_balance > 0
-       ORDER BY membership_wallet_balance DESC LIMIT 1`,
+       ORDER BY membership_wallet_balance DESC`,
       [clientId, salonId],
     );
-    return rows.length ? toClientMembership(rows[0]) : null;
+    return rows.map((r) => toClientMembership(r));
+  },
+
+  // True if any of the client's active, spendable memberships opted in to
+  // covering products (per-membership toggle) — gates whether payments.service.ts
+  // should feed product items into deductWalletAcrossMemberships at all.
+  async hasProductEligibleMembership(clientId: string, salonId: string): Promise<boolean> {
+    const { rows } = await pool.query(
+      `SELECT EXISTS (
+         SELECT 1 FROM client_memberships cm
+         JOIN memberships m ON m.id = cm.membership_id
+         WHERE cm.client_id = $1 AND cm.salon_id = $2 AND cm.status = 'active'
+           AND cm.membership_wallet_balance > 0 AND m.applies_to_products = true
+       ) AS exists`,
+      [clientId, salonId],
+    );
+    return rows[0]?.exists === true;
   },
 
   // Read-only — for display/history use only. NOT used to decide reuse-vs-deduct
@@ -405,84 +432,104 @@ export const clientMembershipsRepository = {
     return parseFloat(rows[0]?.total ?? '0');
   },
 
-  async deductOrReuseWalletForAppointment(
-    clientMembershipId: string,
+  // Draws from several memberships in sequence (the order given in
+  // clientMembershipIds, highest-balance-first) instead of just one — a
+  // single service's amount can be split across multiple memberships if the
+  // first one runs out mid-service. Idempotent per appointment, same locking
+  // pattern as the rest of this module (FOR UPDATE + ledger check inside one
+  // transaction to prevent a double-spend race on concurrent requests).
+  async deductWalletAcrossMemberships(
+    clientMembershipIds: string[],
     salonId: string,
     params: { appointmentId: string; services: WalletDeductionServiceInput[] },
   ): Promise<WalletDeductionResult> {
+    if (clientMembershipIds.length === 0) {
+      return { totalWalletUsed: 0, remainingBalance: 0, perService: [], reused: false };
+    }
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
 
       const { rows } = await client.query(
-        `SELECT * FROM client_memberships WHERE id = $1 AND salon_id = $2 FOR UPDATE`,
-        [clientMembershipId, salonId],
+        `SELECT * FROM client_memberships WHERE id = ANY($1) AND salon_id = $2 FOR UPDATE`,
+        [clientMembershipIds, salonId],
       );
       if (!rows.length) {
         await client.query('ROLLBACK');
         return { totalWalletUsed: 0, remainingBalance: 0, perService: [], reused: false };
       }
-      const cm = rows[0] as ClientMembershipRow;
+      // WHERE id = ANY() doesn't preserve array order — re-sort into the
+      // caller's intended draw-down order (highest-balance-first).
+      const rowsById = new Map(rows.map((r) => [r.id, r as ClientMembershipRow]));
+      const memberships = clientMembershipIds
+        .map((id) => rowsById.get(id))
+        .filter((r): r is ClientMembershipRow => !!r);
 
-      // Idempotency check — MUST happen inside this same locked transaction.
-      // A concurrent request for the same appointment blocks on the FOR UPDATE
-      // above until this transaction commits, then sees the ledger rows below
-      // and no-ops here instead of double-deducting.
+      // Idempotency check — MUST happen inside this same locked transaction,
+      // same reasoning as the single-membership version above.
       const { rows: existing } = await client.query(
         `SELECT COALESCE(SUM(amount_deducted),0) AS total FROM membership_usage_log
-         WHERE appointment_id = $1 AND client_membership_id = $2`,
-        [params.appointmentId, clientMembershipId],
+         WHERE appointment_id = $1 AND client_membership_id = ANY($2)`,
+        [params.appointmentId, clientMembershipIds],
       );
       const alreadyUsed = parseFloat(existing[0]?.total ?? '0');
       if (alreadyUsed > 0) {
         await client.query('ROLLBACK');
-        return {
-          totalWalletUsed: alreadyUsed,
-          remainingBalance: Number(cm.membership_wallet_balance) || 0,
-          perService: [],
-          reused: true,
-        };
+        const remainingBalance = memberships.reduce((sum, m) => sum + (Number(m.membership_wallet_balance) || 0), 0);
+        return { totalWalletUsed: alreadyUsed, remainingBalance, perService: [], reused: true };
       }
 
-      let remaining = Number(cm.membership_wallet_balance) || 0;
+      const remainingByMembership = memberships.map((m) => Number(m.membership_wallet_balance) || 0);
       let totalWalletUsed = 0;
       const perService: WalletDeductionResult['perService'] = [];
 
       for (const svc of params.services) {
-        const amount = Number(svc.amount) || 0;
-        const used = Math.min(remaining, amount);
-        const customerPays = Math.max(0, amount - used);
-        remaining -= used;
-        totalWalletUsed += used;
-        perService.push({ serviceId: svc.serviceId, walletUsed: used, customerPays });
+        const originalAmount = Number(svc.amount) || 0;
+        let amountLeft = originalAmount;
+        let svcWalletUsed = 0;
+        const isUuid = typeof svc.serviceId === 'string' &&
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(svc.serviceId);
 
-        if (used > 0) {
-          // service_id is a UUID column — some legacy/off-catalog service rows
-          // can carry a non-UUID or empty id, which would otherwise crash this
-          // insert (and the whole payment) with a type-cast error.
-          const isUuid = typeof svc.serviceId === 'string' &&
-            /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(svc.serviceId);
+        for (let i = 0; i < memberships.length && amountLeft > 0; i++) {
+          if (remainingByMembership[i] <= 0) continue;
+          const used = Math.min(remainingByMembership[i], amountLeft);
+          if (used <= 0) continue;
+
+          remainingByMembership[i] -= used;
+          amountLeft -= used;
+          svcWalletUsed += used;
+          totalWalletUsed += used;
+
+          const cm = memberships[i];
           await client.query(
             `INSERT INTO membership_usage_log
               (id, client_membership_id, client_id, membership_id, appointment_id,
                service_id, service_name, sessions_consumed, amount_deducted, remaining_balance, notes)
              VALUES (gen_random_uuid(), $1,$2,$3,$4,$5,$6,0,$7,$8,NULL)`,
             [
-              clientMembershipId, cm.client_id, cm.membership_id, params.appointmentId,
-              isUuid ? svc.serviceId : null, svc.serviceName || null, used, remaining,
+              cm.id, cm.client_id, cm.membership_id, params.appointmentId,
+              isUuid ? svc.serviceId : null, svc.serviceName || null, used, remainingByMembership[i],
             ],
           );
         }
+
+        perService.push({ serviceId: svc.serviceId, walletUsed: svcWalletUsed, customerPays: Math.max(0, originalAmount - svcWalletUsed) });
       }
 
-      const newStatus = remaining <= 0 ? 'exhausted' : cm.status;
-      await client.query(
-        `UPDATE client_memberships SET membership_wallet_balance = $1, status = $2, updated_at = NOW() WHERE id = $3`,
-        [remaining, newStatus, clientMembershipId],
-      );
+      for (let i = 0; i < memberships.length; i++) {
+        const cm = memberships[i];
+        const originalBalance = Number(cm.membership_wallet_balance) || 0;
+        if (remainingByMembership[i] === originalBalance) continue; // untouched — skip the write
+        const newStatus = remainingByMembership[i] <= 0 ? 'exhausted' : cm.status;
+        await client.query(
+          `UPDATE client_memberships SET membership_wallet_balance = $1, status = $2, updated_at = NOW() WHERE id = $3`,
+          [remainingByMembership[i], newStatus, cm.id],
+        );
+      }
 
       await client.query('COMMIT');
-      return { totalWalletUsed, remainingBalance: remaining, perService, reused: false };
+      const remainingBalance = remainingByMembership.reduce((sum, v) => sum + v, 0);
+      return { totalWalletUsed, remainingBalance, perService, reused: false };
     } catch (err) {
       await client.query('ROLLBACK');
       throw err;

@@ -1,8 +1,8 @@
 // ============================================================
 // SalonOx — Appointment Completed Notification Helper
 // ============================================================
-// Fires Thank You + Review Request once an appointment is marked completed.
-// Called from the only 2 places that mark an appointment "completed"
+// Fires Thank You + Review Request once an appointment is marked paid.
+// Called from the only 2 places that mark an appointment "paid"
 // (appointments.service.ts checkout() and sales.service.ts checkout()) — kept
 // in its own file (not appointments.service.ts) so both call sites can import
 // it without creating a circular dependency between the two service modules.

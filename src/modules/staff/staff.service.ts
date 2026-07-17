@@ -166,6 +166,42 @@ export const staffService = {
                 passwordHash = await bcrypt.hash(staffPatch.password, 10);
             }
             updated = await staffRepository.update(id, salonId, staffPatch, passwordHash);
+
+            // A password was just set for this staff member — make sure a login-
+            // capable `users` row actually exists and is linked. Without this,
+            // `staff.password_hash` is written but login (which looks up `users`
+            // by email) still fails with "Invalid credentials", because staff
+            // created via the invite flow never got a `users` row in the first
+            // place (see staffService.create's equivalent branch).
+            if (staffPatch.password && passwordHash) {
+                const email = staffPatch.email ?? existing.email;
+                if (existing.user_id) {
+                    await authRepository.updatePassword(existing.user_id, passwordHash);
+                } else {
+                    let user = await authRepository.findUserByEmail(email);
+                    if (!user) {
+                        user = await authRepository.createUser({
+                            email,
+                            first_name: staffPatch.first_name ?? existing.first_name ?? "",
+                            last_name: staffPatch.last_name ?? existing.last_name ?? null,
+                            password_hash: passwordHash,
+                            role: "staff",
+                        } as any);
+                    } else {
+                        await authRepository.updateUserRole(user.id, "staff");
+                        await authRepository.updatePassword(user.id, passwordHash);
+                    }
+                    await staffRepository.linkUserToStaff(
+                        id, user.id,
+                        staffPatch.first_name ?? existing.first_name ?? "",
+                        staffPatch.last_name ?? existing.last_name ?? undefined,
+                    );
+                    await authRepository.markUserVerified(user.id);
+                    await authRepository.markOnboardingComplete(user.id);
+                    await staffRepository.activateDirectly(id);
+                }
+                updated = (await staffRepository.findById(id, salonId)) ?? updated;
+            }
         }
 
         // Attach newly created blocked times to the response so the frontend can replace the temp ID

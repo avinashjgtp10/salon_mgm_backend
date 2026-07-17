@@ -6,7 +6,7 @@ import { salesRepository } from "../sales/sales.repository";
 import { productsRepository } from "../products/products.repository";
 import { commissionCalculationService } from "../commission/commissionCalculation.service";
 import { blockedTimesRepository } from "../blocked_times/blocked_times.repository";
-import { salesService } from "../sales/sales.service";
+import { recordTransaction } from "../transactions/transaction-recorder.service";
 import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
 import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
 import { attendanceService } from "../attendance/attendance.service";
@@ -102,6 +102,7 @@ export const appointmentsService = {
             type:     "appointment",
             title:    "New Appointment Booked",
             body:     `${appointment.client_name ?? "Walk-in"} — ${formatDate(appointment.scheduled_at)} at ${formatTime(appointment.scheduled_at)}`,
+            event_key: "newAppointment",
         }).catch(() => {});
 
         // ── WhatsApp Automation: Appointment Confirmation ─────────────────────
@@ -195,12 +196,26 @@ export const appointmentsService = {
         requesterRole?: string;
         patch: UpdateAppointmentBody;
     }): Promise<Appointment> {
-        const { appointmentId, patch } = params;
+        const { appointmentId } = params;
+        let patch = params.patch;
         const existing = await appointmentsRepository.findById(appointmentId);
         if (!existing) throw new AppError(404, "Appointment not found", "NOT_FOUND");
 
-        if (["completed", "cancelled", "no_show"].includes(existing.status))
+        // "no-show" is the one non-terminal terminal state: a reschedule (time,
+        // staff, or duration change) brings it back to "booked" instead of being
+        // blocked outright, since the whole point of dragging/editing it is to
+        // give the client a new slot.
+        const isReschedule = "scheduled_at" in patch || "staff_id" in patch || "duration_minutes" in patch;
+        if (existing.status === "no-show" && isReschedule) {
+            patch = { ...patch, status: "booked" };
+        } else if (existing.status === "paid" && isReschedule) {
+            // A completed (paid) appointment can still be dragged to a new
+            // time/staff slot on the calendar — only the schedule moves,
+            // payment/lifecycle status is left untouched (unlike no-show,
+            // this doesn't reopen the appointment).
+        } else if (["paid", "cancelled", "deleted"].includes(existing.status)) {
             throw new AppError(400, `Cannot update an appointment with status '${existing.status}'`, "BAD_REQUEST");
+        }
 
         // Overlapping appointments for the same staff are allowed (e.g. hair color
         // processing time) — no conflict check on reschedule/staff/duration changes.
@@ -284,46 +299,6 @@ export const appointmentsService = {
         return updated;
     },
 
-    async confirm(appointmentId: string): Promise<Appointment> {
-        const existing = await appointmentsRepository.findById(appointmentId);
-        if (!existing) throw new AppError(404, "Appointment not found", "NOT_FOUND");
-        if (existing.status !== "booked")
-            throw new AppError(400, "Only booked appointments can be confirmed", "BAD_REQUEST");
-        return appointmentsRepository.updateStatus(appointmentId, "confirmed");
-    },
-
-    async start(appointmentId: string): Promise<Appointment> {
-        const existing = await appointmentsRepository.findById(appointmentId);
-        if (!existing) throw new AppError(404, "Appointment not found", "NOT_FOUND");
-        if (!["booked", "confirmed"].includes(existing.status))
-            throw new AppError(400, "Appointment must be booked or confirmed to start", "BAD_REQUEST");
-        return appointmentsRepository.updateStatus(appointmentId, "in_progress");
-    },
-
-    async serviceCheckIn(appointmentId: string, startedAt?: string): Promise<Appointment> {
-        const existing = await appointmentsRepository.findById(appointmentId);
-        if (!existing || existing.deleted_at) throw new AppError(404, "Appointment not found", "NOT_FOUND");
-        if (["cancelled", "no_show"].includes(existing.status))
-            throw new AppError(400, `Cannot check in a '${existing.status}' appointment`, "BAD_REQUEST");
-        if (startedAt && isNaN(new Date(startedAt).getTime()))
-            throw new AppError(400, "Invalid started_at timestamp", "BAD_REQUEST");
-        const updated = await appointmentsRepository.serviceCheckIn(appointmentId, startedAt);
-        if (!updated) throw new AppError(404, "Appointment not found", "NOT_FOUND");
-        return updated;
-    },
-
-    async serviceCheckOut(appointmentId: string, endedAt?: string): Promise<Appointment> {
-        const existing = await appointmentsRepository.findById(appointmentId);
-        if (!existing || existing.deleted_at) throw new AppError(404, "Appointment not found", "NOT_FOUND");
-        if (!existing.service_started_at)
-            throw new AppError(400, "Appointment must be checked in before it can be checked out", "BAD_REQUEST");
-        if (endedAt && isNaN(new Date(endedAt).getTime()))
-            throw new AppError(400, "Invalid ended_at timestamp", "BAD_REQUEST");
-        const updated = await appointmentsRepository.serviceCheckOut(appointmentId, endedAt);
-        if (!updated) throw new AppError(404, "Appointment not found", "NOT_FOUND");
-        return updated;
-    },
-
     async cancel(params: {
         appointmentId: string;
         requesterUserId: string;
@@ -331,7 +306,7 @@ export const appointmentsService = {
     }): Promise<Appointment> {
         const existing = await appointmentsRepository.findById(params.appointmentId);
         if (!existing) throw new AppError(404, "Appointment not found", "NOT_FOUND");
-        if (["completed", "cancelled"].includes(existing.status))
+        if (["paid", "cancelled", "deleted"].includes(existing.status))
             throw new AppError(400, `Appointment is already '${existing.status}'`, "BAD_REQUEST");
 
         const cancelled = await appointmentsRepository.updateStatus(params.appointmentId, "cancelled");
@@ -351,6 +326,7 @@ export const appointmentsService = {
             type:     "appointment",
             title:    "Appointment Cancelled",
             body:     `${existing.client_name ?? "Walk-in"} — ${formatDate(existing.scheduled_at)} at ${formatTime(existing.scheduled_at)}`,
+            event_key: "appointmentCancelled",
         }).catch(() => {});
 
         // ── WhatsApp Automation: Appointment Cancelled ────────────────────────
@@ -433,14 +409,6 @@ export const appointmentsService = {
         return deleted;
     },
 
-    async noShow(appointmentId: string): Promise<Appointment> {
-        const existing = await appointmentsRepository.findById(appointmentId);
-        if (!existing) throw new AppError(404, "Appointment not found", "NOT_FOUND");
-        if (!["booked", "confirmed"].includes(existing.status))
-            throw new AppError(400, "Only booked/confirmed appointments can be marked no-show", "BAD_REQUEST");
-        return appointmentsRepository.updateStatus(appointmentId, "no_show");
-    },
-
     async checkout(params: {
         appointmentId: string;
         requesterUserId: string;
@@ -449,6 +417,7 @@ export const appointmentsService = {
         discount_amount?: number;
         tip_amount?: number;
         tax_amount?: number;
+        ex_charges?: number;
         payment_method?: string;
         notes?: string;
     }): Promise<{ appointment: Appointment; saleId: string }> {
@@ -456,14 +425,17 @@ export const appointmentsService = {
         const existing = await appointmentsRepository.findById(appointmentId);
         if (!existing) throw new AppError(404, "Appointment not found", "NOT_FOUND");
 
-        if (existing.status === "completed")
-            throw new AppError(400, "Appointment is already completed", "BAD_REQUEST");
-        if (existing.status === "cancelled")
-            throw new AppError(400, "Cannot checkout a cancelled appointment", "BAD_REQUEST");
+        // NOTE: `existing.status` may already be "paid" here even on a first-ever
+        // checkout call — payments.service.ts sets status the instant a payment
+        // lands (before checkout runs), so "paid" no longer means "already
+        // checked out." The real marker for that is `sale_id`, handled below via
+        // the pre-existing-sale lookup (and the fallback `sale_id` guard further down).
+        if (["cancelled", "deleted"].includes(existing.status))
+            throw new AppError(400, `Cannot checkout a '${existing.status}' appointment`, "BAD_REQUEST");
 
         // ── Check if payments service already auto-created a sale for this appointment ─
         // This happens when POST /api/v1/payments runs before checkout.
-        // In that case: use the existing sale, fire commission on it, mark appointment completed.
+        // In that case: use the existing sale, fire commission on it, mark appointment paid.
         const preExistingSale = await salesRepository.findByAppointmentId(appointmentId);
         if (preExistingSale) {
             logger.info("appointmentsService.checkout: using pre-existing sale from payments", {
@@ -496,8 +468,8 @@ export const appointmentsService = {
                 }).catch(() => {});
             }
 
-            // Mark appointment as completed
-            const completedAppt = await appointmentsRepository.updateStatus(appointmentId, "completed");
+            // Mark appointment as paid
+            const completedAppt = await appointmentsRepository.updateStatus(appointmentId, "paid");
 
             // ── WhatsApp Automation: Thank You + Review Request (fire-and-forget) ──
             notifyAppointmentCompleted(appointmentId).catch(() => {});
@@ -552,7 +524,7 @@ export const appointmentsService = {
                                 id:              existing.id,
                                 scheduledAt:     existing.scheduled_at,
                                 durationMinutes: existing.duration_minutes,
-                                status:          "completed",
+                                status:          "paid",
                                 notes:           existing.notes,
                             },
                             paidAmount:  Number(preExistingSale.total_amount ?? 0),
@@ -604,8 +576,22 @@ export const appointmentsService = {
         }
 
         // No pre-existing sale — standard flow
-        if (existing.sale_id)
-            throw new AppError(400, "Appointment already has a linked sale", "BAD_REQUEST");
+        if (existing.sale_id) {
+            // A sale_id can be set but dangling — the sale it points at was
+            // hard-deleted with no cleanup on this side (no FK existed before).
+            // Without this check, a checkout on such an appointment would be
+            // permanently stuck: it can never re-create a sale (blocked here)
+            // and can never self-heal (findByAppointmentId already returned
+            // null above, since that sale doesn't exist).
+            const linkedSale = await salesRepository.findById(existing.sale_id);
+            if (linkedSale) {
+                throw new AppError(400, "Appointment already has a linked sale", "BAD_REQUEST");
+            }
+            logger.warn("appointmentsService.checkout: clearing dangling sale_id, falling through to re-create", {
+                appointmentId, staleSaleId: existing.sale_id,
+            });
+            await appointmentsRepository.clearSaleId(appointmentId);
+        }
 
         const resolvedItems = (saleItems && saleItems.length > 0)
             ? saleItems
@@ -619,7 +605,7 @@ export const appointmentsService = {
                     unit_price: s.price,
                 })),
                 ...existing.package_items.map(p => ({
-                    item_type: "service",
+                    item_type: "package",
                     item_id: p.package_id,
                     staff_id: p.staff_id ?? undefined,
                     name: p.name,
@@ -644,18 +630,23 @@ export const appointmentsService = {
                 })),
             ];
 
-        const { sale, items } = await salesService.create({
-            requesterUserId,
-            requesterRole,
-            body: {
-                salon_id:       existing.salon_id,
-                client_id:      existing.client_id  ?? undefined,
-                appointment_id: appointmentId,
-                staff_id:       existing.staff_id   ?? undefined,
-                status:         "draft",
-                items:          resolvedItems,
-                ...saleExtras,
-            } as any,
+        const { sale, items } = await recordTransaction({
+            salon_id:        existing.salon_id,
+            client_id:       existing.client_id  ?? undefined,
+            appointment_id:  appointmentId,
+            staff_id:        existing.staff_id   ?? undefined,
+            origin:          "quick_sell",
+            payment_label:   saleExtras.payment_method || "",
+            discount_amount: saleExtras.discount_amount,
+            tax_amount:      saleExtras.tax_amount,
+            // ex_charges counts as revenue, tip_amount does not (passes through
+            // to staff) — see recordTransaction()/salesRepository.create().
+            // Fall back to the appointment's own stored values when the caller
+            // (this fallback path) doesn't explicitly pass them.
+            ex_charges:      saleExtras.ex_charges ?? existing.ex_charges,
+            tip_amount:      saleExtras.tip_amount ?? existing.tip_amount,
+            notes:           saleExtras.notes,
+            items:           resolvedItems as any,
         });
 
         const appointment = await appointmentsRepository.linkSale(appointmentId, sale.id);
