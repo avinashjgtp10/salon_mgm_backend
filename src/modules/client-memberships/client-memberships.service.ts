@@ -190,20 +190,21 @@ export const clientMembershipsService = {
     return clientMembershipsRepository.cancel(id, salonId);
   },
 
-  // Automatic wallet redemption at checkout: draws from the client's single
-  // highest-balance active membership. No-op (all zeros) if the client has
-  // no active membership with a positive balance.
+  // Automatic wallet redemption at checkout: draws from ALL of the client's
+  // active memberships with a balance, highest-balance first, moving to the
+  // next one once the current is exhausted. No-op (all zeros) if the client
+  // has no active membership with a positive balance.
   async deductWalletForBooking(
     salonId: string,
     clientId: string,
     appointmentId: string,
     services: WalletDeductionServiceInput[],
   ): Promise<WalletDeductionResult> {
-    const membership = await clientMembershipsRepository.findActiveWithBalanceForClient(clientId, salonId);
-    if (!membership) return { totalWalletUsed: 0, remainingBalance: 0, perService: [], reused: false };
-    return clientMembershipsRepository.deductOrReuseWalletForAppointment(membership.id, salonId, {
-      appointmentId, services,
-    });
+    const memberships = await clientMembershipsRepository.findAllActiveWithBalanceForClient(clientId, salonId);
+    if (memberships.length === 0) return { totalWalletUsed: 0, remainingBalance: 0, perService: [], reused: false };
+    return clientMembershipsRepository.deductWalletAcrossMemberships(
+      memberships.map((m) => m.id), salonId, { appointmentId, services },
+    );
   },
 
   // Backfill: scan paid appointments and completed sales to create missing client_membership records

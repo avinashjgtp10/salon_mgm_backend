@@ -23,11 +23,44 @@ function parseTaxValue(raw: string | null): any {
   }
 }
 
+const TAX_MODULE_SETTING_KEY = "TAX_MODULE_CONFIG";
+
+export interface TaxModuleConfig {
+  enabled: boolean;
+  invoice_prefix: string;
+  show_breakup_on_invoice: boolean;
+  enable_gst_reports: boolean;
+}
+
+const DEFAULT_TAX_MODULE_CONFIG: TaxModuleConfig = {
+  enabled: true,
+  invoice_prefix: "INV",
+  show_breakup_on_invoice: true,
+  enable_gst_reports: true,
+};
+
+// Mirrors the frontend's src/features/settings/utils/taxModuleSettings.ts —
+// same single-row, JSON-in-salon_settings convention as the tax mapping rows.
+export async function getTaxModuleConfig(salonId: string): Promise<TaxModuleConfig> {
+  const rows = await settingsRepository.findAll(salonId);
+  const row = rows.find((r) => r.key === TAX_MODULE_SETTING_KEY);
+  if (!row) return DEFAULT_TAX_MODULE_CONFIG;
+  const parsed = parseTaxValue(row.value);
+  return { ...DEFAULT_TAX_MODULE_CONFIG, ...parsed };
+}
+
 // Mirrors the frontend's src/features/settings/utils/taxSettings.ts. Tax rows
 // are stored as JSON-encoded values in the generic salon_settings key/value
 // table (see settings.repository.ts — it only has key/value/description
 // columns), so the shape has to be parsed and filtered the same way here.
+// Returns none at all when the master "Enable GST" toggle is off, regardless
+// of individual tax mapping rows' own `active` flag — the one enforcement
+// point so every caller (payment totals, invoice generation) is automatically
+// tax-free without its own check.
 export async function getActiveTaxes(salonId: string): Promise<ActiveTaxRow[]> {
+  const moduleConfig = await getTaxModuleConfig(salonId);
+  if (!moduleConfig.enabled) return [];
+
   const rows = await settingsRepository.findAll(salonId);
   return rows
     .map((r) => parseTaxValue(r.value))

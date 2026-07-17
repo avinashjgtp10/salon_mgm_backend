@@ -29,6 +29,10 @@ export const paymentsService = {
     let appt: Appointment | null = null;
     let ewalletUsedActual = 0;
     let refereeWalletCredit = 0;
+    // Hoisted so the post-payment 'redeem' ledger-write block (mirroring the
+    // existing eWallet redeem block) can read the actual amounts redeemed.
+    let rewardPointsRedeemedActual = 0;
+    let referralCreditUsedActual = 0;
     // Hoisted out of the inner `if` block below (where it's computed) so the
     // sale-creation call further down can actually read it — previously it
     // went out of scope before reaching there, which is why sales.total_amount
@@ -106,14 +110,15 @@ export const paymentsService = {
                     referralDiscount = Math.min(refConfig.referee_reward_amount, actualBill);
                   } else {
                     refereeWalletCredit = refConfig.referee_reward_amount;
-                    await ewalletRepository.applyLedgerEntry({
+                    // Own dedicated referral balance now — no longer eWallet money.
+                    await referralRepository.applyLedgerEntry({
                       clientId: data.client_id,
                       salonId: data.salon_id,
-                      type: 'topup',
+                      type: 'earn',
                       delta: refereeWalletCredit,
-                      sourceType: 'referral',
+                      sourceType: 'referral_welcome',
                       sourceId: data.client_id,
-                      note: `Referral welcome reward — bill below ₹${refConfig.min_bill_amount} minimum for an instant discount, credited to wallet instead`,
+                      note: `Referral welcome reward — bill below ₹${refConfig.min_bill_amount} minimum for an instant discount, credited to referral balance instead`,
                     });
                   }
                   await clientsRepository.markRefereeRewarded(data.client_id);
@@ -179,6 +184,46 @@ export const paymentsService = {
             }
           }
 
+          // ── Reward points redemption: own dedicated balance now, not eWallet.
+          // Never trust a points count sent from the frontend — cap it at the
+          // client's real balance, same principle as eWallet above. Converted
+          // to ₹ via the salon's configured redeem rate at redemption time
+          // (earning no longer does this conversion — see the earn block below).
+          let rewardPointsRedeemedValue = 0;
+          const rewardPointsRequested = Math.max(0, Number(data.reward_points_used) || 0);
+          if (data.client_id && rewardPointsRequested > 0) {
+            try {
+              const [rpConfig, rpBalance] = await Promise.all([
+                rewardPointsRepository.getConfig(data.salon_id),
+                rewardPointsRepository.getBalance(data.client_id),
+              ]);
+              const pointsToRedeem = Math.min(rewardPointsRequested, rpBalance);
+              if (pointsToRedeem > 0 && rpConfig.redeem_points > 0) {
+                rewardPointsRedeemedActual = pointsToRedeem;
+                rewardPointsRedeemedValue = (pointsToRedeem / rpConfig.redeem_points) * rpConfig.redeem_value;
+              }
+            } catch (err: any) {
+              logger.warn('[payments] reward points balance check failed:', err?.message ?? err);
+            }
+          }
+          data.reward_points_used = rewardPointsRedeemedActual;
+
+          // ── Referral credit redemption: own dedicated balance now, not
+          // eWallet. Never trust a ₹ amount sent from the frontend — cap it
+          // at the client's real balance, same principle as eWallet above.
+          let referralCreditRequestedValue = 0;
+          const referralCreditRequested = Math.max(0, Number(data.referral_credit_used) || 0);
+          if (data.client_id && referralCreditRequested > 0) {
+            try {
+              const referralBalance = await referralRepository.getBalance(data.client_id);
+              referralCreditUsedActual = Math.min(referralCreditRequested, referralBalance);
+              referralCreditRequestedValue = referralCreditUsedActual;
+            } catch (err: any) {
+              logger.warn('[payments] referral balance check failed:', err?.message ?? err);
+            }
+          }
+          data.referral_credit_used = referralCreditUsedActual;
+
           // ── Tax: apply the same active/applicable rates + bucket allocation
           // the frontend uses (totalsUtils.ts computeBucketTax) — the amount
           // actually owed must include exclusive tax, not just item prices
@@ -205,12 +250,8 @@ export const paymentsService = {
           exChargesAmt = Number(appt.ex_charges) || 0;
           tipAmt       = Number(appt.tip_amount) || 0;
 
-          // Reward points no longer exist as a separately redeemable balance —
-          // earned value is credited straight into eWallet (see the "earn" block
-          // below), so there is nothing to redeem here; eWallet redemption above
-          // already covers whatever reward money the client has.
           const grandTotal    = Math.round(actualBill - discount + taxAmount + exChargesAmt + tipAmt);
-          const effectiveBill = Math.max(0, grandTotal - ewallet - membershipWalletUsed);
+          const effectiveBill = Math.max(0, grandTotal - ewallet - membershipWalletUsed - rewardPointsRedeemedValue - referralCreditRequestedValue);
           data.membership_wallet_used = membershipWalletUsed;
 
           // `|| ` treats 0 as "not provided" and falls through to gross_amount — which
@@ -263,29 +304,62 @@ export const paymentsService = {
       }
     }
 
-    // ── Reward earnings: credited straight into eWallet, not a separate
-    // points balance ────────────────────────────────────────────────────────
-    // Reward points and referral credits are both just eWallet money now —
-    // one balance, one "Use eWallet" toggle at checkout. The salon's rate is
-    // still configured in points-like terms (spend X, earn Y points, Y points
-    // = ₹Z) purely so Settings stays familiar; internally that's converted to
-    // a ₹ value and credited immediately, same as a referral reward.
+    // ── Reward points: actually deduct the real balance now that the payment
+    // row exists — mirrors the eWallet redeem block above exactly.
+    if (data.client_id && rewardPointsRedeemedActual > 0) {
+      try {
+        await rewardPointsRepository.applyLedgerEntry({
+          clientId: data.client_id,
+          salonId: data.salon_id,
+          type: 'redeem',
+          delta: -rewardPointsRedeemedActual,
+          sourceType: 'payment',
+          sourceId: payment.id,
+          note: `Redeemed ${rewardPointsRedeemedActual} points on payment`,
+        });
+      } catch (err: any) {
+        logger.warn('[payments] reward points redeem ledger write failed:', err?.message ?? err);
+      }
+    }
+
+    // ── Referral credit: actually deduct the real balance now that the
+    // payment row exists — mirrors the eWallet redeem block above exactly.
+    if (data.client_id && referralCreditUsedActual > 0) {
+      try {
+        await referralRepository.applyLedgerEntry({
+          clientId: data.client_id,
+          salonId: data.salon_id,
+          type: 'redeem',
+          delta: -referralCreditUsedActual,
+          sourceType: 'payment',
+          sourceId: payment.id,
+          note: `Used ₹${referralCreditUsedActual.toFixed(2)} referral credit for payment`,
+        });
+      } catch (err: any) {
+        logger.warn('[payments] referral credit redeem ledger write failed:', err?.message ?? err);
+      }
+    }
+
+    // ── Reward earnings: credited to their own dedicated points balance —
+    // no longer converted to ₹ and folded into eWallet. Reviving the
+    // pre-existing (previously dormant) reward_points_balance/ledger
+    // mechanism. Conversion to ₹ now only happens at redemption time
+    // (see the redemption block above / near ewalletUsedActual).
     // Earn only on a fully-paid bill — a Partial payment doesn't earn yet,
     // since the sale isn't settled (matches how eWallet/wallet are only ever
     // debited, never speculatively credited before the bill is closed).
     if (data.client_id && data.status === 'completed' && !isPackagePayment) {
       try {
         const config = await rewardPointsRepository.getConfig(data.salon_id);
-        if (config.active && config.spend_amount > 0 && config.redeem_points > 0) {
+        if (config.active && config.spend_amount > 0) {
           const pointsEarned = Math.floor((Number(data.net_amount) / config.spend_amount) * config.points_earned);
-          const earnedValue = (pointsEarned / config.redeem_points) * config.redeem_value;
-          if (earnedValue > 0) {
-            await ewalletRepository.applyLedgerEntry({
+          if (pointsEarned > 0) {
+            await rewardPointsRepository.applyLedgerEntry({
               clientId: data.client_id,
               salonId: data.salon_id,
-              type: 'topup',
-              delta: earnedValue,
-              sourceType: 'reward',
+              type: 'earn',
+              delta: pointsEarned,
+              sourceType: 'payment',
               sourceId: payment.id,
               note: `Earned on ₹${Number(data.net_amount).toFixed(2)} payment`,
             });
@@ -315,12 +389,13 @@ export const paymentsService = {
           const billAmount = Number(data.gross_amount) || 0;
           if (config.active && billAmount >= config.min_bill_amount) {
             if (config.referrer_reward_amount > 0) {
-              await ewalletRepository.applyLedgerEntry({
+              // Own dedicated referral balance now — no longer eWallet money.
+              await referralRepository.applyLedgerEntry({
                 clientId: referredClient.referred_by_client_id,
                 salonId: data.salon_id,
-                type: 'topup',
+                type: 'earn',
                 delta: config.referrer_reward_amount,
-                sourceType: 'referral',
+                sourceType: 'referral_payout',
                 sourceId: data.client_id,
                 note: 'Referral reward for referring a new customer',
               });

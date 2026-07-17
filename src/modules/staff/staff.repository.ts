@@ -115,7 +115,13 @@ export const staffRepository = {
         activateImmediately?: boolean
     ): Promise<Staff> {
         try {
-            const isActive = activateImmediately ?? false;
+            // is_active means "enabled in the system", independent of whether the
+            // invitation has actually been accepted yet — a newly added staff
+            // member should show as Active immediately, not wait on them setting
+            // up login. Only an explicit `false` here (never currently passed by
+            // any caller) opts a record out of that. invitation_status is the
+            // separate, correct place to track pending-vs-accepted login setup.
+            const isActive = activateImmediately !== false;
             const invitationStatus = activateImmediately ? "accepted" : "pending";
             const invitationAcceptedAt = activateImmediately ? new Date() : null;
 

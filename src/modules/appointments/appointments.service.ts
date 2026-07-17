@@ -102,6 +102,7 @@ export const appointmentsService = {
             type:     "appointment",
             title:    "New Appointment Booked",
             body:     `${appointment.client_name ?? "Walk-in"} — ${formatDate(appointment.scheduled_at)} at ${formatTime(appointment.scheduled_at)}`,
+            event_key: "newAppointment",
         }).catch(() => {});
 
         // ── WhatsApp Automation: Appointment Confirmation ─────────────────────
@@ -207,6 +208,11 @@ export const appointmentsService = {
         const isReschedule = "scheduled_at" in patch || "staff_id" in patch || "duration_minutes" in patch;
         if (existing.status === "no-show" && isReschedule) {
             patch = { ...patch, status: "booked" };
+        } else if (existing.status === "paid" && isReschedule) {
+            // A completed (paid) appointment can still be dragged to a new
+            // time/staff slot on the calendar — only the schedule moves,
+            // payment/lifecycle status is left untouched (unlike no-show,
+            // this doesn't reopen the appointment).
         } else if (["paid", "cancelled", "deleted"].includes(existing.status)) {
             throw new AppError(400, `Cannot update an appointment with status '${existing.status}'`, "BAD_REQUEST");
         }
@@ -320,6 +326,7 @@ export const appointmentsService = {
             type:     "appointment",
             title:    "Appointment Cancelled",
             body:     `${existing.client_name ?? "Walk-in"} — ${formatDate(existing.scheduled_at)} at ${formatTime(existing.scheduled_at)}`,
+            event_key: "appointmentCancelled",
         }).catch(() => {});
 
         // ── WhatsApp Automation: Appointment Cancelled ────────────────────────
