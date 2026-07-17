@@ -202,14 +202,14 @@ export const superAdminService = {
     return { success: true };
   },
 
-  async deleteUser(id: string) {
+  async deleteUser(id: string, force = false) {
     if (!id) throw new AppError(400, "User ID required", "VALIDATION_ERROR");
-    const result = await superAdminRepository.deleteUser(id);
+    const result = await superAdminRepository.deleteUser(id, force);
     if (!result) throw new AppError(404, "User not found", "NOT_FOUND");
     if ("blocked" in result && result.blocked === "owns_salon") {
       throw new AppError(
         409,
-        "This user owns a salon. Transfer or delete the salon before deleting this account.",
+        "This user owns a salon. Force delete to also remove the salon and all its data.",
         "USER_OWNS_SALON",
       );
     }

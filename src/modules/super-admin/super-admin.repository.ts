@@ -1,5 +1,6 @@
 import pool from "../../config/database";
 import bcrypt from "bcrypt";
+import { purgeSalon } from "../salons/salons.repository";
 
 export const superAdminRepository = {
 
@@ -392,7 +393,7 @@ export const superAdminRepository = {
     );
   },
 
-  async deleteUser(id: string) {
+  async deleteUser(id: string, force = false) {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
@@ -407,13 +408,20 @@ export const superAdminRepository = {
         return null;
       }
 
+      // If this user owns a salon, require explicit confirmation (force=true)
+      // before purging the salon and all its data — this is an admin acting
+      // on someone else's business, so we don't want a plain "delete user"
+      // click to silently wipe out their whole account.
       const { rows: ownedSalons } = await client.query(
         `SELECT id FROM salons WHERE owner_id = $1 LIMIT 1`,
         [id]
       );
       if (ownedSalons[0]) {
-        await client.query("ROLLBACK");
-        return { blocked: "owns_salon", salon_id: ownedSalons[0].id };
+        if (!force) {
+          await client.query("ROLLBACK");
+          return { blocked: "owns_salon" as const, salon_id: ownedSalons[0].id };
+        }
+        await purgeSalon(client, ownedSalons[0].id);
       }
 
       await client.query(`DELETE FROM refresh_tokens WHERE user_id = $1`, [id]);
@@ -452,20 +460,31 @@ export const superAdminRepository = {
         await client.query("ROLLBACK");
         return null;
       }
+      const ownerId = salons[0].owner_id;
 
-      // Tables with no FK constraint to salons — must delete manually
-      await client.query(`DELETE FROM invoices              WHERE salon_id = $1`, [id]);
-      await client.query(`DELETE FROM billing_subscriptions WHERE salon_id = $1`, [id]);
+      const deleted = await purgeSalon(client, id);
 
-      // Delete the salon — FK ON DELETE CASCADE handles staff, clients,
-      // appointments, payments, services, categories, salon_settings, bookings, etc.
-      const { rows } = await client.query(
-        `DELETE FROM salons WHERE id = $1 RETURNING id`,
-        [id]
-      );
+      // Also delete the owner's own login — "delete the salon" means every
+      // account related to it, not just the business data, and leaving an
+      // ownerless (salon_id = NULL) user row behind looks like the deletion
+      // half-worked. Skip this if the owner still owns another salon.
+      if (ownerId) {
+        const { rows: stillOwns } = await client.query(
+          `SELECT id FROM salons WHERE owner_id = $1 LIMIT 1`,
+          [ownerId]
+        );
+        if (!stillOwns[0]) {
+          await client.query(`DELETE FROM refresh_tokens WHERE user_id = $1`, [ownerId]);
+          await client.query(`DELETE FROM otp_verifications WHERE user_id = $1`, [ownerId]);
+          await client.query(`DELETE FROM user_identities WHERE user_id = $1`, [ownerId]);
+          await client.query(`UPDATE staff SET user_id = NULL, updated_at = NOW() WHERE user_id = $1`, [ownerId]);
+          await client.query(`UPDATE support_tickets SET user_id = NULL, updated_at = NOW() WHERE user_id = $1`, [ownerId]);
+          await client.query(`DELETE FROM users WHERE id = $1 AND role != 'super_admin'`, [ownerId]);
+        }
+      }
 
       await client.query("COMMIT");
-      return rows[0] ?? null;
+      return deleted;
     } catch (err) {
       await client.query("ROLLBACK");
       throw err;

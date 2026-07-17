@@ -207,7 +207,8 @@ export const superAdminController = {
   async deleteUser(req: Request, res: Response, next: NextFunction) {
     try {
       const id = String(req.params.id);
-      const data = await superAdminService.deleteUser(id);
+      const force = req.query.force === "true";
+      const data = await superAdminService.deleteUser(id, force);
       return res.json({ success: true, data });
     } catch (err) { return next(err); }
   },

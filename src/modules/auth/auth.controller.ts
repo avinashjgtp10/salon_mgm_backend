@@ -4,6 +4,7 @@ import { authRepository } from "./auth.repository";
 import pool from "../../config/database";
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
+import { purgeSalon } from "../salons/salons.repository";
 ``
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string } };
 import {
@@ -341,16 +342,39 @@ export const authController = {
     }
   },
 
-  // DELETE /api/v1/auth/account — soft-delete the account
+  // DELETE /api/v1/auth/account — immediately deletes the account. If the
+  // user owns a salon, the salon and everything scoped to it (staff, clients,
+  // appointments, sales, etc.) is purged in the same transaction first.
   async deleteAccount(req: AuthRequest, res: Response, next: NextFunction) {
+    const userId = req.user?.userId;
+    if (!userId) return next(new AppError(401, "Unauthorized", "UNAUTHORIZED"));
+
+    const client = await pool.connect();
     try {
-      const userId = req.user?.userId;
-      if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
-      await authRepository.deleteAllRefreshTokensForUser(userId);
-      await pool.query(`UPDATE users SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1`, [userId]);
-      sendSuccess(res, 200, null, "Account deletion requested. Data will be erased within 30 days.");
+      await client.query("BEGIN");
+
+      const { rows: ownedSalons } = await client.query(
+        `SELECT id FROM salons WHERE owner_id = $1 LIMIT 1`,
+        [userId]
+      );
+      if (ownedSalons[0]) {
+        await purgeSalon(client, ownedSalons[0].id);
+      }
+
+      await client.query(`DELETE FROM refresh_tokens WHERE user_id = $1`, [userId]);
+      await client.query(`DELETE FROM otp_verifications WHERE user_id = $1`, [userId]);
+      await client.query(`DELETE FROM user_identities WHERE user_id = $1`, [userId]);
+      await client.query(`UPDATE staff SET user_id = NULL, updated_at = NOW() WHERE user_id = $1`, [userId]);
+      await client.query(`UPDATE support_tickets SET user_id = NULL, updated_at = NOW() WHERE user_id = $1`, [userId]);
+      await client.query(`DELETE FROM users WHERE id = $1 AND role != 'super_admin'`, [userId]);
+
+      await client.query("COMMIT");
+      sendSuccess(res, 200, null, "Your account and all associated data have been deleted.");
     } catch (err) {
+      await client.query("ROLLBACK");
       next(err);
+    } finally {
+      client.release();
     }
   },
 };
