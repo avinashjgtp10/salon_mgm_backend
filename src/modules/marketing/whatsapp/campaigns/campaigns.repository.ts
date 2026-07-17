@@ -107,6 +107,19 @@ export const campaignsRepository = {
     return rows.map(r => ({ phone: r.phone, name: r.name, variables: r.variables ?? {} }))
   },
 
+  // A campaign whose batch jobs all died (no BullMQ attempts left, or the
+  // whole worker was down) never gets touched again on its own — updated_at
+  // only advances when a batch job actually finishes. 10+ minutes with zero
+  // progress on a still-"SENDING" campaign means something's stuck.
+  async findStalledSending(): Promise<WACampaign[]> {
+    const { rows } = await pool.query(`
+      SELECT * FROM wa_campaigns
+      WHERE status = 'SENDING'
+        AND updated_at < NOW() - INTERVAL '10 minutes'
+    `)
+    return rows
+  },
+
   async getPendingContactIds(campaignId: string): Promise<string[]> {
     const { rows } = await pool.query(
       `SELECT id FROM wa_campaign_contacts

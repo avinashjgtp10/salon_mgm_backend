@@ -1,15 +1,17 @@
 import { AutomationEventType } from "./whatsapp-automation.types";
 
-// Predefined starting wording for the salon-owner-editable events (the 4
-// purchase events plus the Phase 2 lifecycle events) a salon can edit and
-// submit to Meta for approval under their own WABA. {{1}}, {{2}}, {{3}} are
+// Predefined starting wording for the salon-owner-editable events (purchase
+// events, lifecycle events, and the 3 legacy appointment events now moved to
+// this same per-salon model) a salon can edit and submit to Meta for approval
+// under their own WABA. {{1}}, {{2}}, {{3}} are
 // Meta template variable placeholders — filled in at send time from the same
 // positions the rest of whatsapp-automation.service.ts already uses
 // (1 = client name, 2 = salon name / item name, 3 = item name / date / count,
 // varies slightly per event — see each trigger call site for the exact mapping).
 export const DEFAULT_PURCHASE_TEMPLATES: Record<
     | "service_purchased" | "product_purchased" | "membership_purchased" | "package_purchased"
-    | "appointment_reminder_1h" | "thank_you" | "review_request" | "package_expiring_soon" | "sessions_remaining",
+    | "appointment_reminder_1h" | "thank_you" | "review_request" | "package_expiring_soon" | "sessions_remaining"
+    | "appointment_confirmation" | "appointment_reminder_24h" | "appointment_rescheduled",
     { label: string; category: "UTILITY"; language: string; bodyText: string }
 > = {
     service_purchased: {
@@ -65,6 +67,24 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         category: "UTILITY",
         language: "en",
         bodyText: "Hi {{1}}, you have {{3}} session(s) left in your {{2}}. Book your next visit soon!",
+    },
+    appointment_confirmation: {
+        label: "Appointment Confirmation",
+        category: "UTILITY",
+        language: "en",
+        bodyText: "Hi {{1}}, your {{3}} appointment at {{2}} is confirmed for {{4}} at {{5}}. See you then!",
+    },
+    appointment_reminder_24h: {
+        label: "Appointment Reminder (24 Hours Before)",
+        category: "UTILITY",
+        language: "en",
+        bodyText: "Hi {{1}}, just a reminder that your appointment at {{2}} is coming up on {{3}} at {{4}}. See you soon!",
+    },
+    appointment_rescheduled: {
+        label: "Appointment Rescheduled",
+        category: "UTILITY",
+        language: "en",
+        bodyText: "Hi {{1}}, your appointment at {{2}} has been rescheduled to {{3}} at {{4}}. See you then!",
     },
 };
 

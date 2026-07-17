@@ -12,6 +12,9 @@ export function startCampaignScheduler() {
   campaignsService.runDueScheduledCampaigns().catch(err =>
     logger.error('Scheduler error:', err)
   )
+  campaignsService.reconcileStalledCampaigns().catch(err =>
+    logger.error('Campaign reconciliation error:', err)
+  )
 
   // Then run every 60 seconds
   schedulerInterval = setInterval(async () => {
@@ -19,6 +22,11 @@ export function startCampaignScheduler() {
       await campaignsService.runDueScheduledCampaigns()
     } catch (err: any) {
       logger.error('Campaign scheduler error:', err.message)
+    }
+    try {
+      await campaignsService.reconcileStalledCampaigns()
+    } catch (err: any) {
+      logger.error('Campaign reconciliation error:', err.message)
     }
   }, 60_000)
 }
