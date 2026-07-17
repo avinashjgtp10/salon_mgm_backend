@@ -18,6 +18,17 @@ export async function ensureTable(): Promise<void> {
   await pool.query(
     `ALTER TABLE payments ADD COLUMN IF NOT EXISTS referral_discount_applied NUMERIC(10,2) NOT NULL DEFAULT 0`,
   );
+  // Redemption amounts actually applied to this specific payment — distinct
+  // from reward_points_value (the old, now-dead earn-time ₹ conversion) and
+  // from referral_discount_applied (the referee's instant-discount, a
+  // different mechanic). These back the "Reward Points Used"/"Referral
+  // Credit Used" lines on a receipt.
+  await pool.query(
+    `ALTER TABLE payments ADD COLUMN IF NOT EXISTS reward_points_used NUMERIC(10,2) NOT NULL DEFAULT 0`,
+  );
+  await pool.query(
+    `ALTER TABLE payments ADD COLUMN IF NOT EXISTS referral_credit_used NUMERIC(10,2) NOT NULL DEFAULT 0`,
+  );
 }
 
 export const paymentsRepository = {
@@ -31,13 +42,13 @@ export const paymentsRepository = {
         paid_amount, due_amount,
         coupon_code, payment_method, split_details,
         status, paid_at, notes, membership_wallet_used, reward_points_value, tax_breakdown,
-        referral_discount_applied
+        referral_discount_applied, reward_points_used, referral_credit_used
       ) VALUES (
         gen_random_uuid()::text, $13,
         $1,$2,$3,$4,$5,$6,$7,
         $14,$15,
         $8,$9,$10::jsonb,$11,NOW(),$12,$16,$17,$18::jsonb,
-        $19
+        $19,$20,$21
       )
       RETURNING *`,
       [
@@ -61,6 +72,8 @@ export const paymentsRepository = {
            // redemption no longer exists as a mechanic (see payments.service.ts)
         data.tax_breakdown ? JSON.stringify(data.tax_breakdown) : null, // $18
         data.referral_discount_applied ?? 0, // $19
+        data.reward_points_used ?? 0,        // $20
+        data.referral_credit_used ?? 0,      // $21
       ]
     );
     return rows[0];

@@ -22,9 +22,10 @@ export const ewalletRepository = {
     sourceType?: string;
     sourceId?: string;
     note?: string;
+    paymentMethod?: string;
     createdBy?: string;
   }): Promise<number> {
-    const { clientId, salonId, type, delta, sourceType, sourceId, note, createdBy } = params;
+    const { clientId, salonId, type, delta, sourceType, sourceId, note, paymentMethod, createdBy } = params;
 
     const { rows } = await pool.query(
       `UPDATE clients
@@ -37,9 +38,9 @@ export const ewalletRepository = {
 
     await pool.query(
       `INSERT INTO ewallet_ledger
-         (client_id, salon_id, type, amount, balance_after, source_type, source_id, note, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [clientId, salonId, type, delta, balanceAfter, sourceType ?? null, sourceId ?? null, note ?? null, createdBy ?? null],
+         (client_id, salon_id, type, amount, balance_after, source_type, source_id, note, payment_method, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [clientId, salonId, type, delta, balanceAfter, sourceType ?? null, sourceId ?? null, note ?? null, paymentMethod ?? null, createdBy ?? null],
     );
 
     return balanceAfter;

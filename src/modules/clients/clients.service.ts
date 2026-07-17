@@ -105,6 +105,7 @@ export const clientsService = {
             type:     "client",
             title:    "New Client Added",
             body:     `${created.first_name} ${created.last_name ?? ""}`.trim(),
+            event_key: "newClient",
         }).catch(() => {});
 
         // ── Email: New Client (to salon owner) ────────────────────────────────
@@ -278,6 +279,16 @@ export const clientsService = {
                 if (!body.first_name) {
                     result.skipped += 1;
                     result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: "first_name is required" });
+                    continue;
+                }
+                if (!body.phone_number) {
+                    result.skipped += 1;
+                    result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: "mobile number is required" });
+                    continue;
+                }
+                if (!body.gender) {
+                    result.skipped += 1;
+                    result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: "gender is required" });
                     continue;
                 }
 

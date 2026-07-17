@@ -10,12 +10,14 @@ export type EwalletLedgerEntry = {
   source_type: string | null;
   source_id: string | null;
   note: string | null;
+  payment_method: string | null;
   created_by: string | null;
   created_at: string;
 };
 
 export type TopUpEwalletBody = {
   amount: number;
+  payment_method: string;
   note?: string;
 };
 

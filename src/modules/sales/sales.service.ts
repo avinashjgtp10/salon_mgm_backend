@@ -40,6 +40,7 @@ export const salesService = {
             type:     "payment",
             title:    "New Sale Created",
             body:     `${(sale as any).client_name ?? "Walk-in"} — ₹${sale.total_amount ?? 0}`,
+            event_key: "newPayment",
         }).catch(() => {});
 
         // ── WhatsApp Automation: Invoice Generated ────────────────────────────

@@ -1,5 +1,6 @@
 import pool, { safeQuery } from "../../config/database";
 import { Sale, SaleItem, CreateSaleBody, UpdateSaleBody } from "./sales.types";
+import { getTaxModuleConfig } from "../settings/tax.util";
 
 function parseCreatedAt(input: string | undefined | null): Date {
     if (!input) return new Date();
@@ -155,7 +156,8 @@ export const salesRepository = {
 
             // Timestamp alone collides under concurrent inserts (e.g. a backfill
             // running in a tight loop) since sales_invoice_number_key is UNIQUE.
-            const invoiceNumber = `INV-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+            const { invoice_prefix } = await getTaxModuleConfig(data.salon_id);
+            const invoiceNumber = `${invoice_prefix || "INV"}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
             const createdAtVal = parseCreatedAt(data.created_at);
 
             const saleResult = await client.query(

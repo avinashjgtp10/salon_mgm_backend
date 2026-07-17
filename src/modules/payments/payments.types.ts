@@ -30,9 +30,13 @@ export type Payment = {
   reward_points_value: number;
   referral_discount_applied: number;
   tax_breakdown: TaxBreakdownEntry[] | null;
+  // Redemption amounts actually applied to this payment — server-computed,
+  // capped against the client's real reward-points/referral balances.
+  reward_points_used: number;
+  referral_credit_used: number;
   // Response-only, not a persisted column — set when the referred client's
   // welcome reward couldn't apply as an instant discount (bill below
-  // min_bill_amount) and was credited to their eWallet instead.
+  // min_bill_amount) and was credited to their referral balance instead.
   referral_wallet_credited?: number;
 };
 
@@ -57,6 +61,10 @@ export type CreatePaymentBody = {
   // Server-computed only — never trust a value sent by the frontend for this
   // (see payments.service.ts's Refer & Earn block).
   referral_discount_applied?: number;
+  // Requested points/₹ to redeem — never trusted as-is, always capped
+  // server-side against the client's real balance (payments.service.ts).
+  reward_points_used?: number;
+  referral_credit_used?: number;
   // Snapshot of the itemized tax breakdown (CGST/SGST/etc.) at the moment of
   // payment — computed on the frontend from the salon's active tax settings.
   // Persisted as-is so a reprinted receipt shows what was actually charged,
