@@ -1,83 +1,168 @@
-import db from "../../config/database";
+import crypto from "crypto";
 import { AppError } from "../../middleware/error.middleware";
+import { bookingsRepository } from "./bookings.repository";
+import { clientsRepository } from "../clients/clients.repository";
+import { generateUniqueReferralCode } from "../clients/clients.service";
+import { notificationsService } from "../notifications/notifications.service";
+import { appointmentsService } from "../appointments/appointments.service";
+import { appointmentsRepository } from "../appointments/appointments.repository";
 import { PublicBookingRequest } from "./bookings.types";
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function formatDate(dateStr: string): string {
+    return new Date(dateStr).toLocaleDateString("en-IN", {
+        timeZone: "Asia/Kolkata",
+        day: "2-digit", month: "short", year: "numeric",
+    });
+}
+
+function formatTime(dateStr: string): string {
+    return new Date(dateStr).toLocaleTimeString("en-IN", {
+        timeZone: "Asia/Kolkata",
+        hour: "2-digit", minute: "2-digit", hour12: true,
+    });
+}
+
+// Signs a per-appointment management token so a client can cancel/reschedule
+// their own booking from the confirmation link/email without an account —
+// no extra column needed, the token is just an HMAC of the appointment id.
+const MANAGE_TOKEN_SECRET =
+    process.env.BOOKING_MANAGE_SECRET || process.env.JWT_ACCESS_SECRET || "dev-booking-manage-secret";
+
+function generateManageToken(appointmentId: string): string {
+    return crypto.createHmac("sha256", MANAGE_TOKEN_SECRET).update(appointmentId).digest("hex");
+}
+
+function assertManageToken(appointmentId: string, token: string | undefined | null) {
+    const expected = generateManageToken(appointmentId);
+    const provided = Buffer.from(String(token || ""));
+    const expectedBuf = Buffer.from(expected);
+    const valid =
+        provided.length === expectedBuf.length && crypto.timingSafeEqual(provided, expectedBuf);
+    if (!valid) throw new AppError(403, "Invalid or expired management link", "FORBIDDEN");
+}
+
 export const bookingsService = {
+    async getSalonBySlug(slug: string) {
+        const salon = await bookingsRepository.findSalonBySlug(slug);
+        if (!salon) throw new AppError(404, "Salon not found", "NOT_FOUND");
+
+        const [services, staff] = await Promise.all([
+            bookingsRepository.findActiveServices(salon.id),
+            bookingsRepository.findActiveStaff(salon.id),
+        ]);
+
+        return { salon, services, staff };
+    },
+
     async getSalonDetails(salon_id: string) {
-        // Fetch salon, services, staff for public profile
-        const salon = await db.query(
-            `SELECT id, name, description, phone_number, email, address_line1, city, state, country, logo_url 
-             FROM salons WHERE id = $1`, [salon_id]
-        );
-        if (!salon.rows.length) throw new AppError(404, "Salon not found", "NOT_FOUND");
+        const salon = await bookingsRepository.findSalonById(salon_id);
+        if (!salon) throw new AppError(404, "Salon not found", "NOT_FOUND");
 
-        const services = await db.query(
-            `SELECT id, name, description, duration_minutes, price, category_id 
-             FROM services WHERE salon_id = $1 AND is_active = true`, [salon_id]
-        );
+        const [services, staff] = await Promise.all([
+            bookingsRepository.findActiveServices(salon_id),
+            bookingsRepository.findActiveStaff(salon_id),
+        ]);
 
-        const staff = await db.query(
-            `SELECT id, first_name, last_name, bio, title, avatar_url 
-             FROM staff WHERE salon_id = $1 AND is_active = true`, [salon_id]
-        );
-
-        return {
-            salon: salon.rows[0],
-            services: services.rows,
-            staff: staff.rows
-        };
+        return { salon, services, staff };
     },
 
     async createBooking(body: PublicBookingRequest) {
-        // 1. Check if client exists by phone or email
-        let client_id = null;
-        let queryClient = '';
-        const params: any[] = [body.salon_id];
-
-        if (body.client_email) {
-            queryClient = `SELECT id FROM clients WHERE salon_id = $1 AND email = $2`;
-            params.push(body.client_email);
-        } else {
-            queryClient = `SELECT id FROM clients WHERE salon_id = $1 AND phone_number = $2`;
-            params.push(body.client_phone);
+        const services = await Promise.all(
+            body.service_ids.map((id) => bookingsRepository.findServiceById(id, body.salon_id))
+        );
+        if (services.some((s) => !s)) {
+            throw new AppError(404, "Service not found for this salon", "NOT_FOUND");
         }
 
-        const existingClient = await db.query(queryClient, params);
-
-        if (existingClient.rows.length > 0) {
-            client_id = existingClient.rows[0].id;
-        } else {
-            // Create client
-            const newClient = await db.query(
-                `INSERT INTO clients (salon_id, first_name, full_name, email, phone_number)
-                 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-                [body.salon_id, body.client_name.split(' ')[0], body.client_name, body.client_email, body.client_phone]
-            );
-            client_id = newClient.rows[0].id;
+        if (body.staff_id) {
+            const staff = await bookingsRepository.findStaffById(body.staff_id, body.salon_id);
+            if (!staff) throw new AppError(404, "Staff member not found for this salon", "NOT_FOUND");
         }
 
-        // 2. Fetch service name, duration and price
-        const service = await db.query(`SELECT name, price, duration_minutes FROM services WHERE id = $1`, [body.service_id]);
-        if (!service.rows.length) throw new AppError(404, "Service not found", "NOT_FOUND");
-        const { name: serviceName, price, duration_minutes } = service.rows[0];
-
-        // 3. Create appointment
-        const ends_at = new Date(new Date(body.scheduled_at).getTime() + duration_minutes * 60000).toISOString();
-
-        const appointment = await db.query(
-            `INSERT INTO appointments (
-                salon_id, client_id, service_id, staff_id, status, scheduled_at, duration_minutes, ends_at, notes,
-                services
-            ) VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
-            ) RETURNING *`,
-            [
-                body.salon_id, client_id, body.service_id, body.staff_id || null, 'booked',
-                body.scheduled_at, duration_minutes, ends_at, body.notes || null,
-                JSON.stringify([{ service_id: body.service_id, price, quantity: 1, name: serviceName }])
-            ]
+        // Find or create the client for this salon
+        let client = await clientsRepository.findExistingByEmailOrPhone(
+            { email: body.client_email, phone_number: body.client_phone },
+            body.salon_id
         );
 
-        return appointment.rows[0];
-    }
+        if (!client) {
+            const nameParts = body.client_name.trim().split(/\s+/);
+            const referralCode = await generateUniqueReferralCode(nameParts[0], body.salon_id);
+            client = await clientsRepository.create(
+                {
+                    first_name: nameParts[0],
+                    last_name: nameParts.slice(1).join(" ") || null,
+                    email: body.client_email || null,
+                    phone_number: body.client_phone || null,
+                },
+                body.salon_id,
+                { code: referralCode, rewardStatus: null }
+            );
+        }
+
+        const durationMinutes = services.reduce((sum, s) => sum + (Number(s!.duration) || 30), 0);
+        const title = services.map((s) => s!.name).join(", ");
+
+        const appointment = await bookingsRepository.createAppointment({
+            salonId: body.salon_id,
+            clientId: client.id,
+            staffId: body.staff_id || null,
+            serviceId: body.service_ids[0],
+            title,
+            scheduledAt: body.scheduled_at,
+            durationMinutes,
+            notes: body.notes || null,
+            services: services.map((s, i) => ({
+                service_id: body.service_ids[i],
+                name: s!.name,
+                price: Number(s!.price) || 0,
+                quantity: 1,
+                staff_id: body.staff_id || null,
+            })),
+        });
+
+        // Live calendar update — the dashboard calendar refreshes on this same
+        // socket event used for staff-created appointments (appointments.service.ts).
+        notificationsService.create({
+            salon_id: body.salon_id,
+            type: "appointment",
+            title: "New Appointment Booked",
+            body: `${body.client_name} — ${formatDate(body.scheduled_at)} at ${formatTime(body.scheduled_at)}`,
+        }).catch(() => {});
+
+        return { ...appointment, manage_token: generateManageToken(appointment.id) };
+    },
+
+    // ── Client self-service: manage a booking via its signed link ─────────────
+
+    async getManagedAppointment(appointmentId: string, token: string | undefined | null) {
+        assertManageToken(appointmentId, token);
+        const appointment = await appointmentsRepository.findById(appointmentId);
+        if (!appointment) throw new AppError(404, "Booking not found", "NOT_FOUND");
+        return appointment;
+    },
+
+    async cancelManagedAppointment(appointmentId: string, token: string | undefined | null) {
+        assertManageToken(appointmentId, token);
+        return appointmentsService.cancel({
+            appointmentId,
+            requesterUserId: "public-client",
+            body: {},
+        });
+    },
+
+    async rescheduleManagedAppointment(
+        appointmentId: string,
+        token: string | undefined | null,
+        scheduled_at: string
+    ) {
+        assertManageToken(appointmentId, token);
+        return appointmentsService.update({
+            appointmentId,
+            requesterUserId: "public-client",
+            patch: { scheduled_at },
+        });
+    },
 };

@@ -25,7 +25,7 @@ const safeTrim = (v: any) => (v === null || v === undefined ? v : String(v).trim
 // Regenerates with an incrementing suffix until the code is free within this
 // salon — the base code is time-based (not random), so collisions are
 // expected when two same-initial customers join in the same clock hour.
-async function generateUniqueReferralCode(name: string, salonId: string): Promise<string> {
+export async function generateUniqueReferralCode(name: string, salonId: string): Promise<string> {
     const base = generateReferralCode(name);
     let candidate = base;
     let suffix = 0;
