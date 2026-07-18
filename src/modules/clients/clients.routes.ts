@@ -3,6 +3,7 @@ import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { requirePermission } from "../../middleware/permission.middleware";
+import { uploadMiddleware } from "../../middleware/upload.middleware";
 import { clientsController } from "./clients.controller";
 import { upload } from "./clients.upload";
 import {
@@ -22,6 +23,9 @@ const ownerAdminStaff = roleMiddleware("salon_owner", "admin", "staff");
 // LIST + CREATE
 router.get("/", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), validateClientsListQuery, clientsController.list);
 router.post("/", authMiddleware, ownerAdminStaff, requirePermission("edit_clients"), validateCreateClient, clientsController.create);
+
+// Avatar upload (stateless — must be BEFORE /:clientId)
+router.post("/upload-avatar", authMiddleware, ownerAdmin, uploadMiddleware.single("avatar"), clientsController.uploadAvatar);
 
 // EXPORT (same filters)
 router.get("/export", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), validateClientsListQuery, clientsController.export);

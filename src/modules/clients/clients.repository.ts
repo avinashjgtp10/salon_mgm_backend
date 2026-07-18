@@ -57,62 +57,81 @@ export const clientsRepository = {
         const where: string[] = [];
         const params: any[] = [];
 
-        // ── ALWAYS scope to salon ──
+        // ── ALWAYS scope to salon ── salon_id is always params[0], relied on
+        // below by the total_sales join.
         params.push(salonId);
-        where.push(`salon_id = $${params.length}`);
+        where.push(`c.salon_id = $${params.length}`);
 
         // inactive filter
         const includeInactive = q.inactive === true;
         if (!includeInactive) {
             params.push(true);
-            where.push(`is_active = $${params.length}`);
+            where.push(`c.is_active = $${params.length}`);
         }
 
         if (q.source) {
             params.push(q.source);
-            where.push(`client_source = $${params.length}`);
+            where.push(`c.client_source = $${params.length}`);
         }
         if (q.created_from) {
             params.push(q.created_from);
-            where.push(`created_at::date >= $${params.length}::date`);
+            where.push(`c.created_at::date >= $${params.length}::date`);
         }
         if (q.created_to) {
             params.push(q.created_to);
-            where.push(`created_at::date <= $${params.length}::date`);
+            where.push(`c.created_at::date <= $${params.length}::date`);
         }
         if (q.client_group && q.client_group !== "all") {
             if (q.client_group === "fresha_accounts") {
                 params.push("fresha");
-                where.push(`client_source = $${params.length}`);
+                where.push(`c.client_source = $${params.length}`);
             } else if (q.client_group === "manually_added") {
                 params.push("manual");
-                where.push(`client_source = $${params.length}`);
+                where.push(`c.client_source = $${params.length}`);
             }
         }
         if (q.gender && q.gender !== "all") {
             params.push(q.gender.toLowerCase());
-            where.push(`LOWER(gender) = $${params.length}`);
+            where.push(`LOWER(c.gender) = $${params.length}`);
         }
         if (q.search && q.search.trim()) {
             const s = `%${q.search.trim().toLowerCase()}%`;
             params.push(s);
             const p = `$${params.length}`;
             where.push(`(
-        LOWER(full_name) LIKE ${p}
-        OR LOWER(COALESCE(email,'')) LIKE ${p}
-        OR LOWER(COALESCE(phone_number,'')) LIKE ${p}
-        OR LOWER(COALESCE(additional_email,'')) LIKE ${p}
-        OR LOWER(COALESCE(additional_phone_number,'')) LIKE ${p}
+        LOWER(c.full_name) LIKE ${p}
+        OR LOWER(COALESCE(c.email,'')) LIKE ${p}
+        OR LOWER(COALESCE(c.phone_number,'')) LIKE ${p}
+        OR LOWER(COALESCE(c.additional_email,'')) LIKE ${p}
+        OR LOWER(COALESCE(c.additional_phone_number,'')) LIKE ${p}
       )`);
         }
 
         const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
-        const countSql = `SELECT COUNT(*)::int AS total FROM clients ${whereSql}`;
+        const countSql = `SELECT COUNT(*)::int AS total FROM clients c ${whereSql}`;
+
+        // clients.total_sales is a dead column, never written anywhere (see the
+        // campaign-filter join further below) — every client shows ₹0 and
+        // "highest/lowest sales" sorting has nothing real to sort by. Compute it
+        // here from payments instead, the same way Client History's lifetime_spend
+        // does: wallet-settled amounts are excluded since that money was already
+        // recognized as revenue when the wallet/membership was funded/sold.
+        // Aliased separately from clients.total_sales (not overwritten in the
+        // same SELECT) to avoid an ambiguous-column error from ORDER BY when
+        // sorting by it.
+        const orderCol = sb === "total_sales" ? "computed_total_sales" : `c.${sb}`;
         const dataSql = `
-      SELECT * FROM clients
+      SELECT c.*, COALESCE(ts.total_sales, 0) AS computed_total_sales
+      FROM clients c
+      LEFT JOIN (
+        SELECT client_id, SUM(GREATEST(0, paid_amount - COALESCE(ewallet_used, 0) - COALESCE(membership_wallet_used, 0))) AS total_sales
+        FROM payments
+        WHERE salon_id = $1 AND status IN ('completed', 'partial')
+        GROUP BY client_id
+      ) ts ON ts.client_id = c.id
       ${whereSql}
-      ORDER BY ${sb} ${so}
+      ORDER BY ${orderCol} ${so}
       OFFSET $${params.length + 1}
       LIMIT  $${params.length + 2}
     `;
@@ -123,8 +142,12 @@ export const clientsRepository = {
         ]);
 
         const total = countRes.rows[0]?.total ?? 0;
+        const items = dataRes.rows.map((r: any) => {
+            const { computed_total_sales, ...rest } = r;
+            return { ...rest, total_sales: computed_total_sales };
+        });
         return {
-            items: dataRes.rows,
+            items,
             total,
             offset,
             limit,
@@ -150,7 +173,7 @@ export const clientsRepository = {
         email,phone_country_code,phone_number,
         additional_email,additional_phone_country_code,additional_phone_number,
         birthday_day_month,birthday_year,
-        gender,pronouns,
+        gender,pronouns,address,
         client_source,referred_by_client_id,
         preferred_language,occupation,country,avatar_url,
         email_notifications,sms_notifications,whatsapp_notifications,
@@ -161,12 +184,12 @@ export const clientsRepository = {
         $5,$6,$7,
         $8,$9,$10,
         $11,$12,
-        $13,$14,
-        $15,$16,
-        $17,$18,$19,$20,
-        $21,$22,$23,
-        $24,$25,$26,
-        $27,$28
+        $13,$14,$15,
+        $16,$17,
+        $18,$19,$20,$21,
+        $22,$23,$24,
+        $25,$26,$27,
+        $28,$29
       ) RETURNING *`,
             [
                 salonId,
@@ -183,6 +206,7 @@ export const clientsRepository = {
                 body.birthday_year || null,
                 body.gender ?? null,
                 body.pronouns ?? null,
+                body.address ?? null,
                 body.client_source ?? null,
                 body.referred_by_client_id ?? null,
                 body.preferred_language ?? null,
@@ -253,6 +277,17 @@ export const clientsRepository = {
     // client's own one-time "referee welcome bonus" ledger entry — which also
     // has source_type='referral' but belongs to a *different* referral — is
     // never counted as this client's referrer earnings.
+    // Basic info about the client who referred this one — for display only
+    // (e.g. "Referred By" panel), so no salon_id scoping needed beyond the
+    // caller already having resolved referredByClientId from a scoped row.
+    async getReferrerInfo(referredByClientId: string): Promise<{ id: string; full_name: string; email: string | null; phone_country_code: string | null; phone_number: string | null; avatar_url: string | null } | null> {
+        const { rows } = await pool.query(
+            `SELECT id, full_name, email, phone_country_code, phone_number, avatar_url FROM clients WHERE id = $1`,
+            [referredByClientId]
+        );
+        return rows[0] || null;
+    },
+
     async getReferralStats(clientId: string): Promise<{ total_referral_earnings: number; total_successful_referrals: number }> {
         const { rows } = await pool.query(
             `SELECT COALESCE(SUM(el.amount), 0)::numeric AS total_earnings, COUNT(DISTINCT c.id)::int AS total_count
@@ -310,6 +345,7 @@ export const clientsRepository = {
             else if (k === "birthday_year") add("birthday_year", patch.birthday_year || null);
             else if (k === "gender") add("gender", patch.gender ?? null);
             else if (k === "pronouns") add("pronouns", patch.pronouns ?? null);
+            else if (k === "address") add("address", patch.address ?? null);
             else if (k === "client_source") add("client_source", patch.client_source ?? null);
             else if (k === "referred_by_client_id") add("referred_by_client_id", patch.referred_by_client_id ?? null);
             else if (k === "preferred_language") add("preferred_language", patch.preferred_language ?? null);
@@ -484,6 +520,26 @@ export const clientsRepository = {
                AND ($4::uuid IS NULL OR id != $4)
              LIMIT 1`,
             [salonId, pn, pcc, excludeClientId ?? null]
+        );
+        return rows[0] || null;
+    },
+
+    // Mirrors findActiveByPhone — matches the ux_clients_salon_email DB index
+    // (per-salon, case-insensitive, active clients only excluded the same way).
+    async findActiveByEmail(
+        email: string | null | undefined,
+        salonId: string,
+        excludeClientId?: string,
+    ): Promise<Client | null> {
+        const e = email ? String(email).trim().toLowerCase() : "";
+        if (!e) return null;
+        const { rows } = await pool.query(
+            `SELECT * FROM clients
+             WHERE salon_id = $1 AND is_active = true
+               AND LOWER(TRIM(email)) = $2
+               AND ($3::uuid IS NULL OR id != $3)
+             LIMIT 1`,
+            [salonId, e, excludeClientId ?? null]
         );
         return rows[0] || null;
     },
