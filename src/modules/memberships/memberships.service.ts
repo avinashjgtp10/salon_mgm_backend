@@ -2,6 +2,7 @@ import { membershipsRepository } from "./memberships.repository";
 import {
   CreateMembershipDTO, UpdateMembershipDTO,
 } from "./memberships.types";
+import { emitSalonEvent } from "../utils/realtime.util";
 
 const normalize = (val?: string) =>
   val ? val.trim().toLowerCase() : val;
@@ -47,7 +48,9 @@ export const membershipsService = {
       throw new Error("Invalid price value");
     data.price   = parseFloat(String(data.price));
     data.taxRate = parseTaxRate(data.taxRate as any);
-    return membershipsRepository.create(data, salonId);
+    const created = await membershipsRepository.create(data, salonId);
+    emitSalonEvent("memberships:created", salonId, created.id, "created", created);
+    return created;
   },
 
   async getById(id: string, salonId: string) {
@@ -65,12 +68,14 @@ export const membershipsService = {
     data.taxRate = parseTaxRate(data.taxRate as any);
     const updated = await membershipsRepository.update(id, data, salonId);
     if (!updated) throw new Error(`Membership '${id}' not found`);
+    emitSalonEvent("memberships:updated", salonId, updated.id, "updated", updated);
     return updated;
   },
 
   async delete(id: string, salonId: string) {
     const deleted = await membershipsRepository.delete(id, salonId);
     if (!deleted) throw new Error(`Membership '${id}' not found`);
+    emitSalonEvent("memberships:deleted", salonId, id, "deleted", { id });
     return { message: "Membership deleted successfully" };
   },
 };

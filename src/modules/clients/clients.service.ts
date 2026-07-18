@@ -6,6 +6,7 @@ import { salonsRepository } from "../salons/salons.repository";
 import { emailService } from "../utils/email.service";
 import { canSendEmail } from "../utils/notif-prefs";
 import logger from "../../config/logger";
+import { emitSalonEvent } from "../utils/realtime.util";
 import {
     Client,
     ClientWithRelations,
@@ -80,6 +81,7 @@ export const clientsService = {
         })();
 
         const withRel = await clientsRepository.getByIdWithRelations(created.id, salonId);
+        emitSalonEvent("clients:created", salonId, created.id, "created", withRel);
         return withRel as ClientWithRelations;
     },
 
@@ -110,6 +112,7 @@ export const clientsService = {
         if (patch.emergency_contacts) await clientsRepository.replaceUpsertEmergencyContacts(clientId, patch.emergency_contacts);
 
         const withRel = await clientsRepository.getByIdWithRelations(updated.id, salonId);
+        emitSalonEvent("clients:updated", salonId, updated.id, "updated", withRel);
         return withRel as ClientWithRelations;
     },
 
@@ -119,6 +122,7 @@ export const clientsService = {
 
         if (hard) await clientsRepository.hardDelete(clientId, salonId);
         else await clientsRepository.softDelete(clientId, salonId);
+        emitSalonEvent("clients:deleted", salonId, clientId, "deleted", exists);
     },
 
     async blockClients(ids: string[], reason: string, salonId: string): Promise<void> {

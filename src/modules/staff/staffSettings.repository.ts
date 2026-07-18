@@ -1,4 +1,5 @@
 import pool from "../../config/database";
+import logger from "../../config/logger";
 import {
     StaffWageSettings, StaffCommissionSettings, StaffPayRunSettings, StaffSchedule,
     UpdateWageSettingsBody, UpdateCommissionBody, UpdatePayRunBody,
@@ -381,15 +382,25 @@ export const staffPayRunsRepository = {
 export const staffSchedulesRepository = {
     async listByStaffId(staffId: string, start?: string, end?: string): Promise<StaffSchedule[]> {
         if (start && end) {
+            logger.info("staffSchedulesRepository.listByStaffId query", {
+                sql: "SELECT * FROM staff_schedules WHERE staff_id = $1 AND date >= $2::date AND date <= $3::date ORDER BY date ASC, day_of_week ASC",
+                params: [staffId, start, end],
+            });
             const { rows } = await pool.query(
                 `SELECT * FROM staff_schedules WHERE staff_id = $1 AND date >= $2::date AND date <= $3::date ORDER BY date ASC, day_of_week ASC`,
                 [staffId, start, end]
             );
+            logger.info("staffSchedulesRepository.listByStaffId result", { staffId, rowCount: rows.length });
             return rows;
         }
+        logger.info("staffSchedulesRepository.listByStaffId query", {
+            sql: "SELECT * FROM staff_schedules WHERE staff_id = $1 ORDER BY date ASC, day_of_week ASC",
+            params: [staffId],
+        });
         const { rows } = await pool.query(
             `SELECT * FROM staff_schedules WHERE staff_id = $1 ORDER BY date ASC, day_of_week ASC`, [staffId]
         );
+        logger.info("staffSchedulesRepository.listByStaffId result", { staffId, rowCount: rows.length });
         return rows;
     },
 

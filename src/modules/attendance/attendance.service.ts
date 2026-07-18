@@ -1,11 +1,11 @@
 import logger from "../../config/logger";
+import { emitSalonEvent } from "../utils/realtime.util";
 import { AppError } from "../../middleware/error.middleware";
 import { attendanceRepository } from "./attendance.repository";
 import {
     Attendance,
     AttendanceSettings,
     AttendanceStatus,
-    AttendanceSource,
     CheckInBody,
     CheckOutBody,
     PushAttendanceBody,
@@ -87,7 +87,9 @@ export const attendanceService = {
     async updateSettings(salonId: string, data: UpdateSettingsBody): Promise<AttendanceSettings> {
         if (Object.keys(data).length === 0)
             throw new AppError(400, "No fields provided to update", "VALIDATION_ERROR");
-        return attendanceRepository.upsertSettings(salonId, data);
+        const settings = await attendanceRepository.upsertSettings(salonId, data);
+        emitSalonEvent("attendance:updated", salonId, settings.id || salonId, "updated", settings);
+        return settings;
     },
 
     // ── Check In ──────────────────────────────────────────────────────────────
@@ -107,6 +109,7 @@ export const attendanceService = {
             salonId, staffId: staff_id, date, checkIn: checkInTs, status, source: "manual", note,
         });
         logger.info("attendance.checkIn", { salonId, staffId: staff_id, date, status });
+        emitSalonEvent("attendance:updated", salonId, record.id, "updated", record);
         return record;
     },
 
@@ -130,6 +133,7 @@ export const attendanceService = {
             salonId, staffId: staff_id, date, checkOut: checkOutTs, status, hoursWorked: hours, note,
         });
         logger.info("attendance.checkOut", { salonId, staffId: staff_id, date, status, hours });
+        emitSalonEvent("attendance:updated", salonId, record.id, "updated", record);
         return record;
     },
 
@@ -143,30 +147,38 @@ export const attendanceService = {
         if (check_type === "in") {
             const onLeave = await attendanceRepository.hasApprovedLeave(staff_id, date);
             if (onLeave) {
-                return attendanceRepository.upsert({
+                const record = await attendanceRepository.upsert({
                     salonId, staffId: staff_id, date, status: "on_leave", source, checkIn: ts,
                 });
+                emitSalonEvent("attendance:updated", salonId, record.id, "updated", record);
+                return record;
             }
             const settings = await attendanceService.getSettings(salonId);
             const status = calcStatus(ts, null, settings);
-            return attendanceRepository.upsertCheckIn({ salonId, staffId: staff_id, date, checkIn: ts, status, source });
+            const record = await attendanceRepository.upsertCheckIn({ salonId, staffId: staff_id, date, checkIn: ts, status, source });
+            emitSalonEvent("attendance:updated", salonId, record.id, "updated", record);
+            return record;
         }
 
         // check_type === "out"
         const existing = await attendanceRepository.findByStaffAndDate(staff_id, date);
         if (!existing || !existing.check_in) {
             // No check-in: upsert with check-out only, treat as present
-            return attendanceRepository.upsert({
+            const record = await attendanceRepository.upsert({
                 salonId, staffId: staff_id, date, status: "present", source, checkOut: ts,
             });
+            emitSalonEvent("attendance:updated", salonId, record.id, "updated", record);
+            return record;
         }
 
         const settings = await attendanceService.getSettings(salonId);
         const hours = hoursFromTimestamps(existing.check_in, ts);
         const status = calcStatus(existing.check_in, ts, settings);
-        return attendanceRepository.upsertCheckOut({
+        const record = await attendanceRepository.upsertCheckOut({
             salonId, staffId: staff_id, date, checkOut: ts, status, hoursWorked: hours,
         });
+        emitSalonEvent("attendance:updated", salonId, record.id, "updated", record);
+        return record;
     },
 
     // ── Manual Mark ───────────────────────────────────────────────────────────
@@ -177,9 +189,11 @@ export const attendanceService = {
         if (check_in && check_out) {
             hoursWorked = hoursFromTimestamps(check_in, check_out);
         }
-        return attendanceRepository.manualUpsert({
+        const record = await attendanceRepository.manualUpsert({
             salonId, staffId: staff_id, date, status, checkIn: check_in, checkOut: check_out, hoursWorked, note,
         });
+        emitSalonEvent("attendance:updated", salonId, record.id, "updated", record);
+        return record;
     },
 
     // ── Edit existing record ──────────────────────────────────────────────────
@@ -198,7 +212,9 @@ export const attendanceService = {
                 return calcStatus(checkIn, checkOut, settings);
             })());
         }
-        return attendanceRepository.updateById(id, finalPatch);
+        const updated = await attendanceRepository.updateById(id, finalPatch);
+        emitSalonEvent("attendance:updated", existing.salon_id, updated.id, "updated", updated);
+        return updated;
     },
 
     // ── Today dashboard ───────────────────────────────────────────────────────

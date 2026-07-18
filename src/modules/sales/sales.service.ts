@@ -13,6 +13,8 @@ import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-autom
 import { notificationsService } from "../notifications/notifications.service";
 import { membershipsRepository } from "../memberships/memberships.repository";
 import { clientMembershipsService } from "../client-memberships/client-memberships.service";
+import { productsRepository } from "../products/products.repository";
+import { emitSalonEvent } from "../utils/realtime.util";
 
 export const salesService = {
 
@@ -31,6 +33,19 @@ export const salesService = {
         // Fetch enriched sale (with client_phone, client_phone_code, salon_name)
         const sale  = (await salesRepository.findById(rawSale.id)) ?? rawSale;
         const items = await salesRepository.findItemsBySaleId(sale.id);
+        emitSalonEvent("sales:updated", sale.salon_id, sale.id, "updated", { sale, items });
+
+        const productItems = items.filter((item) => item.item_type === "product" && item.item_id);
+        if (productItems.length > 0) {
+            await productsRepository.deductStock(
+                productItems.map((item) => ({ product_id: item.item_id!, quantity: item.quantity })),
+                sale.salon_id,
+            );
+            for (const item of productItems) {
+                emitSalonEvent("products:updated", sale.salon_id, item.item_id!, "updated", item);
+            }
+        }
+        emitSalonEvent("sales:created", sale.salon_id, sale.id, "created", { sale, items });
 
         // Fire notification (fire-and-forget)
         notificationsService.create({
@@ -84,6 +99,7 @@ export const salesService = {
         const deleted = await salesRepository.deleteById(id);
         if (!deleted) throw new AppError(500, "Failed to delete sale", "INTERNAL_ERROR");
         logger.info("salesService.delete success", { saleId: id });
+        emitSalonEvent("sales:updated", existing.salon_id, id, "updated", deleted);
         return deleted;
     },
 
@@ -93,6 +109,7 @@ export const salesService = {
         if (!existing) throw new AppError(404, "Sale not found", "NOT_FOUND");
         const sale = await salesRepository.update(id, patch);
         const updatedItems = await salesRepository.findItemsBySaleId(id);
+        emitSalonEvent("sales:updated", existing.salon_id, sale.id, "updated", { sale, items: updatedItems });
 
         // Reverse pending commissions when a sale is cancelled or refunded
         if (patch.status && ["cancelled", "refunded"].includes(patch.status)) {
@@ -147,7 +164,8 @@ export const salesService = {
         // Mark the linked appointment as completed when the sale is checked out
         if (sale.appointment_id) {
             try {
-                await appointmentsRepository.updateStatus(sale.appointment_id, "completed");
+                const completedAppointment = await appointmentsRepository.updateStatus(sale.appointment_id, "completed");
+                emitSalonEvent("appointments:updated", sale.salon_id, completedAppointment.id, "updated", completedAppointment);
             } catch (error) {
                 logger.error("Failed to update appointment status after checkout:", { appointmentId: sale.appointment_id, error })
             }

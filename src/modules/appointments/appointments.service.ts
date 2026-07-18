@@ -13,6 +13,7 @@ import { attendanceService } from "../attendance/attendance.service";
 import { notificationsService } from "../notifications/notifications.service";
 import { emailService } from "../utils/email.service";
 import { canSendEmail } from "../utils/notif-prefs";
+import { emitSalonEvent } from "../utils/realtime.util";
 import { salonsRepository } from "../salons/salons.repository";
 import {
     Appointment,
@@ -87,6 +88,7 @@ export const appointmentsService = {
 
         const appointment = await appointmentsRepository.create(body, requesterUserId);
         logger.info("appointmentsService.create success", { appointmentId: appointment.id });
+        emitSalonEvent("appointments:created", appointment.salon_id, appointment.id, "created", appointment);
 
         // Deduct stock for products sold in this appointment (fire-and-forget)
         const soldProducts = (body.product_items ?? []).filter(p => p.product_id);
@@ -185,14 +187,24 @@ export const appointmentsService = {
         page?: number;
         limit?: number;
     }): Promise<{ data: Appointment[]; totalRecords: number; totalPages: number; currentPage: number } | Appointment[]> {
+        const serviceStartedAt = performance.now();
         const { salonId, clientId, date, staffId, status, startDate, endDate, page, limit } = params;
         if (clientId) return appointmentsRepository.listByClientId(clientId);
         if (!salonId) throw new AppError(400, "salon_id or client_id is required", "VALIDATION_ERROR");
-        return appointmentsRepository.listBySalonId(salonId, {
+        const repositoryStartedAt = performance.now();
+        const result = await appointmentsRepository.listBySalonId(salonId, {
             date, staff_id: staffId, status,
             start_date: startDate, end_date: endDate,
             page, limit,
         });
+        const completedAt = performance.now();
+        logger.info("appointmentsService.list timing", {
+            status: status ?? null,
+            repositoryMs: Number((completedAt - repositoryStartedAt).toFixed(2)),
+            businessLogicMs: Number((repositoryStartedAt - serviceStartedAt).toFixed(2)),
+            totalMs: Number((completedAt - serviceStartedAt).toFixed(2)),
+        });
+        return result;
     },
 
     async update(params: {
@@ -224,6 +236,7 @@ export const appointmentsService = {
         }
 
         const updated = await appointmentsRepository.update(appointmentId, patch);
+        emitSalonEvent("appointments:updated", existing.salon_id, updated.id, "updated", updated);
 
         // Adjust stock when product_items list changes (fire-and-forget)
         if (patch.product_items !== undefined) {
@@ -292,7 +305,9 @@ export const appointmentsService = {
         if (!existing) throw new AppError(404, "Appointment not found", "NOT_FOUND");
         if (existing.status !== "booked")
             throw new AppError(400, "Only booked appointments can be confirmed", "BAD_REQUEST");
-        return appointmentsRepository.updateStatus(appointmentId, "confirmed");
+        const updated = await appointmentsRepository.updateStatus(appointmentId, "confirmed");
+        emitSalonEvent("appointments:updated", existing.salon_id, updated.id, "updated", updated);
+        return updated;
     },
 
     async start(appointmentId: string): Promise<Appointment> {
@@ -300,7 +315,9 @@ export const appointmentsService = {
         if (!existing) throw new AppError(404, "Appointment not found", "NOT_FOUND");
         if (!["booked", "confirmed"].includes(existing.status))
             throw new AppError(400, "Appointment must be booked or confirmed to start", "BAD_REQUEST");
-        return appointmentsRepository.updateStatus(appointmentId, "in_progress");
+        const updated = await appointmentsRepository.updateStatus(appointmentId, "in_progress");
+        emitSalonEvent("appointments:updated", existing.salon_id, updated.id, "updated", updated);
+        return updated;
     },
 
     async cancel(params: {
@@ -314,6 +331,7 @@ export const appointmentsService = {
             throw new AppError(400, `Appointment is already '${existing.status}'`, "BAD_REQUEST");
 
         const cancelled = await appointmentsRepository.updateStatus(params.appointmentId, "cancelled");
+        emitSalonEvent("appointments:updated", existing.salon_id, cancelled.id, "updated", cancelled);
 
         // Restore stock for cancelled appointment products (fire-and-forget)
         const cancelledProducts = (existing.product_items ?? []).filter(p => p.product_id);
@@ -399,6 +417,7 @@ export const appointmentsService = {
         const deleted = await appointmentsRepository.deleteById(appointmentId);
         if (!deleted) throw new AppError(500, "Failed to delete appointment", "INTERNAL_ERROR");
         logger.info("appointmentsService.delete success", { appointmentId });
+        emitSalonEvent("appointments:deleted", existing.salon_id, appointmentId, "deleted", deleted);
 
         // Restore stock for deleted appointment products (fire-and-forget)
         const deletedProducts = (existing.product_items ?? []).filter(p => p.product_id);
@@ -417,7 +436,9 @@ export const appointmentsService = {
         if (!existing) throw new AppError(404, "Appointment not found", "NOT_FOUND");
         if (!["booked", "confirmed"].includes(existing.status))
             throw new AppError(400, "Only booked/confirmed appointments can be marked no-show", "BAD_REQUEST");
-        return appointmentsRepository.updateStatus(appointmentId, "no_show");
+        const updated = await appointmentsRepository.updateStatus(appointmentId, "no_show");
+        emitSalonEvent("appointments:updated", existing.salon_id, updated.id, "updated", updated);
+        return updated;
     },
 
     async checkout(params: {

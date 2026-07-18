@@ -3,6 +3,7 @@ import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { appointmentsService } from "./appointments.service";
 import { CreateAppointmentBody, UpdateAppointmentBody, CancelAppointmentBody } from "./appointments.types";
+import logger from "../../config/logger";
 
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string | null } };
 
@@ -33,6 +34,7 @@ export const appointmentsController = {
     },
 
     async list(req: AuthRequest, res: Response, next: NextFunction) {
+        const requestStartedAt = performance.now();
         try {
             const salonId = req.user?.salonId;
             if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
@@ -48,6 +50,17 @@ export const appointmentsController = {
                 endDate: String(req.query.end_date || "").trim() || undefined,
                 page,
                 limit,
+            });
+            const serviceCompletedAt = performance.now();
+            const serializationStartedAt = performance.now();
+            const serializedBytes = Buffer.byteLength(JSON.stringify(result));
+            const serializationMs = performance.now() - serializationStartedAt;
+            logger.info("appointmentsController.list timing", {
+                status: req.query.status ?? null,
+                serviceAndBusinessMs: Number((serviceCompletedAt - requestStartedAt).toFixed(2)),
+                serializationMs: Number(serializationMs.toFixed(2)),
+                serializedBytes,
+                totalBeforeSendMs: Number((performance.now() - requestStartedAt).toFixed(2)),
             });
             return sendSuccess(res, 200, result, "Appointments fetched successfully");
         } catch (err) { return next(err); }

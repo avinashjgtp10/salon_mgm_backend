@@ -19,6 +19,7 @@ import {
     CreateStocktakeBody,
     StocktakeStatus,
 } from "./inventory.types";
+import { emitSalonEvent } from "../utils/realtime.util";
 
 // ─── Suppliers ────────────────────────────────────────────────────────────────
 
@@ -90,6 +91,7 @@ export const stockMovementsService = {
         logger.info("stockMovementsService.create called", { requesterUserId, requesterRole, productId: body.product_id, movementType: body.movement_type });
         const created = await stockMovementsRepository.create(body, requesterUserId, salonId);
         logger.info("stockMovementsService.create success", { movementId: created.id, movementType: created.movement_type, quantity: created.quantity });
+        emitSalonEvent("products:updated", salonId, created.product_id, "updated", created);
         return created;
     },
 
@@ -133,6 +135,7 @@ export const stocktakesService = {
     async updateStatus(id: string, status: StocktakeStatus, salonId: string): Promise<Stocktake> {
         const updated = await stocktakesRepository.updateStatus(id, status, salonId);
         if (!updated) throw new AppError(404, "Stocktake not found", "NOT_FOUND");
+        emitSalonEvent("products:updated", salonId, id, "updated", updated);
         return updated;
     },
 
@@ -142,6 +145,7 @@ export const stocktakesService = {
         if (!existing) throw new AppError(404, "Stocktake not found", "NOT_FOUND");
         await stocktakesRepository.delete(id, salonId);
         logger.info("stocktakesService.delete success", { id });
+        emitSalonEvent("products:updated", salonId, id, "updated", existing);
     },
 };
 
@@ -155,6 +159,9 @@ export const stockTakeService = {
             stocktake_id: body.stocktake_id, branch_id: body.branch_id, notes: body.notes, items: body.items, created_by: requesterUserId, salonId,
         });
         logger.info("stockTakeService.process success", { processed: body.items.length, movementsCreated: movements.length });
+        for (const movement of movements) {
+            emitSalonEvent("products:updated", salonId, movement.product_id, "updated", movement);
+        }
         return { processed: body.items.length, movements };
     },
 };
