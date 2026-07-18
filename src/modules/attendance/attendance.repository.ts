@@ -52,21 +52,28 @@ export const attendanceRepository = {
     },
 
     // ── Single staff, date range (for Staff History Attendance tab / Timeline) ──
-    async findByStaffAndDateRange(staffId: string, startDate?: string, endDate?: string, limit?: number): Promise<Attendance[]> {
+    async findByStaffAndDateRange(staffId: string, filters: {
+        startDate?: string; endDate?: string; status?: string; page?: number; limit?: number;
+    } = {}): Promise<{ items: Attendance[]; pagination: { total: number; page: number; limit: number; total_pages: number } }> {
         const conditions: string[] = [`a.staff_id = $1`];
         const values: any[] = [staffId];
         let idx = 2;
 
-        if (startDate) { conditions.push(`a.date >= $${idx++}::date`); values.push(startDate); }
-        if (endDate) { conditions.push(`a.date <= $${idx++}::date`); values.push(endDate); }
+        if (filters.startDate) { conditions.push(`a.date >= $${idx++}::date`); values.push(filters.startDate); }
+        if (filters.endDate) { conditions.push(`a.date <= $${idx++}::date`); values.push(filters.endDate); }
+        if (filters.status) { conditions.push(`a.status = $${idx++}`); values.push(filters.status); }
 
-        const limitClause = limit ? `LIMIT $${idx++}` : "";
-        if (limit) values.push(limit);
+        const page = Math.max(1, Number(filters.page ?? 1));
+        const limit = filters.limit ? Math.max(1, Number(filters.limit)) : undefined;
+        const offset = limit ? (page - 1) * limit : 0;
+        const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+        if (limit) values.push(limit, offset);
 
         const { rows } = await safeQuery(() => pool.query(
             `SELECT a.*,
                     TRIM(CONCAT(st.first_name, ' ', COALESCE(st.last_name, ''))) AS staff_name,
-                    COALESCE(st.designation, '') AS staff_role
+                    COALESCE(st.designation, '') AS staff_role,
+                    COUNT(*) OVER() AS total_count
              FROM attendance a
              JOIN staff st ON st.id = a.staff_id
              WHERE ${conditions.join(" AND ")}
@@ -74,7 +81,10 @@ export const attendanceRepository = {
              ${limitClause}`,
             values
         ));
-        return rows;
+        const total = rows.length ? Number(rows[0].total_count) : 0;
+        const items = rows.map(({ total_count, ...r }) => r);
+        const effectiveLimit = limit ?? Math.max(total, 1);
+        return { items, pagination: { total, page, limit: effectiveLimit, total_pages: Math.max(1, Math.ceil(total / effectiveLimit)) } };
     },
 
     async findById(id: string): Promise<Attendance | null> {

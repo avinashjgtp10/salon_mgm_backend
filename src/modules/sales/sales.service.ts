@@ -73,11 +73,18 @@ export const salesService = {
         return { sale, items };
     },
 
-    async list(filters: { salon_id?: string; client_id?: string; status?: string; staff_id?: string }): Promise<Sale[]> {
+    async list(filters: {
+        salon_id?: string; client_id?: string; status?: string; staff_id?: string;
+        start_date?: string; end_date?: string; page?: number; limit?: number;
+    }) {
         return salesRepository.list(filters);
     },
 
-    async listItemsByStaff(salonId: string, staffId: string, filters: { item_type?: string; limit?: number } = {}) {
+    async listItemsByStaff(
+        salonId: string,
+        staffId: string,
+        filters: { item_type?: string; start_date?: string; end_date?: string; page?: number; limit?: number } = {}
+    ) {
         return salesRepository.listItemsByStaff(salonId, staffId, filters);
     },
 

@@ -451,8 +451,14 @@ export const staffCommissionsController = {
   async getStaffHistory(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const staffId = String(req.params.staffId);
-      const month   = req.query.month ? String(req.query.month) : undefined;
-      const data = await staffCommissionsService.getStaffHistory(staffId, month);
+      const data = await staffCommissionsService.getStaffHistory(staffId, {
+        month: req.query.month ? String(req.query.month) : undefined,
+        start_date: req.query.start_date ? String(req.query.start_date) : undefined,
+        end_date: req.query.end_date ? String(req.query.end_date) : undefined,
+        status: req.query.status ? String(req.query.status) : undefined,
+        page: req.query.page ? parseInt(String(req.query.page), 10) : undefined,
+        limit: req.query.limit ? parseInt(String(req.query.limit), 10) : undefined,
+      });
       return sendSuccess(res, 200, data, "Commission history fetched");
     } catch (err) { return next(err); }
   },
