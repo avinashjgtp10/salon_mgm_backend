@@ -407,14 +407,15 @@ export const staffSchedulesRepository = {
             for (const item of body.items) {
                 const conflictColumns = item.date ? '(staff_id, date)' : '(staff_id, day_of_week) WHERE (date IS NULL)';
                 const insertColumns = item.date
-                    ? `staff_id, day_of_week, is_available, start_time, end_time, notes, date`
-                    : `staff_id, day_of_week, is_available, start_time, end_time, notes`;
-                const valuesPlaceholders = item.date ? `$1,$2,$3,$4,$5,$6,$7` : `$1,$2,$3,$4,$5,$6`;
+                    ? `staff_id, day_of_week, is_available, start_time, end_time, notes, breaks, date`
+                    : `staff_id, day_of_week, is_available, start_time, end_time, notes, breaks`;
+                const valuesPlaceholders = item.date ? `$1,$2,$3,$4,$5,$6,$7,$8` : `$1,$2,$3,$4,$5,$6,$7`;
                 const updateSet = `
                     is_available = EXCLUDED.is_available,
                     start_time   = EXCLUDED.start_time,
                     end_time     = EXCLUDED.end_time,
                     notes        = EXCLUDED.notes,
+                    breaks       = EXCLUDED.breaks,
                     day_of_week  = EXCLUDED.day_of_week,
                     ${item.date ? 'date = EXCLUDED.date,' : ''}
                     updated_at   = NOW()`;
@@ -422,15 +423,16 @@ export const staffSchedulesRepository = {
                     VALUES (${valuesPlaceholders})
                     ON CONFLICT ${conflictColumns} DO UPDATE SET ${updateSet}
                     RETURNING *`;
+                const breaksJson = JSON.stringify(item.is_available ? (item.breaks ?? []) : []);
                 const params = item.date
                     ? [staffId, item.day_of_week, item.is_available,
                         item.is_available ? (item.start_time ?? null) : null,
                         item.is_available ? (item.end_time ?? null) : null,
-                        item.notes ?? null, item.date ?? null]
+                        item.notes ?? null, breaksJson, item.date ?? null]
                     : [staffId, item.day_of_week, item.is_available,
                         item.is_available ? (item.start_time ?? null) : null,
                         item.is_available ? (item.end_time ?? null) : null,
-                        item.notes ?? null];
+                        item.notes ?? null, breaksJson];
                 const { rows } = await client.query(query, params);
                 results.push(rows[0]);
             }
