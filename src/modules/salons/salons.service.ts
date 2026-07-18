@@ -29,6 +29,20 @@ const slugify = (text: string) =>
         .replace(/[^a-z0-9]+/g, "-")
         .replace(/(^-|-$)+/g, "");
 
+// Ensures a slug is unique by appending -2, -3, ... on collision.
+export async function ensureUniqueSlug(base: string): Promise<string> {
+    const slug = slugify(base);
+    let finalSlug = slug;
+    let i = 1;
+    while (true) {
+        const found = await salonsRepository.findBySlug(finalSlug);
+        if (!found) break;
+        i += 1;
+        finalSlug = `${slug}-${i}`;
+    }
+    return finalSlug;
+}
+
 export const salonsService = {
     async create(ownerId: string, body: CreateSalonBody) {
         logger.info("salonsService.create called", { ownerId });
@@ -38,19 +52,7 @@ export const salonsService = {
             throw new AppError(409, "Salon already exists for this owner", "SALON_EXISTS");
         }
 
-        let slug = body.slug?.trim();
-        if (!slug) slug = slugify(body.business_name);
-        slug = slugify(slug);
-
-        // ensure unique slug
-        let finalSlug = slug;
-        let i = 1;
-        while (true) {
-            const found = await salonsRepository.findBySlug(finalSlug);
-            if (!found) break;
-            i += 1;
-            finalSlug = `${slug}-${i}`;
-        }
+        const finalSlug = await ensureUniqueSlug(body.slug?.trim() || body.business_name);
 
         try {
             const salon = await salonsRepository.create(ownerId, { ...body, slug: finalSlug });
@@ -102,15 +104,31 @@ export const salonsService = {
     async mySalon(ownerId: string, salonId?: string | null): Promise<Salon> {
         // Salon owners: look up by owner_id
         const salon = await salonsRepository.findByOwnerId(ownerId);
-        if (salon) return salon;
+        if (salon) return salonsService.ensureSlug(salon);
 
         // Staff users: they don't own a salon but their JWT carries salonId
         if (salonId) {
             const bySalonId = await salonsRepository.findById(salonId);
-            if (bySalonId) return bySalonId;
+            if (bySalonId) return salonsService.ensureSlug(bySalonId);
         }
 
         throw new AppError(404, "Salon not found", "NOT_FOUND");
+    },
+
+    // Auto-generates and persists a slug for salons created before slugs existed.
+    async ensureSlug(salon: Salon): Promise<Salon> {
+        if (salon.slug) return salon;
+        const slug = await ensureUniqueSlug(salon.business_name);
+        try {
+            return await salonsRepository.update(salon.id, { slug });
+        } catch (e: any) {
+            if (e?.code === "23505") {
+                // Lost a race with a concurrent request — re-fetch the now-set slug.
+                const refreshed = await salonsRepository.findById(salon.id);
+                if (refreshed) return refreshed;
+            }
+            throw e;
+        }
     },
 
     async getById(id: string): Promise<Salon> {

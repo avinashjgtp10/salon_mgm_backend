@@ -1,6 +1,6 @@
 export interface PublicBookingRequest {
     salon_id: string;
-    service_id: string;
+    service_ids: string[];
     staff_id?: string;
     scheduled_at: string;
     client_name: string;
