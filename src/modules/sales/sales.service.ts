@@ -15,6 +15,8 @@ import { membershipsRepository } from "../memberships/memberships.repository";
 import { clientMembershipsService } from "../client-memberships/client-memberships.service";
 import { sendPurchaseReceipt } from "./receipt-send.helper";
 import { notifyAppointmentCompleted } from "../appointments/appointment-completed.helper";
+import { productsRepository } from "../products/products.repository";
+import { emitSalonEvent } from "../utils/realtime.util";
 
 export const salesService = {
 
@@ -33,6 +35,19 @@ export const salesService = {
         // Fetch enriched sale (with client_phone, client_phone_code, salon_name)
         const sale  = (await salesRepository.findById(rawSale.id)) ?? rawSale;
         const items = await salesRepository.findItemsBySaleId(sale.id);
+        emitSalonEvent("sales:updated", sale.salon_id, sale.id, "updated", { sale, items });
+
+        const productItems = items.filter((item) => item.item_type === "product" && item.item_id);
+        if (productItems.length > 0) {
+            await productsRepository.deductStock(
+                productItems.map((item) => ({ product_id: item.item_id!, quantity: item.quantity })),
+                sale.salon_id,
+            );
+            for (const item of productItems) {
+                emitSalonEvent("products:updated", sale.salon_id, item.item_id!, "updated", item);
+            }
+        }
+        emitSalonEvent("sales:created", sale.salon_id, sale.id, "created", { sale, items });
 
         // Fire notification (fire-and-forget)
         notificationsService.create({
@@ -91,6 +106,7 @@ export const salesService = {
         const deleted = await salesRepository.deleteById(id);
         if (!deleted) throw new AppError(500, "Failed to delete sale", "INTERNAL_ERROR");
         logger.info("salesService.delete success", { saleId: id });
+        emitSalonEvent("sales:updated", existing.salon_id, id, "updated", deleted);
         return deleted;
     },
 
@@ -100,6 +116,7 @@ export const salesService = {
         if (!existing) throw new AppError(404, "Sale not found", "NOT_FOUND");
         const sale = await salesRepository.update(id, patch);
         const updatedItems = await salesRepository.findItemsBySaleId(id);
+        emitSalonEvent("sales:updated", existing.salon_id, sale.id, "updated", { sale, items: updatedItems });
 
         // Reverse pending commissions when a sale is cancelled or refunded
         if (patch.status && ["cancelled", "refunded"].includes(patch.status)) {
@@ -160,7 +177,8 @@ export const salesService = {
         if (sale.appointment_id) {
             try {
                 const apptStatus = saleDueAmount > 0 ? "partial" : "paid";
-                await appointmentsRepository.updateStatus(sale.appointment_id, apptStatus);
+                const updatedAppointment = await appointmentsRepository.updateStatus(sale.appointment_id, apptStatus);
+                emitSalonEvent("appointments:updated", sale.salon_id, updatedAppointment.id, "updated", updatedAppointment);
                 // Only a fully-paid checkout should trigger the thank-you/review-request message.
                 if (apptStatus === "paid") {
                     notifyAppointmentCompleted(sale.appointment_id).catch(() => {});

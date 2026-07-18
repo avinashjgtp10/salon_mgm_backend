@@ -21,6 +21,7 @@ import {
   UpdateConsultationFormBody,
   UpdateServiceBody,
 } from "./services.types";
+import { emitSalonEvent } from "../utils/realtime.util";
 
 export const servicesService = {
   async list(query: ListServicesQuery, salonId: string): Promise<ServiceListResponse> {
@@ -40,6 +41,7 @@ export const servicesService = {
       await servicesRepository.replaceStaff(created.id, body.staff_ids);
     }
     logger.info("servicesService.create success", { serviceId: created.id });
+    emitSalonEvent("services:created", salonId, created.id, "created", created);
     return created;
   },
 
@@ -68,6 +70,7 @@ export const servicesService = {
       await servicesRepository.replaceStaff(serviceId, staffIds);
     }
     logger.info("servicesService.update success", { serviceId });
+    emitSalonEvent("services:updated", salonId, updated.id, "updated", updated);
     return updated;
   },
 
@@ -75,6 +78,7 @@ export const servicesService = {
     const existing = await servicesRepository.findById(serviceId, salonId);
     if (!existing) throw new AppError(404, "Service not found", "NOT_FOUND");
     await servicesRepository.delete(serviceId, salonId);
+    emitSalonEvent("services:deleted", salonId, serviceId, "deleted", existing);
   },
 
   async listConsultationForms(serviceId: string, salonId: string) {

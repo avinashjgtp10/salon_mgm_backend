@@ -1,4 +1,5 @@
 import pool from "../../config/database";
+import logger from "../../config/logger";
 import {
     Appointment,
     CreateAppointmentBody,
@@ -44,6 +45,14 @@ export const appointmentsRepository = {
                 st.email                                 AS staff_email,
                 s.business_name                          AS salon_name,
                 COALESCE(s.email, u.email)               AS salon_email,
+                CASE
+                  WHEN EXISTS (SELECT 1 FROM payments p WHERE p.appointment_id = a.id)
+                   AND (SELECT due_amount FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) = 0
+                  THEN 'paid'::text
+                  WHEN EXISTS (SELECT 1 FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial'))
+                  THEN 'partial'::text
+                  ELSE 'unpaid'::text
+                END AS payment_status,
                 COALESCE((SELECT SUM(paid_amount) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS paid_amount,
                 (SELECT payment_method FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) AS payment_method,
                 COALESCE((SELECT SUM(reward_points_value) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS reward_points_value,
@@ -106,62 +115,109 @@ export const appointmentsRepository = {
         }
 
         const whereClause = conditions.join(" AND ");
-
-        const countResult = await pool.query(
-            `SELECT COUNT(*) FROM appointments a WHERE ${whereClause}`,
-            values
-        );
-        const totalRecords = parseInt(countResult.rows[0].count, 10);
-        const totalPages = Math.max(1, Math.ceil(totalRecords / limit));
-
-        const { rows } = await pool.query(
-            `WITH pay_agg AS (
+        const countSql = `SELECT COUNT(*) FROM appointments a WHERE ${whereClause}`;
+        const dataSql = `WITH salon_appointments AS (
+               SELECT a.*,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY a.salon_id
+                   ORDER BY a.created_at, a.id
+                 ) AS invoice_number
+               FROM appointments a
+               WHERE a.salon_id = $1
+             ),
+             paged_appointments AS (
+               SELECT a.*
+               FROM salon_appointments a
+               WHERE ${whereClause}
+               ORDER BY a.scheduled_at DESC
+               LIMIT $${idx} OFFSET $${idx + 1}
+             ),
+             payment_rows AS (
+               SELECT p.*,
+                 MAX(p.created_at) OVER (PARTITION BY p.appointment_id) AS latest_created_at
+               FROM payments p
+               JOIN paged_appointments page ON page.id = p.appointment_id
+             ),
+             pay_agg AS (
                SELECT
-                 appointment_id,
-                 SUM(paid_amount) FILTER (WHERE status IN ('completed','partial'))  AS total_paid,
-                 MAX(due_amount)  FILTER (WHERE created_at = (
-                   SELECT MAX(created_at) FROM payments p2 WHERE p2.appointment_id = payments.appointment_id
-                 ))                                                                  AS latest_due,
-                 MAX(payment_method) FILTER (WHERE created_at = (
-                   SELECT MAX(created_at) FROM payments p2 WHERE p2.appointment_id = payments.appointment_id
-                 ))                                                                  AS latest_method,
-                 COUNT(*) FILTER (WHERE status IN ('completed','partial'))           AS pay_count,
-                 SUM(reward_points_value) FILTER (WHERE status IN ('completed','partial')) AS total_reward_points_value,
-                 SUM(membership_wallet_used) FILTER (WHERE status IN ('completed','partial')) AS total_membership_wallet_used,
-                 SUM(ewallet_used) FILTER (WHERE status IN ('completed','partial')) AS total_ewallet_used,
-                 SUM(referral_credit_used) FILTER (WHERE status IN ('completed','partial')) AS total_referral_credit_used
-               FROM payments
-               GROUP BY appointment_id
+                 p.appointment_id,
+                 SUM(p.paid_amount) FILTER (WHERE p.status IN ('completed','partial')) AS total_paid,
+                 MAX(p.due_amount) FILTER (WHERE p.created_at = p.latest_created_at) AS latest_due,
+                 MAX(p.payment_method) FILTER (WHERE p.created_at = p.latest_created_at) AS latest_method,
+                 COUNT(*) FILTER (WHERE p.status IN ('completed','partial')) AS pay_count,
+                 SUM(p.reward_points_value) FILTER (WHERE p.status IN ('completed','partial')) AS total_reward_points_value,
+                 SUM(p.membership_wallet_used) FILTER (WHERE p.status IN ('completed','partial')) AS total_membership_wallet_used,
+                 SUM(p.ewallet_used) FILTER (WHERE p.status IN ('completed','partial')) AS total_ewallet_used,
+                 SUM(p.referral_credit_used) FILTER (WHERE p.status IN ('completed','partial')) AS total_referral_credit_used,
+                 (ARRAY_AGG(p.split_details ORDER BY p.created_at DESC))[1] AS latest_split_details,
+                 (ARRAY_AGG(p.tax_breakdown ORDER BY p.created_at DESC)
+                   FILTER (WHERE p.tax_breakdown IS NOT NULL))[1] AS latest_tax_breakdown
+               FROM payment_rows p
+               GROUP BY p.appointment_id
              )
              SELECT a.*,
-               (SELECT COUNT(*) FROM appointments a2
-                WHERE a2.salon_id = a.salon_id
-                  AND (a2.created_at < a.created_at
-                       OR (a2.created_at = a.created_at AND a2.id <= a.id))
-               ) AS invoice_number,
                c.full_name    AS client_name,
                c.phone_number AS client_phone,
                c.email        AS client_email,
                TRIM(CONCAT(st.first_name, ' ', COALESCE(st.last_name, ''))) AS staff_name,
-               COALESCE(pa.total_paid, 0)    AS paid_amount,
-               pa.latest_method              AS payment_method,
+               CASE
+                 WHEN pa.pay_count > 0 AND COALESCE(pa.latest_due, 1) = 0 THEN 'paid'::text
+                 WHEN pa.pay_count > 0                                      THEN 'partial'::text
+                 ELSE 'unpaid'::text
+               END AS payment_status,
+               COALESCE(pa.total_paid, 0) AS paid_amount,
+               pa.latest_method           AS payment_method,
                COALESCE(pa.total_reward_points_value, 0) AS reward_points_value,
                COALESCE(pa.total_membership_wallet_used, 0) AS membership_wallet_used,
                COALESCE(pa.total_ewallet_used, 0) AS ewallet_used,
                COALESCE(pa.total_referral_credit_used, 0) AS referral_credit_used,
-               (SELECT split_details FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) AS split_details,
-               (SELECT tax_breakdown FROM payments p WHERE p.appointment_id = a.id AND p.tax_breakdown IS NOT NULL ORDER BY p.created_at DESC LIMIT 1) AS tax_breakdown
-             FROM appointments a
-             LEFT JOIN clients c   ON a.client_id  = c.id
-             LEFT JOIN staff   st  ON a.staff_id   = st.id
-             LEFT JOIN pay_agg pa  ON pa.appointment_id = a.id
-             WHERE ${whereClause}
-             ORDER BY a.scheduled_at DESC
-             LIMIT $${idx} OFFSET $${idx + 1}`,
-            [...values, limit, offset]
-        );
+               pa.latest_split_details AS split_details,
+               pa.latest_tax_breakdown AS tax_breakdown
+             FROM paged_appointments a
+             LEFT JOIN clients c ON a.client_id = c.id
+             LEFT JOIN staff st ON a.staff_id = st.id
+             LEFT JOIN pay_agg pa ON pa.appointment_id = a.id
+             ORDER BY a.scheduled_at DESC`;
 
-        return { data: rows, totalRecords, totalPages, currentPage: page };
+        logger.info("appointmentsRepository.listBySalonId SQL", {
+            salonId,
+            filters,
+            page,
+            limit,
+            offset,
+            countSql,
+            dataSql,
+            countParams: values,
+            dataParams: [...values, limit, offset],
+        });
+
+        const databaseStartedAt = performance.now();
+        const countStartedAt = performance.now();
+        const countPromise = pool.query(countSql, values).then((result) => {
+            logger.info("appointmentsRepository.listBySalonId count timing", {
+                durationMs: Number((performance.now() - countStartedAt).toFixed(2)),
+                rowCount: result.rowCount,
+            });
+            return result;
+        });
+        const dataStartedAt = performance.now();
+        const dataPromise = pool.query(dataSql, [...values, limit, offset]).then((result) => {
+            logger.info("appointmentsRepository.listBySalonId data timing", {
+                durationMs: Number((performance.now() - dataStartedAt).toFixed(2)),
+                rowCount: result.rows.length,
+            });
+            return result;
+        });
+        const [countResult, dataResult] = await Promise.all([countPromise, dataPromise]);
+        const totalRecords = parseInt(countResult.rows[0].count, 10);
+        const totalPages = Math.max(1, Math.ceil(totalRecords / limit));
+        logger.info("appointmentsRepository.listBySalonId database timing", {
+            durationMs: Number((performance.now() - databaseStartedAt).toFixed(2)),
+            totalRecords,
+            returnedRecords: dataResult.rows.length,
+        });
+
+        return { data: dataResult.rows, totalRecords, totalPages, currentPage: page };
     },
 
     async listByClientId(clientId: string): Promise<Appointment[]> {

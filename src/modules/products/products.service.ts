@@ -14,6 +14,7 @@ import {
     ProductPhoto, ReorderPhotosBody,
     Brand, CreateBrandBody, UpdateBrandBody,
 } from "./products.types";
+import { emitSalonEvent } from "../utils/realtime.util";
 
 // ─── Products Service ─────────────────────────────────────────────────────────
 
@@ -62,7 +63,9 @@ export const productsService = {
             photos = await productPhotosRepository.insertMany(created.id, files, 0);
         }
         logger.info("productsService.create success", { productId: created.id });
-        return { ...created, photos };
+        const result = { ...created, photos };
+        emitSalonEvent("products:created", salonId, created.id, "created", result);
+        return result;
     },
 
     async update(params: {
@@ -78,6 +81,7 @@ export const productsService = {
         if (!existing) throw new AppError(404, "Product not found", "NOT_FOUND");
         const updated = await productsRepository.update(productId, patch, salonId);
         logger.info("productsService.update success", { productId: updated.id });
+        emitSalonEvent("products:updated", salonId, updated.id, "updated", updated);
         return updated;
     },
 
@@ -93,6 +97,7 @@ export const productsService = {
         if (!existing) throw new AppError(404, "Product not found", "NOT_FOUND");
         await productsRepository.delete(productId, salonId);
         logger.info("productsService.delete success", { productId });
+        emitSalonEvent("products:deleted", salonId, productId, "deleted", existing);
     },
 
     async uploadPhotos(params: {

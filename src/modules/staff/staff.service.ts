@@ -17,6 +17,7 @@ import { staffInvitationRepository } from "./staffInvitation.repository";
 import { salonsRepository } from "../salons/salons.repository";
 import { authService } from "../auth/auth.service";
 import { commissionCalculationService } from "../commission/commissionCalculation.service";
+import { emitSalonEvent } from "../utils/realtime.util";
 import {
     Staff, StaffAddress, StaffEmergencyContact, StaffLeave, StaffSchedule,
     StaffWageSettings, StaffCommissionSettings, StaffPayRunSettings,
@@ -126,6 +127,7 @@ export const staffService = {
                 });
             }
 
+            emitSalonEvent("staff:created", salonId, staff.id, "created", staff);
             return { staffId: staff.id };
         } catch (error) {
             console.error("[DEBUG] staffService.create - WORKFLOW CRASHED:", error);
@@ -210,6 +212,7 @@ export const staffService = {
         }
 
         logger.info("staffService.update success", { staffId: updated.id });
+        emitSalonEvent("staff:updated", salonId, updated.id, "updated", updated);
         return updated;
     },
 
@@ -223,6 +226,7 @@ export const staffService = {
         if (!existing) throw new AppError(404, "Staff not found", "NOT_FOUND");
 
         await staffRepository.activate(id, salonId);
+        emitSalonEvent("staff:updated", salonId, id, "updated", { ...existing, is_active: true });
         logger.info("staffService.activate success", { staffId: id });
     },
 
@@ -236,6 +240,7 @@ export const staffService = {
         if (!existing) throw new AppError(404, "Staff not found", "NOT_FOUND");
 
         await staffRepository.deactivate(id, salonId);
+        emitSalonEvent("staff:updated", salonId, id, "updated", { ...existing, is_active: false });
         logger.info("staffService.deactivate success", { staffId: id });
     },
 
@@ -251,6 +256,7 @@ export const staffService = {
         const deleted = await staffRepository.delete(id, salonId);
         if (!deleted) throw new AppError(500, "Failed to delete staff member", "DELETE_FAILED");
         logger.info("staffService.delete success", { staffId: id });
+        emitSalonEvent("staff:deleted", salonId, id, "deleted", existing);
     },
 
     async importStaff(params: {
@@ -673,17 +679,21 @@ export const staffSchedulesService = {
     },
     async upsert(staffId: string, salonId: string, body: UpsertStaffSchedulesBody): Promise<StaffSchedule[]> {
         await _ensureStaff(staffId, salonId);
-        return staffSchedulesRepository.upsertBulk(staffId, body);
+        const schedules = await staffSchedulesRepository.upsertBulk(staffId, body);
+        emitSalonEvent("attendance:updated", salonId, staffId, "updated", schedules);
+        return schedules;
     },
     async deleteByDate(staffId: string, salonId: string, date: string): Promise<void> {
         await _ensureStaff(staffId, salonId);
         await staffSchedulesRepository.deleteByDate(staffId, date);
+        emitSalonEvent("attendance:updated", salonId, staffId, "updated", { staffId, date });
     },
     async delete(staffId: string, salonId: string, dateStr: string): Promise<void> {
         await _ensureStaff(staffId, salonId);
         const dateObj = new Date(dateStr + "T12:00:00");
         const dayOfWeek = dateObj.getDay();
         await staffSchedulesRepository.deleteByDay(staffId, dayOfWeek);
+        emitSalonEvent("attendance:updated", salonId, staffId, "updated", { staffId, date: dateStr });
     },
 };
 
@@ -696,18 +706,22 @@ export const staffLeavesService = {
     },
     async create(staffId: string, salonId: string, data: CreateStaffLeaveBody): Promise<StaffLeave> {
         await _ensureStaff(staffId, salonId);
-        return staffLeavesRepository.create(staffId, data);
+        const leave = await staffLeavesRepository.create(staffId, data);
+        emitSalonEvent("attendance:updated", salonId, leave.id, "updated", leave);
+        return leave;
     },
     async update(staffId: string, salonId: string, id: string, patch: UpdateStaffLeaveBody): Promise<StaffLeave> {
         await _ensureStaff(staffId, salonId);
         const updated = await staffLeavesRepository.update(id, staffId, patch);
         if (!updated) throw new AppError(404, "Leave not found", "NOT_FOUND");
+        emitSalonEvent("attendance:updated", salonId, updated.id, "updated", updated);
         return updated;
     },
     async delete(staffId: string, salonId: string, id: string): Promise<void> {
         await _ensureStaff(staffId, salonId);
         const deleted = await staffLeavesRepository.delete(id, staffId);
         if (!deleted) throw new AppError(404, "Leave not found", "NOT_FOUND");
+        emitSalonEvent("attendance:updated", salonId, id, "updated", { id, staffId });
     },
 };
 
