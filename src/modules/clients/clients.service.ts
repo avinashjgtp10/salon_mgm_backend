@@ -54,6 +54,7 @@ const normalizeCreateBody = (b: CreateClientBody): CreateClientBody => ({
     client_source: b.client_source ? safeTrim(b.client_source) : b.client_source ?? null,
     gender: b.gender ? safeTrim(b.gender) : b.gender ?? null,
     pronouns: b.pronouns ? safeTrim(b.pronouns) : b.pronouns ?? null,
+    address: b.address ? safeTrim(b.address) : b.address ?? null,
 });
 
 export const clientsService = {
@@ -72,6 +73,17 @@ export const clientsService = {
             );
             if (dup) {
                 throw new AppError(409, `This phone number is already registered to ${dup.full_name}`, "DUPLICATE_PHONE");
+            }
+        }
+
+        // Same for email — checked proactively here (rather than only relying on
+        // the DB's ux_clients_salon_email unique index) so the caller gets a
+        // specific, field-attributable error instead of a raw 23505 constraint
+        // violation caught generically by the error middleware.
+        if (normalized.email) {
+            const dupEmail = await clientsRepository.findActiveByEmail(normalized.email, salonId);
+            if (dupEmail) {
+                throw new AppError(409, "This email address is already registered. Please use a different email address.", "DUPLICATE_EMAIL");
             }
         }
 
@@ -141,7 +153,10 @@ export const clientsService = {
         if (!client) throw new AppError(404, "Client not found", "NOT_FOUND");
 
         const referralStats = await clientsRepository.getReferralStats(clientId);
-        const result: ClientWithRelations = { ...client, ...referralStats } as any;
+        const referredBy = client.referred_by_client_id
+            ? await clientsRepository.getReferrerInfo(client.referred_by_client_id)
+            : null;
+        const result: ClientWithRelations = { ...client, ...referralStats, referred_by: referredBy } as any;
         if (includeSet.has("addresses") || includeSet.has("emergency_contacts")) {
             const rel = await clientsRepository.getRelations(clientId);
             if (includeSet.has("addresses")) result.addresses = rel.addresses;
@@ -162,6 +177,14 @@ export const clientsService = {
             );
             if (dup) {
                 throw new AppError(409, `This phone number is already registered to ${dup.full_name}`, "DUPLICATE_PHONE");
+            }
+        }
+
+        // Same for email — only re-check when it's actually changing.
+        if (patch.email && patch.email.trim().toLowerCase() !== (exists.email || "").trim().toLowerCase()) {
+            const dupEmail = await clientsRepository.findActiveByEmail(patch.email, salonId, clientId);
+            if (dupEmail) {
+                throw new AppError(409, "This email address is already registered. Please use a different email address.", "DUPLICATE_EMAIL");
             }
         }
 

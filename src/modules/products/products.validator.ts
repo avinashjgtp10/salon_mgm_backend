@@ -7,21 +7,28 @@ import { MeasureUnit, TaxType } from "./products.types";
 const isNonEmptyString = (v: unknown): v is string =>
     typeof v === "string" && v.trim().length > 0;
 
-const isOptionalString = (v: unknown) => v === undefined || typeof v === "string";
+// `null` is a legitimate value here, not just `undefined` — the edit form
+// sends it deliberately to CLEAR a field (e.g. team_commission_rate when the
+// toggle is switched off, or brand_id when "no brand" is selected), and
+// products.repository.ts's update() sets whatever key is present verbatim
+// (SET col = $1 with value null), which is exactly the intended "clear this
+// column" behavior. Rejecting null here made every clear-a-field action fail
+// as a validation error instead of doing what the UI promised.
+const isOptionalString = (v: unknown) => v === undefined || v === null || typeof v === "string";
 
 const isOptionalNumber = (v: unknown) =>
-    v === undefined || (typeof v === "number" && Number.isFinite(v));
+    v === undefined || v === null || (typeof v === "number" && Number.isFinite(v));
 
 const isOptionalNonNeg = (v: unknown) =>
-    v === undefined || (typeof v === "number" && Number.isFinite(v) && v >= 0);
+    v === undefined || v === null || (typeof v === "number" && Number.isFinite(v) && v >= 0);
 
-const isOptionalBoolean = (v: unknown) => v === undefined || typeof v === "boolean";
+const isOptionalBoolean = (v: unknown) => v === undefined || v === null || typeof v === "boolean";
 
 const UUID_RE =
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const isUUID = (v: unknown): v is string => typeof v === "string" && UUID_RE.test(v);
-const isOptionalUUID = (v: unknown) => v === undefined || isUUID(v);
+const isOptionalUUID = (v: unknown) => v === undefined || v === null || isUUID(v);
 
 const VALID_MEASURE_UNITS: MeasureUnit[] = ["ml", "l", "g", "kg", "pcs", "oz", "lb"];
 const VALID_TAX_TYPES: TaxType[] = ["no_tax", "gst_5", "gst_12", "gst_18", "gst_28", "custom"];
