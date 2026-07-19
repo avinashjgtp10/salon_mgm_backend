@@ -11,6 +11,7 @@ import {
   AutomationTriggerPayload,
   UpdateSalonAutomationSettingBody,
   ListAutomationLogsFilters,
+  MARKETING_EVENTS,
 } from './whatsapp-automation.types'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -86,38 +87,67 @@ export const whatsappAutomationService = {
    * 7. Send via Meta API with retry
    */
   async trigger(payload: AutomationTriggerPayload): Promise<void> {
-    const { salonId, eventType, clientId, phone, countryCode, variables, referenceId, referenceType } = payload
+    const { salonId, eventType, clientId, phone, countryCode, variables, referenceId, referenceType, dedupeByReference } = payload
 
     try {
+      logger.info(`[WA-TRACE] trigger START`, { eventType, salonId, clientId: clientId ?? null, referenceId: referenceId ?? null, phone })
+
       // 1. Validate phone
       if (!phone || phone.trim().length < 5) {
-        logger.info(`[WA-AUTO] Skipping ${eventType} — no valid phone`)
+        logger.info(`[WA-TRACE] SKIP ${eventType} — no valid phone`)
         return
+      }
+
+      // 1b. Atomic once-per-(event,reference) guard for event-driven sends —
+      // ON CONFLICT DO NOTHING closes the check-then-send race that a plain
+      // "does a log exist?" read leaves open. Won-the-race → proceed; lost → a
+      // duplicate is already in flight/sent, skip silently.
+      if (dedupeByReference && referenceId) {
+        const won = await whatsappAutomationRepository.guardInsertIfNotExists(`trigger:${eventType}:${referenceId}`)
+        if (!won) {
+          logger.info(`[WA-TRACE] SKIP ${eventType} — duplicate for reference ${referenceId}`)
+          return
+        }
       }
 
       // 2. Check salon has this automation enabled
       const salonEnabled = await whatsappAutomationRepository.isSalonAutomationEnabled(salonId, eventType)
       if (!salonEnabled) {
-        logger.info(`[WA-AUTO] Salon ${salonId} has disabled ${eventType} — skipping`)
+        logger.info(`[WA-TRACE] SKIP ${eventType} — salon ${salonId} disabled this automation`)
         return
+      }
+
+      // 2b. Respect the client's WhatsApp opt-out. The scheduler jobs filter on
+      // these flags in SQL, but the event-driven call sites (confirmations,
+      // purchases, thank-you, etc.) route through here without checking — so a
+      // client who opted out of WhatsApp would still be messaged. Only skip on
+      // an explicit opt-out (unknown/walk-in client falls through and sends).
+      if (clientId) {
+        const optIn = await whatsappAutomationRepository.getClientOptIn(clientId)
+        const isMarketing = MARKETING_EVENTS.includes(eventType)
+        if (optIn && ((isMarketing && !optIn.marketing) || (!isMarketing && !optIn.notifications))) {
+          logger.info(`[WA-TRACE] SKIP ${eventType} — client ${clientId} opted out of ${isMarketing ? 'marketing' : 'notifications'}`)
+          return
+        }
       }
 
       // 3. Fetch template — salon's own approved copy for purchase events, else the global row
       const template = await whatsappAutomationRepository.findTemplate(eventType, salonId)
       if (!template) {
-        logger.info(`[WA-AUTO] No active template for ${eventType} — skipping`)
+        logger.info(`[WA-TRACE] SKIP ${eventType} — no active/APPROVED template for this salon (submit & get it approved first)`)
         return
       }
 
       // 4. Get the salon's own WA credentials — billed to the salon, not the platform
       const salonConfig = await configRepository.findBySalonId(salonId)
       if (!salonConfig?.phone_number_id || !salonConfig?.access_token) {
-        logger.info(`[WA-AUTO] Salon ${salonId} has no WhatsApp configured — skipping ${eventType}`)
+        logger.info(`[WA-TRACE] SKIP ${eventType} — salon ${salonId} has no WhatsApp config (phone_number_id/access_token missing)`)
         return
       }
 
       // 5. Format phone
       const formattedPhone = formatPhone(phone, countryCode)
+      logger.info(`[WA-TRACE] SENDING ${eventType} → ${formattedPhone} using template "${template.template_name}" (${template.language})`)
 
       // 6. Create log
       const log = await whatsappAutomationRepository.createLog({
@@ -186,18 +216,19 @@ export const whatsappAutomationService = {
         const wamid = result?.messages?.[0]?.id ?? null
         if (wamid) {
           await whatsappAutomationRepository.markSent(logId, wamid)
-          logger.info(`[WA-AUTO] ✅ Sent ${templateName} to ${to} (wamid: ${wamid})`)
+          logger.info(`[WA-TRACE] ✅ SENT ${templateName} to ${to} (wamid: ${wamid})`)
         } else {
-          logger.warn(`[WA-AUTO] ⚠️ Sent ${templateName} to ${to} but no wamid returned — marking failed`)
+          logger.warn(`[WA-TRACE] ⚠️ SENT ${templateName} to ${to} but Meta returned no wamid — marking failed`)
           await whatsappAutomationRepository.markFailed(logId, 'No wamid in response', result ?? {}, null)
         }
         return
 
       } catch (err: any) {
         const errorMsg     = err?.response?.data?.error?.message ?? err?.message ?? 'Unknown error'
+        const errorCode    = err?.response?.data?.error?.code ?? '—'
         const metaResponse = err?.response?.data ?? {}
 
-        logger.warn(`[WA-AUTO] Attempt ${attempt}/${MAX_ATTEMPTS} failed for log ${logId}: ${errorMsg}`)
+        logger.warn(`[WA-TRACE] ❌ FAILED ${templateName} to ${to} — attempt ${attempt}/${MAX_ATTEMPTS} — Meta [${errorCode}] ${errorMsg}`)
 
         const nextRetryAt = attempt < MAX_ATTEMPTS ? getNextRetryAt(attempt) : null
         await whatsappAutomationRepository.markFailed(logId, errorMsg, metaResponse, nextRetryAt)

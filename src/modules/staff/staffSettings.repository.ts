@@ -292,20 +292,39 @@ export const commissionSlabsRepository = {
 // ─── Commission History ───────────────────────────────────────────────────────
 
 export const commissionHistoryRepository = {
-    async listByStaff(staffId: string, month?: string) {
-        const dateFilter = month
-            ? `AND date_trunc('month', ce.earned_at) = date_trunc('month', ($2 || '-01')::date)`
-            : '';
-        const params: any[] = [staffId];
-        if (month) params.push(month);
+    async listByStaff(staffId: string, filters: {
+        month?: string; start_date?: string; end_date?: string; status?: string; page?: number; limit?: number;
+    } = {}) {
+        const conditions: string[] = [`ce.staff_id = $1`];
+        const values: any[] = [staffId];
+        let idx = 2;
+
+        if (filters.month) {
+            conditions.push(`date_trunc('month', ce.earned_at) = date_trunc('month', ($${idx++} || '-01')::date)`);
+            values.push(filters.month);
+        }
+        if (filters.start_date) { conditions.push(`ce.earned_at >= $${idx++}::date`); values.push(filters.start_date); }
+        if (filters.end_date) { conditions.push(`ce.earned_at < ($${idx++}::date + interval '1 day')`); values.push(filters.end_date); }
+        if (filters.status) { conditions.push(`ce.status = $${idx++}`); values.push(filters.status); }
+
+        const page = Math.max(1, Number(filters.page ?? 1));
+        const limit = filters.limit ? Math.max(1, Number(filters.limit)) : undefined;
+        const offset = limit ? (page - 1) * limit : 0;
+        const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+        if (limit) values.push(limit, offset);
+
         const { rows } = await pool.query(
-            `SELECT ce.*
+            `SELECT ce.*, COUNT(*) OVER() AS total_count
              FROM commission_earned ce
-             WHERE ce.staff_id = $1 ${dateFilter}
-             ORDER BY ce.earned_at DESC`,
-            params
+             WHERE ${conditions.join(" AND ")}
+             ORDER BY ce.earned_at DESC
+             ${limitClause}`,
+            values
         );
-        return rows;
+        const total = rows.length ? Number(rows[0].total_count) : 0;
+        const items = rows.map(({ total_count, ...r }) => r);
+        const effectiveLimit = limit ?? Math.max(total, 1);
+        return { items, pagination: { total, page, limit: effectiveLimit, total_pages: Math.max(1, Math.ceil(total / effectiveLimit)) } };
     },
 
     async exportBySalon(salonId: string, month?: string) {
@@ -407,14 +426,15 @@ export const staffSchedulesRepository = {
             for (const item of body.items) {
                 const conflictColumns = item.date ? '(staff_id, date)' : '(staff_id, day_of_week) WHERE (date IS NULL)';
                 const insertColumns = item.date
-                    ? `staff_id, day_of_week, is_available, start_time, end_time, notes, date`
-                    : `staff_id, day_of_week, is_available, start_time, end_time, notes`;
-                const valuesPlaceholders = item.date ? `$1,$2,$3,$4,$5,$6,$7` : `$1,$2,$3,$4,$5,$6`;
+                    ? `staff_id, day_of_week, is_available, start_time, end_time, notes, breaks, date`
+                    : `staff_id, day_of_week, is_available, start_time, end_time, notes, breaks`;
+                const valuesPlaceholders = item.date ? `$1,$2,$3,$4,$5,$6,$7,$8` : `$1,$2,$3,$4,$5,$6,$7`;
                 const updateSet = `
                     is_available = EXCLUDED.is_available,
                     start_time   = EXCLUDED.start_time,
                     end_time     = EXCLUDED.end_time,
                     notes        = EXCLUDED.notes,
+                    breaks       = EXCLUDED.breaks,
                     day_of_week  = EXCLUDED.day_of_week,
                     ${item.date ? 'date = EXCLUDED.date,' : ''}
                     updated_at   = NOW()`;
@@ -422,15 +442,16 @@ export const staffSchedulesRepository = {
                     VALUES (${valuesPlaceholders})
                     ON CONFLICT ${conflictColumns} DO UPDATE SET ${updateSet}
                     RETURNING *`;
+                const breaksJson = JSON.stringify(item.is_available ? (item.breaks ?? []) : []);
                 const params = item.date
                     ? [staffId, item.day_of_week, item.is_available,
                         item.is_available ? (item.start_time ?? null) : null,
                         item.is_available ? (item.end_time ?? null) : null,
-                        item.notes ?? null, item.date ?? null]
+                        item.notes ?? null, breaksJson, item.date ?? null]
                     : [staffId, item.day_of_week, item.is_available,
                         item.is_available ? (item.start_time ?? null) : null,
                         item.is_available ? (item.end_time ?? null) : null,
-                        item.notes ?? null];
+                        item.notes ?? null, breaksJson];
                 const { rows } = await client.query(query, params);
                 results.push(rows[0]);
             }

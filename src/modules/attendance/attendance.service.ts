@@ -290,8 +290,10 @@ export const attendanceService = {
 
     // ── Single staff, date range (Staff History page) ───────────────────────────
 
-    async getForStaff(staffId: string, startDate?: string, endDate?: string, limit?: number): Promise<Attendance[]> {
-        return attendanceRepository.findByStaffAndDateRange(staffId, startDate, endDate, limit);
+    async getForStaff(staffId: string, filters: {
+        startDate?: string; endDate?: string; status?: string; page?: number; limit?: number;
+    } = {}) {
+        return attendanceRepository.findByStaffAndDateRange(staffId, filters);
     },
 
     // ── Monthly grid ─────────────────────────────────────────────────────────

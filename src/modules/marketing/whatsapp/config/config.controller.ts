@@ -106,7 +106,16 @@ export const configController = {
   // ── Verify all credentials (final onboarding step) ────────────────────────
   async verifyAll(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { phone_number_id, waba_id, app_id, app_secret, access_token, webhook_verify_token } = req.body
+      // Trim every credential up front — the same values are exact-matched
+      // against the DB and sent to Meta; a stray space makes onboarding
+      // validation pass while the saved value silently differs (see saveConfig).
+      const t = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
+      const phone_number_id      = t(req.body.phone_number_id)
+      const waba_id              = t(req.body.waba_id)
+      const app_id               = t(req.body.app_id)
+      const app_secret           = t(req.body.app_secret)
+      const access_token         = t(req.body.access_token)
+      const webhook_verify_token = t(req.body.webhook_verify_token)
       const salonId = req.user?.salonId
       if (!salonId) return res.status(400).json({ valid: false, error: 'salonId missing from token' })
 

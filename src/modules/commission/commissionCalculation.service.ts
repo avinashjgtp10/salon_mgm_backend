@@ -633,8 +633,10 @@ export const commissionCalculationService = {
         return commissionEarnedRepository.markPaid(salonId, staffId);
     },
 
-    async getStaffHistory(staffId: string, month?: string) {
-        return commissionHistoryRepository.listByStaff(staffId, month);
+    async getStaffHistory(staffId: string, filters: {
+        month?: string; start_date?: string; end_date?: string; status?: string; page?: number; limit?: number;
+    } = {}) {
+        return commissionHistoryRepository.listByStaff(staffId, filters);
     },
 
     async exportBySalon(salonId: string, month?: string) {

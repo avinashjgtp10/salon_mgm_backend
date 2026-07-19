@@ -56,7 +56,7 @@ export const staffRepository = {
 
         const [{ rows: data }, { rows: countRows }] = await Promise.all([
             pool.query(
-                `SELECT s.*, bt_agg.blocked_times
+                `SELECT s.*, bt_agg.blocked_times, sch_agg.schedule
                  FROM (
                    SELECT * FROM staff
                    WHERE ${where}
@@ -78,7 +78,26 @@ export const staffRepository = {
                      '[]'::json
                    ) AS blocked_times
                    FROM blocked_times bt WHERE bt.staff_id = s.id
-                 ) bt_agg ON true`,
+                 ) bt_agg ON true
+                 LEFT JOIN LATERAL (
+                   SELECT COALESCE(
+                     json_agg(
+                       json_build_object(
+                         'day_of_week',  ss.day_of_week,
+                         -- to_char formats the DATE column directly, sidestepping the
+                         -- UTC-shift bug where node-postgres/JSON serialization of a raw
+                         -- Date object could land the date on the wrong calendar day.
+                         'date',         to_char(ss.date, 'YYYY-MM-DD'),
+                         'start_time',   to_char(ss.start_time, 'HH24:MI'),
+                         'end_time',     to_char(ss.end_time,   'HH24:MI'),
+                         'is_available', ss.is_available,
+                         'breaks',       ss.breaks
+                       ) ORDER BY ss.date NULLS LAST, ss.day_of_week
+                     ) FILTER (WHERE ss.id IS NOT NULL),
+                     '[]'::json
+                   ) AS schedule
+                   FROM staff_schedules ss WHERE ss.staff_id = s.id
+                 ) sch_agg ON true`,
                 [...values, limit, offset]
             ),
             pool.query(`SELECT COUNT(*)::int AS total FROM staff WHERE ${where}`, values),

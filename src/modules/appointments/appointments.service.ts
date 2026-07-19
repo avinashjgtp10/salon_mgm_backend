@@ -131,11 +131,13 @@ export const appointmentsService = {
                             },
                             referenceId:   full.id,
                             referenceType: "appointment",
+                            dedupeByReference: true,
                         }).catch(() => {});
                     }
                 }
-            } catch (_) {
-                // Never block core flow
+            } catch (err: any) {
+                // Never block core flow — but log so a real bug here isn't invisible.
+                logger.error("[WA-AUTO] appointment notification trigger failed:", err?.message ?? err);
             }
         }
 
@@ -288,11 +290,13 @@ export const appointmentsService = {
                             },
                             referenceId:   full.id,
                             referenceType: "appointment",
+                            dedupeByReference: true,
                         }).catch(() => {});
                     }
                 }
-            } catch (_) {
-                // Never block core flow
+            } catch (err: any) {
+                // Never block core flow — but log so a real bug here isn't invisible.
+                logger.error("[WA-AUTO] appointment notification trigger failed:", err?.message ?? err);
             }
         }
 
@@ -345,6 +349,7 @@ export const appointmentsService = {
                 },
                 referenceId:   existing.id,
                 referenceType: "appointment",
+                dedupeByReference: true,
             }).catch(() => {});
         }
 
@@ -509,6 +514,7 @@ export const appointmentsService = {
                                 },
                                 referenceId:   preExistingSale.id,
                                 referenceType: "invoice",
+                                dedupeByReference: true,
                             }).catch(() => {});
                         }
 
@@ -686,6 +692,7 @@ export const appointmentsService = {
                 },
                 referenceId:   sale.id,
                 referenceType: 'invoice',
+                dedupeByReference: true,
             }).catch(() => {});
 
             // PDF receipt as a WhatsApp document attachment — best-effort, only

@@ -6,7 +6,23 @@ import { Request, Response, NextFunction } from 'express'
 import { whatsappAutomationService } from './whatsapp-automation.service'
 import { sendSuccess } from '../utils/response.util'
 import { AppError } from '../../middleware/error.middleware'
+import { getSalonId } from '../utils/salon.util'
 import { AutomationEventType, AutomationLogStatus, AUTOMATION_EVENT_TYPES } from './whatsapp-automation.types'
+
+// Ownership guard: the :salonId path param is client-supplied, so without this
+// any authenticated user could read another salon's logs (client PII) or toggle
+// its automations by changing the URL. Require the param to match the caller's
+// JWT salon (admins may act on any). Returns the trusted salonId.
+async function resolveOwnedSalonId(req: Request): Promise<string> {
+  const paramSalonId = req.params.salonId as string
+  const role = (req as any).user?.role
+  if (role === 'admin') return paramSalonId
+  const ownSalonId = await getSalonId(req)
+  if (paramSalonId !== ownSalonId) {
+    throw new AppError(403, "You can only access your own salon's automation data", 'FORBIDDEN')
+  }
+  return ownSalonId
+}
 
 export const whatsappAutomationController = {
 
@@ -15,7 +31,7 @@ export const whatsappAutomationController = {
   // GET /api/v1/wa-automation/logs/:salonId
   async getLogs(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const salonId   = req.params.salonId as string
+      const salonId   = await resolveOwnedSalonId(req)
       const eventType = req.query.eventType as string | undefined
       const status    = req.query.status    as string | undefined
       const clientId  = req.query.clientId  as string | undefined
@@ -52,7 +68,7 @@ export const whatsappAutomationController = {
   // GET /api/v1/wa-automation/settings/:salonId
   async getSalonSettings(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const salonId  = req.params.salonId as string
+      const salonId  = await resolveOwnedSalonId(req)
       const settings = await whatsappAutomationService.getSalonSettings(salonId)
       sendSuccess(res, 200, settings, 'Salon automation settings fetched')
     } catch (err) { next(err) }
@@ -62,7 +78,11 @@ export const whatsappAutomationController = {
   // Body: { event_type, is_active }
   async updateSalonSetting(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const salonId = req.params.salonId as string
+      const salonId = await resolveOwnedSalonId(req)
+      // Validate event_type so junk values can't land in wa_salon_automation_settings
+      if (!req.body?.event_type || !AUTOMATION_EVENT_TYPES.includes(req.body.event_type as AutomationEventType)) {
+        return next(new AppError(400, `Invalid event_type: ${req.body?.event_type}`, 'VALIDATION_ERROR'))
+      }
       const updated = await whatsappAutomationService.updateSalonSetting(salonId, req.body)
       sendSuccess(res, 200, updated, 'Salon automation setting updated')
     } catch (err) { next(err) }

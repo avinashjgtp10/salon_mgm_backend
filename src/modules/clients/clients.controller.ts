@@ -4,8 +4,10 @@ import csvParser from "csv-parser";
 import { Readable } from "stream";
 import * as XLSX from "xlsx";
 import { Parser as Json2CsvParser } from "json2csv";
+import PDFDocument from "pdfkit";
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
+import { uploadAvatarToS3 } from "../utils/avatar.upload";
 import { clientsService } from "./clients.service";
 import { clientsRepository } from "./clients.repository";
 import { ClientsListQuery, CreateClientBody, UpdateClientBody, CampaignFilterParams } from "./clients.types";
@@ -95,6 +97,25 @@ export const clientsController = {
             const created = await clientsService.create(body, salonId);
             return sendSuccess(res, 201, created, "Client created successfully");
         } catch (e) { return next(e); }
+    },
+
+    /**
+     * POST /api/v1/clients/upload-avatar
+     * Uploads a profile photo (multer → S3, or local /uploads fallback) and returns
+     * its URL. Stateless — does not persist to a client row, since the client record
+     * may not exist yet (create flow). The caller sends the returned url back as
+     * `avatar_url` in the create/update payload.
+     */
+    async uploadAvatar(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const file = (req as any).file as Express.Multer.File | undefined;
+            if (!file) throw new AppError(400, "No image file provided", "FILE_REQUIRED");
+
+            const key = `client-${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+            const url = await uploadAvatarToS3(file.path, key, file.mimetype);
+
+            return sendSuccess(res, 200, { url }, "Avatar uploaded successfully");
+        } catch (err) { return next(err); }
     },
 
     // GET /api/v1/clients/:clientId
@@ -213,7 +234,7 @@ export const clientsController = {
         try {
             const salonId = getSalonId(req);
             const format = String(req.query.format || "").toLowerCase();
-            if (!["csv", "excel"].includes(format)) throw new AppError(400, "format must be csv or excel", "VALIDATION_ERROR");
+            if (!["csv", "excel", "pdf"].includes(format)) throw new AppError(400, "format must be csv, excel or pdf", "VALIDATION_ERROR");
             const q: ClientsListQuery = {
                 offset: req.query.offset !== undefined ? Number(String(req.query.offset)) : 0,
                 limit: req.query.limit !== undefined ? Math.min(Number(String(req.query.limit)), 2000) : 200,
@@ -249,6 +270,50 @@ export const clientsController = {
                 res.setHeader("Content-Type", "text/csv");
                 res.setHeader("Content-Disposition", `attachment; filename="clients_export.csv"`);
                 return res.status(200).send(csv);
+            }
+            if (format === "pdf") {
+                // Same table layout as products/packages/services PDF exports
+                // (dark header banner, alternating row stripes, auto-pagination)
+                // — a readable subset of columns, not every raw export field,
+                // since a printed table can't usefully fit all 30.
+                res.setHeader("Content-Type", "application/pdf");
+                res.setHeader("Content-Disposition", `attachment; filename="clients_export.pdf"`);
+                const doc = new PDFDocument({ margin: 40, size: "A4", layout: "landscape" });
+                doc.pipe(res);
+                doc.fontSize(18).font("Helvetica-Bold").text("Clients Report", { align: "center" });
+                doc.fontSize(10).font("Helvetica").fillColor("#666").text(`Generated: ${new Date().toLocaleDateString()}`, { align: "center" });
+                doc.moveDown(1);
+                const cols = { name: 40, phone: 190, email: 300, gender: 460, source: 540, sales: 640, created: 710 };
+                let y = doc.y;
+                const drawHeader = () => {
+                    doc.rect(30, y, 760, 22).fill("#101828");
+                    doc.fillColor("#ffffff").fontSize(9).font("Helvetica-Bold");
+                    doc.text("Client Name", cols.name, y + 7, { width: 145 });
+                    doc.text("Phone", cols.phone, y + 7, { width: 105 });
+                    doc.text("Email", cols.email, y + 7, { width: 155 });
+                    doc.text("Gender", cols.gender, y + 7, { width: 75 });
+                    doc.text("Source", cols.source, y + 7, { width: 95 });
+                    doc.text("Sales", cols.sales, y + 7, { width: 65 });
+                    doc.text("Created At", cols.created, y + 7, { width: 80 });
+                    y += 22;
+                };
+                drawHeader();
+                rows.forEach((c: any, i: number) => {
+                    if (y > 530) { doc.addPage({ margin: 40, size: "A4", layout: "landscape" }); y = 40; drawHeader(); }
+                    const bg = i % 2 === 0 ? "#F9FAFB" : "#FFFFFF";
+                    doc.rect(30, y, 760, 22).fill(bg);
+                    doc.fillColor("#101828").fontSize(8).font("Helvetica");
+                    doc.text(String(c.full_name || `${c.first_name ?? ""} ${c.last_name ?? ""}`.trim() || "—").substring(0, 26), cols.name, y + 7, { width: 145 });
+                    doc.text(c.phone_number ? `${c.phone_country_code ?? ""} ${c.phone_number}`.trim() : "—", cols.phone, y + 7, { width: 105 });
+                    doc.text(String(c.email ?? "—").substring(0, 28), cols.email, y + 7, { width: 155 });
+                    doc.text(String(c.gender ?? "—"), cols.gender, y + 7, { width: 75 });
+                    doc.text(String(c.client_source ?? "—"), cols.source, y + 7, { width: 95 });
+                    doc.text(`₹${Number(c.total_sales ?? 0).toFixed(2)}`, cols.sales, y + 7, { width: 65 });
+                    doc.text(c.created_at ? new Date(c.created_at).toLocaleDateString("en-IN") : "—", cols.created, y + 7, { width: 80 });
+                    y += 22;
+                });
+                doc.end();
+                return;
             }
             const ws = XLSX.utils.json_to_sheet(rows);
             const wb = XLSX.utils.book_new();

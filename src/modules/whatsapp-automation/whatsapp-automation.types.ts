@@ -146,6 +146,13 @@ export type AutomationTriggerPayload = {
   variables:      Record<string, string>  // { '1': 'Nishant', '2': 'Style Studio', ... }
   referenceId?:   string | null
   referenceType?: string | null
+  // Event-driven call sites (confirmations, purchases, thank-you, etc.) set
+  // this so trigger() sends at most once per (eventType, referenceId), using an
+  // atomic guard — prevents double messages from a retry, a double-submit, or
+  // two call sites firing the same event for the same record. Recurring
+  // scheduler events (reminders, birthday) leave it off; they do their own
+  // date-keyed guarding and intentionally re-send over time.
+  dedupeByReference?: boolean
 }
 
 // ── API Bodies ────────────────────────────────────────────────────────────────

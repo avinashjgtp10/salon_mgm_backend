@@ -47,6 +47,10 @@ export const salesController = {
                 client_id: req.query.client_id as string,
                 status: req.query.status as string,
                 staff_id: req.query.staff_id as string,
+                start_date: req.query.start_date as string,
+                end_date: req.query.end_date as string,
+                page: req.query.page ? parseInt(req.query.page as string, 10) : undefined,
+                limit: req.query.limit ? parseInt(req.query.limit as string, 10) : undefined,
             });
             return sendSuccess(res, 200, sales, "Sales fetched successfully");
         } catch (err) { return next(err); }
@@ -59,6 +63,9 @@ export const salesController = {
             const staffId = String(req.params.staffId);
             const items = await salesService.listItemsByStaff(salonId, staffId, {
                 item_type: req.query.item_type as string,
+                start_date: req.query.start_date as string,
+                end_date: req.query.end_date as string,
+                page: req.query.page ? parseInt(req.query.page as string, 10) : undefined,
                 limit: req.query.limit ? parseInt(req.query.limit as string, 10) : undefined,
             });
             return sendSuccess(res, 200, items, "Staff service history fetched successfully");

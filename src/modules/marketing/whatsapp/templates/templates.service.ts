@@ -18,8 +18,11 @@ const MAX_HEADER_FILE_SIZE: Record<string, number> = {
 
 function extractExamples(text: string): string[] {
   const matches = text.match(/{{\d+}}/g) ?? []
-  return matches
-    .map(m => parseInt(m.replace(/[{}]/g, '')))
+  // Dedupe to unique variable numbers — Meta wants ONE example per distinct
+  // variable; a repeated {{1}} must not produce two example entries (count
+  // mismatch Meta rejects, or surfaces later as send error 132012).
+  const unique = [...new Set(matches.map(m => parseInt(m.replace(/[{}]/g, ''), 10)))]
+  return unique
     .sort((a, b) => a - b)
     .map(n => `Example${n}`)
 }

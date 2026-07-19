@@ -97,6 +97,20 @@ export type Staff = {
     address: string | null;
     working_hours_per_day: number | null;
     holidays: number | null;
+    // Populated only on the list endpoint (LEFT JOIN LATERAL against
+    // staff_schedules — see staffRepository.list) so callers that already
+    // fetch the staff list don't also need a separate per-staff
+    // GET /staff/:id/scheduled call just to know working hours.
+    schedule?: StaffScheduleSummary[];
+};
+
+export type StaffScheduleSummary = {
+    day_of_week: number;
+    date: string | null;
+    start_time: string | null;
+    end_time: string | null;
+    is_available: boolean;
+    breaks: ScheduleBreak[];
 };
 
 export type CreateStaffBody = {
@@ -301,6 +315,11 @@ export type UpdatePayRunBody = {
 
 // ─── Schedule ─────────────────────────────────────────────────────────────────
 
+export type ScheduleBreak = {
+    start_time: string;
+    end_time: string;
+};
+
 export type StaffSchedule = {
     id: string;
     staff_id: string;
@@ -309,6 +328,7 @@ export type StaffSchedule = {
     end_time: string | null;
     is_available: boolean;
     notes: string | null;
+    breaks: ScheduleBreak[];
     created_at: string;
     updated_at: string;
 };
@@ -321,6 +341,7 @@ export type UpsertScheduleItem = {
     notes?: string;
     /** Optional concrete calendar date (YYYY-MM-DD) for date-based scheduling */
     date?: string | null;
+    breaks?: ScheduleBreak[];
 };
 
 export type UpsertStaffSchedulesBody = {

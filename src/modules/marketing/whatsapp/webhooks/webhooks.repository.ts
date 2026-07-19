@@ -12,8 +12,11 @@ export const webhooksRepository = {
   },
 
   async findSalonByPhoneNumberId(phoneNumberId: string): Promise<string | null> {
+    // TRIM both sides — a phone_number_id saved with stray whitespace would
+    // otherwise never match Meta's inbound payload, silently dropping every
+    // incoming message for that salon (the `if (salonId)` guard swallows it).
     const { rows } = await pool.query(
-      `SELECT salon_id FROM whatsapp_configs WHERE phone_number_id = $1`,
+      `SELECT salon_id FROM whatsapp_configs WHERE TRIM(phone_number_id) = TRIM($1) LIMIT 1`,
       [phoneNumberId]
     )
     return rows[0]?.salon_id ?? null
