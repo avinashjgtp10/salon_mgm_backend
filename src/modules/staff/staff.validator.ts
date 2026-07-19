@@ -383,6 +383,17 @@ export const validateUpsertStaffSchedules = (
 
             if (item.notes !== undefined && (typeof item.notes !== "string" || item.notes.length > 255))
                 throw new AppError(400, `items[${i}].notes must be a string max 255 chars`, "VALIDATION_ERROR");
+
+            if (item.breaks !== undefined) {
+                if (!Array.isArray(item.breaks))
+                    throw new AppError(400, `items[${i}].breaks must be an array`, "VALIDATION_ERROR");
+
+                for (let j = 0; j < item.breaks.length; j++) {
+                    const brk = item.breaks[j];
+                    if (typeof brk.start_time !== "string" || typeof brk.end_time !== "string")
+                        throw new AppError(400, `items[${i}].breaks[${j}] must have string start_time and end_time`, "VALIDATION_ERROR");
+                }
+            }
         }
 
         return next();

@@ -21,6 +21,8 @@ export type Client = {
     gender: string | null;
     pronouns: string | null;
 
+    address: string | null;
+
     client_source: string | null;
     referred_by_client_id: string | null;
 
@@ -93,6 +95,9 @@ export type ClientWithRelations = Client & {
     emergency_contacts?: ClientEmergencyContact[];
     total_referral_earnings?: number;
     total_successful_referrals?: number;
+    // Basic info about the client who referred this one, resolved from
+    // referred_by_client_id — null if this client wasn't referred by anyone.
+    referred_by?: { id: string; full_name: string; email: string | null; phone_country_code: string | null; phone_number: string | null; avatar_url: string | null } | null;
 };
 
 export type CreateClientAddressInput = Omit<ClientAddress, "id" | "client_id" | "created_at" | "updated_at">;
@@ -118,6 +123,8 @@ export type CreateClientBody = {
 
     gender?: string | null;
     pronouns?: string | null;
+
+    address?: string | null;
 
     client_source?: string | null;
     referred_by_client_id?: string | null;

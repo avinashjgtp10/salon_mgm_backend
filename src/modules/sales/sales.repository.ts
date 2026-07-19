@@ -46,7 +46,10 @@ export const salesRepository = {
         return rows;
     },
 
-    async list(filters: { salon_id?: string; client_id?: string; status?: string; staff_id?: string }): Promise<Sale[]> {
+    async list(filters: {
+        salon_id?: string; client_id?: string; status?: string; staff_id?: string;
+        start_date?: string; end_date?: string; page?: number; limit?: number;
+    }): Promise<{ items: Sale[]; pagination: { total: number; page: number; limit: number; total_pages: number } }> {
         const conditions: string[] = [];
         const values: any[] = [];
         let idx = 1;
@@ -55,15 +58,30 @@ export const salesRepository = {
         if (filters.client_id) { conditions.push(`s.client_id = $${idx++}`); values.push(filters.client_id); }
         if (filters.status) { conditions.push(`s.status = $${idx++}`); values.push(filters.status); }
         if (filters.staff_id) { conditions.push(`s.staff_id = $${idx++}`); values.push(filters.staff_id); }
+        if (filters.start_date) { conditions.push(`s.created_at >= $${idx++}::date`); values.push(filters.start_date); }
+        if (filters.end_date) { conditions.push(`s.created_at < ($${idx++}::date + interval '1 day')`); values.push(filters.end_date); }
 
         const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-        const query = `SELECT s.*, c.full_name AS client_name
+
+        // No limit passed => keep pre-existing "fetch everything" behavior
+        // (some callers, e.g. revenue aggregates, need the full result set).
+        const page = Math.max(1, Number(filters.page ?? 1));
+        const limit = filters.limit ? Math.max(1, Number(filters.limit)) : undefined;
+        const offset = limit ? (page - 1) * limit : 0;
+        const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+        if (limit) values.push(limit, offset);
+
+        const query = `SELECT s.*, c.full_name AS client_name, COUNT(*) OVER() AS total_count
                        FROM sales s
                        LEFT JOIN clients c ON s.client_id = c.id
                        ${whereClause}
-                       ORDER BY s.created_at DESC`;
+                       ORDER BY s.created_at DESC
+                       ${limitClause}`;
         const { rows } = await safeQuery(() => pool.query(query, values));
-        return rows;
+        const total = rows.length ? Number(rows[0].total_count) : 0;
+        const items = rows.map(({ total_count, ...r }) => r);
+        const effectiveLimit = limit ?? Math.max(total, 1);
+        return { items, pagination: { total, page, limit: effectiveLimit, total_pages: Math.max(1, Math.ceil(total / effectiveLimit)) } };
     },
 
     // ── Service/product line items performed by a single staff member ──────────
@@ -74,23 +92,32 @@ export const salesRepository = {
     async listItemsByStaff(
         salonId: string,
         staffId: string,
-        filters: { item_type?: string; limit?: number } = {}
-    ): Promise<(SaleItem & { sale_created_at: string; client_name: string | null })[]> {
+        filters: { item_type?: string; start_date?: string; end_date?: string; page?: number; limit?: number } = {}
+    ): Promise<{
+        items: (SaleItem & { sale_created_at: string; client_name: string | null })[];
+        pagination: { total: number; page: number; limit: number; total_pages: number };
+    }> {
         const conditions: string[] = [`s.salon_id = $1`, `COALESCE(si.staff_id, s.staff_id) = $2`];
         const values: any[] = [salonId, staffId];
         let idx = 3;
 
         if (filters.item_type) { conditions.push(`si.item_type = $${idx++}`); values.push(filters.item_type); }
+        if (filters.start_date) { conditions.push(`s.created_at >= $${idx++}::date`); values.push(filters.start_date); }
+        if (filters.end_date) { conditions.push(`s.created_at < ($${idx++}::date + interval '1 day')`); values.push(filters.end_date); }
 
-        const limitClause = filters.limit ? `LIMIT $${idx++}` : "";
-        if (filters.limit) values.push(filters.limit);
+        const page = Math.max(1, Number(filters.page ?? 1));
+        const limit = filters.limit ? Math.max(1, Number(filters.limit)) : undefined;
+        const offset = limit ? (page - 1) * limit : 0;
+        const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+        if (limit) values.push(limit, offset);
 
         const { rows } = await safeQuery(() => pool.query(
             `SELECT si.id, si.sale_id, si.item_type, si.item_id,
                     COALESCE(si.staff_id, s.staff_id) AS staff_id,
                     si.name, si.quantity, si.unit_price, si.discount_amount, si.total_price, si.created_at,
                     s.created_at AS sale_created_at,
-                    c.full_name  AS client_name
+                    c.full_name  AS client_name,
+                    COUNT(*) OVER() AS total_count
              FROM sale_items si
              JOIN sales s   ON si.sale_id = s.id
              LEFT JOIN clients c ON s.client_id = c.id
@@ -99,7 +126,10 @@ export const salesRepository = {
              ${limitClause}`,
             values
         ));
-        return rows;
+        const total = rows.length ? Number(rows[0].total_count) : 0;
+        const items = rows.map(({ total_count, ...r }) => r);
+        const effectiveLimit = limit ?? Math.max(total, 1);
+        return { items, pagination: { total, page, limit: effectiveLimit, total_pages: Math.max(1, Math.ceil(total / effectiveLimit)) } };
     },
 
     async getDailySummary(salonId: string, date?: string): Promise<{ total: string; count: string }> {

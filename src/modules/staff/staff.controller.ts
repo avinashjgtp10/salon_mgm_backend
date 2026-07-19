@@ -451,22 +451,56 @@ export const staffCommissionsController = {
   async getStaffHistory(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const staffId = String(req.params.staffId);
-      const month   = req.query.month ? String(req.query.month) : undefined;
-      const data = await staffCommissionsService.getStaffHistory(staffId, month);
+      const data = await staffCommissionsService.getStaffHistory(staffId, {
+        month: req.query.month ? String(req.query.month) : undefined,
+        start_date: req.query.start_date ? String(req.query.start_date) : undefined,
+        end_date: req.query.end_date ? String(req.query.end_date) : undefined,
+        status: req.query.status ? String(req.query.status) : undefined,
+        page: req.query.page ? parseInt(String(req.query.page), 10) : undefined,
+        limit: req.query.limit ? parseInt(String(req.query.limit), 10) : undefined,
+      });
       return sendSuccess(res, 200, data, "Commission history fetched");
     } catch (err) { return next(err); }
   },
 
-  // ── Export: commissions CSV for the salon ──────────────────────────────────
+  // ── Export: commissions for the salon (csv | excel | json for client-side PDF) ──
   async exportCommissions(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = req.user?.salonId ?? String(req.query.salon_id ?? "");
       const month   = req.query.month ? String(req.query.month) : undefined;
+      const format  = (req.query.format ? String(req.query.format) : "csv").toLowerCase();
       const rows = await staffCommissionsService.exportCommissions(salonId, month);
 
-      const header = "Staff Name,Category,Revenue Amount,Commission Kind,Commission Rate,Commission Amount,Status,Earned Date";
-      const csv = [header, ...rows.map((r: any) =>
-        [r.staff_name, r.category, r.revenue_amount, r.commission_kind, r.commission_rate, r.commission_amount, r.status, r.earned_date].join(",")
+      const commissionExportFields = [
+        "staff_name", "category", "revenue_amount", "commission_kind",
+        "commission_rate", "commission_amount", "status", "earned_date",
+      ] as const;
+      const commissionExportHeaders = [
+        "Staff Name", "Category", "Revenue Amount", "Commission Kind",
+        "Commission Rate", "Commission Amount", "Status", "Earned Date",
+      ];
+
+      // json: the frontend has no other way to get these rows — used to build
+      // the PDF export client-side (jsPDF/autoTable), matching how the Team
+      // Members PDF export already works, rather than duplicating PDF
+      // rendering server-side.
+      if (format === "json") {
+        return sendSuccess(res, 200, rows, "Commissions fetched successfully");
+      }
+
+      if (format === "excel") {
+        const data = rows.map((r: any) => commissionExportFields.map(f => (r as any)[f] ?? ""));
+        const ws = XLSX.utils.aoa_to_sheet([commissionExportHeaders, ...data]);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Commissions");
+        const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+        res.setHeader("Content-Disposition", `attachment; filename="commissions${month ? "_" + month : ""}.xlsx"`);
+        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        return res.status(200).send(buffer);
+      }
+
+      const csv = [commissionExportHeaders.join(","), ...rows.map((r: any) =>
+        commissionExportFields.map(f => (r as any)[f] ?? "").join(",")
       )].join("\n");
 
       res.setHeader("Content-Type", "text/csv");

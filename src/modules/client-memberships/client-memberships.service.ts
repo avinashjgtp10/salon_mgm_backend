@@ -68,10 +68,13 @@ function buildSyntheticSale(membership: ClientMembership): { sale: Sale; items: 
   return { sale, items };
 }
 
-// Fires the membership_purchased text + PDF receipt — the single place every
-// membership purchase path (direct purchase, QuickSale, calendar/appointment)
-// funnels through, so it can never double-send.
-async function notifyMembershipPurchased(membership: ClientMembership): Promise<void> {
+// Fires the membership_purchased text always. The PDF receipt is only sent
+// when the membership was purchased standalone (includeReceipt=true, from
+// purchase() below) — when it's part of a larger checkout (autoCreateFromPayment,
+// called from sales/payments checkout flows), that flow already sent one PDF
+// covering the whole sale (service+product+membership etc.), so sending this
+// synthetic membership-only PDF too would duplicate it.
+async function notifyMembershipPurchased(membership: ClientMembership, includeReceipt: boolean): Promise<void> {
   if (!membership.mobile) {
     logger.info(`[WA-AUTO] Skipping membership_purchased for ${membership.id} — no mobile number`);
     return;
@@ -91,7 +94,10 @@ async function notifyMembershipPurchased(membership: ClientMembership): Promise<
     },
     referenceId: membership.id,
     referenceType: 'membership',
+    dedupeByReference: true,
   }).catch(() => {});
+
+  if (!includeReceipt) return;
 
   const { sale, items } = buildSyntheticSale(membership);
   sendPurchaseReceipt({
@@ -136,6 +142,7 @@ async function notifySessionsRemainingIfLow(membership: ClientMembership): Promi
     },
     referenceId: membership.id,
     referenceType: 'membership',
+    dedupeByReference: true,
   }).catch(() => {});
 }
 
@@ -168,7 +175,7 @@ export const clientMembershipsService = {
       logger.error('[clientMembershipsService] Failed to auto-create sale for membership purchase:', { error: err });
     }
 
-    notifyMembershipPurchased(membership).catch(() => {});
+    notifyMembershipPurchased(membership, true).catch(() => {});
     return membership;
   },
 
@@ -467,7 +474,9 @@ export const clientMembershipsService = {
         expiresAt,
       });
       logger.info(`[client-memberships/auto-create] SUCCESS — client=${clientId}, membership=${membershipName}`);
-      notifyMembershipPurchased(created).catch(() => {});
+      // Text only, no PDF here — the calling checkout flow (sales/payments)
+      // already sent one PDF covering this whole sale, membership line included.
+      notifyMembershipPurchased(created, false).catch(() => {});
     } catch (err: any) {
       logger.warn('[client-memberships/auto-create] FAILED:', err?.message ?? err);
     }
