@@ -1,9 +1,22 @@
 import pool from "../../config/database";
 import { CreateSalonBody, UpdateSalonBody, Salon } from "./salons.types";
 
+// Phone/address are no longer independently editable on the business record —
+// they always mirror the owner's Personal Profile (users.phone/users.address),
+// so every read joins to the owner and overrides those two columns.
+const SALON_SELECT_WITH_OWNER_CONTACT = `
+    SELECT s.id, s.owner_id, s.business_name, s.business_type, s.slug, s.description,
+           s.logo_url, s.banner_url, s.email, u.phone AS phone, s.website_url,
+           s.gst_number, s.pan_number, s.is_verified, s.is_active, s.onboarding_completed,
+           u.address AS address, s.city, s.state, s.country, s.pincode, s.timezone,
+           s.currency, s.business_category, s.created_at, s.updated_at
+    FROM salons s
+    LEFT JOIN users u ON s.owner_id = u.id
+`;
+
 export const salonsRepository = {
     async findById(id: string): Promise<Salon | null> {
-        const { rows } = await pool.query(`SELECT * FROM salons WHERE id = $1`, [id]);
+        const { rows } = await pool.query(`${SALON_SELECT_WITH_OWNER_CONTACT} WHERE s.id = $1`, [id]);
         return rows[0] || null;
     },
 
@@ -25,7 +38,7 @@ export const salonsRepository = {
 
     async findByOwnerId(ownerId: string): Promise<Salon | null> {
         const { rows } = await pool.query(
-            `SELECT * FROM salons WHERE owner_id = $1 ORDER BY created_at DESC LIMIT 1`,
+            `${SALON_SELECT_WITH_OWNER_CONTACT} WHERE s.owner_id = $1 ORDER BY s.created_at DESC LIMIT 1`,
             [ownerId]
         );
         return rows[0] || null;
