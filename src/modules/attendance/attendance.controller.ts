@@ -112,10 +112,13 @@ export const attendanceController = {
     async getForStaff(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const staffId = String(req.params.staffId);
-            const startDate = req.query.start_date ? String(req.query.start_date) : undefined;
-            const endDate = req.query.end_date ? String(req.query.end_date) : undefined;
-            const limit = req.query.limit ? parseInt(String(req.query.limit), 10) : undefined;
-            const data = await attendanceService.getForStaff(staffId, startDate, endDate, limit);
+            const data = await attendanceService.getForStaff(staffId, {
+                startDate: req.query.start_date ? String(req.query.start_date) : undefined,
+                endDate: req.query.end_date ? String(req.query.end_date) : undefined,
+                status: req.query.status ? String(req.query.status) : undefined,
+                page: req.query.page ? parseInt(String(req.query.page), 10) : undefined,
+                limit: req.query.limit ? parseInt(String(req.query.limit), 10) : undefined,
+            });
             return sendSuccess(res, 200, data, "Staff attendance fetched");
         } catch (err) { return next(err); }
     },

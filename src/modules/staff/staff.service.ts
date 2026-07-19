@@ -310,14 +310,27 @@ export const staffService = {
 
                     try {
                         const fullName = String(row["Name"] ?? row["name"] ?? "").trim();
-                        if (!fullName && !email) {
+                        const phoneRaw = String(row["Contact"] ?? row["contact"] ?? "").trim();
+                        const genderRaw = String(row["Gender"] ?? row["gender"] ?? "").trim();
+                        const dojRaw = String(row["DOJ(dd-mm-YYYY)"] ?? row["DOJ"] ?? row["doj"] ?? "").trim();
+
+                        // Required fields for import: Name, Contact, Email, Gender, DOJ.
+                        // Every missing one is reported together so the user doesn't have
+                        // to re-upload and hit the errors one at a time.
+                        const missing: string[] = [];
+                        if (!fullName) missing.push("Name");
+                        if (!phoneRaw) missing.push("Contact");
+                        if (!email) missing.push("Email");
+                        if (!genderRaw) missing.push("Gender");
+                        if (!dojRaw) missing.push("DOJ");
+                        if (missing.length > 0) {
                             part.skipped += 1;
-                            part.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: "Name and Email are both empty" });
-                            return part;
-                        }
-                        if (!email) {
-                            part.skipped += 1;
-                            part.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: "Email is required" });
+                            part.errors.push({
+                                row: rowNum,
+                                email: email || undefined,
+                                code: "VALIDATION_ERROR",
+                                message: `Missing required field(s): ${missing.join(", ")}`,
+                            });
                             return part;
                         }
 
@@ -325,16 +338,21 @@ export const staffService = {
                         const first_name = nameParts[0] || email.split("@")[0];
                         const last_name = nameParts.slice(1).join(" ") || undefined;
 
-                        const phone = String(row["Contact"] ?? row["contact"] ?? "").trim() || undefined;
+                        const phone = phoneRaw || undefined;
+                        const gender = genderRaw || undefined;
                         const country = String(row["Address"] ?? row["address"] ?? "").trim() || undefined;
                         const job_title = String(row["Designation"] ?? row["designation"] ?? "").trim() || undefined;
 
-                        const dojRaw = String(row["DOJ(dd-mm-YYYY)"] ?? row["DOJ"] ?? row["doj"] ?? "").trim();
                         const dobRaw = String(row["DOB(dd-mm-YYYY)"] ?? row["DOB"] ?? row["dob"] ?? "").trim();
                         const hourly_rate = toNum(row["Hourly Rate"] ?? row["hourly_rate"]);
                         const salary_amount = toNum(row["Fixed Salary"] ?? row["fixed_salary"]);
 
                         const joined_date = parseDate(dojRaw);
+                        if (!joined_date) {
+                            part.skipped += 1;
+                            part.errors.push({ row: rowNum, email, code: "VALIDATION_ERROR", message: "DOJ must be in dd-mm-YYYY format" });
+                            return part;
+                        }
                         const { birthday_day, birthday_month } = parseDOB(dobRaw);
 
                         const existing = existingMap.get(email);
@@ -342,7 +360,7 @@ export const staffService = {
                         if (existing) {
                             if (!dry_run) {
                                 await staffRepository.update(existing.id, salonId, {
-                                    first_name, last_name, phone, country, job_title,
+                                    first_name, last_name, phone, gender, country, job_title,
                                 });
                                 await staffRepository.updateDateFields(existing.id, salonId, { joined_date, birthday_day, birthday_month });
                                 if (hourly_rate !== null || salary_amount !== null) {
@@ -358,7 +376,7 @@ export const staffService = {
                         } else {
                             if (!dry_run) {
                                 const staff = await staffRepository.create(salonId, {
-                                    first_name, last_name, email, phone, country, job_title,
+                                    first_name, last_name, email, phone, gender, country, job_title,
                                 }, null, true); // activateImmediately = true: imported staff don't need email invites
                                 await staffRepository.updateDateFields(staff.id, salonId, { joined_date, birthday_day, birthday_month });
                                 if (hourly_rate !== null || salary_amount !== null) {
@@ -619,8 +637,10 @@ export const staffCommissionsService = {
         return commissionCalculationService.getSlabs(staffId, category);
     },
 
-    async getStaffHistory(staffId: string, month?: string) {
-        return commissionCalculationService.getStaffHistory(staffId, month);
+    async getStaffHistory(staffId: string, filters: {
+        month?: string; start_date?: string; end_date?: string; status?: string; page?: number; limit?: number;
+    } = {}) {
+        return commissionCalculationService.getStaffHistory(staffId, filters);
     },
 
     async exportCommissions(salonId: string, month?: string) {
