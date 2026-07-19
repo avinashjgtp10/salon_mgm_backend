@@ -11,6 +11,21 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return chunks
 }
 
+// Collapse duplicate phone numbers within one upload (comparing on digits only,
+// so "+91 98..." and "9198..." count as the same person) — otherwise the same
+// customer is messaged twice and total_contacts over-counts unique recipients.
+function dedupeContacts<T extends { phone: string }>(contacts: T[]): T[] {
+  const seen = new Set<string>()
+  const out: T[] = []
+  for (const c of contacts) {
+    const key = String(c.phone ?? '').replace(/\D/g, '')
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    out.push(c)
+  }
+  return out
+}
+
 // ── Queue batches for a campaign ──────────────────────────────────────────────
 async function queueCampaignBatches(
   campaignId: string,
@@ -52,14 +67,16 @@ export const campaignsService = {
     const scheduledAt = body.scheduled_at ?? null
     const isScheduled = scheduledAt && new Date(scheduledAt) > new Date()
 
+    const contacts = dedupeContacts(body.contacts)
+
     const client = await pool.connect()
     try {
       await client.query('BEGIN')
       const campaignId = await campaignsRepository.create(
         salonId, body.template_id, body.name, batchSize,
-        body.contacts.length, scheduledAt
+        contacts.length, scheduledAt
       )
-      await campaignsRepository.bulkInsertContacts(campaignId, body.contacts)
+      await campaignsRepository.bulkInsertContacts(campaignId, contacts)
       await client.query('COMMIT')
 
       if (!isScheduled) {
@@ -91,7 +108,7 @@ export const campaignsService = {
     )
     if (!tmpl[0]) throw new AppError(400, 'Original template is no longer approved — cannot resend', 'TEMPLATE_NOT_APPROVED')
 
-    const contacts = await campaignsRepository.getAllContactsForResend(id)
+    const contacts = dedupeContacts(await campaignsRepository.getAllContactsForResend(id))
     if (contacts.length === 0) throw new AppError(400, 'This campaign has no contacts to resend', 'NO_CONTACTS')
 
     const client = await pool.connect()

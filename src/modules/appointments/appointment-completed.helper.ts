@@ -37,6 +37,7 @@ export async function notifyAppointmentCompleted(appointmentId: string): Promise
             variables,
             referenceId:   appointmentId,
             referenceType: "appointment",
+            dedupeByReference: true,
         }).catch(() => {});
 
         whatsappAutomationService.trigger({
@@ -48,6 +49,7 @@ export async function notifyAppointmentCompleted(appointmentId: string): Promise
             variables,
             referenceId:   appointmentId,
             referenceType: "appointment",
+            dedupeByReference: true,
         }).catch(() => {});
     } catch (err: any) {
         logger.error("[WA-AUTO] notifyAppointmentCompleted error:", err?.message);

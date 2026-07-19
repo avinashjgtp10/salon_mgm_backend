@@ -14,6 +14,8 @@ router.get("/:salonId", waPurchaseTemplatesController.list);
 router.patch("/:salonId/:eventType", waPurchaseTemplatesController.updateWording);
 // POST /api/v1/wa-automation/purchase-templates/:salonId/:eventType/submit
 router.post("/:salonId/:eventType/submit", waPurchaseTemplatesController.submitForApproval);
+// POST /api/v1/wa-automation/purchase-templates/:salonId/:eventType/reset
+router.post("/:salonId/:eventType/reset", waPurchaseTemplatesController.reset);
 // POST /api/v1/wa-automation/purchase-templates/:salonId/:eventType/sync
 router.post("/:salonId/:eventType/sync", waPurchaseTemplatesController.syncStatus);
 

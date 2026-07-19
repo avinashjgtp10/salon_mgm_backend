@@ -60,6 +60,7 @@ export const salesService = {
                 },
                 referenceId:   sale.id,
                 referenceType: "invoice",
+                dedupeByReference: true,
             }).catch(() => {});
         }
 
@@ -216,6 +217,7 @@ export const salesService = {
                     },
                     referenceId:   sale.id,
                     referenceType: "invoice",
+                    dedupeByReference: true,
                 }).catch(() => {});
             }
 

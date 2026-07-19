@@ -549,6 +549,7 @@ export const paymentsService = {
                 },
                 referenceId:   enrichedSale.id,
                 referenceType: 'invoice',
+                dedupeByReference: true,
               }).catch(() => {});
             }
 
