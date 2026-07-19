@@ -33,10 +33,30 @@ export const configService = {
 
   async saveConfig(salonId: string, body: SaveConfigBody) {
 
-    // ── Check verify token uniqueness ─────────────────────────────────────────
-    if (body.webhook_verify_token) {
+    // Trim EVERY credential field before anything touches it. These are all
+    // used in exact-match lookups (webhook verify token, phone_number_id) or
+    // string-concatenated into Meta tokens (app_id|app_secret), so a single
+    // stray copy-paste space silently breaks webhook verification / sends —
+    // this was a real, confirmed production incident.
+    const trim = (v: unknown): string | null => {
+      const s = typeof v === 'string' ? v.trim() : ''
+      return s.length > 0 ? s : null
+    }
+
+    const cleanBody: SaveConfigBody = {
+      phone_number_id:      trim(body.phone_number_id),
+      waba_id:              trim(body.waba_id),
+      app_id:               trim(body.app_id),
+      app_secret:           trim(body.app_secret),
+      access_token:         trim(body.access_token),
+      webhook_verify_token: trim(body.webhook_verify_token),
+      display_phone:        typeof body.display_phone === 'string' ? body.display_phone.trim() : (body.display_phone ?? null),
+    } as SaveConfigBody
+
+    // ── Check verify token uniqueness (using the trimmed value) ───────────────
+    if (cleanBody.webhook_verify_token) {
       const taken = await configRepository.isVerifyTokenTaken(
-        body.webhook_verify_token,
+        cleanBody.webhook_verify_token,
         salonId
       )
       if (taken) {
@@ -46,16 +66,6 @@ export const configService = {
           'VERIFY_TOKEN_TAKEN'
         )
       }
-    }
-
-    const cleanBody: SaveConfigBody = {
-      phone_number_id:      body.phone_number_id,
-      waba_id:              body.waba_id,
-      app_id:               body.app_id               || null,
-      app_secret:           body.app_secret            || null,
-      access_token:         body.access_token?.trim()  || null,
-      webhook_verify_token: body.webhook_verify_token,
-      display_phone:        body.display_phone         ?? null,
     }
 
     let saved: Awaited<ReturnType<typeof configRepository.upsert>>

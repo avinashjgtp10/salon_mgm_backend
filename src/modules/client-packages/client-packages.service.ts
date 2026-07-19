@@ -167,6 +167,7 @@ export const clientPackagesService = {
         },
         referenceId:   pkg.id,
         referenceType: "package",
+        dedupeByReference: true,
       }).catch(() => {});
 
       // PDF receipt as a WhatsApp document attachment — best-effort, only

@@ -721,13 +721,18 @@ export const clientsRepository = {
     },
     // ── NEW: Smart Filter for campaigns ──────────────────────────────────────
     _buildCampaignFilterSql(salonId: string, filters: CampaignFilterParams): { joinSql: string; where: string[]; params: any[] } {
+        // Only require phone_number itself — phone_country_code is allowed to be
+        // NULL (most clients in practice don't have it explicitly set) since the
+        // SELECT below already defaults a missing country code to +91 via
+        // COALESCE. Requiring it NOT NULL here silently excluded every client
+        // without an explicit country code, regardless of any actual filter
+        // criteria — confirmed live: 11 of 14 active clients in one salon were
+        // being dropped by this alone.
         const where: string[] = [
             'c.salon_id = $1',
             'c.is_active = true',
             'c.phone_number IS NOT NULL',
             "TRIM(c.phone_number) <> ''",
-            'c.phone_country_code IS NOT NULL',
-            "TRIM(c.phone_country_code) <> ''",
         ]
         const params: any[] = [salonId]
         const joins: string[] = []
@@ -777,7 +782,22 @@ export const clientsRepository = {
 
         if (filters.birth_month) {
             params.push(filters.birth_month)
-            where.push(`EXTRACT(MONTH FROM TO_DATE(c.birthday_day_month, 'MM-DD')) = $${params.length}`)
+            // Some client rows have malformed birthday_day_month values (e.g. a
+            // full date like "2026-07-17" instead of "MM-DD") — calling TO_DATE
+            // on those throws "date/time field value out of range" and crashes
+            // the WHOLE query (Postgres doesn't guarantee AND short-circuits, so
+            // a regex guard ANDed in isn't safe here). A CASE expression IS
+            // guaranteed to only evaluate its matched branch per row, so
+            // malformed rows just parse to NULL (never match) instead of
+            // throwing.
+            where.push(`
+                EXTRACT(MONTH FROM (
+                    CASE WHEN c.birthday_day_month ~ '^\\d{2}-\\d{2}$'
+                         THEN TO_DATE(c.birthday_day_month, 'MM-DD')
+                         ELSE NULL
+                    END
+                )) = $${params.length}
+            `)
         }
         if (filters.birth_day_month) {
             params.push(filters.birth_day_month)

@@ -38,6 +38,8 @@ export async function sendReceiptDocument(params: {
     dueAmount: number;
     couponCode: string | null;
 }): Promise<void> {
+    const to = formatPhone(params.phone, params.countryCode);
+    logger.info(`[WA-TRACE] PDF-BILL START — sale=${params.sale.id} salon=${params.salonId} to=${to}`);
     try {
         const url = await generateAndSaveReceipt({
             salon: params.salon,
@@ -52,13 +54,14 @@ export async function sendReceiptDocument(params: {
             couponCode: params.couponCode,
         });
         if (!url) {
-            logger.info("[receipt] PUBLIC_BASE_URL not configured — skipping PDF receipt");
+            logger.info(`[WA-TRACE] PDF-BILL SKIP — PUBLIC_BASE_URL not configured (PDF can't be hosted for Meta to fetch)`);
             return;
         }
+        logger.info(`[WA-TRACE] PDF-BILL generated — url=${url}`);
 
         const salonConfig = await configRepository.findBySalonId(params.salonId);
         if (!salonConfig?.phone_number_id || !salonConfig?.access_token) {
-            logger.info("[receipt] Salon has no WhatsApp configured — skipping PDF receipt");
+            logger.info(`[WA-TRACE] PDF-BILL SKIP — salon ${params.salonId} has no WhatsApp config`);
             return;
         }
 
@@ -67,15 +70,16 @@ export async function sendReceiptDocument(params: {
         await whatsappMetaApi.sendDocumentMessage({
             phoneNumberId: salonConfig.phone_number_id,
             accessToken: salonConfig.access_token,
-            to: formatPhone(params.phone, params.countryCode),
+            to,
             link: url,
             filename: `Receipt-${invoiceLabel}.pdf`,
         });
-        logger.info("[receipt] PDF receipt sent", { saleId: params.sale.id });
+        logger.info(`[WA-TRACE] PDF-BILL ✅ SENT — sale=${params.sale.id} to=${to}`);
     } catch (err: any) {
-        logger.info("[receipt] PDF receipt send failed (expected outside 24h window)", {
-            saleId: params.sale.id,
-            error: err?.response?.data ?? err?.message,
-        });
+        const code = err?.response?.data?.error?.code ?? "—";
+        const msg = err?.response?.data?.error?.message ?? err?.message ?? "Unknown error";
+        // A failure here is often expected (document messages only deliver within
+        // Meta's 24h service window) — logged as a warning, never fatal.
+        logger.warn(`[WA-TRACE] PDF-BILL ❌ FAILED — sale=${params.sale.id} to=${to} — Meta [${code}] ${msg} (note: document messages only deliver within 24h of the customer's last message)`);
     }
 }

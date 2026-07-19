@@ -3,6 +3,11 @@ import axios from 'axios'
 const WA_BASE_URL    = process.env.WA_BASE_URL    ?? 'https://graph.facebook.com'
 const WA_API_VERSION = process.env.WA_API_VERSION ?? 'v22.0'
 
+// Every Meta call goes through this instance so none can hang indefinitely — a
+// stuck request would otherwise tie up a campaign worker slot (concurrency 10)
+// or block a synchronous saveConfig/testConnection during a Meta outage.
+const http = axios.create({ timeout: 30_000 })
+
 const TIER_LIMIT_MAP: Record<string, number> = {
   TIER_50:        50,
   TIER_250:       250,
@@ -29,7 +34,7 @@ export const whatsappMetaApi = {
       language: { code: params.language },
     }
     if (params.components?.length > 0) template.components = params.components
-    const res = await axios.post(
+    const res = await http.post(
       `${WA_BASE_URL}/${WA_API_VERSION}/${params.phoneNumberId}/messages`,
       { messaging_product: 'whatsapp', recipient_type: 'individual', to: params.to, type: 'template', template },
       { headers: { Authorization: `Bearer ${params.accessToken}`, 'Content-Type': 'application/json' } }
@@ -43,9 +48,43 @@ export const whatsappMetaApi = {
     to:            string
     message:       string
   }) {
-    const res = await axios.post(
+    const res = await http.post(
       `${WA_BASE_URL}/${WA_API_VERSION}/${params.phoneNumberId}/messages`,
       { messaging_product: 'whatsapp', recipient_type: 'individual', to: params.to, type: 'text', text: { body: params.message } },
+      { headers: { Authorization: `Bearer ${params.accessToken}`, 'Content-Type': 'application/json' } }
+    )
+    return res.data
+  },
+
+  // Interactive list message — like sendTextMessage, only deliverable within
+  // 24h of the customer's last inbound message (Meta's "service window").
+  // Used for the star-rating prompt: only sent after the customer has
+  // already replied to review_request, which is what opens that window.
+  async sendInteractiveListMessage(params: {
+    phoneNumberId: string
+    accessToken:   string
+    to:            string
+    bodyText:      string
+    buttonText:    string
+    sectionTitle:  string
+    rows:          Array<{ id: string; title: string; description?: string }>
+  }) {
+    const res = await http.post(
+      `${WA_BASE_URL}/${WA_API_VERSION}/${params.phoneNumberId}/messages`,
+      {
+        messaging_product: 'whatsapp',
+        recipient_type:    'individual',
+        to:                params.to,
+        type:              'interactive',
+        interactive: {
+          type:   'list',
+          body:   { text: params.bodyText },
+          action: {
+            button:   params.buttonText,
+            sections: [{ title: params.sectionTitle, rows: params.rows }],
+          },
+        },
+      },
       { headers: { Authorization: `Bearer ${params.accessToken}`, 'Content-Type': 'application/json' } }
     )
     return res.data
@@ -63,7 +102,7 @@ export const whatsappMetaApi = {
     filename:      string
     caption?:      string
   }) {
-    const res = await axios.post(
+    const res = await http.post(
       `${WA_BASE_URL}/${WA_API_VERSION}/${params.phoneNumberId}/messages`,
       {
         messaging_product: 'whatsapp',
@@ -85,7 +124,7 @@ export const whatsappMetaApi = {
   accessToken:   string
 }): Promise<{ valid: boolean; displayPhone?: string; verifiedName?: string; error?: string }> {
   try {
-    const res = await axios.get(
+    const res = await http.get(
       `${WA_BASE_URL}/${WA_API_VERSION}/${params.phoneNumberId}`,
       {
         params: { fields: 'display_phone_number,verified_name,quality_rating,status' },
@@ -110,7 +149,7 @@ async verifyWabaId(params: {
   accessToken: string
 }): Promise<{ valid: boolean; name?: string; error?: string }> {
   try {
-    const res = await axios.get(
+    const res = await http.get(
       `${WA_BASE_URL}/${WA_API_VERSION}/${params.wabaId}`,
       {
         params: { fields: 'name,currency,timezone_id' },
@@ -132,7 +171,7 @@ async verifyAppCredentials(params: {
 }): Promise<{ valid: boolean; appName?: string; error?: string }> {
   try {
     const appToken = `${params.appId}|${params.appSecret}`
-    const res = await axios.get(
+    const res = await http.get(
       `${WA_BASE_URL}/${WA_API_VERSION}/${params.appId}`,
       {
         params: { fields: 'name,category', access_token: appToken },
@@ -151,7 +190,7 @@ async verifyAccessToken(params: {
   accessToken: string
 }): Promise<{ valid: boolean; permissions?: string[]; error?: string }> {
   try {
-    const res = await axios.get(
+    const res = await http.get(
       `${WA_BASE_URL}/${WA_API_VERSION}/me/permissions`,
       {
         headers: { Authorization: `Bearer ${params.accessToken}` },
@@ -187,7 +226,7 @@ async verifyAccessToken(params: {
     language:    string
     components:  any[]
   }) {
-    const res = await axios.post(
+    const res = await http.post(
       `${WA_BASE_URL}/${WA_API_VERSION}/${params.wabaId}/message_templates`,
       { name: params.name, category: params.category, language: params.language, components: params.components },
       { headers: { Authorization: `Bearer ${params.accessToken}`, 'Content-Type': 'application/json' } }
@@ -196,7 +235,7 @@ async verifyAccessToken(params: {
   },
 
   async getTemplateStatus(accessToken: string, metaTemplateId: string) {
-    const res = await axios.get(
+    const res = await http.get(
       `${WA_BASE_URL}/${WA_API_VERSION}/${metaTemplateId}`,
       { headers: { Authorization: `Bearer ${accessToken}` }, params: { fields: 'id,name,status,quality_score,rejected_reason' } }
     )
@@ -204,7 +243,7 @@ async verifyAccessToken(params: {
   },
 
   async testConnection(phoneNumberId: string, accessToken: string) {
-    const res = await axios.get(
+    const res = await http.get(
       `${WA_BASE_URL}/${WA_API_VERSION}/${phoneNumberId}`,
       {
         headers: { Authorization: `Bearer ${accessToken}` },
@@ -221,7 +260,7 @@ async verifyAccessToken(params: {
   ): Promise<{ quality_rating: string; daily_limit: number; raw: any }> {
 
     try {
-      const res = await axios.get(
+      const res = await http.get(
         `${WA_BASE_URL}/${WA_API_VERSION}/${phoneNumberId}`,
         {
           headers: { Authorization: `Bearer ${accessToken}` },
@@ -241,7 +280,7 @@ async verifyAccessToken(params: {
     } catch (err: any) {}
 
     try {
-      const res = await axios.get(
+      const res = await http.get(
         `${WA_BASE_URL}/${WA_API_VERSION}/${wabaId}`,
         {
           headers: { Authorization: `Bearer ${accessToken}` },
@@ -255,7 +294,7 @@ async verifyAccessToken(params: {
     } catch (err: any) {}
 
     try {
-      const res = await axios.get(
+      const res = await http.get(
         `${WA_BASE_URL}/${WA_API_VERSION}/${phoneNumberId}`,
         {
           headers: { Authorization: `Bearer ${accessToken}` },
@@ -276,7 +315,7 @@ async verifyAccessToken(params: {
     callbackUrl: string
     verifyToken: string
   }) {
-    await axios.post(
+    await http.post(
       `${WA_BASE_URL}/${WA_API_VERSION}/${params.appId}/subscriptions`,
       null,
       {
@@ -284,7 +323,13 @@ async verifyAccessToken(params: {
           object:       'whatsapp_business_account',
           callback_url: params.callbackUrl,
           verify_token: params.verifyToken,
-          fields:       'messages,message_status_updates',
+          // "messages" alone covers both inbound messages AND delivery/read
+          // status callbacks (Meta delivers statuses as part of the same
+          // field's payload) — "message_status_updates" is not a real Meta
+          // webhook field name and caused the whole subscribe call to be
+          // rejected with a permissions error, which in turn skipped the
+          // subscribeWaba() call right after it (same try block).
+          fields:       'messages',
           access_token: params.appToken,
         },
       }
@@ -292,7 +337,7 @@ async verifyAccessToken(params: {
   },
 
   async subscribeWaba(params: { wabaId: string; accessToken: string }) {
-    await axios.post(
+    await http.post(
       `${WA_BASE_URL}/${WA_API_VERSION}/${params.wabaId}/subscribed_apps`,
       {},
       { headers: { Authorization: `Bearer ${params.accessToken}`, 'Content-Type': 'application/json' } }
@@ -300,7 +345,7 @@ async verifyAccessToken(params: {
   },
 
   async unsubscribeWaba(params: { wabaId: string; accessToken: string }) {
-    await axios.delete(
+    await http.delete(
       `${WA_BASE_URL}/${WA_API_VERSION}/${params.wabaId}/subscribed_apps`,
       { headers: { Authorization: `Bearer ${params.accessToken}` } }
     )
@@ -319,7 +364,7 @@ async verifyAccessToken(params: {
       `.end(${params.end})` +
       `.granularity(${params.granularity})` +
       `.dimensions(["conversation_type"])`
-    const res = await axios.get(
+    const res = await http.get(
       `${WA_BASE_URL}/${WA_API_VERSION}/${params.wabaId}`,
       { headers: { Authorization: `Bearer ${params.accessToken}` }, params: { fields: fieldStr } }
     )
@@ -341,7 +386,7 @@ async verifyAccessToken(params: {
     `.granularity(${params.granularity})` +
     `.dimensions(["PRICING_CATEGORY"])`   // ← was "conversation_category", now "PRICING_CATEGORY"
 
-  const res = await axios.get(
+  const res = await http.get(
     `${WA_BASE_URL}/${WA_API_VERSION}/${params.wabaId}`,
     {
       headers: { Authorization: `Bearer ${params.accessToken}` },

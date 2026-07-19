@@ -4,6 +4,7 @@ import { branchesRepository } from "../branches/branches.repository";
 import { staffRepository } from "../staff/staff.repository";
 import { clientsRepository } from "../clients/clients.repository";
 import { sendReceiptDocument } from "./receipt-whatsapp.service";
+import logger from "../../config/logger";
 
 // Shared by every purchase-completion call site (sales, packages, memberships,
 // appointments) — gathers the salon/branch/staff/client context the PDF
@@ -72,8 +73,9 @@ export async function sendPurchaseReceipt(params: {
             dueAmount: params.dueAmount ?? 0,
             couponCode: params.couponCode ?? null,
         });
-    } catch {
+    } catch (err: any) {
         // Best-effort — sendReceiptDocument already swallows its own errors;
         // this catches failures in the gathering step above (e.g. a bad salonId).
+        logger.warn(`[WA-TRACE] PDF-BILL prep FAILED — sale=${params.sale?.id} salon=${params.salonId} — ${err?.message ?? err}`);
     }
 }
