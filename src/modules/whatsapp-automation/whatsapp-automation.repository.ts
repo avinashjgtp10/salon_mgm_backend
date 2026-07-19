@@ -143,6 +143,28 @@ export const whatsappAutomationRepository = {
     return rows[0]
   },
 
+  // Return a salon template to a clean, resubmittable state — used when its
+  // Meta-side template was deleted/rejected and needs to be redone. Clears the
+  // stale meta_template_id/name (which would otherwise keep failing sends with
+  // Meta 132001) and flips back to DRAFT, but PRESERVES body_text so the salon's
+  // edited wording survives. Allowed from any status.
+  async resetTemplateForResubmission(salonId: string, eventType: AutomationEventType): Promise<AutomationTemplate> {
+    const { rows } = await pool.query(
+      `UPDATE wa_automation_templates
+       SET status = 'DRAFT',
+           meta_template_id = NULL,
+           rejection_reason = NULL,
+           approved_at = NULL,
+           template_name = $1,
+           updated_at = NOW()
+       WHERE salon_id = $2 AND event_type = $3
+       RETURNING *`,
+      [`${eventType}_draft`, salonId, eventType]
+    )
+    if (!rows[0]) throw new Error(`Salon template not found for eventType=${eventType}`)
+    return rows[0]
+  },
+
   async updateSyncedStatus(
     salonId: string,
     eventType: AutomationEventType,
@@ -161,6 +183,17 @@ export const whatsappAutomationRepository = {
     )
     if (!rows[0]) throw new Error(`Salon template not found for eventType=${eventType}`)
     return rows[0]
+  },
+
+  // Client's WhatsApp opt-in flags. Returns null if the client can't be found
+  // (walk-in / bad id) — caller treats that as "no explicit opt-out, allow".
+  async getClientOptIn(clientId: string): Promise<{ notifications: boolean; marketing: boolean } | null> {
+    const { rows } = await pool.query(
+      `SELECT whatsapp_notifications, whatsapp_marketing FROM clients WHERE id = $1`,
+      [clientId]
+    )
+    if (!rows[0]) return null
+    return { notifications: rows[0].whatsapp_notifications !== false, marketing: rows[0].whatsapp_marketing !== false }
   },
 
   // ── Per-Salon Automation Settings ─────────────────────────────────────────
@@ -321,6 +354,26 @@ export const whatsappAutomationRepository = {
       [referenceId, eventType]
     )
     return rows.length > 0
+  },
+
+  // Used by the reviews module to detect "was a review_request recently sent
+  // to this phone" when a plain-text reply comes in — phone_number here is
+  // digits-only via formatPhone(), matching Meta's inbound msg.from as-is.
+  async findRecentReviewRequestLog(
+    phone: string,
+    salonId: string,
+    withinHours = 72
+  ): Promise<{ reference_id: string | null; meta_message_id: string | null; client_id: string | null } | null> {
+    const { rows } = await pool.query(
+      `SELECT reference_id, meta_message_id, client_id
+       FROM wa_automation_logs
+       WHERE phone_number = $1 AND salon_id = $2 AND event_type = 'review_request'
+         AND status IN ('SENT', 'DELIVERED', 'READ')
+         AND sent_at > NOW() - ($3 || ' hours')::INTERVAL
+       ORDER BY sent_at DESC LIMIT 1`,
+      [phone, salonId, withinHours]
+    )
+    return rows[0] ?? null
   },
 
   async listLogs(filters: ListAutomationLogsFilters): Promise<{ data: AutomationLog[]; total: number }> {

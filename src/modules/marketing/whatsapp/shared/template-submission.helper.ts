@@ -8,8 +8,11 @@ import { whatsappMetaApi } from "./whatsapp.api";
 // marketing-campaign template feature by sharing mutable state/imports.
 function extractExamples(text: string): string[] {
     const matches = text.match(/{{\d+}}/g) ?? [];
-    return matches
-        .map((m) => parseInt(m.replace(/[{}]/g, "")))
+    // Dedupe to unique variable numbers — Meta wants ONE example per distinct
+    // variable, so a body that repeats {{1}} must not yield two example entries
+    // (a count mismatch Meta rejects, or surfaces later as send error 132012).
+    const unique = [...new Set(matches.map((m) => parseInt(m.replace(/[{}]/g, ""), 10)))];
+    return unique
         .sort((a, b) => a - b)
         .map((n) => `Example${n}`);
 }

@@ -3,6 +3,7 @@ import pool from '../../../../config/database'
 import { redisConnection, CampaignJobData } from './campaign.queue'
 import { whatsappMetaApi } from '../shared/whatsapp.api'
 import { inboxRepository } from '../inbox/inbox.repository'
+import { webhooksRepository } from '../webhooks/webhooks.repository'
 
 // ── Normalize phone to E.164 ──────────────────────────────────────────────────
 function normalizePhone(phone: string): string {
@@ -17,12 +18,16 @@ export const campaignWorker = new Worker<CampaignJobData>(
   'wa-campaign-messages',
   async (job: Job<CampaignJobData>) => {
     const { campaignId, salonId, contactIds } = job.data
+    console.log(`[WA-TRACE] campaign batch START — campaign=${campaignId} batchIndex=${job.data.batchIndex} contacts=${contactIds.length}`)
 
     const { rows: [camp] } = await pool.query(
       `SELECT status FROM wa_campaigns WHERE id = $1`,
       [campaignId]
     )
-    if (!camp || camp.status === 'PAUSED') return
+    if (!camp || camp.status === 'PAUSED') {
+      console.log(`[WA-TRACE] campaign batch SKIP — campaign=${campaignId} status=${camp?.status ?? 'not found'}`)
+      return
+    }
 
     const { rows: [waConfig] } = await pool.query(
       `SELECT * FROM whatsapp_configs WHERE salon_id = $1`,
@@ -117,6 +122,7 @@ export const campaignWorker = new Worker<CampaignJobData>(
         })
 
         const wamid = result?.messages?.[0]?.id
+        console.log(`[WA-TRACE] campaign ✅ SENT → ${normalizedPhone} (wamid: ${wamid ?? 'none'})`)
 
         await pool.query(
           `UPDATE wa_campaign_contacts
@@ -163,50 +169,43 @@ export const campaignWorker = new Worker<CampaignJobData>(
         sent++
 
       } catch (err: any) {
-        const errObj    = err?.response?.data?.error ?? {}
-        const code      = errObj.code?.toString()    ?? 'unknown'
-        const msg       = errObj.message             ?? err.message ?? 'Unknown error'
-        const isBlocked = [131047, 131026, 131051, 131049].includes(parseInt(code))
+        const errObj      = err?.response?.data?.error ?? {}
+        const code        = errObj.code?.toString()    ?? 'unknown'
+        const msg         = errObj.message             ?? err.message ?? 'Unknown error'
+        const isBlocked   = [131047, 131026, 131051, 131049].includes(parseInt(code))
+        // 131042 = "Business eligibility payment issue" — Meta account-level
+        // billing/eligibility block, not a per-recipient problem. Tagged
+        // separately so it's unmistakable in logs/DB if it recurs (previously
+        // diagnosed as the root cause of the "GoodHairDayOffer" mass-failure).
+        const isBilling   = parseInt(code) === 131042
 
-        console.error(`❌ Failed to send to ${normalizedPhone}: [${code}] ${msg}`)
+        const label = isBilling ? '💳 BILLING-BLOCKED' : isBlocked ? '🚫 BLOCKED' : '❌ FAILED'
+        console.log(`[WA-TRACE] campaign ${label} → ${normalizedPhone} — Meta [${code}] ${msg}`)
 
         await pool.query(
           `UPDATE wa_campaign_contacts
            SET status=$1, error_code=$2, error_message=$3, updated_at=NOW()
            WHERE id=$4`,
-          [isBlocked ? 'BLOCKED' : 'FAILED', code, msg, contact.id]
-        )
-        isBlocked ? blocked++ : failed++
+          [(isBlocked || isBilling) ? 'BLOCKED' : 'FAILED', code, msg, contact.id]
+        );
+        if (isBlocked || isBilling) { blocked++ } else { failed++ }
       }
 
       // 200ms delay between sends — respects Meta TPS limit
       await new Promise(r => setTimeout(r, 200))
     }
 
-    await pool.query(`
-      UPDATE wa_campaigns SET
-        sent_count    = sent_count    + $1,
-        failed_count  = failed_count  + $2,
-        blocked_count = blocked_count + $3,
-        updated_at    = NOW()
-      WHERE id = $4
-    `, [sent, failed, blocked, campaignId])
-
-    const { rows: [counts] } = await pool.query(`
-      SELECT
-        COUNT(*) FILTER (WHERE status != 'PENDING') AS done,
-        COUNT(*)                                     AS total
-      FROM wa_campaign_contacts WHERE campaign_id = $1
-    `, [campaignId])
-
-    if (parseInt(counts.done) >= parseInt(counts.total)) {
-      await pool.query(
-        `UPDATE wa_campaigns
-         SET status='COMPLETED', completed_at=NOW(), updated_at=NOW()
-         WHERE id=$1`,
-        [campaignId]
-      )
-    }
+    // Recompute the campaign's counts ABSOLUTELY from the contacts table (the
+    // single source of truth), not by incrementing. The old `sent_count = sent_count + $1`
+    // raced with the webhook handler's full-recompute (delivery/read receipts
+    // arrive continuously mid-send), and a safeQuery auto-retry on a dropped ack
+    // could double-apply an increment — together these caused sent_count to
+    // fluctuate up/down and even exceed total_contacts in production. Using the
+    // same idempotent recompute on both paths removes the race entirely. This
+    // also flips the campaign to COMPLETED when everything is terminal.
+    console.log(`[WA-TRACE] campaign batch DONE — campaign=${campaignId} batchIndex=${job.data.batchIndex} → sent=${sent} failed=${failed} blocked=${blocked}`)
+    void sent; void failed; void blocked;
+    await webhooksRepository.refreshCampaignCounts(campaignId)
   },
   // concurrency was 100 against a Postgres pool capped at 20 (config/database.ts) —
   // with 20+ batch jobs hitting the DB nearly simultaneously, pool contention/

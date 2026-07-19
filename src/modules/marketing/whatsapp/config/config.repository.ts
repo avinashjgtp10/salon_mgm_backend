@@ -22,7 +22,7 @@ export const configRepository = {
   async isVerifyTokenTaken(token: string, salonId: string): Promise<boolean> {
     const { rows } = await pool.query(
       `SELECT 1 FROM whatsapp_configs
-       WHERE webhook_verify_token = $1
+       WHERE TRIM(webhook_verify_token) = TRIM($1)
          AND salon_id != $2
        LIMIT 1`,
       [token, salonId]

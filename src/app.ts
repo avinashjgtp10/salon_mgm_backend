@@ -42,6 +42,7 @@ import settingsRoutes from "./modules/settings/settings.routes";
 import reportsRoutes from "./modules/reports/reports.routes";
 import blockedTimesRoutes from "./modules/blocked_times/blocked_times.routes";
 import analyticsRoutes from './modules/marketing/whatsapp/analytics/analytics.routes'
+import reviewsRoutes from './modules/reviews/reviews.routes'
 import botRoutes from "./modules/bot/bot.routes";
 import aiEngineRoutes from "./modules/ai-engine/ai-engine.routes";
 import { ensureTable as ensureAiEngineTables } from "./modules/ai-engine/ai-engine.repository";
@@ -194,6 +195,11 @@ app.use("/api/v1/oauth", authRoutes);
 app.use("/api/v1/billing", billingRoutes);
 app.use("/api/v1/subscriptions", subscriptionsRoutes);
 app.use("/api/v1/webhooks", marketingWebhooksRoutes);
+// Alias: some Meta app webhook configs point at a bare "/webhook" path. Accept
+// it too so inbound messages/verification work regardless of which callback URL
+// a WABA's subscription uses. Reuses the exact same global webhook handlers
+// (salon is identified by phone_number_id inside the payload, so this is safe).
+app.use("/webhook", marketingWebhooksRoutes);
 app.use("/api/v1/profile", profileRoutes);
 
 // ── Subscription gate — applied after exempt routes are registered ─────────────
@@ -225,6 +231,7 @@ app.use('/api/v1/marketing/analytics', analyticsRoutes)
 app.use('/api/v1/templates', marketingTemplatesRoutes)
 app.use('/api/v1/campaigns', marketingCampaignsRoutes)
 app.use('/api/v1/wa-config', marketingConfigRoutes)
+app.use('/api/v1/reviews', reviewsRoutes)
 app.use('/api/v1/inbox', inboxRouter);
 app.use("/api/v1/dashboard", salonDashboardRoutes);
 app.use("/api/v1/coupons", couponsRoutes);

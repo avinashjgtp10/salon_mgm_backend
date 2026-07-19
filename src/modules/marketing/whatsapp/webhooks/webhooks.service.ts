@@ -5,6 +5,7 @@ import { whatsappAutomationService } from '../../../whatsapp-automation/whatsapp
 import { notificationsService } from '../../../notifications/notifications.service'
 import { aiEngineService } from '../../../ai-engine/ai-engine.service'
 import { aiEngineRepository } from '../../../ai-engine/ai-engine.repository'
+import { reviewsService } from '../../../reviews/reviews.service'
 import pool from '../../../../config/database'
 import logger from '../../../../config/logger'
 
@@ -20,9 +21,11 @@ export const webhooksService = {
       throw new AppError(403, 'Missing verify token', 'WEBHOOK_VERIFY_FAILED')
     }
 
-    // Find which salon has this verify token
+    // Find which salon has this verify token. TRIM both sides so a token that
+    // was saved with incidental whitespace (pre-trim-fix rows) still matches
+    // the clean value Meta sends back — otherwise verification silently 403s.
     const { rows } = await pool.query(
-      `SELECT salon_id FROM whatsapp_configs WHERE webhook_verify_token = $1 LIMIT 1`,
+      `SELECT salon_id FROM whatsapp_configs WHERE TRIM(webhook_verify_token) = TRIM($1) LIMIT 1`,
       [token]
     )
 
@@ -39,7 +42,7 @@ export const webhooksService = {
   async verify(salonId: string, mode: string, token: string, challenge: string) {
     const verifyToken = await webhooksRepository.findVerifyToken(salonId)
     if (!verifyToken) throw new AppError(400, 'WhatsApp not configured', 'WA_NOT_CONFIGURED')
-    if (mode === 'subscribe' && token === verifyToken) return challenge
+    if (mode === 'subscribe' && token.trim() === verifyToken.trim()) return challenge
     throw new AppError(403, 'Webhook verification failed', 'WEBHOOK_VERIFY_FAILED')
   },
 
@@ -137,6 +140,15 @@ export const webhooksService = {
   },
 
   async processInboundMessage(salonId: string, msg: any, contact: any) {
+    // Star-rating capture — a tap on the interactive list we send after a
+    // review_request reply. Not an inbox text message, handled separately.
+    if (msg.type === 'interactive' && msg.interactive?.type === 'list_reply') {
+      await reviewsService.handleListReply(salonId, msg).catch((err: any) =>
+        logger.warn('[REVIEWS] handleListReply error:', err?.message)
+      )
+      return
+    }
+
     if (msg.type !== 'text') return
     const senderName = contact?.profile?.name ?? msg.from
     const messageBody = msg.text?.body ?? ''
@@ -147,6 +159,12 @@ export const webhooksService = {
       body:  messageBody,
       wamid: msg.id,
     })
+
+    // Additive, fire-and-forget: if this text is a reply following a recent
+    // review_request, sends the star-rating list — never blocks the inbox path.
+    reviewsService.handleTextReply(salonId, msg.from, messageBody).catch((err: any) =>
+      logger.warn('[REVIEWS] handleTextReply error:', err?.message)
+    )
     // Fire notification for incoming WhatsApp message (fire-and-forget)
     notificationsService.create({
       salon_id: salonId,
@@ -216,7 +234,10 @@ export const webhooksService = {
     } else if (type === 'READ') {
       await webhooksRepository.markRead(wamid, timestamp)
     } else if (type === 'FAILED') {
-      const isBlocked = [131047, 131026, 131051, 131049].includes(parseInt(errorCode ?? '0'))
+      // 131042 = account-level billing/eligibility block (no payment method on
+      // the WABA) — same "not this recipient's fault" bucket as the other
+      // codes here, kept in sync with campaign.processor.ts's send-time check.
+      const isBlocked = [131047, 131026, 131051, 131049, 131042].includes(parseInt(errorCode ?? '0'))
       await webhooksRepository.markFailed(wamid, isBlocked ? 'BLOCKED' : 'FAILED', errorCode, errorMsg)
     }
 
