@@ -516,6 +516,47 @@ async getTipReport(
     );
   },
 
+ async getAppointmentDetailTable(
+    salonId: string,
+    filters: {
+      from?: string;
+      to?: string;
+      dateType?: "appointment" | "booking";
+      statuses?: string[];
+    }
+  ) {
+    return reportsRepository.getAppointmentDetailTable(
+      salonId,
+      filters
+    );
+  },
+
+ async getDailySheetTable(
+    salonId: string,
+    filters: {
+      date: string;
+      service?: string;
+      staff?: string;
+    }
+  ) {
+    return reportsRepository.getDailySheetTable(
+      salonId,
+      filters
+    );
+  },
+
+ async getRewardPointsSummary(
+    salonId: string,
+    filters: {
+      search?: string;
+    }
+  ) {
+    return reportsRepository.getRewardPointsSummary(
+      salonId,
+      filters
+    );
+  },
+
  async getServiceReminderReport(
     salonId: string,
     filters: {

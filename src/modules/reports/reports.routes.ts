@@ -111,6 +111,24 @@ router.get(
 );
 
 router.get(
+    "/appointment-detail/table",
+    ...guard,
+    reportsController.getAppointmentDetailTable
+);
+
+router.get(
+    "/daily-sheet/table",
+    ...guard,
+    reportsController.getDailySheetTable
+);
+
+router.get(
+    "/reward-points/table",
+    ...guard,
+    reportsController.getRewardPointsSummary
+);
+
+router.get(
     "/service-reminder",
     ...guard,
     reportsController.getServiceReminderReport

@@ -6086,6 +6086,289 @@ async getAppointmentTable(
   }));
 },
 
+async getAppointmentDetailTable(
+  salonId: string,
+  filters: { from?: string; to?: string; dateType?: "appointment" | "booking"; statuses?: string[] }
+) {
+  const values: any[] = [salonId];
+  const where = ["m.salon_id = $1"];
+  let index = 2;
+
+  const dateColumn = filters.dateType === "booking" ? "m.created_at" : "m.scheduled_at";
+
+  if (filters.from) {
+    where.push(`DATE(${dateColumn}) >= $${index}`);
+    values.push(filters.from);
+    index++;
+  }
+
+  if (filters.to) {
+    where.push(`DATE(${dateColumn}) <= $${index}`);
+    values.push(filters.to);
+    index++;
+  }
+
+  if (filters.statuses && filters.statuses.length > 0) {
+    where.push(`m.status::text = ANY($${index}::text[])`);
+    values.push(filters.statuses);
+    index++;
+  }
+
+  const { rows } = await safeQuery(() =>
+    pool.query(
+      `
+      ${APPOINTMENT_BASE_CTES},
+      service_rows AS (
+        SELECT
+          a.id AS appointment_id,
+          COALESCE(svc.value->>'name', 'Service') AS service_name,
+          NULLIF(TRIM(COALESCE(svc.value->>'staff_name', '')), '') AS staff_name,
+          NULLIF(svc.value->>'staff_id', '') AS staff_id
+        FROM appointments a
+        LEFT JOIN LATERAL jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) AS svc(value)
+          ON TRUE
+      )
+      SELECT
+        m.id,
+        TO_CHAR(m.scheduled_at, 'YYYY-MM-DD') AS appointment_date,
+        TO_CHAR(m.scheduled_at, 'HH12:MI AM') AS appointment_time,
+        TO_CHAR(m.created_at, 'YYYY-MM-DD') AS booked_date,
+        COALESCE(c.full_name, 'Walk-in Client') AS client_name,
+        COALESCE(sr.service_name, sv.name, 'Service') AS service_name,
+        COALESCE(sr.staff_name, CONCAT(st.first_name, ' ', st.last_name), 'Unknown') AS staff_name,
+        m.status,
+        m.duration_minutes,
+        ROUND(COALESCE(m.appointment_amount, 0), 2) AS amount,
+        UPPER(COALESCE(m.payment_method, 'N/A')) AS payment_method,
+        CASE
+          WHEN m.status::text = 'cancelled' THEN 'cancelled'
+          WHEN m.status::text = 'no-show'   THEN 'no-show'
+          WHEN m.status::text = 'deleted'   THEN 'deleted'
+          WHEN m.status::text = 'paid'      THEN 'paid'
+          WHEN m.status::text = 'partial'   THEN 'partial'
+          ELSE 'unpaid'
+        END AS payment_status
+      FROM metrics m
+      LEFT JOIN service_rows sr
+        ON sr.appointment_id = m.id
+      LEFT JOIN clients c
+        ON c.id = m.client_id
+      LEFT JOIN staff st
+        ON st.id::text = COALESCE(sr.staff_id, m.staff_id::text)
+      LEFT JOIN services sv
+        ON sv.id::text = m.service_id::text
+      WHERE ${where.join(" AND ")}
+      ORDER BY ${dateColumn} DESC
+      `,
+      values
+    )
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    appointmentDate: row.appointment_date,
+    time: row.appointment_time,
+    bookedDate: row.booked_date,
+    clientName: row.client_name,
+    serviceName: row.service_name,
+    staffName: String(row.staff_name ?? "Unknown").trim() || "Unknown",
+    status: row.status,
+    duration: Number(row.duration_minutes ?? 0),
+    amount: Number(row.amount ?? 0),
+    paymentMethod: row.payment_method,
+    paymentStatus: row.payment_status,
+  }));
+},
+
+async getDailySheetTable(
+  salonId: string,
+  filters: { date: string; service?: string; staff?: string }
+) {
+  const values: any[] = [salonId, filters.date];
+  const having: string[] = [];
+  let index = 3;
+
+  if (filters.service) {
+    having.push(`sf.service ILIKE $${index}`);
+    values.push(`%${filters.service}%`);
+    index++;
+  }
+
+  if (filters.staff) {
+    having.push(`sf.staff ILIKE $${index}`);
+    values.push(`%${filters.staff}%`);
+    index++;
+  }
+
+  const { rows } = await safeQuery(() =>
+    pool.query(
+      `
+      WITH filtered_sales AS (
+        SELECT * FROM sales
+        WHERE salon_id = $1
+          AND LOWER(COALESCE(status::text, '')) = 'completed'
+          AND DATE(created_at) = $2
+      ),
+      payment_rollup AS (
+        SELECT
+          p.appointment_id,
+          MAX(p.payment_method) FILTER (
+            WHERE p.created_at = (
+              SELECT MAX(p2.created_at)
+              FROM payments p2
+              WHERE p2.appointment_id = p.appointment_id
+            )
+          ) AS latest_method
+        FROM payments p
+        WHERE p.appointment_id IS NOT NULL
+        GROUP BY p.appointment_id
+      ),
+      sale_item_rollup AS (
+        SELECT
+          si.sale_id,
+          COALESCE(STRING_AGG(DISTINCT si.name, ', ' ORDER BY si.name), '') AS items
+        FROM sale_items si
+        JOIN filtered_sales fs
+          ON fs.id = si.sale_id
+        GROUP BY si.sale_id
+      ),
+      appointment_item_rollup AS (
+        SELECT
+          a.id AS appointment_id,
+          COALESCE((
+            SELECT STRING_AGG(DISTINCT COALESCE(NULLIF(svc.value->>'name', ''), 'Service'), ', ')
+            FROM jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) AS svc(value)
+          ), '') AS services
+        FROM appointments a
+        JOIN filtered_sales fs
+          ON fs.appointment_id = a.id
+      ),
+      sale_staff_rollup AS (
+        SELECT
+          staff_lines.sale_id,
+          COALESCE(
+            STRING_AGG(DISTINCT staff_lines.staff_name, ', ' ORDER BY staff_lines.staff_name),
+            'Unknown'
+          ) AS staff_names
+        FROM (
+          SELECT
+            s.id AS sale_id,
+            COALESCE(
+              NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), ''),
+              'Unknown'
+            ) AS staff_name
+          FROM filtered_sales s
+          LEFT JOIN sale_items si
+            ON si.sale_id = s.id
+          LEFT JOIN staff st
+            ON st.id = COALESCE(si.staff_id, s.staff_id)
+        ) staff_lines
+        GROUP BY staff_lines.sale_id
+      ),
+      sales_final AS (
+        SELECT
+          s.id,
+          s.created_at AS sort_ts,
+          TO_CHAR(s.created_at, 'HH12:MI AM') AS time,
+          COALESCE(s.invoice_number, s.id::text) AS ticket_no,
+          COALESCE(c.full_name, 'Walk-in Client') AS client_name,
+          COALESCE(NULLIF(sir.items, ''), NULLIF(air.services, ''), 'Service') AS service,
+          COALESCE(ssr.staff_names, 'Unknown') AS staff,
+          COALESCE(s.total_amount::numeric, 0) AS amount,
+          UPPER(COALESCE(pr.latest_method, s.payment_method, 'N/A')) AS payment_method
+        FROM filtered_sales s
+        LEFT JOIN clients c
+          ON c.id = s.client_id
+        LEFT JOIN payment_rollup pr
+          ON pr.appointment_id = s.appointment_id
+        LEFT JOIN sale_item_rollup sir
+          ON sir.sale_id = s.id
+        LEFT JOIN appointment_item_rollup air
+          ON air.appointment_id = s.appointment_id
+        LEFT JOIN sale_staff_rollup ssr
+          ON ssr.sale_id = s.id
+      )
+      SELECT * FROM sales_final sf
+      ${having.length > 0 ? "WHERE " + having.join(" AND ") : ""}
+      ORDER BY sf.sort_ts ASC
+      `,
+      values
+    )
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    time: row.time,
+    ticketNo: row.ticket_no,
+    clientName: row.client_name,
+    service: row.service,
+    staff: row.staff,
+    amount: Number(row.amount ?? 0),
+    paymentMethod: row.payment_method,
+  }));
+},
+
+async getRewardPointsSummary(
+  salonId: string,
+  filters: { search?: string }
+) {
+  const values: any[] = [salonId];
+  const where = ["c.salon_id = $1"];
+  let index = 2;
+
+  if (filters.search) {
+    where.push(`(c.full_name ILIKE $${index} OR c.phone_number ILIKE $${index})`);
+    values.push(`%${filters.search}%`);
+    index++;
+  }
+
+  const { rows } = await safeQuery(() =>
+    pool.query(
+      `
+      WITH ledger_rollup AS (
+        SELECT
+          client_id,
+          COALESCE(SUM(points) FILTER (WHERE type = 'earn'), 0) AS total_earned,
+          COALESCE(SUM(-points) FILTER (WHERE type = 'redeem'), 0) AS total_redeemed,
+          MAX(created_at) AS last_activity_at
+        FROM reward_points_ledger
+        WHERE salon_id = $1
+        GROUP BY client_id
+      )
+      SELECT
+        c.id AS client_id,
+        c.full_name,
+        c.phone_number,
+        COALESCE(c.reward_points_balance, 0) AS points_available,
+        COALESCE(lr.total_earned, 0) AS points_earned,
+        COALESCE(lr.total_redeemed, 0) AS points_redeemed,
+        lr.last_activity_at
+      FROM clients c
+      LEFT JOIN ledger_rollup lr
+        ON lr.client_id = c.id
+      WHERE ${where.join(" AND ")}
+        AND (
+          COALESCE(c.reward_points_balance, 0) > 0
+          OR COALESCE(lr.total_earned, 0) > 0
+          OR COALESCE(lr.total_redeemed, 0) > 0
+        )
+      ORDER BY points_available DESC, points_redeemed DESC
+      `,
+      values
+    )
+  );
+
+  return rows.map((row) => ({
+    clientId: row.client_id,
+    clientName: row.full_name || "Walk-in Client",
+    mobile: row.phone_number || "—",
+    pointsAvailable: Number(row.points_available ?? 0),
+    pointsEarned: Number(row.points_earned ?? 0),
+    pointsRedeemed: Number(row.points_redeemed ?? 0),
+    lastActivityAt: row.last_activity_at,
+  }));
+},
+
 async getAppointmentReport(
   salonId: string,
   filters: { from?: string; to?: string }
