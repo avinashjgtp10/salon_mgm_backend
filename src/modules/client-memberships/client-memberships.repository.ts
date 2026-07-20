@@ -49,6 +49,11 @@ export async function ensureTable(): Promise<void> {
     `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS created_at      TIMESTAMPTZ DEFAULT NOW()`,
     `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS updated_at      TIMESTAMPTZ DEFAULT NOW()`,
     `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS membership_wallet_balance NUMERIC(10,2) NOT NULL DEFAULT 0`,
+    // Written alongside expires_at on every INSERT (see create() below) — was
+    // previously only added manually against dev and missing from this patch
+    // list, so environments where ensureTable() never got a matching manual
+    // ALTER TABLE run (e.g. prod) had every membership purchase fail outright.
+    `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS end_date        TIMESTAMPTZ`,
   ];
   for (const sql of patches) {
     await pool.query(sql);
