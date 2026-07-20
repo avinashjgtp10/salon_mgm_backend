@@ -1148,8 +1148,14 @@ const buildStaffCommissionSourceQuery = (
           ) AS commission_kind,
           ROUND(
             CASE
+              -- ce.commission_kind is only non-NULL when a commission_earned row
+              -- actually exists for this (sale, staff, category) — including a
+              -- legitimate ₹0 row for a membership/package-covered item. Checking
+              -- that (not commission_amount > 0) means a real, persisted zero is
+              -- trusted instead of falling through to recompute commission from
+              -- the item's raw (pre-coverage) catalog price below.
               WHEN COALESCE(sct.category_revenue, 0) > 0
-                   AND COALESCE(ce.commission_amount, 0) > 0
+                   AND ce.commission_kind IS NOT NULL
               THEN
                 COALESCE(ce.commission_amount, 0)
                 *

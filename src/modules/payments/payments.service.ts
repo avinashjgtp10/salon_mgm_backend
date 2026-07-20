@@ -199,6 +199,29 @@ export const paymentsService = {
             }
           }
 
+          // Per-item wallet-used breakdown — read back from membership_usage_log
+          // (persisted above, whether deducted just now or on a prior call for
+          // this appointment) rather than relying on deductWalletForBooking's
+          // in-memory result, so this works identically for both branches above.
+          // Used below to exclude the wallet-covered portion of each service/
+          // product from GST — a client shouldn't be taxed on money that never
+          // actually changed hands as a sale.
+          let serviceWalletUsed = 0;
+          let productWalletUsed = 0;
+          if (membershipWalletUsed > 0) {
+            try {
+              const walletUsedByItem = await clientMembershipsRepository.getWalletUsedPerItemForAppointment(data.appointment_id);
+              serviceWalletUsed = (appt.services || []).reduce(
+                (s, i) => s + (walletUsedByItem.get(String(i.service_id)) ?? 0), 0,
+              );
+              productWalletUsed = (appt.product_items || []).reduce(
+                (s, i) => s + (walletUsedByItem.get(String(i.product_id)) ?? 0), 0,
+              );
+            } catch (err: any) {
+              logger.warn('[payments] membership wallet per-item lookup failed:', err?.message ?? err);
+            }
+          }
+
           // ── Reward points redemption: own dedicated balance now, not eWallet.
           // Never trust a points count sent from the frontend — cap it at the
           // client's real balance, same principle as eWallet above. Converted
@@ -248,10 +271,18 @@ export const paymentsService = {
           try {
             const activeTaxes = await getActiveTaxes(data.salon_id);
             const discRatio = rawSubtotal > 0 ? Math.min(1, discount / rawSubtotal) : 0;
+            // Membership-wallet-covered amounts are excluded from the taxable
+            // base (not just the discount ratio above) — that portion of the
+            // item was never actually charged to the client, so it shouldn't
+            // be taxed either. Only service/product buckets can carry wallet
+            // coverage today (see itemsForWallet above); packages/memberships
+            // are untouched. Deliberately NOT subtracted from actualBill/
+            // grandTotal elsewhere — effectiveBill below already subtracts the
+            // full membershipWalletUsed once; doing it here too would double-count.
             taxAmount = computeExclusiveTaxAddOn([
-              { type: 'service',    base: serviceTotal    - serviceTotal    * discRatio },
+              { type: 'service',    base: Math.max(0, serviceTotal    - serviceTotal    * discRatio - serviceWalletUsed) },
               { type: 'packages',   base: packageTotal    - packageTotal    * discRatio },
-              { type: 'product',    base: productTotal    - productTotal    * discRatio },
+              { type: 'product',    base: Math.max(0, productTotal    - productTotal    * discRatio - productWalletUsed) },
               { type: 'membership', base: membershipTotal - membershipTotal * discRatio },
             ], activeTaxes);
           } catch (err: any) {

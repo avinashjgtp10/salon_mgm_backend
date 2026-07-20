@@ -437,6 +437,21 @@ export const clientMembershipsRepository = {
     return parseFloat(rows[0]?.total ?? '0');
   },
 
+  // Per-item breakdown of wallet usage for one appointment, keyed by service_id
+  // (which also holds the product's id for a product redemption — see
+  // deductWalletAcrossMemberships below). Single source of truth for excluding
+  // membership-covered amounts from tax (payments.service.ts) and staff
+  // commission (commissionCalculation.service.ts) on a per-item basis.
+  async getWalletUsedPerItemForAppointment(appointmentId: string): Promise<Map<string, number>> {
+    const { rows } = await pool.query(
+      `SELECT service_id, COALESCE(SUM(amount_deducted),0) AS used
+       FROM membership_usage_log WHERE appointment_id = $1 AND service_id IS NOT NULL
+       GROUP BY service_id`,
+      [appointmentId],
+    );
+    return new Map(rows.map((r) => [String(r.service_id), parseFloat(r.used)]));
+  },
+
   // Draws from several memberships in sequence (the order given in
   // clientMembershipIds, highest-balance-first) instead of just one — a
   // single service's amount can be split across multiple memberships if the
