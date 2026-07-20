@@ -21,6 +21,22 @@ const getSalonId = (req: AuthRequest): string => {
 
 const getBaseUrl = (req: Request) => `${req.protocol}://${req.get("host")}`;
 
+const parseListFilters = (req: AuthRequest) => {
+    const { search, category_id, brand_id, retail_sales_enabled, min_price, max_price, stock, sort_by, sort_order } = req.query;
+    return {
+        search: search as string | undefined,
+        category_id: category_id as string | undefined,
+        brand_id: brand_id as string | undefined,
+        retail_sales_enabled:
+            retail_sales_enabled !== undefined ? retail_sales_enabled === "true" : undefined,
+        min_price: min_price ? parseFloat(min_price as string) : undefined,
+        max_price: max_price ? parseFloat(max_price as string) : undefined,
+        stock: stock as "all" | "low" | "out_of_stock" | undefined,
+        sort_by: sort_by as string | undefined,
+        sort_order: sort_order as "ASC" | "DESC" | undefined,
+    };
+};
+
 // ─── Products Controller ──────────────────────────────────────────────────────
 
 export const productsController = {
@@ -31,10 +47,7 @@ export const productsController = {
                 requesterUserId: req.user?.userId, requesterRole: req.user?.role,
                 path: req.originalUrl, method: req.method,
             });
-            const {
-                search, category_id, brand_id, retail_sales_enabled,
-                min_price, max_price, stock, sort_by, sort_order, page, limit, pageSize,
-            } = req.query;
+            const { page, limit, pageSize } = req.query;
             const salonId = await getSalonId(req);
             const resolvedLimit = pageSize
                 ? parseInt(pageSize as string, 10)
@@ -44,16 +57,7 @@ export const productsController = {
                 requesterRole: req.user?.role,
                 salonId,
                 filters: {
-                    search: search as string | undefined,
-                    category_id: category_id as string | undefined,
-                    brand_id: brand_id as string | undefined,
-                    retail_sales_enabled:
-                        retail_sales_enabled !== undefined ? retail_sales_enabled === "true" : undefined,
-                    min_price: min_price ? parseFloat(min_price as string) : undefined,
-                    max_price: max_price ? parseFloat(max_price as string) : undefined,
-                    stock: stock as "all" | "low" | "out_of_stock" | undefined,
-                    sort_by: sort_by as string | undefined,
-                    sort_order: sort_order as "ASC" | "DESC" | undefined,
+                    ...parseListFilters(req),
                     page: page ? parseInt(page as string, 10) : undefined,
                     limit: resolvedLimit,
                 },
@@ -219,12 +223,13 @@ export const productsController = {
 
     async exportCSV(req: any, res: any, next: any) {
         try {
-            logger.info("GET /products/export/csv called", { path: req.originalUrl });
+            logger.info("GET /products/export/csv called", { path: req.originalUrl, query: req.query });
             const salonId = await getSalonId(req);
             const { stream, filename } = await productsService.exportCSV({
                 requesterUserId: req.user?.userId ?? "anonymous",
                 requesterRole: req.user?.role,
                 salonId,
+                filters: parseListFilters(req),
             });
             res.setHeader("Content-Type", "text/csv");
             res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
@@ -234,12 +239,13 @@ export const productsController = {
 
     async exportExcel(req: any, res: any, next: any) {
         try {
-            logger.info("GET /products/export/excel called", { path: req.originalUrl });
+            logger.info("GET /products/export/excel called", { path: req.originalUrl, query: req.query });
             const salonId = await getSalonId(req);
             const { buffer, filename } = await productsService.exportExcel({
                 requesterUserId: req.user?.userId ?? "anonymous",
                 requesterRole: req.user?.role,
                 salonId,
+                filters: parseListFilters(req),
             });
             res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
             res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
@@ -249,12 +255,13 @@ export const productsController = {
 
     async exportPDF(req: any, res: any, next: any) {
         try {
-            logger.info("GET /products/export/pdf called", { path: req.originalUrl });
+            logger.info("GET /products/export/pdf called", { path: req.originalUrl, query: req.query });
             const salonId = await getSalonId(req);
             const { stream, filename } = await productsService.exportPDF({
                 requesterUserId: req.user?.userId ?? "anonymous",
                 requesterRole: req.user?.role,
                 salonId,
+                filters: parseListFilters(req),
             });
             res.setHeader("Content-Type", "application/pdf");
             res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);

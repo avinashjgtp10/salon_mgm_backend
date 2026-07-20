@@ -33,61 +33,56 @@ export const productsRepository = {
         return rows[0] || null;
     },
 
-    async listAll(salonId: string): Promise<Product[]> {
-        const { rows } = await pool.query(
-            `SELECT ${PRODUCT_COLUMNS_P}, pb.name as brand_name
-             FROM products p
-             LEFT JOIN product_brands pb ON p.brand_id = pb.id
-             WHERE p.salon_id = $1
-             ORDER BY p.created_at DESC`,
-            [salonId]
-        );
-        return rows;
-    },
-
-    async list(filters: ProductListFilters, salonId: string): Promise<{ data: Product[]; total: number }> {
+    // `prefix` is the column-qualifier to use (e.g. "p." when querying the aliased
+    // `products p` join used by listExport, "" for the unaliased table in `list`).
+    _buildFilterConditions(filters: ProductListFilters, salonId: string, prefix = ""): { where: string; values: unknown[] } {
         const conditions: string[] = [];
         const values: unknown[] = [];
         let idx = 1;
 
         // Always scope to salon first
-        conditions.push(`salon_id = $${idx++}`);
+        conditions.push(`${prefix}salon_id = $${idx++}`);
         values.push(salonId);
 
         if (filters.search) {
-            conditions.push(`(name ILIKE $${idx} OR barcode ILIKE $${idx})`);
+            conditions.push(`(${prefix}name ILIKE $${idx} OR ${prefix}barcode ILIKE $${idx})`);
             values.push(`%${filters.search}%`);
             idx++;
         }
         if (filters.category_id) {
-            conditions.push(`category_id = $${idx++}`);
+            conditions.push(`${prefix}category_id = $${idx++}`);
             values.push(filters.category_id);
         }
         if (filters.brand_id) {
-            conditions.push(`brand_id = $${idx++}`);
+            conditions.push(`${prefix}brand_id = $${idx++}`);
             values.push(filters.brand_id);
         }
         if (filters.retail_sales_enabled !== undefined) {
-            conditions.push(`retail_sales_enabled = $${idx++}`);
+            conditions.push(`${prefix}retail_sales_enabled = $${idx++}`);
             values.push(filters.retail_sales_enabled);
         }
         if (filters.min_price !== undefined) {
-            conditions.push(`supply_price >= $${idx++}`);
+            conditions.push(`${prefix}supply_price >= $${idx++}`);
             values.push(filters.min_price);
         }
         if (filters.max_price !== undefined) {
-            conditions.push(`supply_price <= $${idx++}`);
+            conditions.push(`${prefix}supply_price <= $${idx++}`);
             values.push(filters.max_price);
         }
         if (filters.stock !== undefined && filters.stock !== "all") {
             if (filters.stock === "low") {
-                conditions.push(`(amount > 0 AND amount <= qty_alert)`);
+                conditions.push(`(${prefix}amount > 0 AND ${prefix}amount <= ${prefix}qty_alert)`);
             } else if (filters.stock === "out_of_stock") {
-                conditions.push(`amount = 0`);
+                conditions.push(`${prefix}amount = 0`);
             }
         }
 
         const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+        return { where, values };
+    },
+
+    async list(filters: ProductListFilters, salonId: string): Promise<{ data: Product[]; total: number }> {
+        const { where, values } = productsRepository._buildFilterConditions(filters, salonId);
 
         const allowedSorts: Record<string, string> = {
             name: "name", created_at: "created_at",
@@ -100,7 +95,7 @@ export const productsRepository = {
         const limit = filters.limit ?? 20;
         const offset = (page - 1) * limit;
 
-        const dataIdx = idx;
+        const dataIdx = values.length + 1;
         const [{ rows: countRows }, { rows }] = await Promise.all([
             pool.query(`SELECT COUNT(*) AS total FROM products ${where}`, values),
             pool.query(
@@ -111,6 +106,29 @@ export const productsRepository = {
         const total = parseInt(countRows[0].total, 10);
 
         return { data: rows, total };
+    },
+
+    // Same filtering as `list`, but returns every matching row (no pagination) with the
+    // brand name joined in, for use by the export endpoints so exports mirror the table.
+    async listExport(filters: ProductListFilters, salonId: string): Promise<Product[]> {
+        const { where, values } = productsRepository._buildFilterConditions(filters, salonId, "p.");
+
+        const allowedSorts: Record<string, string> = {
+            name: "name", created_at: "created_at",
+            supply_price: "supply_price", retail_price: "retail_price",
+        };
+        const orderCol = allowedSorts[filters.sort_by ?? "created_at"] ?? "created_at";
+        const orderDir = filters.sort_order === "ASC" ? "ASC" : "DESC";
+
+        const { rows } = await pool.query(
+            `SELECT ${PRODUCT_COLUMNS_P}, pb.name as brand_name
+             FROM products p
+             LEFT JOIN product_brands pb ON p.brand_id = pb.id
+             ${where}
+             ORDER BY p.${orderCol} ${orderDir}`,
+            values
+        );
+        return rows;
     },
 
     async create(data: CreateProductBody, salonId: string): Promise<Product> {
