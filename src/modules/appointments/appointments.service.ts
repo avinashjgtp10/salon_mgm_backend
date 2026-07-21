@@ -20,12 +20,48 @@ import { clientsRepository } from "../clients/clients.repository";
 import { sendReceiptDocument } from "../sales/receipt-whatsapp.service";
 import { sendPurchaseReceipt } from "../sales/receipt-send.helper";
 import { notifyAppointmentCompleted } from "./appointment-completed.helper";
+import { computeBillTotals, rowsTotal, ActiveTaxRow } from "../pricing/pricing.engine";
+import { getActiveTaxes } from "../settings/tax.util";
 import {
     Appointment,
     CreateAppointmentBody,
     UpdateAppointmentBody,
     CancelAppointmentBody,
 } from "./appointments.types";
+
+// A "Booked" (never paid) appointment has no persisted, tax-inclusive total
+// anywhere — `appointments` only stores the raw inputs (discount, ex_charges,
+// tip, line items), and `tax_breakdown` above is sourced entirely from the
+// `payments` table, which has zero rows until the client actually pays. That
+// left the calendar tooltip/chip showing a bare pre-tax item sum for any
+// unpaid booking. This backfills tax_breakdown at READ time only — same
+// shared engine as checkout/preview, no DB write, no new column — and ONLY
+// when a real payment hasn't already produced one; once money has actually
+// been collected, that payment's tax_breakdown is authoritative (reflects
+// wallet/coupon actually applied) and must never be overridden by a fresh
+// recompute here.
+function backfillTaxBreakdown(appt: Appointment, activeTaxes: ActiveTaxRow[]): Appointment {
+    if (Array.isArray(appt.tax_breakdown) && appt.tax_breakdown.length > 0) return appt;
+    const toRow = (items: any[] = []) => (items || []).map((i) => ({
+        price: Number(i?.price) || 0,
+        qty: Number(i?.quantity) || 1,
+        isPackageService: !!i?.is_package_service,
+    }));
+    const result = computeBillTotals({
+        actualAmounts: {
+            service:    rowsTotal(toRow((appt as any).services)),
+            packages:   rowsTotal(toRow((appt as any).package_items)),
+            product:    rowsTotal(toRow((appt as any).product_items)),
+            membership: rowsTotal(toRow((appt as any).membership_items)),
+        },
+        discountType: ((appt as any).discount_type === "percentage" ? "percentage" : "flat"),
+        discountValue: Number((appt as any).discount_value) || 0,
+        taxes: activeTaxes,
+        exCharges: Number((appt as any).ex_charges) || 0,
+        tip: Number((appt as any).tip_amount) || 0,
+    });
+    return { ...appt, tax_breakdown: result.taxBreakdown, computed_grand_total: result.grandTotal };
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -168,7 +204,9 @@ export const appointmentsService = {
     async getById(id: string): Promise<Appointment> {
         const appointment = await appointmentsRepository.findById(id);
         if (!appointment) throw new AppError(404, "Appointment not found", "NOT_FOUND");
-        return appointment;
+        if (Array.isArray(appointment.tax_breakdown) && appointment.tax_breakdown.length > 0) return appointment;
+        const activeTaxes = await getActiveTaxes(appointment.salon_id).catch(() => []);
+        return backfillTaxBreakdown(appointment, activeTaxes);
     },
 
     async list(params: {
@@ -183,13 +221,23 @@ export const appointmentsService = {
         limit?: number;
     }): Promise<{ data: Appointment[]; totalRecords: number; totalPages: number; currentPage: number } | Appointment[]> {
         const { salonId, clientId, date, staffId, status, startDate, endDate, page, limit } = params;
-        if (clientId) return appointmentsRepository.listByClientId(clientId);
+        if (clientId) {
+            const appts = await appointmentsRepository.listByClientId(clientId);
+            const needsBackfill = appts.some((a) => !Array.isArray(a.tax_breakdown) || a.tax_breakdown.length === 0);
+            if (!needsBackfill || appts.length === 0) return appts;
+            const activeTaxes = await getActiveTaxes(appts[0].salon_id).catch(() => []);
+            return appts.map((a) => backfillTaxBreakdown(a, activeTaxes));
+        }
         if (!salonId) throw new AppError(400, "salon_id or client_id is required", "VALIDATION_ERROR");
-        return appointmentsRepository.listBySalonId(salonId, {
+        const result = await appointmentsRepository.listBySalonId(salonId, {
             date, staff_id: staffId, status,
             start_date: startDate, end_date: endDate,
             page, limit,
         });
+        const needsBackfill = result.data.some((a) => !Array.isArray(a.tax_breakdown) || a.tax_breakdown.length === 0);
+        if (!needsBackfill) return result;
+        const activeTaxes = await getActiveTaxes(salonId).catch(() => []);
+        return { ...result, data: result.data.map((a) => backfillTaxBreakdown(a, activeTaxes)) };
     },
 
     async update(params: {

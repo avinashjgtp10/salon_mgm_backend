@@ -78,6 +78,11 @@ export type Appointment = {
     invoice_number?: number | null;
     reward_points_value?: number | null;
     tax_breakdown?: { name: string; rate: number; amount: number; inclusive: boolean }[] | null;
+    // Backfilled at read time only for an appointment with no payment yet
+    // (see appointments.service.ts::backfillTaxBreakdown) — the full
+    // discount+tax-inclusive total, since the raw item-price sum alone never
+    // accounted for either.
+    computed_grand_total?: number | null;
     // Joined fields (from clients / staff tables — not stored as columns)
     client_name?: string | null;
     client_phone?: string | null;
