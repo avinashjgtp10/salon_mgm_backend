@@ -5429,7 +5429,7 @@ async getDailySheetTable(
         SELECT * FROM sales
         WHERE salon_id = $1
           AND LOWER(COALESCE(status::text, '')) = 'completed'
-          AND DATE(created_at) = $2
+          AND created_at >= $2::date AND created_at < ($2::date + interval '1 day')
       ),
       payment_rollup AS (
         SELECT
@@ -5490,6 +5490,7 @@ async getDailySheetTable(
       sales_final AS (
         SELECT
           s.id,
+          s.appointment_id,
           s.created_at AS sort_ts,
           TO_CHAR(s.created_at, 'HH12:MI AM') AS time,
           COALESCE(s.invoice_number, s.id::text) AS ticket_no,
@@ -5520,6 +5521,7 @@ async getDailySheetTable(
 
   return rows.map((row) => ({
     id: row.id,
+    appointmentId: row.appointment_id,
     time: row.time,
     ticketNo: row.ticket_no,
     clientName: row.client_name,
