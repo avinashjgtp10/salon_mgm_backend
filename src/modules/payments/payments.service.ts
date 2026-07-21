@@ -18,7 +18,8 @@ import { branchesRepository } from '../branches/branches.repository';
 import { staffService } from '../staff/staff.service';
 import { clientsRepository } from '../clients/clients.repository';
 import { getIO } from '../../config/socket';
-import { getActiveTaxes, computeExclusiveTaxAddOn } from '../settings/tax.util';
+import { getActiveTaxes } from '../settings/tax.util';
+import { computeBillTotals } from '../pricing/pricing.engine';
 
 export const paymentsService = {
 
@@ -263,33 +264,6 @@ export const paymentsService = {
           }
           data.referral_credit_used = referralCreditUsedActual;
 
-          // ── Tax: apply the same active/applicable rates + bucket allocation
-          // the frontend uses (totalsUtils.ts computeBucketTax) — the amount
-          // actually owed must include exclusive tax, not just item prices
-          // minus discount. Previously this was skipped entirely here, so the
-          // receipt correctly displayed tax but the appointment could be
-          // marked "Paid" for less than what was shown to the client.
-          try {
-            const activeTaxes = await getActiveTaxes(data.salon_id);
-            const discRatio = rawSubtotal > 0 ? Math.min(1, discount / rawSubtotal) : 0;
-            // Membership-wallet-covered amounts are excluded from the taxable
-            // base (not just the discount ratio above) — that portion of the
-            // item was never actually charged to the client, so it shouldn't
-            // be taxed either. Only service/product buckets can carry wallet
-            // coverage today (see itemsForWallet above); packages/memberships
-            // are untouched. Deliberately NOT subtracted from actualBill/
-            // grandTotal elsewhere — effectiveBill below already subtracts the
-            // full membershipWalletUsed once; doing it here too would double-count.
-            taxAmount = computeExclusiveTaxAddOn([
-              { type: 'service',    base: Math.max(0, serviceTotal    - serviceTotal    * discRatio - serviceWalletUsed) },
-              { type: 'packages',   base: packageTotal    - packageTotal    * discRatio },
-              { type: 'product',    base: Math.max(0, productTotal    - productTotal    * discRatio - productWalletUsed) },
-              { type: 'membership', base: membershipTotal - membershipTotal * discRatio },
-            ], activeTaxes);
-          } catch (err: any) {
-            logger.warn('[payments] tax computation failed:', err?.message ?? err);
-          }
-
           // Both are real amounts the client actually pays alongside the bill —
           // an ex-charge (business keeps it) and a tip (passed to staff) — so
           // both must be part of what's owed/collected here, even though only
@@ -297,8 +271,49 @@ export const paymentsService = {
           exChargesAmt = Number(appt.ex_charges) || 0;
           tipAmt       = Number(appt.tip_amount) || 0;
 
-          const grandTotal    = Math.round(actualBill - discount + taxAmount + exChargesAmt + tipAmt);
-          const effectiveBill = Math.max(0, grandTotal - ewallet - membershipWalletUsed - rewardPointsRedeemedValue - referralCreditRequestedValue);
+          // ── Tax + grand total: single shared pricing engine (see
+          // pricing.engine.ts) — the same math totalsUtils.ts uses on the
+          // frontend, extended so this backend call site is the authoritative
+          // source of what's actually owed, not just item prices minus discount.
+          // Previously tax was skipped entirely here, so the receipt correctly
+          // displayed tax but the appointment could be marked "Paid" for less
+          // than what was shown to the client.
+          let grandTotal = Math.round(actualBill - discount + exChargesAmt + tipAmt);
+          let effectiveBill = Math.max(0, grandTotal - ewallet - membershipWalletUsed - rewardPointsRedeemedValue - referralCreditRequestedValue);
+          try {
+            const activeTaxes = await getActiveTaxes(data.salon_id);
+            const result = computeBillTotals({
+              actualAmounts: { service: serviceTotal, packages: packageTotal, product: productTotal, membership: membershipTotal },
+              discountType: 'flat',
+              discountValue: discount,
+              taxes: activeTaxes,
+              exCharges: exChargesAmt,
+              tip: tipAmt,
+              eWalletUsed: ewallet,
+              membershipWalletUsed,
+              // Membership-wallet-covered amounts are excluded from the taxable
+              // base (not just the discount ratio) — that portion of the item
+              // was never actually charged to the client, so it shouldn't be
+              // taxed either. Only service/product buckets can carry wallet
+              // coverage today (see itemsForWallet above); packages/memberships
+              // are untouched. Deliberately NOT subtracted from actualBill/
+              // grandTotal elsewhere — effectiveBill already subtracts the full
+              // membershipWalletUsed once; doing it here too would double-count.
+              membershipServiceWalletUsed: serviceWalletUsed,
+              membershipProductWalletUsed: productWalletUsed,
+              rewardPointsRedeemedValue,
+              referralCreditUsed: referralCreditRequestedValue,
+              // Reproduces this call site's pre-existing rounding order — see
+              // the doc comment on this flag in pricing.engine.ts.
+              roundSubtotalBeforeDiscount: true,
+            });
+            taxAmount = result.gstAmount;
+            grandTotal = result.grandTotal;
+            effectiveBill = result.effectiveTotal;
+          } catch (err: any) {
+            logger.warn('[payments] tax computation failed:', err?.message ?? err);
+          }
+
           data.membership_wallet_used = membershipWalletUsed;
 
           // `|| ` treats 0 as "not provided" and falls through to gross_amount — which

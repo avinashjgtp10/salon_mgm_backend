@@ -8,6 +8,11 @@ export interface TaxApplicableFor {
 }
 
 export interface ActiveTaxRow {
+  // The tax's display name — sourced from the settings row's `key` column,
+  // not the parsed JSON value (mirrors the frontend's taxSettings.ts, which
+  // does `tax_name: s.key`). Needed for the per-tax-name `taxBreakdown` the
+  // pricing engine produces; unused by computeExclusiveTaxAddOn below.
+  tax_name: string;
   tax_value: number;
   inclusive_taxes: boolean;
   applicable_for: TaxApplicableFor;
@@ -63,9 +68,10 @@ export async function getActiveTaxes(salonId: string): Promise<ActiveTaxRow[]> {
 
   const rows = await settingsRepository.findAll(salonId);
   return rows
-    .map((r) => parseTaxValue(r.value))
+    .map((r) => ({ ...parseTaxValue(r.value), key: r.key }))
     .filter((v) => v.active && (v.tax_type !== undefined || v.applicable_for !== undefined))
     .map((v) => ({
+      tax_name: v.key ?? "",
       tax_value: Number(v.tax_value) || 0,
       inclusive_taxes: Boolean(v.inclusive_taxes),
       applicable_for: {
@@ -77,24 +83,3 @@ export async function getActiveTaxes(salonId: string): Promise<ActiveTaxRow[]> {
     }));
 }
 
-type BucketType = "service" | "product" | "membership" | "packages";
-
-// Only the exclusive (add-on-top) tax total affects the amount actually owed
-// — inclusive taxes are already baked into the item price, so they don't
-// change the total, only its breakdown (which is a display-only concern,
-// already handled by the frontend's receipt/bill views).
-export function computeExclusiveTaxAddOn(
-  buckets: { type: BucketType; base: number }[],
-  taxes: ActiveTaxRow[]
-): number {
-  let addOn = 0;
-  buckets.forEach(({ type, base }) => {
-    if (base <= 0) return;
-    taxes
-      .filter((t) => t.applicable_for[type] && t.tax_value > 0 && !t.inclusive_taxes)
-      .forEach((t) => {
-        addOn += (base * t.tax_value) / 100;
-      });
-  });
-  return addOn;
-}

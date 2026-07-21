@@ -303,62 +303,6 @@ async getStylistRevenueTable(
     }
 },
 
-async getStaffCommissionReport(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> {
-    try {
-        const salonId = await getSalonId(req);
-
-        const data = await reportsService.getStaffCommissionReport(
-            salonId,
-            {
-                from: asString(req.query.from),
-                to: asString(req.query.to),
-            }
-        );
-
-        sendSuccess(
-            res,
-            200,
-            data,
-            "Staff commission report fetched successfully"
-        );
-
-    } catch (error) {
-        next(error);
-    }
-},
-
-async getStaffCommissionTable(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> {
-    try {
-        const salonId = await getSalonId(req);
-
-        const data = await reportsService.getStaffCommissionTable(
-            salonId,
-            {
-                from: asString(req.query.from),
-                to: asString(req.query.to),
-            }
-        );
-
-        sendSuccess(
-            res,
-            200,
-            data,
-            "Staff commission table fetched successfully"
-        );
-
-    } catch (error) {
-        next(error);
-    }
-},
-
 async getTipReport(
     req: AuthRequest,
     res: Response,
