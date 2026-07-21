@@ -75,18 +75,6 @@ router.get(
 );
 
 router.get(
-    "/staff-commission",
-    ...guard,
-    reportsController.getStaffCommissionReport
-);
-
-router.get(
-    "/staff-commission/table",
-    ...guard,
-    reportsController.getStaffCommissionTable
-);
-
-router.get(
     "/tip-report",
     ...guard,
     reportsController.getTipReport
