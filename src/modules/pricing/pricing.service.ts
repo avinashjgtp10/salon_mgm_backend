@@ -1,4 +1,4 @@
-import { computeBillTotals, rowsTotal, BucketAmounts } from './pricing.engine';
+import { computeBillTotals, rowsTotal, BucketAmounts, LineItem } from './pricing.engine';
 import { getActiveTaxes } from '../settings/tax.util';
 import { ewalletRepository } from '../ewallet/ewallet.repository';
 import { rewardPointsRepository } from '../reward-points/reward-points.repository';
@@ -9,6 +9,47 @@ import { paymentsRepository } from '../payments/payments.repository';
 import { couponsService } from '../coupons/coupons.service';
 import { AppError } from '../../middleware/error.middleware';
 import { CalculateTotalsBody, CalculateTotalsResponse } from './pricing.types';
+
+// Read-only mirror of AppointmentModal.tsx's membershipWalletMap allocation
+// (service rows first, excluding package-covered ones, then product rows
+// if the client's membership allows it) — NOT the same code path as
+// payments.service.ts's deductWalletForBooking, which actually WRITES to
+// membership_usage_log. This never touches the database: it only exists so
+// the live preview can show the correct service/product split for tax
+// purposes before checkout, without deducting anything. The real deduction
+// still happens exactly once, at actual charge time, in payments.service.ts.
+function splitMembershipWalletUsage(
+  serviceRows: LineItem[],
+  productRows: LineItem[],
+  requestedAmount: number,
+  coversProducts: boolean,
+): { serviceWalletUsed: number; productWalletUsed: number; totalWalletUsed: number } {
+  let remaining = Math.max(0, requestedAmount);
+  let serviceWalletUsed = 0;
+  let productWalletUsed = 0;
+
+  for (const row of serviceRows) {
+    if (row.isPackageService || remaining <= 0) continue;
+    const rowTotal = row.total ?? row.price * (row.qty || 1);
+    if (rowTotal <= 0) continue;
+    const used = Math.min(remaining, rowTotal);
+    remaining -= used;
+    serviceWalletUsed += used;
+  }
+
+  if (coversProducts) {
+    for (const row of productRows) {
+      if (remaining <= 0) continue;
+      const rowTotal = row.total ?? row.price * (row.qty || 1);
+      if (rowTotal <= 0) continue;
+      const used = Math.min(remaining, rowTotal);
+      remaining -= used;
+      productWalletUsed += used;
+    }
+  }
+
+  return { serviceWalletUsed, productWalletUsed, totalWalletUsed: serviceWalletUsed + productWalletUsed };
+}
 
 export const pricingService = {
   async calculateTotals(salonId: string, body: CalculateTotalsBody): Promise<CalculateTotalsResponse> {
@@ -42,11 +83,23 @@ export const pricingService = {
     }
 
     // ── Membership wallet: read-only balance preview, no deduction ─────────
+    // Mirrors payments.service.ts's own eligibility gate (applies_to_products)
+    // and the frontend's row-by-row allocation, so the preview's service/
+    // product split — and therefore the tax it implies — matches what
+    // checkout will actually charge.
     let appliedMembershipWallet = 0;
+    let membershipServiceWalletUsed = 0;
+    let membershipProductWalletUsed = 0;
     if (body.applyMembershipWallet && body.client_id) {
       try {
         const memberships = await clientMembershipsRepository.findAllActiveWithBalanceForClient(body.client_id, salonId);
-        appliedMembershipWallet = memberships.reduce((s, m) => s + (Number(m.membershipWalletBalance) || 0), 0);
+        const totalBalance = memberships.reduce((s, m) => s + (Number(m.membershipWalletBalance) || 0), 0);
+        const coversProducts = memberships.some((m) => m.appliesToProducts && Number(m.membershipWalletBalance) > 0);
+        const requested = Math.min(body.membershipWalletRequested ?? totalBalance, totalBalance);
+        const split = splitMembershipWalletUsage(body.serviceRows, body.productRows, requested, coversProducts);
+        membershipServiceWalletUsed = split.serviceWalletUsed;
+        membershipProductWalletUsed = split.productWalletUsed;
+        appliedMembershipWallet = split.totalWalletUsed;
       } catch { /* non-fatal */ }
     }
 
@@ -115,6 +168,8 @@ export const pricingService = {
       tip: body.tip ?? 0,
       eWalletUsed: appliedEWallet,
       membershipWalletUsed: appliedMembershipWallet,
+      membershipServiceWalletUsed,
+      membershipProductWalletUsed,
       rewardPointsRedeemedValue: appliedRewardPointsValue,
       referralCreditUsed: appliedReferralCredit,
       // Frontend-matching rounding order (this is the new preview path, not

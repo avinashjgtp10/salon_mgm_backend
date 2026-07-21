@@ -29,6 +29,10 @@ export interface CalculateTotalsBody {
   eWalletRequested?: number;
 
   applyMembershipWallet?: boolean;
+  // Requested amount to apply — never trusted as-is, always clamped
+  // server-side to the client's real combined membership-wallet balance
+  // (pricing.service.ts). Omit to default to the full available balance.
+  membershipWalletRequested?: number;
 
   applyRewardPoints?: boolean;
   rewardPointsToRedeem?: number;

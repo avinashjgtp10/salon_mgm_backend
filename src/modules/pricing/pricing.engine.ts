@@ -37,6 +37,9 @@ export interface LineItem {
   qty: number;
   discount?: number;
   total?: number;
+  // Membership-wallet-eligibility only (see pricing.service.ts's wallet split)
+  // — unused by the rest of this engine, which only reads price/qty/total.
+  isPackageService?: boolean;
 }
 
 export interface BucketAmounts {
