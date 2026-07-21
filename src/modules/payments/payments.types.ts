@@ -61,6 +61,10 @@ export type CreatePaymentBody = {
   // Server-computed only — never trust a value sent by the frontend for this
   // (see payments.service.ts's Refer & Earn block).
   referral_discount_applied?: number;
+  // Server-computed only — the ₹ value of reward_points_used, converted via
+  // the salon's redeem rate (payments.service.ts). Never trust a value sent
+  // by the frontend for this.
+  reward_points_value?: number;
   // Requested points/₹ to redeem — never trusted as-is, always capped
   // server-side against the client's real balance (payments.service.ts).
   reward_points_used?: number;

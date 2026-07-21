@@ -245,6 +245,7 @@ export const paymentsService = {
             }
           }
           data.reward_points_used = rewardPointsRedeemedActual;
+          data.reward_points_value = rewardPointsRedeemedValue;
 
           // ── Referral credit redemption: own dedicated balance now, not
           // eWallet. Never trust a ₹ amount sent from the frontend — cap it

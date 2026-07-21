@@ -68,8 +68,7 @@ export const paymentsRepository = {
         data.paid_amount ?? data.net_amount,  // $14 = paid_amount (defaults to net_amount)
         data.due_amount ?? 0,     // $15 = due_amount
         data.membership_wallet_used ?? 0, // $16
-        0, // $17 — reward_points_value: column kept for historical rows, but points
-           // redemption no longer exists as a mechanic (see payments.service.ts)
+        data.reward_points_value ?? 0, // $17 — ₹ value of reward points redeemed on this payment
         data.tax_breakdown ? JSON.stringify(data.tax_breakdown) : null, // $18
         data.referral_discount_applied ?? 0, // $19
         data.reward_points_used ?? 0,        // $20
