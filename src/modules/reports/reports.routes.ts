@@ -75,18 +75,6 @@ router.get(
 );
 
 router.get(
-    "/staff-commission",
-    ...guard,
-    reportsController.getStaffCommissionReport
-);
-
-router.get(
-    "/staff-commission/table",
-    ...guard,
-    reportsController.getStaffCommissionTable
-);
-
-router.get(
     "/tip-report",
     ...guard,
     reportsController.getTipReport
@@ -108,6 +96,24 @@ router.get(
     "/appointment-report/table",
     ...guard,
     reportsController.getAppointmentReportTable
+);
+
+router.get(
+    "/appointment-detail/table",
+    ...guard,
+    reportsController.getAppointmentDetailTable
+);
+
+router.get(
+    "/daily-sheet/table",
+    ...guard,
+    reportsController.getDailySheetTable
+);
+
+router.get(
+    "/reward-points/table",
+    ...guard,
+    reportsController.getRewardPointsSummary
 );
 
 router.get(

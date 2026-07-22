@@ -68,8 +68,7 @@ export const paymentsRepository = {
         data.paid_amount ?? data.net_amount,  // $14 = paid_amount (defaults to net_amount)
         data.due_amount ?? 0,     // $15 = due_amount
         data.membership_wallet_used ?? 0, // $16
-        0, // $17 — reward_points_value: column kept for historical rows, but points
-           // redemption no longer exists as a mechanic (see payments.service.ts)
+        data.reward_points_value ?? 0, // $17 — ₹ value of reward points redeemed on this payment
         data.tax_breakdown ? JSON.stringify(data.tax_breakdown) : null, // $18
         data.referral_discount_applied ?? 0, // $19
         data.reward_points_used ?? 0,        // $20
@@ -96,6 +95,40 @@ export const paymentsRepository = {
       [appointmentId]
     );
     return parseFloat(rows[0]?.total ?? '0');
+  },
+
+  // Sums benefit amounts already consumed across every prior payment on this
+  // appointment (partial or completed) — used by the pricing preview endpoint
+  // so re-opening a partially-paid booking doesn't imply those amounts are
+  // still "fresh" balance available to apply again. Note: eWallet/reward-
+  // points/referral-credit balances are already correctly net of this
+  // consumption (deducted via ledger entry at payment time), so this is
+  // purely informational for the preview response, not re-applied to the
+  // actual clamping math.
+  async getConsumedBenefitsForAppointment(appointmentId: string): Promise<{
+    ewalletUsed: number;
+    membershipWalletUsed: number;
+    rewardPointsUsed: number;
+    referralCreditUsed: number;
+  }> {
+    const { rows } = await pool.query(
+      `SELECT
+         COALESCE(SUM(ewallet_used), 0)::numeric AS ewallet_used,
+         COALESCE(SUM(membership_wallet_used), 0)::numeric AS membership_wallet_used,
+         COALESCE(SUM(reward_points_used), 0)::numeric AS reward_points_used,
+         COALESCE(SUM(referral_credit_used), 0)::numeric AS referral_credit_used
+       FROM payments
+       WHERE appointment_id = $1
+       AND status IN ('partial', 'completed')`,
+      [appointmentId]
+    );
+    const row = rows[0] ?? {};
+    return {
+      ewalletUsed: parseFloat(row.ewallet_used ?? '0'),
+      membershipWalletUsed: parseFloat(row.membership_wallet_used ?? '0'),
+      rewardPointsUsed: parseFloat(row.reward_points_used ?? '0'),
+      referralCreditUsed: parseFloat(row.referral_credit_used ?? '0'),
+    };
   },
 
   async findByAppointmentId(appointmentId: string): Promise<Payment | null> {

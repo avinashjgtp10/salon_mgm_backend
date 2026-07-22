@@ -49,6 +49,11 @@ export async function ensureTable(): Promise<void> {
     `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS created_at      TIMESTAMPTZ DEFAULT NOW()`,
     `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS updated_at      TIMESTAMPTZ DEFAULT NOW()`,
     `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS membership_wallet_balance NUMERIC(10,2) NOT NULL DEFAULT 0`,
+    // Written alongside expires_at on every INSERT (see create() below) — was
+    // previously only added manually against dev and missing from this patch
+    // list, so environments where ensureTable() never got a matching manual
+    // ALTER TABLE run (e.g. prod) had every membership purchase fail outright.
+    `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS end_date        TIMESTAMPTZ`,
   ];
   for (const sql of patches) {
     await pool.query(sql);
@@ -430,6 +435,21 @@ export const clientMembershipsRepository = {
       [appointmentId],
     );
     return parseFloat(rows[0]?.total ?? '0');
+  },
+
+  // Per-item breakdown of wallet usage for one appointment, keyed by service_id
+  // (which also holds the product's id for a product redemption — see
+  // deductWalletAcrossMemberships below). Single source of truth for excluding
+  // membership-covered amounts from tax (payments.service.ts) and staff
+  // commission (commissionCalculation.service.ts) on a per-item basis.
+  async getWalletUsedPerItemForAppointment(appointmentId: string): Promise<Map<string, number>> {
+    const { rows } = await pool.query(
+      `SELECT service_id, COALESCE(SUM(amount_deducted),0) AS used
+       FROM membership_usage_log WHERE appointment_id = $1 AND service_id IS NOT NULL
+       GROUP BY service_id`,
+      [appointmentId],
+    );
+    return new Map(rows.map((r) => [String(r.service_id), parseFloat(r.used)]));
   },
 
   // Draws from several memberships in sequence (the order given in

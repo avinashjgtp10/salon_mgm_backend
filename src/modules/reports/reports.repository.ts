@@ -1042,372 +1042,6 @@ const buildProductRevenueSourceQuery = (
   };
 };
 
-const buildStaffCommissionSourceQuery = (
-  salonId: string,
-  filters: { from?: string; to?: string }
-) => {
-  const values: any[] = [salonId];
-  const saleWhere = [
-    "s.salon_id = $1",
-    "s.status IN ('draft', 'completed', 'refunded')",
-    "COALESCE(ni.item_staff_id, s.staff_id) IS NOT NULL",
-    "ni.item_type IN ('service', 'package', 'product', 'membership', 'gift_card')",
-  ];
-  const appointmentWhere = [
-    "m.salon_id = $1",
-    "NOT EXISTS (SELECT 1 FROM sales sx WHERE sx.appointment_id = m.id)",
-  ];
-
-  let index = 2;
-
-  if (filters.from) {
-    saleWhere.push(`DATE(s.created_at) >= $${index}`);
-    appointmentWhere.push(`DATE(m.created_at) >= $${index}`);
-    values.push(filters.from);
-    index++;
-  }
-
-  if (filters.to) {
-    saleWhere.push(`DATE(s.created_at) <= $${index}`);
-    appointmentWhere.push(`DATE(m.created_at) <= $${index}`);
-    values.push(filters.to);
-    index++;
-  }
-
-  const salesSummaryCtes = SALES_SUMMARY_ITEM_CTES.replace(/^\s*WITH\s+/, "");
-  const appointmentBaseCtes = APPOINTMENT_BASE_CTES.replace(/^\s*WITH\s+/, "");
-
-  const saleCommissionCategoryExpr = `
-    CASE
-      WHEN ni.item_type IN ('service', 'package') THEN 'services'
-      WHEN ni.item_type = 'product' THEN 'products'
-      WHEN ni.item_type = 'membership' THEN 'memberships'
-      WHEN ni.item_type = 'gift_card' THEN 'gift_cards'
-      ELSE 'services'
-    END
-  `;
-
-  const appointmentCommissionCategoryExpr = `
-    CASE
-      WHEN ali.item_type IN ('service', 'package') THEN 'services'
-      WHEN ali.item_type = 'product' THEN 'products'
-      WHEN ali.item_type = 'membership' THEN 'memberships'
-      WHEN ali.item_type = 'gift_card' THEN 'gift_cards'
-      ELSE 'services'
-    END
-  `;
-
-  return {
-    values,
-    ctes: `
-      WITH ${salesSummaryCtes},
-      ${appointmentBaseCtes},
-      sale_category_totals AS (
-        SELECT
-          s.id AS sale_id,
-          COALESCE(ni.item_staff_id, s.staff_id) AS staff_id,
-          ${saleCommissionCategoryExpr} AS commission_category,
-          SUM(COALESCE(ni.total_price::numeric, 0)) AS category_revenue
-        FROM normalized_items ni
-        JOIN sales s
-          ON s.id = ni.sale_id
-        WHERE ${saleWhere.join(" AND ")}
-        GROUP BY
-          s.id,
-          COALESCE(ni.item_staff_id, s.staff_id),
-          ${saleCommissionCategoryExpr}
-      ),
-      sale_line_rows AS (
-        SELECT
-          s.created_at AS date,
-          COALESCE(s.invoice_number, CONCAT('INV-', s.id::text)) AS invoice_no,
-          COALESCE(c.full_name, 'Walk-in Client') AS customer_name,
-          COALESCE(c.phone_number, '') AS mobile,
-          COALESCE(
-            NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), ''),
-            'Unknown'
-          ) AS staff_name,
-          ni.item_type,
-          COALESCE(ni.name, 'Item') AS item_name,
-          COALESCE(ni.quantity, 1) AS quantity,
-          ROUND(COALESCE(ni.total_price::numeric, 0), 2) AS revenue_amount,
-          ROUND(
-            COALESCE(
-              ce.commission_rate,
-              slab.commission_value,
-              scs.default_rate,
-              0
-            ),
-            2
-          ) AS commission_rate,
-          COALESCE(
-            ce.commission_kind,
-            slab.commission_kind,
-            scs.commission_kind,
-            '-'
-          ) AS commission_kind,
-          ROUND(
-            CASE
-              WHEN COALESCE(sct.category_revenue, 0) > 0
-                   AND COALESCE(ce.commission_amount, 0) > 0
-              THEN
-                COALESCE(ce.commission_amount, 0)
-                *
-                (COALESCE(ni.total_price::numeric, 0) / sct.category_revenue)
-              WHEN slab.commission_kind = 'percentage'
-              THEN COALESCE(ni.total_price::numeric, 0) * COALESCE(slab.commission_value, 0) / 100
-              WHEN slab.commission_kind = 'fixed_rate'
-              THEN
-                CASE
-                  WHEN COALESCE(slab.revenue_target, 0) > 0
-                  THEN FLOOR(COALESCE(ni.total_price::numeric, 0) / slab.revenue_target) * COALESCE(slab.commission_value, 0)
-                  ELSE COALESCE(slab.commission_value, 0)
-                END
-              WHEN scs.commission_kind = 'percentage'
-              THEN COALESCE(ni.total_price::numeric, 0) * COALESCE(scs.default_rate, 0) / 100
-              WHEN scs.commission_kind = 'fixed_rate'
-              THEN
-                CASE
-                  WHEN COALESCE(scs.revenue_target, 0) > 0
-                  THEN FLOOR(COALESCE(ni.total_price::numeric, 0) / scs.revenue_target) * COALESCE(scs.default_rate, 0)
-                  ELSE COALESCE(scs.default_rate, 0)
-                END
-              ELSE 0
-            END,
-            2
-          ) AS commission_amount,
-          CASE
-            WHEN ce.payout_status IS NOT NULL
-            THEN INITCAP(ce.payout_status)
-            WHEN LOWER(COALESCE(m.payment_state, s.status::text, '')) = 'refunded'
-            THEN 'Cancelled'
-            ELSE 'Pending'
-          END AS payout_status,
-          CASE
-            WHEN m.id IS NOT NULL THEN INITCAP(COALESCE(m.payment_state, 'unpaid'))
-            WHEN LOWER(COALESCE(s.status::text, '')) = 'completed' THEN 'Paid'
-            WHEN LOWER(COALESCE(s.status::text, '')) = 'draft' THEN 'Pending'
-            WHEN LOWER(COALESCE(s.status::text, '')) = 'refunded' THEN 'Refunded'
-            ELSE INITCAP(COALESCE(s.status::text, 'pending'))
-          END AS payment_status,
-          'Sale'::text AS source
-        FROM normalized_items ni
-        JOIN sales s
-          ON s.id = ni.sale_id
-        LEFT JOIN clients c
-          ON c.id = s.client_id
-        LEFT JOIN staff st
-          ON st.id = COALESCE(ni.item_staff_id, s.staff_id)
-        LEFT JOIN metrics m
-          ON m.id = s.appointment_id
-        LEFT JOIN sale_category_totals sct
-          ON sct.sale_id = s.id
-          AND sct.staff_id = COALESCE(ni.item_staff_id, s.staff_id)
-          AND sct.commission_category = ${saleCommissionCategoryExpr}
-        LEFT JOIN LATERAL (
-          SELECT
-            SUM(ce2.commission_amount::numeric) AS commission_amount,
-            MAX(ce2.commission_rate::numeric) AS commission_rate,
-            MAX(ce2.commission_kind) AS commission_kind,
-            MAX(ce2.status::text) AS payout_status
-          FROM commission_earned ce2
-          WHERE
-            ce2.salon_id = $1
-            AND ce2.sale_id = s.id
-            AND ce2.staff_id = COALESCE(ni.item_staff_id, s.staff_id)
-            AND ce2.category = ${saleCommissionCategoryExpr}
-        ) ce
-          ON TRUE
-        LEFT JOIN staff_commission_settings scs
-          ON scs.staff_id = COALESCE(ni.item_staff_id, s.staff_id)
-          AND scs.category = ${saleCommissionCategoryExpr}
-          AND scs.is_enabled = TRUE
-        LEFT JOIN LATERAL (
-          SELECT
-            cs.commission_kind,
-            cs.commission_value,
-            cs.revenue_target
-          FROM commission_slabs cs
-          WHERE
-            cs.staff_id = COALESCE(ni.item_staff_id, s.staff_id)
-            AND cs.category = ${saleCommissionCategoryExpr}
-            AND cs.is_enabled = TRUE
-            AND cs.revenue_target <= COALESCE(ni.total_price::numeric, 0)
-          ORDER BY
-            cs.revenue_target DESC,
-            cs.created_at DESC
-          LIMIT 1
-        ) slab
-          ON TRUE
-        WHERE ${saleWhere.join(" AND ")}
-      ),
-      appointment_line_items AS (
-        SELECT
-          m.id AS appointment_id,
-          m.created_at,
-          COALESCE(c.full_name, 'Walk-in Client') AS customer_name,
-          COALESCE(c.phone_number, '') AS mobile,
-          'service'::text AS item_type,
-          COALESCE(NULLIF(svc.value->>'name', ''), 'Service') AS item_name,
-          COALESCE(NULLIF(svc.value->>'qty', '')::int, NULLIF(svc.value->>'quantity', '')::int, 1) AS quantity,
-          COALESCE(NULLIF(svc.value->>'total', '')::numeric, COALESCE(NULLIF(svc.value->>'price', '')::numeric, 0) * COALESCE(NULLIF(svc.value->>'qty', '')::numeric, NULLIF(svc.value->>'quantity', '')::numeric, 1)) AS revenue_amount,
-          NULLIF(svc.value->>'staff_id', '') AS item_staff_id,
-          NULLIF(svc.value->>'staff_name', '') AS item_staff_name,
-          m.payment_state,
-          m.status
-        FROM metrics m
-        LEFT JOIN clients c
-          ON c.id = m.client_id
-        CROSS JOIN LATERAL jsonb_array_elements(COALESCE(m.services, '[]'::jsonb)) AS svc(value)
-        WHERE ${appointmentWhere.join(" AND ")}
-
-        UNION ALL
-
-        SELECT
-          m.id AS appointment_id,
-          m.created_at,
-          COALESCE(c.full_name, 'Walk-in Client') AS customer_name,
-          COALESCE(c.phone_number, '') AS mobile,
-          'package'::text AS item_type,
-          COALESCE(NULLIF(pkg.value->>'name', ''), 'Package') AS item_name,
-          COALESCE(NULLIF(pkg.value->>'qty', '')::int, NULLIF(pkg.value->>'quantity', '')::int, 1) AS quantity,
-          COALESCE(NULLIF(pkg.value->>'price', '')::numeric, 0) * COALESCE(NULLIF(pkg.value->>'qty', '')::numeric, NULLIF(pkg.value->>'quantity', '')::numeric, 1) AS revenue_amount,
-          NULLIF(pkg.value->>'staff_id', '') AS item_staff_id,
-          NULLIF(pkg.value->>'staff_name', '') AS item_staff_name,
-          m.payment_state,
-          m.status
-        FROM metrics m
-        LEFT JOIN clients c
-          ON c.id = m.client_id
-        CROSS JOIN LATERAL jsonb_array_elements(COALESCE(m.package_items, '[]'::jsonb)) AS pkg(value)
-        WHERE ${appointmentWhere.join(" AND ")}
-
-        UNION ALL
-
-        SELECT
-          m.id AS appointment_id,
-          m.created_at,
-          COALESCE(c.full_name, 'Walk-in Client') AS customer_name,
-          COALESCE(c.phone_number, '') AS mobile,
-          'product'::text AS item_type,
-          COALESCE(NULLIF(prod.value->>'name', ''), 'Product') AS item_name,
-          COALESCE(NULLIF(prod.value->>'qty', '')::int, NULLIF(prod.value->>'quantity', '')::int, 1) AS quantity,
-          COALESCE(NULLIF(prod.value->>'price', '')::numeric, 0) * COALESCE(NULLIF(prod.value->>'qty', '')::numeric, NULLIF(prod.value->>'quantity', '')::numeric, 1) AS revenue_amount,
-          NULLIF(prod.value->>'staff_id', '') AS item_staff_id,
-          NULLIF(prod.value->>'staff_name', '') AS item_staff_name,
-          m.payment_state,
-          m.status
-        FROM metrics m
-        LEFT JOIN clients c
-          ON c.id = m.client_id
-        CROSS JOIN LATERAL jsonb_array_elements(COALESCE(m.product_items, '[]'::jsonb)) AS prod(value)
-        WHERE ${appointmentWhere.join(" AND ")}
-
-        UNION ALL
-
-        SELECT
-          m.id AS appointment_id,
-          m.created_at,
-          COALESCE(c.full_name, 'Walk-in Client') AS customer_name,
-          COALESCE(c.phone_number, '') AS mobile,
-          'membership'::text AS item_type,
-          COALESCE(NULLIF(mem.value->>'name', ''), 'Membership') AS item_name,
-          COALESCE(NULLIF(mem.value->>'qty', '')::int, NULLIF(mem.value->>'quantity', '')::int, 1) AS quantity,
-          COALESCE(NULLIF(mem.value->>'price', '')::numeric, 0) * COALESCE(NULLIF(mem.value->>'qty', '')::numeric, NULLIF(mem.value->>'quantity', '')::numeric, 1) AS revenue_amount,
-          NULLIF(mem.value->>'staff_id', '') AS item_staff_id,
-          NULLIF(mem.value->>'staff_name', '') AS item_staff_name,
-          m.payment_state,
-          m.status
-        FROM metrics m
-        LEFT JOIN clients c
-          ON c.id = m.client_id
-        CROSS JOIN LATERAL jsonb_array_elements(COALESCE(m.membership_items, '[]'::jsonb)) AS mem(value)
-        WHERE ${appointmentWhere.join(" AND ")}
-      ),
-      appointment_line_rows AS (
-        SELECT
-          ali.created_at AS date,
-          CONCAT('APT-', ali.appointment_id::text) AS invoice_no,
-          ali.customer_name,
-          ali.mobile,
-          COALESCE(
-            NULLIF(ali.item_staff_name, ''),
-            NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), ''),
-            'Unknown'
-          ) AS staff_name,
-          ali.item_type,
-          ali.item_name,
-          COALESCE(ali.quantity, 1) AS quantity,
-          ROUND(COALESCE(ali.revenue_amount, 0), 2) AS revenue_amount,
-          ROUND(COALESCE(slab.commission_value, scs.default_rate, 0), 2) AS commission_rate,
-          COALESCE(slab.commission_kind, scs.commission_kind, '-') AS commission_kind,
-          ROUND(
-            CASE
-              WHEN slab.commission_kind = 'percentage'
-              THEN COALESCE(ali.revenue_amount, 0) * COALESCE(slab.commission_value, 0) / 100
-              WHEN slab.commission_kind = 'fixed_rate'
-              THEN
-                CASE
-                  WHEN COALESCE(slab.revenue_target, 0) > 0
-                  THEN FLOOR(COALESCE(ali.revenue_amount, 0) / slab.revenue_target) * COALESCE(slab.commission_value, 0)
-                  ELSE COALESCE(slab.commission_value, 0)
-                END
-              WHEN scs.commission_kind = 'percentage'
-              THEN COALESCE(ali.revenue_amount, 0) * COALESCE(scs.default_rate, 0) / 100
-              WHEN scs.commission_kind = 'fixed_rate'
-              THEN
-                CASE
-                  WHEN COALESCE(scs.revenue_target, 0) > 0
-                  THEN FLOOR(COALESCE(ali.revenue_amount, 0) / scs.revenue_target) * COALESCE(scs.default_rate, 0)
-                  ELSE COALESCE(scs.default_rate, 0)
-                END
-              ELSE 0
-            END,
-            2
-          ) AS commission_amount,
-          CASE
-            WHEN LOWER(COALESCE(ali.status::text, '')) IN ('cancelled', 'no-show')
-                 OR LOWER(COALESCE(ali.payment_state, '')) = 'refunded'
-            THEN 'Cancelled'
-            ELSE 'Pending'
-          END AS payout_status,
-          INITCAP(COALESCE(ali.payment_state, 'unpaid')) AS payment_status,
-          'Appointment'::text AS source
-        FROM appointment_line_items ali
-        LEFT JOIN staff st
-          ON st.id::text = ali.item_staff_id
-        LEFT JOIN staff_commission_settings scs
-          ON scs.staff_id::text = ali.item_staff_id
-          AND scs.category = ${appointmentCommissionCategoryExpr}
-          AND scs.is_enabled = TRUE
-        LEFT JOIN LATERAL (
-          SELECT
-            cs.commission_kind,
-            cs.commission_value,
-            cs.revenue_target
-          FROM commission_slabs cs
-          WHERE
-            cs.staff_id::text = ali.item_staff_id
-            AND cs.category = ${appointmentCommissionCategoryExpr}
-            AND cs.is_enabled = TRUE
-            AND cs.revenue_target <= COALESCE(ali.revenue_amount, 0)
-          ORDER BY
-            cs.revenue_target DESC,
-            cs.created_at DESC
-          LIMIT 1
-        ) slab
-          ON TRUE
-        WHERE COALESCE(ali.item_staff_id, '') <> ''
-      ),
-      commission_rows AS (
-        SELECT * FROM sale_line_rows
-        UNION ALL
-        SELECT * FROM appointment_line_rows
-      )
-    `,
-  };
-};
-
 export const reportsRepository = {
  
 
@@ -4951,418 +4585,6 @@ async getStylistRevenueTable(
   }));
 },
 
-async getStaffCommissionCards(
-  salonId: string,
-  filters: { from?: string; to?: string }
-) {
-  const { values, ctes } = buildStaffCommissionSourceQuery(
-    salonId,
-    filters
-  );
-
-  const { rows } = await safeQuery(() =>
-    pool.query(
-      `
-      ${ctes}
-      SELECT
-        COALESCE(SUM(commission_amount), 0) AS total_commission,
-        COALESCE(SUM(commission_amount) FILTER (WHERE LOWER(payout_status) = 'paid'), 0) AS paid_commission,
-        COALESCE(SUM(commission_amount) FILTER (WHERE LOWER(payout_status) = 'pending'), 0) AS pending_commission,
-        COUNT(DISTINCT staff_name) AS staff_count,
-        COALESCE(SUM(revenue_amount), 0) AS total_revenue,
-        COALESCE(
-          ROUND(
-            CASE
-              WHEN COALESCE(SUM(revenue_amount), 0) = 0 THEN 0
-              ELSE (SUM(commission_amount) / SUM(revenue_amount)) * 100
-            END,
-            2
-          ),
-          0
-        ) AS avg_rate
-      FROM commission_rows
-      `,
-      values
-    )
-  );
-
-  const row = rows[0] ?? {};
-  const totalCommission = Number(row.total_commission ?? 0);
-  const paidCommission = Number(row.paid_commission ?? 0);
-  const pendingCommission = Number(row.pending_commission ?? 0);
-  const staffCount = Number(row.staff_count ?? 0);
-  const totalRevenue = Number(row.total_revenue ?? 0);
-  const avgRate = Number(row.avg_rate ?? 0);
-
-  return [
-    {
-      title: "Total Commission",
-      value: `₹ ${Math.round(totalCommission).toLocaleString("en-IN")}`,
-      trend: "0.0%",
-      color: "primary",
-      icon: "wallet",
-    },
-    {
-      title: "Paid Commission",
-      value: `₹ ${Math.round(paidCommission).toLocaleString("en-IN")}`,
-      trend: "0.0%",
-      color: "success",
-      icon: "circle-check",
-    },
-    {
-      title: "Pending Commission",
-      value: `₹ ${Math.round(pendingCommission).toLocaleString("en-IN")}`,
-      trend: "0.0%",
-      color: "warning",
-      icon: "clock",
-    },
-    {
-      title: "Staff Earned",
-      value: `${staffCount}`,
-      trend: "0.0%",
-      color: "info",
-      icon: "users",
-    },
-    {
-      title: "Revenue Covered",
-      value: `₹ ${Math.round(totalRevenue).toLocaleString("en-IN")}`,
-      trend: "0.0%",
-      color: "purple",
-      icon: "chart-line",
-    },
-    {
-      title: "Avg Commission Rate",
-      value: `${avgRate.toFixed(2)}%`,
-      trend: "0.0%",
-      color: "danger",
-      icon: "percent",
-    },
-  ];
-},
-
-async getStaffCommissionTrend(
-  salonId: string,
-  filters: { from?: string; to?: string }
-) {
-  const { values, ctes } = buildStaffCommissionSourceQuery(
-    salonId,
-    filters
-  );
-
-  let groupExpr = `TO_CHAR(DATE_TRUNC('day', date), 'DD Mon')`;
-  let orderExpr = `DATE_TRUNC('day', date)`;
-
-  if (filters.from && filters.to) {
-    const from = new Date(filters.from);
-    const to = new Date(filters.to);
-    const diffDays =
-      Math.floor((to.getTime() - from.getTime()) / 86400000) + 1;
-
-    if (diffDays === 1) {
-      groupExpr = `TO_CHAR(DATE_TRUNC('hour', date), 'HH24:00')`;
-      orderExpr = `DATE_TRUNC('hour', date)`;
-    } else if (diffDays <= 7) {
-      groupExpr = `TO_CHAR(DATE_TRUNC('day', date), 'Dy')`;
-      orderExpr = `DATE_TRUNC('day', date)`;
-    } else if (diffDays <= 31) {
-      groupExpr = `TO_CHAR(DATE_TRUNC('day', date), 'DD Mon')`;
-      orderExpr = `DATE_TRUNC('day', date)`;
-    } else {
-      groupExpr = `TO_CHAR(DATE_TRUNC('month', date), 'Mon YYYY')`;
-      orderExpr = `DATE_TRUNC('month', date)`;
-    }
-  }
-
-  const { rows } = await safeQuery(() =>
-    pool.query(
-      `
-      ${ctes}
-      SELECT
-        ${groupExpr} AS day,
-        COALESCE(SUM(commission_amount), 0) AS commission
-      FROM commission_rows
-      GROUP BY ${orderExpr}
-      ORDER BY ${orderExpr}
-      `,
-      values
-    )
-  );
-
-  return rows.map((row) => ({
-    day: row.day,
-    commission: Number(row.commission ?? 0),
-  }));
-},
-
-async getStaffCommissionCategoryBreakdown(
-  salonId: string,
-  filters: { from?: string; to?: string }
-) {
-  const { values, ctes } = buildStaffCommissionSourceQuery(
-    salonId,
-    filters
-  );
-
-  const { rows } = await safeQuery(() =>
-    pool.query(
-      `
-      ${ctes}
-      SELECT
-        INITCAP(REPLACE(item_type, '_', ' ')) AS name,
-        COALESCE(SUM(commission_amount), 0) AS value
-      FROM commission_rows
-      GROUP BY item_type
-      ORDER BY value DESC, name ASC
-      `,
-      values
-    )
-  );
-
-  return rows.map((row) => ({
-    name: row.name,
-    value: Number(row.value ?? 0),
-  }));
-},
-
-async getStaffCommissionTopStaff(
-  salonId: string,
-  filters: { from?: string; to?: string }
-) {
-  const { values, ctes } = buildStaffCommissionSourceQuery(
-    salonId,
-    filters
-  );
-
-  const { rows } = await safeQuery(() =>
-    pool.query(
-      `
-      ${ctes}
-      SELECT
-        staff_name AS name,
-        COALESCE(SUM(commission_amount), 0) AS value
-      FROM commission_rows
-      GROUP BY staff_name
-      ORDER BY value DESC, name ASC
-      LIMIT 10
-      `,
-      values
-    )
-  );
-
-  return rows.map((row) => ({
-    name: row.name,
-    value: Number(row.value ?? 0),
-  }));
-},
-
-async getStaffCommissionPayoutStatus(
-  salonId: string,
-  filters: { from?: string; to?: string }
-) {
-  const { values, ctes } = buildStaffCommissionSourceQuery(
-    salonId,
-    filters
-  );
-
-  const { rows } = await safeQuery(() =>
-    pool.query(
-      `
-      ${ctes}
-      SELECT
-        payout_status AS name,
-        COALESCE(SUM(commission_amount), 0) AS value
-      FROM commission_rows
-      GROUP BY payout_status
-      ORDER BY value DESC, name ASC
-      `,
-      values
-    )
-  );
-
-  return rows.map((row) => ({
-    name: row.name,
-    value: Number(row.value ?? 0),
-  }));
-},
-
-async getStaffCommissionAnalytics(
-  salonId: string,
-  filters: { from?: string; to?: string }
-) {
-  const { values, ctes } = buildStaffCommissionSourceQuery(
-    salonId,
-    filters
-  );
-
-  const { rows } = await safeQuery(() =>
-    pool.query(
-      `
-      ${ctes},
-      totals AS (
-        SELECT
-          COALESCE(SUM(commission_amount), 0) AS total_commission,
-          COALESCE(SUM(commission_amount) FILTER (WHERE LOWER(payout_status) = 'paid'), 0) AS paid_commission,
-          COALESCE(SUM(commission_amount) FILTER (WHERE LOWER(payout_status) = 'pending'), 0) AS pending_commission,
-          COUNT(DISTINCT staff_name) AS active_staff
-        FROM commission_rows
-      ),
-      staff_rank AS (
-        SELECT
-          staff_name,
-          SUM(commission_amount) AS total_commission
-        FROM commission_rows
-        GROUP BY staff_name
-        ORDER BY total_commission DESC, staff_name ASC
-        LIMIT 1
-      ),
-      category_rank AS (
-        SELECT
-          INITCAP(REPLACE(item_type, '_', ' ')) AS item_type_name,
-          SUM(commission_amount) AS total_commission
-        FROM commission_rows
-        GROUP BY item_type
-        ORDER BY total_commission DESC, item_type_name ASC
-        LIMIT 1
-      ),
-      line_rank AS (
-        SELECT
-          item_name,
-          commission_amount
-        FROM commission_rows
-        ORDER BY commission_amount DESC, item_name ASC
-        LIMIT 1
-      )
-      SELECT
-        COALESCE((SELECT staff_name FROM staff_rank), '-') AS top_staff,
-        COALESCE((SELECT total_commission FROM staff_rank), 0) AS top_staff_commission,
-        COALESCE((SELECT item_type_name FROM category_rank), '-') AS top_category,
-        COALESCE((SELECT total_commission FROM category_rank), 0) AS top_category_commission,
-        COALESCE((SELECT item_name FROM line_rank), '-') AS top_item,
-        COALESCE((SELECT commission_amount FROM line_rank), 0) AS top_item_commission,
-        total_commission,
-        paid_commission,
-        pending_commission,
-        active_staff
-      FROM totals
-      `,
-      values
-    )
-  );
-
-  const row = rows[0] ?? {};
-  const totalCommission = Number(row.total_commission ?? 0);
-  const paidCommission = Number(row.paid_commission ?? 0);
-  const pendingCommission = Number(row.pending_commission ?? 0);
-  const activeStaff = Number(row.active_staff ?? 0);
-  const paidRatio =
-    totalCommission > 0 ? (paidCommission / totalCommission) * 100 : 0;
-
-  return [
-    {
-      title: "Top Earning Staff",
-      value: row.top_staff ?? "-",
-      subtitle: `₹ ${Math.round(Number(row.top_staff_commission ?? 0)).toLocaleString("en-IN")} commission`,
-      color: "success",
-      icon: "award",
-    },
-    {
-      title: "Top Commission Category",
-      value: row.top_category ?? "-",
-      subtitle: `₹ ${Math.round(Number(row.top_category_commission ?? 0)).toLocaleString("en-IN")} earned`,
-      color: "primary",
-      icon: "layer-group",
-    },
-    {
-      title: "Highest Commission Item",
-      value: row.top_item ?? "-",
-      subtitle: `₹ ${Math.round(Number(row.top_item_commission ?? 0)).toLocaleString("en-IN")} on one line`,
-      color: "warning",
-      icon: "tags",
-    },
-    {
-      title: "Paid Out Ratio",
-      value: `${paidRatio.toFixed(2)}%`,
-      subtitle: "Commission already settled",
-      color: "info",
-      icon: "percent",
-    },
-    {
-      title: "Pending Payout",
-      value: `₹ ${Math.round(pendingCommission).toLocaleString("en-IN")}`,
-      subtitle: "Commission awaiting payout",
-      color: "danger",
-      icon: "clock",
-    },
-    {
-      title: "Active Staff",
-      value: `${activeStaff}`,
-      subtitle: "Staff with commission lines",
-      color: "purple",
-      icon: "users",
-    },
-  ];
-},
-
-async getStaffCommissionTable(
-  salonId: string,
-  filters: { from?: string; to?: string }
-) {
-  const { values, ctes } = buildStaffCommissionSourceQuery(
-    salonId,
-    filters
-  );
-
-  const { rows } = await safeQuery(() =>
-    pool.query(
-      `
-      ${ctes}
-      SELECT
-        date,
-        invoice_no,
-        customer_name,
-        mobile,
-        staff_name,
-        INITCAP(REPLACE(item_type, '_', ' ')) AS item_type,
-        item_name,
-        quantity,
-        revenue_amount,
-        commission_rate,
-        commission_kind,
-        commission_amount,
-        payout_status,
-        payment_status,
-        source
-      FROM commission_rows
-      ORDER BY
-        date DESC,
-        invoice_no DESC,
-        staff_name ASC
-      `,
-      values
-    )
-  );
-
-  return {
-    rows: rows.map((row) => ({
-      date: row.date,
-      invoiceNo: row.invoice_no,
-      customerName: row.customer_name,
-      mobile: row.mobile,
-      staffName: row.staff_name,
-      itemType: row.item_type,
-      itemName: row.item_name,
-      quantity: Number(row.quantity ?? 0),
-      revenueAmount: Number(row.revenue_amount ?? 0),
-      commissionRate: Number(row.commission_rate ?? 0),
-      commissionKind: row.commission_kind,
-      commissionAmount: Number(row.commission_amount ?? 0),
-      payoutStatus: row.payout_status,
-      paymentStatus: row.payment_status,
-      source: row.source,
-    })),
-  };
-},
-
 async getTipReportTable(
   salonId: string,
   filters: {
@@ -6083,6 +5305,291 @@ async getAppointmentTable(
     price: Number(row.amount ?? 0),
     payment: row.payment,
     status: row.status,
+  }));
+},
+
+async getAppointmentDetailTable(
+  salonId: string,
+  filters: { from?: string; to?: string; dateType?: "appointment" | "booking"; statuses?: string[] }
+) {
+  const values: any[] = [salonId];
+  const where = ["m.salon_id = $1"];
+  let index = 2;
+
+  const dateColumn = filters.dateType === "booking" ? "m.created_at" : "m.scheduled_at";
+
+  if (filters.from) {
+    where.push(`DATE(${dateColumn}) >= $${index}`);
+    values.push(filters.from);
+    index++;
+  }
+
+  if (filters.to) {
+    where.push(`DATE(${dateColumn}) <= $${index}`);
+    values.push(filters.to);
+    index++;
+  }
+
+  if (filters.statuses && filters.statuses.length > 0) {
+    where.push(`m.status::text = ANY($${index}::text[])`);
+    values.push(filters.statuses);
+    index++;
+  }
+
+  const { rows } = await safeQuery(() =>
+    pool.query(
+      `
+      ${APPOINTMENT_BASE_CTES},
+      service_rows AS (
+        SELECT
+          a.id AS appointment_id,
+          COALESCE(svc.value->>'name', 'Service') AS service_name,
+          NULLIF(TRIM(COALESCE(svc.value->>'staff_name', '')), '') AS staff_name,
+          NULLIF(svc.value->>'staff_id', '') AS staff_id
+        FROM appointments a
+        LEFT JOIN LATERAL jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) AS svc(value)
+          ON TRUE
+      )
+      SELECT
+        m.id,
+        TO_CHAR(m.scheduled_at, 'YYYY-MM-DD') AS appointment_date,
+        TO_CHAR(m.scheduled_at, 'HH12:MI AM') AS appointment_time,
+        TO_CHAR(m.created_at, 'YYYY-MM-DD') AS booked_date,
+        COALESCE(c.full_name, 'Walk-in Client') AS client_name,
+        COALESCE(sr.service_name, sv.name, 'Service') AS service_name,
+        COALESCE(sr.staff_name, CONCAT(st.first_name, ' ', st.last_name), 'Unknown') AS staff_name,
+        m.status,
+        m.duration_minutes,
+        ROUND(COALESCE(m.appointment_amount, 0), 2) AS amount,
+        UPPER(COALESCE(m.payment_method, 'N/A')) AS payment_method,
+        CASE
+          WHEN m.status::text = 'cancelled' THEN 'cancelled'
+          WHEN m.status::text = 'no-show'   THEN 'no-show'
+          WHEN m.status::text = 'deleted'   THEN 'deleted'
+          WHEN m.status::text = 'paid'      THEN 'paid'
+          WHEN m.status::text = 'partial'   THEN 'partial'
+          ELSE 'unpaid'
+        END AS payment_status
+      FROM metrics m
+      LEFT JOIN service_rows sr
+        ON sr.appointment_id = m.id
+      LEFT JOIN clients c
+        ON c.id = m.client_id
+      LEFT JOIN staff st
+        ON st.id::text = COALESCE(sr.staff_id, m.staff_id::text)
+      LEFT JOIN services sv
+        ON sv.id::text = m.service_id::text
+      WHERE ${where.join(" AND ")}
+      ORDER BY ${dateColumn} DESC
+      `,
+      values
+    )
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    appointmentDate: row.appointment_date,
+    time: row.appointment_time,
+    bookedDate: row.booked_date,
+    clientName: row.client_name,
+    serviceName: row.service_name,
+    staffName: String(row.staff_name ?? "Unknown").trim() || "Unknown",
+    status: row.status,
+    duration: Number(row.duration_minutes ?? 0),
+    amount: Number(row.amount ?? 0),
+    paymentMethod: row.payment_method,
+    paymentStatus: row.payment_status,
+  }));
+},
+
+async getDailySheetTable(
+  salonId: string,
+  filters: { date: string; service?: string; staff?: string }
+) {
+  const values: any[] = [salonId, filters.date];
+  const having: string[] = [];
+  let index = 3;
+
+  if (filters.service) {
+    having.push(`sf.service ILIKE $${index}`);
+    values.push(`%${filters.service}%`);
+    index++;
+  }
+
+  if (filters.staff) {
+    having.push(`sf.staff ILIKE $${index}`);
+    values.push(`%${filters.staff}%`);
+    index++;
+  }
+
+  const { rows } = await safeQuery(() =>
+    pool.query(
+      `
+      WITH filtered_sales AS (
+        SELECT * FROM sales
+        WHERE salon_id = $1
+          AND LOWER(COALESCE(status::text, '')) = 'completed'
+          AND created_at >= $2::date AND created_at < ($2::date + interval '1 day')
+      ),
+      payment_rollup AS (
+        SELECT
+          p.appointment_id,
+          MAX(p.payment_method) FILTER (
+            WHERE p.created_at = (
+              SELECT MAX(p2.created_at)
+              FROM payments p2
+              WHERE p2.appointment_id = p.appointment_id
+            )
+          ) AS latest_method
+        FROM payments p
+        WHERE p.appointment_id IS NOT NULL
+        GROUP BY p.appointment_id
+      ),
+      sale_item_rollup AS (
+        SELECT
+          si.sale_id,
+          COALESCE(STRING_AGG(DISTINCT si.name, ', ' ORDER BY si.name), '') AS items
+        FROM sale_items si
+        JOIN filtered_sales fs
+          ON fs.id = si.sale_id
+        GROUP BY si.sale_id
+      ),
+      appointment_item_rollup AS (
+        SELECT
+          a.id AS appointment_id,
+          COALESCE((
+            SELECT STRING_AGG(DISTINCT COALESCE(NULLIF(svc.value->>'name', ''), 'Service'), ', ')
+            FROM jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) AS svc(value)
+          ), '') AS services
+        FROM appointments a
+        JOIN filtered_sales fs
+          ON fs.appointment_id = a.id
+      ),
+      sale_staff_rollup AS (
+        SELECT
+          staff_lines.sale_id,
+          COALESCE(
+            STRING_AGG(DISTINCT staff_lines.staff_name, ', ' ORDER BY staff_lines.staff_name),
+            'Unknown'
+          ) AS staff_names
+        FROM (
+          SELECT
+            s.id AS sale_id,
+            COALESCE(
+              NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), ''),
+              'Unknown'
+            ) AS staff_name
+          FROM filtered_sales s
+          LEFT JOIN sale_items si
+            ON si.sale_id = s.id
+          LEFT JOIN staff st
+            ON st.id = COALESCE(si.staff_id, s.staff_id)
+        ) staff_lines
+        GROUP BY staff_lines.sale_id
+      ),
+      sales_final AS (
+        SELECT
+          s.id,
+          s.appointment_id,
+          s.created_at AS sort_ts,
+          TO_CHAR(s.created_at, 'HH12:MI AM') AS time,
+          COALESCE(s.invoice_number, s.id::text) AS ticket_no,
+          COALESCE(c.full_name, 'Walk-in Client') AS client_name,
+          COALESCE(NULLIF(sir.items, ''), NULLIF(air.services, ''), 'Service') AS service,
+          COALESCE(ssr.staff_names, 'Unknown') AS staff,
+          COALESCE(s.total_amount::numeric, 0) AS amount,
+          UPPER(COALESCE(pr.latest_method, s.payment_method, 'N/A')) AS payment_method
+        FROM filtered_sales s
+        LEFT JOIN clients c
+          ON c.id = s.client_id
+        LEFT JOIN payment_rollup pr
+          ON pr.appointment_id = s.appointment_id
+        LEFT JOIN sale_item_rollup sir
+          ON sir.sale_id = s.id
+        LEFT JOIN appointment_item_rollup air
+          ON air.appointment_id = s.appointment_id
+        LEFT JOIN sale_staff_rollup ssr
+          ON ssr.sale_id = s.id
+      )
+      SELECT * FROM sales_final sf
+      ${having.length > 0 ? "WHERE " + having.join(" AND ") : ""}
+      ORDER BY sf.sort_ts ASC
+      `,
+      values
+    )
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    appointmentId: row.appointment_id,
+    time: row.time,
+    ticketNo: row.ticket_no,
+    clientName: row.client_name,
+    service: row.service,
+    staff: row.staff,
+    amount: Number(row.amount ?? 0),
+    paymentMethod: row.payment_method,
+  }));
+},
+
+async getRewardPointsSummary(
+  salonId: string,
+  filters: { search?: string }
+) {
+  const values: any[] = [salonId];
+  const where = ["c.salon_id = $1"];
+  let index = 2;
+
+  if (filters.search) {
+    where.push(`(c.full_name ILIKE $${index} OR c.phone_number ILIKE $${index})`);
+    values.push(`%${filters.search}%`);
+    index++;
+  }
+
+  const { rows } = await safeQuery(() =>
+    pool.query(
+      `
+      WITH ledger_rollup AS (
+        SELECT
+          client_id,
+          COALESCE(SUM(points) FILTER (WHERE type = 'earn'), 0) AS total_earned,
+          COALESCE(SUM(-points) FILTER (WHERE type = 'redeem'), 0) AS total_redeemed,
+          MAX(created_at) AS last_activity_at
+        FROM reward_points_ledger
+        WHERE salon_id = $1
+        GROUP BY client_id
+      )
+      SELECT
+        c.id AS client_id,
+        c.full_name,
+        c.phone_number,
+        COALESCE(c.reward_points_balance, 0) AS points_available,
+        COALESCE(lr.total_earned, 0) AS points_earned,
+        COALESCE(lr.total_redeemed, 0) AS points_redeemed,
+        lr.last_activity_at
+      FROM clients c
+      LEFT JOIN ledger_rollup lr
+        ON lr.client_id = c.id
+      WHERE ${where.join(" AND ")}
+        AND (
+          COALESCE(c.reward_points_balance, 0) > 0
+          OR COALESCE(lr.total_earned, 0) > 0
+          OR COALESCE(lr.total_redeemed, 0) > 0
+        )
+      ORDER BY points_available DESC, points_redeemed DESC
+      `,
+      values
+    )
+  );
+
+  return rows.map((row) => ({
+    clientId: row.client_id,
+    clientName: row.full_name || "Walk-in Client",
+    mobile: row.phone_number || "—",
+    pointsAvailable: Number(row.points_available ?? 0),
+    pointsEarned: Number(row.points_earned ?? 0),
+    pointsRedeemed: Number(row.points_redeemed ?? 0),
+    lastActivityAt: row.last_activity_at,
   }));
 },
 

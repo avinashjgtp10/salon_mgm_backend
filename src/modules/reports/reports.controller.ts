@@ -303,62 +303,6 @@ async getStylistRevenueTable(
     }
 },
 
-async getStaffCommissionReport(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> {
-    try {
-        const salonId = await getSalonId(req);
-
-        const data = await reportsService.getStaffCommissionReport(
-            salonId,
-            {
-                from: asString(req.query.from),
-                to: asString(req.query.to),
-            }
-        );
-
-        sendSuccess(
-            res,
-            200,
-            data,
-            "Staff commission report fetched successfully"
-        );
-
-    } catch (error) {
-        next(error);
-    }
-},
-
-async getStaffCommissionTable(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> {
-    try {
-        const salonId = await getSalonId(req);
-
-        const data = await reportsService.getStaffCommissionTable(
-            salonId,
-            {
-                from: asString(req.query.from),
-                to: asString(req.query.to),
-            }
-        );
-
-        sendSuccess(
-            res,
-            200,
-            data,
-            "Staff commission table fetched successfully"
-        );
-
-    } catch (error) {
-        next(error);
-    }
-},
-
 async getTipReport(
     req: AuthRequest,
     res: Response,
@@ -468,6 +412,99 @@ async getAppointmentReportTable(
             200,
             data,
             "Appointment report table fetched successfully"
+        );
+
+    } catch (error) {
+        next(error);
+    }
+},
+
+async getAppointmentDetailTable(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const statusesRaw = asString(req.query.statuses);
+
+        const data = await reportsService.getAppointmentDetailTable(
+            salonId,
+            {
+                from: asString(req.query.from),
+                to: asString(req.query.to),
+                dateType: req.query.dateType === "booking" ? "booking" : "appointment",
+                statuses: statusesRaw ? statusesRaw.split(",").map((s) => s.trim()).filter(Boolean) : undefined,
+            }
+        );
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Appointment detail report fetched successfully"
+        );
+
+    } catch (error) {
+        next(error);
+    }
+},
+
+async getDailySheetTable(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const date = asString(req.query.date);
+
+        if (!date) {
+            res.status(400).json({ success: false, message: "date is required" });
+            return;
+        }
+
+        const data = await reportsService.getDailySheetTable(
+            salonId,
+            {
+                date,
+                service: asString(req.query.service),
+                staff: asString(req.query.staff),
+            }
+        );
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Daily sheet report fetched successfully"
+        );
+
+    } catch (error) {
+        next(error);
+    }
+},
+
+async getRewardPointsSummary(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+
+        const data = await reportsService.getRewardPointsSummary(
+            salonId,
+            {
+                search: asString(req.query.search),
+            }
+        );
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Reward points summary fetched successfully"
         );
 
     } catch (error) {

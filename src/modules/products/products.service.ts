@@ -143,9 +143,9 @@ export const productsService = {
         logger.info("productsService.deletePhoto success", { photoId });
     },
 
-    async exportCSV(params: { requesterUserId: string; requesterRole?: string; salonId: string; }): Promise<{ stream: PassThrough; filename: string }> {
-        logger.info("productsService.exportCSV called", { salonId: params.salonId });
-        const products = await productsRepository.listAll(params.salonId);
+    async exportCSV(params: { requesterUserId: string; requesterRole?: string; salonId: string; filters: ProductListFilters; }): Promise<{ stream: PassThrough; filename: string }> {
+        logger.info("productsService.exportCSV called", { salonId: params.salonId, filters: params.filters });
+        const products = await productsRepository.listExport(params.filters, params.salonId);
         const passThrough = new PassThrough();
         const csvStream = format({ headers: true });
         csvStream.pipe(passThrough);
@@ -160,9 +160,9 @@ export const productsService = {
         return { stream: passThrough, filename: "products.csv" };
     },
 
-    async exportExcel(params: { requesterUserId: string; requesterRole?: string; salonId: string; }): Promise<{ buffer: Buffer; filename: string }> {
-        logger.info("productsService.exportExcel called", { salonId: params.salonId });
-        const products = await productsRepository.listAll(params.salonId);
+    async exportExcel(params: { requesterUserId: string; requesterRole?: string; salonId: string; filters: ProductListFilters; }): Promise<{ buffer: Buffer; filename: string }> {
+        logger.info("productsService.exportExcel called", { salonId: params.salonId, filters: params.filters });
+        const products = await productsRepository.listExport(params.filters, params.salonId);
         const workbook = new ExcelJS.Workbook();
         const sheet = workbook.addWorksheet("Products");
         sheet.columns = [
@@ -185,9 +185,9 @@ export const productsService = {
         return { buffer: Buffer.from(buffer), filename: "products.xlsx" };
     },
 
-    async exportPDF(params: { requesterUserId: string; requesterRole?: string; salonId: string; }): Promise<{ stream: PassThrough; filename: string }> {
-        logger.info("productsService.exportPDF called", { salonId: params.salonId });
-        const products = await productsRepository.listAll(params.salonId);
+    async exportPDF(params: { requesterUserId: string; requesterRole?: string; salonId: string; filters: ProductListFilters; }): Promise<{ stream: PassThrough; filename: string }> {
+        logger.info("productsService.exportPDF called", { salonId: params.salonId, filters: params.filters });
+        const products = await productsRepository.listExport(params.filters, params.salonId);
         const doc = new PDFDocument({ margin: 40, size: "A4", layout: "landscape" });
         const passThrough = new PassThrough();
         doc.pipe(passThrough);

@@ -701,8 +701,15 @@ export const clientsRepository = {
 
     // ---------------- SEARCH ----------------
     async search(q: string, limit: number, salonId: string): Promise<Client[]> {
-        const term = `%${q.trim().toLowerCase()}%`;
+        const needle = q.trim().toLowerCase();
+        const term = `%${needle}%`;
+        const prefixTerm = `${needle}%`;
 
+        // Relevance-ranked: exact name match first, then names starting with the
+        // search term, then any other substring match (e.g. mid-name or phone
+        // number) — alphabetical only as the final tiebreaker within each tier.
+        // Without this, a plain `ORDER BY full_name ASC` put "Anita" ahead of a
+        // closer/prefix match like "Nita ..." purely because A < N alphabetically.
         const { rows } = await pool.query(
             `SELECT id, first_name, last_name, full_name, email,
                     phone_country_code, phone_number, avatar_url, is_active, created_at, updated_at
@@ -712,9 +719,16 @@ export const clientsRepository = {
                    LOWER(full_name) LIKE $2
                 OR LOWER(COALESCE(phone_number, '')) LIKE $2
                )
-             ORDER BY full_name ASC
+             ORDER BY
+               CASE
+                 WHEN LOWER(full_name) = $4 THEN 0
+                 WHEN LOWER(full_name) LIKE $5 THEN 1
+                 WHEN LOWER(COALESCE(phone_number, '')) LIKE $5 THEN 2
+                 ELSE 3
+               END,
+               full_name ASC
              LIMIT $3`,
-            [salonId, term, limit]
+            [salonId, term, limit, needle, prefixTerm]
         );
 
         return rows as Client[];

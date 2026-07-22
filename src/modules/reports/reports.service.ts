@@ -384,78 +384,6 @@ async getServiceRevenue(
     );
   },
 
- async getStaffCommissionReport(
-    salonId: string,
-    filters: {
-      from?: string;
-      to?: string;
-    }
-  ) {
-    const [
-      cards,
-      commissionTrend,
-      categoryBreakdown,
-      topStaff,
-      payoutStatus,
-      analytics,
-      table,
-    ] = await Promise.all([
-      reportsRepository.getStaffCommissionCards(
-        salonId,
-        filters
-      ),
-      reportsRepository.getStaffCommissionTrend(
-        salonId,
-        filters
-      ),
-      reportsRepository.getStaffCommissionCategoryBreakdown(
-        salonId,
-        filters
-      ),
-      reportsRepository.getStaffCommissionTopStaff(
-        salonId,
-        filters
-      ),
-      reportsRepository.getStaffCommissionPayoutStatus(
-        salonId,
-        filters
-      ),
-      reportsRepository.getStaffCommissionAnalytics(
-        salonId,
-        filters
-      ),
-      reportsRepository.getStaffCommissionTable(
-        salonId,
-        filters
-      ),
-    ]);
-
-    return {
-      cards,
-      charts: {
-        commissionTrend,
-        categoryBreakdown,
-        topStaff,
-        payoutStatus,
-      },
-      analytics,
-      table,
-    };
-  },
-
- async getStaffCommissionTable(
-    salonId: string,
-    filters: {
-      from?: string;
-      to?: string;
-    }
-  ) {
-    return reportsRepository.getStaffCommissionTable(
-      salonId,
-      filters
-    );
-  },
-
 async getTipReport(
     salonId: string,
     filters: {
@@ -511,6 +439,47 @@ async getTipReport(
     }
   ) {
     return reportsRepository.getAppointmentTable(
+      salonId,
+      filters
+    );
+  },
+
+ async getAppointmentDetailTable(
+    salonId: string,
+    filters: {
+      from?: string;
+      to?: string;
+      dateType?: "appointment" | "booking";
+      statuses?: string[];
+    }
+  ) {
+    return reportsRepository.getAppointmentDetailTable(
+      salonId,
+      filters
+    );
+  },
+
+ async getDailySheetTable(
+    salonId: string,
+    filters: {
+      date: string;
+      service?: string;
+      staff?: string;
+    }
+  ) {
+    return reportsRepository.getDailySheetTable(
+      salonId,
+      filters
+    );
+  },
+
+ async getRewardPointsSummary(
+    salonId: string,
+    filters: {
+      search?: string;
+    }
+  ) {
+    return reportsRepository.getRewardPointsSummary(
       salonId,
       filters
     );

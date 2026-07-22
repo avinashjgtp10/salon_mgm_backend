@@ -5,6 +5,10 @@ import { recordTransaction } from '../transactions/transaction-recorder.service'
 import { membershipsRepository } from '../memberships/memberships.repository';
 import { clientMembershipsService } from '../client-memberships/client-memberships.service';
 import { clientMembershipsRepository } from '../client-memberships/client-memberships.repository';
+import { packageTemplatesRepository } from '../package-templates/package-templates.repository';
+import { packagesRepository } from '../packages/packages.repository';
+import { clientPackagesService } from '../client-packages/client-packages.service';
+import { servicesRepository } from '../services/services.repository';
 import { rewardPointsRepository } from '../reward-points/reward-points.repository';
 import { ewalletRepository } from '../ewallet/ewallet.repository';
 import { referralRepository } from '../referral/referral.repository';
@@ -18,7 +22,8 @@ import { branchesRepository } from '../branches/branches.repository';
 import { staffService } from '../staff/staff.service';
 import { clientsRepository } from '../clients/clients.repository';
 import { getIO } from '../../config/socket';
-import { getActiveTaxes, computeExclusiveTaxAddOn } from '../settings/tax.util';
+import { getActiveTaxes } from '../settings/tax.util';
+import { computeBillTotals } from '../pricing/pricing.engine';
 
 export const paymentsService = {
 
@@ -199,6 +204,29 @@ export const paymentsService = {
             }
           }
 
+          // Per-item wallet-used breakdown — read back from membership_usage_log
+          // (persisted above, whether deducted just now or on a prior call for
+          // this appointment) rather than relying on deductWalletForBooking's
+          // in-memory result, so this works identically for both branches above.
+          // Used below to exclude the wallet-covered portion of each service/
+          // product from GST — a client shouldn't be taxed on money that never
+          // actually changed hands as a sale.
+          let serviceWalletUsed = 0;
+          let productWalletUsed = 0;
+          if (membershipWalletUsed > 0) {
+            try {
+              const walletUsedByItem = await clientMembershipsRepository.getWalletUsedPerItemForAppointment(data.appointment_id);
+              serviceWalletUsed = (appt.services || []).reduce(
+                (s, i) => s + (walletUsedByItem.get(String(i.service_id)) ?? 0), 0,
+              );
+              productWalletUsed = (appt.product_items || []).reduce(
+                (s, i) => s + (walletUsedByItem.get(String(i.product_id)) ?? 0), 0,
+              );
+            } catch (err: any) {
+              logger.warn('[payments] membership wallet per-item lookup failed:', err?.message ?? err);
+            }
+          }
+
           // ── Reward points redemption: own dedicated balance now, not eWallet.
           // Never trust a points count sent from the frontend — cap it at the
           // client's real balance, same principle as eWallet above. Converted
@@ -222,6 +250,7 @@ export const paymentsService = {
             }
           }
           data.reward_points_used = rewardPointsRedeemedActual;
+          data.reward_points_value = rewardPointsRedeemedValue;
 
           // ── Referral credit redemption: own dedicated balance now, not
           // eWallet. Never trust a ₹ amount sent from the frontend — cap it
@@ -239,25 +268,6 @@ export const paymentsService = {
           }
           data.referral_credit_used = referralCreditUsedActual;
 
-          // ── Tax: apply the same active/applicable rates + bucket allocation
-          // the frontend uses (totalsUtils.ts computeBucketTax) — the amount
-          // actually owed must include exclusive tax, not just item prices
-          // minus discount. Previously this was skipped entirely here, so the
-          // receipt correctly displayed tax but the appointment could be
-          // marked "Paid" for less than what was shown to the client.
-          try {
-            const activeTaxes = await getActiveTaxes(data.salon_id);
-            const discRatio = rawSubtotal > 0 ? Math.min(1, discount / rawSubtotal) : 0;
-            taxAmount = computeExclusiveTaxAddOn([
-              { type: 'service',    base: serviceTotal    - serviceTotal    * discRatio },
-              { type: 'packages',   base: packageTotal    - packageTotal    * discRatio },
-              { type: 'product',    base: productTotal    - productTotal    * discRatio },
-              { type: 'membership', base: membershipTotal - membershipTotal * discRatio },
-            ], activeTaxes);
-          } catch (err: any) {
-            logger.warn('[payments] tax computation failed:', err?.message ?? err);
-          }
-
           // Both are real amounts the client actually pays alongside the bill —
           // an ex-charge (business keeps it) and a tip (passed to staff) — so
           // both must be part of what's owed/collected here, even though only
@@ -265,8 +275,49 @@ export const paymentsService = {
           exChargesAmt = Number(appt.ex_charges) || 0;
           tipAmt       = Number(appt.tip_amount) || 0;
 
-          const grandTotal    = Math.round(actualBill - discount + taxAmount + exChargesAmt + tipAmt);
-          const effectiveBill = Math.max(0, grandTotal - ewallet - membershipWalletUsed - rewardPointsRedeemedValue - referralCreditRequestedValue);
+          // ── Tax + grand total: single shared pricing engine (see
+          // pricing.engine.ts) — the same math totalsUtils.ts uses on the
+          // frontend, extended so this backend call site is the authoritative
+          // source of what's actually owed, not just item prices minus discount.
+          // Previously tax was skipped entirely here, so the receipt correctly
+          // displayed tax but the appointment could be marked "Paid" for less
+          // than what was shown to the client.
+          let grandTotal = Math.round(actualBill - discount + exChargesAmt + tipAmt);
+          let effectiveBill = Math.max(0, grandTotal - ewallet - membershipWalletUsed - rewardPointsRedeemedValue - referralCreditRequestedValue);
+          try {
+            const activeTaxes = await getActiveTaxes(data.salon_id);
+            const result = computeBillTotals({
+              actualAmounts: { service: serviceTotal, packages: packageTotal, product: productTotal, membership: membershipTotal },
+              discountType: 'flat',
+              discountValue: discount,
+              taxes: activeTaxes,
+              exCharges: exChargesAmt,
+              tip: tipAmt,
+              eWalletUsed: ewallet,
+              membershipWalletUsed,
+              // Membership-wallet-covered amounts are excluded from the taxable
+              // base (not just the discount ratio) — that portion of the item
+              // was never actually charged to the client, so it shouldn't be
+              // taxed either. Only service/product buckets can carry wallet
+              // coverage today (see itemsForWallet above); packages/memberships
+              // are untouched. Deliberately NOT subtracted from actualBill/
+              // grandTotal elsewhere — effectiveBill already subtracts the full
+              // membershipWalletUsed once; doing it here too would double-count.
+              membershipServiceWalletUsed: serviceWalletUsed,
+              membershipProductWalletUsed: productWalletUsed,
+              rewardPointsRedeemedValue,
+              referralCreditUsed: referralCreditRequestedValue,
+              // Reproduces this call site's pre-existing rounding order — see
+              // the doc comment on this flag in pricing.engine.ts.
+              roundSubtotalBeforeDiscount: true,
+            });
+            taxAmount = result.gstAmount;
+            grandTotal = result.grandTotal;
+            effectiveBill = result.effectiveTotal;
+          } catch (err: any) {
+            logger.warn('[payments] tax computation failed:', err?.message ?? err);
+          }
+
           data.membership_wallet_used = membershipWalletUsed;
 
           // `|| ` treats 0 as "not provided" and falls through to gross_amount — which
@@ -660,6 +711,77 @@ export const paymentsService = {
             );
           } catch (err: any) {
             logger.warn('[payments] membership auto-create failed:', err?.message ?? err);
+          }
+        })();
+      }
+    }
+
+    // ── Auto-create client_packages when packages are sold ───────────────────
+    // package_items only exists on the DB appointment record — unlike
+    // membership_items there's no payment-body fallback, since the frontend
+    // never sends these directly on a payment.
+    const packageItemsSrc: Array<any> = appt?.package_items ?? [];
+    if (data.status === 'completed' && data.client_id && packageItemsSrc.length > 0) {
+      for (const item of packageItemsSrc) {
+        // Fire-and-forget — does not block payment return
+        (async () => {
+          try {
+            // Prefer a Package Template (has a real per-service session
+            // breakdown) — fall back to a plain Catalog package (services
+            // list only, no session counts), crediting 1 session per
+            // included service since that's what was actually billed.
+            let services: Array<{ serviceId?: string; serviceName: string; totalSessions: number; price: number }> = [];
+            let basePrice      = Number(item.price ?? 0) * Number(item.quantity ?? 1);
+            let discount       = 0;
+            let gstPercentage  = 0;
+            let expiryDate     = "2099-12-31";
+
+            const template = item.package_id
+              ? await packageTemplatesRepository.findById(item.package_id, data.salon_id)
+              : null;
+            if (template) {
+              services      = template.services.map(s => ({ serviceName: s.serviceName, totalSessions: s.totalSessions, price: s.price }));
+              basePrice     = template.basePrice;
+              discount      = template.discount;
+              gstPercentage = template.gstPercentage;
+              if (!template.neverExpires && template.expiryDays != null) {
+                const d = new Date();
+                d.setDate(d.getDate() + template.expiryDays);
+                expiryDate = d.toISOString().slice(0, 10);
+              }
+            } else {
+              const combo = item.package_id
+                ? await packagesRepository.findById(item.package_id, data.salon_id)
+                : null;
+              if (combo && combo.serviceIds.length > 0) {
+                const perServicePrice = parseFloat((basePrice / combo.serviceIds.length).toFixed(2));
+                for (const svcId of combo.serviceIds) {
+                  const svc = await servicesRepository.findById(svcId, data.salon_id);
+                  services.push({ serviceId: svcId, serviceName: svc?.name ?? "Service", totalSessions: 1, price: perServicePrice });
+                }
+                discount = combo.discountType === "fixed"
+                  ? combo.discountValue
+                  : parseFloat((basePrice * combo.discountValue / 100).toFixed(2));
+              }
+            }
+
+            if (services.length === 0) {
+              logger.warn(`[payments] could not resolve package for name="${item.name}" id="${item.package_id}" — skipping client_package auto-create`);
+              return;
+            }
+
+            await clientPackagesService.autoCreateFromPayment(
+              data.salon_id,
+              data.client_id!,
+              item.name || "Package",
+              services,
+              basePrice,
+              discount,
+              gstPercentage,
+              expiryDate,
+            );
+          } catch (err: any) {
+            logger.warn('[payments] package auto-create failed:', err?.message ?? err);
           }
         })();
       }

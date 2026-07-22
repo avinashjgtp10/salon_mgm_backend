@@ -6,6 +6,8 @@ const router = Router();
 
 router.use(authMiddleware);
 
+router.post("/register-device",   notificationsController.registerDevice);
+router.delete("/register-device", notificationsController.unregisterDevice);
 router.get("/",                  notificationsController.list);
 router.get("/unread-count",      notificationsController.unreadCount);
 router.patch("/read-all",        notificationsController.markAllRead);

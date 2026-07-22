@@ -78,6 +78,16 @@ export type Appointment = {
     invoice_number?: number | null;
     reward_points_value?: number | null;
     tax_breakdown?: { name: string; rate: number; amount: number; inclusive: boolean }[] | null;
+    // Backfilled at read time only for an appointment with no payment yet
+    // (see appointments.service.ts::backfillTaxBreakdown) — the full
+    // discount+tax-inclusive total, since the raw item-price sum alone never
+    // accounted for either.
+    computed_grand_total?: number | null;
+    // Timestamp of the most recent payment that carries a real tax_breakdown
+    // (not stored as a column) — used to detect "this appointment was edited
+    // AFTER its last payment," in which case that payment's tax_breakdown
+    // snapshot is stale and must be recomputed rather than trusted.
+    last_payment_at?: string | null;
     // Joined fields (from clients / staff tables — not stored as columns)
     client_name?: string | null;
     client_phone?: string | null;
@@ -101,6 +111,13 @@ export type Appointment = {
     // exists once checkout happens), so the checkbox survives Save/reopen.
     apply_membership_wallet: boolean;
     deleted_at?: string | null;
+    // True once a Paid appointment has been content-edited back down to
+    // 'partial' via appointments.service.ts::update() — keeps its items
+    // editable on reopen, unlike a genuinely-original partial/deposit
+    // booking (which stays locked). Reset is not needed: once a "Continue
+    // Payment" collection brings it back to 'paid', reopening the (now
+    // fully paid) booking edits through this same path again if needed.
+    reopened_from_paid: boolean;
 };
 
 // ─── Request body types ──────────────────────────────────────────────────────
@@ -132,6 +149,7 @@ export type CreateAppointmentBody = {
     tip_amount?: number;
     gst_percent?: number;
     apply_membership_wallet?: boolean;
+    reopened_from_paid?: boolean;
 };
 
 export type UpdateAppointmentBody = Partial<Omit<CreateAppointmentBody, "salon_id">>;
