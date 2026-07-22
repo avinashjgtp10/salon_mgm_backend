@@ -79,4 +79,11 @@ export type CreatePaymentBody = {
   // Persisted as-is so a reprinted receipt shows what was actually charged,
   // not today's tax settings if they've since changed.
   tax_breakdown?: TaxBreakdownEntry[];
+  // Whether staff had "Include GST in this bill" checked for THIS payment.
+  // Defaults to true (apply the salon's active tax config, the pre-existing
+  // behavior) when omitted — only an explicit `false` skips tax entirely.
+  // Without this, a client who paid the full GST-excluded total shown on
+  // screen would still get billed for GST server-side, leaving a phantom
+  // GST-sized due_amount and a wrongly-"Partial" status.
+  include_gst?: boolean;
 };

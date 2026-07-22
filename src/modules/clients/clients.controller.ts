@@ -673,14 +673,16 @@ export const clientsController = {
                 ),
 
                 // 4. Appointment stats — a.status IS the payment state now (paid/
-                //    partial/booked/...), so "completed" here is just a.status = 'paid'
-                //    directly, no more payments-table lookup needed.
+                //    partial/booked/...). completed_appointments feeds "Total Visits"
+                //    (see ClientHistoryDetail.tsx), which counts a visit as any
+                //    appointment the client paid something toward — paid OR partial,
+                //    not paid-only.
                 pool.query(
                     `SELECT
-                        COUNT(*)::int                                        AS total_appointments,
-                        COUNT(*) FILTER (WHERE a.status = 'paid')::int       AS completed_appointments,
-                        COUNT(*) FILTER (WHERE a.status = 'no-show')::int    AS no_shows,
-                        COUNT(*) FILTER (WHERE a.status = 'cancelled')::int  AS cancellations
+                        COUNT(*)::int                                                AS total_appointments,
+                        COUNT(*) FILTER (WHERE a.status IN ('paid','partial'))::int  AS completed_appointments,
+                        COUNT(*) FILTER (WHERE a.status = 'no-show')::int            AS no_shows,
+                        COUNT(*) FILTER (WHERE a.status = 'cancelled')::int          AS cancellations
                      FROM appointments a
                      WHERE a.client_id = $1 AND a.salon_id = $2 AND a.deleted_at IS NULL`,
                     [clientId, salonId]
