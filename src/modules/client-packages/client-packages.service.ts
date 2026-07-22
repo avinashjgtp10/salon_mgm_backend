@@ -216,4 +216,58 @@ export const clientPackagesService = {
 
     return updated;
   },
+
+  // Called from payments.service.ts when a bill containing package_items is
+  // fully settled — creates the client's actual, redeemable package record.
+  // Goes straight to the repository (not this module's own create()), since
+  // that would also call recordTransaction() and double-count revenue that
+  // the checkout's own sale record already covers — mirrors
+  // clientMembershipsService.autoCreateFromPayment()'s same reasoning.
+  async autoCreateFromPayment(
+    salonId:      string,
+    clientId:     string,
+    packageName:  string,
+    services:     Array<{ serviceId?: string; serviceName: string; totalSessions: number; price: number }>,
+    basePrice:    number,
+    discount:     number,
+    gstPercentage: number,
+    expiryDate:   string,
+  ): Promise<void> {
+    logger.info(`[client-packages/auto-create] salon=${salonId} client=${clientId} name="${packageName}" services=${services.length} price=${basePrice}`);
+    try {
+      const created = await clientPackagesRepository.create(salonId, {
+        clientId,
+        packageName,
+        expiryDate,
+        basePrice,
+        gstPercentage,
+        discount,
+        paymentMethod: "included_in_sale",
+        services,
+      });
+      logger.info(`[client-packages/auto-create] SUCCESS — client=${clientId}, package=${packageName}`);
+      // Text only, no PDF here — the calling checkout flow (payments) already
+      // sent one PDF covering this whole sale, package line included.
+      if (created.mobile) {
+        const salon = await salonsRepository.findById(salonId);
+        whatsappAutomationService.trigger({
+          salonId,
+          eventType:   "package_purchased",
+          clientId:    created.clientId,
+          phone:       created.mobile,
+          countryCode: null,
+          variables: {
+            "1": created.clientName ?? "Valued Customer",
+            "2": salon?.business_name ?? "our salon",
+            "3": created.packageName,
+          },
+          referenceId:   created.id,
+          referenceType: "package",
+          dedupeByReference: true,
+        }).catch(() => {});
+      }
+    } catch (err: any) {
+      logger.warn('[client-packages/auto-create] FAILED:', err?.message ?? err);
+    }
+  },
 };
