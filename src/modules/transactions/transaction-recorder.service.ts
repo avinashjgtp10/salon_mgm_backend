@@ -18,13 +18,34 @@ import {
  * failed, silently, inside a try/catch.
  */
 export async function recordTransaction(input: RecordTransactionInput): Promise<RecordTransactionResult> {
-  // Idempotency: never create a second sale for the same appointment.
+  // Idempotency: never create a SECOND sale row for the same appointment —
+  // but an existing one is refreshed to the current bill rather than left
+  // frozen at whatever it was when first created. Without this, editing a
+  // paid appointment and collecting the difference left Sales Summary,
+  // Client History's Sales list, and invoice reprint all showing the stale
+  // original total/items forever, even though the appointment itself was
+  // correctly updated.
   if (input.appointment_id) {
     const existing = await salesRepository.findByAppointmentId(input.appointment_id);
     if (existing) {
-      const items = await salesRepository.findItemsBySaleId(existing.id);
-      const enriched = await salesRepository.findById(existing.id);
-      return { sale: enriched ?? existing, items, wasIdempotentReuse: true };
+      const updated = await salesRepository.update(existing.id, {
+        discount_amount: input.discount_amount != null ? String(input.discount_amount) : undefined,
+        tax_amount:      input.tax_amount      != null ? String(input.tax_amount)      : undefined,
+        tip_amount:      input.tip_amount      != null ? String(input.tip_amount)      : undefined,
+        ex_charges:      input.ex_charges      != null ? String(input.ex_charges)      : undefined,
+        items: input.items.map((item) => ({
+          item_type: item.item_type,
+          item_id: item.item_id,
+          staff_id: item.staff_id,
+          name: item.name,
+          quantity: item.quantity,
+          unit_price: String(item.unit_price),
+          discount_amount: item.discount_amount != null ? String(item.discount_amount) : undefined,
+        })),
+      });
+      const items = await salesRepository.findItemsBySaleId(updated.id);
+      const enriched = await salesRepository.findById(updated.id);
+      return { sale: enriched ?? updated, items, wasIdempotentReuse: true };
     }
   }
 

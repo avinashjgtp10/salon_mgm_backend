@@ -22,6 +22,7 @@ import { sendPurchaseReceipt } from "../sales/receipt-send.helper";
 import { notifyAppointmentCompleted } from "./appointment-completed.helper";
 import { computeBillTotals, rowsTotal, ActiveTaxRow } from "../pricing/pricing.engine";
 import { getActiveTaxes } from "../settings/tax.util";
+import { paymentsRepository } from "../payments/payments.repository";
 import {
     Appointment,
     CreateAppointmentBody,
@@ -40,26 +41,41 @@ import {
 // been collected, that payment's tax_breakdown is authoritative (reflects
 // wallet/coupon actually applied) and must never be overridden by a fresh
 // recompute here.
-function backfillTaxBreakdown(appt: Appointment, activeTaxes: ActiveTaxRow[]): Appointment {
-    if (Array.isArray(appt.tax_breakdown) && appt.tax_breakdown.length > 0) return appt;
+// Shared by backfillTaxBreakdown (read-time display) and update() (the
+// paid/partial recompute-and-branch decision below) — both need "what would
+// this appointment's bill actually total, from its raw stored inputs."
+function computeAppointmentTotals(appt: {
+    services?: any[]; package_items?: any[]; product_items?: any[]; membership_items?: any[];
+    discount_type?: string; discount_value?: number; ex_charges?: number; tip_amount?: number;
+}, activeTaxes: ActiveTaxRow[]) {
     const toRow = (items: any[] = []) => (items || []).map((i) => ({
         price: Number(i?.price) || 0,
         qty: Number(i?.quantity) || 1,
         isPackageService: !!i?.is_package_service,
     }));
-    const result = computeBillTotals({
+    return computeBillTotals({
         actualAmounts: {
-            service:    rowsTotal(toRow((appt as any).services)),
-            packages:   rowsTotal(toRow((appt as any).package_items)),
-            product:    rowsTotal(toRow((appt as any).product_items)),
-            membership: rowsTotal(toRow((appt as any).membership_items)),
+            service:    rowsTotal(toRow(appt.services)),
+            packages:   rowsTotal(toRow(appt.package_items)),
+            product:    rowsTotal(toRow(appt.product_items)),
+            membership: rowsTotal(toRow(appt.membership_items)),
         },
-        discountType: ((appt as any).discount_type === "percentage" ? "percentage" : "flat"),
-        discountValue: Number((appt as any).discount_value) || 0,
+        discountType: (appt.discount_type === "percentage" ? "percentage" : "flat"),
+        discountValue: Number(appt.discount_value) || 0,
         taxes: activeTaxes,
-        exCharges: Number((appt as any).ex_charges) || 0,
-        tip: Number((appt as any).tip_amount) || 0,
+        exCharges: Number(appt.ex_charges) || 0,
+        tip: Number(appt.tip_amount) || 0,
     });
+}
+
+function backfillTaxBreakdown(appt: Appointment, activeTaxes: ActiveTaxRow[]): Appointment {
+    // A payment's tax_breakdown snapshot is only trustworthy if nothing has
+    // been edited since it was taken — once an edit (appointments.updated_at)
+    // postdates the last payment, that snapshot describes a bill that no
+    // longer exists, and must be recomputed fresh instead.
+    const editedAfterPayment = !!appt.last_payment_at && new Date(appt.updated_at) > new Date(appt.last_payment_at);
+    if (Array.isArray(appt.tax_breakdown) && appt.tax_breakdown.length > 0 && !editedAfterPayment) return appt;
+    const result = computeAppointmentTotals(appt, activeTaxes);
     return { ...appt, tax_breakdown: result.taxBreakdown, computed_grand_total: result.grandTotal };
 }
 
@@ -256,15 +272,62 @@ export const appointmentsService = {
         // blocked outright, since the whole point of dragging/editing it is to
         // give the client a new slot.
         const isReschedule = "scheduled_at" in patch || "staff_id" in patch || "duration_minutes" in patch;
+        // Whether this patch actually changes what's owed — distinct from a
+        // pure reschedule/staff-reassignment/note edit, which never needs to
+        // touch payment status. Field list mirrors computeAppointmentTotals's
+        // inputs exactly so this decision and the recompute below can never
+        // disagree about what "changed the bill" means.
+        const isContentEdit = ["services", "package_items", "product_items", "membership_items",
+                                "discount_value", "discount_type", "ex_charges", "tip_amount"]
+                                .some((k) => k in patch);
+
         if (existing.status === "no-show" && isReschedule) {
             patch = { ...patch, status: "booked" };
-        } else if (existing.status === "paid" && isReschedule) {
-            // A completed (paid) appointment can still be dragged to a new
-            // time/staff slot on the calendar — only the schedule moves,
-            // payment/lifecycle status is left untouched (unlike no-show,
-            // this doesn't reopen the appointment).
-        } else if (["paid", "cancelled", "deleted"].includes(existing.status)) {
+        } else if (existing.status === "cancelled" || existing.status === "deleted") {
             throw new AppError(400, `Cannot update an appointment with status '${existing.status}'`, "BAD_REQUEST");
+        } else if ((existing.status === "paid" || existing.status === "partial") && isContentEdit) {
+            // Editing a paid or partially-paid appointment's actual items:
+            // recompute the true bill from the merged (existing + patch)
+            // inputs, using the same shared engine every other charge/preview
+            // call site uses, then compare against what's already been
+            // collected — never trust the frontend's own guess of the total.
+            const merged = {
+                services:         patch.services         ?? existing.services,
+                package_items:    patch.package_items    ?? existing.package_items,
+                product_items:    patch.product_items    ?? existing.product_items,
+                membership_items: patch.membership_items ?? existing.membership_items,
+                discount_type:    patch.discount_type     ?? existing.discount_type,
+                discount_value:   patch.discount_value    ?? existing.discount_value,
+                ex_charges:       patch.ex_charges        ?? existing.ex_charges,
+                tip_amount:       patch.tip_amount         ?? existing.tip_amount,
+            };
+            const activeTaxes = await getActiveTaxes(existing.salon_id).catch(() => []);
+            const newGrandTotal = computeAppointmentTotals(merged, activeTaxes).grandTotal;
+            const existingPaid = await paymentsRepository.getTotalPaidForAppointment(appointmentId);
+            logger.info("[DEBUG update() reprice]", {
+                appointmentId, existingStatus: existing.status, isContentEdit,
+                newGrandTotal, existingPaid, activeTaxesCount: activeTaxes.length,
+                patchKeys: Object.keys(patch),
+            });
+
+            if (newGrandTotal < existingPaid - 0.5) {
+                // Overpayment: the edit would take the bill below what's
+                // already been collected. There's no refund workflow — block
+                // the save rather than silently create/hide an overpaid state.
+                throw new AppError(
+                    400,
+                    "This change would reduce the total below the amount already paid. Cancel or handle removals separately instead of editing a paid appointment down.",
+                    "OVERPAYMENT_BLOCKED",
+                );
+            } else if (newGrandTotal > existingPaid + 0.5) {
+                patch = { ...patch, status: "partial" };
+                // Only a genuinely Paid booking being reopened needs the
+                // stay-editable flag — a booking that was already partial
+                // (a real deposit) keeps its existing lock behavior untouched.
+                if (existing.status === "paid") patch = { ...patch, reopened_from_paid: true };
+            } else {
+                patch = { ...patch, status: "paid" };
+            }
         }
 
         // Overlapping appointments for the same staff are allowed (e.g. hair color
@@ -500,8 +563,17 @@ export const appointmentsService = {
                 await appointmentsRepository.linkSale(appointmentId, preExistingSale.id);
             }
 
-            // Fire commission on the existing sale items (fire-and-forget)
+            // Fire commission on the existing sale items.
             const saleItems = await salesRepository.findItemsBySaleId(preExistingSale.id);
+            // checkout() can be re-entered whenever a second payment fully
+            // settles this appointment (e.g. collecting the difference after
+            // an edit) — without this, re-firing calculateForSale on the same
+            // sale_id would insert a second, duplicate set of commission rows
+            // instead of replacing the first. Awaited (not fire-and-forget)
+            // so the clear always completes before the new calculation
+            // inserts — reverseForSale only deletes rows still 'pending', so
+            // any commission already paid out is left untouched.
+            await commissionCalculationService.reverseForSale(preExistingSale.id).catch(() => {});
             commissionCalculationService.calculateForSale({
                 salonId:         existing.salon_id,
                 saleId:          preExistingSale.id,
