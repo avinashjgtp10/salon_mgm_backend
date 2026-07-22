@@ -5,6 +5,10 @@ import { recordTransaction } from '../transactions/transaction-recorder.service'
 import { membershipsRepository } from '../memberships/memberships.repository';
 import { clientMembershipsService } from '../client-memberships/client-memberships.service';
 import { clientMembershipsRepository } from '../client-memberships/client-memberships.repository';
+import { packageTemplatesRepository } from '../package-templates/package-templates.repository';
+import { packagesRepository } from '../packages/packages.repository';
+import { clientPackagesService } from '../client-packages/client-packages.service';
+import { servicesRepository } from '../services/services.repository';
 import { rewardPointsRepository } from '../reward-points/reward-points.repository';
 import { ewalletRepository } from '../ewallet/ewallet.repository';
 import { referralRepository } from '../referral/referral.repository';
@@ -707,6 +711,77 @@ export const paymentsService = {
             );
           } catch (err: any) {
             logger.warn('[payments] membership auto-create failed:', err?.message ?? err);
+          }
+        })();
+      }
+    }
+
+    // ── Auto-create client_packages when packages are sold ───────────────────
+    // package_items only exists on the DB appointment record — unlike
+    // membership_items there's no payment-body fallback, since the frontend
+    // never sends these directly on a payment.
+    const packageItemsSrc: Array<any> = appt?.package_items ?? [];
+    if (data.status === 'completed' && data.client_id && packageItemsSrc.length > 0) {
+      for (const item of packageItemsSrc) {
+        // Fire-and-forget — does not block payment return
+        (async () => {
+          try {
+            // Prefer a Package Template (has a real per-service session
+            // breakdown) — fall back to a plain Catalog package (services
+            // list only, no session counts), crediting 1 session per
+            // included service since that's what was actually billed.
+            let services: Array<{ serviceId?: string; serviceName: string; totalSessions: number; price: number }> = [];
+            let basePrice      = Number(item.price ?? 0) * Number(item.quantity ?? 1);
+            let discount       = 0;
+            let gstPercentage  = 0;
+            let expiryDate     = "2099-12-31";
+
+            const template = item.package_id
+              ? await packageTemplatesRepository.findById(item.package_id, data.salon_id)
+              : null;
+            if (template) {
+              services      = template.services.map(s => ({ serviceName: s.serviceName, totalSessions: s.totalSessions, price: s.price }));
+              basePrice     = template.basePrice;
+              discount      = template.discount;
+              gstPercentage = template.gstPercentage;
+              if (!template.neverExpires && template.expiryDays != null) {
+                const d = new Date();
+                d.setDate(d.getDate() + template.expiryDays);
+                expiryDate = d.toISOString().slice(0, 10);
+              }
+            } else {
+              const combo = item.package_id
+                ? await packagesRepository.findById(item.package_id, data.salon_id)
+                : null;
+              if (combo && combo.serviceIds.length > 0) {
+                const perServicePrice = parseFloat((basePrice / combo.serviceIds.length).toFixed(2));
+                for (const svcId of combo.serviceIds) {
+                  const svc = await servicesRepository.findById(svcId, data.salon_id);
+                  services.push({ serviceId: svcId, serviceName: svc?.name ?? "Service", totalSessions: 1, price: perServicePrice });
+                }
+                discount = combo.discountType === "fixed"
+                  ? combo.discountValue
+                  : parseFloat((basePrice * combo.discountValue / 100).toFixed(2));
+              }
+            }
+
+            if (services.length === 0) {
+              logger.warn(`[payments] could not resolve package for name="${item.name}" id="${item.package_id}" — skipping client_package auto-create`);
+              return;
+            }
+
+            await clientPackagesService.autoCreateFromPayment(
+              data.salon_id,
+              data.client_id!,
+              item.name || "Package",
+              services,
+              basePrice,
+              discount,
+              gstPercentage,
+              expiryDate,
+            );
+          } catch (err: any) {
+            logger.warn('[payments] package auto-create failed:', err?.message ?? err);
           }
         })();
       }
