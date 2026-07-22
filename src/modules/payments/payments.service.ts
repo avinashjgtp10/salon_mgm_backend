@@ -193,6 +193,7 @@ export const paymentsService = {
                 if (itemsForWallet.length > 0) {
                   const result = await clientMembershipsService.deductWalletForBooking(
                     data.salon_id, data.client_id, data.appointment_id, itemsForWallet,
+                    data.membership_wallet_requested,
                   );
                   membershipWalletUsed = result.totalWalletUsed;
                 }

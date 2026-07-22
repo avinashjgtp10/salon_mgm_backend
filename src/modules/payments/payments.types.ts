@@ -58,6 +58,11 @@ export type CreatePaymentBody = {
   membership_items?: Array<{ membership_id?: string; name: string; price: number; quantity: number }>;
   membership_wallet_used?: number;
   apply_membership_wallet?: boolean;
+  // Staff-chosen cap on how much of the membership wallet to actually use —
+  // never trusted as an amount to blindly deduct, only as an upper bound;
+  // deductWalletForBooking still caps further by real balance/eligible items.
+  // Omitted/undefined preserves the old "use as much as needed" behavior.
+  membership_wallet_requested?: number;
   // Server-computed only — never trust a value sent by the frontend for this
   // (see payments.service.ts's Refer & Earn block).
   referral_discount_applied?: number;

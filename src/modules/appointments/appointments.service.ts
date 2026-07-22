@@ -68,13 +68,20 @@ function computeAppointmentTotals(appt: {
     });
 }
 
+// Single source of truth for "does this appointment's cached tax_breakdown
+// need recomputing" — a payment's snapshot is only trustworthy if nothing has
+// been edited since it was taken; once an edit (appointments.updated_at)
+// postdates the last payment, that snapshot describes a bill that no longer
+// exists. Every caller below MUST use this (not its own "is tax_breakdown
+// empty?" shortcut) — a caller that only checks emptiness will short-circuit
+// past a stale-but-non-empty snapshot and keep showing pre-edit GST forever.
+function needsTaxBackfill(appt: Appointment): boolean {
+    if (!Array.isArray(appt.tax_breakdown) || appt.tax_breakdown.length === 0) return true;
+    return !!appt.last_payment_at && new Date(appt.updated_at) > new Date(appt.last_payment_at);
+}
+
 function backfillTaxBreakdown(appt: Appointment, activeTaxes: ActiveTaxRow[]): Appointment {
-    // A payment's tax_breakdown snapshot is only trustworthy if nothing has
-    // been edited since it was taken — once an edit (appointments.updated_at)
-    // postdates the last payment, that snapshot describes a bill that no
-    // longer exists, and must be recomputed fresh instead.
-    const editedAfterPayment = !!appt.last_payment_at && new Date(appt.updated_at) > new Date(appt.last_payment_at);
-    if (Array.isArray(appt.tax_breakdown) && appt.tax_breakdown.length > 0 && !editedAfterPayment) return appt;
+    if (!needsTaxBackfill(appt)) return appt;
     const result = computeAppointmentTotals(appt, activeTaxes);
     return { ...appt, tax_breakdown: result.taxBreakdown, computed_grand_total: result.grandTotal };
 }
@@ -220,7 +227,7 @@ export const appointmentsService = {
     async getById(id: string): Promise<Appointment> {
         const appointment = await appointmentsRepository.findById(id);
         if (!appointment) throw new AppError(404, "Appointment not found", "NOT_FOUND");
-        if (Array.isArray(appointment.tax_breakdown) && appointment.tax_breakdown.length > 0) return appointment;
+        if (!needsTaxBackfill(appointment)) return appointment;
         const activeTaxes = await getActiveTaxes(appointment.salon_id).catch(() => []);
         return backfillTaxBreakdown(appointment, activeTaxes);
     },
@@ -239,7 +246,7 @@ export const appointmentsService = {
         const { salonId, clientId, date, staffId, status, startDate, endDate, page, limit } = params;
         if (clientId) {
             const appts = await appointmentsRepository.listByClientId(clientId);
-            const needsBackfill = appts.some((a) => !Array.isArray(a.tax_breakdown) || a.tax_breakdown.length === 0);
+            const needsBackfill = appts.some(needsTaxBackfill);
             if (!needsBackfill || appts.length === 0) return appts;
             const activeTaxes = await getActiveTaxes(appts[0].salon_id).catch(() => []);
             return appts.map((a) => backfillTaxBreakdown(a, activeTaxes));
@@ -250,7 +257,7 @@ export const appointmentsService = {
             start_date: startDate, end_date: endDate,
             page, limit,
         });
-        const needsBackfill = result.data.some((a) => !Array.isArray(a.tax_breakdown) || a.tax_breakdown.length === 0);
+        const needsBackfill = result.data.some(needsTaxBackfill);
         if (!needsBackfill) return result;
         const activeTaxes = await getActiveTaxes(salonId).catch(() => []);
         return { ...result, data: result.data.map((a) => backfillTaxBreakdown(a, activeTaxes)) };
@@ -264,6 +271,14 @@ export const appointmentsService = {
     }): Promise<Appointment> {
         const { appointmentId } = params;
         let patch = params.patch;
+        // TEMP DEBUG — remove after diagnosing the drag-and-drop revert issue.
+        console.log("\n========== DRAG DEBUG: incoming update() call ==========");
+        console.log("appointmentId:", appointmentId);
+        console.log("patch keys:", Object.keys(patch));
+        console.log("patch.scheduled_at:", (patch as any).scheduled_at);
+        console.log("patch.staff_id:", (patch as any).staff_id);
+        console.log("patch.duration_minutes:", (patch as any).duration_minutes);
+        console.log("==========================================================\n");
         const existing = await appointmentsRepository.findById(appointmentId);
         if (!existing) throw new AppError(404, "Appointment not found", "NOT_FOUND");
 
