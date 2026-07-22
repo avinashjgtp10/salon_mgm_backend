@@ -86,6 +86,21 @@ function backfillTaxBreakdown(appt: Appointment, activeTaxes: ActiveTaxRow[]): A
     return { ...appt, tax_breakdown: result.taxBreakdown, computed_grand_total: result.grandTotal };
 }
 
+// The no-show scheduler (appointments.scheduler.ts) flips a "booked" appointment
+// to "no-show" once its end time passes, but it's a setInterval running inside
+// one Node process — that never fires at all if the process restarts often or
+// the deployment runs multiple/ephemeral instances. Deriving it here too (same
+// condition the scheduler's own SQL uses: booked + ends_at < now) means the
+// calendar shows the correct status on read regardless of whether that
+// background sweep ever actually ran — it doesn't replace the batch flip
+// (reports/filters that query status='no-show' directly still need it), it
+// just guarantees what's displayed is never stuck showing stale "booked".
+function deriveDisplayStatus(appt: Appointment): Appointment {
+    if (appt.status !== "booked" || !appt.ends_at) return appt;
+    if (new Date(appt.ends_at) >= new Date()) return appt;
+    return { ...appt, status: "no-show" };
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function formatDate(dateStr: string): string {
@@ -225,8 +240,9 @@ export const appointmentsService = {
     },
 
     async getById(id: string): Promise<Appointment> {
-        const appointment = await appointmentsRepository.findById(id);
-        if (!appointment) throw new AppError(404, "Appointment not found", "NOT_FOUND");
+        const found = await appointmentsRepository.findById(id);
+        if (!found) throw new AppError(404, "Appointment not found", "NOT_FOUND");
+        const appointment = deriveDisplayStatus(found);
         if (!needsTaxBackfill(appointment)) return appointment;
         const activeTaxes = await getActiveTaxes(appointment.salon_id).catch(() => []);
         return backfillTaxBreakdown(appointment, activeTaxes);
@@ -245,18 +261,19 @@ export const appointmentsService = {
     }): Promise<{ data: Appointment[]; totalRecords: number; totalPages: number; currentPage: number } | Appointment[]> {
         const { salonId, clientId, date, staffId, status, startDate, endDate, page, limit } = params;
         if (clientId) {
-            const appts = await appointmentsRepository.listByClientId(clientId);
+            const appts = (await appointmentsRepository.listByClientId(clientId)).map(deriveDisplayStatus);
             const needsBackfill = appts.some(needsTaxBackfill);
             if (!needsBackfill || appts.length === 0) return appts;
             const activeTaxes = await getActiveTaxes(appts[0].salon_id).catch(() => []);
             return appts.map((a) => backfillTaxBreakdown(a, activeTaxes));
         }
         if (!salonId) throw new AppError(400, "salon_id or client_id is required", "VALIDATION_ERROR");
-        const result = await appointmentsRepository.listBySalonId(salonId, {
+        const rawResult = await appointmentsRepository.listBySalonId(salonId, {
             date, staff_id: staffId, status,
             start_date: startDate, end_date: endDate,
             page, limit,
         });
+        const result = { ...rawResult, data: rawResult.data.map(deriveDisplayStatus) };
         const needsBackfill = result.data.some(needsTaxBackfill);
         if (!needsBackfill) return result;
         const activeTaxes = await getActiveTaxes(salonId).catch(() => []);
@@ -271,14 +288,6 @@ export const appointmentsService = {
     }): Promise<Appointment> {
         const { appointmentId } = params;
         let patch = params.patch;
-        // TEMP DEBUG — remove after diagnosing the drag-and-drop revert issue.
-        console.log("\n========== DRAG DEBUG: incoming update() call ==========");
-        console.log("appointmentId:", appointmentId);
-        console.log("patch keys:", Object.keys(patch));
-        console.log("patch.scheduled_at:", (patch as any).scheduled_at);
-        console.log("patch.staff_id:", (patch as any).staff_id);
-        console.log("patch.duration_minutes:", (patch as any).duration_minutes);
-        console.log("==========================================================\n");
         const existing = await appointmentsRepository.findById(appointmentId);
         if (!existing) throw new AppError(404, "Appointment not found", "NOT_FOUND");
 
