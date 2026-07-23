@@ -566,9 +566,14 @@ export interface SalesSummaryReportFilters {
     staff_id?: string;
     search?: string;
     status?: string; // 'draft' | 'completed' | 'cancelled' | 'refunded'; default excludes 'draft'
+    category_id?: string; // service_categories.id — only sales with a service line item in this category
     page?: number;
     limit?: number;
     is_export?: boolean; // bypasses the page-size cap for CSV export
+}
+
+export interface SalesSummaryFiltersAvailable {
+    service_categories: { id: string; label: string }[];
 }
 
 export interface SalesSummaryReportRow {
@@ -617,6 +622,7 @@ export interface SalesSummaryReportResponse {
     rows: SalesSummaryReportRow[];
     pagination: SalesSummaryReportPagination;
     stats: SalesSummaryReportStats;
+    filters_available: SalesSummaryFiltersAvailable;
 }
 
 export interface SaleDetailHeader {
@@ -698,6 +704,7 @@ export interface DailySheetReportRow {
     staff: string | null;
     amount: number;
     payment_method: string | null;
+    status: string;
 }
 
 export interface DailySheetReportPagination {

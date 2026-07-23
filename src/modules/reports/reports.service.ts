@@ -1247,9 +1247,10 @@ async getSalesSummaryReport(
     salonId: string,
     filters: SalesSummaryReportFilters
 ): Promise<SalesSummaryReportResponse> {
-    const [statsRaw, rowsResult] = await Promise.all([
+    const [statsRaw, rowsResult, filtersAvailable] = await Promise.all([
         reportsRepository.getSalesSummaryReportStats(salonId, filters),
         reportsRepository.getSalesSummaryReportRows(salonId, filters),
+        reportsRepository.getSalesSummaryFiltersAvailable(salonId),
     ]);
 
     const bill_average = statsRaw.total_bill > 0
@@ -1260,6 +1261,7 @@ async getSalesSummaryReport(
         rows: rowsResult.items,
         pagination: rowsResult.pagination,
         stats: { ...statsRaw, bill_average },
+        filters_available: filtersAvailable,
     };
 },
 
@@ -1352,6 +1354,13 @@ async getGstReport(
 // ======================================================
 // PRODUCT MARGIN REPORT (independent report API)
 // ======================================================
+
+async getProductInventorySales(
+    salonId: string,
+    filters: { start_date?: string; end_date?: string }
+): Promise<Record<string, { quantity: number; revenue: number }>> {
+    return reportsRepository.getProductInventorySales(salonId, filters);
+},
 
 async getProductMarginReport(
     salonId: string,
