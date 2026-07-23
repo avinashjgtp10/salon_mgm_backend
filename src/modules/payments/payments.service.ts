@@ -24,6 +24,7 @@ import { clientsRepository } from '../clients/clients.repository';
 import { getIO } from '../../config/socket';
 import { getActiveTaxes } from '../settings/tax.util';
 import { computeBillTotals } from '../pricing/pricing.engine';
+import pool from '../../config/database';
 
 export const paymentsService = {
 
@@ -410,7 +411,38 @@ export const paymentsService = {
       data.status       = 'completed';
     }
 
-    const payment = await paymentsRepository.create(data);
+    // Payment creation and the reward-points redemption ledger write must
+    // not diverge: without a shared transaction, a ledger write failure
+    // after the payment row was already persisted with reward_points_used/
+    // reward_points_value set would leave the payment claiming points were
+    // redeemed that were never actually deducted from the client's balance.
+    // Run both on one transaction so a ledger failure rolls back the
+    // payment instead of being silently swallowed.
+    let payment: Payment;
+    if (data.client_id && rewardPointsRedeemedActual > 0) {
+      const txClient = await pool.connect();
+      try {
+        await txClient.query('BEGIN');
+        payment = await paymentsRepository.create(data, txClient);
+        await rewardPointsRepository.applyLedgerEntry({
+          clientId: data.client_id,
+          salonId: data.salon_id,
+          type: 'redeem',
+          delta: -rewardPointsRedeemedActual,
+          sourceType: 'payment',
+          sourceId: payment.id,
+          note: `Redeemed ${rewardPointsRedeemedActual} points on payment`,
+        }, txClient);
+        await txClient.query('COMMIT');
+      } catch (err) {
+        await txClient.query('ROLLBACK');
+        throw err;
+      } finally {
+        txClient.release();
+      }
+    } else {
+      payment = await paymentsRepository.create(data);
+    }
 
     // ── eWallet: actually deduct the real balance now that the payment row exists ──
     if (data.client_id && ewalletUsedActual > 0) {
@@ -429,23 +461,8 @@ export const paymentsService = {
       }
     }
 
-    // ── Reward points: actually deduct the real balance now that the payment
-    // row exists — mirrors the eWallet redeem block above exactly.
-    if (data.client_id && rewardPointsRedeemedActual > 0) {
-      try {
-        await rewardPointsRepository.applyLedgerEntry({
-          clientId: data.client_id,
-          salonId: data.salon_id,
-          type: 'redeem',
-          delta: -rewardPointsRedeemedActual,
-          sourceType: 'payment',
-          sourceId: payment.id,
-          note: `Redeemed ${rewardPointsRedeemedActual} points on payment`,
-        });
-      } catch (err: any) {
-        logger.warn('[payments] reward points redeem ledger write failed:', err?.message ?? err);
-      }
-    }
+    // Reward points redemption ledger write now happens atomically with
+    // payment creation above (see the transaction block).
 
     // ── Referral credit: actually deduct the real balance now that the
     // payment row exists — mirrors the eWallet redeem block above exactly.

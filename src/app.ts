@@ -42,6 +42,7 @@ import paymentsRoutes from "./modules/payments/payments.routes";
 import couponsRoutes from "./modules/coupons/coupons.routes";
 import settingsRoutes from "./modules/settings/settings.routes";
 import reportsRoutes from "./modules/reports/reports.routes";
+import legacyReportsRoutes from "./modules/reports/legacyReports.routes";
 import blockedTimesRoutes from "./modules/blocked_times/blocked_times.routes";
 import analyticsRoutes from './modules/marketing/whatsapp/analytics/analytics.routes'
 import reviewsRoutes from './modules/reviews/reviews.routes'
@@ -244,7 +245,8 @@ app.use("/api/v1/blocked-times", blockedTimesRoutes);
 app.use("/api/v1/settings", settingsRoutes);
 app.use("/api/v1/bot", botRoutes);
 app.use("/api/v1/ai-engine", aiEngineRoutes);
-app.use("/api/v1/reports", reportsRoutes);
+app.use("/api/report", reportsRoutes);
+app.use("/api/v1/reports", legacyReportsRoutes);
 app.use("/api/v1/cash-management", cashManagementRoutes);
 app.use("/api/v1/wa-automation", waAutomationRoutes);
 app.use("/api/v1/wa-automation/purchase-templates", waPurchaseTemplatesRoutes);
