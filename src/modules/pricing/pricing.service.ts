@@ -73,14 +73,33 @@ export const pricingService = {
       }
     }
 
-    // ── eWallet: clamp requested amount to the client's real balance ────────
-    let appliedEWallet = 0;
-    if (body.applyEwallet && body.client_id && (body.eWalletRequested ?? 0) > 0) {
-      try {
-        const balance = await ewalletRepository.getBalance(body.client_id);
-        appliedEWallet = Math.min(body.eWalletRequested ?? 0, balance);
-      } catch { /* non-fatal — treat as unavailable */ }
-    }
+    // ── Sequential benefit preview ───────────────────────────────────────────
+    // Membership wallet / eWallet / reward points / referral credit used to
+    // each be previewed independently, capped only against their OWN balance
+    // — never against how much of the bill was actually still left after the
+    // others. That let the preview show a combined value that could vastly
+    // exceed the bill (e.g. membership alone fully covers it, but eWallet and
+    // reward points still showed as fully applied on top) — and since
+    // payments.service.ts's real charge-time logic now caps sequentially too
+    // (same order: Membership, eWallet, Reward Points, Referral), this preview
+    // has to match or it would mislead staff about what's about to happen.
+    // The ceiling here uses the same discount/tax/exCharges/tip as the real
+    // grand total but without any wallet-coverage tax exclusion (that
+    // exclusion only ever shifts the GST portion, not the whole bill, so this
+    // is a safe, slightly conservative estimate) — recomputed exactly below
+    // once every applied amount is known.
+    const preliminaryTaxes = body.includeGst ? await getActiveTaxes(salonId).catch(() => []) : [];
+    const preliminaryTotals = computeBillTotals({
+      actualAmounts,
+      discountType: body.discountType,
+      discountValue: body.discountValue,
+      couponDiscount,
+      taxes: preliminaryTaxes,
+      exCharges: body.exCharges ?? 0,
+      tip: body.tip ?? 0,
+      roundSubtotalBeforeDiscount: false,
+    });
+    let remaining = preliminaryTotals.grandTotal;
 
     // ── Membership wallet: read-only balance preview, no deduction ─────────
     // Mirrors payments.service.ts's own eligibility gate (applies_to_products)
@@ -90,47 +109,70 @@ export const pricingService = {
     let appliedMembershipWallet = 0;
     let membershipServiceWalletUsed = 0;
     let membershipProductWalletUsed = 0;
-    if (body.applyMembershipWallet && body.client_id) {
+    if (body.applyMembershipWallet && body.client_id && remaining > 0) {
       try {
         const memberships = await clientMembershipsRepository.findAllActiveWithBalanceForClient(body.client_id, salonId);
         const totalBalance = memberships.reduce((s, m) => s + (Number(m.membershipWalletBalance) || 0), 0);
         const coversProducts = memberships.some((m) => m.appliesToProducts && Number(m.membershipWalletBalance) > 0);
-        const requested = Math.min(body.membershipWalletRequested ?? totalBalance, totalBalance);
+        const requested = Math.min(body.membershipWalletRequested ?? totalBalance, totalBalance, remaining);
         const split = splitMembershipWalletUsage(body.serviceRows, body.productRows, requested, coversProducts);
         membershipServiceWalletUsed = split.serviceWalletUsed;
         membershipProductWalletUsed = split.productWalletUsed;
         appliedMembershipWallet = split.totalWalletUsed;
       } catch { /* non-fatal */ }
     }
+    remaining = Math.max(0, remaining - appliedMembershipWallet);
+
+    // ── eWallet: clamp requested amount to the client's real balance AND to
+    // what's still left on the bill after membership wallet coverage above ──
+    let appliedEWallet = 0;
+    if (body.applyEwallet && body.client_id && (body.eWalletRequested ?? 0) > 0 && remaining > 0) {
+      try {
+        const balance = await ewalletRepository.getBalance(body.client_id);
+        appliedEWallet = Math.min(body.eWalletRequested ?? 0, balance, remaining);
+      } catch { /* non-fatal — treat as unavailable */ }
+    }
+    remaining = Math.max(0, remaining - appliedEWallet);
 
     // ── Reward points: clamp requested points to real balance, convert to ₹ ─
     let appliedRewardPointsValue = 0;
-    if (body.applyRewardPoints && body.client_id && (body.rewardPointsToRedeem ?? 0) > 0) {
+    if (body.applyRewardPoints && body.client_id && (body.rewardPointsToRedeem ?? 0) > 0 && remaining > 0) {
       try {
         const [rpConfig, rpBalance] = await Promise.all([
           rewardPointsRepository.getConfig(salonId),
           rewardPointsRepository.getBalance(body.client_id),
         ]);
-        const pointsToRedeem = Math.min(body.rewardPointsToRedeem ?? 0, rpBalance);
+        let pointsToRedeem = Math.min(body.rewardPointsToRedeem ?? 0, rpBalance);
         if (pointsToRedeem > 0 && rpConfig.redeem_points > 0) {
-          appliedRewardPointsValue = (pointsToRedeem / rpConfig.redeem_points) * rpConfig.redeem_value;
+          let value = (pointsToRedeem / rpConfig.redeem_points) * rpConfig.redeem_value;
+          if (value > remaining) {
+            // Cap the ₹ value at what's left, then work backward to how many
+            // points that actually costs — floor so this only ever slightly
+            // UNDER-redeems in the preview, matching the real charge-time logic.
+            pointsToRedeem = Math.floor((remaining / rpConfig.redeem_value) * rpConfig.redeem_points);
+            value = (pointsToRedeem / rpConfig.redeem_points) * rpConfig.redeem_value;
+          }
+          appliedRewardPointsValue = value;
         }
       } catch { /* non-fatal */ }
     }
+    remaining = Math.max(0, remaining - appliedRewardPointsValue);
 
-    // ── Referral credit: clamp requested ₹ to real balance ───────────────────
+    // ── Referral credit: clamp requested ₹ to real balance AND to what's
+    // still left on the bill ─────────────────────────────────────────────────
     let appliedReferralCredit = 0;
     let referralCreditRejectedReason: string | undefined;
     if (body.applyReferralCredit) {
       if (!body.client_id) {
         referralCreditRejectedReason = 'No client selected';
-      } else if ((body.referralCreditRequested ?? 0) > 0) {
+      } else if ((body.referralCreditRequested ?? 0) > 0 && remaining > 0) {
         try {
           const balance = await referralRepository.getBalance(body.client_id);
-          appliedReferralCredit = Math.min(body.referralCreditRequested ?? 0, balance);
+          appliedReferralCredit = Math.min(body.referralCreditRequested ?? 0, balance, remaining);
         } catch { /* non-fatal */ }
       }
     }
+    remaining = Math.max(0, remaining - appliedReferralCredit);
 
     // ── Referral first-bill discount eligibility preview — mirrors
     // payments.service.ts's charge-time logic exactly, but read-only (no
