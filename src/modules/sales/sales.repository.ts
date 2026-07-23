@@ -37,13 +37,38 @@ export const salesRepository = {
         const { rows } = await safeQuery(() => pool.query(
             `SELECT si.id, si.sale_id, si.item_type, si.item_id,
                     COALESCE(si.staff_id, s.staff_id) AS staff_id,
-                    si.name, si.quantity, si.unit_price, si.discount_amount, si.total_price, si.created_at
+                    si.name, si.quantity, si.unit_price, si.discount_amount, si.total_price,
+                    si.tax_amount, si.taxable_amount, si.created_at
              FROM sale_items si
              JOIN sales s ON si.sale_id = s.id
              WHERE si.sale_id = $1`,
             [saleId]
         ));
         return rows;
+    },
+
+    // Batched form of findItemsBySaleId — one query for a whole list of sale
+    // ids (e.g. every linked sale in a calendar day's appointment list),
+    // grouped by sale_id, instead of one DB round-trip per appointment.
+    async findItemsBySaleIds(saleIds: string[]): Promise<Map<string, SaleItem[]>> {
+        const result = new Map<string, SaleItem[]>();
+        if (saleIds.length === 0) return result;
+        const { rows } = await safeQuery(() => pool.query(
+            `SELECT si.id, si.sale_id, si.item_type, si.item_id,
+                    COALESCE(si.staff_id, s.staff_id) AS staff_id,
+                    si.name, si.quantity, si.unit_price, si.discount_amount, si.total_price,
+                    si.tax_amount, si.taxable_amount, si.created_at
+             FROM sale_items si
+             JOIN sales s ON si.sale_id = s.id
+             WHERE si.sale_id = ANY($1::uuid[])`,
+            [saleIds]
+        ));
+        rows.forEach((row: SaleItem) => {
+            const list = result.get(row.sale_id) ?? [];
+            list.push(row);
+            result.set(row.sale_id, list);
+        });
+        return result;
     },
 
     async list(filters: {
@@ -121,7 +146,8 @@ export const salesRepository = {
         const { rows } = await safeQuery(() => pool.query(
             `SELECT si.id, si.sale_id, si.item_type, si.item_id,
                     COALESCE(si.staff_id, s.staff_id) AS staff_id,
-                    si.name, si.quantity, si.unit_price, si.discount_amount, si.total_price, si.created_at,
+                    si.name, si.quantity, si.unit_price, si.discount_amount, si.total_price,
+                    si.tax_amount, si.taxable_amount, si.created_at,
                     s.created_at AS sale_created_at,
                     c.full_name  AS client_name,
                     CASE
@@ -240,10 +266,11 @@ export const salesRepository = {
                 const itemTotal     = item.quantity * parseFloat(item.unit_price) - discAmt;
                 await client.query(
                     `INSERT INTO sale_items (
-                        sale_id, item_type, item_id, staff_id, name, quantity, unit_price, discount_amount, total_price
-                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+                        sale_id, item_type, item_id, staff_id, name, quantity, unit_price, discount_amount, total_price, tax_amount, taxable_amount
+                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
                     [sale.id, item.item_type, item.item_id || null, item.staff_id || null,
-                     item.name, item.quantity, item.unit_price, item.discount_amount || '0', itemTotal.toString()]
+                     item.name, item.quantity, item.unit_price, item.discount_amount || '0', itemTotal.toString(),
+                     item.tax_amount || '0', item.taxable_amount || '0']
                 );
             }
 
@@ -275,10 +302,11 @@ export const salesRepository = {
                     subtotal += itemTotal;
                     await client.query(
                         `INSERT INTO sale_items (
-                            sale_id, item_type, item_id, staff_id, name, quantity, unit_price, discount_amount, total_price
-                        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+                            sale_id, item_type, item_id, staff_id, name, quantity, unit_price, discount_amount, total_price, tax_amount, taxable_amount
+                        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
                         [id, item.item_type, item.item_id || null, item.staff_id || null,
-                         item.name, item.quantity, item.unit_price, item.discount_amount || '0', itemTotal.toString()]
+                         item.name, item.quantity, item.unit_price, item.discount_amount || '0', itemTotal.toString(),
+                         item.tax_amount || '0', item.taxable_amount || '0']
                     );
                 }
 

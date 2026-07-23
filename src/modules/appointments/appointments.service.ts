@@ -3,6 +3,7 @@ import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { appointmentsRepository } from "./appointments.repository";
 import { salesRepository } from "../sales/sales.repository";
+import type { SaleItem } from "../sales/sales.types";
 import { productsRepository } from "../products/products.repository";
 import { commissionCalculationService } from "../commission/commissionCalculation.service";
 import { blockedTimesRepository } from "../blocked_times/blocked_times.repository";
@@ -84,6 +85,87 @@ function backfillTaxBreakdown(appt: Appointment, activeTaxes: ActiveTaxRow[]): A
     if (!needsTaxBackfill(appt)) return appt;
     const result = computeAppointmentTotals(appt, activeTaxes);
     return { ...appt, tax_breakdown: result.taxBreakdown, computed_grand_total: result.grandTotal };
+}
+
+// Once an appointment has a linked, paid sale, its real per-item GST lives on
+// sale_items (see payments.service.ts/pricing.engine.ts's per-row
+// allocation) — this attaches each item's own tax_amount back onto the
+// matching entry in appt.services/package_items/product_items/
+// membership_items, purely for READ-time display (receipt.ts via
+// bookingMapper.ts); nothing is written back to the appointment's own JSONB
+// columns. An unpaid appointment (no sale_id yet) is left untouched — there's
+// nothing real to attach yet, and the frontend falls back to its existing
+// blended-rate approximation in that case.
+//
+// Matching is by (item_type, item_id) first — falling back to (item_type,
+// name+quantity+unit_price) for legacy sale_items rows recorded before
+// item_id was reliably populated. Matches are consumed one at a time (not
+// re-used) so two identical duplicate-service rows on the same appointment
+// (see ServiceRow.tsx's duplicate-row support) each get their own sale_items
+// row's tax rather than all of them collapsing onto the first match.
+function attachItemTax(appt: Appointment, saleItems: SaleItem[]): Appointment {
+    const remaining = [...saleItems];
+    const takeMatch = (itemType: string, itemId: string | null | undefined, name: string, qty: number, price: number): number | undefined => {
+        let idx = itemId ? remaining.findIndex((si) => si.item_type === itemType && si.item_id === itemId) : -1;
+        if (idx === -1) {
+            idx = remaining.findIndex((si) =>
+                si.item_type === itemType &&
+                !si.item_id &&
+                si.name === name &&
+                Number(si.quantity) === qty &&
+                Math.abs(Number(si.unit_price) - price) < 0.01
+            );
+        }
+        if (idx === -1) return undefined;
+        const [match] = remaining.splice(idx, 1);
+        return Number(match.tax_amount) || 0;
+    };
+
+    return {
+        ...appt,
+        services: (appt.services || []).map((s) => {
+            const tax = takeMatch("service", s.service_id, s.name, Number(s.quantity) || 1, Number(s.price) || 0);
+            return tax !== undefined ? { ...s, tax_amount: tax } : s;
+        }),
+        package_items: (appt.package_items || []).map((p) => {
+            const tax = takeMatch("package", p.package_id, p.name, Number(p.quantity) || 1, Number(p.price) || 0);
+            return tax !== undefined ? { ...p, tax_amount: tax } : p;
+        }),
+        product_items: (appt.product_items || []).map((pr) => {
+            const tax = takeMatch("product", pr.product_id, pr.name, Number(pr.quantity) || 1, Number(pr.price) || 0);
+            return tax !== undefined ? { ...pr, tax_amount: tax } : pr;
+        }),
+        membership_items: (appt.membership_items || []).map((m) => {
+            const tax = takeMatch("membership", m.membership_id, m.name, Number(m.quantity) || 1, Number(m.price) || 0);
+            return tax !== undefined ? { ...m, tax_amount: tax } : m;
+        }),
+    };
+}
+
+async function enrichItemsWithTax(appt: Appointment): Promise<Appointment> {
+    if (!appt.sale_id) return appt;
+    try {
+        const saleItems = await salesRepository.findItemsBySaleId(appt.sale_id);
+        return attachItemTax(appt, saleItems);
+    } catch (err: any) {
+        logger.warn("[appointments] per-item tax enrichment failed:", err?.message ?? err);
+        return appt;
+    }
+}
+
+// Batched form for list() — one query for every linked sale in the whole
+// page/day instead of one DB round-trip per appointment (see
+// salesRepository.findItemsBySaleIds).
+async function enrichManyWithTax(appts: Appointment[]): Promise<Appointment[]> {
+    const saleIds = appts.map((a) => a.sale_id).filter((id): id is string => !!id);
+    if (saleIds.length === 0) return appts;
+    try {
+        const bySaleId = await salesRepository.findItemsBySaleIds(saleIds);
+        return appts.map((a) => a.sale_id && bySaleId.has(a.sale_id) ? attachItemTax(a, bySaleId.get(a.sale_id)!) : a);
+    } catch (err: any) {
+        logger.warn("[appointments] batch per-item tax enrichment failed:", err?.message ?? err);
+        return appts;
+    }
 }
 
 // The no-show scheduler (appointments.scheduler.ts) flips a "booked" appointment
@@ -250,7 +332,7 @@ export const appointmentsService = {
     async getById(id: string): Promise<Appointment> {
         const found = await appointmentsRepository.findById(id);
         if (!found) throw new AppError(404, "Appointment not found", "NOT_FOUND");
-        const appointment = deriveDisplayStatus(found);
+        const appointment = await enrichItemsWithTax(deriveDisplayStatus(found));
         if (!needsTaxBackfill(appointment)) return appointment;
         const activeTaxes = await getActiveTaxes(appointment.salon_id).catch(() => []);
         return backfillTaxBreakdown(appointment, activeTaxes);
@@ -269,7 +351,8 @@ export const appointmentsService = {
     }): Promise<{ data: Appointment[]; totalRecords: number; totalPages: number; currentPage: number } | Appointment[]> {
         const { salonId, clientId, date, staffId, status, startDate, endDate, page, limit } = params;
         if (clientId) {
-            const appts = (await appointmentsRepository.listByClientId(clientId)).map(deriveDisplayStatus);
+            let appts = (await appointmentsRepository.listByClientId(clientId)).map(deriveDisplayStatus);
+            appts = await enrichManyWithTax(appts);
             const needsBackfill = appts.some(needsTaxBackfill);
             if (!needsBackfill || appts.length === 0) return appts;
             const activeTaxes = await getActiveTaxes(appts[0].salon_id).catch(() => []);
@@ -281,7 +364,8 @@ export const appointmentsService = {
             start_date: startDate, end_date: endDate,
             page, limit,
         });
-        const result = { ...rawResult, data: rawResult.data.map(deriveDisplayStatus) };
+        const enrichedData = await enrichManyWithTax(rawResult.data.map(deriveDisplayStatus));
+        const result = { ...rawResult, data: enrichedData };
         const needsBackfill = result.data.some(needsTaxBackfill);
         if (!needsBackfill) return result;
         const activeTaxes = await getActiveTaxes(salonId).catch(() => []);
@@ -803,6 +887,30 @@ export const appointmentsService = {
                     unit_price: m.price,
                 })),
             ];
+
+        // This fallback path (no explicit saleItems from the caller) never ran
+        // the full pricing engine per-row — unlike payments.service.ts's
+        // primary checkout path, there's no per-row wallet/discount data
+        // available here. Simplest safe approximation: split the one
+        // aggregate tax_amount across these items by their own value share,
+        // last item absorbing the rounding remainder — strictly better than
+        // today's "no per-item tax at all," at zero risk to the bill total
+        // itself (saleExtras.tax_amount is untouched).
+        if (!(saleItems && saleItems.length > 0) && (Number(saleExtras.tax_amount) || 0) > 0) {
+            const totalTax = Number(saleExtras.tax_amount) || 0;
+            const values = resolvedItems.map((i: any) => (Number(i.unit_price) || 0) * (Number(i.quantity) || 1));
+            const sumValues = values.reduce((s, v) => s + v, 0);
+            if (sumValues > 0) {
+                let allocated = 0;
+                resolvedItems.forEach((item: any, i: number) => {
+                    const isLast = i === resolvedItems.length - 1;
+                    const share = isLast ? totalTax - allocated : Math.round(totalTax * (values[i] / sumValues) * 100) / 100;
+                    allocated += share;
+                    item.tax_amount = share;
+                    item.taxable_amount = values[i];
+                });
+            }
+        }
 
         const { sale, items } = await recordTransaction({
             salon_id:        existing.salon_id,

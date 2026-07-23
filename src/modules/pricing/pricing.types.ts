@@ -54,6 +54,13 @@ export interface CalculateTotalsResponse {
   roundOff: number;
   effectiveTotal: number;
 
+  // Per-row GST + taxable base, index-aligned with the serviceRows/packageRows/
+  // productRows/membershipRows the caller sent — lets the live sale-building
+  // screen show each item's own tax before checkout, matching what the saved
+  // sale_items will carry. See pricing.engine.ts's per-row allocation.
+  rowTax?: { service: number[]; packages: number[]; product: number[]; membership: number[] };
+  rowTaxableAmount?: { service: number[]; packages: number[]; product: number[]; membership: number[] };
+
   // Server-clamped amounts actually applied — authoritative, may be lower
   // than what was requested (real balance, coupon rejected, etc).
   appliedEWallet: number;

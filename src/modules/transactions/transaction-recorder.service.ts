@@ -41,6 +41,8 @@ export async function recordTransaction(input: RecordTransactionInput): Promise<
           quantity: item.quantity,
           unit_price: String(item.unit_price),
           discount_amount: item.discount_amount != null ? String(item.discount_amount) : undefined,
+          tax_amount: item.tax_amount != null ? String(item.tax_amount) : undefined,
+          taxable_amount: item.taxable_amount != null ? String(item.taxable_amount) : undefined,
         })),
       });
       const items = await salesRepository.findItemsBySaleId(updated.id);
@@ -78,6 +80,8 @@ export async function recordTransaction(input: RecordTransactionInput): Promise<
           quantity: item.quantity,
           unit_price: String(item.unit_price),
           discount_amount: item.discount_amount != null ? String(item.discount_amount) : undefined,
+          tax_amount: item.tax_amount != null ? String(item.tax_amount) : undefined,
+          taxable_amount: item.taxable_amount != null ? String(item.taxable_amount) : undefined,
         })),
       },
       input.created_by ?? null

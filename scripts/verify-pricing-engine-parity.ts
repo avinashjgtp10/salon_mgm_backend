@@ -194,5 +194,43 @@ console.log('\nScenario 7: rawSubtotal=100.5, discount=0.5 — legacy vs fronten
   if (r1.grandTotal === r2.grandTotal) failures++;
 }
 
+// ── Scenario 8: per-row tax allocation (new `rows` input) ──────────────────
+console.log('\nScenario 8: per-row tax allocation — 2 service rows (₹700+₹300) + 1 product row (₹500), ₹300 flat discount, 18% GST (service only)');
+{
+  const gst18ServiceOnly: ActiveTaxRow = {
+    tax_name: 'GST', tax_value: 18, inclusive_taxes: false,
+    applicable_for: { service: true, product: false, membership: false, packages: false },
+  };
+  const serviceRows = [{ price: 700, qty: 1 }, { price: 300, qty: 1 }];
+  const productRows = [{ price: 500, qty: 1 }];
+  const r = computeBillTotals({
+    actualAmounts: amounts({ service: 1000, product: 500 }),
+    discountType: 'flat',
+    discountValue: 300,
+    taxes: [gst18ServiceOnly],
+    exCharges: 0,
+    tip: 0,
+    roundSubtotalBeforeDiscount: true,
+    rows: { service: serviceRows, product: productRows },
+  });
+  // Same totals as Scenario 6 — adding `rows` must not change bucket/grand totals.
+  approxEqual(r.gstAmount, 144, 'gstAmount (unchanged vs Scenario 6)');
+  approxEqual(r.grandTotal, 1344, 'grandTotal (unchanged vs Scenario 6)');
+
+  const serviceRowTax = r.rowTax?.service ?? [];
+  const productRowTax = r.rowTax?.product ?? [];
+  console.log(`  rowTax.service: [${serviceRowTax.join(', ')}], rowTax.product: [${productRowTax.join(', ')}]`);
+
+  const sumAllRowTax = [...serviceRowTax, ...productRowTax].reduce((s, v) => s + v, 0);
+  approxEqual(sumAllRowTax, r.gstAmount, 'sum(all rowTax) reconciles exactly to gstAmount', 1e-6);
+
+  // Product bucket has no applicable tax → every product row's tax is 0.
+  approxEqual(productRowTax[0] ?? -1, 0, 'product row tax is 0 (bucket not taxable)');
+
+  // Service rows split 700:300 (7:3) of the bucket's ₹144 tax.
+  approxEqual(serviceRowTax[0] ?? -1, 100.8, 'service row 1 tax (700/1000 share of 144)');
+  approxEqual(serviceRowTax[1] ?? -1, 43.2, 'service row 2 tax (300/1000 share of 144)');
+}
+
 console.log(failures === 0 ? '\n✅ All pricing engine parity checks passed.' : `\n❌ ${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

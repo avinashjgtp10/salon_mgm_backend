@@ -51,6 +51,17 @@ export const paymentsService = {
     // it passes straight through to staff (see recordTransaction() call below).
     let exChargesAmt = 0;
     let tipAmt = 0;
+    // Bill's overall taxable base — only needed as a fallback for the
+    // items.length===0 case below (a single synthetic item stands in for the
+    // whole bill, so its own taxable_amount is just the bill's taxable total).
+    let taxableAmount = 0;
+    // Per-row GST, index-aligned with the `items` array built further down
+    // (both derived from appt.services/package_items/product_items/
+    // membership_items, in the same order) — populated by the
+    // computeBillTotals() call below when it succeeds, left undefined
+    // (falls back to 0 per item) if that call throws.
+    let rowTaxByBucket: { service: number[]; packages: number[]; product: number[]; membership: number[] } | undefined;
+    let rowTaxableByBucket: { service: number[]; packages: number[]; product: number[]; membership: number[] } | undefined;
 
     const isPackagePayment = (data.payment_method || '').toLowerCase() === 'package';
 
@@ -270,9 +281,14 @@ export const paymentsService = {
           // actually changed hands as a sale.
           let serviceWalletUsed = 0;
           let productWalletUsed = 0;
+          // Hoisted out of the `if` below (rather than a local `const` inside
+          // it) so the per-row tax allocation further down can also look up
+          // each individual service/product's own wallet-covered amount, not
+          // just the bucket-level sums.
+          let walletUsedByItem = new Map<string, number>();
           if (membershipWalletUsed > 0) {
             try {
-              const walletUsedByItem = await clientMembershipsRepository.getWalletUsedPerItemForAppointment(data.appointment_id);
+              walletUsedByItem = await clientMembershipsRepository.getWalletUsedPerItemForAppointment(data.appointment_id);
               serviceWalletUsed = (appt.services || []).reduce(
                 (s, i) => s + (walletUsedByItem.get(String(i.service_id)) ?? 0), 0,
               );
@@ -346,6 +362,16 @@ export const paymentsService = {
           let effectiveBill = Math.max(0, grandTotal - ewallet - membershipWalletUsed - rewardPointsRedeemedValue - referralCreditRequestedValue);
           try {
             const activeTaxes = data.include_gst === false ? [] : await getActiveTaxes(data.salon_id);
+            // Same lineTotal fallback used by itemDiscount() further down
+            // (unitPrice*qty unless a real `total` is already stored on the
+            // item) — kept in sync deliberately, both derive the row's own
+            // post-item-discount base from the exact same raw appt arrays.
+            const rowTotal = (i: any) => {
+              const unitPrice = Number(i.price) || 0;
+              const q = Number(i.quantity) || Number(i.qty) || 1;
+              const t = Number(i.total);
+              return (i.total !== undefined && i.total !== null && isFinite(t)) ? t : unitPrice * q;
+            };
             const result = computeBillTotals({
               actualAmounts: { service: serviceTotal, packages: packageTotal, product: productTotal, membership: membershipTotal },
               discountType: 'flat',
@@ -355,6 +381,22 @@ export const paymentsService = {
               tip: tipAmt,
               eWalletUsed: ewallet,
               membershipWalletUsed,
+              rows: {
+                service: (appt.services || []).map(s => ({
+                  price: Number(s.price) || 0, qty: Number(s.quantity) || 1, total: rowTotal(s),
+                  walletUsed: walletUsedByItem.get(String(s.service_id)) ?? 0,
+                })),
+                packages: (appt.package_items || []).map(p => ({
+                  price: Number(p.price) || 0, qty: Number(p.quantity) || 1, total: rowTotal(p),
+                })),
+                product: (appt.product_items || []).map(p => ({
+                  price: Number(p.price) || 0, qty: Number(p.quantity) || 1, total: rowTotal(p),
+                  walletUsed: walletUsedByItem.get(String(p.product_id)) ?? 0,
+                })),
+                membership: (appt.membership_items || []).map(m => ({
+                  price: Number(m.price) || 0, qty: Number(m.quantity) || 1, total: rowTotal(m),
+                })),
+              },
               // Membership-wallet-covered amounts are excluded from the taxable
               // base (not just the discount ratio) — that portion of the item
               // was never actually charged to the client, so it shouldn't be
@@ -374,6 +416,9 @@ export const paymentsService = {
             taxAmount = result.gstAmount;
             grandTotal = result.grandTotal;
             effectiveBill = result.effectiveTotal;
+            taxableAmount = result.taxable;
+            rowTaxByBucket = result.rowTax;
+            rowTaxableByBucket = result.rowTaxableAmount;
           } catch (err: any) {
             logger.warn('[payments] tax computation failed:', err?.message ?? err);
           }
@@ -590,8 +635,8 @@ export const paymentsService = {
           return Math.max(0, unitPrice * q - lineTotal);
         };
 
-        const items: Array<{ item_type: 'service' | 'package' | 'product' | 'membership'; item_id?: string; staff_id?: string; name: string; quantity: number; unit_price: number; discount_amount: number }> = [
-          ...(appt.services || []).map(s => ({
+        const items: Array<{ item_type: 'service' | 'package' | 'product' | 'membership'; item_id?: string; staff_id?: string; name: string; quantity: number; unit_price: number; discount_amount: number; tax_amount?: number; taxable_amount?: number }> = [
+          ...(appt.services || []).map((s, i) => ({
             item_type: 'service' as const,
             item_id: s.service_id,
             staff_id: s.staff_id || undefined,
@@ -599,8 +644,10 @@ export const paymentsService = {
             quantity: Number(s.quantity) || 1,
             unit_price: Number(s.price) || 0,
             discount_amount: itemDiscount(s),
+            tax_amount: rowTaxByBucket?.service[i],
+            taxable_amount: rowTaxableByBucket?.service[i],
           })),
-          ...(appt.package_items || []).map(p => ({
+          ...(appt.package_items || []).map((p, i) => ({
             item_type: 'package' as const,
             item_id: p.package_id,
             staff_id: p.staff_id || undefined,
@@ -608,8 +655,10 @@ export const paymentsService = {
             quantity: Number(p.quantity) || 1,
             unit_price: Number(p.price) || 0,
             discount_amount: itemDiscount(p),
+            tax_amount: rowTaxByBucket?.packages[i],
+            taxable_amount: rowTaxableByBucket?.packages[i],
           })),
-          ...(appt.product_items || []).map(p => ({
+          ...(appt.product_items || []).map((p, i) => ({
             item_type: 'product' as const,
             item_id: p.product_id || undefined,
             staff_id: p.staff_id || undefined,
@@ -617,8 +666,10 @@ export const paymentsService = {
             quantity: Number(p.quantity) || 1,
             unit_price: Number(p.price) || 0,
             discount_amount: itemDiscount(p),
+            tax_amount: rowTaxByBucket?.product[i],
+            taxable_amount: rowTaxableByBucket?.product[i],
           })),
-          ...(appt.membership_items || []).map(m => ({
+          ...(appt.membership_items || []).map((m, i) => ({
             item_type: 'membership' as const,
             item_id: m.membership_id || undefined,
             staff_id: m.staff_id || undefined,
@@ -626,6 +677,8 @@ export const paymentsService = {
             quantity: Number(m.quantity) || 1,
             unit_price: Number(m.price) || 0,
             discount_amount: itemDiscount(m),
+            tax_amount: rowTaxByBucket?.membership[i],
+            taxable_amount: rowTaxableByBucket?.membership[i],
           })),
         ];
 
@@ -636,6 +689,8 @@ export const paymentsService = {
             quantity: 1,
             unit_price: Number(data.net_amount || data.gross_amount || 0),
             discount_amount: 0,
+            tax_amount: taxAmount,
+            taxable_amount: taxableAmount,
           });
         }
 
