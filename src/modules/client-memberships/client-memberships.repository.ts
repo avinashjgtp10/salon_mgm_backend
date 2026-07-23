@@ -461,7 +461,7 @@ export const clientMembershipsRepository = {
   async deductWalletAcrossMemberships(
     clientMembershipIds: string[],
     salonId: string,
-    params: { appointmentId: string; services: WalletDeductionServiceInput[] },
+    params: { appointmentId: string; services: WalletDeductionServiceInput[]; maxTotalAmount?: number },
   ): Promise<WalletDeductionResult> {
     if (clientMembershipIds.length === 0) {
       return { totalWalletUsed: 0, remainingBalance: 0, perService: [], reused: false };
@@ -502,10 +502,16 @@ export const clientMembershipsRepository = {
       const remainingByMembership = memberships.map((m) => Number(m.membership_wallet_balance) || 0);
       let totalWalletUsed = 0;
       const perService: WalletDeductionResult['perService'] = [];
+      // Staff-chosen cap (e.g. "only use ₹150 of the wallet, I'll collect the
+      // rest via cash") — undefined/omitted means no cap beyond the wallet's
+      // own balance, preserving the original "use as much as needed" behavior.
+      const hasBudgetCap = params.maxTotalAmount != null;
+      const budgetCap = hasBudgetCap ? Math.max(0, params.maxTotalAmount!) : Infinity;
 
       for (const svc of params.services) {
+        if (totalWalletUsed >= budgetCap) break;
         const originalAmount = Number(svc.amount) || 0;
-        let amountLeft = originalAmount;
+        let amountLeft = Math.min(originalAmount, budgetCap - totalWalletUsed);
         let svcWalletUsed = 0;
         const isUuid = typeof svc.serviceId === 'string' &&
           /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(svc.serviceId);

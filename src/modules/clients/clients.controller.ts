@@ -506,7 +506,7 @@ export const clientsController = {
             const client = await clientsRepository.findById(clientId, salonId);
             if (!client) throw new AppError(404, "Client not found", "NOT_FOUND");
 
-            const [apptRes, salesRes, pkgRes, statsRes, totalSpendRes] = await Promise.all([
+            const [apptRes, salesRes, pkgRes, memRes, statsRes, totalSpendRes] = await Promise.all([
 
                 // 1. Appointments
                 pool.query(
@@ -652,15 +652,37 @@ export const clientsController = {
                     [clientId, salonId]
                 ),
 
-                // 4. Appointment stats — a.status IS the payment state now (paid/
-                //    partial/booked/...), so "completed" here is just a.status = 'paid'
-                //    directly, no more payments-table lookup needed.
+                // 3b. Memberships — one overall session pool per membership (unlike
+                // packages, there's no per-service breakdown table for these).
                 pool.query(
                     `SELECT
-                        COUNT(*)::int                                        AS total_appointments,
-                        COUNT(*) FILTER (WHERE a.status = 'paid')::int       AS completed_appointments,
-                        COUNT(*) FILTER (WHERE a.status = 'no-show')::int    AS no_shows,
-                        COUNT(*) FILTER (WHERE a.status = 'cancelled')::int  AS cancellations
+                        cm.id,
+                        cm.membership_name,
+                        cm.status,
+                        cm.price_paid,
+                        cm.expires_at,
+                        cm.purchased_at,
+                        cm.total_sessions,
+                        cm.used_sessions,
+                        cm.membership_wallet_balance
+                     FROM client_memberships cm
+                     WHERE cm.client_id = $1 AND cm.salon_id = $2
+                     ORDER BY cm.purchased_at DESC
+                     LIMIT 50`,
+                    [clientId, salonId]
+                ),
+
+                // 4. Appointment stats — a.status IS the payment state now (paid/
+                //    partial/booked/...). completed_appointments feeds "Total Visits"
+                //    (see ClientHistoryDetail.tsx), which counts a visit as any
+                //    appointment the client paid something toward — paid OR partial,
+                //    not paid-only.
+                pool.query(
+                    `SELECT
+                        COUNT(*)::int                                                AS total_appointments,
+                        COUNT(*) FILTER (WHERE a.status IN ('paid','partial'))::int  AS completed_appointments,
+                        COUNT(*) FILTER (WHERE a.status = 'no-show')::int            AS no_shows,
+                        COUNT(*) FILTER (WHERE a.status = 'cancelled')::int          AS cancellations
                      FROM appointments a
                      WHERE a.client_id = $1 AND a.salon_id = $2 AND a.deleted_at IS NULL`,
                     [clientId, salonId]
@@ -714,6 +736,7 @@ export const clientsController = {
                 appointments: apptRes.rows,
                 sales:        salesRes.rows,
                 packages:     pkgRows,
+                memberships:  memRes.rows,
             };
 
             return sendSuccess(res, 200, data, "Client history fetched successfully");

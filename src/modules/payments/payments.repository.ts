@@ -97,6 +97,40 @@ export const paymentsRepository = {
     return parseFloat(rows[0]?.total ?? '0');
   },
 
+  // Sums benefit amounts already consumed across every prior payment on this
+  // appointment (partial or completed) — used by the pricing preview endpoint
+  // so re-opening a partially-paid booking doesn't imply those amounts are
+  // still "fresh" balance available to apply again. Note: eWallet/reward-
+  // points/referral-credit balances are already correctly net of this
+  // consumption (deducted via ledger entry at payment time), so this is
+  // purely informational for the preview response, not re-applied to the
+  // actual clamping math.
+  async getConsumedBenefitsForAppointment(appointmentId: string): Promise<{
+    ewalletUsed: number;
+    membershipWalletUsed: number;
+    rewardPointsUsed: number;
+    referralCreditUsed: number;
+  }> {
+    const { rows } = await pool.query(
+      `SELECT
+         COALESCE(SUM(ewallet_used), 0)::numeric AS ewallet_used,
+         COALESCE(SUM(membership_wallet_used), 0)::numeric AS membership_wallet_used,
+         COALESCE(SUM(reward_points_used), 0)::numeric AS reward_points_used,
+         COALESCE(SUM(referral_credit_used), 0)::numeric AS referral_credit_used
+       FROM payments
+       WHERE appointment_id = $1
+       AND status IN ('partial', 'completed')`,
+      [appointmentId]
+    );
+    const row = rows[0] ?? {};
+    return {
+      ewalletUsed: parseFloat(row.ewallet_used ?? '0'),
+      membershipWalletUsed: parseFloat(row.membership_wallet_used ?? '0'),
+      rewardPointsUsed: parseFloat(row.reward_points_used ?? '0'),
+      referralCreditUsed: parseFloat(row.referral_credit_used ?? '0'),
+    };
+  },
+
   async findByAppointmentId(appointmentId: string): Promise<Payment | null> {
     const { rows } = await pool.query(
       `SELECT * FROM payments WHERE appointment_id = $1 ORDER BY created_at DESC LIMIT 1`,
