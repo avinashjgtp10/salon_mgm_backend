@@ -177,7 +177,15 @@ export const appointmentsService = {
             title:    "New Appointment Booked",
             body:     `${appointment.client_name ?? "Walk-in"} — ${formatDate(appointment.scheduled_at)} at ${formatTime(appointment.scheduled_at)}`,
             event_key: "newAppointment",
-        }).catch(() => {});
+        }).catch((err: any) => {
+            logger.error("New appointment notification failed", {
+                appointmentId: appointment.id,
+                salonId: appointment.salon_id,
+                message: err?.message,
+                stack: err?.stack,
+                error: err,
+            });
+        });
 
         // ── WhatsApp Automation: Appointment Confirmation ─────────────────────
         // Dedup check — NEVER send confirmation twice for the same appointment
@@ -397,7 +405,15 @@ export const appointmentsService = {
                 type:     "appointment",
                 title:    "Appointment Updated",
                 body:     `${existing.client_name ?? "Walk-in"} — ${formatDate(updated.scheduled_at)} at ${formatTime(updated.scheduled_at)}`,
-            }).catch(() => {});
+            }).catch((err: any) => {
+                logger.error("Appointment update notification failed", {
+                    appointmentId: updated.id,
+                    salonId: existing.salon_id,
+                    message: err?.message,
+                    stack: err?.stack,
+                    error: err,
+                });
+            });
         }
 
         // ── WhatsApp Automation: Appointment Rescheduled ──────────────────────
@@ -466,7 +482,15 @@ export const appointmentsService = {
             title:    "Appointment Cancelled",
             body:     `${existing.client_name ?? "Walk-in"} — ${formatDate(existing.scheduled_at)} at ${formatTime(existing.scheduled_at)}`,
             event_key: "appointmentCancelled",
-        }).catch(() => {});
+        }).catch((err: any) => {
+            logger.error("Appointment cancellation notification failed", {
+                appointmentId: existing.id,
+                salonId: existing.salon_id,
+                message: err?.message,
+                stack: err?.stack,
+                error: err,
+            });
+        });
 
         // ── WhatsApp Automation: Appointment Cancelled ────────────────────────
         if (existing.client_id && (existing as any).client_phone) {

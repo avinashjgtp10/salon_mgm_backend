@@ -41,7 +41,15 @@ export const salesService = {
             title:    "New Sale Created",
             body:     `${(sale as any).client_name ?? "Walk-in"} — ₹${sale.total_amount ?? 0}`,
             event_key: "newPayment",
-        }).catch(() => {});
+        }).catch((err: any) => {
+            logger.error("New sale notification failed", {
+                saleId: sale.id,
+                salonId: sale.salon_id,
+                message: err?.message,
+                stack: err?.stack,
+                error: err,
+            });
+        });
 
         // ── WhatsApp Automation: Invoice Generated ────────────────────────────
         // Only fire when there's a real client (not walk-in) and it's a proper sale
