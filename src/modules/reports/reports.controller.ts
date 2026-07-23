@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import { reportsService } from "./reports.service";
 import { sendSuccess } from "../utils/response.util";
 import { getSalonId } from "../utils/salon.util";
+import { AppError } from "../../middleware/error.middleware";
 
 type AuthRequest = Request & {
     user?: {
@@ -16,518 +17,97 @@ const asString = (value: unknown): string | undefined => {
         ? value
         : undefined;
 };
+
+// ======================================================
+// SALES SUMMARY REPORT (independent report API)
+// POST /api/report/sales-summary
+// GET  /api/report/sales-summary/:saleId
+// ======================================================
+
 export const reportsController = {
 
- async getSalesSummary(
+async getSalesSummaryReport(
     req: AuthRequest,
     res: Response,
     next: NextFunction
 ): Promise<void> {
-
     try {
-
         const salonId = await getSalonId(req);
+        const body = req.body ?? {};
 
-        const query = {
-            period: asString(req.query.period),
-            from: asString(req.query.from),
-            to: asString(req.query.to),
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            staff_id: asString(body.staff_id),
+            search: asString(body.search),
+            status: asString(body.status),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
         };
 
-        const data = await reportsService.getSalesSummary(
-            salonId,
-            query
-        );
+        const data = await reportsService.getSalesSummaryReport(salonId, filters);
 
         sendSuccess(
             res,
             200,
             data,
-            "Sales Summary fetched successfully"
-        );
-
-    } catch (err) {
-        next(err);
-    }
-
-},
-
-async getSalesSummaryTable(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> {
-
-    try {
-
-        const salonId = await getSalonId(req);
-
-        const data = await reportsService.getSalesSummaryTable(
-            salonId,
-            {
-                from: asString(req.query.from),
-                to: asString(req.query.to),
-            }
-        );
-
-        sendSuccess(
-            res,
-            200,
-            data,
-            "Sales Summary table fetched successfully"
-        );
-
-    } catch (err) {
-        next(err);
-    }
-
-},
-
-
-// ======================================================
-// PRODUCT REVENUE REPORT
-// GET /api/v1/reports/product-revenue
-// ======================================================
-
-async getProductRevenueReport(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> {
-    try {
-        const salonId = await getSalonId(req);
-
-        const data = await reportsService.getProductRevenueReport(
-            salonId,
-            {
-                search: asString(req.query.search),
-
-                from: asString(req.query.from),
-
-                to: asString(req.query.to),
-
-                category_id: asString(req.query.category_id),
-
-                brand_id: asString(req.query.brand_id),
-
-                sales_person: asString(req.query.sales_person),
-
-                payment_mode: asString(req.query.payment_mode),
-
-                page: req.query.page ? Number(req.query.page) : undefined,
-
-                limit: req.query.limit ? Number(req.query.limit) : undefined,
-            }
-        );
-
-        sendSuccess(
-            res,
-            200,
-            data,
-            "Product revenue report fetched successfully"
+            "Sales summary report fetched successfully"
         );
     } catch (error) {
         next(error);
     }
 },
 
-async getProductRevenueTable(
+async getSaleDetail(
     req: AuthRequest,
     res: Response,
     next: NextFunction
 ): Promise<void> {
     try {
         const salonId = await getSalonId(req);
+        const data = await reportsService.getSaleDetail(salonId, String(req.params.saleId));
 
-        const data = await reportsService.getProductRevenueTable(
-            salonId,
-            {
-                from: asString(req.query.from),
-                to: asString(req.query.to),
-            }
-        );
-
-        sendSuccess(
-            res,
-            200,
-            data,
-            "Product revenue table fetched successfully"
-        );
-    } catch (error) {
-        next(error);
-    }
-},
-
-async getProductRevenue(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> {
-    try {
-        const salonId = await getSalonId(req);
-
-        const data = await reportsService.getProductRevenue(
-         salonId,
-            {
-                from: asString(req.query.from),
-                to: asString(req.query.to),
-            }
-        );
-
-        sendSuccess(
-            res,
-            200,
-            data,
-            "Product revenue report fetched successfully"
-        );
-
-    } catch (error) {
-        next(error);
-    }
-},
-
-// ======================================================
-// SERVICE REVENUE REPORT
-// GET /api/v1/reports/service-revenue
-// ======================================================
-
-async getServiceRevenue(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> {
-    try {
-        const salonId = await getSalonId(req);
-
-        const data = await reportsService.getServiceRevenue(
-            salonId,
-            {
-                from: asString(req.query.from),
-                to: asString(req.query.to),
-            }
-        );
-
-        sendSuccess(
-            res,
-            200,
-            data,
-            "Service revenue report fetched successfully"
-        );
-
-    } catch (error) {
-        next(error);
-    }
-},
-
-async getServiceRevenueTable(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> {
-    try {
-        const salonId = await getSalonId(req);
-
-        const data = await reportsService.getServiceRevenueTable(
-            salonId,
-            {
-                from: asString(req.query.from),
-                to: asString(req.query.to),
-            }
-        );
-
-        sendSuccess(
-            res,
-            200,
-            data,
-            "Service revenue table fetched successfully"
-        );
-
-    } catch (error) {
-        next(error);
-    }
-},
-
-async getStylistRevenue(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> {
-    try {
-        const salonId = await getSalonId(req);
-
-        const data = await reportsService.getStylistRevenue(
-            salonId,
-            {
-                from: asString(req.query.from),
-                to: asString(req.query.to),
-            }
-        );
-
-        sendSuccess(
-            res,
-            200,
-            data,
-            "Stylist revenue report fetched successfully"
-        );
-
-    } catch (error) {
-        next(error);
-    }
-},
-
-async getStylistRevenueTable(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> {
-    try {
-        const salonId = await getSalonId(req);
-
-        const data = await reportsService.getStylistRevenueTable(
-            salonId,
-            {
-                from: asString(req.query.from),
-                to: asString(req.query.to),
-            }
-        );
-
-        sendSuccess(
-            res,
-            200,
-            data,
-            "Stylist revenue table fetched successfully"
-        );
-
-    } catch (error) {
-        next(error);
-    }
-},
-
-async getStaffCommissionReport(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> {
-    try {
-        const salonId = await getSalonId(req);
-
-        const data = await reportsService.getStaffCommissionReport(
-            salonId,
-            {
-                from: asString(req.query.from),
-                to: asString(req.query.to),
-            }
-        );
-
-        sendSuccess(
-            res,
-            200,
-            data,
-            "Staff commission report fetched successfully"
-        );
-
-    } catch (error) {
-        next(error);
-    }
-},
-
-async getStaffCommissionTable(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> {
-    try {
-        const salonId = await getSalonId(req);
-
-        const data = await reportsService.getStaffCommissionTable(
-            salonId,
-            {
-                from: asString(req.query.from),
-                to: asString(req.query.to),
-            }
-        );
-
-        sendSuccess(
-            res,
-            200,
-            data,
-            "Staff commission table fetched successfully"
-        );
-
-    } catch (error) {
-        next(error);
-    }
-},
-
-async getTipReport(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> {
-    try {
-        const salonId = await getSalonId(req);
-
-        const data = await reportsService.getTipReport(
-            salonId,
-            {
-                from: asString(req.query.from),
-                to: asString(req.query.to),
-                search: asString(req.query.search),
-                stylist: asString(req.query.stylist),
-                payment: asString(req.query.payment),
-                status: asString(req.query.status),
-            }
-        );
-
-        sendSuccess(
-            res,
-            200,
-            data,
-            "Tip report fetched successfully"
-        );
-
-    } catch (error) {
-        next(error);
-    }
-},
-
-async getTipReportTable(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> {
-    try {
-        const salonId = await getSalonId(req);
-
-        const data = await reportsService.getTipReportTable(
-            salonId,
-            {
-                from: asString(req.query.from),
-                to: asString(req.query.to),
-            }
-        );
-
-        sendSuccess(
-            res,
-            200,
-            data,
-            "Tip report table fetched successfully"
-        );
-
-    } catch (error) {
-        next(error);
-    }
-},
-
-async getAppointmentReport(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> {
-    try {
-        const salonId = await getSalonId(req);
-
-        const data = await reportsService.getAppointmentReport(
-            salonId,
-            {
-                from: asString(req.query.from),
-                to: asString(req.query.to),
-            }
-        );
-
-        sendSuccess(
-            res,
-            200,
-            data,
-            "Appointment report fetched successfully"
-        );
-
-    } catch (error) {
-        next(error);
-    }
-},
-
-async getAppointmentReportTable(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> {
-    try {
-        const salonId = await getSalonId(req);
-
-        const data = await reportsService.getAppointmentReportTable(
-            salonId,
-            {
-                from: asString(req.query.from),
-                to: asString(req.query.to),
-            }
-        );
-
-        sendSuccess(
-            res,
-            200,
-            data,
-            "Appointment report table fetched successfully"
-        );
-
-    } catch (error) {
-        next(error);
-    }
-},
-
-async getAppointmentDetailTable(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> {
-    try {
-        const salonId = await getSalonId(req);
-        const statusesRaw = asString(req.query.statuses);
-
-        const data = await reportsService.getAppointmentDetailTable(
-            salonId,
-            {
-                from: asString(req.query.from),
-                to: asString(req.query.to),
-                dateType: req.query.dateType === "booking" ? "booking" : "appointment",
-                statuses: statusesRaw ? statusesRaw.split(",").map((s) => s.trim()).filter(Boolean) : undefined,
-            }
-        );
-
-        sendSuccess(
-            res,
-            200,
-            data,
-            "Appointment detail report fetched successfully"
-        );
-
-    } catch (error) {
-        next(error);
-    }
-},
-
-async getDailySheetTable(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> {
-    try {
-        const salonId = await getSalonId(req);
-        const date = asString(req.query.date);
-
-        if (!date) {
-            res.status(400).json({ success: false, message: "date is required" });
-            return;
+        if (!data.sale) {
+            throw new AppError(404, "Sale not found", "NOT_FOUND");
         }
 
-        const data = await reportsService.getDailySheetTable(
-            salonId,
-            {
-                date,
-                service: asString(req.query.service),
-                staff: asString(req.query.staff),
-            }
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Sale detail fetched successfully"
         );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// DAILY SHEET REPORT (independent report API)
+// POST /api/report/daily-sheet
+// ======================================================
+
+async getDailySheetReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            date: asString(body.date),
+            service_id: asString(body.service_id),
+            staff_id: asString(body.staff_id),
+            search: asString(body.search),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getDailySheetReport(salonId, filters);
 
         sendSuccess(
             res,
@@ -535,377 +115,476 @@ async getDailySheetTable(
             data,
             "Daily sheet report fetched successfully"
         );
-
     } catch (error) {
         next(error);
     }
 },
 
-async getRewardPointsSummary(
+// ======================================================
+// PRODUCT RETAIL REPORT (independent report API)
+// POST /api/report/product-retail
+// ======================================================
+
+async getProductRetailReport(
     req: AuthRequest,
     res: Response,
     next: NextFunction
 ): Promise<void> {
     try {
         const salonId = await getSalonId(req);
+        const body = req.body ?? {};
 
-        const data = await reportsService.getRewardPointsSummary(
-            salonId,
-            {
-                search: asString(req.query.search),
-            }
-        );
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            product_id: asString(body.product_id),
+            search: asString(body.search),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
 
-        sendSuccess(
-            res,
-            200,
-            data,
-            "Reward points summary fetched successfully"
-        );
-
-    } catch (error) {
-        next(error);
-    }
-},
-
-async getServiceReminderReport(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> {
-    try {
-        const salonId = await getSalonId(req);
-
-        const data = await reportsService.getServiceReminderReport(
-            salonId,
-            {
-                from: asString(req.query.from),
-                to: asString(req.query.to),
-            }
-        );
+        const data = await reportsService.getProductRetailReport(salonId, filters);
 
         sendSuccess(
             res,
             200,
             data,
-            "Service reminder report fetched successfully"
-        );
-
-    } catch (error) {
-        next(error);
-    }
-},
-
-async getServiceReminderTable(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> {
-    try {
-        const salonId = await getSalonId(req);
-
-        const data = await reportsService.getServiceReminderTable(
-            salonId,
-            {
-                from: asString(req.query.from),
-                to: asString(req.query.to),
-            }
-        );
-
-        sendSuccess(
-            res,
-            200,
-            data,
-            "Service reminder table fetched successfully"
-        );
-
-    } catch (error) {
-        next(error);
-    }
-},
-
-async getGuestCollectionReport(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> {
-    try {
-        const salonId = await getSalonId(req);
-
-        const data = await reportsService.getGuestCollectionReport(
-            salonId,
-            {
-                from: asString(req.query.from),
-                to: asString(req.query.to),
-            }
-        );
-
-        sendSuccess(
-            res,
-            200,
-            data,
-            "Guest collection report fetched successfully"
-        );
-
-    } catch (error) {
-        next(error);
-    }
-},
-
-async getGuestCollectionTable(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> {
-    try {
-        const salonId = await getSalonId(req);
-
-        const data = await reportsService.getGuestCollectionTable(
-            salonId,
-            {
-                from: asString(req.query.from),
-                to: asString(req.query.to),
-            }
-        );
-
-        sendSuccess(
-            res,
-            200,
-            data,
-            "Guest collection table fetched successfully"
-        );
-
-    } catch (error) {
-        next(error);
-    }
-},
-
-async getStaffAttendanceReport(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> {
-    try {
-        const salonId = await getSalonId(req);
-
-        const data = await reportsService.getStaffAttendanceReport(
-            salonId,
-            {
-                from: asString(req.query.from),
-                to: asString(req.query.to),
-            }
-        );
-
-        sendSuccess(
-            res,
-            200,
-            data,
-            "Staff attendance report fetched successfully"
-        );
-
-    } catch (error) {
-        next(error);
-    }
-},
-
-async getStaffAttendanceTable(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> {
-    try {
-        const salonId = await getSalonId(req);
-
-        const data = await reportsService.getStaffAttendanceTable(
-            salonId,
-            {
-                from: asString(req.query.from),
-                to: asString(req.query.to),
-            }
-        );
-
-        sendSuccess(
-            res,
-            200,
-            data,
-            "Staff attendance table fetched successfully"
-        );
-
-    } catch (error) {
-        next(error);
-    }
-},
-
-async getBalanceReceivedReport(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> {
-    try {
-        const salonId = await getSalonId(req);
-
-        const data = await reportsService.getBalanceReceivedReport(
-            salonId,
-            {
-                from: asString(req.query.from),
-                to: asString(req.query.to),
-                search: asString(req.query.search),
-                page: req.query.page ? Number(req.query.page) : undefined,
-                limit: req.query.limit ? Number(req.query.limit) : undefined,
-                sort_by: asString(req.query.sort_by),
-                sort_order: asString(req.query.sort_order) as "asc" | "desc" | undefined,
-            }
-        );
-
-        sendSuccess(
-            res,
-            200,
-            data,
-            "Balance received report fetched successfully"
-        );
-
-    } catch (error) {
-        next(error);
-    }
-},
-
-async getBalanceReceivedTable(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> {
-    try {
-        const salonId = await getSalonId(req);
-
-        const data = await reportsService.getBalanceReceivedTable(
-            salonId,
-            {
-                from: asString(req.query.from),
-                to: asString(req.query.to),
-            }
-        );
-
-        sendSuccess(
-            res,
-            200,
-            data,
-            "Balance received table fetched successfully"
-        );
-
-    } catch (error) {
-        next(error);
-    }
-},
-
-async getDayWiseReport(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> {
-    try {
-        const salonId = await getSalonId(req);
-
-        const data = await reportsService.getDayWiseReport(
-            salonId,
-            {
-                from: asString(req.query.from),
-                to: asString(req.query.to),
-                search: asString(req.query.search),
-                page: req.query.page ? Number(req.query.page) : undefined,
-                limit: req.query.limit ? Number(req.query.limit) : undefined,
-                sort_by: asString(req.query.sort_by),
-                sort_order: asString(req.query.sort_order) as "asc" | "desc" | undefined,
-            }
-        );
-
-        sendSuccess(
-            res,
-            200,
-            data,
-            "Day wise report fetched successfully"
-        );
-
-    } catch (error) {
-        next(error);
-    }
-},
-
-async getDayWiseTable(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> {
-    try {
-        const salonId = await getSalonId(req);
-
-        const data = await reportsService.getDayWiseTable(
-            salonId,
-            {
-                from: asString(req.query.from),
-                to: asString(req.query.to),
-            }
-        );
-
-        sendSuccess(
-            res,
-            200,
-            data,
-            "Day wise table fetched successfully"
-        );
-
-    } catch (error) {
-        next(error);
-    }
-},
-
-async getCouponRedemptionReport(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-): Promise<void> {
-    try {
-        const salonId = await getSalonId(req);
-
-        const data = await reportsService.getCouponRedemptionReport(
-            salonId,
-            {
-                from: asString(req.query.from),
-                to: asString(req.query.to),
-            }
-        );
-
-        sendSuccess(
-            res,
-            200,
-            data,
-            "Coupon redemption report fetched successfully"
+            "Product retail report fetched successfully"
         );
     } catch (error) {
         next(error);
     }
 },
 
-async getCouponRedemptionTable(
+// ======================================================
+// SERVICE SALE REPORT (independent report API)
+// POST /api/report/service-sale
+// ======================================================
+
+async getServiceSaleReport(
     req: AuthRequest,
     res: Response,
     next: NextFunction
 ): Promise<void> {
     try {
         const salonId = await getSalonId(req);
+        const body = req.body ?? {};
 
-        const data = await reportsService.getCouponRedemptionTable(
-            salonId,
-            {
-                from: asString(req.query.from),
-                to: asString(req.query.to),
-            }
-        );
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            staff_id: asString(body.staff_id),
+            search: asString(body.search),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getServiceSaleReport(salonId, filters);
 
         sendSuccess(
             res,
             200,
             data,
-            "Coupon redemption table fetched successfully"
+            "Service sale report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// GST / TAXES REPORT (independent report API)
+// POST /api/report/gst
+// ======================================================
+
+async getGstReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            staff_id: asString(body.staff_id),
+            search: asString(body.search),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getGstReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "GST report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// PRODUCT MARGIN REPORT (independent report API)
+// POST /api/report/product-margin
+// ======================================================
+
+async getProductMarginReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getProductMarginReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Product margin report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// REWARD POINTS REPORT (independent report API)
+// POST /api/report/reward-points
+// ======================================================
+
+async getRewardPointsReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            search: asString(body.search),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getRewardPointsReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Reward points report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// E-WALLET REPORT (independent report API)
+// POST /api/report/ewallet
+// ======================================================
+
+async getEwalletReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            search: asString(body.search),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getEwalletReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "E-wallet report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// CLIENT REVENUE REPORT (independent report API)
+// POST /api/report/client-revenue
+// ======================================================
+
+async getClientRevenueReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            search: asString(body.search),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getClientRevenueReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Client revenue report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// STAFF SALES REPORT (independent report API)
+// POST /api/report/staff-sales
+// ======================================================
+
+async getStaffSalesReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const period = asString(body.period);
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            period: (period === "weekly" || period === "monthly" || period === "yearly" ? period : "daily") as
+                "daily" | "weekly" | "monthly" | "yearly",
+            staff_id: asString(body.staff_id),
+        };
+
+        const data = await reportsService.getStaffSalesReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Staff sales report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// STAFF ITEM SALES REPORT (independent report API)
+// POST /api/report/staff-item-sales
+// ======================================================
+
+async getStaffItemSalesReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const itemType = asString(body.item_type);
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            item_type: (["service", "product", "membership", "package"].includes(itemType ?? "")
+                ? itemType : "service") as "service" | "product" | "membership" | "package",
+            staff_id: asString(body.staff_id),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getStaffItemSalesReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Staff item sales report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// PACKAGE SALE REPORT (independent report API)
+// POST /api/report/package-sale
+// ======================================================
+
+async getPackageSaleReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            search: asString(body.search),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getPackageSaleReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Package sale report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// PACKAGE HISTORY REPORT (independent report API)
+// POST /api/report/package-history
+// ======================================================
+
+async getPackageHistoryReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            search: asString(body.search),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getPackageHistoryReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Package history report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// MEMBER SALE REPORT (independent report API)
+// POST /api/report/member-sale
+// ======================================================
+
+async getMemberSaleReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            search: asString(body.search),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getMemberSaleReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Member sale report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// APPOINTMENT DETAIL REPORT (independent report API)
+// POST /api/report/appointment-detail
+// ======================================================
+
+async getAppointmentDetailReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            from: asString(body.from),
+            to: asString(body.to),
+            statuses: Array.isArray(body.statuses)
+                ? body.statuses.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getAppointmentDetailReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Appointment detail report fetched successfully"
         );
     } catch (error) {
         next(error);
