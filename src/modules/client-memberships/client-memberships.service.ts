@@ -206,11 +206,12 @@ export const clientMembershipsService = {
     clientId: string,
     appointmentId: string,
     services: WalletDeductionServiceInput[],
+    maxTotalAmount?: number,
   ): Promise<WalletDeductionResult> {
     const memberships = await clientMembershipsRepository.findAllActiveWithBalanceForClient(clientId, salonId);
     if (memberships.length === 0) return { totalWalletUsed: 0, remainingBalance: 0, perService: [], reused: false };
     return clientMembershipsRepository.deductWalletAcrossMemberships(
-      memberships.map((m) => m.id), salonId, { appointmentId, services },
+      memberships.map((m) => m.id), salonId, { appointmentId, services, maxTotalAmount },
     );
   },
 

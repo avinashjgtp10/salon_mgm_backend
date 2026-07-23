@@ -24,6 +24,7 @@ import { clientsRepository } from '../clients/clients.repository';
 import { getIO } from '../../config/socket';
 import { getActiveTaxes } from '../settings/tax.util';
 import { computeBillTotals } from '../pricing/pricing.engine';
+import pool from '../../config/database';
 
 export const paymentsService = {
 
@@ -140,23 +141,52 @@ export const paymentsService = {
           // referral piece too, same as it already does for coupon/manual.
           data.discount_amount = discount;
 
-          // ── eWallet: recompute server-side from the client's real balance ──
-          // Never trust a ₹ amount sent from the frontend — cap it at what the
-          // client actually has, same principle as reward points redemption.
-          let ewallet = 0;
-          if (data.client_id && ewalletRequested > 0) {
-            try {
-              const balance = await ewalletRepository.getBalance(data.client_id);
-              ewallet = Math.min(ewalletRequested, balance);
-            } catch (err: any) {
-              logger.warn('[payments] ewallet balance check failed:', err?.message ?? err);
-            }
-          }
-          ewalletUsedActual = ewallet;
-          data.ewallet_used = ewallet;
+          // Both are real amounts the client actually pays alongside the bill —
+          // an ex-charge (business keeps it) and a tip (passed to staff) — so
+          // both must be part of what's owed/collected here, even though only
+          // ex_charges counts as revenue once it reaches the sale record.
+          // Computed here (earlier than before) because the sequential
+          // deduction ceiling just below needs them.
+          exChargesAmt = Number(appt.ex_charges) || 0;
+          tipAmt       = Number(appt.tip_amount) || 0;
+
+          // ── Sequential benefit deduction ────────────────────────────────────
+          // eWallet / membership wallet / reward points / referral credit used
+          // to each be computed independently, capped only against their OWN
+          // balance — never against how much of the bill was actually still
+          // left after the others. That let their combined value vastly
+          // exceed the bill (e.g. membership alone fully covers it, then
+          // eWallet and reward points still get deducted in full on top of
+          // that) — not just a display bug, since each of these is a REAL
+          // ledger deduction. `remaining` is threaded through all four, in
+          // the same order the Sale Summary displays them, and each is capped
+          // at whatever's actually still owed at that point.
+          //
+          // The starting ceiling needs a real, tax-inclusive grand total, but
+          // the tax-exclusion adjustment for membership-wallet-covered items
+          // depends on knowing the wallet amount, which isn't known yet — a
+          // genuine circular dependency. Resolved by using a preliminary,
+          // not-yet-wallet-adjusted grand total as the ceiling (that
+          // exclusion only ever shifts the GST portion, not the whole bill,
+          // so this is a safe, slightly conservative estimate) and
+          // recomputing the exact final figure with computeBillTotals() once
+          // every actual deduction is known.
+          const activeTaxesForCeiling = data.include_gst === false ? [] : await getActiveTaxes(data.salon_id).catch(() => []);
+          const preliminaryTotals = computeBillTotals({
+            actualAmounts: { service: serviceTotal, packages: packageTotal, product: productTotal, membership: membershipTotal },
+            discountType: 'flat',
+            discountValue: discount,
+            taxes: activeTaxesForCeiling,
+            exCharges: exChargesAmt,
+            tip: tipAmt,
+            roundSubtotalBeforeDiscount: true,
+          });
+          let remaining = preliminaryTotals.grandTotal;
 
           // ── Membership wallet: redeem against services, plus products when the
           // client's membership opted in ──────────────────────────────────────
+          // Applied first (matches the Sale Summary's own display order —
+          // Membership, then eWallet, then Reward Points, then Referral).
           // Manual opt-in — only deducts when the staff checked "Apply
           // Membership" (data.apply_membership_wallet). Deducts once per
           // appointment (idempotent across repeat/partial-payment calls — see
@@ -190,9 +220,18 @@ export const paymentsService = {
                       amount:      (Number(p.price) || 0) * qty(p),
                     })));
                 }
-                if (itemsForWallet.length > 0) {
+                if (itemsForWallet.length > 0 && remaining > 0) {
+                  // Cap at whatever's still left on the bill, not just
+                  // whatever the staff requested — otherwise this could
+                  // still fully drain the wallet even once other benefits
+                  // (later in the sequence) would have covered the rest.
+                  const cappedMembershipRequest = Math.min(
+                    data.membership_wallet_requested ?? Infinity,
+                    remaining,
+                  );
                   const result = await clientMembershipsService.deductWalletForBooking(
                     data.salon_id, data.client_id, data.appointment_id, itemsForWallet,
+                    cappedMembershipRequest,
                   );
                   membershipWalletUsed = result.totalWalletUsed;
                 }
@@ -203,6 +242,24 @@ export const paymentsService = {
               logger.warn('[payments] membership wallet deduction failed:', err?.message ?? err);
             }
           }
+          remaining = Math.max(0, remaining - membershipWalletUsed);
+
+          // ── eWallet: recompute server-side from the client's real balance ──
+          // Never trust a ₹ amount sent from the frontend — cap it at what the
+          // client actually has AND at what's still left on the bill after
+          // membership wallet coverage above.
+          let ewallet = 0;
+          if (data.client_id && ewalletRequested > 0 && remaining > 0) {
+            try {
+              const balance = await ewalletRepository.getBalance(data.client_id);
+              ewallet = Math.min(ewalletRequested, balance, remaining);
+            } catch (err: any) {
+              logger.warn('[payments] ewallet balance check failed:', err?.message ?? err);
+            }
+          }
+          ewalletUsedActual = ewallet;
+          data.ewallet_used = ewallet;
+          remaining = Math.max(0, remaining - ewallet);
 
           // Per-item wallet-used breakdown — read back from membership_usage_log
           // (persisted above, whether deducted just now or on a prior call for
@@ -234,16 +291,24 @@ export const paymentsService = {
           // (earning no longer does this conversion — see the earn block below).
           let rewardPointsRedeemedValue = 0;
           const rewardPointsRequested = Math.max(0, Number(data.reward_points_used) || 0);
-          if (data.client_id && rewardPointsRequested > 0) {
+          if (data.client_id && rewardPointsRequested > 0 && remaining > 0) {
             try {
               const [rpConfig, rpBalance] = await Promise.all([
                 rewardPointsRepository.getConfig(data.salon_id),
                 rewardPointsRepository.getBalance(data.client_id),
               ]);
-              const pointsToRedeem = Math.min(rewardPointsRequested, rpBalance);
+              let pointsToRedeem = Math.min(rewardPointsRequested, rpBalance);
               if (pointsToRedeem > 0 && rpConfig.redeem_points > 0) {
+                let value = (pointsToRedeem / rpConfig.redeem_points) * rpConfig.redeem_value;
+                if (value > remaining) {
+                  // Cap the ₹ value at what's left, then work backward to how
+                  // many points that actually costs — floor so this can only
+                  // ever slightly UNDER-redeem, never exceed what's remaining.
+                  pointsToRedeem = Math.floor((remaining / rpConfig.redeem_value) * rpConfig.redeem_points);
+                  value = (pointsToRedeem / rpConfig.redeem_points) * rpConfig.redeem_value;
+                }
                 rewardPointsRedeemedActual = pointsToRedeem;
-                rewardPointsRedeemedValue = (pointsToRedeem / rpConfig.redeem_points) * rpConfig.redeem_value;
+                rewardPointsRedeemedValue = value;
               }
             } catch (err: any) {
               logger.warn('[payments] reward points balance check failed:', err?.message ?? err);
@@ -251,29 +316,24 @@ export const paymentsService = {
           }
           data.reward_points_used = rewardPointsRedeemedActual;
           data.reward_points_value = rewardPointsRedeemedValue;
+          remaining = Math.max(0, remaining - rewardPointsRedeemedValue);
 
           // ── Referral credit redemption: own dedicated balance now, not
           // eWallet. Never trust a ₹ amount sent from the frontend — cap it
-          // at the client's real balance, same principle as eWallet above.
+          // at the client's real balance AND at what's still left on the bill.
           let referralCreditRequestedValue = 0;
           const referralCreditRequested = Math.max(0, Number(data.referral_credit_used) || 0);
-          if (data.client_id && referralCreditRequested > 0) {
+          if (data.client_id && referralCreditRequested > 0 && remaining > 0) {
             try {
               const referralBalance = await referralRepository.getBalance(data.client_id);
-              referralCreditUsedActual = Math.min(referralCreditRequested, referralBalance);
+              referralCreditUsedActual = Math.min(referralCreditRequested, referralBalance, remaining);
               referralCreditRequestedValue = referralCreditUsedActual;
             } catch (err: any) {
               logger.warn('[payments] referral balance check failed:', err?.message ?? err);
             }
           }
           data.referral_credit_used = referralCreditUsedActual;
-
-          // Both are real amounts the client actually pays alongside the bill —
-          // an ex-charge (business keeps it) and a tip (passed to staff) — so
-          // both must be part of what's owed/collected here, even though only
-          // ex_charges counts as revenue once it reaches the sale record.
-          exChargesAmt = Number(appt.ex_charges) || 0;
-          tipAmt       = Number(appt.tip_amount) || 0;
+          remaining = Math.max(0, remaining - referralCreditRequestedValue);
 
           // ── Tax + grand total: single shared pricing engine (see
           // pricing.engine.ts) — the same math totalsUtils.ts uses on the
@@ -285,7 +345,7 @@ export const paymentsService = {
           let grandTotal = Math.round(actualBill - discount + exChargesAmt + tipAmt);
           let effectiveBill = Math.max(0, grandTotal - ewallet - membershipWalletUsed - rewardPointsRedeemedValue - referralCreditRequestedValue);
           try {
-            const activeTaxes = await getActiveTaxes(data.salon_id);
+            const activeTaxes = data.include_gst === false ? [] : await getActiveTaxes(data.salon_id);
             const result = computeBillTotals({
               actualAmounts: { service: serviceTotal, packages: packageTotal, product: productTotal, membership: membershipTotal },
               discountType: 'flat',
@@ -351,7 +411,38 @@ export const paymentsService = {
       data.status       = 'completed';
     }
 
-    const payment = await paymentsRepository.create(data);
+    // Payment creation and the reward-points redemption ledger write must
+    // not diverge: without a shared transaction, a ledger write failure
+    // after the payment row was already persisted with reward_points_used/
+    // reward_points_value set would leave the payment claiming points were
+    // redeemed that were never actually deducted from the client's balance.
+    // Run both on one transaction so a ledger failure rolls back the
+    // payment instead of being silently swallowed.
+    let payment: Payment;
+    if (data.client_id && rewardPointsRedeemedActual > 0) {
+      const txClient = await pool.connect();
+      try {
+        await txClient.query('BEGIN');
+        payment = await paymentsRepository.create(data, txClient);
+        await rewardPointsRepository.applyLedgerEntry({
+          clientId: data.client_id,
+          salonId: data.salon_id,
+          type: 'redeem',
+          delta: -rewardPointsRedeemedActual,
+          sourceType: 'payment',
+          sourceId: payment.id,
+          note: `Redeemed ${rewardPointsRedeemedActual} points on payment`,
+        }, txClient);
+        await txClient.query('COMMIT');
+      } catch (err) {
+        await txClient.query('ROLLBACK');
+        throw err;
+      } finally {
+        txClient.release();
+      }
+    } else {
+      payment = await paymentsRepository.create(data);
+    }
 
     // ── eWallet: actually deduct the real balance now that the payment row exists ──
     if (data.client_id && ewalletUsedActual > 0) {
@@ -370,23 +461,8 @@ export const paymentsService = {
       }
     }
 
-    // ── Reward points: actually deduct the real balance now that the payment
-    // row exists — mirrors the eWallet redeem block above exactly.
-    if (data.client_id && rewardPointsRedeemedActual > 0) {
-      try {
-        await rewardPointsRepository.applyLedgerEntry({
-          clientId: data.client_id,
-          salonId: data.salon_id,
-          type: 'redeem',
-          delta: -rewardPointsRedeemedActual,
-          sourceType: 'payment',
-          sourceId: payment.id,
-          note: `Redeemed ${rewardPointsRedeemedActual} points on payment`,
-        });
-      } catch (err: any) {
-        logger.warn('[payments] reward points redeem ledger write failed:', err?.message ?? err);
-      }
-    }
+    // Reward points redemption ledger write now happens atomically with
+    // payment creation above (see the transaction block).
 
     // ── Referral credit: actually deduct the real balance now that the
     // payment row exists — mirrors the eWallet redeem block above exactly.
@@ -497,7 +573,24 @@ export const paymentsService = {
     // Skip for package payments — revenue was already counted when the package was purchased.
     if (data.appointment_id && data.status === 'completed' && appt && !isPackagePayment) {
       try {
-        const items: Array<{ item_type: 'service' | 'package' | 'product' | 'membership'; item_id?: string; staff_id?: string; name: string; quantity: number; unit_price: number }> = [
+        // Per-row "Disc %" (see ServiceRow.tsx calcTotal()) is baked into each
+        // item's own `total`, but was never carried over into the sale-item's
+        // `discount_amount` below — sales.repository.ts's create() only
+        // subtracts item.discount_amount from quantity×unit_price when
+        // building sales.subtotal, so every item silently looked
+        // full-price, inflating sales.subtotal (and therefore
+        // sales.total_amount / all dashboard revenue figures) by the sum of
+        // every item-level discount on the bill.
+        const itemQty = (i: any) => Number(i.quantity) || Number(i.qty) || 1;
+        const itemDiscount = (i: any) => {
+          const unitPrice = Number(i.price) || 0;
+          const q = itemQty(i);
+          const t = Number(i.total);
+          const lineTotal = (i.total !== undefined && i.total !== null && isFinite(t)) ? t : unitPrice * q;
+          return Math.max(0, unitPrice * q - lineTotal);
+        };
+
+        const items: Array<{ item_type: 'service' | 'package' | 'product' | 'membership'; item_id?: string; staff_id?: string; name: string; quantity: number; unit_price: number; discount_amount: number }> = [
           ...(appt.services || []).map(s => ({
             item_type: 'service' as const,
             item_id: s.service_id,
@@ -505,6 +598,7 @@ export const paymentsService = {
             name: s.name || 'Service',
             quantity: Number(s.quantity) || 1,
             unit_price: Number(s.price) || 0,
+            discount_amount: itemDiscount(s),
           })),
           ...(appt.package_items || []).map(p => ({
             item_type: 'package' as const,
@@ -513,6 +607,7 @@ export const paymentsService = {
             name: p.name || 'Package',
             quantity: Number(p.quantity) || 1,
             unit_price: Number(p.price) || 0,
+            discount_amount: itemDiscount(p),
           })),
           ...(appt.product_items || []).map(p => ({
             item_type: 'product' as const,
@@ -521,6 +616,7 @@ export const paymentsService = {
             name: p.name || 'Product',
             quantity: Number(p.quantity) || 1,
             unit_price: Number(p.price) || 0,
+            discount_amount: itemDiscount(p),
           })),
           ...(appt.membership_items || []).map(m => ({
             item_type: 'membership' as const,
@@ -529,6 +625,7 @@ export const paymentsService = {
             name: m.name || 'Membership',
             quantity: Number(m.quantity) || 1,
             unit_price: Number(m.price) || 0,
+            discount_amount: itemDiscount(m),
           })),
         ];
 
@@ -538,6 +635,7 @@ export const paymentsService = {
             name: appt.title || 'Appointment Service',
             quantity: 1,
             unit_price: Number(data.net_amount || data.gross_amount || 0),
+            discount_amount: 0,
           });
         }
 

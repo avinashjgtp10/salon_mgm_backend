@@ -68,15 +68,37 @@ function computeAppointmentTotals(appt: {
     });
 }
 
+// Single source of truth for "does this appointment's cached tax_breakdown
+// need recomputing" — a payment's snapshot is only trustworthy if nothing has
+// been edited since it was taken; once an edit (appointments.updated_at)
+// postdates the last payment, that snapshot describes a bill that no longer
+// exists. Every caller below MUST use this (not its own "is tax_breakdown
+// empty?" shortcut) — a caller that only checks emptiness will short-circuit
+// past a stale-but-non-empty snapshot and keep showing pre-edit GST forever.
+function needsTaxBackfill(appt: Appointment): boolean {
+    if (!Array.isArray(appt.tax_breakdown) || appt.tax_breakdown.length === 0) return true;
+    return !!appt.last_payment_at && new Date(appt.updated_at) > new Date(appt.last_payment_at);
+}
+
 function backfillTaxBreakdown(appt: Appointment, activeTaxes: ActiveTaxRow[]): Appointment {
-    // A payment's tax_breakdown snapshot is only trustworthy if nothing has
-    // been edited since it was taken — once an edit (appointments.updated_at)
-    // postdates the last payment, that snapshot describes a bill that no
-    // longer exists, and must be recomputed fresh instead.
-    const editedAfterPayment = !!appt.last_payment_at && new Date(appt.updated_at) > new Date(appt.last_payment_at);
-    if (Array.isArray(appt.tax_breakdown) && appt.tax_breakdown.length > 0 && !editedAfterPayment) return appt;
+    if (!needsTaxBackfill(appt)) return appt;
     const result = computeAppointmentTotals(appt, activeTaxes);
     return { ...appt, tax_breakdown: result.taxBreakdown, computed_grand_total: result.grandTotal };
+}
+
+// The no-show scheduler (appointments.scheduler.ts) flips a "booked" appointment
+// to "no-show" once its end time passes, but it's a setInterval running inside
+// one Node process — that never fires at all if the process restarts often or
+// the deployment runs multiple/ephemeral instances. Deriving it here too (same
+// condition the scheduler's own SQL uses: booked + ends_at < now) means the
+// calendar shows the correct status on read regardless of whether that
+// background sweep ever actually ran — it doesn't replace the batch flip
+// (reports/filters that query status='no-show' directly still need it), it
+// just guarantees what's displayed is never stuck showing stale "booked".
+function deriveDisplayStatus(appt: Appointment): Appointment {
+    if (appt.status !== "booked" || !appt.ends_at) return appt;
+    if (new Date(appt.ends_at) >= new Date()) return appt;
+    return { ...appt, status: "no-show" };
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -155,7 +177,15 @@ export const appointmentsService = {
             title:    "New Appointment Booked",
             body:     `${appointment.client_name ?? "Walk-in"} — ${formatDate(appointment.scheduled_at)} at ${formatTime(appointment.scheduled_at)}`,
             event_key: "newAppointment",
-        }).catch(() => {});
+        }).catch((err: any) => {
+            logger.error("New appointment notification failed", {
+                appointmentId: appointment.id,
+                salonId: appointment.salon_id,
+                message: err?.message,
+                stack: err?.stack,
+                error: err,
+            });
+        });
 
         // ── WhatsApp Automation: Appointment Confirmation ─────────────────────
         // Dedup check — NEVER send confirmation twice for the same appointment
@@ -218,9 +248,10 @@ export const appointmentsService = {
     },
 
     async getById(id: string): Promise<Appointment> {
-        const appointment = await appointmentsRepository.findById(id);
-        if (!appointment) throw new AppError(404, "Appointment not found", "NOT_FOUND");
-        if (Array.isArray(appointment.tax_breakdown) && appointment.tax_breakdown.length > 0) return appointment;
+        const found = await appointmentsRepository.findById(id);
+        if (!found) throw new AppError(404, "Appointment not found", "NOT_FOUND");
+        const appointment = deriveDisplayStatus(found);
+        if (!needsTaxBackfill(appointment)) return appointment;
         const activeTaxes = await getActiveTaxes(appointment.salon_id).catch(() => []);
         return backfillTaxBreakdown(appointment, activeTaxes);
     },
@@ -238,19 +269,20 @@ export const appointmentsService = {
     }): Promise<{ data: Appointment[]; totalRecords: number; totalPages: number; currentPage: number } | Appointment[]> {
         const { salonId, clientId, date, staffId, status, startDate, endDate, page, limit } = params;
         if (clientId) {
-            const appts = await appointmentsRepository.listByClientId(clientId);
-            const needsBackfill = appts.some((a) => !Array.isArray(a.tax_breakdown) || a.tax_breakdown.length === 0);
+            const appts = (await appointmentsRepository.listByClientId(clientId)).map(deriveDisplayStatus);
+            const needsBackfill = appts.some(needsTaxBackfill);
             if (!needsBackfill || appts.length === 0) return appts;
             const activeTaxes = await getActiveTaxes(appts[0].salon_id).catch(() => []);
             return appts.map((a) => backfillTaxBreakdown(a, activeTaxes));
         }
         if (!salonId) throw new AppError(400, "salon_id or client_id is required", "VALIDATION_ERROR");
-        const result = await appointmentsRepository.listBySalonId(salonId, {
+        const rawResult = await appointmentsRepository.listBySalonId(salonId, {
             date, staff_id: staffId, status,
             start_date: startDate, end_date: endDate,
             page, limit,
         });
-        const needsBackfill = result.data.some((a) => !Array.isArray(a.tax_breakdown) || a.tax_breakdown.length === 0);
+        const result = { ...rawResult, data: rawResult.data.map(deriveDisplayStatus) };
+        const needsBackfill = result.data.some(needsTaxBackfill);
         if (!needsBackfill) return result;
         const activeTaxes = await getActiveTaxes(salonId).catch(() => []);
         return { ...result, data: result.data.map((a) => backfillTaxBreakdown(a, activeTaxes)) };
@@ -373,7 +405,15 @@ export const appointmentsService = {
                 type:     "appointment",
                 title:    "Appointment Updated",
                 body:     `${existing.client_name ?? "Walk-in"} — ${formatDate(updated.scheduled_at)} at ${formatTime(updated.scheduled_at)}`,
-            }).catch(() => {});
+            }).catch((err: any) => {
+                logger.error("Appointment update notification failed", {
+                    appointmentId: updated.id,
+                    salonId: existing.salon_id,
+                    message: err?.message,
+                    stack: err?.stack,
+                    error: err,
+                });
+            });
         }
 
         // ── WhatsApp Automation: Appointment Rescheduled ──────────────────────
@@ -442,7 +482,15 @@ export const appointmentsService = {
             title:    "Appointment Cancelled",
             body:     `${existing.client_name ?? "Walk-in"} — ${formatDate(existing.scheduled_at)} at ${formatTime(existing.scheduled_at)}`,
             event_key: "appointmentCancelled",
-        }).catch(() => {});
+        }).catch((err: any) => {
+            logger.error("Appointment cancellation notification failed", {
+                appointmentId: existing.id,
+                salonId: existing.salon_id,
+                message: err?.message,
+                stack: err?.stack,
+                error: err,
+            });
+        });
 
         // ── WhatsApp Automation: Appointment Cancelled ────────────────────────
         if (existing.client_id && (existing as any).client_phone) {

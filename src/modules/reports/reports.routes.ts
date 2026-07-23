@@ -5,6 +5,12 @@ import { subscriptionMiddleware } from "../../middleware/subscription.middleware
 import { requirePermission } from "../../middleware/permission.middleware";
 import { reportsController } from "./reports.controller";
 
+// ======================================================
+// SALES SUMMARY REPORT (independent report API)
+// Reads sales/sale_items/payments directly — never calls the Appointment
+// API/service. Mounted at /api/report (not /api/v1) in app.ts.
+// ======================================================
+
 const router = Router();
 
 const guard = [
@@ -14,178 +20,174 @@ const guard = [
     requirePermission("view_reports"),
 ];
 
-// ======================================================
-// SALES SUMMARY
-// ======================================================
-
-router.get(
+router.post(
     "/sales-summary",
     ...guard,
-    reportsController.getSalesSummary
+    reportsController.getSalesSummaryReport
 );
 
 router.get(
-    "/sales-summary/table",
+    "/sales-summary/:saleId",
     ...guard,
-    reportsController.getSalesSummaryTable
-);
-
-// ======================================================
-// PRODUCT REVENUE REPORT
-// ======================================================
-
-router.get(
-    "/product-revenue",
-    ...guard,
-    reportsController.getProductRevenueReport
-);
-
-router.get(
-    "/product-revenue/table",
-    ...guard,
-    reportsController.getProductRevenueTable
+    reportsController.getSaleDetail
 );
 
 // ======================================================
-// STAFF REVENUE REPORT
+// DAILY SHEET REPORT (independent report API)
+// Reads sales/sale_items directly — never calls the Appointment API/service.
 // ======================================================
 
-router.get(
-    "/service-revenue",
+router.post(
+    "/daily-sheet",
     ...guard,
-    reportsController.getServiceRevenue
+    reportsController.getDailySheetReport
 );
 
-router.get(
-    "/service-revenue/table",
+// ======================================================
+// PRODUCT RETAIL REPORT (independent report API)
+// Reads sales/sale_items directly — never calls the Appointment API/service.
+// ======================================================
+
+router.post(
+    "/product-retail",
     ...guard,
-    reportsController.getServiceRevenueTable
+    reportsController.getProductRetailReport
 );
 
-router.get(
-    "/stylist-revenue",
+// ======================================================
+// SERVICE SALE REPORT (independent report API)
+// Reads sales/sale_items directly — never calls the Appointment API/service.
+// ======================================================
+
+router.post(
+    "/service-sale",
     ...guard,
-    reportsController.getStylistRevenue
+    reportsController.getServiceSaleReport
 );
 
-router.get(
-    "/stylist-revenue/table",
+// ======================================================
+// GST / TAXES REPORT (independent report API)
+// Reads sales directly — never calls the Appointment API/service.
+// ======================================================
+
+router.post(
+    "/gst",
     ...guard,
-    reportsController.getStylistRevenueTable
+    reportsController.getGstReport
 );
 
-router.get(
-    "/tip-report",
+// ======================================================
+// PRODUCT MARGIN REPORT (independent report API)
+// Reads sale_items/products directly — never calls the Appointment
+// API/service.
+// ======================================================
+
+router.post(
+    "/product-margin",
     ...guard,
-    reportsController.getTipReport
+    reportsController.getProductMarginReport
 );
 
-router.get(
-    "/tip-report/table",
+// ======================================================
+// REWARD POINTS REPORT (independent report API)
+// Reads clients/reward_points_ledger directly — never calls the Appointment
+// API/service.
+// ======================================================
+
+router.post(
+    "/reward-points",
     ...guard,
-    reportsController.getTipReportTable
+    reportsController.getRewardPointsReport
 );
 
-router.get(
-    "/appointment-report",
+// ======================================================
+// E-WALLET REPORT (independent report API)
+// Reads clients directly — never calls the Appointment API/service.
+// ======================================================
+
+router.post(
+    "/ewallet",
     ...guard,
-    reportsController.getAppointmentReport
+    reportsController.getEwalletReport
 );
 
-router.get(
-    "/appointment-report/table",
+// ======================================================
+// CLIENT REVENUE REPORT (independent report API)
+// Reads sales/clients directly — never calls the Appointment API/service.
+// ======================================================
+
+router.post(
+    "/client-revenue",
     ...guard,
-    reportsController.getAppointmentReportTable
+    reportsController.getClientRevenueReport
 );
 
-router.get(
-    "/appointment-detail/table",
+// ======================================================
+// STAFF SALES REPORT (independent report API)
+// Reads sale_items/sales directly — never calls the Appointment API/service.
+// ======================================================
+
+router.post(
+    "/staff-sales",
     ...guard,
-    reportsController.getAppointmentDetailTable
+    reportsController.getStaffSalesReport
 );
 
-router.get(
-    "/daily-sheet/table",
+// ======================================================
+// STAFF ITEM SALES REPORT (independent report API)
+// Reads sale_items directly — never calls the Appointment API/service.
+// ======================================================
+
+router.post(
+    "/staff-item-sales",
     ...guard,
-    reportsController.getDailySheetTable
+    reportsController.getStaffItemSalesReport
 );
 
-router.get(
-    "/reward-points/table",
+// ======================================================
+// PACKAGE SALE REPORT (independent report API)
+// Reads client_packages directly — never calls the Appointment API.
+// ======================================================
+
+router.post(
+    "/package-sale",
     ...guard,
-    reportsController.getRewardPointsSummary
+    reportsController.getPackageSaleReport
 );
 
-router.get(
-    "/service-reminder",
+// ======================================================
+// PACKAGE HISTORY REPORT (independent report API)
+// Reads client_package_session_history directly — never calls the
+// Appointment API.
+// ======================================================
+
+router.post(
+    "/package-history",
     ...guard,
-    reportsController.getServiceReminderReport
+    reportsController.getPackageHistoryReport
 );
 
-router.get(
-    "/service-reminder/table",
+// ======================================================
+// MEMBER SALE REPORT (independent report API)
+// Reads client_memberships directly — never calls the Appointment API.
+// ======================================================
+
+router.post(
+    "/member-sale",
     ...guard,
-    reportsController.getServiceReminderTable
+    reportsController.getMemberSaleReport
 );
 
-router.get(
-    "/guest-collection",
-    ...guard,
-    reportsController.getGuestCollectionReport
-);
+// ======================================================
+// APPOINTMENT DETAIL REPORT (independent report API)
+// Reads the appointments table directly via SQL — never calls the
+// Appointment HTTP API/service.
+// ======================================================
 
-router.get(
-    "/guest-collection/table",
+router.post(
+    "/appointment-detail",
     ...guard,
-    reportsController.getGuestCollectionTable
-);
-
-router.get(
-    "/staff-attendance",
-    ...guard,
-    reportsController.getStaffAttendanceReport
-);
-
-router.get(
-    "/staff-attendance/table",
-    ...guard,
-    reportsController.getStaffAttendanceTable
-);
-
-router.get(
-    "/balance-received",
-    ...guard,
-    reportsController.getBalanceReceivedReport
-);
-
-router.get(
-    "/balance-received/table",
-    ...guard,
-    reportsController.getBalanceReceivedTable
-);
-
-router.get(
-    "/day-wise",
-    ...guard,
-    reportsController.getDayWiseReport
-);
-
-router.get(
-    "/day-wise/table",
-    ...guard,
-    reportsController.getDayWiseTable
-);
-
-router.get(
-    "/coupon-redemption",
-    ...guard,
-    reportsController.getCouponRedemptionReport
-);
-
-router.get(
-    "/coupon-redemption/table",
-    ...guard,
-    reportsController.getCouponRedemptionTable
+    reportsController.getAppointmentDetailReport
 );
 
 export default router;
