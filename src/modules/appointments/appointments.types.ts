@@ -17,6 +17,10 @@ export type AppointmentServiceItem = {
     quantity: number;
     time?: string | null; // "HH:MM" slot time
     is_package_service?: boolean;
+    // Read-time-only enrichment (never persisted on this JSONB column) — this
+    // row's own real GST, read back from the linked sale's sale_items once
+    // one exists. See appointmentsService's enrichItemsWithTax.
+    tax_amount?: number;
 };
 
 export type AppointmentPackageItem = {
@@ -28,6 +32,7 @@ export type AppointmentPackageItem = {
     staff_id?: string | null;
     staff_name?: string | null;
     start_time?: string | null;
+    tax_amount?: number;
 };
 
 export type AppointmentProductItem = {
@@ -38,6 +43,7 @@ export type AppointmentProductItem = {
     staff_id?: string | null;
     staff_name?: string | null;
     start_time?: string | null;
+    tax_amount?: number;
 };
 
 export type AppointmentMembershipItem = {
@@ -49,6 +55,7 @@ export type AppointmentMembershipItem = {
     staff_id?: string | null;
     staff_name?: string | null;
     start_time?: string | null;
+    tax_amount?: number;
 };
 
 // ─── Core Appointment type ───────────────────────────────────────────────────

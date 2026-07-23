@@ -56,6 +56,11 @@ function buildSyntheticSale(pkg: ClientPackage): { sale: Sale; items: SaleItem[]
           discount_amount: "0",
           unit_price: String(s.price ?? 0),
           total_price: String((s.price ?? 0) * (s.totalSessions || 1)),
+          // This synthetic multi-service breakdown has no real per-service tax
+          // split (the package's real tax was only ever computed on the whole
+          // package, see pkg.gstAmount below) — receipt display only, ₹0 here.
+          tax_amount: "0",
+          taxable_amount: "0",
           created_at: pkg.createdDate,
         }))
       : [
@@ -70,6 +75,8 @@ function buildSyntheticSale(pkg: ClientPackage): { sale: Sale; items: SaleItem[]
             discount_amount: String(pkg.discount ?? 0),
             unit_price: String(pkg.basePrice ?? 0),
             total_price: String(pkg.totalAmount ?? 0),
+            tax_amount: String(pkg.gstAmount ?? 0),
+            taxable_amount: String((pkg.basePrice ?? 0) - (pkg.discount ?? 0)),
             created_at: pkg.createdDate,
           },
         ];
@@ -144,6 +151,10 @@ export const clientPackagesService = {
           quantity:        1,
           unit_price:      Number(pkg.basePrice || 0) + discountAmt,
           discount_amount: discountAmt,
+          // Single-item sale — the package's own already-computed GST (see
+          // client-packages.repository.ts) is trivially this one item's tax.
+          tax_amount:      gstAmt,
+          taxable_amount:  Number(pkg.basePrice || 0),
         }],
       });
     } catch (err) {

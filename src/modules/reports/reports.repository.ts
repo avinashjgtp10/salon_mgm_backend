@@ -1658,6 +1658,7 @@ async getProductRetailReportRows(
       si.quantity,
       si.unit_price AS price,
       si.total_price AS total,
+      si.tax_amount, si.taxable_amount,
       COUNT(*) OVER() AS total_count
     FROM sale_items si
     JOIN sales s ON s.id = si.sale_id
@@ -1680,6 +1681,8 @@ async getProductRetailReportRows(
     quantity: Number(row.quantity ?? 0),
     price: Number(row.price ?? 0),
     total: Number(row.total ?? 0),
+    tax_amount: Number(row.tax_amount ?? 0),
+    taxable_amount: Number(row.taxable_amount ?? 0),
   }));
   const effectiveLimit = limit ?? Math.max(total, 1);
   return {
@@ -1811,6 +1814,7 @@ async getServiceSaleReportRows(
       si.item_id AS service_id,
       si.name AS service_name,
       si.total_price AS price,
+      si.tax_amount, si.taxable_amount,
       COUNT(*) OVER() AS total_count
     FROM sale_items si
     JOIN sales s ON s.id = si.sale_id
@@ -1834,6 +1838,8 @@ async getServiceSaleReportRows(
     service_id: row.service_id,
     service_name: row.service_name,
     price: Number(row.price ?? 0),
+    tax_amount: Number(row.tax_amount ?? 0),
+    taxable_amount: Number(row.taxable_amount ?? 0),
   }));
   const effectiveLimit = limit ?? Math.max(total, 1);
   return {
@@ -2779,6 +2785,7 @@ async getPackageSaleReportRows(
       cp.paid_amount,
       cp.pending_amount,
       cp.payment_status,
+      cp.gst_amount,
       COUNT(*) OVER() AS total_count
     FROM client_packages cp
     WHERE ${where}
@@ -2798,6 +2805,7 @@ async getPackageSaleReportRows(
     paid_amount: Number(row.paid_amount ?? 0),
     pending_amount: Number(row.pending_amount ?? 0),
     payment_status: row.payment_status,
+    gst_amount: Number(row.gst_amount ?? 0),
   }));
   const effectiveLimit = limit ?? Math.max(total, 1);
   return {
@@ -3664,6 +3672,11 @@ async getServiceRevenueTable(
     index++;
   }
 
+  // tax_amount below reads si.tax_amount (this row's own GST, see
+  // pricing.engine.ts's per-row allocation) — it used to read s.tax_amount
+  // (the WHOLE sale's tax), which duplicated the full bill's tax onto every
+  // sibling item row, overstating total tax whenever a sale had more than
+  // one item and its rows were summed together.
   const { rows } = await pool.query(
     `
     WITH sale_rows AS (
@@ -3680,7 +3693,7 @@ async getServiceRevenueTable(
         COALESCE(si.quantity, 1) AS quantity,
         COALESCE(si.unit_price::numeric, 0) AS unit_price,
         COALESCE(si.discount_amount::numeric, 0) AS discount,
-        COALESCE(s.tax_amount::numeric, 0) AS tax_amount,
+        COALESCE(si.tax_amount::numeric, 0) AS tax_amount,
         COALESCE(si.total_price::numeric, 0) AS total_amount,
         s.payment_method,
         CASE

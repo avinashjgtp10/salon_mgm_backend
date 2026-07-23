@@ -51,6 +51,22 @@ function splitMembershipWalletUsage(
   return { serviceWalletUsed, productWalletUsed, totalWalletUsed: serviceWalletUsed + productWalletUsed };
 }
 
+// Per-row form of the same fill-in-order allocation splitMembershipWalletUsage
+// does — returns how much wallet each individual row absorbed, so the per-row
+// tax preview can exclude the wallet-covered portion of a row from its taxable
+// base (same as checkout does via payments.service.ts's walletUsedByItem).
+function allocateWalletPerRow(rows: LineItem[], totalWallet: number, skipPackageRows: boolean): number[] {
+  let remaining = Math.max(0, totalWallet);
+  return rows.map((row) => {
+    if ((skipPackageRows && row.isPackageService) || remaining <= 0) return 0;
+    const rowTotal = row.total ?? row.price * (row.qty || 1);
+    if (rowTotal <= 0) return 0;
+    const used = Math.min(remaining, rowTotal);
+    remaining -= used;
+    return used;
+  });
+}
+
 export const pricingService = {
   async calculateTotals(salonId: string, body: CalculateTotalsBody): Promise<CalculateTotalsResponse> {
     const actualAmounts: BucketAmounts = {
@@ -200,6 +216,12 @@ export const pricingService = {
     // ── Tax ──────────────────────────────────────────────────────────────────
     const taxes = body.includeGst ? await getActiveTaxes(salonId) : [];
 
+    // Per-row wallet coverage (same fill-in-order split as the aggregates
+    // above) so each row's tax preview excludes the wallet-covered portion,
+    // matching what checkout will actually store per sale_item.
+    const svcWalletPerRow = allocateWalletPerRow(body.serviceRows ?? [], membershipServiceWalletUsed, true);
+    const prodWalletPerRow = allocateWalletPerRow(body.productRows ?? [], membershipProductWalletUsed, false);
+
     const result = computeBillTotals({
       actualAmounts,
       discountType: body.discountType,
@@ -218,6 +240,12 @@ export const pricingService = {
       // the legacy payments.service.ts call site) — see the doc comment on
       // this flag in pricing.engine.ts.
       roundSubtotalBeforeDiscount: false,
+      rows: {
+        service: (body.serviceRows ?? []).map((r, i) => ({ ...r, walletUsed: svcWalletPerRow[i] ?? 0 })),
+        packages: body.packageRows ?? [],
+        product: (body.productRows ?? []).map((r, i) => ({ ...r, walletUsed: prodWalletPerRow[i] ?? 0 })),
+        membership: body.membershipRows ?? [],
+      },
     });
 
     let alreadyAppliedThisAppointment: CalculateTotalsResponse['alreadyAppliedThisAppointment'];

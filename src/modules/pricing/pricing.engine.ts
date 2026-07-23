@@ -40,6 +40,12 @@ export interface LineItem {
   // Membership-wallet-eligibility only (see pricing.service.ts's wallet split)
   // — unused by the rest of this engine, which only reads price/qty/total.
   isPackageService?: boolean;
+  // This row's own share of the bucket-level membership wallet deduction —
+  // only meaningful when the caller also passes `rows` (see
+  // ComputeBillTotalsInput.rows) for per-row tax allocation. Excluded from
+  // this row's taxable base the same way membershipServiceWalletUsed/
+  // membershipProductWalletUsed are excluded at the bucket level.
+  walletUsed?: number;
 }
 
 export interface BucketAmounts {
@@ -92,6 +98,18 @@ export interface ComputeBillTotalsInput {
   // deliberately deciding to unify the two roundings (a real, separate
   // behavior change, not a refactor).
   roundSubtotalBeforeDiscount?: boolean;
+  // Optional: per-row breakdown of each bucket, in the SAME order the caller
+  // will later map its own item list. Enables per-item tax allocation
+  // (BillTotalsResult.rowTax/rowTaxableAmount) for real per-line-item GST
+  // storage/reporting. Omitted by every existing caller (previews,
+  // single-item purchases) -- when absent, behavior is byte-for-byte
+  // identical to before this field existed.
+  rows?: {
+    service?: LineItem[];
+    packages?: LineItem[];
+    product?: LineItem[];
+    membership?: LineItem[];
+  };
 }
 
 export interface BillTotalsResult {
@@ -106,6 +124,13 @@ export interface BillTotalsResult {
   grandTotal: number;
   roundOff: number;
   effectiveTotal: number;
+  // Present only when the caller passed `ComputeBillTotalsInput.rows` --
+  // each array is index-aligned with the corresponding `rows[type]` array
+  // the caller supplied, so the caller matches entries back by index (no id
+  // matching needed here). tax = exclusive + inclusive tax allocated to that
+  // row; taxableAmount = that row's own post-discount, post-wallet base.
+  rowTax?: { service: number[]; packages: number[]; product: number[]; membership: number[] };
+  rowTaxableAmount?: { service: number[]; packages: number[]; product: number[]; membership: number[] };
 }
 
 export function rowsTotal(rows: LineItem[]): number {
@@ -148,6 +173,38 @@ function computeBucketTax(
   return { addOn, breakdown };
 }
 
+function round2(v: number): number {
+  return Math.round(v * 100) / 100;
+}
+
+// Splits a bucket's total tax (exclusive addOn + inclusive amount) across its
+// own rows, proportional to each row's own taxable share -- NOT bucketTaxable
+// itself, so this always reconciles exactly among the rows even if a caller's
+// row list doesn't sum perfectly to the bucket aggregate. The last row
+// absorbs the rounding remainder so sum(tax) === addOn + inclusiveTotal to
+// the paisa (see pricing.engine.ts's ComputeBillTotalsInput.rows doc comment).
+function allocateRowTax(
+  rows: LineItem[],
+  discRatio: number,
+  addOn: number,
+  inclusiveTotal: number
+): { tax: number[]; taxableAmount: number[] } {
+  const rawTaxable = rows.map((r) => {
+    const base = r.total ?? r.price * (r.qty || 1);
+    return Math.max(0, base - base * discRatio - (r.walletUsed ?? 0));
+  });
+  const taxableAmount = rawTaxable.map(round2);
+  const sum = rawTaxable.reduce((s, v) => s + v, 0);
+  const totalRowTax = addOn + inclusiveTotal;
+  if (sum <= 0 || rows.length === 0) {
+    return { tax: rows.map(() => 0), taxableAmount };
+  }
+  const tax = rawTaxable.map((v) => round2(totalRowTax * (v / sum)));
+  const allocated = tax.reduce((s, v) => s + v, 0);
+  tax[tax.length - 1] = round2(tax[tax.length - 1] + (totalRowTax - allocated));
+  return { tax, taxableAmount };
+}
+
 function mergeBreakdown(entries: TaxBreakdownEntry[]): TaxBreakdownEntry[] {
   const byKey = new Map<string, TaxBreakdownEntry>();
   entries.forEach((e) => {
@@ -167,6 +224,7 @@ export function computeBillTotals(input: ComputeBillTotalsInput): BillTotalsResu
     membershipServiceWalletUsed = 0, membershipProductWalletUsed = 0,
     rewardPointsRedeemedValue = 0, referralCreditUsed = 0,
     roundSubtotalBeforeDiscount = false,
+    rows,
   } = input;
 
   const { service: serviceBase, packages: packageBase, product: productBase, membership: membershipBase } = actualAmounts;
@@ -207,6 +265,8 @@ export function computeBillTotals(input: ComputeBillTotalsInput): BillTotalsResu
 
   let gstAmount = 0;
   let allBreakdown: TaxBreakdownEntry[] = [];
+  const rowTax = rows ? { service: [] as number[], packages: [] as number[], product: [] as number[], membership: [] as number[] } : undefined;
+  const rowTaxableAmount = rows ? { service: [] as number[], packages: [] as number[], product: [] as number[], membership: [] as number[] } : undefined;
   buckets.forEach(({ type, base }) => {
     if (base <= 0) return;
     let bucketTaxable = base - base * discRatio;
@@ -222,6 +282,14 @@ export function computeBillTotals(input: ComputeBillTotalsInput): BillTotalsResu
     const { addOn, breakdown } = computeBucketTax(bucketTaxable, type, taxes);
     gstAmount += addOn;
     allBreakdown = allBreakdown.concat(breakdown);
+
+    if (rowTax && rowTaxableAmount) {
+      const bucketRows = rows?.[type] ?? [];
+      const inclusiveTotal = breakdown.filter((b) => b.inclusive).reduce((s, b) => s + b.amount, 0);
+      const { tax, taxableAmount } = allocateRowTax(bucketRows, discRatio, addOn, inclusiveTotal);
+      rowTax[type] = tax;
+      rowTaxableAmount[type] = taxableAmount;
+    }
   });
 
   const taxBreakdown = mergeBreakdown(allBreakdown);
@@ -233,5 +301,5 @@ export function computeBillTotals(input: ComputeBillTotalsInput): BillTotalsResu
   const roundOff = grandTotal - rawGrandTotal;
   const effectiveTotal = Math.max(0, grandTotal - eWalletUsed - membershipWalletUsed - rewardPointsRedeemedValue - referralCreditUsed);
 
-  return { catalogTotal, itemDiscountTotal, subtotal: rawSubtotal, manualDiscount, totalDisc, taxable, gstAmount, taxBreakdown, grandTotal, roundOff, effectiveTotal };
+  return { catalogTotal, itemDiscountTotal, subtotal: rawSubtotal, manualDiscount, totalDisc, taxable, gstAmount, taxBreakdown, grandTotal, roundOff, effectiveTotal, rowTax, rowTaxableAmount };
 }

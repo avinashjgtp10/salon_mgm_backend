@@ -751,6 +751,8 @@ export interface ProductRetailReportRow {
     quantity: number;
     price: number;
     total: number;
+    tax_amount: number;
+    taxable_amount: number;
 }
 
 export interface ProductRetailReportStats {
@@ -807,6 +809,11 @@ export interface ServiceSaleReportRow {
     service_id: string | null;
     service_name: string;
     price: number;
+    // This line item's own GST + the post-discount/post-wallet base it was
+    // computed on (see pricing.engine.ts's per-row allocation). 0 for sales
+    // recorded before per-item tax existed.
+    tax_amount: number;
+    taxable_amount: number;
 }
 
 export interface ServiceSaleReportStats {
@@ -1154,6 +1161,10 @@ export interface PackageSaleReportRow {
     paid_amount: number;
     pending_amount: number;
     payment_status: string;
+    // Computed at package-purchase time (client-packages.repository.ts),
+    // independent of pricing.engine.ts — this row IS the whole sale, so it's
+    // trivially "per item" already, unlike sale_items-derived reports.
+    gst_amount: number;
 }
 
 export interface PackageSaleReportStats {
