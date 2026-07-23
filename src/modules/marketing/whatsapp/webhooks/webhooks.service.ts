@@ -172,7 +172,15 @@ export const webhooksService = {
       title:    `WhatsApp: ${senderName}`,
       body:     messageBody.length > 80 ? messageBody.slice(0, 77) + '…' : messageBody,
       event_key: 'newMessage',
-    }).catch(() => {})
+    }).catch((err: any) => {
+      logger.error('WhatsApp inbound notification failed', {
+        salonId,
+        phone: msg.from,
+        message: err?.message,
+        stack: err?.stack,
+        error: err,
+      })
+    })
 
     // ── LUNOX AI receptionist — opt-in per salon, off by default ────────────
     // handleIncomingMessage never throws (it catches internally), so this is

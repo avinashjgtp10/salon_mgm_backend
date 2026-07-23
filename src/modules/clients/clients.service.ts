@@ -118,7 +118,15 @@ export const clientsService = {
             title:    "New Client Added",
             body:     `${created.first_name} ${created.last_name ?? ""}`.trim(),
             event_key: "newClient",
-        }).catch(() => {});
+        }).catch((err: any) => {
+            logger.error("New client notification failed", {
+                clientId: created.id,
+                salonId,
+                message: err?.message,
+                stack: err?.stack,
+                error: err,
+            });
+        });
 
         // ── Email: New Client (to salon owner) ────────────────────────────────
         ;(async () => {

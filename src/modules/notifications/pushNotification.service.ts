@@ -22,12 +22,20 @@ export interface PushNotificationPayload {
 
 export interface PushNotificationSendResult {
   tickets: ExpoPushTicket[];
+  receiptReferences: ExpoPushReceiptReference[];
   invalidTokens: string[];
   removedTokens: string[];
   failedTickets: ExpoPushTicket[];
   sentCount: number;
   failedCount: number;
 }
+
+export interface ExpoPushReceiptReference {
+  receiptId: ExpoPushReceiptId;
+  token: string;
+}
+
+const RECEIPT_CHECK_DELAY_MS = 15 * 60 * 1000;
 
 let expoInstance: Expo | undefined;
 
@@ -75,11 +83,19 @@ export const pushNotificationService = {
       messageTokens.push(token);
     }
 
+    if (invalidTokens.length > 0) {
+      logger.warn("Expo push token validation failed", {
+        error: "InvalidPushToken",
+        invalidTokenCount: invalidTokens.length,
+      });
+    }
+
     const removedTokens = await removeInvalidTokens(invalidTokens);
 
     if (messages.length === 0) {
       return {
         tickets: [],
+        receiptReferences: [],
         invalidTokens,
         removedTokens,
         failedTickets: [],
@@ -89,6 +105,7 @@ export const pushNotificationService = {
     }
 
     const tickets: ExpoPushTicket[] = [];
+    const receiptReferences: ExpoPushReceiptReference[] = [];
     const failedTickets: ExpoPushTicket[] = [];
     const deviceNotRegisteredTokens: string[] = [];
     const chunks = expo.chunkPushNotifications(messages);
@@ -100,10 +117,26 @@ export const pushNotificationService = {
         tickets.push(...ticketChunk);
         for (let i = 0; i < ticketChunk.length; i++) {
           const ticket = ticketChunk[i];
+          const token = messageTokens[ticketOffset + i];
+
+          if (ticket.status === "ok" && token) {
+            receiptReferences.push({ receiptId: ticket.id, token });
+          }
+
           if (ticket.status === "error") {
             failedTickets.push(ticket);
+            const logData = {
+              error: ticket.details?.error,
+              message: ticket.message,
+            };
+
+            if (ticket.details?.error === "InvalidCredentials") {
+              logger.error("Expo push ticket InvalidCredentials", logData);
+            } else {
+              logger.warn("Expo push ticket failed", logData);
+            }
+
             if (ticket.details?.error === "DeviceNotRegistered") {
-              const token = messageTokens[ticketOffset + i];
               if (token) deviceNotRegisteredTokens.push(token);
             }
           }
@@ -122,6 +155,7 @@ export const pushNotificationService = {
 
     return {
       tickets,
+      receiptReferences,
       invalidTokens,
       removedTokens: Array.from(new Set(removedTokens)),
       failedTickets,
@@ -142,7 +176,77 @@ export const pushNotificationService = {
 
     return receipts;
   },
+
+  scheduleReceiptCheck(
+    references: ExpoPushReceiptReference[],
+    delayMs = RECEIPT_CHECK_DELAY_MS
+  ): void {
+    if (references.length === 0) return;
+
+    const timer = setTimeout(() => {
+      void processReceiptReferences(references);
+    }, delayMs);
+
+    // Receipt processing must not keep an otherwise idle Node process alive.
+    timer.unref();
+  },
 };
+
+async function processReceiptReferences(references: ExpoPushReceiptReference[]): Promise<void> {
+  try {
+    const uniqueReferences = Array.from(
+      new Map(references.map((reference) => [reference.receiptId, reference])).values()
+    );
+    const receipts = await pushNotificationService.getReceipts(
+      uniqueReferences.map((reference) => reference.receiptId)
+    );
+
+    for (const reference of uniqueReferences) {
+      const receipt = receipts[reference.receiptId];
+
+      if (!receipt) {
+        logger.warn("Expo push receipt not available", { receiptId: reference.receiptId });
+        continue;
+      }
+
+      if (receipt.status === "ok") {
+        continue;
+      }
+
+      // Keep this widened because Expo can add provider error codes before the
+      // installed SDK's TypeScript union is updated (for example InvalidPushToken).
+      const errorCode: string | undefined = receipt.details?.error;
+      const logData = {
+        receiptId: reference.receiptId,
+        status: receipt.status,
+        error: errorCode,
+        message: receipt.message,
+      };
+
+      if (errorCode === "DeviceNotRegistered") {
+        await removeInvalidTokens([reference.token]);
+        logger.warn("Expo device token removed from receipt", logData);
+      } else if (errorCode === "InvalidCredentials") {
+        logger.error("Expo push receipt InvalidCredentials", logData);
+      } else if (errorCode === "InvalidPushToken") {
+        await removeInvalidTokens([reference.token]);
+        logger.warn("Expo push receipt InvalidPushToken", logData);
+      } else if (errorCode === "MessageTooBig") {
+        logger.warn("Expo push receipt MessageTooBig", logData);
+      } else if (errorCode === "MessageRateExceeded") {
+        logger.warn("Expo push receipt MessageRateExceeded", logData);
+      } else {
+        logger.warn("Expo push receipt failed", logData);
+      }
+    }
+  } catch (err: any) {
+    logger.error("Expo push receipt check failed", {
+      message: err?.message,
+      stack: err?.stack,
+      receiptCount: references.length,
+    });
+  }
+}
 
 async function removeInvalidTokens(tokens: string[]): Promise<string[]> {
   const uniqueTokens = Array.from(new Set(tokens.filter(Boolean)));
