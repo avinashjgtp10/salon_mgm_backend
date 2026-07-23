@@ -498,7 +498,24 @@ export const paymentsService = {
     // Skip for package payments — revenue was already counted when the package was purchased.
     if (data.appointment_id && data.status === 'completed' && appt && !isPackagePayment) {
       try {
-        const items: Array<{ item_type: 'service' | 'package' | 'product' | 'membership'; item_id?: string; staff_id?: string; name: string; quantity: number; unit_price: number }> = [
+        // Per-row "Disc %" (see ServiceRow.tsx calcTotal()) is baked into each
+        // item's own `total`, but was never carried over into the sale-item's
+        // `discount_amount` below — sales.repository.ts's create() only
+        // subtracts item.discount_amount from quantity×unit_price when
+        // building sales.subtotal, so every item silently looked
+        // full-price, inflating sales.subtotal (and therefore
+        // sales.total_amount / all dashboard revenue figures) by the sum of
+        // every item-level discount on the bill.
+        const itemQty = (i: any) => Number(i.quantity) || Number(i.qty) || 1;
+        const itemDiscount = (i: any) => {
+          const unitPrice = Number(i.price) || 0;
+          const q = itemQty(i);
+          const t = Number(i.total);
+          const lineTotal = (i.total !== undefined && i.total !== null && isFinite(t)) ? t : unitPrice * q;
+          return Math.max(0, unitPrice * q - lineTotal);
+        };
+
+        const items: Array<{ item_type: 'service' | 'package' | 'product' | 'membership'; item_id?: string; staff_id?: string; name: string; quantity: number; unit_price: number; discount_amount: number }> = [
           ...(appt.services || []).map(s => ({
             item_type: 'service' as const,
             item_id: s.service_id,
@@ -506,6 +523,7 @@ export const paymentsService = {
             name: s.name || 'Service',
             quantity: Number(s.quantity) || 1,
             unit_price: Number(s.price) || 0,
+            discount_amount: itemDiscount(s),
           })),
           ...(appt.package_items || []).map(p => ({
             item_type: 'package' as const,
@@ -514,6 +532,7 @@ export const paymentsService = {
             name: p.name || 'Package',
             quantity: Number(p.quantity) || 1,
             unit_price: Number(p.price) || 0,
+            discount_amount: itemDiscount(p),
           })),
           ...(appt.product_items || []).map(p => ({
             item_type: 'product' as const,
@@ -522,6 +541,7 @@ export const paymentsService = {
             name: p.name || 'Product',
             quantity: Number(p.quantity) || 1,
             unit_price: Number(p.price) || 0,
+            discount_amount: itemDiscount(p),
           })),
           ...(appt.membership_items || []).map(m => ({
             item_type: 'membership' as const,
@@ -530,6 +550,7 @@ export const paymentsService = {
             name: m.name || 'Membership',
             quantity: Number(m.quantity) || 1,
             unit_price: Number(m.price) || 0,
+            discount_amount: itemDiscount(m),
           })),
         ];
 
@@ -539,6 +560,7 @@ export const paymentsService = {
             name: appt.title || 'Appointment Service',
             quantity: 1,
             unit_price: Number(data.net_amount || data.gross_amount || 0),
+            discount_amount: 0,
           });
         }
 
