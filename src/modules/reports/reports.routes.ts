@@ -77,6 +77,18 @@ router.post(
 );
 
 // ======================================================
+// PRODUCT INVENTORY SALES (independent report API)
+// Reads sale_items/sales directly — never calls the Appointment API/service.
+// Powers the "Sales" column on the Product Inventory report.
+// ======================================================
+
+router.post(
+    "/product-inventory-sales",
+    ...guard,
+    reportsController.getProductInventorySales
+);
+
+// ======================================================
 // PRODUCT MARGIN REPORT (independent report API)
 // Reads sale_items/products directly — never calls the Appointment
 // API/service.

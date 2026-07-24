@@ -1095,6 +1095,7 @@ _buildSalesSummaryWhere(
     staff_id?: string;
     search?: string;
     status?: string;
+    category_id?: string;
   }
 ): { where: string; values: any[]; nextIndex: number } {
   const values: any[] = [salonId];
@@ -1120,6 +1121,17 @@ _buildSalesSummaryWhere(
     where.push(`s.staff_id = $${idx++}`);
     values.push(filters.staff_id);
   }
+  if (filters.category_id) {
+    // A sale only "belongs" to a service category if at least one of its
+    // line items is a service in that category — sales.category has no
+    // column of its own, since one invoice can mix categories.
+    where.push(`EXISTS (
+      SELECT 1 FROM sale_items si
+      JOIN services sv ON sv.id = si.item_id
+      WHERE si.sale_id = s.id AND si.item_type = 'service' AND sv.category_id = $${idx++}
+    )`);
+    values.push(filters.category_id);
+  }
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(s.invoice_number, '') ILIKE $${idx}
@@ -1133,62 +1145,284 @@ _buildSalesSummaryWhere(
   return { where: where.join(" AND "), values, nextIndex: idx };
 },
 
+// A `sales` row only ever gets created once an appointment's balance
+// reaches due_amount = 0 (see transaction-recorder.service.ts::
+// recordTransaction() and payments.service.ts's "Auto-create sale record
+// when calendar payment is fully completed" gate) — a partially-paid or
+// not-yet-paid appointment structurally has NO sales row at all, so a
+// sales-only report can never show it, regardless of any status filter.
+// This CTE fills that gap: one synthetic row per appointment that (a) is
+// not cancelled/deleted, (b) has no linked sales row yet (checked via
+// NOT EXISTS on sales.appointment_id, not appointments.sale_id, since the
+// latter is only set by the explicit checkout endpoint and can lag behind
+// an actual auto-created sale). Shaped identically to the sales-side
+// SELECT (same column names/order) so the two sides can UNION ALL cleanly.
+// Money fields mirror appointments.repository.ts::listBySalonId()'s
+// pay_agg CTE (same FILTER predicates) — the proven-correct reference the
+// Calendar/Quick Sale UI itself reads.
+// NOTE: does NOT take its own salonId parameter slot — it's always embedded
+// in a larger query (see getSalesSummaryReportStats/Rows) where $1 is
+// already bound to salonId by the sales-side query it's UNIONed with.
+_UNBILLED_APPOINTMENT_ROWS_CTE(
+  filters: { start_date?: string; end_date?: string; staff_id?: string; search?: string; category_id?: string },
+  startIdx: number
+): { sql: string; values: any[]; nextIndex: number } {
+  const values: any[] = [];
+  const where = [
+    "a.salon_id = $1",
+    "a.deleted_at IS NULL",
+    "a.status NOT IN ('cancelled', 'deleted', 'no-show')",
+    "NOT EXISTS (SELECT 1 FROM sales sx WHERE sx.appointment_id = a.id)",
+  ];
+  let idx = startIdx;
+
+  if (filters.start_date) {
+    where.push(`a.scheduled_at >= $${idx++}::date`);
+    values.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    where.push(`a.scheduled_at < ($${idx++}::date + interval '1 day')`);
+    values.push(filters.end_date);
+  }
+  if (filters.staff_id) {
+    where.push(`a.staff_id = $${idx++}`);
+    values.push(filters.staff_id);
+  }
+  if (filters.category_id) {
+    // Unbilled appointments have no sale_items yet — match against the raw
+    // services JSONB via each entry's service_id, joined to services/
+    // service_categories, same category semantics as the sales_side filter.
+    where.push(`EXISTS (
+      SELECT 1 FROM jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) AS svc(value)
+      JOIN services sv ON sv.id = NULLIF(svc.value->>'service_id', '')::uuid
+      WHERE sv.category_id = $${idx++}
+    )`);
+    values.push(filters.category_id);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  const sql = `
+    SELECT
+      a.id,
+      a.id AS appointment_id,
+      NULL::text AS invoice_number,
+      a.status::text AS status,
+      a.created_at,
+      pay.latest_method AS payment_method,
+      c.full_name AS client_name,
+      c.phone_number AS client_phone,
+      NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
+      COALESCE(items.item_description, '—') AS item_description,
+      COALESCE(items.item_types, '—') AS item_types,
+      COALESCE(items.items_total, 0) AS actual_price,
+      -- Mirrors totalsUtils.ts::computeTotals() at a coarser grain: taxable =
+      -- items_total - discount, then GST applied on that taxable amount using
+      -- the flat rate saved on the appointment at booking time
+      -- (appointments.gst_percent — set from booking.gst in useAppointment.ts).
+      -- The real UI computes GST per item-type bucket against configured tax
+      -- rules, which isn't reproducible here without that config; gst_percent
+      -- is the single stored number closest to "the rate that was actually
+      -- applied to this specific bill".
+      GREATEST(
+        (
+          COALESCE(items.items_total, 0)
+            - (CASE WHEN a.discount_type = 'percentage'
+                     THEN COALESCE(items.items_total, 0) * (COALESCE(a.discount_value, 0) / 100)
+                     ELSE COALESCE(a.discount_value, 0) END)
+        ) * (1 + COALESCE(a.gst_percent, 0) / 100)
+          + COALESCE(a.ex_charges, 0) + COALESCE(a.tip_amount, 0),
+        0
+      ) AS price,
+      COALESCE(a.tip_amount, 0) AS tip_amount,
+      COALESCE(pay.total_paid, 0) AS paid_amount,
+      COALESCE(pay.latest_due, 0) AS due_amount,
+      COALESCE(pay.ewallet_used, 0) AS ewallet_used,
+      COALESCE(pay.membership_wallet_used, 0) AS membership_wallet_used,
+      COALESCE(pay.reward_points_value, 0) AS reward_points_value,
+      COALESCE(pay.referral_credit_used, 0) AS referral_credit_used
+    FROM appointments a
+    LEFT JOIN clients c ON a.client_id = c.id
+    LEFT JOIN staff st ON st.id = a.staff_id
+    LEFT JOIN LATERAL (
+      SELECT
+        COALESCE(SUM(p.paid_amount) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS total_paid,
+        COALESCE(MAX(p.due_amount) FILTER (
+          WHERE p.created_at = (SELECT MAX(p2.created_at) FROM payments p2 WHERE p2.appointment_id = a.id)
+        ), 0) AS latest_due,
+        MAX(p.payment_method) FILTER (
+          WHERE p.created_at = (SELECT MAX(p2.created_at) FROM payments p2 WHERE p2.appointment_id = a.id)
+        ) AS latest_method,
+        COALESCE(SUM(p.ewallet_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS ewallet_used,
+        COALESCE(SUM(p.membership_wallet_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS membership_wallet_used,
+        COALESCE(SUM(p.reward_points_value) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS reward_points_value,
+        COALESCE(SUM(p.referral_credit_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS referral_credit_used
+      FROM payments p
+      WHERE p.appointment_id = a.id
+    ) pay ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT
+        STRING_AGG(DISTINCT src.name, ', ') AS item_description,
+        STRING_AGG(DISTINCT src.item_type, ', ') AS item_types,
+        SUM(src.price * src.quantity) AS items_total
+      FROM (
+        SELECT svc.value->>'name' AS name, 'service' AS item_type,
+               COALESCE(NULLIF(svc.value->>'price', '')::numeric, 0) AS price,
+               COALESCE(NULLIF(svc.value->>'quantity', '')::numeric, 1) AS quantity
+        FROM jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) AS svc(value)
+        UNION ALL
+        SELECT pkg.value->>'name', 'package',
+               COALESCE(NULLIF(pkg.value->>'price', '')::numeric, 0),
+               COALESCE(NULLIF(pkg.value->>'quantity', '')::numeric, 1)
+        FROM jsonb_array_elements(COALESCE(a.package_items, '[]'::jsonb)) AS pkg(value)
+        UNION ALL
+        SELECT prod.value->>'name', 'product',
+               COALESCE(NULLIF(prod.value->>'price', '')::numeric, 0),
+               COALESCE(NULLIF(prod.value->>'quantity', '')::numeric, 1)
+        FROM jsonb_array_elements(COALESCE(a.product_items, '[]'::jsonb)) AS prod(value)
+        UNION ALL
+        SELECT mem.value->>'name', 'membership',
+               COALESCE(NULLIF(mem.value->>'price', '')::numeric, 0),
+               COALESCE(NULLIF(mem.value->>'quantity', '')::numeric, 1)
+        FROM jsonb_array_elements(COALESCE(a.membership_items, '[]'::jsonb)) AS mem(value)
+      ) src
+    ) items ON TRUE
+    WHERE ${where.join(" AND ")}
+  `;
+
+  return { sql, values, nextIndex: idx };
+},
+
 // Lateral join reused by both the stats and rows queries — keyed strictly on
 // sales.appointment_id, since payments has no sale_id column. For walk-in
 // sales (appointment_id IS NULL) this naturally yields 0 for every wallet/
 // reward/referral figure — a real schema gap (payments can't be linked to an
 // appointment-less sale at all), not a bug in this query.
+// Mirrors appointments.repository.ts::listBySalonId()'s pay_agg CTE exactly
+// (same FILTER predicates, same "latest row by created_at" due_amount
+// pattern) — that query is what the Calendar/Quick Sale UI actually reads,
+// so this is the proven-correct reference, not something to "simplify".
+// Note: paid/wallet/reward/referral sums are FILTERed on
+// ('completed','partial') only — 'refunded' is deliberately excluded here,
+// matching the Appointment API precisely.
 _PAYMENT_LATERAL: `
   LEFT JOIN LATERAL (
     SELECT
-      COALESCE(SUM(p.paid_amount) FILTER (WHERE p.status IN ('completed', 'partial', 'refunded')), 0) AS paid_from_payments,
+      COALESCE(SUM(p.paid_amount) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS paid_from_payments,
       COALESCE(MAX(p.due_amount) FILTER (
         WHERE p.created_at = (SELECT MAX(p2.created_at) FROM payments p2 WHERE p2.appointment_id = s.appointment_id)
       ), 0) AS latest_due,
-      COALESCE(SUM(p.ewallet_used), 0) AS ewallet_used,
-      COALESCE(SUM(p.membership_wallet_used), 0) AS membership_wallet_used,
-      COALESCE(SUM(p.reward_points_value), 0) AS reward_points_value,
-      COALESCE(SUM(p.referral_credit_used), 0) AS referral_credit_used
+      COALESCE(SUM(p.ewallet_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS ewallet_used,
+      COALESCE(SUM(p.membership_wallet_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS membership_wallet_used,
+      COALESCE(SUM(p.reward_points_value) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS reward_points_value,
+      COALESCE(SUM(p.referral_credit_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS referral_credit_used,
+      COUNT(*) FILTER (WHERE p.status IN ('completed', 'partial')) > 0 AS has_payment
     FROM payments p
     WHERE p.appointment_id = s.appointment_id AND s.appointment_id IS NOT NULL
   ) pay ON TRUE
+`,
+
+// Every service category in this salon (not just ones with sales) — the
+// ticket asks for "all available service categories" in the dropdown, same
+// convention as the Product Inventory report's Category filter.
+async getSalesSummaryFiltersAvailable(salonId: string): Promise<{ service_categories: { id: string; label: string }[] }> {
+  const { rows } = await safeQuery(() => pool.query(
+    `SELECT id, name AS label
+     FROM service_categories
+     WHERE salon_id = $1
+     ORDER BY display_order ASC, created_at DESC`,
+    [salonId]
+  ));
+  return { service_categories: rows.map((r: any) => ({ id: r.id, label: r.label })) };
+},
+
+// LEFT JOIN to appointments, keyed on sales.appointment_id — reused by
+// getSalesSummaryReportRows and getDailySheetReport alongside _STATUS_EXPR.
+// appointments.status is already correctly maintained by the payment flow
+// (booked|partial|paid|cancelled|no-show|deleted) — same column the working
+// Appointment Detail report reads directly — so we reuse it as-is rather
+// than trying to recompute payment state from the payments table ourselves.
+_APPOINTMENT_STATUS_JOIN: `
+  LEFT JOIN appointments a ON a.id = s.appointment_id
+`,
+
+// Computed status expression reused by getSalesSummaryReportRows and
+// getDailySheetReport. For appointment-linked sales, trust
+// appointments.status directly (already correct — see
+// _APPOINTMENT_STATUS_JOIN). For walk-in sales with no appointment, fall
+// back to sales.status, mapped onto the same vocabulary. Requires
+// _APPOINTMENT_STATUS_JOIN's `a` alias to already be joined in the same query.
+_STATUS_EXPR: `
+  CASE
+    WHEN s.appointment_id IS NOT NULL THEN COALESCE(a.status::text, 'booked')
+    WHEN s.status = 'completed' THEN 'paid'
+    WHEN s.status = 'cancelled' THEN 'cancelled'
+    WHEN s.status = 'refunded' THEN 'refunded'
+    ELSE 'booked'
+  END
 `,
 
 async getSalesSummaryReportStats(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; staff_id?: string;
-    search?: string; status?: string;
+    search?: string; status?: string; category_id?: string;
   }
 ): Promise<{
   total_bill: number; total_sale: number; received_amount: number; total_tip: number;
   total_ewallet: number; total_membership: number; total_rewards: number; total_referral: number;
 }> {
-  const { where, values } = this._buildSalesSummaryWhere(salonId, filters);
+  const { where, values, nextIndex } = this._buildSalesSummaryWhere(salonId, filters);
+  const unbilled = this._UNBILLED_APPOINTMENT_ROWS_CTE(filters, nextIndex);
 
   const query = `
-    SELECT
-      COUNT(*)::int AS total_bill,
-      COALESCE(SUM(s.total_amount::numeric), 0) AS total_sale,
-      COALESCE(SUM(
+    WITH sales_side AS (
+      SELECT
+        s.total_amount::numeric AS price,
         CASE
           WHEN s.appointment_id IS NOT NULL THEN pay.paid_from_payments
           WHEN s.status = 'completed' THEN s.total_amount::numeric
           ELSE 0
-        END
-      ), 0) AS received_amount,
-      COALESCE(SUM(s.tip_amount::numeric), 0) AS total_tip,
-      COALESCE(SUM(pay.ewallet_used), 0) AS total_ewallet,
-      COALESCE(SUM(pay.membership_wallet_used), 0) AS total_membership,
-      COALESCE(SUM(pay.reward_points_value), 0) AS total_rewards,
-      COALESCE(SUM(pay.referral_credit_used), 0) AS total_referral
-    FROM sales s
-    LEFT JOIN clients c ON s.client_id = c.id
-    ${this._PAYMENT_LATERAL}
-    WHERE ${where}
+        END AS paid_amount,
+        s.tip_amount::numeric AS tip_amount,
+        pay.ewallet_used, pay.membership_wallet_used,
+        pay.reward_points_value, pay.referral_credit_used
+      FROM sales s
+      LEFT JOIN clients c ON s.client_id = c.id
+      ${this._PAYMENT_LATERAL}
+      WHERE ${where}
+    ),
+    appt_side AS (
+      SELECT
+        u.price, u.paid_amount, u.tip_amount,
+        u.ewallet_used, u.membership_wallet_used,
+        u.reward_points_value, u.referral_credit_used
+      FROM (${unbilled.sql}) u
+    ),
+    unified AS (
+      SELECT * FROM sales_side
+      UNION ALL
+      SELECT * FROM appt_side
+    )
+    SELECT
+      COUNT(*)::int AS total_bill,
+      COALESCE(SUM(price), 0) AS total_sale,
+      COALESCE(SUM(paid_amount), 0) AS received_amount,
+      COALESCE(SUM(tip_amount), 0) AS total_tip,
+      COALESCE(SUM(ewallet_used), 0) AS total_ewallet,
+      COALESCE(SUM(membership_wallet_used), 0) AS total_membership,
+      COALESCE(SUM(reward_points_value), 0) AS total_rewards,
+      COALESCE(SUM(referral_credit_used), 0) AS total_referral
+    FROM unified
   `;
 
-  const { rows } = await safeQuery(() => pool.query(query, values));
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...unbilled.values]));
   const r = rows[0] ?? {};
   return {
     total_bill: Number(r.total_bill ?? 0),
@@ -1206,14 +1440,15 @@ async getSalesSummaryReportRows(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; staff_id?: string; search?: string;
-    status?: string; page?: number; limit?: number; is_export?: boolean;
+    status?: string; category_id?: string; page?: number; limit?: number; is_export?: boolean;
   }
 ): Promise<{
   items: SalesSummaryReportRow[];
   pagination: { total: number; page: number; limit: number; total_pages: number };
 }> {
   const { where, values, nextIndex } = this._buildSalesSummaryWhere(salonId, filters);
-  let idx = nextIndex;
+  const unbilled = this._UNBILLED_APPOINTMENT_ROWS_CTE(filters, nextIndex);
+  let idx = unbilled.nextIndex;
 
   const page = Math.max(1, Number(filters.page ?? 1));
   const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
@@ -1223,49 +1458,71 @@ async getSalesSummaryReportRows(
   const limitValues = limit ? [limit, offset] : [];
 
   const query = `
-    SELECT
-      s.id, s.invoice_number, s.status, s.created_at, s.payment_method,
-      s.appointment_id,
-      s.subtotal AS actual_price, s.total_amount AS price, s.tip_amount,
-      c.full_name AS client_name, c.phone_number AS client_phone,
-      NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
-      COALESCE(items.item_description, '—') AS item_description,
-      COALESCE(items.item_types, '—') AS item_types,
-      CASE
-        WHEN s.appointment_id IS NOT NULL THEN pay.paid_from_payments
-        WHEN s.status = 'completed' THEN s.total_amount::numeric
-        ELSE 0
-      END AS paid_amount,
-      COALESCE(pay.latest_due, 0) AS due_amount,
-      COALESCE(pay.ewallet_used, 0) AS ewallet_used,
-      COALESCE(pay.membership_wallet_used, 0) AS membership_wallet_used,
-      COALESCE(pay.reward_points_value, 0) AS reward_points_value,
-      COALESCE(pay.referral_credit_used, 0) AS referral_credit_used,
-      COUNT(*) OVER() AS total_count
-    FROM sales s
-    LEFT JOIN clients c ON s.client_id = c.id
-    -- Sales don't always carry their own staff_id (e.g. membership/package/
-    -- product-only sales record staff per line item instead) — fall back to
-    -- any line item's staff_id, same COALESCE(si.staff_id, s.staff_id)
-    -- convention already used by sales.repository.ts::findItemsBySaleId().
-    LEFT JOIN staff st ON st.id = COALESCE(
-      s.staff_id,
-      (SELECT si.staff_id FROM sale_items si WHERE si.sale_id = s.id AND si.staff_id IS NOT NULL LIMIT 1)
-    )
-    ${this._PAYMENT_LATERAL}
-    LEFT JOIN LATERAL (
+    WITH sales_side AS (
       SELECT
-        STRING_AGG(DISTINCT si.name, ', ') AS item_description,
-        STRING_AGG(DISTINCT si.item_type, ', ') AS item_types
-      FROM sale_items si
-      WHERE si.sale_id = s.id
-    ) items ON TRUE
-    WHERE ${where}
-    ORDER BY s.created_at DESC
+        s.id, s.invoice_number, s.created_at, s.payment_method,
+        s.appointment_id,
+        ${this._STATUS_EXPR} AS status,
+        s.subtotal AS actual_price, s.total_amount AS price, s.tip_amount,
+        c.full_name AS client_name, c.phone_number AS client_phone,
+        NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
+        COALESCE(items.item_description, '—') AS item_description,
+        COALESCE(items.item_types, '—') AS item_types,
+        CASE
+          WHEN s.appointment_id IS NOT NULL THEN pay.paid_from_payments
+          WHEN s.status = 'completed' THEN s.total_amount::numeric
+          ELSE 0
+        END AS paid_amount,
+        COALESCE(pay.latest_due, 0) AS due_amount,
+        COALESCE(pay.ewallet_used, 0) AS ewallet_used,
+        COALESCE(pay.membership_wallet_used, 0) AS membership_wallet_used,
+        COALESCE(pay.reward_points_value, 0) AS reward_points_value,
+        COALESCE(pay.referral_credit_used, 0) AS referral_credit_used
+      FROM sales s
+      LEFT JOIN clients c ON s.client_id = c.id
+      -- Sales don't always carry their own staff_id (e.g. membership/package/
+      -- product-only sales record staff per line item instead) — fall back to
+      -- any line item's staff_id, same COALESCE(si.staff_id, s.staff_id)
+      -- convention already used by sales.repository.ts::findItemsBySaleId().
+      LEFT JOIN staff st ON st.id = COALESCE(
+        s.staff_id,
+        (SELECT si.staff_id FROM sale_items si WHERE si.sale_id = s.id AND si.staff_id IS NOT NULL LIMIT 1)
+      )
+      ${this._PAYMENT_LATERAL}
+      ${this._APPOINTMENT_STATUS_JOIN}
+      LEFT JOIN LATERAL (
+        SELECT
+          STRING_AGG(DISTINCT si.name, ', ') AS item_description,
+          STRING_AGG(DISTINCT si.item_type, ', ') AS item_types
+        FROM sale_items si
+        WHERE si.sale_id = s.id
+      ) items ON TRUE
+      WHERE ${where}
+    ),
+    appt_side AS (
+      SELECT
+        u.id, u.invoice_number, u.created_at, u.payment_method,
+        u.appointment_id, u.status,
+        u.actual_price, u.price, u.tip_amount,
+        u.client_name, u.client_phone, u.staff_name,
+        u.item_description, u.item_types,
+        u.paid_amount, u.due_amount,
+        u.ewallet_used, u.membership_wallet_used,
+        u.reward_points_value, u.referral_credit_used
+      FROM (${unbilled.sql}) u
+    ),
+    unified AS (
+      SELECT * FROM sales_side
+      UNION ALL
+      SELECT * FROM appt_side
+    )
+    SELECT *, COUNT(*) OVER() AS total_count
+    FROM unified
+    ORDER BY created_at DESC
     ${limitClause}
   `;
 
-  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...unbilled.values, ...limitValues]));
   const total = rows.length ? Number(rows[0].total_count) : 0;
   const items: SalesSummaryReportRow[] = rows.map((row: any) => ({
     id: row.id,
@@ -1448,6 +1705,110 @@ _buildDailySheetWhere(
   return { where: where.join(" AND "), values, nextIndex: idx };
 },
 
+// Same gap as Sales Summary (see _UNBILLED_APPOINTMENT_ROWS_CTE): a
+// partially-paid or not-yet-paid appointment has no sales/sale_items rows
+// at all, so Daily Sheet — which reads sale_items — can never show it
+// without this. One synthetic row per line item across all four JSONB
+// arrays (services/package_items/product_items/membership_items), shaped
+// identically to the sale_items-based SELECT so both sides UNION ALL
+// cleanly. Does not take its own salonId slot — always embedded where $1
+// is already bound (see getDailySheetReport).
+_UNBILLED_APPOINTMENT_DAILY_ROWS_CTE(
+  filters: { date?: string; service_id?: string; staff_id?: string; search?: string },
+  startIdx: number
+): { sql: string; values: any[]; nextIndex: number } {
+  const values: any[] = [];
+  const where = [
+    "a.salon_id = $1",
+    "a.deleted_at IS NULL",
+    "a.status NOT IN ('cancelled', 'deleted', 'no-show')",
+    "NOT EXISTS (SELECT 1 FROM sales sx WHERE sx.appointment_id = a.id)",
+  ];
+  let idx = startIdx;
+
+  if (filters.date) {
+    where.push(`DATE(a.scheduled_at) = $${idx++}::date`);
+    values.push(filters.date);
+  }
+  if (filters.service_id) {
+    where.push(`src.item_id = $${idx++}`);
+    values.push(filters.service_id);
+  }
+  if (filters.staff_id) {
+    where.push(`COALESCE(src.staff_id, a.staff_id) = $${idx++}`);
+    values.push(filters.staff_id);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+      OR COALESCE(src.name, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  const sql = `
+    SELECT
+      a.appointment_id,
+      NULL::uuid AS sale_id,
+      a.time,
+      a.ticket_no,
+      c.full_name AS client_name,
+      src.item_id AS service_id,
+      src.name AS service,
+      st.id AS staff_id,
+      NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff,
+      (src.price * src.quantity) AS amount,
+      pay.latest_method AS payment_method,
+      a.status::text AS status
+    FROM (
+      SELECT a.id AS appointment_id, a.client_id, a.staff_id, a.status, a.created_at, a.services,
+             a.package_items, a.product_items, a.membership_items,
+             TO_CHAR(a.created_at, 'HH12:MI AM') AS time,
+             NULL::text AS ticket_no
+      FROM appointments a
+    ) a
+    LEFT JOIN clients c ON a.client_id = c.id
+    LEFT JOIN LATERAL (
+      SELECT svc.value->>'name' AS name, svc.value->>'service_id' AS item_id,
+             NULLIF(svc.value->>'staff_id', '')::uuid AS staff_id,
+             COALESCE(NULLIF(svc.value->>'price', '')::numeric, 0) AS price,
+             COALESCE(NULLIF(svc.value->>'quantity', '')::numeric, 1) AS quantity
+      FROM jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) AS svc(value)
+      UNION ALL
+      SELECT pkg.value->>'name', pkg.value->>'package_id',
+             NULLIF(pkg.value->>'staff_id', '')::uuid,
+             COALESCE(NULLIF(pkg.value->>'price', '')::numeric, 0),
+             COALESCE(NULLIF(pkg.value->>'quantity', '')::numeric, 1)
+      FROM jsonb_array_elements(COALESCE(a.package_items, '[]'::jsonb)) AS pkg(value)
+      UNION ALL
+      SELECT prod.value->>'name', prod.value->>'product_id',
+             NULLIF(prod.value->>'staff_id', '')::uuid,
+             COALESCE(NULLIF(prod.value->>'price', '')::numeric, 0),
+             COALESCE(NULLIF(prod.value->>'quantity', '')::numeric, 1)
+      FROM jsonb_array_elements(COALESCE(a.product_items, '[]'::jsonb)) AS prod(value)
+      UNION ALL
+      SELECT mem.value->>'name', mem.value->>'membership_id',
+             NULLIF(mem.value->>'staff_id', '')::uuid,
+             COALESCE(NULLIF(mem.value->>'price', '')::numeric, 0),
+             COALESCE(NULLIF(mem.value->>'quantity', '')::numeric, 1)
+      FROM jsonb_array_elements(COALESCE(a.membership_items, '[]'::jsonb)) AS mem(value)
+    ) src ON TRUE
+    LEFT JOIN staff st ON st.id = COALESCE(src.staff_id, a.staff_id)
+    LEFT JOIN LATERAL (
+      SELECT MAX(p.payment_method) FILTER (
+        WHERE p.created_at = (SELECT MAX(p2.created_at) FROM payments p2 WHERE p2.appointment_id = a.appointment_id)
+      ) AS latest_method
+      FROM payments p
+      WHERE p.appointment_id = a.appointment_id
+    ) pay ON TRUE
+    WHERE src.name IS NOT NULL AND ${where.join(" AND ")}
+  `;
+
+  return { sql, values, nextIndex: idx };
+},
+
 async getDailySheetReport(
   salonId: string,
   filters: {
@@ -1460,7 +1821,8 @@ async getDailySheetReport(
   total_amount: number;
 }> {
   const { where, values, nextIndex } = this._buildDailySheetWhere(salonId, filters);
-  let idx = nextIndex;
+  const unbilled = this._UNBILLED_APPOINTMENT_DAILY_ROWS_CTE(filters, nextIndex);
+  let idx = unbilled.nextIndex;
 
   const page = Math.max(1, Number(filters.page ?? 1));
   const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
@@ -1470,30 +1832,51 @@ async getDailySheetReport(
   const limitValues = limit ? [limit, offset] : [];
 
   const query = `
-    SELECT
-      s.appointment_id,
-      s.id AS sale_id,
-      TO_CHAR(s.created_at, 'HH12:MI AM') AS time,
-      COALESCE(s.invoice_number, s.id::text) AS ticket_no,
-      c.full_name AS client_name,
-      si.item_id AS service_id,
-      si.name AS service,
-      st.id AS staff_id,
-      NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff,
-      si.total_price AS amount,
-      s.payment_method,
-      SUM(si.total_price) OVER() AS grand_total,
+    WITH sales_side AS (
+      SELECT
+        s.appointment_id,
+        s.id AS sale_id,
+        TO_CHAR(s.created_at, 'HH12:MI AM') AS time,
+        COALESCE(s.invoice_number, s.id::text) AS ticket_no,
+        c.full_name AS client_name,
+        si.item_id AS service_id,
+        si.name AS service,
+        st.id AS staff_id,
+        NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff,
+        si.total_price AS amount,
+        s.payment_method,
+        ${this._STATUS_EXPR} AS status,
+        s.created_at AS sort_at
+      FROM sale_items si
+      JOIN sales s ON s.id = si.sale_id
+      LEFT JOIN clients c ON s.client_id = c.id
+      LEFT JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
+      ${this._PAYMENT_LATERAL}
+      ${this._APPOINTMENT_STATUS_JOIN}
+      WHERE ${where}
+    ),
+    appt_side AS (
+      SELECT
+        u.appointment_id, u.sale_id, u.time, u.ticket_no, u.client_name,
+        u.service_id, u.service, u.staff_id, u.staff, u.amount,
+        u.payment_method, u.status,
+        (SELECT a2.created_at FROM appointments a2 WHERE a2.id = u.appointment_id) AS sort_at
+      FROM (${unbilled.sql}) u
+    ),
+    unified AS (
+      SELECT * FROM sales_side
+      UNION ALL
+      SELECT * FROM appt_side
+    )
+    SELECT *,
+      SUM(amount) OVER() AS grand_total,
       COUNT(*) OVER() AS total_count
-    FROM sale_items si
-    JOIN sales s ON s.id = si.sale_id
-    LEFT JOIN clients c ON s.client_id = c.id
-    LEFT JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
-    WHERE ${where}
-    ORDER BY s.created_at ASC
+    FROM unified
+    ORDER BY sort_at ASC
     ${limitClause}
   `;
 
-  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...unbilled.values, ...limitValues]));
   const total = rows.length ? Number(rows[0].total_count) : 0;
   const totalAmount = rows.length ? Number(rows[0].grand_total ?? 0) : 0;
   const items: DailySheetReportRow[] = rows.map((row: any) => ({
@@ -1508,6 +1891,7 @@ async getDailySheetReport(
     staff: row.staff,
     amount: Number(row.amount ?? 0),
     payment_method: row.payment_method,
+    status: row.status,
   }));
   const effectiveLimit = limit ?? Math.max(total, 1);
   return {
@@ -1607,7 +1991,14 @@ async getProductRetailReportStats(
   const query = `
     SELECT
       COALESCE(SUM(si.quantity), 0)::int AS total_quantity,
-      COALESCE(SUM(si.total_price), 0) AS total_revenue,
+      COALESCE(SUM(
+        si.total_price + (
+          CASE WHEN COALESCE(s.subtotal, 0) > 0
+               THEN COALESCE(s.tax_amount, 0) * (si.total_price / s.subtotal)
+               ELSE 0
+          END
+        )
+      ), 0) AS total_revenue,
       COUNT(DISTINCT si.name)::int AS unique_products,
       COUNT(*)::int AS line_items
     FROM sale_items si
@@ -1694,6 +2085,45 @@ async getProductRetailReportRows(
       total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
     },
   };
+},
+
+// Per-product units-sold + tax-inclusive revenue, for the "Sales" column on
+// the Product Inventory report. Grouped by si.item_id (the real product row),
+// not by name — same tables/tax-proration logic as getProductRetailReportRows,
+// just aggregated instead of returned as line items.
+async getProductInventorySales(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string }
+): Promise<Record<string, { quantity: number; revenue: number }>> {
+  const { where, values } = this._buildProductRetailWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      si.item_id AS product_id,
+      SUM(si.quantity) AS quantity,
+      SUM(
+        si.total_price + (
+          CASE WHEN COALESCE(s.subtotal, 0) > 0
+               THEN COALESCE(s.tax_amount, 0) * (si.total_price / s.subtotal)
+               ELSE 0
+          END
+        )
+      ) AS revenue
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    WHERE ${where} AND si.item_id IS NOT NULL
+    GROUP BY si.item_id
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const result: Record<string, { quantity: number; revenue: number }> = {};
+  for (const row of rows) {
+    result[String(row.product_id)] = {
+      quantity: Number(row.quantity ?? 0),
+      revenue: Number(row.revenue ?? 0),
+    };
+  }
+  return result;
 },
 
 // Distinct products that have EVER been sold in this salon — scoped only to
@@ -2608,7 +3038,12 @@ async getStaffItemSalesReportStats(
     WITH filtered AS (
       SELECT
         si.name,
-        si.total_price,
+        si.total_price + (
+          CASE WHEN COALESCE(s.subtotal, 0) > 0
+               THEN COALESCE(s.tax_amount, 0) * (si.total_price / s.subtotal)
+               ELSE 0
+          END
+        ) AS total_price,
         si.quantity,
         NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
         s.created_at
@@ -2661,14 +3096,19 @@ async getStaffItemSalesReportRows(
       COALESCE(NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), ''), 'Unknown') AS staff_name,
       si.name AS item_name,
       si.quantity,
-      si.total_price AS revenue,
+      si.total_price + (
+        CASE WHEN COALESCE(s.subtotal, 0) > 0
+             THEN COALESCE(s.tax_amount, 0) * (si.total_price / s.subtotal)
+             ELSE 0
+        END
+      ) AS revenue,
       TO_CHAR(s.created_at, 'YYYY-MM-DD') AS date,
       COUNT(*) OVER() AS total_count
     FROM sale_items si
     JOIN sales s ON s.id = si.sale_id
     LEFT JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
     WHERE ${where}
-    ORDER BY si.total_price DESC
+    ORDER BY revenue DESC
     ${limitClause}
   `;
 

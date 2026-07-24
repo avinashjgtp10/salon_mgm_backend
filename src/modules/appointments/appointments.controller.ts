@@ -91,6 +91,19 @@ export const appointmentsController = {
         } catch (err) { return next(err); }
     },
 
+    async bulkDelete(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const userId = req.user?.userId;
+            if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+            const ids = Array.isArray(req.body?.ids)
+                ? [...new Set(req.body.ids.map((id: unknown) => String(id).trim()).filter(Boolean))]
+                : [];
+            if (ids.length === 0) throw new AppError(400, "ids must be a non-empty array", "VALIDATION_ERROR");
+            const result = await appointmentsService.bulkDelete(ids as string[]);
+            return sendSuccess(res, 200, result, `${result.deleted.length} appointment(s) deleted`);
+        } catch (err) { return next(err); }
+    },
+
     async checkout(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const userId = req.user?.userId;

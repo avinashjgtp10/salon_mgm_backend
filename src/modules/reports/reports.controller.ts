@@ -886,6 +886,7 @@ async getSalesSummaryReport(
             staff_id: asString(body.staff_id),
             search: asString(body.search),
             status: asString(body.status),
+            category_id: asString(body.category_id),
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,
@@ -1073,6 +1074,32 @@ async getGstReport(
         );
     } catch (error) {
         next(error);
+    }
+},
+
+// ======================================================
+// PRODUCT INVENTORY SALES (independent report API)
+// POST /api/report/product-inventory-sales
+// Per-product units-sold + tax-inclusive revenue, keyed by product_id, for
+// the Product Inventory report's "Sales" column.
+// ======================================================
+
+async getProductInventorySales(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+        };
+        const data = await reportsService.getProductInventorySales(salonId, filters);
+        sendSuccess(res, 200, data, "Product inventory sales fetched successfully");
+    } catch (err) {
+        next(err);
     }
 },
 
