@@ -524,22 +524,27 @@ export const clientsRepository = {
     // client's old number can be reused by someone new. excludeClientId lets
     // update() check without tripping over the client's own unchanged number.
     async findActiveByPhone(
-        phone_country_code: string | null | undefined,
         phone_number: string | null | undefined,
         salonId: string,
         excludeClientId?: string,
     ): Promise<Client | null> {
         const pn = phone_number ? String(phone_number).trim() : "";
         if (!pn) return null;
-        const pcc = phone_country_code ? String(phone_country_code).trim() : null;
+        // Matched on phone_number alone — NOT also phone_country_code. Many
+        // existing rows have a NULL country code (added before it was tracked,
+        // or via a flow that never set it), and NULL never equals '+91' in SQL —
+        // so requiring both to match let a genuine duplicate phone slip through
+        // undetected whenever the two records' country-code fields merely
+        // *differed in form* despite being the same real number. Two distinct
+        // real clients sharing one 10-digit number within a salon is
+        // vanishingly rare; treating any match as a duplicate is the safe default.
         const { rows } = await pool.query(
             `SELECT * FROM clients
              WHERE salon_id = $1 AND is_active = true
                AND TRIM(phone_number) = $2
-               AND ($3::text IS NULL OR phone_country_code = $3)
-               AND ($4::uuid IS NULL OR id != $4)
+               AND ($3::uuid IS NULL OR id != $3)
              LIMIT 1`,
-            [salonId, pn, pcc, excludeClientId ?? null]
+            [salonId, pn, excludeClientId ?? null]
         );
         return rows[0] || null;
     },
