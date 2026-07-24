@@ -2790,20 +2790,26 @@ async getEwalletReportRows(
 // Appointment API/service.
 // ======================================================
 
+// Client-driven: every registered client must appear (even with zero sales),
+// so filters that only make sense against a sale (date range, "completed"
+// status) belong in the LEFT JOIN's ON clause, not WHERE — a WHERE on s.*
+// would silently discard NULL-sale rows and turn this back into an INNER
+// JOIN, which is the exact bug being fixed here.
 _buildClientRevenueWhere(
   salonId: string,
   filters: { start_date?: string; end_date?: string; search?: string }
-): { where: string; values: any[]; nextIndex: number } {
+): { where: string; saleJoin: string; values: any[]; nextIndex: number } {
   const values: any[] = [salonId];
-  const where = ["s.salon_id = $1", "s.status = 'completed'"];
+  const where = ["c.salon_id = $1"];
+  const saleJoin = ["s.client_id = c.id", "s.status = 'completed'"];
   let idx = 2;
 
   if (filters.start_date) {
-    where.push(`s.created_at >= $${idx++}::date`);
+    saleJoin.push(`s.created_at >= $${idx++}::date`);
     values.push(filters.start_date);
   }
   if (filters.end_date) {
-    where.push(`s.created_at < ($${idx++}::date + interval '1 day')`);
+    saleJoin.push(`s.created_at < ($${idx++}::date + interval '1 day')`);
     values.push(filters.end_date);
   }
   if (filters.search?.trim()) {
@@ -2815,27 +2821,27 @@ _buildClientRevenueWhere(
     idx++;
   }
 
-  return { where: where.join(" AND "), values, nextIndex: idx };
+  return { where: where.join(" AND "), saleJoin: saleJoin.join(" AND "), values, nextIndex: idx };
 },
 
-// Shared aggregation CTE — groups by client_id when known (real clients),
-// falling back to a name+phone composite key for walk-in sales that have no
-// client_id at all, so those still aggregate together rather than each
-// showing up as a separate "unknown" row.
-_CLIENT_REVENUE_AGG(where: string): string {
+// Shared aggregation CTE — one row per registered client (LEFT JOIN sales,
+// so a client with zero completed sales in the filtered range still shows
+// up, with visits/total_spend/last_visit all zero/null rather than the
+// client vanishing from the report entirely).
+_CLIENT_REVENUE_AGG(where: string, saleJoin: string): string {
   return `
     WITH revenue_agg AS (
       SELECT
-        s.client_id,
+        c.id AS client_id,
         COALESCE(NULLIF(TRIM(c.full_name), ''), 'Walk-in') AS client_name,
         COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS contact,
-        COUNT(*) AS visits,
-        SUM(s.total_amount::numeric) AS total_spend,
+        COUNT(s.id) AS visits,
+        COALESCE(SUM(s.total_amount::numeric), 0) AS total_spend,
         MAX(TO_CHAR(s.created_at, 'YYYY-MM-DD')) AS last_visit
-      FROM sales s
-      LEFT JOIN clients c ON s.client_id = c.id
+      FROM clients c
+      LEFT JOIN sales s ON ${saleJoin}
       WHERE ${where}
-      GROUP BY COALESCE(s.client_id::text, CONCAT(c.full_name, '|', c.phone_number)), s.client_id, c.full_name, c.phone_number, c.phone_country_code
+      GROUP BY c.id, c.full_name, c.phone_number, c.phone_country_code
     )
   `;
 },
@@ -2844,14 +2850,14 @@ async getClientRevenueReportStats(
   salonId: string,
   filters: { start_date?: string; end_date?: string; search?: string }
 ): Promise<ClientRevenueReportStats> {
-  const { where, values } = this._buildClientRevenueWhere(salonId, filters);
+  const { where, saleJoin, values } = this._buildClientRevenueWhere(salonId, filters);
 
   const query = `
-    ${this._CLIENT_REVENUE_AGG(where)}
+    ${this._CLIENT_REVENUE_AGG(where, saleJoin)}
     SELECT
       COUNT(*)::int AS total_clients,
       COALESCE(SUM(total_spend), 0) AS total_revenue,
-      (SELECT client_name FROM revenue_agg ORDER BY total_spend DESC LIMIT 1) AS top_client
+      (SELECT client_name FROM revenue_agg WHERE total_spend > 0 ORDER BY total_spend DESC LIMIT 1) AS top_client
     FROM revenue_agg
   `;
 
@@ -2877,7 +2883,7 @@ async getClientRevenueReportRows(
   items: ClientRevenueReportRow[];
   pagination: { total: number; page: number; limit: number; total_pages: number };
 }> {
-  const { where, values, nextIndex } = this._buildClientRevenueWhere(salonId, filters);
+  const { where, saleJoin, values, nextIndex } = this._buildClientRevenueWhere(salonId, filters);
   let idx = nextIndex;
 
   const page = Math.max(1, Number(filters.page ?? 1));
@@ -2888,12 +2894,12 @@ async getClientRevenueReportRows(
   const limitValues = limit ? [limit, offset] : [];
 
   const query = `
-    ${this._CLIENT_REVENUE_AGG(where)}
+    ${this._CLIENT_REVENUE_AGG(where, saleJoin)}
     SELECT
       client_id, client_name, contact, visits, total_spend, last_visit,
       COUNT(*) OVER() AS total_count
     FROM revenue_agg
-    ORDER BY total_spend DESC
+    ORDER BY total_spend DESC, client_name ASC
     ${limitClause}
   `;
 
