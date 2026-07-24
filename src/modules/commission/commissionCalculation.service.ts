@@ -2,6 +2,7 @@ import pool from "../../config/database";
 import logger from "../../config/logger";
 import { staffCommissionsRepository, commissionSlabsRepository, commissionHistoryRepository } from "../staff/staffSettings.repository";
 import { commissionRulesRepository } from "../commissionRules/commissionRules.repository";
+import { clientMembershipsRepository } from "../client-memberships/client-memberships.repository";
 import { SaleItem } from "../sales/sales.types";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -213,9 +214,13 @@ async function tryNewEngineRule(params: {
     staff_id: string;
     category: CommissionCategory;
     revenue: number;
+    // True when this group had commissionable value on the sale, but
+    // membership-wallet or package coverage brought it to exactly ₹0 — see
+    // the caller in calculateForSale for the originalRevenue/revenue comparison.
+    fullyCovered: boolean;
     inserts: Promise<any>[];
 }): Promise<boolean> {
-    const { salonId, saleId, appointmentId, staff_id, category, revenue, inserts } = params;
+    const { salonId, saleId, appointmentId, staff_id, category, revenue, fullyCovered, inserts } = params;
     // services/products/memberships/packages map 1:1 onto the new engine's source enum
     const source = category as "services" | "products" | "memberships" | "packages";
 
@@ -224,6 +229,25 @@ async function tryNewEngineRule(params: {
 
     const rule = await commissionRulesRepository.findActiveForCalculation(salonId, source, staff_id, designation);
     if (!rule) return false;
+
+    if (fullyCovered) {
+        // Record the ₹0 explicitly instead of running threshold/milestone/rate
+        // logic against a ₹0 base, so reports.repository.ts's staff-commission
+        // query can trust this persisted zero instead of recomputing commission
+        // from the item's raw (pre-coverage) catalog price.
+        inserts.push(
+            commissionEarnedRepository.insert({
+                salon_id: salonId, staff_id, sale_id: saleId,
+                appointment_id: appointmentId ?? null, category,
+                revenue_amount: 0,
+                commission_kind: rule.type === "percentage" ? "percentage" : "fixed_rate",
+                commission_rate: Number(rule.rate),
+                commission_amount: 0,
+                rule_id: rule.id,
+            })
+        );
+        return true;
+    }
 
     // ── Threshold gate (applies to all 3 types) ──────────────────────────────────
     // "They receive [rate] when they generate [condition_target] based on [condition_metric]"
@@ -336,39 +360,27 @@ export const commissionCalculationService = {
         if (!items || items.length === 0) return;
 
         try {
-            // ── Membership-wallet-covered revenue must not earn services commission
-            // again ─────────────────────────────────────────────────────────────
-            // Redeeming a membership wallet balance for a service only reduces the
-            // bill at the payment level (payments.net_amount/membership_wallet_used)
-            // — sale_items.total_price keeps showing the full catalog price. Without
-            // this, the staff who sold the membership earns "memberships" commission
-            // on that money once, and the staff who performs the redeemed service
-            // would earn "services" commission on the exact same money again. Wallet
-            // redemption is services-only (payments.service.ts only ever builds its
-            // servicesForWallet list from appt.services), so this ratio is applied
-            // only to the "services" category below — products/memberships/packages/
-            // gift_cards are untouched.
-            let servicesSubtotal = 0;
-            for (const item of items) {
-                const isPackage = !!(item.item_id && packageItemIds?.has(item.item_id));
-                if (!isPackage && item.item_type === "service") {
-                    servicesSubtotal += parseFloat(String(item.total_price)) * (item.quantity ?? 1);
-                }
-            }
-
-            let walletRatio = 0;
-            if (appointmentId && servicesSubtotal > 0) {
+            // ── Membership-wallet-covered revenue must not earn commission again ──
+            // Redeeming a membership wallet balance for a service/product only
+            // reduces the bill at the payment level (payments.net_amount/
+            // membership_wallet_used) — sale_items.total_price keeps showing the
+            // full catalog price. Without this, the staff who sold the membership
+            // earns "memberships" commission on that money once, and the staff who
+            // performs/sells the redeemed service or product would earn commission
+            // on the exact same money again. Exact per-item amounts (not a bill-
+            // level ratio) — membership_usage_log already records how much wallet
+            // was drawn against each specific service/product (service_id also
+            // holds the product's id for a product redemption — see
+            // deductWalletAcrossMemberships in client-memberships.repository.ts).
+            // Applies to "services" and "products" only — payments.service.ts only
+            // ever feeds appt.services and (when a membership opts in) product_items
+            // into wallet redemption, so memberships/packages/gift_cards are untouched.
+            let walletUsedByItem = new Map<string, number>();
+            if (appointmentId) {
                 try {
-                    const { rows: walletRows } = await pool.query(
-                        `SELECT COALESCE(SUM(membership_wallet_used), 0)::numeric AS wallet_used
-                         FROM payments
-                         WHERE appointment_id = $1 AND status IN ('completed', 'partial')`,
-                        [appointmentId]
-                    );
-                    const walletUsed = parseFloat(walletRows[0]?.wallet_used ?? "0");
-                    walletRatio = Math.min(1, walletUsed / servicesSubtotal);
+                    walletUsedByItem = await clientMembershipsRepository.getWalletUsedPerItemForAppointment(appointmentId);
                 } catch (qErr) {
-                    logger.warn("commissionCalculationService: membership wallet ratio query failed, treating as 0", { appointmentId, qErr });
+                    logger.warn("commissionCalculationService: membership wallet per-item lookup failed, treating as none covered", { appointmentId, qErr });
                 }
             }
 
@@ -403,11 +415,17 @@ export const commissionCalculationService = {
                 }
             }
 
-            // Step 1: Group items by (staff_id, category) and sum revenue
+            // Step 1: Group items by (staff_id, category) and sum revenue.
+            // originalRevenue (pre-coverage) is tracked alongside revenue
+            // (post-coverage) so Step 2 can tell "reduced to ₹0 by membership/
+            // package coverage" apart from "genuinely no revenue" (e.g. no rule
+            // configured) — the former still needs a ₹0 commission_earned row
+            // recorded (see fullyCovered below), the latter doesn't.
             const groups = new Map<string, {
                 staff_id: string;
                 category: CommissionCategory;
                 revenue: number;
+                originalRevenue: number;
             }>();
 
             for (const item of items) {
@@ -419,20 +437,22 @@ export const commissionCalculationService = {
                     : ITEM_TYPE_TO_CATEGORY[item.item_type];
                 if (!category) continue; // unknown item type — skip
 
-                const key      = `${staffId}::${category}`;
-                let revenue    = parseFloat(String(item.total_price)) * (item.quantity ?? 1);
-                if (category === "services") {
-                    if (item.item_id && packageCoveredServiceIds.has(String(item.item_id))) {
-                        revenue = 0;
-                    } else if (walletRatio > 0) {
-                        revenue = revenue * (1 - walletRatio);
-                    }
+                const key            = `${staffId}::${category}`;
+                const originalRevenue = parseFloat(String(item.total_price)) * (item.quantity ?? 1);
+                let revenue           = originalRevenue;
+                if (category === "services" && item.item_id && packageCoveredServiceIds.has(String(item.item_id))) {
+                    revenue = 0;
+                } else if (category === "services" || category === "products") {
+                    const walletUsed = item.item_id ? (walletUsedByItem.get(String(item.item_id)) ?? 0) : 0;
+                    if (walletUsed > 0) revenue = Math.max(0, revenue - walletUsed);
                 }
 
                 if (groups.has(key)) {
-                    groups.get(key)!.revenue += revenue;
+                    const g = groups.get(key)!;
+                    g.revenue += revenue;
+                    g.originalRevenue += originalRevenue;
                 } else {
-                    groups.set(key, { staff_id: staffId, category, revenue });
+                    groups.set(key, { staff_id: staffId, category, revenue, originalRevenue });
                 }
             }
 
@@ -441,14 +461,20 @@ export const commissionCalculationService = {
             // Step 2: For each group, look up commission rule and calculate
             const inserts: Promise<any>[] = [];
 
-            for (const { staff_id, category, revenue } of groups.values()) {
+            for (const { staff_id, category, revenue, originalRevenue } of groups.values()) {
                 try {
+                    // This category had commissionable value on the sale, but
+                    // membership-wallet or package coverage brought it to ₹0 —
+                    // distinct from "no revenue at all" (e.g. a genuinely $0
+                    // catalog item), which should keep skipping quietly below.
+                    const fullyCovered = originalRevenue > 0 && revenue === 0;
+
                     // ── New-engine commission_rules first — services/products/memberships only;
                     // gift_cards/cancellation aren't covered by the new engine yet, so those always
                     // fall through to the legacy path below. ──────────────────────────────────
                     if (category !== "gift_cards" && category !== "cancellation") {
                         const handled = await tryNewEngineRule({
-                            salonId, saleId, appointmentId, staff_id, category, revenue, inserts,
+                            salonId, saleId, appointmentId, staff_id, category, revenue, fullyCovered, inserts,
                         });
                         if (handled) continue;
                     }
@@ -460,6 +486,24 @@ export const commissionCalculationService = {
                     // Check if commission is enabled for this staff + category
                     const rule = await staffCommissionsRepository.findByCategory(staff_id, category);
                     if (!rule || !rule.is_enabled) continue;
+
+                    if (fullyCovered) {
+                        // Record the ₹0 explicitly (rather than skipping the insert)
+                        // so reports.repository.ts's staff-commission query can trust
+                        // this persisted zero instead of recomputing commission from
+                        // the item's raw (pre-coverage) catalog price.
+                        inserts.push(
+                            commissionEarnedRepository.insert({
+                                salon_id: salonId, staff_id, sale_id: saleId,
+                                appointment_id: appointmentId ?? null, category,
+                                revenue_amount: 0,
+                                commission_kind: rule.commission_kind,
+                                commission_rate: Number(rule.default_rate),
+                                commission_amount: 0,
+                            })
+                        );
+                        continue;
+                    }
 
                     const period = (rule as any).period ?? "monthly";
 

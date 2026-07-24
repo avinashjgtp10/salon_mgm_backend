@@ -58,9 +58,18 @@ export type CreatePaymentBody = {
   membership_items?: Array<{ membership_id?: string; name: string; price: number; quantity: number }>;
   membership_wallet_used?: number;
   apply_membership_wallet?: boolean;
+  // Staff-chosen cap on how much of the membership wallet to actually use —
+  // never trusted as an amount to blindly deduct, only as an upper bound;
+  // deductWalletForBooking still caps further by real balance/eligible items.
+  // Omitted/undefined preserves the old "use as much as needed" behavior.
+  membership_wallet_requested?: number;
   // Server-computed only — never trust a value sent by the frontend for this
   // (see payments.service.ts's Refer & Earn block).
   referral_discount_applied?: number;
+  // Server-computed only — the ₹ value of reward_points_used, converted via
+  // the salon's redeem rate (payments.service.ts). Never trust a value sent
+  // by the frontend for this.
+  reward_points_value?: number;
   // Requested points/₹ to redeem — never trusted as-is, always capped
   // server-side against the client's real balance (payments.service.ts).
   reward_points_used?: number;
@@ -70,4 +79,11 @@ export type CreatePaymentBody = {
   // Persisted as-is so a reprinted receipt shows what was actually charged,
   // not today's tax settings if they've since changed.
   tax_breakdown?: TaxBreakdownEntry[];
+  // Whether staff had "Include GST in this bill" checked for THIS payment.
+  // Defaults to true (apply the salon's active tax config, the pre-existing
+  // behavior) when omitted — only an explicit `false` skips tax entirely.
+  // Without this, a client who paid the full GST-excluded total shown on
+  // screen would still get billed for GST server-side, leaving a phantom
+  // GST-sized due_amount and a wrongly-"Partial" status.
+  include_gst?: boolean;
 };

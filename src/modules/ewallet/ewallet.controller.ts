@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { AppError } from '../../middleware/error.middleware';
 import { sendSuccess } from '../utils/response.util';
 import { ewalletService } from './ewallet.service';
-import { TopUpEwalletBody } from './ewallet.types';
+import { AdjustEwalletBody, TopUpEwalletBody } from './ewallet.types';
 
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string | null } };
 
@@ -21,6 +21,22 @@ export const ewalletController = {
       const body = req.body as TopUpEwalletBody;
       const result = await ewalletService.topUp(clientId, salonId, Number(body.amount), body.payment_method, body.note, userId);
       return sendSuccess(res, 201, result, 'eWallet topped up successfully');
+    } catch (err) { return next(err); }
+  },
+
+  async adjust(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user?.userId;
+      const salonId = req.user?.salonId;
+      if (!userId) throw new AppError(401, 'Unauthorized', 'UNAUTHORIZED');
+      if (!salonId) throw new AppError(403, 'Salon context required', 'NO_SALON_CONTEXT');
+
+      const clientId = String(req.params.clientId || '').trim();
+      if (!clientId) throw new AppError(400, 'clientId is required', 'VALIDATION_ERROR');
+
+      const body = req.body as AdjustEwalletBody;
+      const result = await ewalletService.adjust(clientId, salonId, body.direction, Number(body.amount), body.reason, userId);
+      return sendSuccess(res, 200, result, 'eWallet adjusted successfully');
     } catch (err) { return next(err); }
   },
 

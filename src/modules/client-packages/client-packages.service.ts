@@ -56,6 +56,11 @@ function buildSyntheticSale(pkg: ClientPackage): { sale: Sale; items: SaleItem[]
           discount_amount: "0",
           unit_price: String(s.price ?? 0),
           total_price: String((s.price ?? 0) * (s.totalSessions || 1)),
+          // This synthetic multi-service breakdown has no real per-service tax
+          // split (the package's real tax was only ever computed on the whole
+          // package, see pkg.gstAmount below) — receipt display only, ₹0 here.
+          tax_amount: "0",
+          taxable_amount: "0",
           created_at: pkg.createdDate,
         }))
       : [
@@ -70,6 +75,8 @@ function buildSyntheticSale(pkg: ClientPackage): { sale: Sale; items: SaleItem[]
             discount_amount: String(pkg.discount ?? 0),
             unit_price: String(pkg.basePrice ?? 0),
             total_price: String(pkg.totalAmount ?? 0),
+            tax_amount: String(pkg.gstAmount ?? 0),
+            taxable_amount: String((pkg.basePrice ?? 0) - (pkg.discount ?? 0)),
             created_at: pkg.createdDate,
           },
         ];
@@ -144,6 +151,10 @@ export const clientPackagesService = {
           quantity:        1,
           unit_price:      Number(pkg.basePrice || 0) + discountAmt,
           discount_amount: discountAmt,
+          // Single-item sale — the package's own already-computed GST (see
+          // client-packages.repository.ts) is trivially this one item's tax.
+          tax_amount:      gstAmt,
+          taxable_amount:  Number(pkg.basePrice || 0),
         }],
       });
     } catch (err) {
@@ -215,5 +226,59 @@ export const clientPackagesService = {
     notifySessionsRemainingIfLow(updated).catch(() => {});
 
     return updated;
+  },
+
+  // Called from payments.service.ts when a bill containing package_items is
+  // fully settled — creates the client's actual, redeemable package record.
+  // Goes straight to the repository (not this module's own create()), since
+  // that would also call recordTransaction() and double-count revenue that
+  // the checkout's own sale record already covers — mirrors
+  // clientMembershipsService.autoCreateFromPayment()'s same reasoning.
+  async autoCreateFromPayment(
+    salonId:      string,
+    clientId:     string,
+    packageName:  string,
+    services:     Array<{ serviceId?: string; serviceName: string; totalSessions: number; price: number }>,
+    basePrice:    number,
+    discount:     number,
+    gstPercentage: number,
+    expiryDate:   string,
+  ): Promise<void> {
+    logger.info(`[client-packages/auto-create] salon=${salonId} client=${clientId} name="${packageName}" services=${services.length} price=${basePrice}`);
+    try {
+      const created = await clientPackagesRepository.create(salonId, {
+        clientId,
+        packageName,
+        expiryDate,
+        basePrice,
+        gstPercentage,
+        discount,
+        paymentMethod: "included_in_sale",
+        services,
+      });
+      logger.info(`[client-packages/auto-create] SUCCESS — client=${clientId}, package=${packageName}`);
+      // Text only, no PDF here — the calling checkout flow (payments) already
+      // sent one PDF covering this whole sale, package line included.
+      if (created.mobile) {
+        const salon = await salonsRepository.findById(salonId);
+        whatsappAutomationService.trigger({
+          salonId,
+          eventType:   "package_purchased",
+          clientId:    created.clientId,
+          phone:       created.mobile,
+          countryCode: null,
+          variables: {
+            "1": created.clientName ?? "Valued Customer",
+            "2": salon?.business_name ?? "our salon",
+            "3": created.packageName,
+          },
+          referenceId:   created.id,
+          referenceType: "package",
+          dedupeByReference: true,
+        }).catch(() => {});
+      }
+    } catch (err: any) {
+      logger.warn('[client-packages/auto-create] FAILED:', err?.message ?? err);
+    }
   },
 };

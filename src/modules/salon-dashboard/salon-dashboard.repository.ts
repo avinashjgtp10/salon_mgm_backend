@@ -54,22 +54,29 @@ export const salonDashboardRepository = {
         last_month_sales_count: string;
       }>(
         `SELECT
-           COALESCE(SUM(CASE WHEN date_trunc('month', created_at) = date_trunc('month', NOW())
-             THEN total_amount ELSE 0 END), 0)::numeric AS total_revenue,
-           COALESCE(SUM(CASE WHEN date_trunc('month', created_at) = date_trunc('month', NOW() - INTERVAL '1 month')
-             THEN total_amount ELSE 0 END), 0)::numeric AS last_month_revenue,
-           COALESCE(SUM(CASE WHEN DATE(created_at) = CURRENT_DATE
-             THEN total_amount ELSE 0 END), 0)::numeric AS today_revenue,
-           COALESCE(SUM(CASE WHEN DATE(created_at) = (CURRENT_DATE - INTERVAL '1 month')::date
-             THEN total_amount ELSE 0 END), 0)::numeric AS last_month_today_revenue,
-           COALESCE(SUM(CASE WHEN DATE(created_at) = CURRENT_DATE - INTERVAL '1 day'
-             THEN total_amount ELSE 0 END), 0)::numeric AS yesterday_revenue,
-           COUNT(CASE WHEN date_trunc('month', created_at) = date_trunc('month', NOW()) THEN 1 END) AS sales_count,
-           COUNT(CASE WHEN date_trunc('month', created_at) = date_trunc('month', NOW() - INTERVAL '1 month') THEN 1 END) AS last_month_sales_count
-         FROM sales
-         WHERE salon_id = $1
-           AND status = 'completed'
-           AND created_at >= date_trunc('month', NOW() - INTERVAL '1 month')`,
+           COALESCE(SUM(CASE WHEN date_trunc('month', s.created_at) = date_trunc('month', NOW())
+             THEN s.total_amount ELSE 0 END), 0)::numeric AS total_revenue,
+           COALESCE(SUM(CASE WHEN date_trunc('month', s.created_at) = date_trunc('month', NOW() - INTERVAL '1 month')
+             THEN s.total_amount ELSE 0 END), 0)::numeric AS last_month_revenue,
+           COALESCE(SUM(CASE WHEN DATE(s.created_at) = CURRENT_DATE
+             THEN s.total_amount ELSE 0 END), 0)::numeric AS today_revenue,
+           COALESCE(SUM(CASE WHEN DATE(s.created_at) = (CURRENT_DATE - INTERVAL '1 month')::date
+             THEN s.total_amount ELSE 0 END), 0)::numeric AS last_month_today_revenue,
+           COALESCE(SUM(CASE WHEN DATE(s.created_at) = CURRENT_DATE - INTERVAL '1 day'
+             THEN s.total_amount ELSE 0 END), 0)::numeric AS yesterday_revenue,
+           COUNT(CASE WHEN date_trunc('month', s.created_at) = date_trunc('month', NOW()) THEN 1 END) AS sales_count,
+           COUNT(CASE WHEN date_trunc('month', s.created_at) = date_trunc('month', NOW() - INTERVAL '1 month') THEN 1 END) AS last_month_sales_count
+         FROM sales s
+         LEFT JOIN appointments a ON a.id = s.appointment_id
+         WHERE s.salon_id = $1
+           AND s.status = 'completed'
+           AND s.created_at >= date_trunc('month', NOW() - INTERVAL '1 month')
+           -- A completed sale only counts as revenue while its linked
+           -- appointment (if it has one — quick sales don't) is CURRENTLY
+           -- still 'paid' — if that appointment was later cancelled or
+           -- soft-deleted, its money shouldn't keep showing as today's/this
+           -- month's revenue, matching the calendar's own current state.
+           AND (a.id IS NULL OR (a.status = 'paid' AND a.deleted_at IS NULL))`,
         [salonId]
       ),
 
@@ -107,33 +114,29 @@ export const salonDashboardRepository = {
         [salonId]
       ),
 
-      // New clients — a client's first-ever appointment/sale at THIS salon fell
-      // today / this month. (clients table has no salon_id, so "new to this
-      // salon" is derived from their earliest interaction here, same pattern
-      // as the active-clients query above.)
+      // New clients — based on the client record's OWN created_at (clients.
+      // salon_id exists directly, despite what an earlier version of this
+      // comment claimed) — not on their first appointment/sale here. A client
+      // added with no booking or purchase yet is still a real new client and
+      // must count immediately, not only once they've transacted.
       pool.query<{ new_today: string; new_this_month: string }>(
-        `WITH first_visit AS (
-           SELECT client_id, MIN(created_at) AS first_at
-           FROM (
-             SELECT client_id, created_at FROM appointments WHERE salon_id = $1 AND client_id IS NOT NULL AND deleted_at IS NULL
-             UNION ALL
-             SELECT client_id, created_at FROM sales       WHERE salon_id = $1 AND client_id IS NOT NULL
-           ) combined
-           GROUP BY client_id
-         )
-         SELECT
-           COUNT(*) FILTER (WHERE DATE(first_at) = CURRENT_DATE) AS new_today,
-           COUNT(*) FILTER (WHERE date_trunc('month', first_at) = date_trunc('month', NOW())) AS new_this_month
-         FROM first_visit`,
+        `SELECT
+           COUNT(*) FILTER (WHERE DATE(created_at) = CURRENT_DATE) AS new_today,
+           COUNT(*) FILTER (WHERE date_trunc('month', created_at) = date_trunc('month', NOW())) AS new_this_month
+         FROM clients
+         WHERE salon_id = $1
+           AND is_active = true`,
         [salonId]
       ),
 
       // All-time total revenue — genuinely unbounded, unlike total_revenue
       // above which is scoped to the current calendar month.
       pool.query<{ all_time_revenue: string }>(
-        `SELECT COALESCE(SUM(total_amount), 0)::numeric AS all_time_revenue
-         FROM sales
-         WHERE salon_id = $1 AND status = 'completed'`,
+        `SELECT COALESCE(SUM(s.total_amount), 0)::numeric AS all_time_revenue
+         FROM sales s
+         LEFT JOIN appointments a ON a.id = s.appointment_id
+         WHERE s.salon_id = $1 AND s.status = 'completed'
+           AND (a.id IS NULL OR (a.status = 'paid' AND a.deleted_at IS NULL))`,
         [salonId]
       ),
     ]);
@@ -245,54 +248,67 @@ export const salonDashboardRepository = {
   async getRevenueChart(salonId: string, period: string = "monthly"): Promise<RevenueDataPoint[]> {
     let sql: string;
 
+    // A completed sale only counts as revenue while its linked appointment
+    // (if it has one — quick sales don't) is CURRENTLY still 'paid' — see
+    // the same condition in getSummary() above.
+    const revenueGate = `(a.id IS NULL OR (a.status = 'paid' AND a.deleted_at IS NULL))`;
+
     if (period === "today") {
       sql = `
         SELECT
-          TO_CHAR(date_trunc('hour', created_at AT TIME ZONE 'UTC'), 'HH12AM') AS month,
-          date_trunc('hour', created_at AT TIME ZONE 'UTC')                     AS sort_key,
-          COALESCE(SUM(total_amount), 0)::numeric                               AS revenue
-        FROM sales
-        WHERE salon_id = $1
-          AND status = 'completed'
-          AND DATE(created_at AT TIME ZONE 'UTC') = CURRENT_DATE
-        GROUP BY date_trunc('hour', created_at AT TIME ZONE 'UTC')
+          TO_CHAR(date_trunc('hour', s.created_at AT TIME ZONE 'UTC'), 'HH12AM') AS month,
+          date_trunc('hour', s.created_at AT TIME ZONE 'UTC')                     AS sort_key,
+          COALESCE(SUM(s.total_amount), 0)::numeric                               AS revenue
+        FROM sales s
+        LEFT JOIN appointments a ON a.id = s.appointment_id
+        WHERE s.salon_id = $1
+          AND s.status = 'completed'
+          AND DATE(s.created_at AT TIME ZONE 'UTC') = CURRENT_DATE
+          AND ${revenueGate}
+        GROUP BY date_trunc('hour', s.created_at AT TIME ZONE 'UTC')
         ORDER BY sort_key ASC`;
     } else if (period === "weekly") {
       sql = `
         SELECT
-          TO_CHAR(DATE(created_at AT TIME ZONE 'UTC'), 'Dy DD') AS month,
-          DATE(created_at AT TIME ZONE 'UTC')                    AS sort_key,
-          COALESCE(SUM(total_amount), 0)::numeric                AS revenue
-        FROM sales
-        WHERE salon_id = $1
-          AND status = 'completed'
-          AND created_at >= CURRENT_DATE - INTERVAL '6 days'
-        GROUP BY DATE(created_at AT TIME ZONE 'UTC')
+          TO_CHAR(DATE(s.created_at AT TIME ZONE 'UTC'), 'Dy DD') AS month,
+          DATE(s.created_at AT TIME ZONE 'UTC')                    AS sort_key,
+          COALESCE(SUM(s.total_amount), 0)::numeric                AS revenue
+        FROM sales s
+        LEFT JOIN appointments a ON a.id = s.appointment_id
+        WHERE s.salon_id = $1
+          AND s.status = 'completed'
+          AND s.created_at >= CURRENT_DATE - INTERVAL '6 days'
+          AND ${revenueGate}
+        GROUP BY DATE(s.created_at AT TIME ZONE 'UTC')
         ORDER BY sort_key ASC`;
     } else if (period === "yearly") {
       sql = `
         SELECT
-          TO_CHAR(date_trunc('month', created_at), 'Mon YY') AS month,
-          date_trunc('month', created_at)                     AS sort_key,
-          COALESCE(SUM(total_amount), 0)::numeric             AS revenue
-        FROM sales
-        WHERE salon_id = $1
-          AND status = 'completed'
-          AND created_at >= NOW() - INTERVAL '12 months'
-        GROUP BY date_trunc('month', created_at)
+          TO_CHAR(date_trunc('month', s.created_at), 'Mon YY') AS month,
+          date_trunc('month', s.created_at)                     AS sort_key,
+          COALESCE(SUM(s.total_amount), 0)::numeric             AS revenue
+        FROM sales s
+        LEFT JOIN appointments a ON a.id = s.appointment_id
+        WHERE s.salon_id = $1
+          AND s.status = 'completed'
+          AND s.created_at >= NOW() - INTERVAL '12 months'
+          AND ${revenueGate}
+        GROUP BY date_trunc('month', s.created_at)
         ORDER BY sort_key ASC`;
     } else {
       // monthly — daily data for the current calendar month
       sql = `
         SELECT
-          TO_CHAR(DATE(created_at AT TIME ZONE 'UTC'), 'DD') AS month,
-          DATE(created_at AT TIME ZONE 'UTC')                 AS sort_key,
-          COALESCE(SUM(total_amount), 0)::numeric             AS revenue
-        FROM sales
-        WHERE salon_id = $1
-          AND status = 'completed'
-          AND date_trunc('month', created_at AT TIME ZONE 'UTC') = date_trunc('month', NOW() AT TIME ZONE 'UTC')
-        GROUP BY DATE(created_at AT TIME ZONE 'UTC')
+          TO_CHAR(DATE(s.created_at AT TIME ZONE 'UTC'), 'DD') AS month,
+          DATE(s.created_at AT TIME ZONE 'UTC')                 AS sort_key,
+          COALESCE(SUM(s.total_amount), 0)::numeric             AS revenue
+        FROM sales s
+        LEFT JOIN appointments a ON a.id = s.appointment_id
+        WHERE s.salon_id = $1
+          AND s.status = 'completed'
+          AND date_trunc('month', s.created_at AT TIME ZONE 'UTC') = date_trunc('month', NOW() AT TIME ZONE 'UTC')
+          AND ${revenueGate}
+        GROUP BY DATE(s.created_at AT TIME ZONE 'UTC')
         ORDER BY sort_key ASC`;
     }
 
@@ -329,8 +345,12 @@ export const salonDashboardRepository = {
               ON sl.staff_id = s.id
              AND sl.status = 'completed'
              AND ${dateCond}
+       LEFT JOIN appointments sla ON sla.id = sl.appointment_id
        WHERE s.salon_id = $1
          AND s.is_active = true
+         -- Same rule as getSummary(): a sale tied to an appointment that's
+         -- since gone cancelled/deleted shouldn't keep counting as revenue.
+         AND (sl.id IS NULL OR sla.id IS NULL OR (sla.status = 'paid' AND sla.deleted_at IS NULL))
        GROUP BY s.id, s.first_name, s.last_name, s.designation
        HAVING COALESCE(SUM(sl.total_amount), 0) > 0
        ORDER BY revenue DESC
@@ -369,21 +389,28 @@ export const salonDashboardRepository = {
          GROUP BY staff_id
        ),
        sales_stats AS (
-         SELECT staff_id,
-                COALESCE(SUM(total_amount), 0)::numeric AS revenue
-         FROM sales
-         WHERE salon_id = $1
-           AND date_trunc('month', created_at) = date_trunc('month', NOW())
-           AND status = 'completed'
-         GROUP BY staff_id
+         SELECT sl.staff_id,
+                COALESCE(SUM(sl.total_amount), 0)::numeric AS revenue
+         FROM sales sl
+         LEFT JOIN appointments a ON a.id = sl.appointment_id
+         WHERE sl.salon_id = $1
+           AND date_trunc('month', sl.created_at) = date_trunc('month', NOW())
+           AND sl.status = 'completed'
+           -- Same rule as getSummary(): exclude sales whose appointment has
+           -- since been cancelled/deleted.
+           AND (a.id IS NULL OR (a.status = 'paid' AND a.deleted_at IS NULL))
+         GROUP BY sl.staff_id
        )
        SELECT
          s.id,
          TRIM(COALESCE(s.first_name, '') || ' ' || COALESCE(s.last_name, '')) AS name,
          COALESCE(s.designation, 'Staff') AS role,
+         -- Empty-string fallback, not '?' — a missing last_name must
+         -- contribute NOTHING to the initials (single-letter avatar), not a
+         -- literal "?" character (e.g. "demo" with no last name showed "D?").
          UPPER(
-           LEFT(COALESCE(s.first_name, '?'), 1) ||
-           LEFT(COALESCE(s.last_name,  '?'), 1)
+           LEFT(COALESCE(s.first_name, ''), 1) ||
+           LEFT(COALESCE(s.last_name,  ''), 1)
          ) AS avatar,
          COALESCE(appt_stats.client_count, 0) AS client_count,
          COALESCE(sales_stats.revenue, 0)     AS revenue,

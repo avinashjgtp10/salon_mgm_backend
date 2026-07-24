@@ -3,6 +3,7 @@ import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { appointmentsRepository } from "./appointments.repository";
 import { salesRepository } from "../sales/sales.repository";
+import type { SaleItem } from "../sales/sales.types";
 import { productsRepository } from "../products/products.repository";
 import { commissionCalculationService } from "../commission/commissionCalculation.service";
 import { blockedTimesRepository } from "../blocked_times/blocked_times.repository";
@@ -20,12 +21,167 @@ import { clientsRepository } from "../clients/clients.repository";
 import { sendReceiptDocument } from "../sales/receipt-whatsapp.service";
 import { sendPurchaseReceipt } from "../sales/receipt-send.helper";
 import { notifyAppointmentCompleted } from "./appointment-completed.helper";
+import { computeBillTotals, rowsTotal, ActiveTaxRow } from "../pricing/pricing.engine";
+import { getActiveTaxes } from "../settings/tax.util";
+import { paymentsRepository } from "../payments/payments.repository";
 import {
     Appointment,
     CreateAppointmentBody,
     UpdateAppointmentBody,
     CancelAppointmentBody,
 } from "./appointments.types";
+
+// A "Booked" (never paid) appointment has no persisted, tax-inclusive total
+// anywhere — `appointments` only stores the raw inputs (discount, ex_charges,
+// tip, line items), and `tax_breakdown` above is sourced entirely from the
+// `payments` table, which has zero rows until the client actually pays. That
+// left the calendar tooltip/chip showing a bare pre-tax item sum for any
+// unpaid booking. This backfills tax_breakdown at READ time only — same
+// shared engine as checkout/preview, no DB write, no new column — and ONLY
+// when a real payment hasn't already produced one; once money has actually
+// been collected, that payment's tax_breakdown is authoritative (reflects
+// wallet/coupon actually applied) and must never be overridden by a fresh
+// recompute here.
+// Shared by backfillTaxBreakdown (read-time display) and update() (the
+// paid/partial recompute-and-branch decision below) — both need "what would
+// this appointment's bill actually total, from its raw stored inputs."
+function computeAppointmentTotals(appt: {
+    services?: any[]; package_items?: any[]; product_items?: any[]; membership_items?: any[];
+    discount_type?: string; discount_value?: number; ex_charges?: number; tip_amount?: number;
+}, activeTaxes: ActiveTaxRow[]) {
+    const toRow = (items: any[] = []) => (items || []).map((i) => ({
+        price: Number(i?.price) || 0,
+        qty: Number(i?.quantity) || 1,
+        isPackageService: !!i?.is_package_service,
+    }));
+    return computeBillTotals({
+        actualAmounts: {
+            service:    rowsTotal(toRow(appt.services)),
+            packages:   rowsTotal(toRow(appt.package_items)),
+            product:    rowsTotal(toRow(appt.product_items)),
+            membership: rowsTotal(toRow(appt.membership_items)),
+        },
+        discountType: (appt.discount_type === "percentage" ? "percentage" : "flat"),
+        discountValue: Number(appt.discount_value) || 0,
+        taxes: activeTaxes,
+        exCharges: Number(appt.ex_charges) || 0,
+        tip: Number(appt.tip_amount) || 0,
+    });
+}
+
+// Single source of truth for "does this appointment's cached tax_breakdown
+// need recomputing" — a payment's snapshot is only trustworthy if nothing has
+// been edited since it was taken; once an edit (appointments.updated_at)
+// postdates the last payment, that snapshot describes a bill that no longer
+// exists. Every caller below MUST use this (not its own "is tax_breakdown
+// empty?" shortcut) — a caller that only checks emptiness will short-circuit
+// past a stale-but-non-empty snapshot and keep showing pre-edit GST forever.
+function needsTaxBackfill(appt: Appointment): boolean {
+    if (!Array.isArray(appt.tax_breakdown) || appt.tax_breakdown.length === 0) return true;
+    return !!appt.last_payment_at && new Date(appt.updated_at) > new Date(appt.last_payment_at);
+}
+
+function backfillTaxBreakdown(appt: Appointment, activeTaxes: ActiveTaxRow[]): Appointment {
+    if (!needsTaxBackfill(appt)) return appt;
+    const result = computeAppointmentTotals(appt, activeTaxes);
+    return { ...appt, tax_breakdown: result.taxBreakdown, computed_grand_total: result.grandTotal };
+}
+
+// Once an appointment has a linked, paid sale, its real per-item GST lives on
+// sale_items (see payments.service.ts/pricing.engine.ts's per-row
+// allocation) — this attaches each item's own tax_amount back onto the
+// matching entry in appt.services/package_items/product_items/
+// membership_items, purely for READ-time display (receipt.ts via
+// bookingMapper.ts); nothing is written back to the appointment's own JSONB
+// columns. An unpaid appointment (no sale_id yet) is left untouched — there's
+// nothing real to attach yet, and the frontend falls back to its existing
+// blended-rate approximation in that case.
+//
+// Matching is by (item_type, item_id) first — falling back to (item_type,
+// name+quantity+unit_price) for legacy sale_items rows recorded before
+// item_id was reliably populated. Matches are consumed one at a time (not
+// re-used) so two identical duplicate-service rows on the same appointment
+// (see ServiceRow.tsx's duplicate-row support) each get their own sale_items
+// row's tax rather than all of them collapsing onto the first match.
+function attachItemTax(appt: Appointment, saleItems: SaleItem[]): Appointment {
+    const remaining = [...saleItems];
+    const takeMatch = (itemType: string, itemId: string | null | undefined, name: string, qty: number, price: number): number | undefined => {
+        let idx = itemId ? remaining.findIndex((si) => si.item_type === itemType && si.item_id === itemId) : -1;
+        if (idx === -1) {
+            idx = remaining.findIndex((si) =>
+                si.item_type === itemType &&
+                !si.item_id &&
+                si.name === name &&
+                Number(si.quantity) === qty &&
+                Math.abs(Number(si.unit_price) - price) < 0.01
+            );
+        }
+        if (idx === -1) return undefined;
+        const [match] = remaining.splice(idx, 1);
+        return Number(match.tax_amount) || 0;
+    };
+
+    return {
+        ...appt,
+        services: (appt.services || []).map((s) => {
+            const tax = takeMatch("service", s.service_id, s.name, Number(s.quantity) || 1, Number(s.price) || 0);
+            return tax !== undefined ? { ...s, tax_amount: tax } : s;
+        }),
+        package_items: (appt.package_items || []).map((p) => {
+            const tax = takeMatch("package", p.package_id, p.name, Number(p.quantity) || 1, Number(p.price) || 0);
+            return tax !== undefined ? { ...p, tax_amount: tax } : p;
+        }),
+        product_items: (appt.product_items || []).map((pr) => {
+            const tax = takeMatch("product", pr.product_id, pr.name, Number(pr.quantity) || 1, Number(pr.price) || 0);
+            return tax !== undefined ? { ...pr, tax_amount: tax } : pr;
+        }),
+        membership_items: (appt.membership_items || []).map((m) => {
+            const tax = takeMatch("membership", m.membership_id, m.name, Number(m.quantity) || 1, Number(m.price) || 0);
+            return tax !== undefined ? { ...m, tax_amount: tax } : m;
+        }),
+    };
+}
+
+async function enrichItemsWithTax(appt: Appointment): Promise<Appointment> {
+    if (!appt.sale_id) return appt;
+    try {
+        const saleItems = await salesRepository.findItemsBySaleId(appt.sale_id);
+        return attachItemTax(appt, saleItems);
+    } catch (err: any) {
+        logger.warn("[appointments] per-item tax enrichment failed:", err?.message ?? err);
+        return appt;
+    }
+}
+
+// Batched form for list() — one query for every linked sale in the whole
+// page/day instead of one DB round-trip per appointment (see
+// salesRepository.findItemsBySaleIds).
+async function enrichManyWithTax(appts: Appointment[]): Promise<Appointment[]> {
+    const saleIds = appts.map((a) => a.sale_id).filter((id): id is string => !!id);
+    if (saleIds.length === 0) return appts;
+    try {
+        const bySaleId = await salesRepository.findItemsBySaleIds(saleIds);
+        return appts.map((a) => a.sale_id && bySaleId.has(a.sale_id) ? attachItemTax(a, bySaleId.get(a.sale_id)!) : a);
+    } catch (err: any) {
+        logger.warn("[appointments] batch per-item tax enrichment failed:", err?.message ?? err);
+        return appts;
+    }
+}
+
+// The no-show scheduler (appointments.scheduler.ts) flips a "booked" appointment
+// to "no-show" once its end time passes, but it's a setInterval running inside
+// one Node process — that never fires at all if the process restarts often or
+// the deployment runs multiple/ephemeral instances. Deriving it here too (same
+// condition the scheduler's own SQL uses: booked + ends_at < now) means the
+// calendar shows the correct status on read regardless of whether that
+// background sweep ever actually ran — it doesn't replace the batch flip
+// (reports/filters that query status='no-show' directly still need it), it
+// just guarantees what's displayed is never stuck showing stale "booked".
+function deriveDisplayStatus(appt: Appointment): Appointment {
+    if (appt.status !== "booked" || !appt.ends_at) return appt;
+    if (new Date(appt.ends_at) >= new Date()) return appt;
+    return { ...appt, status: "no-show" };
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -103,7 +259,15 @@ export const appointmentsService = {
             title:    "New Appointment Booked",
             body:     `${appointment.client_name ?? "Walk-in"} — ${formatDate(appointment.scheduled_at)} at ${formatTime(appointment.scheduled_at)}`,
             event_key: "newAppointment",
-        }).catch(() => {});
+        }).catch((err: any) => {
+            logger.error("New appointment notification failed", {
+                appointmentId: appointment.id,
+                salonId: appointment.salon_id,
+                message: err?.message,
+                stack: err?.stack,
+                error: err,
+            });
+        });
 
         // ── WhatsApp Automation: Appointment Confirmation ─────────────────────
         // Dedup check — NEVER send confirmation twice for the same appointment
@@ -166,9 +330,12 @@ export const appointmentsService = {
     },
 
     async getById(id: string): Promise<Appointment> {
-        const appointment = await appointmentsRepository.findById(id);
-        if (!appointment) throw new AppError(404, "Appointment not found", "NOT_FOUND");
-        return appointment;
+        const found = await appointmentsRepository.findById(id);
+        if (!found) throw new AppError(404, "Appointment not found", "NOT_FOUND");
+        const appointment = await enrichItemsWithTax(deriveDisplayStatus(found));
+        if (!needsTaxBackfill(appointment)) return appointment;
+        const activeTaxes = await getActiveTaxes(appointment.salon_id).catch(() => []);
+        return backfillTaxBreakdown(appointment, activeTaxes);
     },
 
     async list(params: {
@@ -183,13 +350,26 @@ export const appointmentsService = {
         limit?: number;
     }): Promise<{ data: Appointment[]; totalRecords: number; totalPages: number; currentPage: number } | Appointment[]> {
         const { salonId, clientId, date, staffId, status, startDate, endDate, page, limit } = params;
-        if (clientId) return appointmentsRepository.listByClientId(clientId);
+        if (clientId) {
+            let appts = (await appointmentsRepository.listByClientId(clientId)).map(deriveDisplayStatus);
+            appts = await enrichManyWithTax(appts);
+            const needsBackfill = appts.some(needsTaxBackfill);
+            if (!needsBackfill || appts.length === 0) return appts;
+            const activeTaxes = await getActiveTaxes(appts[0].salon_id).catch(() => []);
+            return appts.map((a) => backfillTaxBreakdown(a, activeTaxes));
+        }
         if (!salonId) throw new AppError(400, "salon_id or client_id is required", "VALIDATION_ERROR");
-        return appointmentsRepository.listBySalonId(salonId, {
+        const rawResult = await appointmentsRepository.listBySalonId(salonId, {
             date, staff_id: staffId, status,
             start_date: startDate, end_date: endDate,
             page, limit,
         });
+        const enrichedData = await enrichManyWithTax(rawResult.data.map(deriveDisplayStatus));
+        const result = { ...rawResult, data: enrichedData };
+        const needsBackfill = result.data.some(needsTaxBackfill);
+        if (!needsBackfill) return result;
+        const activeTaxes = await getActiveTaxes(salonId).catch(() => []);
+        return { ...result, data: result.data.map((a) => backfillTaxBreakdown(a, activeTaxes)) };
     },
 
     async update(params: {
@@ -208,15 +388,62 @@ export const appointmentsService = {
         // blocked outright, since the whole point of dragging/editing it is to
         // give the client a new slot.
         const isReschedule = "scheduled_at" in patch || "staff_id" in patch || "duration_minutes" in patch;
+        // Whether this patch actually changes what's owed — distinct from a
+        // pure reschedule/staff-reassignment/note edit, which never needs to
+        // touch payment status. Field list mirrors computeAppointmentTotals's
+        // inputs exactly so this decision and the recompute below can never
+        // disagree about what "changed the bill" means.
+        const isContentEdit = ["services", "package_items", "product_items", "membership_items",
+                                "discount_value", "discount_type", "ex_charges", "tip_amount"]
+                                .some((k) => k in patch);
+
         if (existing.status === "no-show" && isReschedule) {
             patch = { ...patch, status: "booked" };
-        } else if (existing.status === "paid" && isReschedule) {
-            // A completed (paid) appointment can still be dragged to a new
-            // time/staff slot on the calendar — only the schedule moves,
-            // payment/lifecycle status is left untouched (unlike no-show,
-            // this doesn't reopen the appointment).
-        } else if (["paid", "cancelled", "deleted"].includes(existing.status)) {
+        } else if (existing.status === "cancelled" || existing.status === "deleted") {
             throw new AppError(400, `Cannot update an appointment with status '${existing.status}'`, "BAD_REQUEST");
+        } else if ((existing.status === "paid" || existing.status === "partial") && isContentEdit) {
+            // Editing a paid or partially-paid appointment's actual items:
+            // recompute the true bill from the merged (existing + patch)
+            // inputs, using the same shared engine every other charge/preview
+            // call site uses, then compare against what's already been
+            // collected — never trust the frontend's own guess of the total.
+            const merged = {
+                services:         patch.services         ?? existing.services,
+                package_items:    patch.package_items    ?? existing.package_items,
+                product_items:    patch.product_items    ?? existing.product_items,
+                membership_items: patch.membership_items ?? existing.membership_items,
+                discount_type:    patch.discount_type     ?? existing.discount_type,
+                discount_value:   patch.discount_value    ?? existing.discount_value,
+                ex_charges:       patch.ex_charges        ?? existing.ex_charges,
+                tip_amount:       patch.tip_amount         ?? existing.tip_amount,
+            };
+            const activeTaxes = await getActiveTaxes(existing.salon_id).catch(() => []);
+            const newGrandTotal = computeAppointmentTotals(merged, activeTaxes).grandTotal;
+            const existingPaid = await paymentsRepository.getTotalPaidForAppointment(appointmentId);
+            logger.info("[DEBUG update() reprice]", {
+                appointmentId, existingStatus: existing.status, isContentEdit,
+                newGrandTotal, existingPaid, activeTaxesCount: activeTaxes.length,
+                patchKeys: Object.keys(patch),
+            });
+
+            if (newGrandTotal < existingPaid - 0.5) {
+                // Overpayment: the edit would take the bill below what's
+                // already been collected. There's no refund workflow — block
+                // the save rather than silently create/hide an overpaid state.
+                throw new AppError(
+                    400,
+                    "This change would reduce the total below the amount already paid. Cancel or handle removals separately instead of editing a paid appointment down.",
+                    "OVERPAYMENT_BLOCKED",
+                );
+            } else if (newGrandTotal > existingPaid + 0.5) {
+                patch = { ...patch, status: "partial" };
+                // Only a genuinely Paid booking being reopened needs the
+                // stay-editable flag — a booking that was already partial
+                // (a real deposit) keeps its existing lock behavior untouched.
+                if (existing.status === "paid") patch = { ...patch, reopened_from_paid: true };
+            } else {
+                patch = { ...patch, status: "paid" };
+            }
         }
 
         // Overlapping appointments for the same staff are allowed (e.g. hair color
@@ -262,7 +489,15 @@ export const appointmentsService = {
                 type:     "appointment",
                 title:    "Appointment Updated",
                 body:     `${existing.client_name ?? "Walk-in"} — ${formatDate(updated.scheduled_at)} at ${formatTime(updated.scheduled_at)}`,
-            }).catch(() => {});
+            }).catch((err: any) => {
+                logger.error("Appointment update notification failed", {
+                    appointmentId: updated.id,
+                    salonId: existing.salon_id,
+                    message: err?.message,
+                    stack: err?.stack,
+                    error: err,
+                });
+            });
         }
 
         // ── WhatsApp Automation: Appointment Rescheduled ──────────────────────
@@ -331,7 +566,15 @@ export const appointmentsService = {
             title:    "Appointment Cancelled",
             body:     `${existing.client_name ?? "Walk-in"} — ${formatDate(existing.scheduled_at)} at ${formatTime(existing.scheduled_at)}`,
             event_key: "appointmentCancelled",
-        }).catch(() => {});
+        }).catch((err: any) => {
+            logger.error("Appointment cancellation notification failed", {
+                appointmentId: existing.id,
+                salonId: existing.salon_id,
+                message: err?.message,
+                stack: err?.stack,
+                error: err,
+            });
+        });
 
         // ── WhatsApp Automation: Appointment Cancelled ────────────────────────
         if (existing.client_id && (existing as any).client_phone) {
@@ -414,6 +657,25 @@ export const appointmentsService = {
         return deleted;
     },
 
+    // Bulk delete for the reports multi-select UI. Reuses the same per-appointment
+    // delete() logic (soft delete + stock restore) so behavior stays identical to
+    // deleting one at a time — just looped, with per-id failures collected instead
+    // of aborting the whole batch.
+    async bulkDelete(appointmentIds: string[]): Promise<{ deleted: string[]; failed: { id: string; reason: string }[] }> {
+        const deleted: string[] = [];
+        const failed: { id: string; reason: string }[] = [];
+        for (const id of appointmentIds) {
+            try {
+                await this.delete(id);
+                deleted.push(id);
+            } catch (err: any) {
+                failed.push({ id, reason: err?.message || "Unknown error" });
+            }
+        }
+        logger.info("appointmentsService.bulkDelete complete", { requested: appointmentIds.length, deleted: deleted.length, failed: failed.length });
+        return { deleted, failed };
+    },
+
     async checkout(params: {
         appointmentId: string;
         requesterUserId: string;
@@ -452,8 +714,17 @@ export const appointmentsService = {
                 await appointmentsRepository.linkSale(appointmentId, preExistingSale.id);
             }
 
-            // Fire commission on the existing sale items (fire-and-forget)
+            // Fire commission on the existing sale items.
             const saleItems = await salesRepository.findItemsBySaleId(preExistingSale.id);
+            // checkout() can be re-entered whenever a second payment fully
+            // settles this appointment (e.g. collecting the difference after
+            // an edit) — without this, re-firing calculateForSale on the same
+            // sale_id would insert a second, duplicate set of commission rows
+            // instead of replacing the first. Awaited (not fire-and-forget)
+            // so the clear always completes before the new calculation
+            // inserts — reverseForSale only deletes rows still 'pending', so
+            // any commission already paid out is left untouched.
+            await commissionCalculationService.reverseForSale(preExistingSale.id).catch(() => {});
             commissionCalculationService.calculateForSale({
                 salonId:         existing.salon_id,
                 saleId:          preExistingSale.id,
@@ -635,6 +906,30 @@ export const appointmentsService = {
                     unit_price: m.price,
                 })),
             ];
+
+        // This fallback path (no explicit saleItems from the caller) never ran
+        // the full pricing engine per-row — unlike payments.service.ts's
+        // primary checkout path, there's no per-row wallet/discount data
+        // available here. Simplest safe approximation: split the one
+        // aggregate tax_amount across these items by their own value share,
+        // last item absorbing the rounding remainder — strictly better than
+        // today's "no per-item tax at all," at zero risk to the bill total
+        // itself (saleExtras.tax_amount is untouched).
+        if (!(saleItems && saleItems.length > 0) && (Number(saleExtras.tax_amount) || 0) > 0) {
+            const totalTax = Number(saleExtras.tax_amount) || 0;
+            const values = resolvedItems.map((i: any) => (Number(i.unit_price) || 0) * (Number(i.quantity) || 1));
+            const sumValues = values.reduce((s, v) => s + v, 0);
+            if (sumValues > 0) {
+                let allocated = 0;
+                resolvedItems.forEach((item: any, i: number) => {
+                    const isLast = i === resolvedItems.length - 1;
+                    const share = isLast ? totalTax - allocated : Math.round(totalTax * (values[i] / sumValues) * 100) / 100;
+                    allocated += share;
+                    item.tax_amount = share;
+                    item.taxable_amount = values[i];
+                });
+            }
+        }
 
         const { sale, items } = await recordTransaction({
             salon_id:        existing.salon_id,

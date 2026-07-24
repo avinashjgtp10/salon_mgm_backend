@@ -11,6 +11,12 @@ router.post(
   roleMiddleware('salon_owner', 'admin', 'staff'),
   ewalletController.topUp
 );
+router.post(
+  '/:clientId/adjust',
+  authMiddleware,
+  roleMiddleware('salon_owner', 'admin', 'staff'),
+  ewalletController.adjust
+);
 router.get(
   '/:clientId/balance',
   authMiddleware,

@@ -61,6 +61,8 @@ function buildSyntheticSale(membership: ClientMembership): { sale: Sale; items: 
       discount_amount: '0',
       unit_price: String(price),
       total_price: String(price),
+      tax_amount: '0',
+      taxable_amount: String(price),
       created_at: now,
     },
   ];
@@ -169,6 +171,12 @@ export const clientMembershipsService = {
           name:       membership.membershipName,
           quantity:   1,
           unit_price: pricePaid,
+          // Pre-existing behavior: standalone membership purchases don't
+          // compute GST at all (no tax_amount passed to recordTransaction
+          // above either) — preserved as-is here, out of scope for this
+          // per-item-tax ticket to also start taxing this flow.
+          tax_amount: 0,
+          taxable_amount: pricePaid,
         }],
       });
     } catch (err) {
@@ -206,11 +214,12 @@ export const clientMembershipsService = {
     clientId: string,
     appointmentId: string,
     services: WalletDeductionServiceInput[],
+    maxTotalAmount?: number,
   ): Promise<WalletDeductionResult> {
     const memberships = await clientMembershipsRepository.findAllActiveWithBalanceForClient(clientId, salonId);
     if (memberships.length === 0) return { totalWalletUsed: 0, remainingBalance: 0, perService: [], reused: false };
     return clientMembershipsRepository.deductWalletAcrossMemberships(
-      memberships.map((m) => m.id), salonId, { appointmentId, services },
+      memberships.map((m) => m.id), salonId, { appointmentId, services, maxTotalAmount },
     );
   },
 
