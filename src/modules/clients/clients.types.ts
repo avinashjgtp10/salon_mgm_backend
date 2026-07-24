@@ -18,6 +18,8 @@ export type Client = {
     birthday_day_month: string | null; // "MM-DD"
     birthday_year: number | null;
 
+    anniversary: string | null; // "YYYY-MM-DD" (full date)
+
     gender: string | null;
     pronouns: string | null;
 
@@ -121,6 +123,8 @@ export type CreateClientBody = {
     birthday_day_month?: string | null;
     birthday_year?: number | null;
 
+    anniversary?: string | null; // "YYYY-MM-DD"
+
     gender?: string | null;
     pronouns?: string | null;
 
@@ -159,7 +163,7 @@ export type UpdateClientBody = Partial<CreateClientBody> & {
 };
 
 export type ClientGroupFilter = "all" | "fresha_accounts" | "manually_added";
-export type GenderFilter = "all" | "female" | "male" | "non_binary" | "prefer_not_to_say";
+export type GenderFilter = "all" | "female" | "male" | "other" | "non_binary" | "prefer_not_to_say";
 
 export type ClientsListQuery = {
     offset?: number;
@@ -175,6 +179,8 @@ export type ClientsListQuery = {
     // filters
     client_group?: ClientGroupFilter;
     gender?: GenderFilter;
+    min_sales?: number;    // revenue range (lifetime paid, wallet-settled excluded)
+    max_sales?: number;
 };
 
 export type Paginated<T> = {

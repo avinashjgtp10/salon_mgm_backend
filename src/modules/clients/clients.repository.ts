@@ -107,16 +107,39 @@ export const clientsRepository = {
       )`);
         }
 
+        // Revenue (lifetime paid, wallet-settled money excluded) range. Filters
+        // on the same computed figure the `ts` join below produces, so both the
+        // count and data queries must include that join (see tsJoin) — a client
+        // with no payments coalesces to 0, so a min of 0 still includes them.
+        if (q.min_sales !== undefined && !Number.isNaN(q.min_sales)) {
+            params.push(q.min_sales);
+            where.push(`COALESCE(ts.total_sales, 0) >= $${params.length}`);
+        }
+        if (q.max_sales !== undefined && !Number.isNaN(q.max_sales)) {
+            params.push(q.max_sales);
+            where.push(`COALESCE(ts.total_sales, 0) <= $${params.length}`);
+        }
+
         const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
-        const countSql = `SELECT COUNT(*)::int AS total FROM clients c ${whereSql}`;
+        // clients.total_sales is a dead column, never written anywhere — every
+        // client shows ₹0 and "highest/lowest sales" sorting has nothing real to
+        // sort by. Compute it here from payments instead, the same way Client
+        // History's lifetime_spend does: wallet-settled amounts are excluded
+        // since that money was already recognized as revenue when the wallet/
+        // membership was funded/sold. Aliased `ts` and joined into BOTH the count
+        // and data queries so the revenue range filter above can reference it and
+        // the total count stays consistent with the returned rows.
+        const tsJoin = `
+      LEFT JOIN (
+        SELECT client_id, SUM(GREATEST(0, paid_amount - COALESCE(ewallet_used, 0) - COALESCE(membership_wallet_used, 0))) AS total_sales
+        FROM payments
+        WHERE salon_id = $1 AND status IN ('completed', 'partial')
+        GROUP BY client_id
+      ) ts ON ts.client_id = c.id`;
 
-        // clients.total_sales is a dead column, never written anywhere (see the
-        // campaign-filter join further below) — every client shows ₹0 and
-        // "highest/lowest sales" sorting has nothing real to sort by. Compute it
-        // here from payments instead, the same way Client History's lifetime_spend
-        // does: wallet-settled amounts are excluded since that money was already
-        // recognized as revenue when the wallet/membership was funded/sold.
+        const countSql = `SELECT COUNT(*)::int AS total FROM clients c ${tsJoin} ${whereSql}`;
+
         // Aliased separately from clients.total_sales (not overwritten in the
         // same SELECT) to avoid an ambiguous-column error from ORDER BY when
         // sorting by it.
@@ -124,12 +147,7 @@ export const clientsRepository = {
         const dataSql = `
       SELECT c.*, COALESCE(ts.total_sales, 0) AS computed_total_sales
       FROM clients c
-      LEFT JOIN (
-        SELECT client_id, SUM(GREATEST(0, paid_amount - COALESCE(ewallet_used, 0) - COALESCE(membership_wallet_used, 0))) AS total_sales
-        FROM payments
-        WHERE salon_id = $1 AND status IN ('completed', 'partial')
-        GROUP BY client_id
-      ) ts ON ts.client_id = c.id
+      ${tsJoin}
       ${whereSql}
       ORDER BY ${orderCol} ${so}
       OFFSET $${params.length + 1}
@@ -172,7 +190,7 @@ export const clientsRepository = {
         first_name,last_name,full_name,
         email,phone_country_code,phone_number,
         additional_email,additional_phone_country_code,additional_phone_number,
-        birthday_day_month,birthday_year,
+        birthday_day_month,birthday_year,anniversary,
         gender,pronouns,address,
         client_source,referred_by_client_id,
         preferred_language,occupation,country,avatar_url,
@@ -183,13 +201,13 @@ export const clientsRepository = {
         $1,$2,$3,$4,
         $5,$6,$7,
         $8,$9,$10,
-        $11,$12,
-        $13,$14,$15,
-        $16,$17,
-        $18,$19,$20,$21,
-        $22,$23,$24,
-        $25,$26,$27,
-        $28,$29
+        $11,$12,$13,
+        $14,$15,$16,
+        $17,$18,
+        $19,$20,$21,$22,
+        $23,$24,$25,
+        $26,$27,$28,
+        $29,$30
       ) RETURNING *`,
             [
                 salonId,
@@ -204,6 +222,7 @@ export const clientsRepository = {
                 body.additional_phone_number ?? null,
                 body.birthday_day_month || null,
                 body.birthday_year || null,
+                body.anniversary || null,
                 body.gender ?? null,
                 body.pronouns ?? null,
                 body.address ?? null,
@@ -343,6 +362,7 @@ export const clientsRepository = {
             else if (k === "additional_phone_number") add("additional_phone_number", patch.additional_phone_number ?? null);
             else if (k === "birthday_day_month") add("birthday_day_month", patch.birthday_day_month || null);
             else if (k === "birthday_year") add("birthday_year", patch.birthday_year || null);
+            else if (k === "anniversary") add("anniversary", patch.anniversary || null);
             else if (k === "gender") add("gender", patch.gender ?? null);
             else if (k === "pronouns") add("pronouns", patch.pronouns ?? null);
             else if (k === "address") add("address", patch.address ?? null);
