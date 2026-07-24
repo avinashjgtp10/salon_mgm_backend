@@ -137,6 +137,57 @@ export const superAdminController = {
     } catch (err) { return next(err); }
   },
 
+  // ── SUBSCRIPTION PERMISSIONS ─────────────────────────────────────────────────
+
+  async searchSalonsForSubscriptionPermissions(req: Request, res: Response, next: NextFunction) {
+    try {
+      const q = typeof req.query.q === "string" ? req.query.q : "";
+      const data = await superAdminService.searchSalonsForSubscriptionPermissions(q);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
+  async getSubscriptionPermissionsById(req: Request, res: Response, next: NextFunction) {
+    try {
+      const salonId = String(req.params.salonId);
+      const data = await superAdminService.getSubscriptionPermissionsById(salonId);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
+  async updateSubscriptionPermissions(req: Request & { user?: { userId: string } }, res: Response, next: NextFunction) {
+    try {
+      const salonId = String(req.params.salonId);
+      const { permissions } = req.body;
+      if (!permissions || typeof permissions !== "object") {
+        return res.status(400).json({ success: false, error: { message: "permissions object required" } });
+      }
+      const changedByUserId = req.user?.userId;
+      if (!changedByUserId) return res.status(401).json({ success: false, error: { message: "Unauthorized" } });
+      const data = await superAdminService.updateSubscriptionPermissions(salonId, permissions, changedByUserId);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
+  async getSubscriptionPermissionAuditLog(req: Request, res: Response, next: NextFunction) {
+    try {
+      const salonId = String(req.params.salonId);
+      const data = await superAdminService.getSubscriptionPermissionAuditLog(salonId);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
+  async grantSubscriptionDays(req: Request & { user?: { userId: string } }, res: Response, next: NextFunction) {
+    try {
+      const salonId = String(req.params.salonId);
+      const days = Number(req.body?.days);
+      const changedByUserId = req.user?.userId;
+      if (!changedByUserId) return res.status(401).json({ success: false, error: { message: "Unauthorized" } });
+      const data = await superAdminService.grantSubscriptionDays(salonId, days, changedByUserId);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
   // ── USERS ─────────────────────────────────────────────────────────────────────
 
   async createUser(req: Request, res: Response, next: NextFunction) {

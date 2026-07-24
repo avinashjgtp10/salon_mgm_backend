@@ -160,6 +160,60 @@ export const subscriptionsRepository = {
         return rows.length > 0
     },
 
+    async findMostRecentBySalonId(salonId: string): Promise<Subscription | null> {
+        const { rows } = await pool.query(
+            `SELECT * FROM subscriptions
+       WHERE salon_id = $1
+       ORDER BY created_at DESC
+       LIMIT 1`,
+            [salonId]
+        )
+        return rows[0] || null
+    },
+
+    // Super-admin manual comp/override — extends (or backfills, if the
+    // current period already lapsed) current_period_end by `days` from
+    // whichever is later: now, or the existing current_period_end. Also
+    // forces status back to 'active' so useSubscriptionPoller's
+    // ["active","trialing"].includes(status) check passes immediately —
+    // this is the one field that actually drives the SubscriptionWall.
+    async extendSubscriptionDays(subscriptionId: string, days: number): Promise<Subscription> {
+        const { rows } = await pool.query(
+            `UPDATE subscriptions
+       SET current_period_end = GREATEST(current_period_end, NOW()) + ($2 || ' days')::interval,
+           status = 'active',
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
+            [subscriptionId, days]
+        )
+        return rows[0]
+    },
+
+    // Super-admin manual comp/override for an account with NO existing
+    // subscription row at all — creates one directly, bypassing Razorpay
+    // entirely (razorpay_subscription_id/razorpay_plan_id stay NULL, which
+    // every consumer of those fields already null-guards against). Needs
+    // SOME plan_id (subscriptions.plan_id is NOT NULL, FK'd to
+    // subscription_plans) — caller passes whichever plan it picked;
+    // current_period_end is exactly `days` from now, nothing more.
+    async createManualSubscription(data: {
+        salon_id: string
+        plan_id: string
+        days: number
+    }): Promise<Subscription> {
+        const { rows } = await pool.query(
+            `INSERT INTO subscriptions (
+                salon_id, plan_id, razorpay_subscription_id, razorpay_plan_id,
+                status, is_trial, current_period_start, current_period_end
+            )
+            VALUES ($1, $2, NULL, NULL, 'active', false, NOW(), NOW() + ($3 || ' days')::interval)
+            RETURNING *`,
+            [data.salon_id, data.plan_id, data.days]
+        )
+        return rows[0]
+    },
+
     async updateSubscriptionStatus(
         razorpaySubId: string,
         status: SubscriptionStatus,

@@ -69,7 +69,7 @@ export const clientsService = {
         // name is almost always a duplicate/mistake, not two real clients.
         if (normalized.phone_number) {
             const dup = await clientsRepository.findActiveByPhone(
-                normalized.phone_country_code, normalized.phone_number, salonId,
+                normalized.phone_number, salonId,
             );
             if (dup) {
                 throw new AppError(409, `This phone number is already registered to ${dup.full_name}`, "DUPLICATE_PHONE");
@@ -181,7 +181,7 @@ export const clientsService = {
         // unrelated field on a client shouldn't trip over their own number.
         if (patch.phone_number && patch.phone_number.trim() !== (exists.phone_number || "").trim()) {
             const dup = await clientsRepository.findActiveByPhone(
-                patch.phone_country_code ?? exists.phone_country_code, patch.phone_number, salonId, clientId,
+                patch.phone_number, salonId, clientId,
             );
             if (dup) {
                 throw new AppError(409, `This phone number is already registered to ${dup.full_name}`, "DUPLICATE_PHONE");
