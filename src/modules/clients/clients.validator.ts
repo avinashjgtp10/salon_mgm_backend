@@ -119,6 +119,8 @@ export const validateCreateClient = (req: Request, _res: Response, next: NextFun
 
         if (!isOptionalMMDD(b.birthday_day_month)) throw new AppError(400, "birthday_day_month is invalid", "VALIDATION_ERROR");
         if (!isOptionalNumber(b.birthday_year)) throw new AppError(400, "birthday_year must be number", "VALIDATION_ERROR");
+        if (b.anniversary !== undefined && b.anniversary !== "" && !isOptionalDateString(b.anniversary))
+            throw new AppError(400, "anniversary must be YYYY-MM-DD", "VALIDATION_ERROR");
 
         validateAddressesArray(b.addresses, false);
         validateEmergencyContactsArray(b.emergency_contacts, false);
@@ -183,6 +185,8 @@ export const validateUpdateClient = (req: Request, _res: Response, next: NextFun
 
         if (!isOptionalMMDD(b.birthday_day_month)) throw new AppError(400, "birthday_day_month is invalid", "VALIDATION_ERROR");
         if (!isOptionalNumber(b.birthday_year)) throw new AppError(400, "birthday_year must be number", "VALIDATION_ERROR");
+        if (b.anniversary !== undefined && b.anniversary !== "" && !isOptionalDateString(b.anniversary))
+            throw new AppError(400, "anniversary must be YYYY-MM-DD", "VALIDATION_ERROR");
 
         validateAddressesArray(b.addresses, true);
         validateEmergencyContactsArray(b.emergency_contacts, true);
@@ -220,6 +224,14 @@ export const validateClientsListQuery = (req: Request, _res: Response, next: Nex
         if (!isOptionalDateString(q.created_from)) throw new AppError(400, "created_from must be YYYY-MM-DD", "VALIDATION_ERROR");
         if (!isOptionalDateString(q.created_to)) throw new AppError(400, "created_to must be YYYY-MM-DD", "VALIDATION_ERROR");
 
+        for (const key of ["min_sales", "max_sales"] as const) {
+            if (q[key] !== undefined && String(q[key]).trim() !== "") {
+                const n = Number(String(q[key]));
+                if (!Number.isFinite(n) || n < 0)
+                    throw new AppError(400, `${key} must be a number >= 0`, "VALIDATION_ERROR");
+            }
+        }
+
         if (q.client_group !== undefined) {
             const cg = String(q.client_group);
             if (!["all", "fresha_accounts", "manually_added"].includes(cg)) {
@@ -229,7 +241,7 @@ export const validateClientsListQuery = (req: Request, _res: Response, next: Nex
 
         if (q.gender !== undefined) {
             const g = String(q.gender);
-            if (!["all", "female", "male", "non_binary", "prefer_not_to_say"].includes(g)) {
+            if (!["all", "female", "male", "other", "non_binary", "prefer_not_to_say"].includes(g)) {
                 throw new AppError(400, "gender invalid", "VALIDATION_ERROR");
             }
         }

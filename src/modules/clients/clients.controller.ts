@@ -42,6 +42,14 @@ const parseExcelBuffer = (buffer: Buffer): any[] => {
     return XLSX.utils.sheet_to_json(ws, { defval: null });
 };
 
+// Revenue range bound → non-negative number, or undefined when absent/blank/
+// invalid so the filter is simply skipped rather than rejecting the request.
+const parseMoney = (v: unknown): number | undefined => {
+    if (v === undefined || v === null || String(v).trim() === "") return undefined;
+    const n = Number(String(v));
+    return Number.isFinite(n) && n >= 0 ? n : undefined;
+};
+
 export const clientsController = {
     // GET /api/v1/clients
     async list(req: AuthRequest, res: Response, next: NextFunction) {
@@ -75,6 +83,8 @@ export const clientsController = {
                 source: req.query.source ? String(req.query.source) : undefined,
                 client_group: req.query.client_group ? (String(req.query.client_group) as any) : undefined,
                 gender: req.query.gender ? (String(req.query.gender) as any) : undefined,
+                min_sales: parseMoney(req.query.min_sales),
+                max_sales: parseMoney(req.query.max_sales),
             };
             const raw = await clientsService.list(q, salonId);
             const currentPage = page ?? Math.max(1, Math.floor(resolvedOffset / resolvedLimit) + 1);
@@ -116,6 +126,22 @@ export const clientsController = {
 
             return sendSuccess(res, 200, { url }, "Avatar uploaded successfully");
         } catch (err) { return next(err); }
+    },
+
+    // GET /api/v1/clients/referral/:code
+    // Resolve a referral code to the (active) client who owns it, so the
+    // "Referred by" field can confirm whose code was entered before saving.
+    async lookupReferralCode(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const salonId = getSalonId(req);
+            const code = String(req.params.code || "").trim().toUpperCase();
+            if (!code) throw new AppError(400, "code is required", "VALIDATION_ERROR");
+            const client = await clientsRepository.findByReferralCode(code, salonId);
+            if (!client || client.is_active === false) {
+                throw new AppError(404, "No client found for this referral code", "NOT_FOUND");
+            }
+            return sendSuccess(res, 200, { id: client.id, full_name: client.full_name }, "Referral code resolved");
+        } catch (e) { return next(e); }
     },
 
     // GET /api/v1/clients/:clientId
@@ -247,6 +273,8 @@ export const clientsController = {
                 source: req.query.source ? String(req.query.source) : undefined,
                 client_group: req.query.client_group ? (String(req.query.client_group) as any) : undefined,
                 gender: req.query.gender ? (String(req.query.gender) as any) : undefined,
+                min_sales: parseMoney(req.query.min_sales),
+                max_sales: parseMoney(req.query.max_sales),
             };
             const data = await clientsService.list(q, salonId);
             const rows = data.items.map((c: any) => ({

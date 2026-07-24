@@ -69,6 +69,9 @@ router.get(
     clientsController.getHistory
 );
 
+// Referral-code lookup (for the "Referred by" field) — must be BEFORE /:clientId
+router.get("/referral/:code", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), clientsController.lookupReferralCode);
+
 // GET / PATCH / DELETE by id
 router.get("/:clientId", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), clientsController.getById);
 router.patch("/:clientId", authMiddleware, ownerAdminStaff, requirePermission("edit_clients"), validateUpdateClient, clientsController.update);
