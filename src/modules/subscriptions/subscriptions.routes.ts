@@ -2,6 +2,7 @@ import { Router } from "express"
 import { subscriptionsController } from "./subscriptions.controller"
 import { authMiddleware } from "../../middleware/auth.middleware"
 import { roleMiddleware } from "../../middleware/role.middleware"
+import { requireSubscriptionPermission } from "../../middleware/subscriptionPermission.middleware"
 import {
     validateCreatePlan,
     validateCreateSubscription,
@@ -26,7 +27,20 @@ router.get("/trial/:salonId", authMiddleware, subscriptionsController.getTrialSt
 router.post("/verify/:salonId", authMiddleware, subscriptionsController.verifySubscription)
 
 // ─── Subscriptions ────────────────────────────────────────────
-router.post("/", authMiddleware, validateCreateSubscription, subscriptionsController.createSubscription)
+// Renew/Upgrade/Downgrade all funnel through this one endpoint — this
+// codebase has no separate route per action. All three permissions are
+// checked; since a super admin normally toggles them together for one
+// account, this is equivalent to gating "this account's ability to change
+// its plan" as a whole until distinct renew/upgrade/downgrade flows exist.
+router.post(
+    "/",
+    authMiddleware,
+    requireSubscriptionPermission("renew_subscription"),
+    requireSubscriptionPermission("upgrade_subscription"),
+    requireSubscriptionPermission("downgrade_subscription"),
+    validateCreateSubscription,
+    subscriptionsController.createSubscription
+)
 router.get("/salon/:salonId", authMiddleware, subscriptionsController.getSubscriptionsBySalon)
 router.get("/:id", authMiddleware, subscriptionsController.getSubscription)
 router.post("/:id/cancel", authMiddleware, subscriptionsController.cancelSubscription)

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
+import { requireSubscriptionPermission } from "../../middleware/subscriptionPermission.middleware";
 import { billingController } from "./billing.controller";
 import {
     validateSubscribeBilling,
@@ -20,6 +21,7 @@ router.get(
     "/subscription",
     authMiddleware,
     roleMiddleware("salon_owner", "admin"),
+    requireSubscriptionPermission("view_subscription"),
     billingController.getSubscription
 );
 
@@ -28,6 +30,7 @@ router.post(
     "/subscribe",
     authMiddleware,
     roleMiddleware("salon_owner", "admin"),
+    requireSubscriptionPermission("renew_subscription"),
     validateSubscribeBilling,
     billingController.subscribe
 );
@@ -37,6 +40,7 @@ router.patch(
     "/subscription/:id",
     authMiddleware,
     roleMiddleware("salon_owner", "admin"),
+    requireSubscriptionPermission("upgrade_subscription"),
     validateUpdateBillingSubscription,
     billingController.updateSubscription
 );
@@ -46,6 +50,7 @@ router.post(
     "/subscription/:id/cancel",
     authMiddleware,
     roleMiddleware("salon_owner", "admin"),
+    requireSubscriptionPermission("cancel_subscription"),
     billingController.cancelSubscription
 );
 
@@ -72,6 +77,7 @@ router.get(
     "/invoices",
     authMiddleware,
     roleMiddleware("salon_owner", "admin"),
+    requireSubscriptionPermission("view_billing_history"),
     billingController.listInvoices
 );
 
@@ -79,6 +85,7 @@ router.get(
     "/invoices/:id",
     authMiddleware,
     roleMiddleware("salon_owner", "admin"),
+    requireSubscriptionPermission("view_billing_history"),
     billingController.getInvoice
 );
 
