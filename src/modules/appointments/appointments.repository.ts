@@ -95,17 +95,24 @@ export const appointmentsRepository = {
         const values: any[] = [salonId];
         let idx = 2;
 
+        // Salon calendar days are Asia/Kolkata days, but the DB session runs in
+        // UTC — comparing scheduled_at (timestamptz) against a bare "YYYY-MM-DD"
+        // implicitly anchors the day boundary to UTC midnight (05:30 IST), not
+        // local midnight. That silently dropped any appointment booked between
+        // IST 00:00–05:30 from "today"'s list — it fell into the *previous*
+        // UTC day and never matched. Anchoring explicitly to +05:30 fixes both
+        // the single-date and start/end range filters the same way.
         if (filters.date) {
-            conditions.push(`DATE(a.scheduled_at) = $${idx}::date`);
-            values.push(filters.date); idx++;
+            conditions.push(`a.scheduled_at >= $${idx}::timestamptz AND a.scheduled_at < ($${idx}::timestamptz + INTERVAL '1 day')`);
+            values.push(filters.date + "T00:00:00+05:30"); idx++;
         }
         if (filters.start_date) {
             conditions.push(`a.scheduled_at >= $${idx}::timestamptz`);
-            values.push(filters.start_date + "T00:00:00Z"); idx++;
+            values.push(filters.start_date + "T00:00:00+05:30"); idx++;
         }
         if (filters.end_date) {
-            conditions.push(`a.scheduled_at < ($${idx}::date + INTERVAL '1 day')`);
-            values.push(filters.end_date); idx++;
+            conditions.push(`a.scheduled_at < ($${idx}::timestamptz + INTERVAL '1 day')`);
+            values.push(filters.end_date + "T00:00:00+05:30"); idx++;
         }
         if (filters.staff_id) {
             conditions.push(`a.staff_id = $${idx}`);
