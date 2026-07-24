@@ -162,7 +162,14 @@ export const salesService = {
                 due_amount:     saleDueAmount,
                 payment_method: body.payment_method,
                 split_details:  splitDetails,
-                status:         "completed",
+                // Was hardcoded 'completed' regardless of amount collected — a
+                // Quick Sale checkout that only took a deposit (amount_paid <
+                // total) recorded a payment claiming to be fully settled with a
+                // nonzero due_amount still attached, which is self-contradictory
+                // and undercounts what's actually still owed everywhere that
+                // reads payments.status (e.g. Pending Payments). Same rule the
+                // calendar checkout flow already uses.
+                status:         saleDueAmount > 0 ? "partial" : "completed",
                 notes:          `Payment for Sale ID: ${sale.id}`,
             });
         } catch (error) {

@@ -303,7 +303,7 @@ export const clientMembershipsRepository = {
         (id, salon_id, client_id, client_name, mobile, email,
          membership_id, membership_name, colour, total_sessions, used_sessions,
          expires_at, end_date, status, price_paid, membership_wallet_balance)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$11,$11,'active',$12,$13)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$11,$14,'active',$12,$13)
        RETURNING *`,
       [
         id, salonId, dto.clientId, clientName, mobile, email,
@@ -312,6 +312,12 @@ export const clientMembershipsRepository = {
         expiresAt,
         dto.pricePaid ?? null,
         walletBalance,
+        // expires_at (timestamptz) and end_date (date) can't share one $11
+        // placeholder — Postgres infers a single type per parameter across
+        // every occurrence in the statement, so reusing it for two differently
+        // -typed columns is a genuine SQL error (42P08), not just a style
+        // choice. Same value, its own placeholder.
+        expiresAt,
       ],
     );
     return toClientMembership(rows[0]);
