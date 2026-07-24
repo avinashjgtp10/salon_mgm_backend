@@ -20,7 +20,11 @@ import type {
 // Map the unified appointments.status directly to the dashboard's display
 // status — payment state and lifecycle state are the same column now, so
 // there's no separate "is it actually paid" lookup needed anymore.
-function mapStatus(s: string): "completed" | "upcoming" | "cancelled" | "no-show" {
+// 'partial' gets its own bucket (not folded into "upcoming") so a client who's
+// paid part of the bill is visibly distinct from one who hasn't paid at all —
+// same reasoning as the Today's Revenue fix: partial payments are real,
+// already-collected money and shouldn't be invisible on the dashboard.
+function mapStatus(s: string): "completed" | "upcoming" | "partial" | "cancelled" | "no-show" {
   switch (s) {
     case "cancelled":
       return "cancelled";
@@ -28,8 +32,10 @@ function mapStatus(s: string): "completed" | "upcoming" | "cancelled" | "no-show
       return "no-show";
     case "paid":
       return "completed";
+    case "partial":
+      return "partial";
     default:
-      return "upcoming"; // booked, partial
+      return "upcoming"; // booked
   }
 }
 
@@ -53,30 +59,63 @@ export const salonDashboardRepository = {
         sales_count: string;
         last_month_sales_count: string;
       }>(
-        `SELECT
-           COALESCE(SUM(CASE WHEN date_trunc('month', s.created_at) = date_trunc('month', NOW())
-             THEN s.total_amount ELSE 0 END), 0)::numeric AS total_revenue,
-           COALESCE(SUM(CASE WHEN date_trunc('month', s.created_at) = date_trunc('month', NOW() - INTERVAL '1 month')
-             THEN s.total_amount ELSE 0 END), 0)::numeric AS last_month_revenue,
-           COALESCE(SUM(CASE WHEN DATE(s.created_at) = CURRENT_DATE
-             THEN s.total_amount ELSE 0 END), 0)::numeric AS today_revenue,
-           COALESCE(SUM(CASE WHEN DATE(s.created_at) = (CURRENT_DATE - INTERVAL '1 month')::date
-             THEN s.total_amount ELSE 0 END), 0)::numeric AS last_month_today_revenue,
-           COALESCE(SUM(CASE WHEN DATE(s.created_at) = CURRENT_DATE - INTERVAL '1 day'
-             THEN s.total_amount ELSE 0 END), 0)::numeric AS yesterday_revenue,
-           COUNT(CASE WHEN date_trunc('month', s.created_at) = date_trunc('month', NOW()) THEN 1 END) AS sales_count,
-           COUNT(CASE WHEN date_trunc('month', s.created_at) = date_trunc('month', NOW() - INTERVAL '1 month') THEN 1 END) AS last_month_sales_count
-         FROM sales s
-         LEFT JOIN appointments a ON a.id = s.appointment_id
-         WHERE s.salon_id = $1
-           AND s.status = 'completed'
-           AND s.created_at >= date_trunc('month', NOW() - INTERVAL '1 month')
-           -- A completed sale only counts as revenue while its linked
-           -- appointment (if it has one — quick sales don't) is CURRENTLY
-           -- still 'paid' — if that appointment was later cancelled or
-           -- soft-deleted, its money shouldn't keep showing as today's/this
-           -- month's revenue, matching the calendar's own current state.
-           AND (a.id IS NULL OR (a.status = 'paid' AND a.deleted_at IS NULL))`,
+        `WITH sales_rows AS (
+           -- Completed sales, same appointment gate as before ('partial' is a
+           -- fully-collected sale whose appointment status just never got
+           -- flipped back to 'paid' — see the note below).
+           SELECT s.created_at AS event_at, s.total_amount AS amount
+           FROM sales s
+           LEFT JOIN appointments a ON a.id = s.appointment_id
+           WHERE s.salon_id = $1
+             AND s.status = 'completed'
+             AND s.created_at >= date_trunc('month', NOW() - INTERVAL '1 month')
+             AND (a.id IS NULL OR (a.status IN ('paid', 'partial') AND a.deleted_at IS NULL))
+         ),
+         -- Money genuinely collected on a bill that's still short of the full
+         -- total (a real deposit, not yet settled) — payments.service.ts only
+         -- auto-creates a sales row once a payment leg fully clears, so this
+         -- money would otherwise sit invisible to every revenue figure until
+         -- (if ever) the remainder gets paid. Dated by when it was actually
+         -- collected (payments.created_at), not the eventual settlement date.
+         -- Excluded once the appointment DOES get a completed sale, so that
+         -- deposit isn't double-counted on top of the sale's full total_amount.
+         open_partial_rows AS (
+           SELECT p.created_at AS event_at, p.paid_amount AS amount
+           FROM payments p
+           JOIN appointments a ON a.id = p.appointment_id
+           WHERE p.salon_id = $1
+             AND p.status = 'partial'
+             AND p.created_at >= date_trunc('month', NOW() - INTERVAL '1 month')
+             AND a.deleted_at IS NULL
+             AND a.status NOT IN ('cancelled', 'no-show')
+             AND NOT EXISTS (
+               SELECT 1 FROM sales s2
+               WHERE s2.appointment_id = p.appointment_id AND s2.status = 'completed'
+             )
+         ),
+         revenue_events AS (
+           SELECT event_at, amount FROM sales_rows
+           UNION ALL
+           SELECT event_at, amount FROM open_partial_rows
+         )
+         SELECT
+           COALESCE(SUM(CASE WHEN date_trunc('month', event_at) = date_trunc('month', NOW())
+             THEN amount ELSE 0 END), 0)::numeric AS total_revenue,
+           COALESCE(SUM(CASE WHEN date_trunc('month', event_at) = date_trunc('month', NOW() - INTERVAL '1 month')
+             THEN amount ELSE 0 END), 0)::numeric AS last_month_revenue,
+           COALESCE(SUM(CASE WHEN DATE(event_at) = CURRENT_DATE
+             THEN amount ELSE 0 END), 0)::numeric AS today_revenue,
+           COALESCE(SUM(CASE WHEN DATE(event_at) = (CURRENT_DATE - INTERVAL '1 month')::date
+             THEN amount ELSE 0 END), 0)::numeric AS last_month_today_revenue,
+           COALESCE(SUM(CASE WHEN DATE(event_at) = CURRENT_DATE - INTERVAL '1 day'
+             THEN amount ELSE 0 END), 0)::numeric AS yesterday_revenue,
+           -- avg-bill-value counts stay scoped to actual completed sales only
+           -- (sales_rows) — a still-open deposit isn't a finished transaction,
+           -- so it shouldn't count as one more "sale" in that denominator even
+           -- though its money now shows up in the revenue totals above.
+           (SELECT COUNT(*) FROM sales_rows WHERE date_trunc('month', event_at) = date_trunc('month', NOW())) AS sales_count,
+           (SELECT COUNT(*) FROM sales_rows WHERE date_trunc('month', event_at) = date_trunc('month', NOW() - INTERVAL '1 month')) AS last_month_sales_count
+         FROM revenue_events`,
         [salonId]
       ),
 
@@ -130,13 +169,29 @@ export const salonDashboardRepository = {
       ),
 
       // All-time total revenue — genuinely unbounded, unlike total_revenue
-      // above which is scoped to the current calendar month.
+      // above which is scoped to the current calendar month. Same
+      // sales + still-open-deposit union as getSummary's main query.
       pool.query<{ all_time_revenue: string }>(
-        `SELECT COALESCE(SUM(s.total_amount), 0)::numeric AS all_time_revenue
-         FROM sales s
-         LEFT JOIN appointments a ON a.id = s.appointment_id
-         WHERE s.salon_id = $1 AND s.status = 'completed'
-           AND (a.id IS NULL OR (a.status = 'paid' AND a.deleted_at IS NULL))`,
+        `SELECT COALESCE(SUM(amount), 0)::numeric AS all_time_revenue
+         FROM (
+           SELECT s.total_amount AS amount
+           FROM sales s
+           LEFT JOIN appointments a ON a.id = s.appointment_id
+           WHERE s.salon_id = $1 AND s.status = 'completed'
+             AND (a.id IS NULL OR (a.status IN ('paid', 'partial') AND a.deleted_at IS NULL))
+           UNION ALL
+           SELECT p.paid_amount AS amount
+           FROM payments p
+           JOIN appointments a ON a.id = p.appointment_id
+           WHERE p.salon_id = $1
+             AND p.status = 'partial'
+             AND a.deleted_at IS NULL
+             AND a.status NOT IN ('cancelled', 'no-show')
+             AND NOT EXISTS (
+               SELECT 1 FROM sales s2
+               WHERE s2.appointment_id = p.appointment_id AND s2.status = 'completed'
+             )
+         ) combined`,
         [salonId]
       ),
     ]);
@@ -248,10 +303,10 @@ export const salonDashboardRepository = {
   async getRevenueChart(salonId: string, period: string = "monthly"): Promise<RevenueDataPoint[]> {
     let sql: string;
 
-    // A completed sale only counts as revenue while its linked appointment
-    // (if it has one — quick sales don't) is CURRENTLY still 'paid' — see
-    // the same condition in getSummary() above.
-    const revenueGate = `(a.id IS NULL OR (a.status = 'paid' AND a.deleted_at IS NULL))`;
+    // Same gate as getSummary() above — 'partial' is included alongside
+    // 'paid' so a fully-collected sale isn't hidden just because its
+    // appointment's own status didn't get flipped back from 'partial'.
+    const revenueGate = `(a.id IS NULL OR (a.status IN ('paid', 'partial') AND a.deleted_at IS NULL))`;
 
     if (period === "today") {
       sql = `
@@ -349,8 +404,9 @@ export const salonDashboardRepository = {
        WHERE s.salon_id = $1
          AND s.is_active = true
          -- Same rule as getSummary(): a sale tied to an appointment that's
-         -- since gone cancelled/deleted shouldn't keep counting as revenue.
-         AND (sl.id IS NULL OR sla.id IS NULL OR (sla.status = 'paid' AND sla.deleted_at IS NULL))
+         -- since gone cancelled/deleted shouldn't keep counting as revenue —
+         -- but 'partial' is still included (see getSummary's comment).
+         AND (sl.id IS NULL OR sla.id IS NULL OR (sla.status IN ('paid', 'partial') AND sla.deleted_at IS NULL))
        GROUP BY s.id, s.first_name, s.last_name, s.designation
        HAVING COALESCE(SUM(sl.total_amount), 0) > 0
        ORDER BY revenue DESC
@@ -397,8 +453,8 @@ export const salonDashboardRepository = {
            AND date_trunc('month', sl.created_at) = date_trunc('month', NOW())
            AND sl.status = 'completed'
            -- Same rule as getSummary(): exclude sales whose appointment has
-           -- since been cancelled/deleted.
-           AND (a.id IS NULL OR (a.status = 'paid' AND a.deleted_at IS NULL))
+           -- since been cancelled/deleted, but keep 'partial' included.
+           AND (a.id IS NULL OR (a.status IN ('paid', 'partial') AND a.deleted_at IS NULL))
          GROUP BY sl.staff_id
        )
        SELECT
