@@ -286,6 +286,132 @@ export const superAdminRepository = {
     return rows[0];
   },
 
+  // ── SUBSCRIPTION PERMISSIONS ──────────────────────────────────────────────────
+  // Same salon_settings key-value pattern as role_permissions above, under its
+  // own key so the two feature areas don't collide. Controls which
+  // subscription-related actions (view/renew/upgrade/downgrade/cancel/billing
+  // history/payment methods) an ACCOUNT (owner/admin included, not just staff)
+  // is allowed to perform — enforced by requireSubscriptionPermission()
+  // middleware on every request, so changes apply without requiring logout.
+
+  async searchSalonsForSubscriptionPermissions(query: string) {
+    const param = query ? `%${query.trim()}%` : "%";
+    const { rows } = await pool.query(`
+      SELECT
+        s.id,
+        COALESCE(s.business_name, s.slug, 'Unnamed')           AS name,
+        s.is_active,
+        u.email                                                  AS owner_email,
+        TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,''))) AS owner_name,
+        bp.name                                                  AS plan_name,
+        ss.value                                                 AS subscription_permissions
+      FROM salons s
+      JOIN  users u  ON u.id = s.owner_id
+      LEFT JOIN billing_subscriptions bs ON bs.salon_id = s.id AND bs.status IN ('active','trialing')
+      LEFT JOIN billing_plans bp ON bp.id = bs.plan_id
+      LEFT JOIN salon_settings ss ON ss.salon_id = s.id AND ss.key = 'subscription_permissions'
+      WHERE (
+        s.business_name ILIKE $1
+        OR s.slug        ILIKE $1
+        OR u.email       ILIKE $1
+        OR u.first_name  ILIKE $1
+        OR u.last_name   ILIKE $1
+      )
+      ORDER BY s.business_name ASC
+      LIMIT 50
+    `, [param]);
+    return rows;
+  },
+
+  async getSubscriptionPermissionsById(salonId: string) {
+    const { rows } = await pool.query(`
+      SELECT
+        s.id,
+        COALESCE(s.business_name, s.slug, 'Unnamed')           AS name,
+        s.is_active,
+        u.email                                                  AS owner_email,
+        TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,''))) AS owner_name,
+        bp.name                                                  AS plan_name,
+        ss.value                                                 AS subscription_permissions
+      FROM salons s
+      JOIN  users u  ON u.id = s.owner_id
+      LEFT JOIN billing_subscriptions bs ON bs.salon_id = s.id AND bs.status IN ('active','trialing')
+      LEFT JOIN billing_plans bp ON bp.id = bs.plan_id
+      LEFT JOIN salon_settings ss ON ss.salon_id = s.id AND ss.key = 'subscription_permissions'
+      WHERE s.id = $1
+      LIMIT 1
+    `, [salonId]);
+    return rows[0] ?? null;
+  },
+
+  async updateSubscriptionPermissions(
+    salonId: string,
+    permissions: Record<string, boolean>,
+    changedByUserId: string
+  ) {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const { rows: prevRows } = await client.query(
+        `SELECT value FROM salon_settings WHERE salon_id = $1 AND key = 'subscription_permissions' LIMIT 1`,
+        [salonId]
+      );
+      const previousValue = prevRows[0]?.value ? JSON.parse(prevRows[0].value) : null;
+
+      const value = JSON.stringify(permissions);
+      const { rows } = await client.query(`
+        INSERT INTO salon_settings (salon_id, key, value, description)
+        VALUES ($1, 'subscription_permissions', $2, 'Per-account subscription action permissions managed by super admin')
+        ON CONFLICT (salon_id, key) DO UPDATE
+          SET value = EXCLUDED.value, updated_at = NOW()
+        RETURNING salon_id, key, updated_at
+      `, [salonId, value]);
+
+      await client.query(
+        `INSERT INTO subscription_permission_audit_log (salon_id, changed_by, previous_value, new_value)
+         VALUES ($1, $2, $3, $4)`,
+        [salonId, changedByUserId, previousValue ? JSON.stringify(previousValue) : null, value]
+      );
+
+      await client.query("COMMIT");
+      return rows[0];
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  },
+
+  async getSubscriptionPermissionAuditLog(salonId: string, limit = 50) {
+    const { rows } = await pool.query(`
+      SELECT
+        al.id, al.previous_value, al.new_value, al.created_at,
+        TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,''))) AS changed_by_name,
+        u.email AS changed_by_email
+      FROM subscription_permission_audit_log al
+      JOIN users u ON u.id = al.changed_by
+      WHERE al.salon_id = $1
+      ORDER BY al.created_at DESC
+      LIMIT $2
+    `, [salonId, limit]);
+    return rows;
+  },
+
+  // Reuses subscription_permission_audit_log for "grant N days" actions too —
+  // new_value carries { action: 'grant_days', days, new_current_period_end }
+  // so a single audit trail/UI can show both permission toggles and day
+  // grants for a salon, distinguished by the `action` field.
+  async logSubscriptionGrantDays(salonId: string, changedByUserId: string, days: number, newPeriodEnd: string) {
+    const value = JSON.stringify({ action: "grant_days", days, new_current_period_end: newPeriodEnd });
+    await pool.query(
+      `INSERT INTO subscription_permission_audit_log (salon_id, changed_by, previous_value, new_value)
+       VALUES ($1, $2, NULL, $3)`,
+      [salonId, changedByUserId, value]
+    );
+  },
+
   // ── USERS ─────────────────────────────────────────────────────────────────────
 
   async createUser(data: {
