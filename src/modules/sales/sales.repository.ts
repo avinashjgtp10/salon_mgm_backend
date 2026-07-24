@@ -37,13 +37,38 @@ export const salesRepository = {
         const { rows } = await safeQuery(() => pool.query(
             `SELECT si.id, si.sale_id, si.item_type, si.item_id,
                     COALESCE(si.staff_id, s.staff_id) AS staff_id,
-                    si.name, si.quantity, si.unit_price, si.discount_amount, si.total_price, si.created_at
+                    si.name, si.quantity, si.unit_price, si.discount_amount, si.total_price,
+                    si.tax_amount, si.taxable_amount, si.created_at
              FROM sale_items si
              JOIN sales s ON si.sale_id = s.id
              WHERE si.sale_id = $1`,
             [saleId]
         ));
         return rows;
+    },
+
+    // Batched form of findItemsBySaleId — one query for a whole list of sale
+    // ids (e.g. every linked sale in a calendar day's appointment list),
+    // grouped by sale_id, instead of one DB round-trip per appointment.
+    async findItemsBySaleIds(saleIds: string[]): Promise<Map<string, SaleItem[]>> {
+        const result = new Map<string, SaleItem[]>();
+        if (saleIds.length === 0) return result;
+        const { rows } = await safeQuery(() => pool.query(
+            `SELECT si.id, si.sale_id, si.item_type, si.item_id,
+                    COALESCE(si.staff_id, s.staff_id) AS staff_id,
+                    si.name, si.quantity, si.unit_price, si.discount_amount, si.total_price,
+                    si.tax_amount, si.taxable_amount, si.created_at
+             FROM sale_items si
+             JOIN sales s ON si.sale_id = s.id
+             WHERE si.sale_id = ANY($1::uuid[])`,
+            [saleIds]
+        ));
+        rows.forEach((row: SaleItem) => {
+            const list = result.get(row.sale_id) ?? [];
+            list.push(row);
+            result.set(row.sale_id, list);
+        });
+        return result;
     },
 
     async list(filters: {
@@ -94,7 +119,7 @@ export const salesRepository = {
         staffId: string,
         filters: { item_type?: string; start_date?: string; end_date?: string; page?: number; limit?: number } = {}
     ): Promise<{
-        items: (SaleItem & { sale_created_at: string; client_name: string | null })[];
+        items: (SaleItem & { sale_created_at: string; client_name: string | null; payment_source: string })[];
         pagination: { total: number; page: number; limit: number; total_pages: number };
     }> {
         const conditions: string[] = [`s.salon_id = $1`, `COALESCE(si.staff_id, s.staff_id) = $2`];
@@ -111,16 +136,44 @@ export const salesRepository = {
         const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
         if (limit) values.push(limit, offset);
 
+        // payment_source = where this specific line item's value came from.
+        // Item-level coverage (membership wallet, package) takes precedence — it's
+        // tied to this exact item via membership_usage_log / appointments.services —
+        // and everything else falls back to the sale's payment method (Cash/Card/
+        // UPI/Split/eWallet…). mship/pkg are correlated EXISTS-style lateral joins
+        // keyed on service_id (which also holds a product's id for a product
+        // redemption — see client-memberships.repository.ts deductWalletAcrossMemberships).
         const { rows } = await safeQuery(() => pool.query(
             `SELECT si.id, si.sale_id, si.item_type, si.item_id,
                     COALESCE(si.staff_id, s.staff_id) AS staff_id,
-                    si.name, si.quantity, si.unit_price, si.discount_amount, si.total_price, si.created_at,
+                    si.name, si.quantity, si.unit_price, si.discount_amount, si.total_price,
+                    si.tax_amount, si.taxable_amount, si.created_at,
                     s.created_at AS sale_created_at,
                     c.full_name  AS client_name,
+                    CASE
+                      WHEN mship.hit IS NOT NULL THEN 'Membership'
+                      WHEN pkg.hit   IS NOT NULL THEN 'Package'
+                      ELSE COALESCE(NULLIF(TRIM(s.payment_method), ''), '—')
+                    END AS payment_source,
                     COUNT(*) OVER() AS total_count
              FROM sale_items si
              JOIN sales s   ON si.sale_id = s.id
              LEFT JOIN clients c ON s.client_id = c.id
+             LEFT JOIN LATERAL (
+               SELECT 1 AS hit FROM membership_usage_log mul
+               WHERE mul.appointment_id = s.appointment_id
+                 AND mul.service_id::text = si.item_id::text
+               LIMIT 1
+             ) mship ON TRUE
+             LEFT JOIN LATERAL (
+               SELECT 1 AS hit
+               FROM appointments a
+               CROSS JOIN LATERAL jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) svc
+               WHERE a.id = s.appointment_id
+                 AND (svc->>'service_id') = si.item_id::text
+                 AND COALESCE((svc->>'is_package_service')::boolean, FALSE) = TRUE
+               LIMIT 1
+             ) pkg ON TRUE
              WHERE ${conditions.join(" AND ")}
              ORDER BY s.created_at DESC
              ${limitClause}`,
@@ -213,10 +266,11 @@ export const salesRepository = {
                 const itemTotal     = item.quantity * parseFloat(item.unit_price) - discAmt;
                 await client.query(
                     `INSERT INTO sale_items (
-                        sale_id, item_type, item_id, staff_id, name, quantity, unit_price, discount_amount, total_price
-                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+                        sale_id, item_type, item_id, staff_id, name, quantity, unit_price, discount_amount, total_price, tax_amount, taxable_amount
+                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
                     [sale.id, item.item_type, item.item_id || null, item.staff_id || null,
-                     item.name, item.quantity, item.unit_price, item.discount_amount || '0', itemTotal.toString()]
+                     item.name, item.quantity, item.unit_price, item.discount_amount || '0', itemTotal.toString(),
+                     item.tax_amount || '0', item.taxable_amount || '0']
                 );
             }
 
@@ -248,10 +302,11 @@ export const salesRepository = {
                     subtotal += itemTotal;
                     await client.query(
                         `INSERT INTO sale_items (
-                            sale_id, item_type, item_id, staff_id, name, quantity, unit_price, discount_amount, total_price
-                        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+                            sale_id, item_type, item_id, staff_id, name, quantity, unit_price, discount_amount, total_price, tax_amount, taxable_amount
+                        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
                         [id, item.item_type, item.item_id || null, item.staff_id || null,
-                         item.name, item.quantity, item.unit_price, item.discount_amount || '0', itemTotal.toString()]
+                         item.name, item.quantity, item.unit_price, item.discount_amount || '0', itemTotal.toString(),
+                         item.tax_amount || '0', item.taxable_amount || '0']
                     );
                 }
 

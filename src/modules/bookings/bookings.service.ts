@@ -7,6 +7,7 @@ import { notificationsService } from "../notifications/notifications.service";
 import { appointmentsService } from "../appointments/appointments.service";
 import { appointmentsRepository } from "../appointments/appointments.repository";
 import { PublicBookingRequest } from "./bookings.types";
+import logger from "../../config/logger";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -130,7 +131,15 @@ export const bookingsService = {
             type: "appointment",
             title: "New Appointment Booked",
             body: `${body.client_name} — ${formatDate(body.scheduled_at)} at ${formatTime(body.scheduled_at)}`,
-        }).catch(() => {});
+        }).catch((err: any) => {
+            logger.error("Public booking notification failed", {
+                appointmentId: appointment.id,
+                salonId: body.salon_id,
+                message: err?.message,
+                stack: err?.stack,
+                error: err,
+            });
+        });
 
         return { ...appointment, manage_token: generateManageToken(appointment.id) };
     },

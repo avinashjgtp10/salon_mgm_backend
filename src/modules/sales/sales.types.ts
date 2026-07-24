@@ -41,6 +41,12 @@ export type SaleItem = {
     unit_price: string;
     discount_amount: string;
     total_price: string;
+    // This item's own GST + the post-discount/post-wallet base it was
+    // computed on (see pricing.engine.ts's per-row allocation) — distinct
+    // from the whole sale's Sale.tax_amount above. Defaults to '0' for every
+    // sale_items row created before this column existed.
+    tax_amount: string;
+    taxable_amount: string;
     created_at: string;
 };
 
@@ -69,6 +75,8 @@ export type CreateSaleBody = {
         quantity: number;
         unit_price: string;
         discount_amount?: string;
+        tax_amount?: string;
+        taxable_amount?: string;
     }>;
 };
 

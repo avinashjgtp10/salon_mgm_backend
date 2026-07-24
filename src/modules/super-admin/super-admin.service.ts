@@ -3,6 +3,8 @@ import { authRepository } from "../auth/auth.repository";
 import { demoRequestsService } from "../demo-requests/demo-requests.service";
 import { emailService } from "../utils/email.service";
 import { AppError } from "../../middleware/error.middleware";
+import { invalidateSubscriptionPermCache } from "../../middleware/subscriptionPermission.middleware";
+import { subscriptionsRepository } from "../subscriptions/subscriptions.repository";
 import bcrypt from "bcrypt";
 import jwt, { Secret, SignOptions } from "jsonwebtoken";
 
@@ -127,6 +129,87 @@ export const superAdminService = {
     const result = await superAdminRepository.updateSalonPermissions(salonId, permissions);
     if (!result) throw new AppError(404, "Salon not found", "NOT_FOUND");
     return result;
+  },
+
+  // ── SUBSCRIPTION PERMISSIONS ──────────────────────────────────────────────────
+
+  async searchSalonsForSubscriptionPermissions(query: string) {
+    return superAdminRepository.searchSalonsForSubscriptionPermissions(query ?? "");
+  },
+
+  async getSubscriptionPermissionsById(salonId: string) {
+    const salon = await superAdminRepository.getSubscriptionPermissionsById(salonId);
+    if (!salon) throw new AppError(404, "Salon not found", "NOT_FOUND");
+    let permissions: Record<string, boolean> = {};
+    if (salon.subscription_permissions) {
+      try { permissions = JSON.parse(salon.subscription_permissions); } catch { permissions = {}; }
+    }
+    return {
+      salon: { id: salon.id, name: salon.name, owner_email: salon.owner_email, owner_name: salon.owner_name, plan_name: salon.plan_name, is_active: salon.is_active },
+      permissions,
+    };
+  },
+
+  async updateSubscriptionPermissions(salonId: string, permissions: Record<string, boolean>, changedByUserId: string) {
+    if (!salonId) throw new AppError(400, "Salon ID required", "VALIDATION_ERROR");
+    if (!changedByUserId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+    const result = await superAdminRepository.updateSubscriptionPermissions(salonId, permissions, changedByUserId);
+    if (!result) throw new AppError(404, "Salon not found", "NOT_FOUND");
+    // Applies immediately, no logout required — requireSubscriptionPermission()
+    // re-reads salon_settings per request (with a short cache); this
+    // invalidation makes the very next request see the new values instead of
+    // waiting out the cache TTL.
+    invalidateSubscriptionPermCache(salonId);
+    return result;
+  },
+
+  async getSubscriptionPermissionAuditLog(salonId: string) {
+    if (!salonId) throw new AppError(400, "Salon ID required", "VALIDATION_ERROR");
+    return superAdminRepository.getSubscriptionPermissionAuditLog(salonId);
+  },
+
+  // ── GRANT SUBSCRIPTION DAYS (manual comp/override) ────────────────────────────
+  // Enter N days, the account gets exactly N days — nothing more, nothing
+  // less. If a subscription row already exists, extends its
+  // current_period_end. If the account has NONE yet, creates one directly
+  // (no Razorpay, no plan picker) so this works for every account
+  // unconditionally. Either way, status is forced to 'active' — the exact
+  // field useSubscriptionPoller.ts reads to decide whether to show
+  // SubscriptionWall — so access is restored/extended immediately, no
+  // logout needed.
+  async grantSubscriptionDays(salonId: string, days: number, changedByUserId: string) {
+    if (!salonId) throw new AppError(400, "Salon ID required", "VALIDATION_ERROR");
+    if (!Number.isFinite(days) || days <= 0) throw new AppError(400, "days must be a positive number", "VALIDATION_ERROR");
+    if (!changedByUserId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+
+    const existing = await subscriptionsRepository.findMostRecentBySalonId(salonId);
+
+    let updated;
+    if (existing) {
+      updated = await subscriptionsRepository.extendSubscriptionDays(existing.id, days);
+    } else {
+      // subscriptions.plan_id is NOT NULL (FK to subscription_plans) — the
+      // caller only cares about days, not which plan, so just take any
+      // existing plan. Plans already exist for the normal Upgrade flow to
+      // work at all, so listPlans() returning empty here would itself be a
+      // pre-existing data problem, not something this feature should mask.
+      const plans = await subscriptionsRepository.listPlans();
+      if (plans.length === 0) {
+        throw new AppError(500, "No subscription plans exist to attach this grant to", "NO_PLANS_CONFIGURED");
+      }
+      updated = await subscriptionsRepository.createManualSubscription({
+        salon_id: salonId,
+        plan_id: plans[0].id,
+        days,
+      });
+    }
+
+    // Reuse the subscription_permission_audit_log table for this too — same
+    // "who changed what, when" shape the ticket asked for, just a different
+    // action type inside new_value instead of a permission map.
+    await superAdminRepository.logSubscriptionGrantDays(salonId, changedByUserId, days, updated.current_period_end as string);
+
+    return { subscription: updated, days_granted: days };
   },
 
   // ── USERS ─────────────────────────────────────────────────────────────────────

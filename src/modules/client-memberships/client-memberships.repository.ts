@@ -49,6 +49,11 @@ export async function ensureTable(): Promise<void> {
     `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS created_at      TIMESTAMPTZ DEFAULT NOW()`,
     `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS updated_at      TIMESTAMPTZ DEFAULT NOW()`,
     `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS membership_wallet_balance NUMERIC(10,2) NOT NULL DEFAULT 0`,
+    // Written alongside expires_at on every INSERT (see create() below) — was
+    // previously only added manually against dev and missing from this patch
+    // list, so environments where ensureTable() never got a matching manual
+    // ALTER TABLE run (e.g. prod) had every membership purchase fail outright.
+    `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS end_date        TIMESTAMPTZ`,
   ];
   for (const sql of patches) {
     await pool.query(sql);
@@ -298,7 +303,7 @@ export const clientMembershipsRepository = {
         (id, salon_id, client_id, client_name, mobile, email,
          membership_id, membership_name, colour, total_sessions, used_sessions,
          expires_at, end_date, status, price_paid, membership_wallet_balance)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$11,$11,'active',$12,$13)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$11,$14,'active',$12,$13)
        RETURNING *`,
       [
         id, salonId, dto.clientId, clientName, mobile, email,
@@ -307,6 +312,12 @@ export const clientMembershipsRepository = {
         expiresAt,
         dto.pricePaid ?? null,
         walletBalance,
+        // expires_at (timestamptz) and end_date (date) can't share one $11
+        // placeholder — Postgres infers a single type per parameter across
+        // every occurrence in the statement, so reusing it for two differently
+        // -typed columns is a genuine SQL error (42P08), not just a style
+        // choice. Same value, its own placeholder.
+        expiresAt,
       ],
     );
     return toClientMembership(rows[0]);
@@ -432,6 +443,21 @@ export const clientMembershipsRepository = {
     return parseFloat(rows[0]?.total ?? '0');
   },
 
+  // Per-item breakdown of wallet usage for one appointment, keyed by service_id
+  // (which also holds the product's id for a product redemption — see
+  // deductWalletAcrossMemberships below). Single source of truth for excluding
+  // membership-covered amounts from tax (payments.service.ts) and staff
+  // commission (commissionCalculation.service.ts) on a per-item basis.
+  async getWalletUsedPerItemForAppointment(appointmentId: string): Promise<Map<string, number>> {
+    const { rows } = await pool.query(
+      `SELECT service_id, COALESCE(SUM(amount_deducted),0) AS used
+       FROM membership_usage_log WHERE appointment_id = $1 AND service_id IS NOT NULL
+       GROUP BY service_id`,
+      [appointmentId],
+    );
+    return new Map(rows.map((r) => [String(r.service_id), parseFloat(r.used)]));
+  },
+
   // Draws from several memberships in sequence (the order given in
   // clientMembershipIds, highest-balance-first) instead of just one — a
   // single service's amount can be split across multiple memberships if the
@@ -441,7 +467,7 @@ export const clientMembershipsRepository = {
   async deductWalletAcrossMemberships(
     clientMembershipIds: string[],
     salonId: string,
-    params: { appointmentId: string; services: WalletDeductionServiceInput[] },
+    params: { appointmentId: string; services: WalletDeductionServiceInput[]; maxTotalAmount?: number },
   ): Promise<WalletDeductionResult> {
     if (clientMembershipIds.length === 0) {
       return { totalWalletUsed: 0, remainingBalance: 0, perService: [], reused: false };
@@ -482,10 +508,16 @@ export const clientMembershipsRepository = {
       const remainingByMembership = memberships.map((m) => Number(m.membership_wallet_balance) || 0);
       let totalWalletUsed = 0;
       const perService: WalletDeductionResult['perService'] = [];
+      // Staff-chosen cap (e.g. "only use ₹150 of the wallet, I'll collect the
+      // rest via cash") — undefined/omitted means no cap beyond the wallet's
+      // own balance, preserving the original "use as much as needed" behavior.
+      const hasBudgetCap = params.maxTotalAmount != null;
+      const budgetCap = hasBudgetCap ? Math.max(0, params.maxTotalAmount!) : Infinity;
 
       for (const svc of params.services) {
+        if (totalWalletUsed >= budgetCap) break;
         const originalAmount = Number(svc.amount) || 0;
-        let amountLeft = originalAmount;
+        let amountLeft = Math.min(originalAmount, budgetCap - totalWalletUsed);
         let svcWalletUsed = 0;
         const isUuid = typeof svc.serviceId === 'string' &&
           /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(svc.serviceId);

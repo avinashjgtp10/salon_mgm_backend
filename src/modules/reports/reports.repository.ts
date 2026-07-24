@@ -1,5 +1,37 @@
 import pool, { safeQuery } from "../../config/database";
 import {
+    SalesSummaryReportRow,
+    SaleDetailHeader,
+    SaleDetailItem,
+    SaleDetailPayment,
+    SaleDetailResponse,
+    DailySheetReportRow,
+    DailySheetFiltersAvailable,
+    ProductRetailReportRow,
+    ProductRetailReportStats,
+    ProductRetailFilterOption,
+    ServiceSaleReportRow,
+    ServiceSaleReportStats,
+    GstReportRow,
+    GstReportStats,
+    ProductMarginReportRow,
+    ProductMarginReportStats,
+    RewardPointsReportRow,
+    RewardPointsReportStats,
+    EwalletReportRow,
+    EwalletReportStats,
+    ClientRevenueReportRow,
+    ClientRevenueReportStats,
+    StaffSalesReportRow,
+    StaffItemSalesReportRow,
+    StaffItemSalesReportStats,
+    PackageSaleReportRow,
+    PackageSaleReportStats,
+    PackageHistoryReportRow,
+    PackageHistoryReportStats,
+    MemberSaleReportRow,
+    MemberSaleReportStats,
+    AppointmentDetailReportRow,
     CategoryTotalsRow,
     FootfallRow,
     InvoiceAdjustmentsRow,
@@ -9,6 +41,10 @@ import {
     TopStylistRow,
 } from "./reports.types";
 
+// ======================================================
+// LEGACY REPORTS (dev) — free-standing helpers/interfaces used by the
+// legacy reportsRepository methods below (mounted at /api/v1/reports).
+// ======================================================
 
 export interface ProductRevenueFilters {
     search?: string;
@@ -1042,373 +1078,2571 @@ const buildProductRevenueSourceQuery = (
   };
 };
 
-const buildStaffCommissionSourceQuery = (
-  salonId: string,
-  filters: { from?: string; to?: string }
-) => {
-  const values: any[] = [salonId];
-  const saleWhere = [
-    "s.salon_id = $1",
-    "s.status IN ('draft', 'completed', 'refunded')",
-    "COALESCE(ni.item_staff_id, s.staff_id) IS NOT NULL",
-    "ni.item_type IN ('service', 'package', 'product', 'membership', 'gift_card')",
-  ];
-  const appointmentWhere = [
-    "m.salon_id = $1",
-    "NOT EXISTS (SELECT 1 FROM sales sx WHERE sx.appointment_id = m.id)",
-  ];
-
-  let index = 2;
-
-  if (filters.from) {
-    saleWhere.push(`DATE(s.created_at) >= $${index}`);
-    appointmentWhere.push(`DATE(m.created_at) >= $${index}`);
-    values.push(filters.from);
-    index++;
-  }
-
-  if (filters.to) {
-    saleWhere.push(`DATE(s.created_at) <= $${index}`);
-    appointmentWhere.push(`DATE(m.created_at) <= $${index}`);
-    values.push(filters.to);
-    index++;
-  }
-
-  const salesSummaryCtes = SALES_SUMMARY_ITEM_CTES.replace(/^\s*WITH\s+/, "");
-  const appointmentBaseCtes = APPOINTMENT_BASE_CTES.replace(/^\s*WITH\s+/, "");
-
-  const saleCommissionCategoryExpr = `
-    CASE
-      WHEN ni.item_type IN ('service', 'package') THEN 'services'
-      WHEN ni.item_type = 'product' THEN 'products'
-      WHEN ni.item_type = 'membership' THEN 'memberships'
-      WHEN ni.item_type = 'gift_card' THEN 'gift_cards'
-      ELSE 'services'
-    END
-  `;
-
-  const appointmentCommissionCategoryExpr = `
-    CASE
-      WHEN ali.item_type IN ('service', 'package') THEN 'services'
-      WHEN ali.item_type = 'product' THEN 'products'
-      WHEN ali.item_type = 'membership' THEN 'memberships'
-      WHEN ali.item_type = 'gift_card' THEN 'gift_cards'
-      ELSE 'services'
-    END
-  `;
-
-  return {
-    values,
-    ctes: `
-      WITH ${salesSummaryCtes},
-      ${appointmentBaseCtes},
-      sale_category_totals AS (
-        SELECT
-          s.id AS sale_id,
-          COALESCE(ni.item_staff_id, s.staff_id) AS staff_id,
-          ${saleCommissionCategoryExpr} AS commission_category,
-          SUM(COALESCE(ni.total_price::numeric, 0)) AS category_revenue
-        FROM normalized_items ni
-        JOIN sales s
-          ON s.id = ni.sale_id
-        WHERE ${saleWhere.join(" AND ")}
-        GROUP BY
-          s.id,
-          COALESCE(ni.item_staff_id, s.staff_id),
-          ${saleCommissionCategoryExpr}
-      ),
-      sale_line_rows AS (
-        SELECT
-          s.created_at AS date,
-          COALESCE(s.invoice_number, CONCAT('INV-', s.id::text)) AS invoice_no,
-          COALESCE(c.full_name, 'Walk-in Client') AS customer_name,
-          COALESCE(c.phone_number, '') AS mobile,
-          COALESCE(
-            NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), ''),
-            'Unknown'
-          ) AS staff_name,
-          ni.item_type,
-          COALESCE(ni.name, 'Item') AS item_name,
-          COALESCE(ni.quantity, 1) AS quantity,
-          ROUND(COALESCE(ni.total_price::numeric, 0), 2) AS revenue_amount,
-          ROUND(
-            COALESCE(
-              ce.commission_rate,
-              slab.commission_value,
-              scs.default_rate,
-              0
-            ),
-            2
-          ) AS commission_rate,
-          COALESCE(
-            ce.commission_kind,
-            slab.commission_kind,
-            scs.commission_kind,
-            '-'
-          ) AS commission_kind,
-          ROUND(
-            CASE
-              WHEN COALESCE(sct.category_revenue, 0) > 0
-                   AND COALESCE(ce.commission_amount, 0) > 0
-              THEN
-                COALESCE(ce.commission_amount, 0)
-                *
-                (COALESCE(ni.total_price::numeric, 0) / sct.category_revenue)
-              WHEN slab.commission_kind = 'percentage'
-              THEN COALESCE(ni.total_price::numeric, 0) * COALESCE(slab.commission_value, 0) / 100
-              WHEN slab.commission_kind = 'fixed_rate'
-              THEN
-                CASE
-                  WHEN COALESCE(slab.revenue_target, 0) > 0
-                  THEN FLOOR(COALESCE(ni.total_price::numeric, 0) / slab.revenue_target) * COALESCE(slab.commission_value, 0)
-                  ELSE COALESCE(slab.commission_value, 0)
-                END
-              WHEN scs.commission_kind = 'percentage'
-              THEN COALESCE(ni.total_price::numeric, 0) * COALESCE(scs.default_rate, 0) / 100
-              WHEN scs.commission_kind = 'fixed_rate'
-              THEN
-                CASE
-                  WHEN COALESCE(scs.revenue_target, 0) > 0
-                  THEN FLOOR(COALESCE(ni.total_price::numeric, 0) / scs.revenue_target) * COALESCE(scs.default_rate, 0)
-                  ELSE COALESCE(scs.default_rate, 0)
-                END
-              ELSE 0
-            END,
-            2
-          ) AS commission_amount,
-          CASE
-            WHEN ce.payout_status IS NOT NULL
-            THEN INITCAP(ce.payout_status)
-            WHEN LOWER(COALESCE(m.payment_state, s.status::text, '')) = 'refunded'
-            THEN 'Cancelled'
-            ELSE 'Pending'
-          END AS payout_status,
-          CASE
-            WHEN m.id IS NOT NULL THEN INITCAP(COALESCE(m.payment_state, 'unpaid'))
-            WHEN LOWER(COALESCE(s.status::text, '')) = 'completed' THEN 'Paid'
-            WHEN LOWER(COALESCE(s.status::text, '')) = 'draft' THEN 'Pending'
-            WHEN LOWER(COALESCE(s.status::text, '')) = 'refunded' THEN 'Refunded'
-            ELSE INITCAP(COALESCE(s.status::text, 'pending'))
-          END AS payment_status,
-          'Sale'::text AS source
-        FROM normalized_items ni
-        JOIN sales s
-          ON s.id = ni.sale_id
-        LEFT JOIN clients c
-          ON c.id = s.client_id
-        LEFT JOIN staff st
-          ON st.id = COALESCE(ni.item_staff_id, s.staff_id)
-        LEFT JOIN metrics m
-          ON m.id = s.appointment_id
-        LEFT JOIN sale_category_totals sct
-          ON sct.sale_id = s.id
-          AND sct.staff_id = COALESCE(ni.item_staff_id, s.staff_id)
-          AND sct.commission_category = ${saleCommissionCategoryExpr}
-        LEFT JOIN LATERAL (
-          SELECT
-            SUM(ce2.commission_amount::numeric) AS commission_amount,
-            MAX(ce2.commission_rate::numeric) AS commission_rate,
-            MAX(ce2.commission_kind) AS commission_kind,
-            MAX(ce2.status::text) AS payout_status
-          FROM commission_earned ce2
-          WHERE
-            ce2.salon_id = $1
-            AND ce2.sale_id = s.id
-            AND ce2.staff_id = COALESCE(ni.item_staff_id, s.staff_id)
-            AND ce2.category = ${saleCommissionCategoryExpr}
-        ) ce
-          ON TRUE
-        LEFT JOIN staff_commission_settings scs
-          ON scs.staff_id = COALESCE(ni.item_staff_id, s.staff_id)
-          AND scs.category = ${saleCommissionCategoryExpr}
-          AND scs.is_enabled = TRUE
-        LEFT JOIN LATERAL (
-          SELECT
-            cs.commission_kind,
-            cs.commission_value,
-            cs.revenue_target
-          FROM commission_slabs cs
-          WHERE
-            cs.staff_id = COALESCE(ni.item_staff_id, s.staff_id)
-            AND cs.category = ${saleCommissionCategoryExpr}
-            AND cs.is_enabled = TRUE
-            AND cs.revenue_target <= COALESCE(ni.total_price::numeric, 0)
-          ORDER BY
-            cs.revenue_target DESC,
-            cs.created_at DESC
-          LIMIT 1
-        ) slab
-          ON TRUE
-        WHERE ${saleWhere.join(" AND ")}
-      ),
-      appointment_line_items AS (
-        SELECT
-          m.id AS appointment_id,
-          m.created_at,
-          COALESCE(c.full_name, 'Walk-in Client') AS customer_name,
-          COALESCE(c.phone_number, '') AS mobile,
-          'service'::text AS item_type,
-          COALESCE(NULLIF(svc.value->>'name', ''), 'Service') AS item_name,
-          COALESCE(NULLIF(svc.value->>'qty', '')::int, NULLIF(svc.value->>'quantity', '')::int, 1) AS quantity,
-          COALESCE(NULLIF(svc.value->>'total', '')::numeric, COALESCE(NULLIF(svc.value->>'price', '')::numeric, 0) * COALESCE(NULLIF(svc.value->>'qty', '')::numeric, NULLIF(svc.value->>'quantity', '')::numeric, 1)) AS revenue_amount,
-          NULLIF(svc.value->>'staff_id', '') AS item_staff_id,
-          NULLIF(svc.value->>'staff_name', '') AS item_staff_name,
-          m.payment_state,
-          m.status
-        FROM metrics m
-        LEFT JOIN clients c
-          ON c.id = m.client_id
-        CROSS JOIN LATERAL jsonb_array_elements(COALESCE(m.services, '[]'::jsonb)) AS svc(value)
-        WHERE ${appointmentWhere.join(" AND ")}
-
-        UNION ALL
-
-        SELECT
-          m.id AS appointment_id,
-          m.created_at,
-          COALESCE(c.full_name, 'Walk-in Client') AS customer_name,
-          COALESCE(c.phone_number, '') AS mobile,
-          'package'::text AS item_type,
-          COALESCE(NULLIF(pkg.value->>'name', ''), 'Package') AS item_name,
-          COALESCE(NULLIF(pkg.value->>'qty', '')::int, NULLIF(pkg.value->>'quantity', '')::int, 1) AS quantity,
-          COALESCE(NULLIF(pkg.value->>'price', '')::numeric, 0) * COALESCE(NULLIF(pkg.value->>'qty', '')::numeric, NULLIF(pkg.value->>'quantity', '')::numeric, 1) AS revenue_amount,
-          NULLIF(pkg.value->>'staff_id', '') AS item_staff_id,
-          NULLIF(pkg.value->>'staff_name', '') AS item_staff_name,
-          m.payment_state,
-          m.status
-        FROM metrics m
-        LEFT JOIN clients c
-          ON c.id = m.client_id
-        CROSS JOIN LATERAL jsonb_array_elements(COALESCE(m.package_items, '[]'::jsonb)) AS pkg(value)
-        WHERE ${appointmentWhere.join(" AND ")}
-
-        UNION ALL
-
-        SELECT
-          m.id AS appointment_id,
-          m.created_at,
-          COALESCE(c.full_name, 'Walk-in Client') AS customer_name,
-          COALESCE(c.phone_number, '') AS mobile,
-          'product'::text AS item_type,
-          COALESCE(NULLIF(prod.value->>'name', ''), 'Product') AS item_name,
-          COALESCE(NULLIF(prod.value->>'qty', '')::int, NULLIF(prod.value->>'quantity', '')::int, 1) AS quantity,
-          COALESCE(NULLIF(prod.value->>'price', '')::numeric, 0) * COALESCE(NULLIF(prod.value->>'qty', '')::numeric, NULLIF(prod.value->>'quantity', '')::numeric, 1) AS revenue_amount,
-          NULLIF(prod.value->>'staff_id', '') AS item_staff_id,
-          NULLIF(prod.value->>'staff_name', '') AS item_staff_name,
-          m.payment_state,
-          m.status
-        FROM metrics m
-        LEFT JOIN clients c
-          ON c.id = m.client_id
-        CROSS JOIN LATERAL jsonb_array_elements(COALESCE(m.product_items, '[]'::jsonb)) AS prod(value)
-        WHERE ${appointmentWhere.join(" AND ")}
-
-        UNION ALL
-
-        SELECT
-          m.id AS appointment_id,
-          m.created_at,
-          COALESCE(c.full_name, 'Walk-in Client') AS customer_name,
-          COALESCE(c.phone_number, '') AS mobile,
-          'membership'::text AS item_type,
-          COALESCE(NULLIF(mem.value->>'name', ''), 'Membership') AS item_name,
-          COALESCE(NULLIF(mem.value->>'qty', '')::int, NULLIF(mem.value->>'quantity', '')::int, 1) AS quantity,
-          COALESCE(NULLIF(mem.value->>'price', '')::numeric, 0) * COALESCE(NULLIF(mem.value->>'qty', '')::numeric, NULLIF(mem.value->>'quantity', '')::numeric, 1) AS revenue_amount,
-          NULLIF(mem.value->>'staff_id', '') AS item_staff_id,
-          NULLIF(mem.value->>'staff_name', '') AS item_staff_name,
-          m.payment_state,
-          m.status
-        FROM metrics m
-        LEFT JOIN clients c
-          ON c.id = m.client_id
-        CROSS JOIN LATERAL jsonb_array_elements(COALESCE(m.membership_items, '[]'::jsonb)) AS mem(value)
-        WHERE ${appointmentWhere.join(" AND ")}
-      ),
-      appointment_line_rows AS (
-        SELECT
-          ali.created_at AS date,
-          CONCAT('APT-', ali.appointment_id::text) AS invoice_no,
-          ali.customer_name,
-          ali.mobile,
-          COALESCE(
-            NULLIF(ali.item_staff_name, ''),
-            NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), ''),
-            'Unknown'
-          ) AS staff_name,
-          ali.item_type,
-          ali.item_name,
-          COALESCE(ali.quantity, 1) AS quantity,
-          ROUND(COALESCE(ali.revenue_amount, 0), 2) AS revenue_amount,
-          ROUND(COALESCE(slab.commission_value, scs.default_rate, 0), 2) AS commission_rate,
-          COALESCE(slab.commission_kind, scs.commission_kind, '-') AS commission_kind,
-          ROUND(
-            CASE
-              WHEN slab.commission_kind = 'percentage'
-              THEN COALESCE(ali.revenue_amount, 0) * COALESCE(slab.commission_value, 0) / 100
-              WHEN slab.commission_kind = 'fixed_rate'
-              THEN
-                CASE
-                  WHEN COALESCE(slab.revenue_target, 0) > 0
-                  THEN FLOOR(COALESCE(ali.revenue_amount, 0) / slab.revenue_target) * COALESCE(slab.commission_value, 0)
-                  ELSE COALESCE(slab.commission_value, 0)
-                END
-              WHEN scs.commission_kind = 'percentage'
-              THEN COALESCE(ali.revenue_amount, 0) * COALESCE(scs.default_rate, 0) / 100
-              WHEN scs.commission_kind = 'fixed_rate'
-              THEN
-                CASE
-                  WHEN COALESCE(scs.revenue_target, 0) > 0
-                  THEN FLOOR(COALESCE(ali.revenue_amount, 0) / scs.revenue_target) * COALESCE(scs.default_rate, 0)
-                  ELSE COALESCE(scs.default_rate, 0)
-                END
-              ELSE 0
-            END,
-            2
-          ) AS commission_amount,
-          CASE
-            WHEN LOWER(COALESCE(ali.status::text, '')) IN ('cancelled', 'no-show')
-                 OR LOWER(COALESCE(ali.payment_state, '')) = 'refunded'
-            THEN 'Cancelled'
-            ELSE 'Pending'
-          END AS payout_status,
-          INITCAP(COALESCE(ali.payment_state, 'unpaid')) AS payment_status,
-          'Appointment'::text AS source
-        FROM appointment_line_items ali
-        LEFT JOIN staff st
-          ON st.id::text = ali.item_staff_id
-        LEFT JOIN staff_commission_settings scs
-          ON scs.staff_id::text = ali.item_staff_id
-          AND scs.category = ${appointmentCommissionCategoryExpr}
-          AND scs.is_enabled = TRUE
-        LEFT JOIN LATERAL (
-          SELECT
-            cs.commission_kind,
-            cs.commission_value,
-            cs.revenue_target
-          FROM commission_slabs cs
-          WHERE
-            cs.staff_id::text = ali.item_staff_id
-            AND cs.category = ${appointmentCommissionCategoryExpr}
-            AND cs.is_enabled = TRUE
-            AND cs.revenue_target <= COALESCE(ali.revenue_amount, 0)
-          ORDER BY
-            cs.revenue_target DESC,
-            cs.created_at DESC
-          LIMIT 1
-        ) slab
-          ON TRUE
-        WHERE COALESCE(ali.item_staff_id, '') <> ''
-      ),
-      commission_rows AS (
-        SELECT * FROM sale_line_rows
-        UNION ALL
-        SELECT * FROM appointment_line_rows
-      )
-    `,
-  };
-};
+// ======================================================
+// SALES SUMMARY REPORT (independent report API)
+// POST /api/report/sales-summary — reads sales/sale_items/payments directly.
+// Never calls the Appointment API/service; appointments is only ever JOINed
+// (via sales.appointment_id) for wallet/reward context that lives on payments.
+// ======================================================
 
 export const reportsRepository = {
+
+_buildSalesSummaryWhere(
+  salonId: string,
+  filters: {
+    start_date?: string;
+    end_date?: string;
+    staff_id?: string;
+    search?: string;
+    status?: string;
+    category_id?: string;
+  }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["s.salon_id = $1"];
+  let idx = 2;
+
+  if (filters.status) {
+    where.push(`s.status = $${idx++}`);
+    values.push(filters.status);
+  } else {
+    where.push(`s.status <> 'draft'`);
+  }
+
+  if (filters.start_date) {
+    where.push(`s.created_at >= $${idx++}::date`);
+    values.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    where.push(`s.created_at < ($${idx++}::date + interval '1 day')`);
+    values.push(filters.end_date);
+  }
+  if (filters.staff_id) {
+    where.push(`s.staff_id = $${idx++}`);
+    values.push(filters.staff_id);
+  }
+  if (filters.category_id) {
+    // A sale only "belongs" to a service category if at least one of its
+    // line items is a service in that category — sales.category has no
+    // column of its own, since one invoice can mix categories.
+    where.push(`EXISTS (
+      SELECT 1 FROM sale_items si
+      JOIN services sv ON sv.id = si.item_id
+      WHERE si.sale_id = s.id AND si.item_type = 'service' AND sv.category_id = $${idx++}
+    )`);
+    values.push(filters.category_id);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(s.invoice_number, '') ILIKE $${idx}
+      OR COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+// A `sales` row only ever gets created once an appointment's balance
+// reaches due_amount = 0 (see transaction-recorder.service.ts::
+// recordTransaction() and payments.service.ts's "Auto-create sale record
+// when calendar payment is fully completed" gate) — a partially-paid or
+// not-yet-paid appointment structurally has NO sales row at all, so a
+// sales-only report can never show it, regardless of any status filter.
+// This CTE fills that gap: one synthetic row per appointment that (a) is
+// not cancelled/deleted, (b) has no linked sales row yet (checked via
+// NOT EXISTS on sales.appointment_id, not appointments.sale_id, since the
+// latter is only set by the explicit checkout endpoint and can lag behind
+// an actual auto-created sale). Shaped identically to the sales-side
+// SELECT (same column names/order) so the two sides can UNION ALL cleanly.
+// Money fields mirror appointments.repository.ts::listBySalonId()'s
+// pay_agg CTE (same FILTER predicates) — the proven-correct reference the
+// Calendar/Quick Sale UI itself reads.
+// NOTE: does NOT take its own salonId parameter slot — it's always embedded
+// in a larger query (see getSalesSummaryReportStats/Rows) where $1 is
+// already bound to salonId by the sales-side query it's UNIONed with.
+_UNBILLED_APPOINTMENT_ROWS_CTE(
+  filters: { start_date?: string; end_date?: string; staff_id?: string; search?: string; category_id?: string },
+  startIdx: number
+): { sql: string; values: any[]; nextIndex: number } {
+  const values: any[] = [];
+  const where = [
+    "a.salon_id = $1",
+    "a.deleted_at IS NULL",
+    "a.status NOT IN ('cancelled', 'deleted', 'no-show')",
+    "NOT EXISTS (SELECT 1 FROM sales sx WHERE sx.appointment_id = a.id)",
+  ];
+  let idx = startIdx;
+
+  if (filters.start_date) {
+    where.push(`a.scheduled_at >= $${idx++}::date`);
+    values.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    where.push(`a.scheduled_at < ($${idx++}::date + interval '1 day')`);
+    values.push(filters.end_date);
+  }
+  if (filters.staff_id) {
+    where.push(`a.staff_id = $${idx++}`);
+    values.push(filters.staff_id);
+  }
+  if (filters.category_id) {
+    // Unbilled appointments have no sale_items yet — match against the raw
+    // services JSONB via each entry's service_id, joined to services/
+    // service_categories, same category semantics as the sales_side filter.
+    where.push(`EXISTS (
+      SELECT 1 FROM jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) AS svc(value)
+      JOIN services sv ON sv.id = NULLIF(svc.value->>'service_id', '')::uuid
+      WHERE sv.category_id = $${idx++}
+    )`);
+    values.push(filters.category_id);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  const sql = `
+    SELECT
+      a.id,
+      a.id AS appointment_id,
+      NULL::text AS invoice_number,
+      a.status::text AS status,
+      a.created_at,
+      pay.latest_method AS payment_method,
+      c.full_name AS client_name,
+      c.phone_number AS client_phone,
+      NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
+      COALESCE(items.item_description, '—') AS item_description,
+      COALESCE(items.item_types, '—') AS item_types,
+      COALESCE(items.items_total, 0) AS actual_price,
+      -- Mirrors totalsUtils.ts::computeTotals() at a coarser grain: taxable =
+      -- items_total - discount, then GST applied on that taxable amount using
+      -- the flat rate saved on the appointment at booking time
+      -- (appointments.gst_percent — set from booking.gst in useAppointment.ts).
+      -- The real UI computes GST per item-type bucket against configured tax
+      -- rules, which isn't reproducible here without that config; gst_percent
+      -- is the single stored number closest to "the rate that was actually
+      -- applied to this specific bill".
+      GREATEST(
+        (
+          COALESCE(items.items_total, 0)
+            - (CASE WHEN a.discount_type = 'percentage'
+                     THEN COALESCE(items.items_total, 0) * (COALESCE(a.discount_value, 0) / 100)
+                     ELSE COALESCE(a.discount_value, 0) END)
+        ) * (1 + COALESCE(a.gst_percent, 0) / 100)
+          + COALESCE(a.ex_charges, 0) + COALESCE(a.tip_amount, 0),
+        0
+      ) AS price,
+      COALESCE(a.tip_amount, 0) AS tip_amount,
+      COALESCE(pay.total_paid, 0) AS paid_amount,
+      COALESCE(pay.latest_due, 0) AS due_amount,
+      COALESCE(pay.ewallet_used, 0) AS ewallet_used,
+      COALESCE(pay.membership_wallet_used, 0) AS membership_wallet_used,
+      COALESCE(pay.reward_points_value, 0) AS reward_points_value,
+      COALESCE(pay.referral_credit_used, 0) AS referral_credit_used
+    FROM appointments a
+    LEFT JOIN clients c ON a.client_id = c.id
+    LEFT JOIN staff st ON st.id = a.staff_id
+    LEFT JOIN LATERAL (
+      SELECT
+        COALESCE(SUM(p.paid_amount) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS total_paid,
+        COALESCE(MAX(p.due_amount) FILTER (
+          WHERE p.created_at = (SELECT MAX(p2.created_at) FROM payments p2 WHERE p2.appointment_id = a.id)
+        ), 0) AS latest_due,
+        MAX(p.payment_method) FILTER (
+          WHERE p.created_at = (SELECT MAX(p2.created_at) FROM payments p2 WHERE p2.appointment_id = a.id)
+        ) AS latest_method,
+        COALESCE(SUM(p.ewallet_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS ewallet_used,
+        COALESCE(SUM(p.membership_wallet_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS membership_wallet_used,
+        COALESCE(SUM(p.reward_points_value) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS reward_points_value,
+        COALESCE(SUM(p.referral_credit_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS referral_credit_used
+      FROM payments p
+      WHERE p.appointment_id = a.id
+    ) pay ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT
+        STRING_AGG(DISTINCT src.name, ', ') AS item_description,
+        STRING_AGG(DISTINCT src.item_type, ', ') AS item_types,
+        SUM(src.price * src.quantity) AS items_total
+      FROM (
+        SELECT svc.value->>'name' AS name, 'service' AS item_type,
+               COALESCE(NULLIF(svc.value->>'price', '')::numeric, 0) AS price,
+               COALESCE(NULLIF(svc.value->>'quantity', '')::numeric, 1) AS quantity
+        FROM jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) AS svc(value)
+        UNION ALL
+        SELECT pkg.value->>'name', 'package',
+               COALESCE(NULLIF(pkg.value->>'price', '')::numeric, 0),
+               COALESCE(NULLIF(pkg.value->>'quantity', '')::numeric, 1)
+        FROM jsonb_array_elements(COALESCE(a.package_items, '[]'::jsonb)) AS pkg(value)
+        UNION ALL
+        SELECT prod.value->>'name', 'product',
+               COALESCE(NULLIF(prod.value->>'price', '')::numeric, 0),
+               COALESCE(NULLIF(prod.value->>'quantity', '')::numeric, 1)
+        FROM jsonb_array_elements(COALESCE(a.product_items, '[]'::jsonb)) AS prod(value)
+        UNION ALL
+        SELECT mem.value->>'name', 'membership',
+               COALESCE(NULLIF(mem.value->>'price', '')::numeric, 0),
+               COALESCE(NULLIF(mem.value->>'quantity', '')::numeric, 1)
+        FROM jsonb_array_elements(COALESCE(a.membership_items, '[]'::jsonb)) AS mem(value)
+      ) src
+    ) items ON TRUE
+    WHERE ${where.join(" AND ")}
+  `;
+
+  return { sql, values, nextIndex: idx };
+},
+
+// Lateral join reused by both the stats and rows queries — keyed strictly on
+// sales.appointment_id, since payments has no sale_id column. For walk-in
+// sales (appointment_id IS NULL) this naturally yields 0 for every wallet/
+// reward/referral figure — a real schema gap (payments can't be linked to an
+// appointment-less sale at all), not a bug in this query.
+// Mirrors appointments.repository.ts::listBySalonId()'s pay_agg CTE exactly
+// (same FILTER predicates, same "latest row by created_at" due_amount
+// pattern) — that query is what the Calendar/Quick Sale UI actually reads,
+// so this is the proven-correct reference, not something to "simplify".
+// Note: paid/wallet/reward/referral sums are FILTERed on
+// ('completed','partial') only — 'refunded' is deliberately excluded here,
+// matching the Appointment API precisely.
+_PAYMENT_LATERAL: `
+  LEFT JOIN LATERAL (
+    SELECT
+      COALESCE(SUM(p.paid_amount) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS paid_from_payments,
+      COALESCE(MAX(p.due_amount) FILTER (
+        WHERE p.created_at = (SELECT MAX(p2.created_at) FROM payments p2 WHERE p2.appointment_id = s.appointment_id)
+      ), 0) AS latest_due,
+      COALESCE(SUM(p.ewallet_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS ewallet_used,
+      COALESCE(SUM(p.membership_wallet_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS membership_wallet_used,
+      COALESCE(SUM(p.reward_points_value) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS reward_points_value,
+      COALESCE(SUM(p.referral_credit_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS referral_credit_used,
+      COUNT(*) FILTER (WHERE p.status IN ('completed', 'partial')) > 0 AS has_payment
+    FROM payments p
+    WHERE p.appointment_id = s.appointment_id AND s.appointment_id IS NOT NULL
+  ) pay ON TRUE
+`,
+
+// Every service category in this salon (not just ones with sales) — the
+// ticket asks for "all available service categories" in the dropdown, same
+// convention as the Product Inventory report's Category filter.
+async getSalesSummaryFiltersAvailable(salonId: string): Promise<{ service_categories: { id: string; label: string }[] }> {
+  const { rows } = await safeQuery(() => pool.query(
+    `SELECT id, name AS label
+     FROM service_categories
+     WHERE salon_id = $1
+     ORDER BY display_order ASC, created_at DESC`,
+    [salonId]
+  ));
+  return { service_categories: rows.map((r: any) => ({ id: r.id, label: r.label })) };
+},
+
+// LEFT JOIN to appointments, keyed on sales.appointment_id — reused by
+// getSalesSummaryReportRows and getDailySheetReport alongside _STATUS_EXPR.
+// appointments.status is already correctly maintained by the payment flow
+// (booked|partial|paid|cancelled|no-show|deleted) — same column the working
+// Appointment Detail report reads directly — so we reuse it as-is rather
+// than trying to recompute payment state from the payments table ourselves.
+_APPOINTMENT_STATUS_JOIN: `
+  LEFT JOIN appointments a ON a.id = s.appointment_id
+`,
+
+// Computed status expression reused by getSalesSummaryReportRows and
+// getDailySheetReport. For appointment-linked sales, trust
+// appointments.status directly (already correct — see
+// _APPOINTMENT_STATUS_JOIN). For walk-in sales with no appointment, fall
+// back to sales.status, mapped onto the same vocabulary. Requires
+// _APPOINTMENT_STATUS_JOIN's `a` alias to already be joined in the same query.
+_STATUS_EXPR: `
+  CASE
+    WHEN s.appointment_id IS NOT NULL THEN COALESCE(a.status::text, 'booked')
+    WHEN s.status = 'completed' THEN 'paid'
+    WHEN s.status = 'cancelled' THEN 'cancelled'
+    WHEN s.status = 'refunded' THEN 'refunded'
+    ELSE 'booked'
+  END
+`,
+
+async getSalesSummaryReportStats(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; staff_id?: string;
+    search?: string; status?: string; category_id?: string;
+  }
+): Promise<{
+  total_bill: number; total_sale: number; received_amount: number; total_tip: number;
+  total_ewallet: number; total_membership: number; total_rewards: number; total_referral: number;
+}> {
+  const { where, values, nextIndex } = this._buildSalesSummaryWhere(salonId, filters);
+  const unbilled = this._UNBILLED_APPOINTMENT_ROWS_CTE(filters, nextIndex);
+
+  const query = `
+    WITH sales_side AS (
+      SELECT
+        s.total_amount::numeric AS price,
+        CASE
+          WHEN s.appointment_id IS NOT NULL THEN pay.paid_from_payments
+          WHEN s.status = 'completed' THEN s.total_amount::numeric
+          ELSE 0
+        END AS paid_amount,
+        s.tip_amount::numeric AS tip_amount,
+        pay.ewallet_used, pay.membership_wallet_used,
+        pay.reward_points_value, pay.referral_credit_used
+      FROM sales s
+      LEFT JOIN clients c ON s.client_id = c.id
+      ${this._PAYMENT_LATERAL}
+      WHERE ${where}
+    ),
+    appt_side AS (
+      SELECT
+        u.price, u.paid_amount, u.tip_amount,
+        u.ewallet_used, u.membership_wallet_used,
+        u.reward_points_value, u.referral_credit_used
+      FROM (${unbilled.sql}) u
+    ),
+    unified AS (
+      SELECT * FROM sales_side
+      UNION ALL
+      SELECT * FROM appt_side
+    )
+    SELECT
+      COUNT(*)::int AS total_bill,
+      COALESCE(SUM(price), 0) AS total_sale,
+      COALESCE(SUM(paid_amount), 0) AS received_amount,
+      COALESCE(SUM(tip_amount), 0) AS total_tip,
+      COALESCE(SUM(ewallet_used), 0) AS total_ewallet,
+      COALESCE(SUM(membership_wallet_used), 0) AS total_membership,
+      COALESCE(SUM(reward_points_value), 0) AS total_rewards,
+      COALESCE(SUM(referral_credit_used), 0) AS total_referral
+    FROM unified
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...unbilled.values]));
+  const r = rows[0] ?? {};
+  return {
+    total_bill: Number(r.total_bill ?? 0),
+    total_sale: Number(r.total_sale ?? 0),
+    received_amount: Number(r.received_amount ?? 0),
+    total_tip: Number(r.total_tip ?? 0),
+    total_ewallet: Number(r.total_ewallet ?? 0),
+    total_membership: Number(r.total_membership ?? 0),
+    total_rewards: Number(r.total_rewards ?? 0),
+    total_referral: Number(r.total_referral ?? 0),
+  };
+},
+
+async getSalesSummaryReportRows(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; staff_id?: string; search?: string;
+    status?: string; category_id?: string; page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: SalesSummaryReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildSalesSummaryWhere(salonId, filters);
+  const unbilled = this._UNBILLED_APPOINTMENT_ROWS_CTE(filters, nextIndex);
+  let idx = unbilled.nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    WITH sales_side AS (
+      SELECT
+        s.id, s.invoice_number, s.created_at, s.payment_method,
+        s.appointment_id,
+        ${this._STATUS_EXPR} AS status,
+        s.subtotal AS actual_price, s.total_amount AS price, s.tip_amount,
+        c.full_name AS client_name, c.phone_number AS client_phone,
+        NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
+        COALESCE(items.item_description, '—') AS item_description,
+        COALESCE(items.item_types, '—') AS item_types,
+        CASE
+          WHEN s.appointment_id IS NOT NULL THEN pay.paid_from_payments
+          WHEN s.status = 'completed' THEN s.total_amount::numeric
+          ELSE 0
+        END AS paid_amount,
+        COALESCE(pay.latest_due, 0) AS due_amount,
+        COALESCE(pay.ewallet_used, 0) AS ewallet_used,
+        COALESCE(pay.membership_wallet_used, 0) AS membership_wallet_used,
+        COALESCE(pay.reward_points_value, 0) AS reward_points_value,
+        COALESCE(pay.referral_credit_used, 0) AS referral_credit_used
+      FROM sales s
+      LEFT JOIN clients c ON s.client_id = c.id
+      -- Sales don't always carry their own staff_id (e.g. membership/package/
+      -- product-only sales record staff per line item instead) — fall back to
+      -- any line item's staff_id, same COALESCE(si.staff_id, s.staff_id)
+      -- convention already used by sales.repository.ts::findItemsBySaleId().
+      LEFT JOIN staff st ON st.id = COALESCE(
+        s.staff_id,
+        (SELECT si.staff_id FROM sale_items si WHERE si.sale_id = s.id AND si.staff_id IS NOT NULL LIMIT 1)
+      )
+      ${this._PAYMENT_LATERAL}
+      ${this._APPOINTMENT_STATUS_JOIN}
+      LEFT JOIN LATERAL (
+        SELECT
+          STRING_AGG(DISTINCT si.name, ', ') AS item_description,
+          STRING_AGG(DISTINCT si.item_type, ', ') AS item_types
+        FROM sale_items si
+        WHERE si.sale_id = s.id
+      ) items ON TRUE
+      WHERE ${where}
+    ),
+    appt_side AS (
+      SELECT
+        u.id, u.invoice_number, u.created_at, u.payment_method,
+        u.appointment_id, u.status,
+        u.actual_price, u.price, u.tip_amount,
+        u.client_name, u.client_phone, u.staff_name,
+        u.item_description, u.item_types,
+        u.paid_amount, u.due_amount,
+        u.ewallet_used, u.membership_wallet_used,
+        u.reward_points_value, u.referral_credit_used
+      FROM (${unbilled.sql}) u
+    ),
+    unified AS (
+      SELECT * FROM sales_side
+      UNION ALL
+      SELECT * FROM appt_side
+    )
+    SELECT *, COUNT(*) OVER() AS total_count
+    FROM unified
+    ORDER BY created_at DESC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...unbilled.values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: SalesSummaryReportRow[] = rows.map((row: any) => ({
+    id: row.id,
+    appointment_id: row.appointment_id,
+    invoice_number: row.invoice_number,
+    client_name: row.client_name,
+    client_phone: row.client_phone,
+    item_description: row.item_description,
+    item_types: row.item_types,
+    actual_price: Number(row.actual_price ?? 0),
+    price: Number(row.price ?? 0),
+    paid_amount: Number(row.paid_amount ?? 0),
+    due_amount: Number(row.due_amount ?? 0),
+    tip_amount: Number(row.tip_amount ?? 0),
+    ewallet_used: Number(row.ewallet_used ?? 0),
+    membership_wallet_used: Number(row.membership_wallet_used ?? 0),
+    reward_points_value: Number(row.reward_points_value ?? 0),
+    referral_credit_used: Number(row.referral_credit_used ?? 0),
+    payment_method: row.payment_method,
+    status: row.status,
+    created_at: row.created_at,
+    staff_name: row.staff_name,
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+async getSaleDetail(salonId: string, saleId: string): Promise<SaleDetailResponse> {
+  const { rows: saleRows } = await safeQuery(() => pool.query(
+    `SELECT
+      s.id, s.invoice_number, s.status, s.created_at, s.appointment_id,
+      s.subtotal, s.discount_amount, s.tip_amount, s.tax_amount, s.ex_charges, s.total_amount,
+      s.payment_method, s.payment_reference, s.notes,
+      s.coupon_code, s.discount_percent, s.discount_type,
+      c.full_name AS client_name, c.phone_number AS client_phone,
+      NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name
+    FROM sales s
+    LEFT JOIN clients c ON s.client_id = c.id
+    LEFT JOIN staff st ON st.id = COALESCE(
+      s.staff_id,
+      (SELECT si.staff_id FROM sale_items si WHERE si.sale_id = s.id AND si.staff_id IS NOT NULL LIMIT 1)
+    )
+    WHERE s.id = $1 AND s.salon_id = $2`,
+    [saleId, salonId]
+  ));
+  const saleRow = saleRows[0];
+  if (!saleRow) {
+    return { sale: null, items: [], payment: null };
+  }
+
+  const sale: SaleDetailHeader = {
+    id: saleRow.id,
+    invoice_number: saleRow.invoice_number,
+    status: saleRow.status,
+    created_at: saleRow.created_at,
+    client_name: saleRow.client_name,
+    client_phone: saleRow.client_phone,
+    staff_name: saleRow.staff_name,
+    subtotal: Number(saleRow.subtotal ?? 0),
+    discount_amount: Number(saleRow.discount_amount ?? 0),
+    tip_amount: Number(saleRow.tip_amount ?? 0),
+    tax_amount: Number(saleRow.tax_amount ?? 0),
+    ex_charges: Number(saleRow.ex_charges ?? 0),
+    total_amount: Number(saleRow.total_amount ?? 0),
+    payment_method: saleRow.payment_method,
+    payment_reference: saleRow.payment_reference,
+    notes: saleRow.notes,
+    coupon_code: saleRow.coupon_code,
+    discount_percent: saleRow.discount_percent != null ? Number(saleRow.discount_percent) : null,
+    discount_type: saleRow.discount_type,
+    appointment_id: saleRow.appointment_id,
+  };
+
+  const { rows: itemRows } = await safeQuery(() => pool.query(
+    `SELECT
+      si.id, si.item_type, si.item_id, si.name, si.quantity, si.unit_price,
+      si.discount_amount, si.total_price,
+      NULLIF(TRIM(CONCAT(COALESCE(st2.first_name, ''), ' ', COALESCE(st2.last_name, ''))), '') AS staff_name
+    FROM sale_items si
+    LEFT JOIN staff st2 ON st2.id = COALESCE(si.staff_id, (SELECT staff_id FROM sales WHERE id = si.sale_id))
+    WHERE si.sale_id = $1`,
+    [saleId]
+  ));
+  const items: SaleDetailItem[] = itemRows.map((row: any) => ({
+    id: row.id,
+    item_type: row.item_type,
+    item_id: row.item_id,
+    name: row.name,
+    quantity: Number(row.quantity ?? 0),
+    unit_price: Number(row.unit_price ?? 0),
+    discount_amount: Number(row.discount_amount ?? 0),
+    total_price: Number(row.total_price ?? 0),
+    staff_name: row.staff_name,
+  }));
+
+  let payment: SaleDetailPayment | null = null;
+  if (sale.appointment_id) {
+    const { rows: payRows } = await safeQuery(() => pool.query(
+      `SELECT
+        COALESCE(SUM(p.paid_amount) FILTER (WHERE p.status IN ('completed', 'partial', 'refunded')), 0) AS paid_amount,
+        COALESCE(MAX(p.due_amount) FILTER (
+          WHERE p.created_at = (SELECT MAX(created_at) FROM payments WHERE appointment_id = $1)
+        ), 0) AS due_amount,
+        COALESCE(SUM(p.ewallet_used), 0) AS ewallet_used,
+        COALESCE(SUM(p.membership_wallet_used), 0) AS membership_wallet_used,
+        COALESCE(SUM(p.reward_points_value), 0) AS reward_points_value,
+        COALESCE(SUM(p.referral_credit_used), 0) AS referral_credit_used,
+        (ARRAY_AGG(p.tax_breakdown ORDER BY p.created_at DESC))[1] AS tax_breakdown
+      FROM payments p
+      WHERE p.appointment_id = $1`,
+      [sale.appointment_id]
+    ));
+    const payRow = payRows[0];
+    if (payRow) {
+      payment = {
+        paid_amount: Number(payRow.paid_amount ?? 0),
+        due_amount: Number(payRow.due_amount ?? 0),
+        ewallet_used: Number(payRow.ewallet_used ?? 0),
+        membership_wallet_used: Number(payRow.membership_wallet_used ?? 0),
+        reward_points_value: Number(payRow.reward_points_value ?? 0),
+        referral_credit_used: Number(payRow.referral_credit_used ?? 0),
+        tax_breakdown: payRow.tax_breakdown ?? null,
+      };
+    }
+  }
+
+  return { sale, items, payment };
+},
+
+// ======================================================
+// DAILY SHEET REPORT (independent report API)
+// POST /api/report/daily-sheet — reads sales/sale_items directly, one row
+// per line item. Never calls the Appointment API/service.
+// ======================================================
+
+_buildDailySheetWhere(
+  salonId: string,
+  filters: {
+    date?: string;
+    service_id?: string;
+    staff_id?: string;
+    search?: string;
+  }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["s.salon_id = $1", "s.status <> 'draft'"];
+  let idx = 2;
+
+  if (filters.date) {
+    where.push(`DATE(s.created_at) = $${idx++}::date`);
+    values.push(filters.date);
+  }
+  if (filters.service_id) {
+    where.push(`si.item_id = $${idx++}`);
+    values.push(filters.service_id);
+  }
+  if (filters.staff_id) {
+    where.push(`COALESCE(si.staff_id, s.staff_id) = $${idx++}`);
+    values.push(filters.staff_id);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(s.invoice_number, '') ILIKE $${idx}
+      OR COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+      OR COALESCE(si.name, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+// Same gap as Sales Summary (see _UNBILLED_APPOINTMENT_ROWS_CTE): a
+// partially-paid or not-yet-paid appointment has no sales/sale_items rows
+// at all, so Daily Sheet — which reads sale_items — can never show it
+// without this. One synthetic row per line item across all four JSONB
+// arrays (services/package_items/product_items/membership_items), shaped
+// identically to the sale_items-based SELECT so both sides UNION ALL
+// cleanly. Does not take its own salonId slot — always embedded where $1
+// is already bound (see getDailySheetReport).
+_UNBILLED_APPOINTMENT_DAILY_ROWS_CTE(
+  filters: { date?: string; service_id?: string; staff_id?: string; search?: string },
+  startIdx: number
+): { sql: string; values: any[]; nextIndex: number } {
+  const values: any[] = [];
+  const where = [
+    "a.salon_id = $1",
+    "a.deleted_at IS NULL",
+    "a.status NOT IN ('cancelled', 'deleted', 'no-show')",
+    "NOT EXISTS (SELECT 1 FROM sales sx WHERE sx.appointment_id = a.id)",
+  ];
+  let idx = startIdx;
+
+  if (filters.date) {
+    where.push(`DATE(a.scheduled_at) = $${idx++}::date`);
+    values.push(filters.date);
+  }
+  if (filters.service_id) {
+    where.push(`src.item_id = $${idx++}`);
+    values.push(filters.service_id);
+  }
+  if (filters.staff_id) {
+    where.push(`COALESCE(src.staff_id, a.staff_id) = $${idx++}`);
+    values.push(filters.staff_id);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+      OR COALESCE(src.name, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  const sql = `
+    SELECT
+      a.appointment_id,
+      NULL::uuid AS sale_id,
+      a.time,
+      a.ticket_no,
+      c.full_name AS client_name,
+      src.item_id AS service_id,
+      src.name AS service,
+      st.id AS staff_id,
+      NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff,
+      (src.price * src.quantity) AS amount,
+      pay.latest_method AS payment_method,
+      a.status::text AS status
+    FROM (
+      SELECT a.id AS appointment_id, a.client_id, a.staff_id, a.status, a.created_at, a.services,
+             a.package_items, a.product_items, a.membership_items,
+             TO_CHAR(a.created_at, 'HH12:MI AM') AS time,
+             NULL::text AS ticket_no
+      FROM appointments a
+    ) a
+    LEFT JOIN clients c ON a.client_id = c.id
+    LEFT JOIN LATERAL (
+      SELECT svc.value->>'name' AS name, svc.value->>'service_id' AS item_id,
+             NULLIF(svc.value->>'staff_id', '')::uuid AS staff_id,
+             COALESCE(NULLIF(svc.value->>'price', '')::numeric, 0) AS price,
+             COALESCE(NULLIF(svc.value->>'quantity', '')::numeric, 1) AS quantity
+      FROM jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) AS svc(value)
+      UNION ALL
+      SELECT pkg.value->>'name', pkg.value->>'package_id',
+             NULLIF(pkg.value->>'staff_id', '')::uuid,
+             COALESCE(NULLIF(pkg.value->>'price', '')::numeric, 0),
+             COALESCE(NULLIF(pkg.value->>'quantity', '')::numeric, 1)
+      FROM jsonb_array_elements(COALESCE(a.package_items, '[]'::jsonb)) AS pkg(value)
+      UNION ALL
+      SELECT prod.value->>'name', prod.value->>'product_id',
+             NULLIF(prod.value->>'staff_id', '')::uuid,
+             COALESCE(NULLIF(prod.value->>'price', '')::numeric, 0),
+             COALESCE(NULLIF(prod.value->>'quantity', '')::numeric, 1)
+      FROM jsonb_array_elements(COALESCE(a.product_items, '[]'::jsonb)) AS prod(value)
+      UNION ALL
+      SELECT mem.value->>'name', mem.value->>'membership_id',
+             NULLIF(mem.value->>'staff_id', '')::uuid,
+             COALESCE(NULLIF(mem.value->>'price', '')::numeric, 0),
+             COALESCE(NULLIF(mem.value->>'quantity', '')::numeric, 1)
+      FROM jsonb_array_elements(COALESCE(a.membership_items, '[]'::jsonb)) AS mem(value)
+    ) src ON TRUE
+    LEFT JOIN staff st ON st.id = COALESCE(src.staff_id, a.staff_id)
+    LEFT JOIN LATERAL (
+      SELECT MAX(p.payment_method) FILTER (
+        WHERE p.created_at = (SELECT MAX(p2.created_at) FROM payments p2 WHERE p2.appointment_id = a.appointment_id)
+      ) AS latest_method
+      FROM payments p
+      WHERE p.appointment_id = a.appointment_id
+    ) pay ON TRUE
+    WHERE src.name IS NOT NULL AND ${where.join(" AND ")}
+  `;
+
+  return { sql, values, nextIndex: idx };
+},
+
+async getDailySheetReport(
+  salonId: string,
+  filters: {
+    date?: string; service_id?: string; staff_id?: string; search?: string;
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: DailySheetReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+  total_amount: number;
+}> {
+  const { where, values, nextIndex } = this._buildDailySheetWhere(salonId, filters);
+  const unbilled = this._UNBILLED_APPOINTMENT_DAILY_ROWS_CTE(filters, nextIndex);
+  let idx = unbilled.nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    WITH sales_side AS (
+      SELECT
+        s.appointment_id,
+        s.id AS sale_id,
+        TO_CHAR(s.created_at, 'HH12:MI AM') AS time,
+        COALESCE(s.invoice_number, s.id::text) AS ticket_no,
+        c.full_name AS client_name,
+        si.item_id AS service_id,
+        si.name AS service,
+        st.id AS staff_id,
+        NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff,
+        si.total_price AS amount,
+        s.payment_method,
+        ${this._STATUS_EXPR} AS status,
+        s.created_at AS sort_at
+      FROM sale_items si
+      JOIN sales s ON s.id = si.sale_id
+      LEFT JOIN clients c ON s.client_id = c.id
+      LEFT JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
+      ${this._PAYMENT_LATERAL}
+      ${this._APPOINTMENT_STATUS_JOIN}
+      WHERE ${where}
+    ),
+    appt_side AS (
+      SELECT
+        u.appointment_id, u.sale_id, u.time, u.ticket_no, u.client_name,
+        u.service_id, u.service, u.staff_id, u.staff, u.amount,
+        u.payment_method, u.status,
+        (SELECT a2.created_at FROM appointments a2 WHERE a2.id = u.appointment_id) AS sort_at
+      FROM (${unbilled.sql}) u
+    ),
+    unified AS (
+      SELECT * FROM sales_side
+      UNION ALL
+      SELECT * FROM appt_side
+    )
+    SELECT *,
+      SUM(amount) OVER() AS grand_total,
+      COUNT(*) OVER() AS total_count
+    FROM unified
+    ORDER BY sort_at ASC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...unbilled.values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const totalAmount = rows.length ? Number(rows[0].grand_total ?? 0) : 0;
+  const items: DailySheetReportRow[] = rows.map((row: any) => ({
+    appointment_id: row.appointment_id,
+    sale_id: row.sale_id,
+    time: row.time,
+    ticket_no: row.ticket_no,
+    client_name: row.client_name,
+    service_id: row.service_id,
+    service: row.service,
+    staff_id: row.staff_id,
+    staff: row.staff,
+    amount: Number(row.amount ?? 0),
+    payment_method: row.payment_method,
+    status: row.status,
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+    total_amount: totalAmount,
+  };
+},
+
+// Distinct services/staff that have EVER appeared in this salon's sales —
+// scoped only to salon_id, not the current date/filters, so the dropdown
+// options stay complete and stable no matter what's currently selected.
+// Zero separate /services or /staff API calls needed on the frontend.
+async getDailySheetFiltersAvailable(salonId: string): Promise<DailySheetFiltersAvailable> {
+  const { rows: serviceRows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT si.item_id AS id, si.name AS label
+     FROM sale_items si
+     JOIN sales s ON s.id = si.sale_id
+     WHERE s.salon_id = $1 AND s.status <> 'draft' AND si.item_id IS NOT NULL
+     ORDER BY si.name ASC`,
+    [salonId]
+  ));
+
+  const { rows: staffRows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT st.id, TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))) AS label
+     FROM sale_items si
+     JOIN sales s ON s.id = si.sale_id
+     JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
+     WHERE s.salon_id = $1 AND s.status <> 'draft'
+     ORDER BY label ASC`,
+    [salonId]
+  ));
+
+  return {
+    services: serviceRows.map((r: any) => ({ id: r.id, label: r.label })),
+    staff: staffRows.map((r: any) => ({ id: r.id, label: r.label })),
+  };
+},
+
+// ======================================================
+// PRODUCT RETAIL REPORT (independent report API)
+// POST /api/report/product-retail — reads sales/sale_items directly
+// (item_type = 'product'), one row per line item. Never calls the
+// Appointment API/service.
+// ======================================================
+
+_buildProductRetailWhere(
+  salonId: string,
+  filters: {
+    start_date?: string;
+    end_date?: string;
+    product_id?: string;
+    search?: string;
+  }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["s.salon_id = $1", "s.status <> 'draft'", "si.item_type = 'product'"];
+  let idx = 2;
+
+  if (filters.start_date) {
+    where.push(`s.created_at >= $${idx++}::date`);
+    values.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    where.push(`s.created_at < ($${idx++}::date + interval '1 day')`);
+    values.push(filters.end_date);
+  }
+  if (filters.product_id) {
+    where.push(`si.item_id = $${idx++}`);
+    values.push(filters.product_id);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(s.invoice_number, '') ILIKE $${idx}
+      OR COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+      OR COALESCE(si.name, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+async getProductRetailReportStats(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; product_id?: string; search?: string }
+): Promise<ProductRetailReportStats> {
+  const { where, values } = this._buildProductRetailWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      COALESCE(SUM(si.quantity), 0)::int AS total_quantity,
+      COALESCE(SUM(
+        si.total_price + (
+          CASE WHEN COALESCE(s.subtotal, 0) > 0
+               THEN COALESCE(s.tax_amount, 0) * (si.total_price / s.subtotal)
+               ELSE 0
+          END
+        )
+      ), 0) AS total_revenue,
+      COUNT(DISTINCT si.name)::int AS unique_products,
+      COUNT(*)::int AS line_items
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    LEFT JOIN clients c ON s.client_id = c.id
+    WHERE ${where}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  return {
+    total_quantity: Number(r.total_quantity ?? 0),
+    total_revenue: Number(r.total_revenue ?? 0),
+    unique_products: Number(r.unique_products ?? 0),
+    line_items: Number(r.line_items ?? 0),
+  };
+},
+
+async getProductRetailReportRows(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; product_id?: string; search?: string;
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: ProductRetailReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildProductRetailWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    SELECT
+      s.id AS sale_id,
+      TO_CHAR(s.created_at, 'YYYY-MM-DD') AS date,
+      COALESCE(s.invoice_number, s.id::text) AS invoice_no,
+      s.client_id,
+      c.full_name AS client_name,
+      si.item_id AS product_id,
+      si.name AS product_name,
+      si.quantity,
+      si.unit_price AS price,
+      si.total_price AS total,
+      si.tax_amount, si.taxable_amount,
+      COUNT(*) OVER() AS total_count
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    LEFT JOIN clients c ON s.client_id = c.id
+    WHERE ${where}
+    ORDER BY s.created_at DESC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: ProductRetailReportRow[] = rows.map((row: any) => ({
+    sale_id: row.sale_id,
+    date: row.date,
+    invoice_no: row.invoice_no,
+    client_id: row.client_id,
+    client_name: row.client_name,
+    product_id: row.product_id,
+    product_name: row.product_name,
+    quantity: Number(row.quantity ?? 0),
+    price: Number(row.price ?? 0),
+    total: Number(row.total ?? 0),
+    tax_amount: Number(row.tax_amount ?? 0),
+    taxable_amount: Number(row.taxable_amount ?? 0),
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// Per-product units-sold + tax-inclusive revenue, for the "Sales" column on
+// the Product Inventory report. Grouped by si.item_id (the real product row),
+// not by name — same tables/tax-proration logic as getProductRetailReportRows,
+// just aggregated instead of returned as line items.
+async getProductInventorySales(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string }
+): Promise<Record<string, { quantity: number; revenue: number }>> {
+  const { where, values } = this._buildProductRetailWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      si.item_id AS product_id,
+      SUM(si.quantity) AS quantity,
+      SUM(
+        si.total_price + (
+          CASE WHEN COALESCE(s.subtotal, 0) > 0
+               THEN COALESCE(s.tax_amount, 0) * (si.total_price / s.subtotal)
+               ELSE 0
+          END
+        )
+      ) AS revenue
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    WHERE ${where} AND si.item_id IS NOT NULL
+    GROUP BY si.item_id
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const result: Record<string, { quantity: number; revenue: number }> = {};
+  for (const row of rows) {
+    result[String(row.product_id)] = {
+      quantity: Number(row.quantity ?? 0),
+      revenue: Number(row.revenue ?? 0),
+    };
+  }
+  return result;
+},
+
+// Distinct products that have EVER been sold in this salon — scoped only to
+// salon_id, not the current date/filters, so the dropdown stays complete.
+// Zero separate /products API call needed on the frontend.
+async getProductRetailFiltersAvailable(salonId: string): Promise<{ products: ProductRetailFilterOption[] }> {
+  const { rows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT si.item_id AS id, si.name AS label
+     FROM sale_items si
+     JOIN sales s ON s.id = si.sale_id
+     WHERE s.salon_id = $1 AND s.status <> 'draft' AND si.item_type = 'product' AND si.item_id IS NOT NULL
+     ORDER BY si.name ASC`,
+    [salonId]
+  ));
+  return { products: rows.map((r: any) => ({ id: r.id, label: r.label })) };
+},
+
+// ======================================================
+// SERVICE SALE REPORT (independent report API)
+// POST /api/report/service-sale — reads sales/sale_items directly
+// (item_type = 'service'), one row per line item. Never calls the
+// Appointment API/service.
+// ======================================================
+
+_buildServiceSaleWhere(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; staff_id?: string; search?: string }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["s.salon_id = $1", "s.status <> 'draft'", "si.item_type = 'service'"];
+  let idx = 2;
+
+  if (filters.start_date) {
+    where.push(`s.created_at >= $${idx++}::date`);
+    values.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    where.push(`s.created_at < ($${idx++}::date + interval '1 day')`);
+    values.push(filters.end_date);
+  }
+  if (filters.staff_id) {
+    where.push(`COALESCE(si.staff_id, s.staff_id) = $${idx++}`);
+    values.push(filters.staff_id);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(si.name, '') ILIKE $${idx}
+      OR COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(st.first_name, '') ILIKE $${idx}
+      OR COALESCE(st.last_name, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+async getServiceSaleReportStats(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; staff_id?: string; search?: string }
+): Promise<ServiceSaleReportStats> {
+  const { where, values } = this._buildServiceSaleWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      COUNT(*)::int AS services_sold,
+      COALESCE(SUM(si.total_price), 0) AS total_revenue,
+      COUNT(DISTINCT si.name)::int AS unique_services
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    LEFT JOIN clients c ON s.client_id = c.id
+    LEFT JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
+    WHERE ${where}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  const services_sold = Number(r.services_sold ?? 0);
+  const total_revenue = Number(r.total_revenue ?? 0);
+  return {
+    services_sold,
+    total_revenue,
+    avg_ticket: services_sold > 0 ? total_revenue / services_sold : 0,
+    unique_services: Number(r.unique_services ?? 0),
+  };
+},
+
+async getServiceSaleReportRows(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; staff_id?: string; search?: string;
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: ServiceSaleReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildServiceSaleWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    SELECT
+      s.id AS sale_id,
+      TO_CHAR(s.created_at, 'YYYY-MM-DD') AS date,
+      COALESCE(s.invoice_number, s.id::text) AS invoice_no,
+      s.client_id,
+      c.full_name AS client_name,
+      st.id AS staff_id,
+      NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
+      si.item_id AS service_id,
+      si.name AS service_name,
+      si.total_price AS price,
+      si.tax_amount, si.taxable_amount,
+      COUNT(*) OVER() AS total_count
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    LEFT JOIN clients c ON s.client_id = c.id
+    LEFT JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
+    WHERE ${where}
+    ORDER BY s.created_at DESC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: ServiceSaleReportRow[] = rows.map((row: any) => ({
+    sale_id: row.sale_id,
+    date: row.date,
+    invoice_no: row.invoice_no,
+    client_id: row.client_id,
+    client_name: row.client_name,
+    staff_id: row.staff_id,
+    staff_name: row.staff_name,
+    service_id: row.service_id,
+    service_name: row.service_name,
+    price: Number(row.price ?? 0),
+    tax_amount: Number(row.tax_amount ?? 0),
+    taxable_amount: Number(row.taxable_amount ?? 0),
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// ======================================================
+// GST / TAXES REPORT (independent report API)
+// POST /api/report/gst — reads sales directly, one row per invoice. Only
+// sales with tax_amount > 0 are included (equivalent of the old report's
+// "skip appointments with no tax_breakdown" rule). Never calls the
+// Appointment API/service.
+// ======================================================
+
+_buildGstWhere(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; staff_id?: string; search?: string }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["s.salon_id = $1", "s.status <> 'draft'", "s.tax_amount::numeric > 0"];
+  let idx = 2;
+
+  if (filters.start_date) {
+    where.push(`s.created_at >= $${idx++}::date`);
+    values.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    where.push(`s.created_at < ($${idx++}::date + interval '1 day')`);
+    values.push(filters.end_date);
+  }
+  if (filters.staff_id) {
+    where.push(`s.staff_id = $${idx++}`);
+    values.push(filters.staff_id);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(s.invoice_number, '') ILIKE $${idx}
+      OR COALESCE(c.full_name, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+async getGstReportStats(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; staff_id?: string; search?: string }
+): Promise<GstReportStats> {
+  const { where, values } = this._buildGstWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      COUNT(*)::int AS invoices_with_tax,
+      COALESCE(SUM(s.tax_amount::numeric), 0) AS total_tax_collected,
+      COALESCE(SUM(s.total_amount::numeric), 0) AS total_amount_collected
+    FROM sales s
+    LEFT JOIN clients c ON s.client_id = c.id
+    WHERE ${where}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  return {
+    invoices_with_tax: Number(r.invoices_with_tax ?? 0),
+    total_tax_collected: Number(r.total_tax_collected ?? 0),
+    total_amount_collected: Number(r.total_amount_collected ?? 0),
+  };
+},
+
+async getGstReportRows(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; staff_id?: string; search?: string;
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: GstReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildGstWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    SELECT
+      s.id AS sale_id,
+      TO_CHAR(s.created_at, 'YYYY-MM-DD') AS date,
+      COALESCE(s.invoice_number, s.id::text) AS invoice_no,
+      c.full_name AS client_name,
+      GREATEST(s.subtotal::numeric - s.discount_amount::numeric, 0) AS taxable_amount,
+      s.tax_amount::numeric AS tax_amount,
+      s.total_amount::numeric AS total,
+      COUNT(*) OVER() AS total_count
+    FROM sales s
+    LEFT JOIN clients c ON s.client_id = c.id
+    WHERE ${where}
+    ORDER BY s.created_at DESC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: GstReportRow[] = rows.map((row: any) => ({
+    sale_id: row.sale_id,
+    date: row.date,
+    invoice_no: row.invoice_no,
+    client_name: row.client_name,
+    taxable_amount: Number(row.taxable_amount ?? 0),
+    tax_amount: Number(row.tax_amount ?? 0),
+    total: Number(row.total ?? 0),
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// ======================================================
+// PRODUCT MARGIN REPORT (independent report API)
+// POST /api/report/product-margin — reads sale_items (item_type = 'product')
+// joined against products.supply_price for cost, aggregated by product name.
+// Never calls the Appointment API/service.
+// ======================================================
+
+_buildProductMarginWhere(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["s.salon_id = $1", "s.status <> 'draft'", "si.item_type = 'product'"];
+  let idx = 2;
+
+  if (filters.start_date) {
+    where.push(`s.created_at >= $${idx++}::date`);
+    values.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    where.push(`s.created_at < ($${idx++}::date + interval '1 day')`);
+    values.push(filters.end_date);
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+// Shared aggregation CTE — groups sale_items by product name, joining
+// products.supply_price by item_id first, falling back to a case-insensitive
+// name match for line items whose product_id no longer resolves (e.g. a
+// deleted/renamed product), same fallback style already used elsewhere in
+// this module for staff attribution.
+_PRODUCT_MARGIN_AGG(where: string): string {
+  return `
+    WITH margin_agg AS (
+      SELECT
+        si.name AS product_name,
+        SUM(si.quantity) AS quantity,
+        SUM(si.total_price) AS revenue,
+        SUM(
+          COALESCE(
+            (SELECT p.supply_price FROM products p WHERE p.id = si.item_id),
+            (SELECT p.supply_price FROM products p WHERE p.salon_id = s.salon_id AND LOWER(p.name) = LOWER(si.name) LIMIT 1),
+            0
+          )::numeric * si.quantity
+        ) AS cost
+      FROM sale_items si
+      JOIN sales s ON s.id = si.sale_id
+      WHERE ${where}
+      GROUP BY si.name
+    )
+  `;
+},
+
+async getProductMarginReportStats(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string }
+): Promise<ProductMarginReportStats> {
+  const { where, values } = this._buildProductMarginWhere(salonId, filters);
+
+  const query = `
+    ${this._PRODUCT_MARGIN_AGG(where)}
+    SELECT
+      COALESCE(SUM(revenue), 0) AS total_revenue,
+      COALESCE(SUM(cost), 0) AS total_cost,
+      COALESCE(SUM(revenue - cost), 0) AS total_profit
+    FROM margin_agg
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  const total_revenue = Number(r.total_revenue ?? 0);
+  const total_profit = Number(r.total_profit ?? 0);
+  return {
+    total_revenue,
+    total_cost: Number(r.total_cost ?? 0),
+    total_profit,
+    avg_margin_pct: total_revenue > 0 ? Math.round((total_profit / total_revenue) * 1000) / 10 : 0,
+  };
+},
+
+async getProductMarginReportRows(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; page?: number; limit?: number; is_export?: boolean }
+): Promise<{
+  items: ProductMarginReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildProductMarginWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    ${this._PRODUCT_MARGIN_AGG(where)}
+    SELECT
+      product_name, quantity, revenue, cost, (revenue - cost) AS profit,
+      COUNT(*) OVER() AS total_count
+    FROM margin_agg
+    ORDER BY (revenue - cost) DESC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: ProductMarginReportRow[] = rows.map((row: any) => {
+    const revenue = Number(row.revenue ?? 0);
+    const profit = Number(row.profit ?? 0);
+    return {
+      product_name: row.product_name,
+      quantity: Number(row.quantity ?? 0),
+      revenue: Math.round(revenue),
+      cost: Math.round(Number(row.cost ?? 0)),
+      profit: Math.round(profit),
+      margin_pct: revenue > 0 ? Math.round((profit / revenue) * 1000) / 10 : 0,
+    };
+  });
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// ======================================================
+// REWARD POINTS REPORT (independent report API)
+// POST /api/report/reward-points — reads clients.reward_points_balance and
+// reward_points_ledger directly, one row per client. Never calls the
+// Appointment API/service.
+// ======================================================
+
+_buildRewardPointsWhere(
+  salonId: string,
+  filters: { search?: string }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["c.salon_id = $1"];
+  let idx = 2;
+
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+// Shared aggregation CTE — only clients that have ever had a reward-points
+// ledger entry are included (matches the old report's scope: clients with
+// zero reward-points history never show up in a "reward points" report).
+_REWARD_POINTS_AGG(where: string): string {
+  return `
+    WITH ledger_agg AS (
+      SELECT
+        rl.client_id,
+        COALESCE(SUM(rl.points) FILTER (WHERE rl.type = 'earn'), 0) AS points_earned,
+        COALESCE(SUM(-rl.points) FILTER (WHERE rl.type = 'redeem'), 0) AS points_redeemed,
+        MAX(rl.created_at) AS last_activity_at
+      FROM reward_points_ledger rl
+      GROUP BY rl.client_id
+    ),
+    reward_agg AS (
+      SELECT
+        c.id AS client_id,
+        c.full_name AS client_name,
+        c.phone_number AS mobile,
+        COALESCE(c.reward_points_balance, 0) AS points_available,
+        COALESCE(la.points_earned, 0) AS points_earned,
+        COALESCE(la.points_redeemed, 0) AS points_redeemed,
+        la.last_activity_at
+      FROM clients c
+      JOIN ledger_agg la ON la.client_id = c.id
+      WHERE ${where}
+    )
+  `;
+},
+
+async getRewardPointsReportStats(
+  salonId: string,
+  filters: { search?: string }
+): Promise<RewardPointsReportStats> {
+  const { where, values } = this._buildRewardPointsWhere(salonId, filters);
+
+  const query = `
+    ${this._REWARD_POINTS_AGG(where)}
+    SELECT
+      COALESCE(SUM(points_available), 0) AS points_available,
+      COALESCE(SUM(points_earned), 0) AS total_points_earned,
+      COALESCE(SUM(points_redeemed), 0) AS total_points_redeemed
+    FROM reward_agg
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  return {
+    points_available: Number(r.points_available ?? 0),
+    total_points_earned: Number(r.total_points_earned ?? 0),
+    total_points_redeemed: Number(r.total_points_redeemed ?? 0),
+  };
+},
+
+async getRewardPointsReportRows(
+  salonId: string,
+  filters: { search?: string; page?: number; limit?: number; is_export?: boolean }
+): Promise<{
+  items: RewardPointsReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildRewardPointsWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    ${this._REWARD_POINTS_AGG(where)}
+    SELECT
+      client_id, client_name, mobile, points_available, points_earned,
+      points_redeemed, last_activity_at,
+      COUNT(*) OVER() AS total_count
+    FROM reward_agg
+    ORDER BY points_available DESC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: RewardPointsReportRow[] = rows.map((row: any) => ({
+    client_id: row.client_id,
+    client_name: row.client_name,
+    mobile: row.mobile,
+    points_available: Number(row.points_available ?? 0),
+    points_earned: Number(row.points_earned ?? 0),
+    points_redeemed: Number(row.points_redeemed ?? 0),
+    last_activity_at: row.last_activity_at,
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// ======================================================
+// E-WALLET REPORT (independent report API)
+// POST /api/report/ewallet — reads clients.ewallet_balance directly, one
+// row per client. Never calls the Appointment API/service. Row-click
+// drill-down (breakdown/ledger) keeps using the existing dedicated
+// /api/v1/ewallet/:clientId/breakdown and /ledger endpoints.
+// ======================================================
+
+_buildEwalletWhere(
+  salonId: string,
+  filters: { search?: string }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["c.salon_id = $1"];
+  let idx = 2;
+
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+      OR COALESCE(c.email, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+async getEwalletReportStats(
+  salonId: string,
+  filters: { search?: string }
+): Promise<EwalletReportStats> {
+  const { where, values } = this._buildEwalletWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      COUNT(*)::int AS total_clients,
+      COUNT(*) FILTER (WHERE COALESCE(c.ewallet_balance, 0) > 0)::int AS with_balance,
+      COALESCE(SUM(c.ewallet_balance), 0) AS total_wallet_value
+    FROM clients c
+    WHERE ${where}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  const total_wallet_value = Number(r.total_wallet_value ?? 0);
+  const with_balance = Number(r.with_balance ?? 0);
+  return {
+    total_clients: Number(r.total_clients ?? 0),
+    with_balance,
+    total_wallet_value,
+    avg_balance: with_balance > 0 ? total_wallet_value / with_balance : 0,
+  };
+},
+
+async getEwalletReportRows(
+  salonId: string,
+  filters: { search?: string; page?: number; limit?: number; is_export?: boolean }
+): Promise<{
+  items: EwalletReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildEwalletWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    SELECT
+      c.id AS client_id,
+      COALESCE(NULLIF(TRIM(c.full_name), ''), '—') AS client_name,
+      COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS phone,
+      COALESCE(NULLIF(c.email, ''), '—') AS email,
+      COALESCE(c.ewallet_balance, 0) AS balance,
+      COUNT(*) OVER() AS total_count
+    FROM clients c
+    WHERE ${where}
+    ORDER BY COALESCE(c.ewallet_balance, 0) DESC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: EwalletReportRow[] = rows.map((row: any) => ({
+    client_id: row.client_id,
+    client_name: row.client_name,
+    phone: row.phone,
+    email: row.email,
+    balance: Number(row.balance ?? 0),
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// ======================================================
+// CLIENT REVENUE REPORT (independent report API)
+// POST /api/report/client-revenue — reads sales/clients directly, grouped
+// per client (by client_id when known, else name+phone for walk-ins), one
+// row per client. Only status = 'completed' sales count. Never calls the
+// Appointment API/service.
+// ======================================================
+
+// Client-driven: every registered client must appear (even with zero sales),
+// so filters that only make sense against a sale (date range, "completed"
+// status) belong in the LEFT JOIN's ON clause, not WHERE — a WHERE on s.*
+// would silently discard NULL-sale rows and turn this back into an INNER
+// JOIN, which is the exact bug being fixed here.
+_buildClientRevenueWhere(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; search?: string }
+): { where: string; saleJoin: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["c.salon_id = $1"];
+  const saleJoin = ["s.client_id = c.id", "s.status = 'completed'"];
+  let idx = 2;
+
+  if (filters.start_date) {
+    saleJoin.push(`s.created_at >= $${idx++}::date`);
+    values.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    saleJoin.push(`s.created_at < ($${idx++}::date + interval '1 day')`);
+    values.push(filters.end_date);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  return { where: where.join(" AND "), saleJoin: saleJoin.join(" AND "), values, nextIndex: idx };
+},
+
+// Shared aggregation CTE — one row per registered client (LEFT JOIN sales,
+// so a client with zero completed sales in the filtered range still shows
+// up, with visits/total_spend/last_visit all zero/null rather than the
+// client vanishing from the report entirely).
+_CLIENT_REVENUE_AGG(where: string, saleJoin: string): string {
+  return `
+    WITH revenue_agg AS (
+      SELECT
+        c.id AS client_id,
+        COALESCE(NULLIF(TRIM(c.full_name), ''), 'Walk-in') AS client_name,
+        COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS contact,
+        COUNT(s.id) AS visits,
+        COALESCE(SUM(s.total_amount::numeric), 0) AS total_spend,
+        MAX(TO_CHAR(s.created_at, 'YYYY-MM-DD')) AS last_visit
+      FROM clients c
+      LEFT JOIN sales s ON ${saleJoin}
+      WHERE ${where}
+      GROUP BY c.id, c.full_name, c.phone_number, c.phone_country_code
+    )
+  `;
+},
+
+async getClientRevenueReportStats(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; search?: string }
+): Promise<ClientRevenueReportStats> {
+  const { where, saleJoin, values } = this._buildClientRevenueWhere(salonId, filters);
+
+  const query = `
+    ${this._CLIENT_REVENUE_AGG(where, saleJoin)}
+    SELECT
+      COUNT(*)::int AS total_clients,
+      COALESCE(SUM(total_spend), 0) AS total_revenue,
+      (SELECT client_name FROM revenue_agg WHERE total_spend > 0 ORDER BY total_spend DESC LIMIT 1) AS top_client
+    FROM revenue_agg
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  const total_clients = Number(r.total_clients ?? 0);
+  const total_revenue = Number(r.total_revenue ?? 0);
+  return {
+    total_clients,
+    total_revenue,
+    avg_spend_per_client: total_clients > 0 ? total_revenue / total_clients : 0,
+    top_client: r.top_client ?? "—",
+  };
+},
+
+async getClientRevenueReportRows(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string;
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: ClientRevenueReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, saleJoin, values, nextIndex } = this._buildClientRevenueWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    ${this._CLIENT_REVENUE_AGG(where, saleJoin)}
+    SELECT
+      client_id, client_name, contact, visits, total_spend, last_visit,
+      COUNT(*) OVER() AS total_count
+    FROM revenue_agg
+    ORDER BY total_spend DESC, client_name ASC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: ClientRevenueReportRow[] = rows.map((row: any) => {
+    const visits = Number(row.visits ?? 0);
+    const total_spend = Number(row.total_spend ?? 0);
+    return {
+      client_id: row.client_id,
+      client_name: row.client_name,
+      contact: row.contact,
+      visits,
+      total_spend: Math.round(total_spend),
+      avg_ticket: visits > 0 ? Math.round(total_spend / visits) : 0,
+      last_visit: row.last_visit,
+    };
+  });
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// ======================================================
+// STAFF SALES REPORT (independent report API)
+// POST /api/report/staff-sales — reads sale_items/sales directly, bucketed
+// by period (daily/weekly/monthly/yearly) and optionally filtered to one
+// staff member. Never calls the Appointment API/service.
+// ======================================================
+
+async getStaffSalesReport(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string;
+    period?: "daily" | "weekly" | "monthly" | "yearly";
+    staff_id?: string;
+  }
+): Promise<StaffSalesReportRow[]> {
+  const values: any[] = [salonId];
+  const where = ["s.salon_id = $1", "s.status <> 'draft'", "si.item_type IN ('service', 'product')"];
+  let idx = 2;
+
+  if (filters.start_date) {
+    where.push(`s.created_at >= $${idx++}::date`);
+    values.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    where.push(`s.created_at < ($${idx++}::date + interval '1 day')`);
+    values.push(filters.end_date);
+  }
+  if (filters.staff_id) {
+    where.push(`COALESCE(si.staff_id, s.staff_id) = $${idx++}`);
+    values.push(filters.staff_id);
+  }
+
+  const period = filters.period ?? "daily";
+  const truncUnit = period === "yearly" ? "year" : period === "monthly" ? "month" : period === "weekly" ? "week" : "day";
+  const labelExpr =
+    period === "yearly"  ? `TO_CHAR(bucket, 'YYYY')` :
+    period === "monthly" ? `TO_CHAR(bucket, 'Mon YY')` :
+    period === "weekly"  ? `'W' || TO_CHAR(bucket, 'DD Mon')` :
+                            `TO_CHAR(bucket, 'DD Mon')`;
+
+  const query = `
+    SELECT
+      ${labelExpr} AS label,
+      TO_CHAR(bucket, 'YYYY-MM-DD') AS bucket_date,
+      COALESCE(SUM(total_price) FILTER (WHERE item_type = 'service'), 0) AS service_revenue,
+      COALESCE(SUM(total_price) FILTER (WHERE item_type = 'product'), 0) AS product_revenue
+    FROM (
+      SELECT
+        date_trunc('${truncUnit}', s.created_at) AS bucket,
+        si.item_type,
+        si.total_price
+      FROM sale_items si
+      JOIN sales s ON s.id = si.sale_id
+      WHERE ${where.join(" AND ")}
+    ) bucketed
+    GROUP BY bucket
+    ORDER BY bucket ASC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((row: any) => {
+    const service_revenue = Math.round(Number(row.service_revenue ?? 0));
+    const product_revenue = Math.round(Number(row.product_revenue ?? 0));
+    return {
+      label: row.label,
+      bucket_date: row.bucket_date,
+      service_revenue,
+      product_revenue,
+      total: service_revenue + product_revenue,
+    };
+  });
+},
+
+// ======================================================
+// STAFF ITEM SALES REPORT (independent report API)
+// POST /api/report/staff-item-sales — reads sale_items directly, one
+// item_type at a time (service/product/membership/package), one row per
+// line item. Never calls the Appointment API/service.
+// ======================================================
+
+_buildStaffItemSalesWhere(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; item_type?: string; staff_id?: string }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId, filters.item_type ?? "service"];
+  const where = ["s.salon_id = $1", "s.status <> 'draft'", "si.item_type = $2"];
+  let idx = 3;
+
+  if (filters.start_date) {
+    where.push(`s.created_at >= $${idx++}::date`);
+    values.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    where.push(`s.created_at < ($${idx++}::date + interval '1 day')`);
+    values.push(filters.end_date);
+  }
+  if (filters.staff_id) {
+    where.push(`COALESCE(si.staff_id, s.staff_id) = $${idx++}`);
+    values.push(filters.staff_id);
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+async getStaffItemSalesReportStats(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; item_type?: string; staff_id?: string }
+): Promise<StaffItemSalesReportStats> {
+  const { where, values } = this._buildStaffItemSalesWhere(salonId, filters);
+
+  const query = `
+    WITH filtered AS (
+      SELECT
+        si.name,
+        si.total_price + (
+          CASE WHEN COALESCE(s.subtotal, 0) > 0
+               THEN COALESCE(s.tax_amount, 0) * (si.total_price / s.subtotal)
+               ELSE 0
+          END
+        ) AS total_price,
+        si.quantity,
+        NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
+        s.created_at
+      FROM sale_items si
+      JOIN sales s ON s.id = si.sale_id
+      LEFT JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
+      WHERE ${where}
+    )
+    SELECT
+      COALESCE(SUM(quantity), 0)::int AS total_quantity,
+      COALESCE(SUM(total_price), 0) AS total_revenue,
+      (SELECT name FROM filtered GROUP BY name ORDER BY SUM(total_price) DESC LIMIT 1) AS top_item,
+      (SELECT COALESCE(staff_name, 'Unknown') FROM filtered ORDER BY total_price DESC LIMIT 1) AS top_staff
+    FROM filtered
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  return {
+    total_quantity: Number(r.total_quantity ?? 0),
+    total_revenue: Number(r.total_revenue ?? 0),
+    top_item: r.top_item ?? "—",
+    top_staff: r.top_staff ?? "—",
+  };
+},
+
+async getStaffItemSalesReportRows(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; item_type?: string; staff_id?: string;
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: StaffItemSalesReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildStaffItemSalesWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 10));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    SELECT
+      COALESCE(si.staff_id, s.staff_id) AS staff_id,
+      COALESCE(NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), ''), 'Unknown') AS staff_name,
+      si.name AS item_name,
+      si.quantity,
+      si.total_price + (
+        CASE WHEN COALESCE(s.subtotal, 0) > 0
+             THEN COALESCE(s.tax_amount, 0) * (si.total_price / s.subtotal)
+             ELSE 0
+        END
+      ) AS revenue,
+      TO_CHAR(s.created_at, 'YYYY-MM-DD') AS date,
+      COUNT(*) OVER() AS total_count
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    LEFT JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
+    WHERE ${where}
+    ORDER BY revenue DESC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: StaffItemSalesReportRow[] = rows.map((row: any) => ({
+    staff_id: row.staff_id,
+    staff_name: row.staff_name,
+    item_name: row.item_name,
+    quantity: Number(row.quantity ?? 0),
+    revenue: Math.round(Number(row.revenue ?? 0)),
+    date: row.date,
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// ======================================================
+// PACKAGE SALE REPORT (independent report API)
+// POST /api/report/package-sale — reads client_packages directly, one row
+// per package sale. Never calls the Appointment API.
+// ======================================================
+
+_buildPackageSaleWhere(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; search?: string }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["cp.salon_id = $1"];
+  let idx = 2;
+
+  if (filters.start_date) {
+    where.push(`cp.created_date >= $${idx++}::date`);
+    values.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    where.push(`cp.created_date < ($${idx++}::date + interval '1 day')`);
+    values.push(filters.end_date);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(cp.client_name, '') ILIKE $${idx}
+      OR COALESCE(cp.package_name, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+async getPackageSaleReportStats(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; search?: string }
+): Promise<PackageSaleReportStats> {
+  const { where, values } = this._buildPackageSaleWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      COUNT(*)::int AS packages_sold,
+      COALESCE(SUM(cp.total_amount::numeric), 0) AS total_sale_value,
+      COALESCE(SUM(cp.paid_amount::numeric), 0) AS total_received,
+      COUNT(DISTINCT cp.package_name)::int AS unique_packages
+    FROM client_packages cp
+    WHERE ${where}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  return {
+    packages_sold: Number(r.packages_sold ?? 0),
+    total_sale_value: Number(r.total_sale_value ?? 0),
+    total_received: Number(r.total_received ?? 0),
+    unique_packages: Number(r.unique_packages ?? 0),
+  };
+},
+
+async getPackageSaleReportRows(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string;
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: PackageSaleReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildPackageSaleWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    SELECT
+      cp.id,
+      TO_CHAR(cp.created_date, 'YYYY-MM-DD') AS date,
+      cp.client_id,
+      cp.client_name,
+      cp.package_name,
+      cp.total_amount,
+      cp.paid_amount,
+      cp.pending_amount,
+      cp.payment_status,
+      cp.gst_amount,
+      COUNT(*) OVER() AS total_count
+    FROM client_packages cp
+    WHERE ${where}
+    ORDER BY cp.created_date DESC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: PackageSaleReportRow[] = rows.map((row: any) => ({
+    id: row.id,
+    date: row.date,
+    client_id: row.client_id,
+    client_name: row.client_name,
+    package_name: row.package_name,
+    total_amount: Number(row.total_amount ?? 0),
+    paid_amount: Number(row.paid_amount ?? 0),
+    pending_amount: Number(row.pending_amount ?? 0),
+    payment_status: row.payment_status,
+    gst_amount: Number(row.gst_amount ?? 0),
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// ======================================================
+// PACKAGE HISTORY REPORT (independent report API)
+// POST /api/report/package-history — reads client_package_session_history
+// directly, joined to client_package_services/client_packages, one row per
+// session. Never calls the Appointment API.
+// ======================================================
+
+_buildPackageHistoryWhere(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; search?: string }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["cp.salon_id = $1"];
+  let idx = 2;
+
+  if (filters.start_date) {
+    where.push(`h.session_date >= $${idx++}::date`);
+    values.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    where.push(`h.session_date < ($${idx++}::date + interval '1 day')`);
+    values.push(filters.end_date);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(cp.client_name, '') ILIKE $${idx}
+      OR COALESCE(cp.package_name, '') ILIKE $${idx}
+      OR COALESCE(cps.service_name, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+async getPackageHistoryReportStats(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; search?: string }
+): Promise<PackageHistoryReportStats> {
+  const { where, values } = this._buildPackageHistoryWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      COUNT(*)::int AS total_sessions,
+      COUNT(*) FILTER (WHERE LOWER(h.status) = 'completed')::int AS completed_sessions,
+      COUNT(DISTINCT cp.client_id)::int AS unique_clients,
+      COUNT(DISTINCT cp.package_name)::int AS unique_packages
+    FROM client_package_session_history h
+    JOIN client_package_services cps ON cps.id = h.client_package_service_id
+    JOIN client_packages cp ON cp.id = h.client_package_id
+    WHERE ${where}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  return {
+    total_sessions: Number(r.total_sessions ?? 0),
+    completed_sessions: Number(r.completed_sessions ?? 0),
+    unique_clients: Number(r.unique_clients ?? 0),
+    unique_packages: Number(r.unique_packages ?? 0),
+  };
+},
+
+async getPackageHistoryReportRows(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string;
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: PackageHistoryReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildPackageHistoryWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    SELECT
+      TO_CHAR(h.session_date, 'YYYY-MM-DD') AS date,
+      cp.client_id,
+      cp.client_name,
+      cp.package_name,
+      cps.service_name,
+      h.session_no,
+      h.staff_name AS staff,
+      h.status,
+      COUNT(*) OVER() AS total_count
+    FROM client_package_session_history h
+    JOIN client_package_services cps ON cps.id = h.client_package_service_id
+    JOIN client_packages cp ON cp.id = h.client_package_id
+    WHERE ${where}
+    ORDER BY h.session_date DESC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: PackageHistoryReportRow[] = rows.map((row: any) => ({
+    date: row.date,
+    client_id: row.client_id,
+    client_name: row.client_name,
+    package_name: row.package_name,
+    service_name: row.service_name,
+    session_no: Number(row.session_no ?? 0),
+    staff: row.staff,
+    status: row.status,
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// ======================================================
+// MEMBER SALE REPORT (independent report API)
+// POST /api/report/member-sale — reads client_memberships directly, one row
+// per membership sale. Never calls the Appointment API.
+// ======================================================
+
+_buildMemberSaleWhere(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; search?: string }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["cm.salon_id = $1"];
+  let idx = 2;
+
+  if (filters.start_date) {
+    where.push(`cm.purchased_at >= $${idx++}::date`);
+    values.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    where.push(`cm.purchased_at < ($${idx++}::date + interval '1 day')`);
+    values.push(filters.end_date);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(cm.client_name, '') ILIKE $${idx}
+      OR COALESCE(cm.membership_name, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+async getMemberSaleReportStats(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; search?: string }
+): Promise<MemberSaleReportStats> {
+  const { where, values } = this._buildMemberSaleWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      COUNT(*)::int AS memberships_sold,
+      COALESCE(SUM(cm.price_paid::numeric), 0) AS total_revenue,
+      COUNT(*) FILTER (WHERE cm.status = 'active')::int AS active_memberships
+    FROM client_memberships cm
+    WHERE ${where}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  return {
+    memberships_sold: Number(r.memberships_sold ?? 0),
+    total_revenue: Number(r.total_revenue ?? 0),
+    active_memberships: Number(r.active_memberships ?? 0),
+  };
+},
+
+async getMemberSaleReportRows(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string;
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: MemberSaleReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildMemberSaleWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    SELECT
+      cm.id,
+      cm.client_id,
+      TO_CHAR(cm.purchased_at, 'YYYY-MM-DD') AS purchased_at,
+      cm.client_name,
+      cm.membership_name,
+      cm.price_paid,
+      cm.total_sessions,
+      cm.used_sessions,
+      cm.status,
+      COUNT(*) OVER() AS total_count
+    FROM client_memberships cm
+    WHERE ${where}
+    ORDER BY cm.purchased_at DESC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: MemberSaleReportRow[] = rows.map((row: any) => ({
+    id: row.id,
+    client_id: row.client_id,
+    purchased_at: row.purchased_at,
+    client_name: row.client_name,
+    membership_name: row.membership_name,
+    price_paid: Number(row.price_paid ?? 0),
+    total_sessions: Number(row.total_sessions ?? 0),
+    used_sessions: Number(row.used_sessions ?? 0),
+    status: row.status,
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// ======================================================
+// APPOINTMENT DETAIL REPORT (independent report API)
+// POST /api/report/appointment-detail — reads the appointments table
+// directly (JOIN clients/staff/payments), one row per service in the
+// services JSONB array. This queries the DB table directly, which is NOT
+// the same as calling the Appointment HTTP API/service (still off-limits).
+// ======================================================
+
+async getAppointmentDetailReport(
+  salonId: string,
+  filters: {
+    from?: string; to?: string; statuses?: string[];
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: AppointmentDetailReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const values: any[] = [salonId];
+  const where = ["a.salon_id = $1", "a.deleted_at IS NULL"];
+  let idx = 2;
+
+  if (filters.from) {
+    where.push(`a.scheduled_at >= $${idx++}::date`);
+    values.push(filters.from);
+  }
+  if (filters.to) {
+    where.push(`a.scheduled_at < ($${idx++}::date + interval '1 day')`);
+    values.push(filters.to);
+  }
+  if (filters.statuses && filters.statuses.length > 0) {
+    where.push(`a.status = ANY($${idx++}::text[])`);
+    values.push(filters.statuses);
+  }
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 10));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    WITH matched AS (
+      SELECT a.*
+      FROM appointments a
+      WHERE ${where.join(" AND ")}
+    ),
+    exploded AS (
+      SELECT
+        m.id,
+        m.scheduled_at,
+        m.duration_minutes,
+        m.created_at,
+        m.client_id,
+        m.staff_id,
+        m.status,
+        svc.value->>'name' AS service_name,
+        NULLIF(svc.value->>'staff_id', '') AS svc_staff_id,
+        NULLIF(svc.value->>'staff_name', '') AS svc_staff_name,
+        COALESCE(NULLIF(svc.value->>'price', '')::numeric, 0) AS svc_price
+      FROM matched m
+      LEFT JOIN LATERAL jsonb_array_elements(COALESCE(m.services, '[]'::jsonb)) AS svc(value) ON TRUE
+    )
+    SELECT
+      e.id,
+      TO_CHAR(e.scheduled_at, 'YYYY-MM-DD') AS appointment_date,
+      TO_CHAR(e.scheduled_at, 'HH12:MI AM') AS time,
+      TO_CHAR(e.created_at, 'YYYY-MM-DD') AS booked_date,
+      c.full_name AS client_name,
+      COALESCE(e.service_name, '—') AS service_name,
+      COALESCE(
+        e.svc_staff_name,
+        NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '')
+      ) AS staff_name,
+      e.duration_minutes AS duration,
+      COALESCE(pay.paid_amount, e.svc_price, 0) AS amount,
+      pay.payment_method,
+      e.status AS payment_status,
+      COUNT(*) OVER() AS total_count
+    FROM exploded e
+    LEFT JOIN clients c ON e.client_id = c.id
+    LEFT JOIN staff st ON st.id = COALESCE(
+      CASE WHEN e.svc_staff_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+           THEN e.svc_staff_id::uuid END,
+      e.staff_id
+    )
+    LEFT JOIN LATERAL (
+      SELECT p.payment_method, p.paid_amount
+      FROM payments p
+      WHERE p.appointment_id = e.id
+      ORDER BY p.created_at DESC
+      LIMIT 1
+    ) pay ON TRUE
+    ORDER BY e.scheduled_at DESC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: AppointmentDetailReportRow[] = rows.map((row: any) => ({
+    id: row.id,
+    appointment_date: row.appointment_date,
+    time: row.time,
+    booked_date: row.booked_date,
+    client_name: row.client_name,
+    service_name: row.service_name,
+    staff_name: row.staff_name,
+    duration: Number(row.duration ?? 0),
+    amount: Number(row.amount ?? 0),
+    payment_method: row.payment_method,
+    payment_status: row.payment_status,
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// ======================================================
+// LEGACY REPORTS (dev) continued — additional service/staff/
+// sales-summary-table methods restored from origin/dev.
+// ======================================================
+
  
 
 async getServiceRevenueCards(
@@ -1884,6 +4118,11 @@ async getServiceRevenueTable(
     index++;
   }
 
+  // tax_amount below reads si.tax_amount (this row's own GST, see
+  // pricing.engine.ts's per-row allocation) — it used to read s.tax_amount
+  // (the WHOLE sale's tax), which duplicated the full bill's tax onto every
+  // sibling item row, overstating total tax whenever a sale had more than
+  // one item and its rows were summed together.
   const { rows } = await pool.query(
     `
     WITH sale_rows AS (
@@ -1900,7 +4139,7 @@ async getServiceRevenueTable(
         COALESCE(si.quantity, 1) AS quantity,
         COALESCE(si.unit_price::numeric, 0) AS unit_price,
         COALESCE(si.discount_amount::numeric, 0) AS discount,
-        COALESCE(s.tax_amount::numeric, 0) AS tax_amount,
+        COALESCE(si.tax_amount::numeric, 0) AS tax_amount,
         COALESCE(si.total_price::numeric, 0) AS total_amount,
         s.payment_method,
         CASE
@@ -4951,418 +7190,6 @@ async getStylistRevenueTable(
   }));
 },
 
-async getStaffCommissionCards(
-  salonId: string,
-  filters: { from?: string; to?: string }
-) {
-  const { values, ctes } = buildStaffCommissionSourceQuery(
-    salonId,
-    filters
-  );
-
-  const { rows } = await safeQuery(() =>
-    pool.query(
-      `
-      ${ctes}
-      SELECT
-        COALESCE(SUM(commission_amount), 0) AS total_commission,
-        COALESCE(SUM(commission_amount) FILTER (WHERE LOWER(payout_status) = 'paid'), 0) AS paid_commission,
-        COALESCE(SUM(commission_amount) FILTER (WHERE LOWER(payout_status) = 'pending'), 0) AS pending_commission,
-        COUNT(DISTINCT staff_name) AS staff_count,
-        COALESCE(SUM(revenue_amount), 0) AS total_revenue,
-        COALESCE(
-          ROUND(
-            CASE
-              WHEN COALESCE(SUM(revenue_amount), 0) = 0 THEN 0
-              ELSE (SUM(commission_amount) / SUM(revenue_amount)) * 100
-            END,
-            2
-          ),
-          0
-        ) AS avg_rate
-      FROM commission_rows
-      `,
-      values
-    )
-  );
-
-  const row = rows[0] ?? {};
-  const totalCommission = Number(row.total_commission ?? 0);
-  const paidCommission = Number(row.paid_commission ?? 0);
-  const pendingCommission = Number(row.pending_commission ?? 0);
-  const staffCount = Number(row.staff_count ?? 0);
-  const totalRevenue = Number(row.total_revenue ?? 0);
-  const avgRate = Number(row.avg_rate ?? 0);
-
-  return [
-    {
-      title: "Total Commission",
-      value: `₹ ${Math.round(totalCommission).toLocaleString("en-IN")}`,
-      trend: "0.0%",
-      color: "primary",
-      icon: "wallet",
-    },
-    {
-      title: "Paid Commission",
-      value: `₹ ${Math.round(paidCommission).toLocaleString("en-IN")}`,
-      trend: "0.0%",
-      color: "success",
-      icon: "circle-check",
-    },
-    {
-      title: "Pending Commission",
-      value: `₹ ${Math.round(pendingCommission).toLocaleString("en-IN")}`,
-      trend: "0.0%",
-      color: "warning",
-      icon: "clock",
-    },
-    {
-      title: "Staff Earned",
-      value: `${staffCount}`,
-      trend: "0.0%",
-      color: "info",
-      icon: "users",
-    },
-    {
-      title: "Revenue Covered",
-      value: `₹ ${Math.round(totalRevenue).toLocaleString("en-IN")}`,
-      trend: "0.0%",
-      color: "purple",
-      icon: "chart-line",
-    },
-    {
-      title: "Avg Commission Rate",
-      value: `${avgRate.toFixed(2)}%`,
-      trend: "0.0%",
-      color: "danger",
-      icon: "percent",
-    },
-  ];
-},
-
-async getStaffCommissionTrend(
-  salonId: string,
-  filters: { from?: string; to?: string }
-) {
-  const { values, ctes } = buildStaffCommissionSourceQuery(
-    salonId,
-    filters
-  );
-
-  let groupExpr = `TO_CHAR(DATE_TRUNC('day', date), 'DD Mon')`;
-  let orderExpr = `DATE_TRUNC('day', date)`;
-
-  if (filters.from && filters.to) {
-    const from = new Date(filters.from);
-    const to = new Date(filters.to);
-    const diffDays =
-      Math.floor((to.getTime() - from.getTime()) / 86400000) + 1;
-
-    if (diffDays === 1) {
-      groupExpr = `TO_CHAR(DATE_TRUNC('hour', date), 'HH24:00')`;
-      orderExpr = `DATE_TRUNC('hour', date)`;
-    } else if (diffDays <= 7) {
-      groupExpr = `TO_CHAR(DATE_TRUNC('day', date), 'Dy')`;
-      orderExpr = `DATE_TRUNC('day', date)`;
-    } else if (diffDays <= 31) {
-      groupExpr = `TO_CHAR(DATE_TRUNC('day', date), 'DD Mon')`;
-      orderExpr = `DATE_TRUNC('day', date)`;
-    } else {
-      groupExpr = `TO_CHAR(DATE_TRUNC('month', date), 'Mon YYYY')`;
-      orderExpr = `DATE_TRUNC('month', date)`;
-    }
-  }
-
-  const { rows } = await safeQuery(() =>
-    pool.query(
-      `
-      ${ctes}
-      SELECT
-        ${groupExpr} AS day,
-        COALESCE(SUM(commission_amount), 0) AS commission
-      FROM commission_rows
-      GROUP BY ${orderExpr}
-      ORDER BY ${orderExpr}
-      `,
-      values
-    )
-  );
-
-  return rows.map((row) => ({
-    day: row.day,
-    commission: Number(row.commission ?? 0),
-  }));
-},
-
-async getStaffCommissionCategoryBreakdown(
-  salonId: string,
-  filters: { from?: string; to?: string }
-) {
-  const { values, ctes } = buildStaffCommissionSourceQuery(
-    salonId,
-    filters
-  );
-
-  const { rows } = await safeQuery(() =>
-    pool.query(
-      `
-      ${ctes}
-      SELECT
-        INITCAP(REPLACE(item_type, '_', ' ')) AS name,
-        COALESCE(SUM(commission_amount), 0) AS value
-      FROM commission_rows
-      GROUP BY item_type
-      ORDER BY value DESC, name ASC
-      `,
-      values
-    )
-  );
-
-  return rows.map((row) => ({
-    name: row.name,
-    value: Number(row.value ?? 0),
-  }));
-},
-
-async getStaffCommissionTopStaff(
-  salonId: string,
-  filters: { from?: string; to?: string }
-) {
-  const { values, ctes } = buildStaffCommissionSourceQuery(
-    salonId,
-    filters
-  );
-
-  const { rows } = await safeQuery(() =>
-    pool.query(
-      `
-      ${ctes}
-      SELECT
-        staff_name AS name,
-        COALESCE(SUM(commission_amount), 0) AS value
-      FROM commission_rows
-      GROUP BY staff_name
-      ORDER BY value DESC, name ASC
-      LIMIT 10
-      `,
-      values
-    )
-  );
-
-  return rows.map((row) => ({
-    name: row.name,
-    value: Number(row.value ?? 0),
-  }));
-},
-
-async getStaffCommissionPayoutStatus(
-  salonId: string,
-  filters: { from?: string; to?: string }
-) {
-  const { values, ctes } = buildStaffCommissionSourceQuery(
-    salonId,
-    filters
-  );
-
-  const { rows } = await safeQuery(() =>
-    pool.query(
-      `
-      ${ctes}
-      SELECT
-        payout_status AS name,
-        COALESCE(SUM(commission_amount), 0) AS value
-      FROM commission_rows
-      GROUP BY payout_status
-      ORDER BY value DESC, name ASC
-      `,
-      values
-    )
-  );
-
-  return rows.map((row) => ({
-    name: row.name,
-    value: Number(row.value ?? 0),
-  }));
-},
-
-async getStaffCommissionAnalytics(
-  salonId: string,
-  filters: { from?: string; to?: string }
-) {
-  const { values, ctes } = buildStaffCommissionSourceQuery(
-    salonId,
-    filters
-  );
-
-  const { rows } = await safeQuery(() =>
-    pool.query(
-      `
-      ${ctes},
-      totals AS (
-        SELECT
-          COALESCE(SUM(commission_amount), 0) AS total_commission,
-          COALESCE(SUM(commission_amount) FILTER (WHERE LOWER(payout_status) = 'paid'), 0) AS paid_commission,
-          COALESCE(SUM(commission_amount) FILTER (WHERE LOWER(payout_status) = 'pending'), 0) AS pending_commission,
-          COUNT(DISTINCT staff_name) AS active_staff
-        FROM commission_rows
-      ),
-      staff_rank AS (
-        SELECT
-          staff_name,
-          SUM(commission_amount) AS total_commission
-        FROM commission_rows
-        GROUP BY staff_name
-        ORDER BY total_commission DESC, staff_name ASC
-        LIMIT 1
-      ),
-      category_rank AS (
-        SELECT
-          INITCAP(REPLACE(item_type, '_', ' ')) AS item_type_name,
-          SUM(commission_amount) AS total_commission
-        FROM commission_rows
-        GROUP BY item_type
-        ORDER BY total_commission DESC, item_type_name ASC
-        LIMIT 1
-      ),
-      line_rank AS (
-        SELECT
-          item_name,
-          commission_amount
-        FROM commission_rows
-        ORDER BY commission_amount DESC, item_name ASC
-        LIMIT 1
-      )
-      SELECT
-        COALESCE((SELECT staff_name FROM staff_rank), '-') AS top_staff,
-        COALESCE((SELECT total_commission FROM staff_rank), 0) AS top_staff_commission,
-        COALESCE((SELECT item_type_name FROM category_rank), '-') AS top_category,
-        COALESCE((SELECT total_commission FROM category_rank), 0) AS top_category_commission,
-        COALESCE((SELECT item_name FROM line_rank), '-') AS top_item,
-        COALESCE((SELECT commission_amount FROM line_rank), 0) AS top_item_commission,
-        total_commission,
-        paid_commission,
-        pending_commission,
-        active_staff
-      FROM totals
-      `,
-      values
-    )
-  );
-
-  const row = rows[0] ?? {};
-  const totalCommission = Number(row.total_commission ?? 0);
-  const paidCommission = Number(row.paid_commission ?? 0);
-  const pendingCommission = Number(row.pending_commission ?? 0);
-  const activeStaff = Number(row.active_staff ?? 0);
-  const paidRatio =
-    totalCommission > 0 ? (paidCommission / totalCommission) * 100 : 0;
-
-  return [
-    {
-      title: "Top Earning Staff",
-      value: row.top_staff ?? "-",
-      subtitle: `₹ ${Math.round(Number(row.top_staff_commission ?? 0)).toLocaleString("en-IN")} commission`,
-      color: "success",
-      icon: "award",
-    },
-    {
-      title: "Top Commission Category",
-      value: row.top_category ?? "-",
-      subtitle: `₹ ${Math.round(Number(row.top_category_commission ?? 0)).toLocaleString("en-IN")} earned`,
-      color: "primary",
-      icon: "layer-group",
-    },
-    {
-      title: "Highest Commission Item",
-      value: row.top_item ?? "-",
-      subtitle: `₹ ${Math.round(Number(row.top_item_commission ?? 0)).toLocaleString("en-IN")} on one line`,
-      color: "warning",
-      icon: "tags",
-    },
-    {
-      title: "Paid Out Ratio",
-      value: `${paidRatio.toFixed(2)}%`,
-      subtitle: "Commission already settled",
-      color: "info",
-      icon: "percent",
-    },
-    {
-      title: "Pending Payout",
-      value: `₹ ${Math.round(pendingCommission).toLocaleString("en-IN")}`,
-      subtitle: "Commission awaiting payout",
-      color: "danger",
-      icon: "clock",
-    },
-    {
-      title: "Active Staff",
-      value: `${activeStaff}`,
-      subtitle: "Staff with commission lines",
-      color: "purple",
-      icon: "users",
-    },
-  ];
-},
-
-async getStaffCommissionTable(
-  salonId: string,
-  filters: { from?: string; to?: string }
-) {
-  const { values, ctes } = buildStaffCommissionSourceQuery(
-    salonId,
-    filters
-  );
-
-  const { rows } = await safeQuery(() =>
-    pool.query(
-      `
-      ${ctes}
-      SELECT
-        date,
-        invoice_no,
-        customer_name,
-        mobile,
-        staff_name,
-        INITCAP(REPLACE(item_type, '_', ' ')) AS item_type,
-        item_name,
-        quantity,
-        revenue_amount,
-        commission_rate,
-        commission_kind,
-        commission_amount,
-        payout_status,
-        payment_status,
-        source
-      FROM commission_rows
-      ORDER BY
-        date DESC,
-        invoice_no DESC,
-        staff_name ASC
-      `,
-      values
-    )
-  );
-
-  return {
-    rows: rows.map((row) => ({
-      date: row.date,
-      invoiceNo: row.invoice_no,
-      customerName: row.customer_name,
-      mobile: row.mobile,
-      staffName: row.staff_name,
-      itemType: row.item_type,
-      itemName: row.item_name,
-      quantity: Number(row.quantity ?? 0),
-      revenueAmount: Number(row.revenue_amount ?? 0),
-      commissionRate: Number(row.commission_rate ?? 0),
-      commissionKind: row.commission_kind,
-      commissionAmount: Number(row.commission_amount ?? 0),
-      payoutStatus: row.payout_status,
-      paymentStatus: row.payment_status,
-      source: row.source,
-    })),
-  };
-},
-
 async getTipReportTable(
   salonId: string,
   filters: {
@@ -6083,6 +7910,291 @@ async getAppointmentTable(
     price: Number(row.amount ?? 0),
     payment: row.payment,
     status: row.status,
+  }));
+},
+
+async getAppointmentDetailTable(
+  salonId: string,
+  filters: { from?: string; to?: string; dateType?: "appointment" | "booking"; statuses?: string[] }
+) {
+  const values: any[] = [salonId];
+  const where = ["m.salon_id = $1"];
+  let index = 2;
+
+  const dateColumn = filters.dateType === "booking" ? "m.created_at" : "m.scheduled_at";
+
+  if (filters.from) {
+    where.push(`DATE(${dateColumn}) >= $${index}`);
+    values.push(filters.from);
+    index++;
+  }
+
+  if (filters.to) {
+    where.push(`DATE(${dateColumn}) <= $${index}`);
+    values.push(filters.to);
+    index++;
+  }
+
+  if (filters.statuses && filters.statuses.length > 0) {
+    where.push(`m.status::text = ANY($${index}::text[])`);
+    values.push(filters.statuses);
+    index++;
+  }
+
+  const { rows } = await safeQuery(() =>
+    pool.query(
+      `
+      ${APPOINTMENT_BASE_CTES},
+      service_rows AS (
+        SELECT
+          a.id AS appointment_id,
+          COALESCE(svc.value->>'name', 'Service') AS service_name,
+          NULLIF(TRIM(COALESCE(svc.value->>'staff_name', '')), '') AS staff_name,
+          NULLIF(svc.value->>'staff_id', '') AS staff_id
+        FROM appointments a
+        LEFT JOIN LATERAL jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) AS svc(value)
+          ON TRUE
+      )
+      SELECT
+        m.id,
+        TO_CHAR(m.scheduled_at, 'YYYY-MM-DD') AS appointment_date,
+        TO_CHAR(m.scheduled_at, 'HH12:MI AM') AS appointment_time,
+        TO_CHAR(m.created_at, 'YYYY-MM-DD') AS booked_date,
+        COALESCE(c.full_name, 'Walk-in Client') AS client_name,
+        COALESCE(sr.service_name, sv.name, 'Service') AS service_name,
+        COALESCE(sr.staff_name, CONCAT(st.first_name, ' ', st.last_name), 'Unknown') AS staff_name,
+        m.status,
+        m.duration_minutes,
+        ROUND(COALESCE(m.appointment_amount, 0), 2) AS amount,
+        UPPER(COALESCE(m.payment_method, 'N/A')) AS payment_method,
+        CASE
+          WHEN m.status::text = 'cancelled' THEN 'cancelled'
+          WHEN m.status::text = 'no-show'   THEN 'no-show'
+          WHEN m.status::text = 'deleted'   THEN 'deleted'
+          WHEN m.status::text = 'paid'      THEN 'paid'
+          WHEN m.status::text = 'partial'   THEN 'partial'
+          ELSE 'unpaid'
+        END AS payment_status
+      FROM metrics m
+      LEFT JOIN service_rows sr
+        ON sr.appointment_id = m.id
+      LEFT JOIN clients c
+        ON c.id = m.client_id
+      LEFT JOIN staff st
+        ON st.id::text = COALESCE(sr.staff_id, m.staff_id::text)
+      LEFT JOIN services sv
+        ON sv.id::text = m.service_id::text
+      WHERE ${where.join(" AND ")}
+      ORDER BY ${dateColumn} DESC
+      `,
+      values
+    )
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    appointmentDate: row.appointment_date,
+    time: row.appointment_time,
+    bookedDate: row.booked_date,
+    clientName: row.client_name,
+    serviceName: row.service_name,
+    staffName: String(row.staff_name ?? "Unknown").trim() || "Unknown",
+    status: row.status,
+    duration: Number(row.duration_minutes ?? 0),
+    amount: Number(row.amount ?? 0),
+    paymentMethod: row.payment_method,
+    paymentStatus: row.payment_status,
+  }));
+},
+
+async getDailySheetTable(
+  salonId: string,
+  filters: { date: string; service?: string; staff?: string }
+) {
+  const values: any[] = [salonId, filters.date];
+  const having: string[] = [];
+  let index = 3;
+
+  if (filters.service) {
+    having.push(`sf.service ILIKE $${index}`);
+    values.push(`%${filters.service}%`);
+    index++;
+  }
+
+  if (filters.staff) {
+    having.push(`sf.staff ILIKE $${index}`);
+    values.push(`%${filters.staff}%`);
+    index++;
+  }
+
+  const { rows } = await safeQuery(() =>
+    pool.query(
+      `
+      WITH filtered_sales AS (
+        SELECT * FROM sales
+        WHERE salon_id = $1
+          AND LOWER(COALESCE(status::text, '')) = 'completed'
+          AND created_at >= $2::date AND created_at < ($2::date + interval '1 day')
+      ),
+      payment_rollup AS (
+        SELECT
+          p.appointment_id,
+          MAX(p.payment_method) FILTER (
+            WHERE p.created_at = (
+              SELECT MAX(p2.created_at)
+              FROM payments p2
+              WHERE p2.appointment_id = p.appointment_id
+            )
+          ) AS latest_method
+        FROM payments p
+        WHERE p.appointment_id IS NOT NULL
+        GROUP BY p.appointment_id
+      ),
+      sale_item_rollup AS (
+        SELECT
+          si.sale_id,
+          COALESCE(STRING_AGG(DISTINCT si.name, ', ' ORDER BY si.name), '') AS items
+        FROM sale_items si
+        JOIN filtered_sales fs
+          ON fs.id = si.sale_id
+        GROUP BY si.sale_id
+      ),
+      appointment_item_rollup AS (
+        SELECT
+          a.id AS appointment_id,
+          COALESCE((
+            SELECT STRING_AGG(DISTINCT COALESCE(NULLIF(svc.value->>'name', ''), 'Service'), ', ')
+            FROM jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) AS svc(value)
+          ), '') AS services
+        FROM appointments a
+        JOIN filtered_sales fs
+          ON fs.appointment_id = a.id
+      ),
+      sale_staff_rollup AS (
+        SELECT
+          staff_lines.sale_id,
+          COALESCE(
+            STRING_AGG(DISTINCT staff_lines.staff_name, ', ' ORDER BY staff_lines.staff_name),
+            'Unknown'
+          ) AS staff_names
+        FROM (
+          SELECT
+            s.id AS sale_id,
+            COALESCE(
+              NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), ''),
+              'Unknown'
+            ) AS staff_name
+          FROM filtered_sales s
+          LEFT JOIN sale_items si
+            ON si.sale_id = s.id
+          LEFT JOIN staff st
+            ON st.id = COALESCE(si.staff_id, s.staff_id)
+        ) staff_lines
+        GROUP BY staff_lines.sale_id
+      ),
+      sales_final AS (
+        SELECT
+          s.id,
+          s.appointment_id,
+          s.created_at AS sort_ts,
+          TO_CHAR(s.created_at, 'HH12:MI AM') AS time,
+          COALESCE(s.invoice_number, s.id::text) AS ticket_no,
+          COALESCE(c.full_name, 'Walk-in Client') AS client_name,
+          COALESCE(NULLIF(sir.items, ''), NULLIF(air.services, ''), 'Service') AS service,
+          COALESCE(ssr.staff_names, 'Unknown') AS staff,
+          COALESCE(s.total_amount::numeric, 0) AS amount,
+          UPPER(COALESCE(pr.latest_method, s.payment_method, 'N/A')) AS payment_method
+        FROM filtered_sales s
+        LEFT JOIN clients c
+          ON c.id = s.client_id
+        LEFT JOIN payment_rollup pr
+          ON pr.appointment_id = s.appointment_id
+        LEFT JOIN sale_item_rollup sir
+          ON sir.sale_id = s.id
+        LEFT JOIN appointment_item_rollup air
+          ON air.appointment_id = s.appointment_id
+        LEFT JOIN sale_staff_rollup ssr
+          ON ssr.sale_id = s.id
+      )
+      SELECT * FROM sales_final sf
+      ${having.length > 0 ? "WHERE " + having.join(" AND ") : ""}
+      ORDER BY sf.sort_ts ASC
+      `,
+      values
+    )
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    appointmentId: row.appointment_id,
+    time: row.time,
+    ticketNo: row.ticket_no,
+    clientName: row.client_name,
+    service: row.service,
+    staff: row.staff,
+    amount: Number(row.amount ?? 0),
+    paymentMethod: row.payment_method,
+  }));
+},
+
+async getRewardPointsSummary(
+  salonId: string,
+  filters: { search?: string }
+) {
+  const values: any[] = [salonId];
+  const where = ["c.salon_id = $1"];
+  let index = 2;
+
+  if (filters.search) {
+    where.push(`(c.full_name ILIKE $${index} OR c.phone_number ILIKE $${index})`);
+    values.push(`%${filters.search}%`);
+    index++;
+  }
+
+  const { rows } = await safeQuery(() =>
+    pool.query(
+      `
+      WITH ledger_rollup AS (
+        SELECT
+          client_id,
+          COALESCE(SUM(points) FILTER (WHERE type = 'earn'), 0) AS total_earned,
+          COALESCE(SUM(-points) FILTER (WHERE type = 'redeem'), 0) AS total_redeemed,
+          MAX(created_at) AS last_activity_at
+        FROM reward_points_ledger
+        WHERE salon_id = $1
+        GROUP BY client_id
+      )
+      SELECT
+        c.id AS client_id,
+        c.full_name,
+        c.phone_number,
+        COALESCE(c.reward_points_balance, 0) AS points_available,
+        COALESCE(lr.total_earned, 0) AS points_earned,
+        COALESCE(lr.total_redeemed, 0) AS points_redeemed,
+        lr.last_activity_at
+      FROM clients c
+      LEFT JOIN ledger_rollup lr
+        ON lr.client_id = c.id
+      WHERE ${where.join(" AND ")}
+        AND (
+          COALESCE(c.reward_points_balance, 0) > 0
+          OR COALESCE(lr.total_earned, 0) > 0
+          OR COALESCE(lr.total_redeemed, 0) > 0
+        )
+      ORDER BY points_available DESC, points_redeemed DESC
+      `,
+      values
+    )
+  );
+
+  return rows.map((row) => ({
+    clientId: row.client_id,
+    clientName: row.full_name || "Walk-in Client",
+    mobile: row.phone_number || "—",
+    pointsAvailable: Number(row.points_available ?? 0),
+    pointsEarned: Number(row.points_earned ?? 0),
+    pointsRedeemed: Number(row.points_redeemed ?? 0),
+    lastActivityAt: row.last_activity_at,
   }));
 },
 

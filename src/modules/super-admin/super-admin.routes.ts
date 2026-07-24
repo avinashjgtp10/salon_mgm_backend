@@ -16,6 +16,13 @@ router.get("/salon-permissions/search",       superAdminController.searchSalonsF
 router.get("/salon-permissions/:salonId",     superAdminController.getSalonPermissionsById);
 router.put("/salon-permissions/:salonId",     superAdminController.updateSalonPermissions);
 
+// Subscription permissions (per-account control over subscription actions)
+router.get("/subscription-permissions/search",              superAdminController.searchSalonsForSubscriptionPermissions);
+router.get("/subscription-permissions/:salonId",             superAdminController.getSubscriptionPermissionsById);
+router.put("/subscription-permissions/:salonId",             superAdminController.updateSubscriptionPermissions);
+router.get("/subscription-permissions/:salonId/audit-log",   superAdminController.getSubscriptionPermissionAuditLog);
+router.post("/subscription-permissions/:salonId/grant-days", superAdminController.grantSubscriptionDays);
+
 // Recent / Frequent Logins & No-Plan Users
 router.get("/recent-logins",         superAdminController.getRecentLogins);
 router.get("/frequent-logins",       superAdminController.getFrequentLogins);

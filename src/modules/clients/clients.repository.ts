@@ -107,16 +107,39 @@ export const clientsRepository = {
       )`);
         }
 
+        // Revenue (lifetime paid, wallet-settled money excluded) range. Filters
+        // on the same computed figure the `ts` join below produces, so both the
+        // count and data queries must include that join (see tsJoin) — a client
+        // with no payments coalesces to 0, so a min of 0 still includes them.
+        if (q.min_sales !== undefined && !Number.isNaN(q.min_sales)) {
+            params.push(q.min_sales);
+            where.push(`COALESCE(ts.total_sales, 0) >= $${params.length}`);
+        }
+        if (q.max_sales !== undefined && !Number.isNaN(q.max_sales)) {
+            params.push(q.max_sales);
+            where.push(`COALESCE(ts.total_sales, 0) <= $${params.length}`);
+        }
+
         const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
-        const countSql = `SELECT COUNT(*)::int AS total FROM clients c ${whereSql}`;
+        // clients.total_sales is a dead column, never written anywhere — every
+        // client shows ₹0 and "highest/lowest sales" sorting has nothing real to
+        // sort by. Compute it here from payments instead, the same way Client
+        // History's lifetime_spend does: wallet-settled amounts are excluded
+        // since that money was already recognized as revenue when the wallet/
+        // membership was funded/sold. Aliased `ts` and joined into BOTH the count
+        // and data queries so the revenue range filter above can reference it and
+        // the total count stays consistent with the returned rows.
+        const tsJoin = `
+      LEFT JOIN (
+        SELECT client_id, SUM(GREATEST(0, paid_amount - COALESCE(ewallet_used, 0) - COALESCE(membership_wallet_used, 0))) AS total_sales
+        FROM payments
+        WHERE salon_id = $1 AND status IN ('completed', 'partial')
+        GROUP BY client_id
+      ) ts ON ts.client_id = c.id`;
 
-        // clients.total_sales is a dead column, never written anywhere (see the
-        // campaign-filter join further below) — every client shows ₹0 and
-        // "highest/lowest sales" sorting has nothing real to sort by. Compute it
-        // here from payments instead, the same way Client History's lifetime_spend
-        // does: wallet-settled amounts are excluded since that money was already
-        // recognized as revenue when the wallet/membership was funded/sold.
+        const countSql = `SELECT COUNT(*)::int AS total FROM clients c ${tsJoin} ${whereSql}`;
+
         // Aliased separately from clients.total_sales (not overwritten in the
         // same SELECT) to avoid an ambiguous-column error from ORDER BY when
         // sorting by it.
@@ -124,12 +147,7 @@ export const clientsRepository = {
         const dataSql = `
       SELECT c.*, COALESCE(ts.total_sales, 0) AS computed_total_sales
       FROM clients c
-      LEFT JOIN (
-        SELECT client_id, SUM(GREATEST(0, paid_amount - COALESCE(ewallet_used, 0) - COALESCE(membership_wallet_used, 0))) AS total_sales
-        FROM payments
-        WHERE salon_id = $1 AND status IN ('completed', 'partial')
-        GROUP BY client_id
-      ) ts ON ts.client_id = c.id
+      ${tsJoin}
       ${whereSql}
       ORDER BY ${orderCol} ${so}
       OFFSET $${params.length + 1}
@@ -172,7 +190,7 @@ export const clientsRepository = {
         first_name,last_name,full_name,
         email,phone_country_code,phone_number,
         additional_email,additional_phone_country_code,additional_phone_number,
-        birthday_day_month,birthday_year,
+        birthday_day_month,birthday_year,anniversary,
         gender,pronouns,address,
         client_source,referred_by_client_id,
         preferred_language,occupation,country,avatar_url,
@@ -183,13 +201,13 @@ export const clientsRepository = {
         $1,$2,$3,$4,
         $5,$6,$7,
         $8,$9,$10,
-        $11,$12,
-        $13,$14,$15,
-        $16,$17,
-        $18,$19,$20,$21,
-        $22,$23,$24,
-        $25,$26,$27,
-        $28,$29
+        $11,$12,$13,
+        $14,$15,$16,
+        $17,$18,
+        $19,$20,$21,$22,
+        $23,$24,$25,
+        $26,$27,$28,
+        $29,$30
       ) RETURNING *`,
             [
                 salonId,
@@ -204,6 +222,7 @@ export const clientsRepository = {
                 body.additional_phone_number ?? null,
                 body.birthday_day_month || null,
                 body.birthday_year || null,
+                body.anniversary || null,
                 body.gender ?? null,
                 body.pronouns ?? null,
                 body.address ?? null,
@@ -343,6 +362,7 @@ export const clientsRepository = {
             else if (k === "additional_phone_number") add("additional_phone_number", patch.additional_phone_number ?? null);
             else if (k === "birthday_day_month") add("birthday_day_month", patch.birthday_day_month || null);
             else if (k === "birthday_year") add("birthday_year", patch.birthday_year || null);
+            else if (k === "anniversary") add("anniversary", patch.anniversary || null);
             else if (k === "gender") add("gender", patch.gender ?? null);
             else if (k === "pronouns") add("pronouns", patch.pronouns ?? null);
             else if (k === "address") add("address", patch.address ?? null);
@@ -504,22 +524,27 @@ export const clientsRepository = {
     // client's old number can be reused by someone new. excludeClientId lets
     // update() check without tripping over the client's own unchanged number.
     async findActiveByPhone(
-        phone_country_code: string | null | undefined,
         phone_number: string | null | undefined,
         salonId: string,
         excludeClientId?: string,
     ): Promise<Client | null> {
         const pn = phone_number ? String(phone_number).trim() : "";
         if (!pn) return null;
-        const pcc = phone_country_code ? String(phone_country_code).trim() : null;
+        // Matched on phone_number alone — NOT also phone_country_code. Many
+        // existing rows have a NULL country code (added before it was tracked,
+        // or via a flow that never set it), and NULL never equals '+91' in SQL —
+        // so requiring both to match let a genuine duplicate phone slip through
+        // undetected whenever the two records' country-code fields merely
+        // *differed in form* despite being the same real number. Two distinct
+        // real clients sharing one 10-digit number within a salon is
+        // vanishingly rare; treating any match as a duplicate is the safe default.
         const { rows } = await pool.query(
             `SELECT * FROM clients
              WHERE salon_id = $1 AND is_active = true
                AND TRIM(phone_number) = $2
-               AND ($3::text IS NULL OR phone_country_code = $3)
-               AND ($4::uuid IS NULL OR id != $4)
+               AND ($3::uuid IS NULL OR id != $3)
              LIMIT 1`,
-            [salonId, pn, pcc, excludeClientId ?? null]
+            [salonId, pn, excludeClientId ?? null]
         );
         return rows[0] || null;
     },
@@ -701,8 +726,15 @@ export const clientsRepository = {
 
     // ---------------- SEARCH ----------------
     async search(q: string, limit: number, salonId: string): Promise<Client[]> {
-        const term = `%${q.trim().toLowerCase()}%`;
+        const needle = q.trim().toLowerCase();
+        const term = `%${needle}%`;
+        const prefixTerm = `${needle}%`;
 
+        // Relevance-ranked: exact name match first, then names starting with the
+        // search term, then any other substring match (e.g. mid-name or phone
+        // number) — alphabetical only as the final tiebreaker within each tier.
+        // Without this, a plain `ORDER BY full_name ASC` put "Anita" ahead of a
+        // closer/prefix match like "Nita ..." purely because A < N alphabetically.
         const { rows } = await pool.query(
             `SELECT id, first_name, last_name, full_name, email,
                     phone_country_code, phone_number, avatar_url, is_active, created_at, updated_at
@@ -712,9 +744,16 @@ export const clientsRepository = {
                    LOWER(full_name) LIKE $2
                 OR LOWER(COALESCE(phone_number, '')) LIKE $2
                )
-             ORDER BY full_name ASC
+             ORDER BY
+               CASE
+                 WHEN LOWER(full_name) = $4 THEN 0
+                 WHEN LOWER(full_name) LIKE $5 THEN 1
+                 WHEN LOWER(COALESCE(phone_number, '')) LIKE $5 THEN 2
+                 ELSE 3
+               END,
+               full_name ASC
              LIMIT $3`,
-            [salonId, term, limit]
+            [salonId, term, limit, needle, prefixTerm]
         );
 
         return rows as Client[];

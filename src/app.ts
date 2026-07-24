@@ -28,6 +28,7 @@ import bookingsRoutes from "./modules/bookings/bookings.routes";
 import linkBuilderRoutes from "./modules/link-builder/link-builder.routes";
 import inventoryRoutes from "./modules/inventory/inventory.routes";
 import billingRoutes from "./modules/billing/billing.routes";
+import pricingRoutes from "./modules/pricing/pricing.routes";
 import subscriptionsRoutes from "./modules/subscriptions/subscriptions.routes";
 import marketingDashboardRoutes from './modules/marketing/whatsapp/dashboard/dashboard.routes'
 import marketingTemplatesRoutes from './modules/marketing/whatsapp/templates/templates.routes'
@@ -41,6 +42,7 @@ import paymentsRoutes from "./modules/payments/payments.routes";
 import couponsRoutes from "./modules/coupons/coupons.routes";
 import settingsRoutes from "./modules/settings/settings.routes";
 import reportsRoutes from "./modules/reports/reports.routes";
+import legacyReportsRoutes from "./modules/reports/legacyReports.routes";
 import blockedTimesRoutes from "./modules/blocked_times/blocked_times.routes";
 import analyticsRoutes from './modules/marketing/whatsapp/analytics/analytics.routes'
 import reviewsRoutes from './modules/reviews/reviews.routes'
@@ -194,6 +196,7 @@ app.use("/api/v1/auth", authRoutes);
 // Alias: Google OAuth console uses /api/v1/oauth/google/callback as redirect URI
 app.use("/api/v1/oauth", authRoutes);
 app.use("/api/v1/billing", billingRoutes);
+app.use("/api/v1/pricing", pricingRoutes);
 app.use("/api/v1/subscriptions", subscriptionsRoutes);
 app.use("/api/v1/webhooks", marketingWebhooksRoutes);
 // Alias: some Meta app webhook configs point at a bare "/webhook" path. Accept
@@ -242,7 +245,8 @@ app.use("/api/v1/blocked-times", blockedTimesRoutes);
 app.use("/api/v1/settings", settingsRoutes);
 app.use("/api/v1/bot", botRoutes);
 app.use("/api/v1/ai-engine", aiEngineRoutes);
-app.use("/api/v1/reports", reportsRoutes);
+app.use("/api/report", reportsRoutes);
+app.use("/api/v1/reports", legacyReportsRoutes);
 app.use("/api/v1/cash-management", cashManagementRoutes);
 app.use("/api/v1/wa-automation", waAutomationRoutes);
 app.use("/api/v1/wa-automation/purchase-templates", waPurchaseTemplatesRoutes);

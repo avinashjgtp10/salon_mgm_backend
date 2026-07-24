@@ -53,23 +53,65 @@ export const salonDashboardRepository = {
         sales_count: string;
         last_month_sales_count: string;
       }>(
-        `SELECT
-           COALESCE(SUM(CASE WHEN date_trunc('month', created_at) = date_trunc('month', NOW())
-             THEN total_amount ELSE 0 END), 0)::numeric AS total_revenue,
-           COALESCE(SUM(CASE WHEN date_trunc('month', created_at) = date_trunc('month', NOW() - INTERVAL '1 month')
-             THEN total_amount ELSE 0 END), 0)::numeric AS last_month_revenue,
-           COALESCE(SUM(CASE WHEN DATE(created_at) = CURRENT_DATE
-             THEN total_amount ELSE 0 END), 0)::numeric AS today_revenue,
-           COALESCE(SUM(CASE WHEN DATE(created_at) = (CURRENT_DATE - INTERVAL '1 month')::date
-             THEN total_amount ELSE 0 END), 0)::numeric AS last_month_today_revenue,
-           COALESCE(SUM(CASE WHEN DATE(created_at) = CURRENT_DATE - INTERVAL '1 day'
-             THEN total_amount ELSE 0 END), 0)::numeric AS yesterday_revenue,
-           COUNT(CASE WHEN date_trunc('month', created_at) = date_trunc('month', NOW()) THEN 1 END) AS sales_count,
-           COUNT(CASE WHEN date_trunc('month', created_at) = date_trunc('month', NOW() - INTERVAL '1 month') THEN 1 END) AS last_month_sales_count
-         FROM sales
-         WHERE salon_id = $1
-           AND status = 'completed'
-           AND created_at >= date_trunc('month', NOW() - INTERVAL '1 month')`,
+        `WITH sales_rows AS (
+           -- Completed sales whose appointment (if any) hasn't since been
+           -- cancelled/no-showed/soft-deleted. 'partial' is included in the
+           -- appointment-status gate — a sale only gets created once a single
+           -- payment leg fully clears (payments.service.ts), but the
+           -- appointment's own status can still read 'partial' after that
+           -- (e.g. a top-up that settles the balance without flipping the
+           -- appointment back to 'paid').
+           SELECT s.created_at AS event_at, s.total_amount AS amount
+           FROM sales s
+           LEFT JOIN appointments a ON a.id = s.appointment_id
+           WHERE s.salon_id = $1
+             AND s.status = 'completed'
+             AND s.created_at >= date_trunc('month', NOW() - INTERVAL '1 month')
+             AND (a.id IS NULL OR (a.status IN ('paid', 'partial') AND a.deleted_at IS NULL))
+         ),
+         -- Money genuinely collected on a bill still short of the full total
+         -- (a real deposit, not yet settled) — no sales row exists for these
+         -- yet, so without this branch that money is invisible to revenue
+         -- until (if ever) the remainder gets paid. Dated by when it was
+         -- actually collected. Excluded once the appointment gets a completed
+         -- sale, so the deposit isn't double-counted against the full total.
+         open_partial_rows AS (
+           SELECT p.created_at AS event_at, p.paid_amount AS amount
+           FROM payments p
+           JOIN appointments a ON a.id = p.appointment_id
+           WHERE p.salon_id = $1
+             AND p.status = 'partial'
+             AND p.created_at >= date_trunc('month', NOW() - INTERVAL '1 month')
+             AND a.deleted_at IS NULL
+             AND a.status NOT IN ('cancelled', 'no-show')
+             AND NOT EXISTS (
+               SELECT 1 FROM sales s2
+               WHERE s2.appointment_id = p.appointment_id AND s2.status = 'completed'
+             )
+         ),
+         revenue_events AS (
+           SELECT event_at, amount FROM sales_rows
+           UNION ALL
+           SELECT event_at, amount FROM open_partial_rows
+         )
+         SELECT
+           COALESCE(SUM(CASE WHEN date_trunc('month', event_at) = date_trunc('month', NOW())
+             THEN amount ELSE 0 END), 0)::numeric AS total_revenue,
+           COALESCE(SUM(CASE WHEN date_trunc('month', event_at) = date_trunc('month', NOW() - INTERVAL '1 month')
+             THEN amount ELSE 0 END), 0)::numeric AS last_month_revenue,
+           COALESCE(SUM(CASE WHEN DATE(event_at) = CURRENT_DATE
+             THEN amount ELSE 0 END), 0)::numeric AS today_revenue,
+           COALESCE(SUM(CASE WHEN DATE(event_at) = (CURRENT_DATE - INTERVAL '1 month')::date
+             THEN amount ELSE 0 END), 0)::numeric AS last_month_today_revenue,
+           COALESCE(SUM(CASE WHEN DATE(event_at) = CURRENT_DATE - INTERVAL '1 day'
+             THEN amount ELSE 0 END), 0)::numeric AS yesterday_revenue,
+           -- avg-bill-value stays scoped to actual completed sales — a still-
+           -- open deposit isn't a finished transaction, so it doesn't count as
+           -- one more "sale" in that denominator even though its money now
+           -- shows up in the revenue totals above.
+           (SELECT COUNT(*) FROM sales_rows WHERE date_trunc('month', event_at) = date_trunc('month', NOW())) AS sales_count,
+           (SELECT COUNT(*) FROM sales_rows WHERE date_trunc('month', event_at) = date_trunc('month', NOW() - INTERVAL '1 month')) AS last_month_sales_count
+         FROM revenue_events`,
         [salonId]
       ),
 
@@ -131,9 +173,26 @@ export const salonDashboardRepository = {
       // All-time total revenue — genuinely unbounded, unlike total_revenue
       // above which is scoped to the current calendar month.
       pool.query<{ all_time_revenue: string }>(
-        `SELECT COALESCE(SUM(total_amount), 0)::numeric AS all_time_revenue
-         FROM sales
-         WHERE salon_id = $1 AND status = 'completed'`,
+        `SELECT COALESCE(SUM(amount), 0)::numeric AS all_time_revenue
+         FROM (
+           SELECT s.total_amount AS amount
+           FROM sales s
+           LEFT JOIN appointments a ON a.id = s.appointment_id
+           WHERE s.salon_id = $1 AND s.status = 'completed'
+             AND (a.id IS NULL OR (a.status IN ('paid', 'partial') AND a.deleted_at IS NULL))
+           UNION ALL
+           SELECT p.paid_amount AS amount
+           FROM payments p
+           JOIN appointments a ON a.id = p.appointment_id
+           WHERE p.salon_id = $1
+             AND p.status = 'partial'
+             AND a.deleted_at IS NULL
+             AND a.status NOT IN ('cancelled', 'no-show')
+             AND NOT EXISTS (
+               SELECT 1 FROM sales s2
+               WHERE s2.appointment_id = p.appointment_id AND s2.status = 'completed'
+             )
+         ) combined`,
         [salonId]
       ),
     ]);
@@ -243,56 +302,82 @@ export const salonDashboardRepository = {
 
   // ── Revenue Chart (today / weekly / monthly / yearly) ───────────────────────
   async getRevenueChart(salonId: string, period: string = "monthly"): Promise<RevenueDataPoint[]> {
+    // Shared event source for every period below: completed sales (gated on
+    // appointment status same as getSummary) UNION ALL still-open partial-
+    // payment deposits with no sales row yet. 13-month floor keeps the scan
+    // bounded while covering every period branch that reads from it.
+    const eventsCte = `
+      WITH sales_rows AS (
+        SELECT s.created_at AS event_at, s.total_amount AS amount
+        FROM sales s
+        LEFT JOIN appointments a ON a.id = s.appointment_id
+        WHERE s.salon_id = $1
+          AND s.status = 'completed'
+          AND s.created_at >= NOW() - INTERVAL '13 months'
+          AND (a.id IS NULL OR (a.status IN ('paid', 'partial') AND a.deleted_at IS NULL))
+      ),
+      open_partial_rows AS (
+        SELECT p.created_at AS event_at, p.paid_amount AS amount
+        FROM payments p
+        JOIN appointments a ON a.id = p.appointment_id
+        WHERE p.salon_id = $1
+          AND p.status = 'partial'
+          AND p.created_at >= NOW() - INTERVAL '13 months'
+          AND a.deleted_at IS NULL
+          AND a.status NOT IN ('cancelled', 'no-show')
+          AND NOT EXISTS (
+            SELECT 1 FROM sales s2
+            WHERE s2.appointment_id = p.appointment_id AND s2.status = 'completed'
+          )
+      ),
+      revenue_events AS (
+        SELECT event_at, amount FROM sales_rows
+        UNION ALL
+        SELECT event_at, amount FROM open_partial_rows
+      )`;
+
     let sql: string;
 
     if (period === "today") {
-      sql = `
+      sql = `${eventsCte}
         SELECT
-          TO_CHAR(date_trunc('hour', created_at AT TIME ZONE 'UTC'), 'HH12AM') AS month,
-          date_trunc('hour', created_at AT TIME ZONE 'UTC')                     AS sort_key,
-          COALESCE(SUM(total_amount), 0)::numeric                               AS revenue
-        FROM sales
-        WHERE salon_id = $1
-          AND status = 'completed'
-          AND DATE(created_at AT TIME ZONE 'UTC') = CURRENT_DATE
-        GROUP BY date_trunc('hour', created_at AT TIME ZONE 'UTC')
+          TO_CHAR(date_trunc('hour', event_at AT TIME ZONE 'UTC'), 'HH12AM') AS month,
+          date_trunc('hour', event_at AT TIME ZONE 'UTC')                     AS sort_key,
+          COALESCE(SUM(amount), 0)::numeric                                   AS revenue
+        FROM revenue_events
+        WHERE DATE(event_at AT TIME ZONE 'UTC') = CURRENT_DATE
+        GROUP BY date_trunc('hour', event_at AT TIME ZONE 'UTC')
         ORDER BY sort_key ASC`;
     } else if (period === "weekly") {
-      sql = `
+      sql = `${eventsCte}
         SELECT
-          TO_CHAR(DATE(created_at AT TIME ZONE 'UTC'), 'Dy DD') AS month,
-          DATE(created_at AT TIME ZONE 'UTC')                    AS sort_key,
-          COALESCE(SUM(total_amount), 0)::numeric                AS revenue
-        FROM sales
-        WHERE salon_id = $1
-          AND status = 'completed'
-          AND created_at >= CURRENT_DATE - INTERVAL '6 days'
-        GROUP BY DATE(created_at AT TIME ZONE 'UTC')
+          TO_CHAR(DATE(event_at AT TIME ZONE 'UTC'), 'Dy DD') AS month,
+          DATE(event_at AT TIME ZONE 'UTC')                    AS sort_key,
+          COALESCE(SUM(amount), 0)::numeric                    AS revenue
+        FROM revenue_events
+        WHERE event_at >= CURRENT_DATE - INTERVAL '6 days'
+        GROUP BY DATE(event_at AT TIME ZONE 'UTC')
         ORDER BY sort_key ASC`;
     } else if (period === "yearly") {
-      sql = `
+      sql = `${eventsCte}
         SELECT
-          TO_CHAR(date_trunc('month', created_at), 'Mon YY') AS month,
-          date_trunc('month', created_at)                     AS sort_key,
-          COALESCE(SUM(total_amount), 0)::numeric             AS revenue
-        FROM sales
-        WHERE salon_id = $1
-          AND status = 'completed'
-          AND created_at >= NOW() - INTERVAL '12 months'
-        GROUP BY date_trunc('month', created_at)
+          TO_CHAR(date_trunc('month', event_at), 'Mon YY') AS month,
+          date_trunc('month', event_at)                     AS sort_key,
+          COALESCE(SUM(amount), 0)::numeric                 AS revenue
+        FROM revenue_events
+        WHERE event_at >= NOW() - INTERVAL '12 months'
+        GROUP BY date_trunc('month', event_at)
         ORDER BY sort_key ASC`;
     } else {
       // monthly — daily data for the current calendar month
-      sql = `
+      sql = `${eventsCte}
         SELECT
-          TO_CHAR(DATE(created_at AT TIME ZONE 'UTC'), 'DD') AS month,
-          DATE(created_at AT TIME ZONE 'UTC')                 AS sort_key,
-          COALESCE(SUM(total_amount), 0)::numeric             AS revenue
-        FROM sales
-        WHERE salon_id = $1
-          AND status = 'completed'
-          AND date_trunc('month', created_at AT TIME ZONE 'UTC') = date_trunc('month', NOW() AT TIME ZONE 'UTC')
-        GROUP BY DATE(created_at AT TIME ZONE 'UTC')
+          TO_CHAR(DATE(event_at AT TIME ZONE 'UTC'), 'DD') AS month,
+          DATE(event_at AT TIME ZONE 'UTC')                 AS sort_key,
+          COALESCE(SUM(amount), 0)::numeric                 AS revenue
+        FROM revenue_events
+        WHERE date_trunc('month', event_at AT TIME ZONE 'UTC') = date_trunc('month', NOW() AT TIME ZONE 'UTC')
+        GROUP BY DATE(event_at AT TIME ZONE 'UTC')
         ORDER BY sort_key ASC`;
     }
 
@@ -309,30 +394,58 @@ export const salonDashboardRepository = {
   async getStaffRevenue(salonId: string, period: string = "monthly"): Promise<StaffRevenueEntry[]> {
     let dateCond: string;
     if (period === "today") {
-      dateCond = `DATE(sl.created_at AT TIME ZONE 'UTC') = CURRENT_DATE`;
+      dateCond = `DATE(re.event_at AT TIME ZONE 'UTC') = CURRENT_DATE`;
     } else if (period === "weekly") {
-      dateCond = `sl.created_at >= CURRENT_DATE - INTERVAL '6 days'`;
+      dateCond = `re.event_at >= CURRENT_DATE - INTERVAL '6 days'`;
     } else if (period === "yearly") {
-      dateCond = `sl.created_at >= NOW() - INTERVAL '12 months'`;
+      dateCond = `re.event_at >= NOW() - INTERVAL '12 months'`;
     } else {
-      dateCond = `date_trunc('month', sl.created_at AT TIME ZONE 'UTC') = date_trunc('month', NOW() AT TIME ZONE 'UTC')`;
+      dateCond = `date_trunc('month', re.event_at AT TIME ZONE 'UTC') = date_trunc('month', NOW() AT TIME ZONE 'UTC')`;
     }
 
     const { rows } = await pool.query<{ id: string; name: string; role: string; revenue: string }>(
-      `SELECT
+      `WITH sales_rows AS (
+         SELECT sl.staff_id, sl.created_at AS event_at, sl.total_amount AS amount
+         FROM sales sl
+         LEFT JOIN appointments a ON a.id = sl.appointment_id
+         WHERE sl.salon_id = $1
+           AND sl.status = 'completed'
+           AND (a.id IS NULL OR (a.status IN ('paid', 'partial') AND a.deleted_at IS NULL))
+       ),
+       open_partial_rows AS (
+         -- payments has no staff_id of its own — attributed to the
+         -- appointment's assigned staff, the same source the eventual sales
+         -- row's own staff_id would come from (payments.service.ts).
+         SELECT a.staff_id, p.created_at AS event_at, p.paid_amount AS amount
+         FROM payments p
+         JOIN appointments a ON a.id = p.appointment_id
+         WHERE p.salon_id = $1
+           AND p.status = 'partial'
+           AND a.deleted_at IS NULL
+           AND a.status NOT IN ('cancelled', 'no-show')
+           AND NOT EXISTS (
+             SELECT 1 FROM sales s2
+             WHERE s2.appointment_id = p.appointment_id AND s2.status = 'completed'
+           )
+       ),
+       revenue_events AS (
+         SELECT staff_id, event_at, amount FROM sales_rows
+         UNION ALL
+         SELECT staff_id, event_at, amount FROM open_partial_rows
+       )
+       SELECT
          s.id,
          TRIM(COALESCE(s.first_name, '') || ' ' || COALESCE(s.last_name, '')) AS name,
          COALESCE(s.designation, 'Staff') AS role,
-         COALESCE(SUM(sl.total_amount), 0)::numeric AS revenue
+         COALESCE(SUM(re.amount), 0)::numeric AS revenue
        FROM staff s
-       LEFT JOIN sales sl
-              ON sl.staff_id = s.id
-             AND sl.status = 'completed'
+       LEFT JOIN revenue_events re
+              ON re.staff_id = s.id
              AND ${dateCond}
        WHERE s.salon_id = $1
          AND s.is_active = true
        GROUP BY s.id, s.first_name, s.last_name, s.designation
-       HAVING COALESCE(SUM(sl.total_amount), 0) > 0
+       HAVING COALESCE(SUM(re.amount), 0) > 0
        ORDER BY revenue DESC
        LIMIT 8`,
       [salonId]
@@ -368,13 +481,39 @@ export const salonDashboardRepository = {
            AND status = 'paid'
          GROUP BY staff_id
        ),
+       sales_rows AS (
+         SELECT sl.staff_id, sl.total_amount AS amount
+         FROM sales sl
+         LEFT JOIN appointments a ON a.id = sl.appointment_id
+         WHERE sl.salon_id = $1
+           AND date_trunc('month', sl.created_at) = date_trunc('month', NOW())
+           AND sl.status = 'completed'
+           AND (a.id IS NULL OR (a.status IN ('paid', 'partial') AND a.deleted_at IS NULL))
+       ),
+       open_partial_rows AS (
+         -- Same still-open-deposit reasoning as getStaffRevenue/getRevenueChart
+         -- above — attributed to the appointment's assigned staff since
+         -- payments has no staff_id of its own.
+         SELECT a.staff_id, p.paid_amount AS amount
+         FROM payments p
+         JOIN appointments a ON a.id = p.appointment_id
+         WHERE p.salon_id = $1
+           AND date_trunc('month', p.created_at) = date_trunc('month', NOW())
+           AND p.status = 'partial'
+           AND a.deleted_at IS NULL
+           AND a.status NOT IN ('cancelled', 'no-show')
+           AND NOT EXISTS (
+             SELECT 1 FROM sales s2
+             WHERE s2.appointment_id = p.appointment_id AND s2.status = 'completed'
+           )
+       ),
        sales_stats AS (
-         SELECT staff_id,
-                COALESCE(SUM(total_amount), 0)::numeric AS revenue
-         FROM sales
-         WHERE salon_id = $1
-           AND date_trunc('month', created_at) = date_trunc('month', NOW())
-           AND status = 'completed'
+         SELECT staff_id, COALESCE(SUM(amount), 0)::numeric AS revenue
+         FROM (
+           SELECT staff_id, amount FROM sales_rows
+           UNION ALL
+           SELECT staff_id, amount FROM open_partial_rows
+         ) combined
          GROUP BY staff_id
        )
        SELECT

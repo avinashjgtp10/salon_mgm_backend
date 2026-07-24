@@ -22,6 +22,16 @@ export async function ensureTable(): Promise<void> {
     await pool.query(
         `ALTER TABLE appointments ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ NULL`,
     );
+    // Distinguishes "was fully Paid, then content-edited back down to
+    // partial" from a genuinely-original partial/deposit booking — the
+    // frontend keeps a real partial booking's items locked (staff shouldn't
+    // change what a deposit was collected against), but this specific case
+    // must stay editable so staff can keep adjusting before collecting the
+    // difference. FALSE for every pre-existing row and every appointment
+    // that has never been through this flow.
+    await pool.query(
+        `ALTER TABLE appointments ADD COLUMN IF NOT EXISTS reopened_from_paid BOOLEAN NOT NULL DEFAULT FALSE`,
+    );
 }
 
 export const appointmentsRepository = {
@@ -51,7 +61,8 @@ export const appointmentsRepository = {
                 COALESCE((SELECT SUM(ewallet_used) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS ewallet_used,
                 COALESCE((SELECT SUM(referral_credit_used) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS referral_credit_used,
                 (SELECT split_details FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) AS split_details,
-                (SELECT tax_breakdown FROM payments p WHERE p.appointment_id = a.id AND p.tax_breakdown IS NOT NULL ORDER BY p.created_at DESC LIMIT 1) AS tax_breakdown
+                (SELECT tax_breakdown FROM payments p WHERE p.appointment_id = a.id AND p.tax_breakdown IS NOT NULL ORDER BY p.created_at DESC LIMIT 1) AS tax_breakdown,
+                (SELECT MAX(created_at) FROM payments p WHERE p.appointment_id = a.id AND p.tax_breakdown IS NOT NULL) AS last_payment_at
              FROM appointments a
              LEFT JOIN clients c  ON a.client_id = c.id
              LEFT JOIN staff   st ON a.staff_id  = st.id
@@ -84,17 +95,24 @@ export const appointmentsRepository = {
         const values: any[] = [salonId];
         let idx = 2;
 
+        // Salon calendar days are Asia/Kolkata days, but the DB session runs in
+        // UTC — comparing scheduled_at (timestamptz) against a bare "YYYY-MM-DD"
+        // implicitly anchors the day boundary to UTC midnight (05:30 IST), not
+        // local midnight. That silently dropped any appointment booked between
+        // IST 00:00–05:30 from "today"'s list — it fell into the *previous*
+        // UTC day and never matched. Anchoring explicitly to +05:30 fixes both
+        // the single-date and start/end range filters the same way.
         if (filters.date) {
-            conditions.push(`DATE(a.scheduled_at) = $${idx}::date`);
-            values.push(filters.date); idx++;
+            conditions.push(`a.scheduled_at >= $${idx}::timestamptz AND a.scheduled_at < ($${idx}::timestamptz + INTERVAL '1 day')`);
+            values.push(filters.date + "T00:00:00+05:30"); idx++;
         }
         if (filters.start_date) {
             conditions.push(`a.scheduled_at >= $${idx}::timestamptz`);
-            values.push(filters.start_date + "T00:00:00Z"); idx++;
+            values.push(filters.start_date + "T00:00:00+05:30"); idx++;
         }
         if (filters.end_date) {
-            conditions.push(`a.scheduled_at < ($${idx}::date + INTERVAL '1 day')`);
-            values.push(filters.end_date); idx++;
+            conditions.push(`a.scheduled_at < ($${idx}::timestamptz + INTERVAL '1 day')`);
+            values.push(filters.end_date + "T00:00:00+05:30"); idx++;
         }
         if (filters.staff_id) {
             conditions.push(`a.staff_id = $${idx}`);
@@ -150,7 +168,8 @@ export const appointmentsRepository = {
                COALESCE(pa.total_ewallet_used, 0) AS ewallet_used,
                COALESCE(pa.total_referral_credit_used, 0) AS referral_credit_used,
                (SELECT split_details FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) AS split_details,
-               (SELECT tax_breakdown FROM payments p WHERE p.appointment_id = a.id AND p.tax_breakdown IS NOT NULL ORDER BY p.created_at DESC LIMIT 1) AS tax_breakdown
+               (SELECT tax_breakdown FROM payments p WHERE p.appointment_id = a.id AND p.tax_breakdown IS NOT NULL ORDER BY p.created_at DESC LIMIT 1) AS tax_breakdown,
+               (SELECT MAX(created_at) FROM payments p WHERE p.appointment_id = a.id AND p.tax_breakdown IS NOT NULL) AS last_payment_at
              FROM appointments a
              LEFT JOIN clients c   ON a.client_id  = c.id
              LEFT JOIN staff   st  ON a.staff_id   = st.id

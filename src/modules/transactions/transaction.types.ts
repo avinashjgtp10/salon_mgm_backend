@@ -14,6 +14,10 @@ export interface TransactionItemInput {
   quantity: number;
   unit_price: number;
   discount_amount?: number;
+  /** This item's own GST, computed by pricing.engine.ts's per-row allocation (see rowTax on BillTotalsResult) — distinct from the whole sale's tax_amount below. */
+  tax_amount?: number;
+  /** This item's own post-discount/post-wallet base that tax_amount was computed on. */
+  taxable_amount?: number;
 }
 
 export interface RecordTransactionInput {
