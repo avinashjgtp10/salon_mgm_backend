@@ -243,6 +243,7 @@ export const clientPackagesService = {
     discount:     number,
     gstPercentage: number,
     expiryDate:   string,
+    appointmentId?: string,
   ): Promise<void> {
     logger.info(`[client-packages/auto-create] salon=${salonId} client=${clientId} name="${packageName}" services=${services.length} price=${basePrice}`);
     try {
@@ -255,6 +256,7 @@ export const clientPackagesService = {
         discount,
         paymentMethod: "included_in_sale",
         services,
+        appointmentId,
       });
       logger.info(`[client-packages/auto-create] SUCCESS — client=${clientId}, package=${packageName}`);
       // Text only, no PDF here — the calling checkout flow (payments) already

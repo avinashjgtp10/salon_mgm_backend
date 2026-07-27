@@ -60,6 +60,12 @@ export async function ensureTable(): Promise<void> {
     // read pricing type straight off client_memberships with no extra lookup.
     `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS pricing_type    VARCHAR(20) NOT NULL DEFAULT 'value'`,
     `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS discount_percent NUMERIC(5,2)`,
+    // NULL = a genuine standalone "Sell Membership" purchase (never otherwise
+    // counted as revenue anywhere else). A real id means this row was
+    // auto-created from paying an appointment that had this membership as a
+    // line item — that value is already inside the appointment's own total,
+    // so client-revenue aggregation must skip any row with this set.
+    `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS appointment_id  UUID REFERENCES appointments(id) ON DELETE SET NULL`,
   ];
   for (const sql of patches) {
     await pool.query(sql);
@@ -152,6 +158,7 @@ function toClientMembership(row: ClientMembershipRow, log: UsageLogRow[] = []): 
     pricePaid:          row.price_paid ? parseFloat(row.price_paid) : undefined,
     membershipWalletBalance: Number(row.membership_wallet_balance) || 0,
     appliesToProducts:  row.applies_to_products ?? false,
+    appointmentId:      row.appointment_id ?? null,
     usageLog:           log.map(r => ({
       id:                  r.id,
       clientMembershipId:  r.client_membership_id,
@@ -308,8 +315,8 @@ export const clientMembershipsRepository = {
       `INSERT INTO client_memberships
         (id, salon_id, client_id, client_name, mobile, email,
          membership_id, membership_name, colour, total_sessions, used_sessions,
-         expires_at, end_date, status, price_paid, membership_wallet_balance)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$11,$14,'active',$12,$13)
+         expires_at, end_date, status, price_paid, membership_wallet_balance, appointment_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$11,$14,'active',$12,$13,$15)
        RETURNING *`,
       [
         id, salonId, dto.clientId, clientName, mobile, email,
@@ -324,6 +331,7 @@ export const clientMembershipsRepository = {
         // -typed columns is a genuine SQL error (42P08), not just a style
         // choice. Same value, its own placeholder.
         expiresAt,
+        dto.appointmentId ?? null,
       ],
     );
     return toClientMembership(rows[0]);

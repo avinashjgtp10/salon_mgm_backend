@@ -861,6 +861,8 @@ export const paymentsService = {
               totalSessions,
               pricePaid,
               mem.colour,
+              undefined,
+              data.appointment_id,
             );
           } catch (err: any) {
             logger.warn('[payments] membership auto-create failed:', err?.message ?? err);
@@ -932,6 +934,7 @@ export const paymentsService = {
               discount,
               gstPercentage,
               expiryDate,
+              data.appointment_id,
             );
           } catch (err: any) {
             logger.warn('[payments] package auto-create failed:', err?.message ?? err);

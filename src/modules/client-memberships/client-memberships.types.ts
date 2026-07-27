@@ -18,6 +18,12 @@ export interface ClientMembership {
   membershipWalletBalance: number;
   appliesToProducts?: boolean;
   usageLog?: UsageLogEntry[];
+  // Set only when this row was auto-created as a byproduct of paying an
+  // appointment that had this membership as a line item — that value is
+  // already counted in the appointment's own total, so client-revenue
+  // aggregation (useClientDetails.ts) must skip any row with this set to
+  // avoid double-counting. NULL/undefined means a genuine standalone sale.
+  appointmentId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -54,6 +60,8 @@ export interface CreateClientMembershipDTO {
   paymentMethod?: string;
   /** Method -> amount breakdown, present only when paymentMethod is a split combo. */
   splitDetails?: Record<string, number>;
+  /** Set only by autoCreateFromPayment — the appointment this membership was sold within. */
+  appointmentId?: string | null;
 }
 
 export interface ConsumeSessionDTO {
@@ -103,6 +111,7 @@ export interface ClientMembershipRow {
   price_paid?: string | null;
   membership_wallet_balance?: string | number | null;
   applies_to_products?: boolean | null;
+  appointment_id?: string | null;
   created_at: string;
   updated_at: string;
 }
