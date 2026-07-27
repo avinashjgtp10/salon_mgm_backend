@@ -33,6 +33,8 @@ export interface CreateClientPackageDTO {
   paymentMethod:  string;
   /** Method -> amount breakdown, present only when paymentMethod === "split". */
   splitDetails?:  Record<string, number>;
+  /** Set only by autoCreateFromPayment — the appointment this package was sold within. */
+  appointmentId?: string | null;
   services: Array<{
     /** Real catalog services.id, when the frontend picked one from the catalog search. */
     serviceId?:     string;
@@ -87,6 +89,12 @@ export interface ClientPackage {
   pendingAmount:  number;
   paymentStatus:  string;
   services:       ClientPackageService[];
+  // Set only when this row was auto-created as a byproduct of paying an
+  // appointment that had this package as a line item — that value is
+  // already counted in the appointment's own total, so client-revenue
+  // aggregation (useClientDetails.ts) must skip any row with this set to
+  // avoid double-counting. NULL/undefined means a genuine standalone sale.
+  appointmentId?: string | null;
 }
 
 export interface ClientPackagesListQuery {
@@ -122,6 +130,7 @@ export interface ClientPackageRow {
   paid_amount:    string;
   pending_amount: string;
   payment_status: string;
+  appointment_id?: string | null;
   services:       Array<{
     service_id:          string;
     catalog_service_id:  string | null;
