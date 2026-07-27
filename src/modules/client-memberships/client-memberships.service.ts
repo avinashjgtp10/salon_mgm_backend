@@ -465,6 +465,7 @@ export const clientMembershipsService = {
     pricePaid: number,
     colour?: string,
     expiresAt?: string,
+    appointmentId?: string,
   ): Promise<void> {
     logger.info(`[client-memberships/auto-create] salon=${salonId} client=${clientId} membership=${membershipId} name="${membershipName}" sessions=${totalSessions} price=${pricePaid}`);
     try {
@@ -481,6 +482,7 @@ export const clientMembershipsService = {
         totalSessions,
         pricePaid,
         expiresAt,
+        appointmentId,
       });
       logger.info(`[client-memberships/auto-create] SUCCESS — client=${clientId}, membership=${membershipName}`);
       // Text only, no PDF here — the calling checkout flow (sales/payments)
