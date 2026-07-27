@@ -54,6 +54,12 @@ export async function ensureTable(): Promise<void> {
     // list, so environments where ensureTable() never got a matching manual
     // ALTER TABLE run (e.g. prod) had every membership purchase fail outright.
     `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS end_date        TIMESTAMPTZ`,
+    // Denormalized from the membership plan at purchase time (same pattern as
+    // applies_to_products) — a sold membership keeps the pricing terms it was
+    // bought under even if the plan changes later, and the booking flow can
+    // read pricing type straight off client_memberships with no extra lookup.
+    `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS pricing_type    VARCHAR(20) NOT NULL DEFAULT 'value'`,
+    `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS discount_percent NUMERIC(5,2)`,
   ];
   for (const sql of patches) {
     await pool.query(sql);
