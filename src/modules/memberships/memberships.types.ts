@@ -28,6 +28,8 @@ export interface CreateMembershipDTO {
   enableOnlineRedemption: boolean;
   termsAndConditions?:    string;
   appliesToProducts?:     boolean;
+  pricingType?:           'value' | 'percentage';
+  discountPercent?:       number;
 }
 
 export interface UpdateMembershipDTO extends Partial<CreateMembershipDTO> {}
@@ -52,6 +54,8 @@ export interface MembershipRow {
   enable_online_redemption: boolean;
   terms_and_conditions:     string | null;
   applies_to_products:      boolean;
+  pricing_type:             'value' | 'percentage';
+  discount_percent:         string | null;
   created_at:               Date;
   updated_at:               Date;
   services:                 IncludedService[] | null;

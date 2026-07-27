@@ -17,6 +17,8 @@ export interface ClientMembership {
   pricePaid?: number;
   membershipWalletBalance: number;
   appliesToProducts?: boolean;
+  pricingType: 'value' | 'percentage';
+  discountPercent?: number;
   usageLog?: UsageLogEntry[];
   // Set only when this row was auto-created as a byproduct of paying an
   // appointment that had this membership as a line item — that value is
@@ -111,6 +113,8 @@ export interface ClientMembershipRow {
   price_paid?: string | null;
   membership_wallet_balance?: string | number | null;
   applies_to_products?: boolean | null;
+  pricing_type?: string | null;
+  discount_percent?: string | number | null;
   appointment_id?: string | null;
   created_at: string;
   updated_at: string;
