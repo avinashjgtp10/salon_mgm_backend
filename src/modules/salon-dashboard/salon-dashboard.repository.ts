@@ -149,10 +149,13 @@ export const salonDashboardRepository = {
         [salonId]
       ),
 
-      // New clients — a client's first-ever appointment/sale at THIS salon fell
-      // today / this month. (clients table has no salon_id, so "new to this
-      // salon" is derived from their earliest interaction here, same pattern
-      // as the active-clients query above.)
+      // New clients — earliest of: their client profile being created (e.g. via
+      // Clients → Add Client, with no booking/sale at all yet), or their
+      // first-ever appointment/sale at this salon (Calendar/Quick Sale, which
+      // create the client record and the appointment together). Including the
+      // clients row itself means a client added ONLY via Add Client (no
+      // appointment/sale ever) still counts as "new" the day they were added,
+      // instead of never appearing here at all.
       pool.query<{ new_today: string; new_this_month: string }>(
         `WITH first_visit AS (
            SELECT client_id, MIN(created_at) AS first_at
@@ -160,6 +163,8 @@ export const salonDashboardRepository = {
              SELECT client_id, created_at FROM appointments WHERE salon_id = $1 AND client_id IS NOT NULL AND deleted_at IS NULL
              UNION ALL
              SELECT client_id, created_at FROM sales       WHERE salon_id = $1 AND client_id IS NOT NULL
+             UNION ALL
+             SELECT id AS client_id, created_at FROM clients WHERE salon_id = $1
            ) combined
            GROUP BY client_id
          )
@@ -712,12 +717,8 @@ export const salonDashboardRepository = {
     const { rows } = await pool.query<{ id: string; name: string }>(
       `SELECT c.id, COALESCE(c.full_name, TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,''))) AS name
        FROM clients c
-       INNER JOIN (
-         SELECT client_id FROM appointments WHERE salon_id = $1 AND client_id IS NOT NULL AND deleted_at IS NULL
-         UNION
-         SELECT client_id FROM sales       WHERE salon_id = $1 AND client_id IS NOT NULL
-       ) visited ON visited.client_id = c.id
-       WHERE c.is_active = true
+       WHERE c.salon_id = $1
+         AND c.is_active = true
          AND c.birthday_day_month IS NOT NULL
          AND (
            -- Intended format is "MM-DD" (5 chars) — but most existing rows were
