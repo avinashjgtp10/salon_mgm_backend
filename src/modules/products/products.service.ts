@@ -188,36 +188,64 @@ export const productsService = {
     async exportPDF(params: { requesterUserId: string; requesterRole?: string; salonId: string; filters: ProductListFilters; }): Promise<{ stream: PassThrough; filename: string }> {
         logger.info("productsService.exportPDF called", { salonId: params.salonId, filters: params.filters });
         const products = await productsRepository.listExport(params.filters, params.salonId);
-        const doc = new PDFDocument({ margin: 40, size: "A4", layout: "landscape" });
+        const PAGE_MARGIN = 24;
+        const doc = new PDFDocument({ margin: PAGE_MARGIN, size: "A4", layout: "landscape" });
         const passThrough = new PassThrough();
         doc.pipe(passThrough);
         doc.fontSize(18).font("Helvetica-Bold").text("Products Report", { align: "center" });
         doc.fontSize(10).font("Helvetica").fillColor("#666").text(`Generated: ${new Date().toLocaleDateString()}`, { align: "center" });
         doc.moveDown(1);
-        const cols = { name: 40, barcode: 160, brand: 260, measure: 340, supply: 400, retail: 470, stock: 540 };
+
+        // Table spans the full printable width (page width minus both margins)
+        // instead of a hardcoded pixel width — keeps left/right whitespace equal
+        // and the table filling the page regardless of page size.
+        const tableX     = PAGE_MARGIN;
+        const tableWidth = doc.page.width - PAGE_MARGIN * 2;
+        // Proportional column widths (sum to 1) — name gets the most room since
+        // it's free text, the rest are fixed-format numbers/codes.
+        const colRatios = { name: 0.19, barcode: 0.16, brand: 0.14, measure: 0.11, supply: 0.13, retail: 0.13, stock: 0.14 };
+        const colWidth  = (key: keyof typeof colRatios) => tableWidth * colRatios[key];
+        let colX = tableX;
+        const cols: Record<keyof typeof colRatios, number> = {} as any;
+        (Object.keys(colRatios) as (keyof typeof colRatios)[]).forEach((key) => {
+            cols[key] = colX;
+            colX += colWidth(key);
+        });
+
+        // "₹" isn't in pdfkit's standard-font (WinAnsi) encoding and renders as
+        // a mangled glyph — spell the currency out instead of using the symbol.
+        const money = (n: number) => `Rs. ${n.toFixed(2)}`;
+
         let y = doc.y;
-        doc.rect(30, y, 760, 22).fill("#101828");
-        doc.fillColor("#ffffff").fontSize(9).font("Helvetica-Bold");
-        doc.text("Name", cols.name, y + 7, { width: 115 });
-        doc.text("Barcode", cols.barcode, y + 7, { width: 95 });
-        doc.text("Brand", cols.brand, y + 7, { width: 75 });
-        doc.text("Measure", cols.measure, y + 7, { width: 55 });
-        doc.text("Supply Price", cols.supply, y + 7, { width: 65 });
-        doc.text("Retail Price", cols.retail, y + 7, { width: 65 });
-        doc.text("Stock", cols.stock, y + 7, { width: 50 });
-        y += 22;
+        const drawHeader = () => {
+            doc.rect(tableX, y, tableWidth, 22).fill("#101828");
+            doc.fillColor("#ffffff").fontSize(9).font("Helvetica-Bold");
+            doc.text("Name",         cols.name,    y + 7, { width: colWidth("name") - 6 });
+            doc.text("Barcode",      cols.barcode, y + 7, { width: colWidth("barcode") - 6 });
+            doc.text("Brand",        cols.brand,   y + 7, { width: colWidth("brand") - 6 });
+            doc.text("Measure",      cols.measure, y + 7, { width: colWidth("measure") - 6 });
+            doc.text("Supply Price", cols.supply,  y + 7, { width: colWidth("supply") - 6 });
+            doc.text("Retail Price", cols.retail,  y + 7, { width: colWidth("retail") - 6 });
+            doc.text("Stock",        cols.stock,   y + 7, { width: colWidth("stock") - 6 });
+            y += 22;
+        };
+        drawHeader();
         products.forEach((p: any, i: number) => {
-            if (y > 530) { doc.addPage({ margin: 40, size: "A4", layout: "landscape" }); y = 40; }
+            if (y > doc.page.height - PAGE_MARGIN - 22) {
+                doc.addPage({ margin: PAGE_MARGIN, size: "A4", layout: "landscape" });
+                y = PAGE_MARGIN;
+                drawHeader();
+            }
             const bg = i % 2 === 0 ? "#F9FAFB" : "#FFFFFF";
-            doc.rect(30, y, 760, 22).fill(bg);
+            doc.rect(tableX, y, tableWidth, 22).fill(bg);
             doc.fillColor("#101828").fontSize(8).font("Helvetica");
-            doc.text(String(p.name).substring(0, 20), cols.name, y + 7, { width: 115 });
-            doc.text(String(p.barcode ?? "—"), cols.barcode, y + 7, { width: 95 });
-            doc.text(String(p.brand_name ?? "—"), cols.brand, y + 7, { width: 75 });
-            doc.text(`${p.amount} ${p.measure_unit}`, cols.measure, y + 7, { width: 55 });
-            doc.text(`₹${Number(p.supply_price).toFixed(2)}`, cols.supply, y + 7, { width: 65 });
-            doc.text(p.retail_price ? `₹${Number(p.retail_price).toFixed(2)}` : "—", cols.retail, y + 7, { width: 65 });
-            doc.text(String(p.amount ?? 0), cols.stock, y + 7, { width: 50 });
+            doc.text(String(p.name).substring(0, 24), cols.name, y + 7, { width: colWidth("name") - 6 });
+            doc.text(String(p.barcode ?? "—"), cols.barcode, y + 7, { width: colWidth("barcode") - 6 });
+            doc.text(String(p.brand_name ?? "—"), cols.brand, y + 7, { width: colWidth("brand") - 6 });
+            doc.text(`${p.amount} ${p.measure_unit}`, cols.measure, y + 7, { width: colWidth("measure") - 6 });
+            doc.text(money(Number(p.supply_price)), cols.supply, y + 7, { width: colWidth("supply") - 6 });
+            doc.text(p.retail_price ? money(Number(p.retail_price)) : "—", cols.retail, y + 7, { width: colWidth("retail") - 6 });
+            doc.text(String(p.amount ?? 0), cols.stock, y + 7, { width: colWidth("stock") - 6 });
             y += 22;
         });
         doc.end();

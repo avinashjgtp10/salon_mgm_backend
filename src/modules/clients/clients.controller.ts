@@ -336,7 +336,7 @@ export const clientsController = {
                     doc.text(String(c.email ?? "—").substring(0, 28), cols.email, y + 7, { width: 155 });
                     doc.text(String(c.gender ?? "—"), cols.gender, y + 7, { width: 75 });
                     doc.text(String(c.client_source ?? "—"), cols.source, y + 7, { width: 95 });
-                    doc.text(`₹${Number(c.total_sales ?? 0).toFixed(2)}`, cols.sales, y + 7, { width: 65 });
+                    doc.text(`Rs. ${Number(c.total_sales ?? 0).toFixed(2)}`, cols.sales, y + 7, { width: 65 });
                     doc.text(c.created_at ? new Date(c.created_at).toLocaleDateString("en-IN") : "—", cols.created, y + 7, { width: 80 });
                     y += 22;
                 });
