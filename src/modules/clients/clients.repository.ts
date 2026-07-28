@@ -124,17 +124,46 @@ export const clientsRepository = {
 
         // clients.total_sales is a dead column, never written anywhere — every
         // client shows ₹0 and "highest/lowest sales" sorting has nothing real to
-        // sort by. Compute it here from payments instead, the same way Client
-        // History's lifetime_spend does: wallet-settled amounts are excluded
-        // since that money was already recognized as revenue when the wallet/
-        // membership was funded/sold. Aliased `ts` and joined into BOTH the count
-        // and data queries so the revenue range filter above can reference it and
-        // the total count stays consistent with the returned rows.
+        // sort by. Compute it here instead, matching the same event source
+        // Client History and the Dashboard both already use: completed `sales`
+        // rows (which is where a standalone package/membership sell — Sell
+        // Package/Sell Membership, no appointment/payment involved at all —
+        // actually lands) UNION ALL any still-open partial-payment deposit that
+        // hasn't produced its own `sales` row yet (a real appointment payment
+        // only becomes a `sales` row once the bill is FULLY settled — see
+        // payments.service.ts's "Auto-create sale record" block). Summing the
+        // old `payments` table alone silently missed every standalone
+        // package/membership sale, since those never touch `payments` at all.
+        // Wallet-settled money is still excluded from the open-partial leg —
+        // that revenue was already recognized when the wallet/membership was
+        // funded/sold — and the NOT EXISTS guard stops an appointment's partial
+        // deposit from being counted a second time once it's fully paid and
+        // gets its own completed `sales` row.
         const tsJoin = `
       LEFT JOIN (
-        SELECT client_id, SUM(GREATEST(0, paid_amount - COALESCE(ewallet_used, 0) - COALESCE(membership_wallet_used, 0))) AS total_sales
-        FROM payments
-        WHERE salon_id = $1 AND status IN ('completed', 'partial')
+        SELECT client_id, SUM(amount) AS total_sales
+        FROM (
+          SELECT s.client_id, s.total_amount AS amount
+          FROM sales s
+          LEFT JOIN appointments a ON a.id = s.appointment_id
+          WHERE s.salon_id = $1
+            AND s.status = 'completed'
+            AND s.client_id IS NOT NULL
+            AND (a.id IS NULL OR (a.status IN ('paid', 'partial') AND a.deleted_at IS NULL))
+          UNION ALL
+          SELECT p.client_id, GREATEST(0, p.paid_amount - COALESCE(p.ewallet_used, 0) - COALESCE(p.membership_wallet_used, 0)) AS amount
+          FROM payments p
+          JOIN appointments a ON a.id = p.appointment_id
+          WHERE p.salon_id = $1
+            AND p.status = 'partial'
+            AND p.client_id IS NOT NULL
+            AND a.deleted_at IS NULL
+            AND a.status NOT IN ('cancelled', 'no-show')
+            AND NOT EXISTS (
+              SELECT 1 FROM sales s2
+              WHERE s2.appointment_id = p.appointment_id AND s2.status = 'completed'
+            )
+        ) combined
         GROUP BY client_id
       ) ts ON ts.client_id = c.id`;
 
@@ -804,16 +833,40 @@ export const clientsRepository = {
 
         // Total spend — clients.total_sales is never written anywhere in the codebase
         // (dead column), so compute the real figure the same way Client History does.
-        // Excludes eWallet/membership-wallet contributions, same reasoning as lifetime_spend
-        // in clients.controller.ts — wallet-settled visits aren't new money for the salon.
+        // Same sales ∪ still-open-partial-payments source as the `list()` method's
+        // `ts` join above — summing `payments` alone missed every standalone
+        // package/membership sale (Sell Package/Sell Membership never create a
+        // payments row). Excludes eWallet/membership-wallet contributions from the
+        // open-partial leg — that money was already recognized as revenue when the
+        // wallet/membership was funded/sold — and the NOT EXISTS guard stops a
+        // deposit from being double-counted once it's fully paid and gets its own
+        // completed `sales` row.
         if (filters.total_spend_min != null || filters.total_spend_max != null) {
             joins.push(`
                 LEFT JOIN (
-                    SELECT client_id, COALESCE(SUM(
-                        GREATEST(0, paid_amount - COALESCE(ewallet_used, 0) - COALESCE(membership_wallet_used, 0))
-                    ), 0) AS total_spend
-                    FROM payments
-                    WHERE salon_id = $1 AND status IN ('completed', 'partial')
+                    SELECT client_id, COALESCE(SUM(amount), 0) AS total_spend
+                    FROM (
+                        SELECT s.client_id, s.total_amount AS amount
+                        FROM sales s
+                        LEFT JOIN appointments a ON a.id = s.appointment_id
+                        WHERE s.salon_id = $1
+                          AND s.status = 'completed'
+                          AND s.client_id IS NOT NULL
+                          AND (a.id IS NULL OR (a.status IN ('paid', 'partial') AND a.deleted_at IS NULL))
+                        UNION ALL
+                        SELECT p.client_id, GREATEST(0, p.paid_amount - COALESCE(p.ewallet_used, 0) - COALESCE(p.membership_wallet_used, 0)) AS amount
+                        FROM payments p
+                        JOIN appointments a ON a.id = p.appointment_id
+                        WHERE p.salon_id = $1
+                          AND p.status = 'partial'
+                          AND p.client_id IS NOT NULL
+                          AND a.deleted_at IS NULL
+                          AND a.status NOT IN ('cancelled', 'no-show')
+                          AND NOT EXISTS (
+                            SELECT 1 FROM sales s2
+                            WHERE s2.appointment_id = p.appointment_id AND s2.status = 'completed'
+                          )
+                    ) combined
                     GROUP BY client_id
                 ) ps ON ps.client_id = c.id
             `)

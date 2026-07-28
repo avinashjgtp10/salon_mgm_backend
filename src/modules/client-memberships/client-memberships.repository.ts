@@ -54,6 +54,18 @@ export async function ensureTable(): Promise<void> {
     // list, so environments where ensureTable() never got a matching manual
     // ALTER TABLE run (e.g. prod) had every membership purchase fail outright.
     `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS end_date        TIMESTAMPTZ`,
+    // NULL = a genuine standalone "Sell Membership" purchase (never otherwise
+    // counted as revenue anywhere else). A real id means this row was
+    // auto-created from paying an appointment that had this membership as a
+    // line item — that value is already inside the appointment's own total,
+    // so client-revenue aggregation must skip any row with this set.
+    `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS appointment_id  UUID REFERENCES appointments(id) ON DELETE SET NULL`,
+    // Denormalized from the membership plan at purchase time (same pattern as
+    // applies_to_products) — a sold membership keeps the pricing terms it was
+    // bought under even if the plan changes later, and the booking flow can
+    // read pricing type straight off client_memberships with no extra lookup.
+    `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS pricing_type    VARCHAR(20) NOT NULL DEFAULT 'value'`,
+    `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS discount_percent NUMERIC(5,2)`,
   ];
   for (const sql of patches) {
     await pool.query(sql);
@@ -146,6 +158,9 @@ function toClientMembership(row: ClientMembershipRow, log: UsageLogRow[] = []): 
     pricePaid:          row.price_paid ? parseFloat(row.price_paid) : undefined,
     membershipWalletBalance: Number(row.membership_wallet_balance) || 0,
     appliesToProducts:  row.applies_to_products ?? false,
+    pricingType:        (row.pricing_type as ClientMembership['pricingType']) ?? 'value',
+    discountPercent:    row.discount_percent != null ? Number(row.discount_percent) : undefined,
+    appointmentId:      row.appointment_id ?? null,
     usageLog:           log.map(r => ({
       id:                  r.id,
       clientMembershipId:  r.client_membership_id,
@@ -282,7 +297,7 @@ export const clientMembershipsRepository = {
     // always funded as (catalog price + bonusCredit) no matter which of the
     // several sell flows created this row.
     const memRes = await pool.query(
-      `SELECT valid_for, price, description FROM memberships WHERE id = $1`,
+      `SELECT valid_for, price, description, pricing_type, discount_percent FROM memberships WHERE id = $1`,
       [dto.membershipId],
     );
     const memRow = memRes.rows[0];
@@ -296,14 +311,17 @@ export const clientMembershipsRepository = {
       try { bonusCredit = Number(JSON.parse(memRow.description ?? "{}").bonusCredit) || 0; } catch { /* plain text description */ }
       walletBalance = (Number(memRow.price) || 0) + bonusCredit;
     }
+    const pricingType = memRow?.pricing_type ?? 'value';
+    const discountPercent = memRow?.discount_percent ?? null;
 
     const id = uuidv4();
     const { rows } = await pool.query(
       `INSERT INTO client_memberships
         (id, salon_id, client_id, client_name, mobile, email,
          membership_id, membership_name, colour, total_sessions, used_sessions,
-         expires_at, end_date, status, price_paid, membership_wallet_balance)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$11,$14,'active',$12,$13)
+         expires_at, end_date, status, price_paid, membership_wallet_balance, appointment_id,
+         pricing_type, discount_percent)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$11,$14,'active',$12,$13,$15,$16,$17)
        RETURNING *`,
       [
         id, salonId, dto.clientId, clientName, mobile, email,
@@ -318,6 +336,9 @@ export const clientMembershipsRepository = {
         // -typed columns is a genuine SQL error (42P08), not just a style
         // choice. Same value, its own placeholder.
         expiresAt,
+        dto.appointmentId ?? null,
+        pricingType,
+        discountPercent,
       ],
     );
     return toClientMembership(rows[0]);

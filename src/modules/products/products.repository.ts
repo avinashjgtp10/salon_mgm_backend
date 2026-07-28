@@ -121,9 +121,10 @@ export const productsRepository = {
         const orderDir = filters.sort_order === "ASC" ? "ASC" : "DESC";
 
         const { rows } = await pool.query(
-            `SELECT ${PRODUCT_COLUMNS_P}, pb.name as brand_name
+            `SELECT ${PRODUCT_COLUMNS_P}, pb.name as brand_name, sc.name as category_name
              FROM products p
              LEFT JOIN product_brands pb ON p.brand_id = pb.id
+             LEFT JOIN service_categories sc ON p.category_id = sc.id
              ${where}
              ORDER BY p.${orderCol} ${orderDir}`,
             values
