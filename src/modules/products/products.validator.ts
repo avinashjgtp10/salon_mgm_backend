@@ -37,7 +37,7 @@ const VALID_TAX_TYPES: TaxType[] = ["no_tax", "gst_5", "gst_12", "gst_18", "gst_
 
 const coerceProductFields = (b: Record<string, any>) => {
     if (!b || typeof b !== "object") return;
-    const floatFields = ["amount", "supply_price", "retail_price", "markup_percentage", "custom_tax_rate", "team_commission_rate"];
+    const floatFields = ["amount", "qty_alert", "supply_price", "retail_price", "markup_percentage", "custom_tax_rate", "team_commission_rate"];
     for (const f of floatFields) {
         if (typeof b[f] === "string" && b[f].trim() !== "") {
             const parsed = parseFloat(b[f]);
@@ -83,6 +83,15 @@ const validateProductFields = (b: Record<string, unknown>, requireName = false) 
     }
     if (!isOptionalNonNeg(b.amount)) {
         throw new AppError(400, "amount must be a non-negative number", "VALIDATION_ERROR");
+    }
+    if (!isOptionalNonNeg(b.qty_alert)) {
+        throw new AppError(400, "qty_alert must be a non-negative number", "VALIDATION_ERROR");
+    }
+    // Both fields are always sent together by the Create/Edit Product forms
+    // (a full-form submit, not a sparse patch) — safe to cross-validate here
+    // without needing the existing DB row for whichever field is "missing".
+    if (typeof b.amount === "number" && typeof b.qty_alert === "number" && b.qty_alert >= b.amount) {
+        throw new AppError(400, "Low Stock Alert Quantity must be less than the Product Quantity.", "VALIDATION_ERROR");
     }
     if (!isOptionalString(b.short_description)) {
         throw new AppError(400, "short_description must be a string", "VALIDATION_ERROR");
