@@ -326,7 +326,7 @@ export const usersController = {
       await usersService.changePassword(userId, currentPassword, newPassword);
 
       logger.info("POST /users/me/change-password success", { userId });
-      return sendSuccess(res, 200, null, "Password changed successfully");
+      return sendSuccess(res, 200, null, "Password updated successfully.");
     } catch (error) {
       logger.error("POST /users/me/change-password error", { error });
       return next(error);
