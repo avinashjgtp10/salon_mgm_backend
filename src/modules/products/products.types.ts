@@ -1,5 +1,6 @@
-export type MeasureUnit = "ml" | "l" | "g" | "kg" | "pcs" | "oz" | "lb";
+export type MeasureUnit = "ml" | "l" | "g" | "kg" | "pcs" | "oz" | "lb" | "bottle" | "tube" | "pack" | "box" | "roll";
 export type TaxType = "no_tax" | "gst_5" | "gst_12" | "gst_18" | "gst_28" | "custom";
+export type ProductType = "retail" | "consumable" | "both";
 
 export type Product = {
     id: string;
@@ -7,7 +8,10 @@ export type Product = {
     barcode: string | null;
     brand_id: string | null;
     category_id: string | null;
+    supplier_id: string | null;
     measure_unit: MeasureUnit;
+    product_type: ProductType;
+    size: string | null;
     amount: number;
     qty_alert: number | null;
     short_description: string | null;
@@ -18,6 +22,7 @@ export type Product = {
     markup_percentage: number | null;
     tax_type: TaxType;
     custom_tax_rate: number | null;
+    hsn_sac: string | null;
     team_commission_enabled: boolean;
     team_commission_rate: number | null;
     created_at: string;
@@ -46,7 +51,10 @@ export type CreateProductBody = {
     barcode?: string;
     brand_id?: string;
     category_id?: string;
+    supplier_id?: string;
     measure_unit?: string;
+    product_type?: string;
+    size?: string;
     amount?: number;
     qty_alert?: number;
     short_description?: string;
@@ -57,6 +65,7 @@ export type CreateProductBody = {
     markup_percentage?: number;
     tax_type?: string;
     custom_tax_rate?: number;
+    hsn_sac?: string;
     team_commission_enabled?: boolean;
     team_commission_rate?: number;
 };
@@ -73,6 +82,7 @@ export type ProductListFilters = {
     search?: string;
     category_id?: string;
     brand_id?: string;
+    product_type?: ProductType;
     retail_sales_enabled?: boolean;
     min_price?: number;
     max_price?: number;

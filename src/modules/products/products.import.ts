@@ -311,6 +311,7 @@ function validateRow(row: ImportRow): {
             retail_sales_enabled: true,
             retail_price: row.sellPrice || 0,
             tax_type: "gst_18",
+            hsn_sac: row.hsnSac && row.hsnSac.trim() !== "" ? row.hsnSac.trim() : undefined,
         },
     };
 }

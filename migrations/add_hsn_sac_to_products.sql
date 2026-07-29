@@ -1,0 +1,2 @@
+ALTER TABLE products
+  ADD COLUMN IF NOT EXISTS hsn_sac VARCHAR(20);
