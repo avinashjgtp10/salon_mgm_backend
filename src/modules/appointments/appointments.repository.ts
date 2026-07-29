@@ -40,11 +40,13 @@ export const appointmentsRepository = {
     async findById(id: string): Promise<Appointment | null> {
         const { rows } = await pool.query(
             `SELECT a.*,
-                (SELECT COUNT(*) FROM appointments a2
-                 WHERE a2.salon_id = a.salon_id
-                   AND (a2.created_at < a.created_at
-                        OR (a2.created_at = a.created_at AND a2.id <= a.id))
-                ) AS invoice_number,
+                -- The real invoice number is the linked sale's own sequential
+                -- invoice_number (sales.repository.ts's per-salon counter) —
+                -- NULL until the appointment is actually billed. Previously
+                -- this counted every appointment ever created for the salon
+                -- (paid or not), which diverged from Sales Summary/reports
+                -- (both read sales.invoice_number directly).
+                (SELECT s.invoice_number FROM sales s WHERE s.appointment_id = a.id LIMIT 1) AS invoice_number,
                 c.full_name                              AS client_name,
                 c.phone_number                           AS client_phone,
                 c.phone_country_code                     AS client_phone_code,
@@ -152,11 +154,10 @@ export const appointmentsRepository = {
                GROUP BY appointment_id
              )
              SELECT a.*,
-               (SELECT COUNT(*) FROM appointments a2
-                WHERE a2.salon_id = a.salon_id
-                  AND (a2.created_at < a.created_at
-                       OR (a2.created_at = a.created_at AND a2.id <= a.id))
-               ) AS invoice_number,
+               -- See findById()'s identical comment — invoice_number now comes
+               -- from the linked sale's own sequential number, not an
+               -- appointment-count, so it matches Sales Summary/reports.
+               (SELECT s.invoice_number FROM sales s WHERE s.appointment_id = a.id LIMIT 1) AS invoice_number,
                c.full_name    AS client_name,
                c.phone_number AS client_phone,
                c.email        AS client_email,

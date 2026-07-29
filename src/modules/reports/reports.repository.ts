@@ -1666,6 +1666,14 @@ async getSaleDetail(salonId: string, saleId: string): Promise<SaleDetailResponse
 // per line item. Never calls the Appointment API/service.
 // ======================================================
 
+// Sale-level filters go in `where` (safe against s./c. columns, which are
+// never NULL-able via the sale_items join). item-level filters (service_id,
+// staff_id via si., search's si.name arm) go in `saleItemsJoin` instead of
+// WHERE — sale_items is now LEFT JOINed (see getDailySheetReport) so a sale
+// can still surface even when it happens to have no matching/any line item;
+// a WHERE on si.* would silently turn that LEFT JOIN back into an INNER
+// JOIN and drop the sale entirely, same class of bug fixed for Client
+// Revenue (SCRUM-1066).
 _buildDailySheetWhere(
   salonId: string,
   filters: {
@@ -1674,9 +1682,10 @@ _buildDailySheetWhere(
     staff_id?: string;
     search?: string;
   }
-): { where: string; values: any[]; nextIndex: number } {
+): { where: string; saleItemsJoin: string; values: any[]; nextIndex: number } {
   const values: any[] = [salonId];
   const where = ["s.salon_id = $1", "s.status <> 'draft'"];
+  const saleItemsJoin = ["si.sale_id = s.id"];
   let idx = 2;
 
   if (filters.date) {
@@ -1684,12 +1693,20 @@ _buildDailySheetWhere(
     values.push(filters.date);
   }
   if (filters.service_id) {
-    where.push(`si.item_id = $${idx++}`);
+    saleItemsJoin.push(`si.item_id = $${idx}`);
+    // Still on `where` too — a plain ON-clause filter would only stop that
+    // one line item from matching, leaving the sale in the result as a
+    // blank row (via the other, non-matching si.* columns going NULL)
+    // instead of being excluded like the old INNER JOIN did.
+    where.push(`EXISTS (SELECT 1 FROM sale_items si2 WHERE si2.sale_id = s.id AND si2.item_id = $${idx})`);
     values.push(filters.service_id);
+    idx++;
   }
   if (filters.staff_id) {
-    where.push(`COALESCE(si.staff_id, s.staff_id) = $${idx++}`);
+    saleItemsJoin.push(`COALESCE(si.staff_id, s.staff_id) = $${idx}`);
+    where.push(`EXISTS (SELECT 1 FROM sale_items si2 WHERE si2.sale_id = s.id AND COALESCE(si2.staff_id, s.staff_id) = $${idx})`);
     values.push(filters.staff_id);
+    idx++;
   }
   if (filters.search?.trim()) {
     where.push(`(
@@ -1702,7 +1719,7 @@ _buildDailySheetWhere(
     idx++;
   }
 
-  return { where: where.join(" AND "), values, nextIndex: idx };
+  return { where: where.join(" AND "), saleItemsJoin: saleItemsJoin.join(" AND "), values, nextIndex: idx };
 },
 
 // Same gap as Sales Summary (see _UNBILLED_APPOINTMENT_ROWS_CTE): a
@@ -1763,7 +1780,8 @@ _UNBILLED_APPOINTMENT_DAILY_ROWS_CTE(
       pay.latest_method AS payment_method,
       a.status::text AS status
     FROM (
-      SELECT a.id AS appointment_id, a.client_id, a.staff_id, a.status, a.created_at, a.services,
+      SELECT a.id, a.id AS appointment_id, a.salon_id, a.client_id, a.staff_id, a.status,
+             a.created_at, a.scheduled_at, a.deleted_at, a.services,
              a.package_items, a.product_items, a.membership_items,
              TO_CHAR(a.created_at, 'HH12:MI AM') AS time,
              NULL::text AS ticket_no
@@ -1820,7 +1838,7 @@ async getDailySheetReport(
   pagination: { total: number; page: number; limit: number; total_pages: number };
   total_amount: number;
 }> {
-  const { where, values, nextIndex } = this._buildDailySheetWhere(salonId, filters);
+  const { where, saleItemsJoin, values, nextIndex } = this._buildDailySheetWhere(salonId, filters);
   const unbilled = this._UNBILLED_APPOINTMENT_DAILY_ROWS_CTE(filters, nextIndex);
   let idx = unbilled.nextIndex;
 
@@ -1839,16 +1857,16 @@ async getDailySheetReport(
         TO_CHAR(s.created_at, 'HH12:MI AM') AS time,
         COALESCE(s.invoice_number, s.id::text) AS ticket_no,
         c.full_name AS client_name,
-        si.item_id AS service_id,
+        si.item_id::text AS service_id,
         si.name AS service,
         st.id AS staff_id,
         NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff,
-        si.total_price AS amount,
+        COALESCE(si.total_price, s.total_amount) AS amount,
         s.payment_method,
         ${this._STATUS_EXPR} AS status,
         s.created_at AS sort_at
-      FROM sale_items si
-      JOIN sales s ON s.id = si.sale_id
+      FROM sales s
+      LEFT JOIN sale_items si ON ${saleItemsJoin}
       LEFT JOIN clients c ON s.client_id = c.id
       LEFT JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
       ${this._PAYMENT_LATERAL}
