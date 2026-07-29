@@ -2,6 +2,8 @@ import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import ExcelJS from "exceljs";
 import { productsRepository, brandsRepository } from "./products.repository";
+import { categoriesRepository } from "../categories/categories.repository";
+import { suppliersRepository } from "../inventory/inventory.repository";
 import { CreateProductBody } from "./products.types";
 
 interface ImportRow {
@@ -363,6 +365,75 @@ async function getOrCreateBrand(
     }
 }
 
+async function getOrCreateCategory(
+    categoryName: string,
+    salonId: string,
+    cache?: Map<string, string>
+): Promise<string> {
+    if (!categoryName || !categoryName.trim()) {
+        return "";
+    }
+
+    const cacheKey = `${salonId}:${categoryName.trim().toLowerCase()}`;
+    if (cache && cache.has(cacheKey)) {
+        return cache.get(cacheKey)!;
+    }
+
+    try {
+        const existing = await categoriesRepository.findByName(categoryName.trim(), salonId);
+
+        if (existing) {
+            cache?.set(cacheKey, existing.id);
+            return existing.id;
+        }
+
+        const newCategory = await categoriesRepository.create(salonId, {
+            name: categoryName.trim(),
+        });
+
+        cache?.set(cacheKey, newCategory.id);
+        return newCategory.id;
+    } catch (error) {
+        logger.warn(`Failed to create category: ${categoryName}`, { error });
+        return "";
+    }
+}
+
+async function getOrCreateSupplier(
+    supplierName: string,
+    salonId: string,
+    cache?: Map<string, string>
+): Promise<string> {
+    if (!supplierName || !supplierName.trim()) {
+        return "";
+    }
+
+    const cacheKey = `${salonId}:${supplierName.trim().toLowerCase()}`;
+    if (cache && cache.has(cacheKey)) {
+        return cache.get(cacheKey)!;
+    }
+
+    try {
+        const existing = await suppliersRepository.findByName(supplierName.trim(), salonId);
+
+        if (existing) {
+            cache?.set(cacheKey, existing.id);
+            return existing.id;
+        }
+
+        const newSupplier = await suppliersRepository.create(
+            { name: supplierName.trim() },
+            salonId
+        );
+
+        cache?.set(cacheKey, newSupplier.id);
+        return newSupplier.id;
+    } catch (error) {
+        logger.warn(`Failed to create supplier: ${supplierName}`, { error });
+        return "";
+    }
+}
+
 // Main service
 export const productsImportService = {
     async importProducts(params: {
@@ -397,8 +468,10 @@ export const productsImportService = {
             errors: [],
         };
 
-        // Per-import brand cache: avoids repeated DB lookups for the same brand
+        // Per-import caches: avoid repeated DB lookups for the same brand/category/supplier
         const brandCache = new Map<string, string>();
+        const categoryCache = new Map<string, string>();
+        const supplierCache = new Map<string, string>();
 
         try {
             let rows: ImportRow[] = [];
@@ -458,6 +531,22 @@ export const productsImportService = {
                         if (brandId) {
                             productData.brand_id =
                                 brandId;
+                        }
+                    }
+
+                    // "Product Type"/"Category" column — matches the frontend's product
+                    // category (not the retail/consumable/both product_type field).
+                    if (row.productType) {
+                        const categoryId = await getOrCreateCategory(row.productType, salonId, categoryCache);
+                        if (categoryId) {
+                            productData.category_id = categoryId;
+                        }
+                    }
+
+                    if (row.vendor) {
+                        const supplierId = await getOrCreateSupplier(row.vendor, salonId, supplierCache);
+                        if (supplierId) {
+                            productData.supplier_id = supplierId;
                         }
                     }
 
