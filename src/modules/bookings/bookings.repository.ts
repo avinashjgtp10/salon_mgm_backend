@@ -4,7 +4,7 @@ export const bookingsRepository = {
     async findSalonBySlug(slug: string) {
         const { rows } = await pool.query(
             `SELECT s.id, s.slug, s.description, s.city, s.state, s.country,
-                    s.logo_url, s.banner_url,
+                    s.logo_url, s.banner_url, s.currency,
                     COALESCE(NULLIF(s.business_name, ''), NULLIF(TRIM(CONCAT(u.first_name, ' ', COALESCE(u.last_name, ''))), '')) AS business_name,
                     u.phone AS phone,
                     COALESCE(NULLIF(s.email, ''), u.email) AS email,
@@ -20,7 +20,7 @@ export const bookingsRepository = {
     async findSalonById(salonId: string) {
         const { rows } = await pool.query(
             `SELECT s.id, s.slug, s.description, s.city, s.state, s.country,
-                    s.logo_url, s.banner_url,
+                    s.logo_url, s.banner_url, s.currency,
                     COALESCE(NULLIF(s.business_name, ''), NULLIF(TRIM(CONCAT(u.first_name, ' ', COALESCE(u.last_name, ''))), '')) AS business_name,
                     u.phone AS phone,
                     COALESCE(NULLIF(s.email, ''), u.email) AS email,
