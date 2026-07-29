@@ -54,6 +54,7 @@ export const appointmentsRepository = {
                 st.email                                 AS staff_email,
                 s.business_name                          AS salon_name,
                 COALESCE(s.email, u.email)               AS salon_email,
+                s.currency                                AS salon_currency,
                 COALESCE((SELECT SUM(paid_amount) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS paid_amount,
                 (SELECT payment_method FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) AS payment_method,
                 COALESCE((SELECT SUM(reward_points_value) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS reward_points_value,
