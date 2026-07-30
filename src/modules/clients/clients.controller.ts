@@ -547,6 +547,7 @@ export const clientsController = {
                         a.cancel_reason,
                         a.services,
                         a.product_items,
+                        a.package_items,
                         a.membership_items,
                         a.staff_id,
                         -- Actual cash/tender collected so far (NOT net_amount, which is
@@ -608,7 +609,20 @@ export const clientsController = {
                              WHERE p.appointment_id = a.id
                                AND p.status IN ('completed', 'partial')),
                             0
-                        ) AS ewallet_used
+                        ) AS ewallet_used,
+                        -- Display-name backfill for a membership/package-only
+                        -- appointment whose own membership_items/package_items
+                        -- JSONB name came through blank — falls back to the
+                        -- linked purchase record (same appointment_id) that's
+                        -- created alongside it, so Visit History never shows
+                        -- the generic "Appointment" label when the real name
+                        -- is available anywhere.
+                        (SELECT cm.membership_name FROM client_memberships cm
+                         WHERE cm.appointment_id = a.id
+                         ORDER BY cm.purchased_at DESC LIMIT 1) AS linked_membership_name,
+                        (SELECT cp.package_name FROM client_packages cp
+                         WHERE cp.appointment_id = a.id
+                         ORDER BY cp.created_date DESC LIMIT 1) AS linked_package_name
                      FROM appointments a
                      WHERE a.client_id = $1 AND a.salon_id = $2 AND a.deleted_at IS NULL
                      ORDER BY a.scheduled_at DESC
