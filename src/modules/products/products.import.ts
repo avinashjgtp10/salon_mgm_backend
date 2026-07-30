@@ -12,10 +12,22 @@ interface ImportRow {
     barcode?: string;
     brand?: string;
     vendor?: string;
+    // The product's menu CATEGORY (e.g. "Hair Care") — from the "Category"
+    // column only. Was previously conflated with productType below via a
+    // `||` fallback, so a sheet with BOTH columns (like the real export
+    // template) silently discarded Category and created a bogus category
+    // literally named "Consumable"/"Retail" instead.
+    category?: string;
+    // Retail / Consumable / Both — from the "Product Type" column only.
     productType?: string;
     costPrice?: number;
     fullPrice?: number;
     sellPrice?: number;
+    // MRP (Maximum Retail Price) — common on Indian supplier Excel sheets.
+    // Maps to retail_price; takes priority over Sell Price / Full Price.
+    mrp?: number;
+    // Paid Price — fallback for retail_price when MRP/Sell/Full are all absent.
+    paidPrice?: number;
     qtyAlert?: number;
     inHandQuantity?: number;
     type?: string;
@@ -61,8 +73,8 @@ function parseCSV(content: string): ImportRow[] {
                 barcode: row["BarcodeID"] || row["barcode"],
                 brand: row["Brand"] || row["brand"],
                 vendor: row["Vendor"],
-                productType:
-                    row["Product Type"] || row["Category"],
+                category: row["Category"],
+                productType: row["Product Type"],
                 costPrice: row["Cost Price"]
                     ? parseFloat(String(row["Cost Price"]))
                     : undefined,
@@ -71,6 +83,12 @@ function parseCSV(content: string): ImportRow[] {
                     : undefined,
                 sellPrice: row["Sell Price"]
                     ? parseFloat(String(row["Sell Price"]))
+                    : undefined,
+                mrp: row["MRP"] || row["mrp"] || row["M.R.P"] || row["M.R.P."]
+                    ? parseFloat(String(row["MRP"] || row["mrp"] || row["M.R.P"] || row["M.R.P."]))
+                    : undefined,
+                paidPrice: row["Paid Price"] || row["paid_price"]
+                    ? parseFloat(String(row["Paid Price"] || row["paid_price"]))
                     : undefined,
                 qtyAlert: row["Qty Alert"]
                     ? parseInt(String(row["Qty Alert"]), 10)
@@ -186,11 +204,14 @@ async function parseExcel(
                     String(getCell("Vendor") || "").trim() ||
                     undefined,
 
+                category:
+                    String(
+                        getCell("Category") || ""
+                    ).trim() || undefined,
+
                 productType:
                     String(
-                        getCell("Product Type") ||
-                            getCell("Category") ||
-                            ""
+                        getCell("Product Type") || ""
                     ).trim() || undefined,
 
                 costPrice: getCell("Cost Price")
@@ -209,6 +230,16 @@ async function parseExcel(
                     ? parseFloat(
                           String(getCell("Sell Price"))
                       )
+                    : undefined,
+
+                mrp: getCell("MRP") || getCell("M.R.P") || getCell("M.R.P.")
+                    ? parseFloat(
+                          String(getCell("MRP") || getCell("M.R.P") || getCell("M.R.P."))
+                      )
+                    : undefined,
+
+                paidPrice: getCell("Paid Price")
+                    ? parseFloat(String(getCell("Paid Price")))
                     : undefined,
 
                 qtyAlert: getCell("Qty Alert")
@@ -306,16 +337,27 @@ function validateRow(row: ImportRow): {
                     ? row.productUsage.trim()
                     : undefined,
 
+            product_type: normalizeProductType(row.productType),
             measure_unit: "pcs",
             amount: row.inHandQuantity || 0,
             qty_alert: row.qtyAlert || undefined,
             supply_price: row.costPrice || 0,
             retail_sales_enabled: true,
-            retail_price: row.sellPrice || 0,
+            retail_price: row.mrp || row.sellPrice || row.fullPrice || row.paidPrice || 0,
             tax_type: "gst_18",
             hsn_sac: row.hsnSac && row.hsnSac.trim() !== "" ? row.hsnSac.trim() : undefined,
         },
     };
+}
+
+// "Retail" / "Consumable" / "Both" (any case) from the sheet's "Product Type"
+// column -> the DB's retail/consumable/both enum. Defaults to "retail" for
+// missing/unrecognized values, matching the product form's own default.
+function normalizeProductType(value?: string): "retail" | "consumable" | "both" {
+    const normalized = (value || "").trim().toLowerCase();
+    if (normalized === "consumable") return "consumable";
+    if (normalized === "both") return "both";
+    return "retail";
 }
 
 // Create / get brand (with per-import in-memory cache)
@@ -534,10 +576,8 @@ export const productsImportService = {
                         }
                     }
 
-                    // "Product Type"/"Category" column — matches the frontend's product
-                    // category (not the retail/consumable/both product_type field).
-                    if (row.productType) {
-                        const categoryId = await getOrCreateCategory(row.productType, salonId, categoryCache);
+                    if (row.category) {
+                        const categoryId = await getOrCreateCategory(row.category, salonId, categoryCache);
                         if (categoryId) {
                             productData.category_id = categoryId;
                         }
