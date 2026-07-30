@@ -124,46 +124,67 @@ export const clientsRepository = {
 
         // clients.total_sales is a dead column, never written anywhere — every
         // client shows ₹0 and "highest/lowest sales" sorting has nothing real to
-        // sort by. Compute it here instead, matching the same event source
-        // Client History and the Dashboard both already use: completed `sales`
-        // rows (which is where a standalone package/membership sell — Sell
-        // Package/Sell Membership, no appointment/payment involved at all —
-        // actually lands) UNION ALL any still-open partial-payment deposit that
-        // hasn't produced its own `sales` row yet (a real appointment payment
-        // only becomes a `sales` row once the bill is FULLY settled — see
-        // payments.service.ts's "Auto-create sale record" block). Summing the
-        // old `payments` table alone silently missed every standalone
-        // package/membership sale, since those never touch `payments` at all.
-        // Wallet-settled money is still excluded from the open-partial leg —
-        // that revenue was already recognized when the wallet/membership was
-        // funded/sold — and the NOT EXISTS guard stops an appointment's partial
-        // deposit from being counted a second time once it's fully paid and
-        // gets its own completed `sales` row.
+        // sort by. Compute it here instead — same canonical formula as
+        // useClientDetails.ts (Calendar/Sale Client Information panel) and
+        // ClientHistoryDetail.tsx (History popup/page), read straight from the
+        // source tables rather than the `sales` mirror the previous version of
+        // this join depended on: a standalone package/membership sale's `sales`
+        // row is only ever created by a fire-and-forget background job
+        // (transaction-recorder.service.ts) that can fail, so relying on it
+        // here under-reported revenue for any client whose mirror row was
+        // missing — same root cause as the History-vs-Calendar mismatch this
+        // replaced. Four legs, matching useClientDetails.ts's
+        // paidRevenue/partialRevenue/packageRevenue/membershipRevenue exactly:
         const tsJoin = `
       LEFT JOIN (
         SELECT client_id, SUM(amount) AS total_sales
         FROM (
-          SELECT s.client_id, s.total_amount AS amount
-          FROM sales s
-          LEFT JOIN appointments a ON a.id = s.appointment_id
-          WHERE s.salon_id = $1
-            AND s.status = 'completed'
-            AND s.client_id IS NOT NULL
-            AND (a.id IS NULL OR (a.status IN ('paid', 'partial') AND a.deleted_at IS NULL))
+          -- Fully-paid appointments: the completed payment's net_amount is
+          -- already net of any membership-wallet/package coverage (that
+          -- value was already recognized as revenue when the membership/
+          -- package was originally sold) — mirrors paidRevenue.
+          SELECT a.client_id,
+                 (SELECT SUM(p.net_amount) FROM payments p
+                  WHERE p.appointment_id = a.id AND p.status = 'completed') AS amount
+          FROM appointments a
+          WHERE a.salon_id = $1 AND a.client_id IS NOT NULL
+            AND a.status = 'paid' AND a.deleted_at IS NULL
+
           UNION ALL
-          SELECT p.client_id, GREATEST(0, p.paid_amount - COALESCE(p.ewallet_used, 0) - COALESCE(p.membership_wallet_used, 0)) AS amount
-          FROM payments p
-          JOIN appointments a ON a.id = p.appointment_id
-          WHERE p.salon_id = $1
-            AND p.status = 'partial'
-            AND p.client_id IS NOT NULL
-            AND a.deleted_at IS NULL
-            AND a.status NOT IN ('cancelled', 'no-show')
-            AND NOT EXISTS (
-              SELECT 1 FROM sales s2
-              WHERE s2.appointment_id = p.appointment_id AND s2.status = 'completed'
-            )
+
+          -- Partially-paid appointments: amount actually collected, minus
+          -- eWallet/membership-wallet portions (neither is new money for the
+          -- salon) — mirrors partialRevenue.
+          SELECT a.client_id,
+                 GREATEST(0,
+                   COALESCE((SELECT SUM(p.paid_amount) FROM payments p
+                             WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0)
+                   - COALESCE((SELECT SUM(p.ewallet_used) FROM payments p
+                             WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0)
+                   - COALESCE((SELECT SUM(p.membership_wallet_used) FROM payments p
+                             WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0)
+                 ) AS amount
+          FROM appointments a
+          WHERE a.salon_id = $1 AND a.client_id IS NOT NULL
+            AND a.status = 'partial' AND a.deleted_at IS NULL
+
+          UNION ALL
+
+          -- Standalone package purchases (no linked appointment — one sold as
+          -- a line item on an appointment is already counted above via that
+          -- appointment's own payment) — mirrors packageRevenue.
+          SELECT cp.client_id, cp.paid_amount AS amount
+          FROM client_packages cp
+          WHERE cp.salon_id = $1 AND cp.appointment_id IS NULL
+
+          UNION ALL
+
+          -- Standalone membership purchases — mirrors membershipRevenue.
+          SELECT cm.client_id, cm.price_paid AS amount
+          FROM client_memberships cm
+          WHERE cm.salon_id = $1 AND cm.appointment_id IS NULL
         ) combined
+        WHERE client_id IS NOT NULL
         GROUP BY client_id
       ) ts ON ts.client_id = c.id`;
 
