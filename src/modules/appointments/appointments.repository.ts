@@ -15,6 +15,16 @@ export async function ensureTable(): Promise<void> {
     await pool.query(
         `ALTER TABLE appointments ADD COLUMN IF NOT EXISTS apply_membership_wallet BOOLEAN NOT NULL DEFAULT FALSE`,
     );
+    // Persists the "Include GST" checkbox state on the appointment itself —
+    // previously it only ever reached the payments table (at actual
+    // checkout), so reopening a paid appointment that was deliberately
+    // billed without GST re-defaulted the checkbox to on and recomputed a
+    // phantom GST-sized due amount. TRUE for every pre-existing row, since
+    // that matches the assumed-on behavior every appointment had before this
+    // flag existed.
+    await pool.query(
+        `ALTER TABLE appointments ADD COLUMN IF NOT EXISTS include_gst BOOLEAN NOT NULL DEFAULT TRUE`,
+    );
     // "Delete Appointment" used to be a real SQL DELETE — switched to soft
     // delete so a removed booking can still show on the calendar (greyed out,
     // "Deleted" on the tooltip) instead of vanishing without a trace. NULL
@@ -225,7 +235,7 @@ export const appointmentsRepository = {
                 colour, created_by,
                 services, package_items, product_items, membership_items,
                 discount_value, discount_type, ex_charges, tip_amount, gst_percent,
-                apply_membership_wallet
+                apply_membership_wallet, include_gst
             )
             VALUES (
                 $1, $2, $3, $4, $5,
@@ -235,7 +245,7 @@ export const appointmentsRepository = {
                 $12, $13,
                 $14::jsonb, $15::jsonb, $16::jsonb, $17::jsonb,
                 $18, $19, $20, $21, $22,
-                $23
+                $23, $24
             )
             RETURNING *`,
             [
@@ -262,6 +272,7 @@ export const appointmentsRepository = {
                 data.tip_amount         ?? 0,
                 data.gst_percent        ?? 0,
                 data.apply_membership_wallet ?? false,
+                data.include_gst        ?? true,
             ]
         );
         return rows[0];
