@@ -567,6 +567,9 @@ export interface SalesSummaryReportFilters {
     search?: string;
     status?: string; // 'draft' | 'completed' | 'cancelled' | 'refunded'; default excludes 'draft'
     category_id?: string; // service_categories.id — only sales with a service line item in this category
+    payment_mode?: string; // sales.payment_method
+    item_type?: string; // sale_items.item_type — 'service' | 'product' | 'membership' | 'gift_card' | 'quick' | 'package'
+    service_id?: string; // sale_items.item_id where item_type = 'service'
     page?: number;
     limit?: number;
     is_export?: boolean; // bypasses the page-size cap for CSV export
@@ -574,6 +577,9 @@ export interface SalesSummaryReportFilters {
 
 export interface SalesSummaryFiltersAvailable {
     service_categories: { id: string; label: string }[];
+    staff: { id: string; label: string }[];
+    services: { id: string; label: string }[];
+    payment_modes: string[];
 }
 
 export interface SalesSummaryReportRow {
@@ -685,8 +691,13 @@ export interface SaleDetailResponse {
 export interface DailySheetReportFilters {
     date?: string;
     service_id?: string;
-    staff_id?: string;
+    staff_ids?: string[];
     search?: string;
+    payment_mode?: string;
+    status?: string;
+    item_type?: string;
+    time_from?: string;
+    time_to?: string;
     page?: number;
     limit?: number;
     is_export?: boolean; // bypasses the page-size cap for CSV export
@@ -697,9 +708,11 @@ export interface DailySheetReportRow {
     sale_id: string;
     time: string;
     ticket_no: string;
+    client_id: string | null;
     client_name: string | null;
     service_id: string | null;
     service: string;
+    item_type: string | null;
     staff_id: string | null;
     staff: string | null;
     amount: number;
@@ -722,12 +735,21 @@ export interface DailySheetFilterOption {
 export interface DailySheetFiltersAvailable {
     services: DailySheetFilterOption[];
     staff: DailySheetFilterOption[];
+    payment_modes: string[];
 }
 
 export interface DailySheetReportResponse {
     rows: DailySheetReportRow[];
     pagination: DailySheetReportPagination;
     total_amount: number;
+    // invoice_count = distinct invoices/appointments (NOT the same as
+    // pagination.total, which counts line-item rows since Daily Sheet is
+    // one-row-per-item); items_count === pagination.total, kept as an
+    // explicit field so the frontend stat card doesn't need to know that.
+    invoice_count: number;
+    client_count: number;
+    staff_count: number;
+    items_count: number;
     filters_available: DailySheetFiltersAvailable;
 }
 
@@ -742,6 +764,11 @@ export interface ProductRetailReportFilters {
     end_date?: string;
     product_id?: string;
     search?: string;
+    staff_id?: string;
+    brand_id?: string;
+    category_id?: string;
+    min_price?: number;
+    max_price?: number;
     page?: number;
     limit?: number;
     is_export?: boolean; // bypasses the page-size cap for CSV export
@@ -753,13 +780,21 @@ export interface ProductRetailReportRow {
     invoice_no: string;
     client_id: string | null;
     client_name: string | null;
+    staff_id: string | null;
+    staff_name: string | null;
     product_id: string | null;
     product_name: string;
+    brand_id: string | null;
+    brand_name: string | null;
+    category_id: string | null;
+    category_name: string | null;
     quantity: number;
     price: number;
     total: number;
     tax_amount: number;
     taxable_amount: number;
+    payment_method: string | null;
+    status: string;
 }
 
 export interface ProductRetailReportStats {
@@ -785,7 +820,12 @@ export interface ProductRetailReportResponse {
     rows: ProductRetailReportRow[];
     pagination: ProductRetailReportPagination;
     stats: ProductRetailReportStats;
-    filters_available: { products: ProductRetailFilterOption[] };
+    filters_available: {
+        products: ProductRetailFilterOption[];
+        staff: ProductRetailFilterOption[];
+        brands: ProductRetailFilterOption[];
+        categories: ProductRetailFilterOption[];
+    };
 }
 
 // ===============================
