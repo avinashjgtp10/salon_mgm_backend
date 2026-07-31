@@ -23,6 +23,7 @@ export const validateCreateMembership = (req: Request, _res: Response, next: Nex
       throw new AppError(400, "enableOnlineSales is required", "VALIDATION_ERROR");
     if (enableOnlineRedemption === undefined)
       throw new AppError(400, "enableOnlineRedemption is required", "VALIDATION_ERROR");
+    validateVisitCondition(req.body);
     return next();
   } catch (e) { return next(e); }
 };
@@ -34,9 +35,25 @@ export const validateUpdateMembership = (
     const { price } = req.body;
     if (price !== undefined && (isNaN(Number(price)) || Number(price) < 0))
       throw new AppError(400, "price must be a non-negative number", "VALIDATION_ERROR");
+    validateVisitCondition(req.body);
     return next();
   } catch (e) { return next(e); }
 };
+
+function validateVisitCondition(body: any) {
+  if (body.is_visit_condition_enabled === true) {
+    const visits = Number(body.apply_after_visits);
+    if (
+      body.apply_after_visits === undefined ||
+      body.apply_after_visits === null ||
+      Number.isNaN(visits) ||
+      !Number.isInteger(visits) ||
+      visits < 1
+    ) {
+      throw new AppError(400, "apply_after_visits is required when visit condition is enabled", "VALIDATION_ERROR");
+    }
+  }
+}
 
 export const validateMembershipsListQuery = (
   req: Request, _res: Response, next: NextFunction

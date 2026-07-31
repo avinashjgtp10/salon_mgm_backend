@@ -16,6 +16,19 @@ const parseTaxRate = (val?: string | number): number | undefined => {
   return undefined;
 };
 
+const normalizeVisitCondition = (data: CreateMembershipDTO | UpdateMembershipDTO, isCreate = false) => {
+  const hasVisitConditionPatch =
+    "is_visit_condition_enabled" in data || "apply_after_visits" in data;
+  if (!isCreate && !hasVisitConditionPatch) return;
+
+  if (data.is_visit_condition_enabled !== true) {
+    data.is_visit_condition_enabled = false;
+    data.apply_after_visits = null;
+    return;
+  }
+  data.apply_after_visits = Number(data.apply_after_visits);
+};
+
 export const membershipsService = {
 
   async list(query: any, salonId: string) {
@@ -47,6 +60,7 @@ export const membershipsService = {
       throw new Error("Invalid price value");
     data.price   = parseFloat(String(data.price));
     data.taxRate = parseTaxRate(data.taxRate as any);
+    normalizeVisitCondition(data, true);
     return membershipsRepository.create(data, salonId);
   },
 
@@ -63,6 +77,7 @@ export const membershipsService = {
     if (data.sessionType && data.sessionType !== "limited")
       data.numberOfSessions = undefined;
     data.taxRate = parseTaxRate(data.taxRate as any);
+    normalizeVisitCondition(data);
     const updated = await membershipsRepository.update(id, data, salonId);
     if (!updated) throw new Error(`Membership '${id}' not found`);
     return updated;

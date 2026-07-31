@@ -34,6 +34,8 @@ function toMembership(row: MembershipRow): Membership {
     appliesToProducts: row.applies_to_products,
     pricingType: row.pricing_type,
     discountPercent: row.discount_percent ? parseFloat(row.discount_percent) : undefined,
+    is_visit_condition_enabled: row.is_visit_condition_enabled,
+    apply_after_visits: row.apply_after_visits,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -120,8 +122,9 @@ export const membershipsRepository = {
           (id, salon_id, name, description, session_type, number_of_sessions,
            valid_for, price, tax_rate, colour,
            enable_online_sales, enable_online_redemption, terms_and_conditions,
-           applies_to_products, pricing_type, discount_percent)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+           applies_to_products, pricing_type, discount_percent,
+           is_visit_condition_enabled, apply_after_visits)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
         [
           membershipId, salonId, data.name, data.description ?? null,
           data.sessionType, data.numberOfSessions ?? null,
@@ -130,6 +133,8 @@ export const membershipsRepository = {
           data.enableOnlineRedemption, data.termsAndConditions ?? null,
           data.appliesToProducts ?? false,
           data.pricingType ?? 'value', data.discountPercent ?? null,
+          data.is_visit_condition_enabled ?? false,
+          data.is_visit_condition_enabled ? data.apply_after_visits ?? null : null,
         ]
       );
       await _linkServices(client, membershipId, data.includedServices);
@@ -160,6 +165,8 @@ export const membershipsRepository = {
         appliesToProducts: "applies_to_products",
         pricingType: "pricing_type",
         discountPercent: "discount_percent",
+        is_visit_condition_enabled: "is_visit_condition_enabled",
+        apply_after_visits: "apply_after_visits",
       };
       const fields: string[] = [];
       const values: any[] = [];

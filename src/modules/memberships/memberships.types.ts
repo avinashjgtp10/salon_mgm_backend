@@ -30,6 +30,8 @@ export interface CreateMembershipDTO {
   appliesToProducts?:     boolean;
   pricingType?:           'value' | 'percentage';
   discountPercent?:       number;
+  is_visit_condition_enabled?: boolean;
+  apply_after_visits?:    number | null;
 }
 
 export interface UpdateMembershipDTO extends Partial<CreateMembershipDTO> {}
@@ -56,6 +58,8 @@ export interface MembershipRow {
   applies_to_products:      boolean;
   pricing_type:             'value' | 'percentage';
   discount_percent:         string | null;
+  is_visit_condition_enabled: boolean;
+  apply_after_visits:        number | null;
   created_at:               Date;
   updated_at:               Date;
   services:                 IncludedService[] | null;
