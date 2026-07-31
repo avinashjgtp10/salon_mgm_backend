@@ -1285,6 +1285,10 @@ async getDailySheetReport(
         rows: result.items,
         pagination: result.pagination,
         total_amount: result.total_amount,
+        invoice_count: result.invoice_count,
+        client_count: result.client_count,
+        staff_count: result.staff_count,
+        items_count: result.items_count,
         filters_available: filtersAvailable,
     };
 },
