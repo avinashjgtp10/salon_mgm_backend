@@ -19,6 +19,8 @@ const viewMemberships = requireAnyPermission(["view_memberships", "create_sales"
 const createMemberships = requirePermission("create_memberships");
 
 router.get("/",            ...guard, viewMemberships, validateMembershipsListQuery, membershipsController.list);
+// Must precede "/:id" — otherwise "loyalty-eligibility" is swallowed as an id.
+router.get("/loyalty-eligibility", ...guard, viewMemberships, membershipsController.loyaltyEligibility);
 router.get("/export/csv",   ...guard, viewMemberships, validateExportQuery, membershipsController.exportCsv);
 router.get("/export/excel", ...guard, viewMemberships, validateExportQuery, membershipsController.exportExcel);
 router.get("/export/pdf",   ...guard, viewMemberships, validateExportQuery, membershipsController.exportPdf);

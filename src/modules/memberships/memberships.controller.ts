@@ -24,6 +24,17 @@ export const membershipsController = {
     } catch (e) { return next(e); }
   },
 
+  async loyaltyEligibility(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = await getSalonId(req);
+      const clientId = String(req.query.clientId ?? "");
+      if (!clientId)
+        throw new AppError(400, "clientId is required", "VALIDATION_ERROR");
+      const data = await membershipsService.getLoyaltyEligibility(clientId, salonId);
+      return sendSuccess(res, 200, data, "Loyalty eligibility fetched successfully");
+    } catch (e) { return next(e); }
+  },
+
   async exportCsv(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = await getSalonId(req);

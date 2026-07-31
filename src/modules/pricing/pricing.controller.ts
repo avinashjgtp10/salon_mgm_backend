@@ -26,6 +26,12 @@ export const pricingController = {
         applyEwallet: !!body.applyEwallet,
         eWalletRequested: Number(body.eWalletRequested) || 0,
         applyMembershipWallet: !!body.applyMembershipWallet,
+        // Was omitted here entirely, so the preview always assumed the client's
+        // full wallet balance and over-stated coverage whenever staff capped it.
+        membershipWalletRequested: body.membershipWalletRequested !== undefined
+          ? Number(body.membershipWalletRequested) || 0
+          : undefined,
+        applyMembershipDiscount: !!body.applyMembershipDiscount,
         applyRewardPoints: !!body.applyRewardPoints,
         rewardPointsToRedeem: Number(body.rewardPointsToRedeem) || 0,
         applyReferralCredit: !!body.applyReferralCredit,

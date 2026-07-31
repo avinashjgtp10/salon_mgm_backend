@@ -1,3 +1,5 @@
+import type { MembershipAppliesTo } from "../memberships/memberships.types";
+
 export interface ClientMembership {
   id: string;
   salonId: string;
@@ -16,9 +18,12 @@ export interface ClientMembership {
   status: 'active' | 'expired' | 'exhausted' | 'cancelled';
   pricePaid?: number;
   membershipWalletBalance: number;
-  appliesToProducts?: boolean;
-  pricingType: 'value' | 'percentage';
+  /** Denormalized from the plan at purchase time — see memberships.types.ts. */
+  appliesTo: MembershipAppliesTo;
+  pricingType: 'value' | 'percentage' | 'loyalty';
   discountPercent?: number;
+  /** 'percentage' only — discount still available to hand out, depletes by discount given. */
+  discountBalanceRemaining: number;
   usageLog?: UsageLogEntry[];
   // Set only when this row was auto-created as a byproduct of paying an
   // appointment that had this membership as a line item — that value is
@@ -86,6 +91,20 @@ export interface WalletDeductionResult {
   reused: boolean;
 }
 
+export interface DiscountDeductionServiceInput {
+  serviceId?: string;
+  serviceName?: string;
+  /** Pre-discount line amount the percentage is applied to. */
+  amount: number;
+}
+
+export interface DiscountDeductionResult {
+  totalDiscountGiven: number;
+  remainingBalance: number;
+  perService: Array<{ serviceId?: string; discountGiven: number }>;
+  reused: boolean;
+}
+
 export interface ClientMembershipsListQuery {
   clientId?: string;
   status?: string;
@@ -112,9 +131,10 @@ export interface ClientMembershipRow {
   status: string;
   price_paid?: string | null;
   membership_wallet_balance?: string | number | null;
-  applies_to_products?: boolean | null;
+  applies_to?: MembershipAppliesTo | null;
   pricing_type?: string | null;
   discount_percent?: string | number | null;
+  discount_balance_remaining?: string | number | null;
   appointment_id?: string | null;
   created_at: string;
   updated_at: string;

@@ -1,6 +1,48 @@
 import { NextFunction, Request, Response } from "express";
 import { AppError } from "../../middleware/error.middleware";
 
+const PRICING_TYPES = ["value", "percentage", "loyalty"];
+const APPLIES_TO_VALUES = ["services", "products", "both"];
+
+// Shared by create and update — on update every field is optional, so each check
+// is gated on the field actually being present.
+const validatePricingFields = (body: any) => {
+  const {
+    pricingType, discountPercent, discountBalance,
+    loyaltyThresholdValue, appliesTo,
+  } = body;
+
+  if (pricingType !== undefined && !PRICING_TYPES.includes(pricingType))
+    throw new AppError(400, `pricingType must be one of: ${PRICING_TYPES.join(", ")}`, "VALIDATION_ERROR");
+
+  if (appliesTo !== undefined && !APPLIES_TO_VALUES.includes(appliesTo))
+    throw new AppError(400, `appliesTo must be one of: ${APPLIES_TO_VALUES.join(", ")}`, "VALIDATION_ERROR");
+
+  if (discountPercent !== undefined && discountPercent !== null &&
+      (isNaN(Number(discountPercent)) || Number(discountPercent) < 0 || Number(discountPercent) > 100))
+    throw new AppError(400, "discountPercent must be between 0 and 100", "VALIDATION_ERROR");
+
+  if (discountBalance !== undefined && discountBalance !== null &&
+      (isNaN(Number(discountBalance)) || Number(discountBalance) < 0))
+    throw new AppError(400, "discountBalance must be a non-negative number", "VALIDATION_ERROR");
+
+  if (loyaltyThresholdValue !== undefined && loyaltyThresholdValue !== null &&
+      (isNaN(Number(loyaltyThresholdValue)) || Number(loyaltyThresholdValue) < 1))
+    throw new AppError(400, "loyaltyThresholdValue must be a positive number", "VALIDATION_ERROR");
+
+  // A loyalty plan without a threshold would unlock for everyone immediately, and
+  // without a percentage it would grant nothing — neither is ever intended.
+  if (pricingType === "loyalty") {
+    if (loyaltyThresholdValue === undefined || loyaltyThresholdValue === null)
+      throw new AppError(400, "loyaltyThresholdValue is required for a loyalty membership", "VALIDATION_ERROR");
+    if (!Number(discountPercent))
+      throw new AppError(400, "discountPercent is required for a loyalty membership", "VALIDATION_ERROR");
+  }
+
+  if (pricingType === "percentage" && !Number(discountPercent))
+    throw new AppError(400, "discountPercent is required for a percentage membership", "VALIDATION_ERROR");
+};
+
 export const validateCreateMembership = (req: Request, _res: Response, next: NextFunction) => {
   try {
     const {
@@ -23,6 +65,7 @@ export const validateCreateMembership = (req: Request, _res: Response, next: Nex
       throw new AppError(400, "enableOnlineSales is required", "VALIDATION_ERROR");
     if (enableOnlineRedemption === undefined)
       throw new AppError(400, "enableOnlineRedemption is required", "VALIDATION_ERROR");
+    validatePricingFields(req.body);
     return next();
   } catch (e) { return next(e); }
 };
@@ -34,6 +77,7 @@ export const validateUpdateMembership = (
     const { price } = req.body;
     if (price !== undefined && (isNaN(Number(price)) || Number(price) < 0))
       throw new AppError(400, "price must be a non-negative number", "VALIDATION_ERROR");
+    validatePricingFields(req.body);
     return next();
   } catch (e) { return next(e); }
 };
