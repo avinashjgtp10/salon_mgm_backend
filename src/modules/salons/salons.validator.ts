@@ -23,12 +23,17 @@ export const validateCreateSalon = (req: Request, _res: Response, next: NextFunc
             "website_url",
             "gst_number",
             "pan_number",
+            "currency",
         ];
 
         for (const f of optionalFields) {
             if (!isOptionalString(b[f])) {
                 throw new AppError(400, `${f} must be a string`, "VALIDATION_ERROR");
             }
+        }
+
+        if (b.currency !== undefined && b.currency !== "" && !/^[A-Z]{3}$/.test(b.currency)) {
+            throw new AppError(400, "currency must be a 3-letter ISO 4217 code (e.g. INR, USD)", "VALIDATION_ERROR");
         }
 
         return next();
@@ -53,12 +58,17 @@ export const validateUpdateSalon = (req: Request, _res: Response, next: NextFunc
             "website_url",
             "gst_number",
             "pan_number",
+            "currency",
         ];
 
         for (const f of optionalFields) {
             if (!isOptionalString(b[f])) {
                 throw new AppError(400, `${f} must be a string`, "VALIDATION_ERROR");
             }
+        }
+
+        if (b.currency !== undefined && b.currency !== "" && !/^[A-Z]{3}$/.test(b.currency)) {
+            throw new AppError(400, "currency must be a 3-letter ISO 4217 code (e.g. INR, USD)", "VALIDATION_ERROR");
         }
 
         if (b.is_active !== undefined && typeof b.is_active !== "boolean") {

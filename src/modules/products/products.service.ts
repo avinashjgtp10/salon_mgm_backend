@@ -15,6 +15,26 @@ import {
     Brand, CreateBrandBody, UpdateBrandBody,
 } from "./products.types";
 
+// GST display label for exports — mirrors the frontend's TAX_TYPE_OPTIONS.
+const gstLabel = (p: any): string => {
+    switch (p.tax_type) {
+        case "gst_5": return "GST 5%";
+        case "gst_12": return "GST 12%";
+        case "gst_18": return "GST 18%";
+        case "gst_28": return "GST 28%";
+        case "custom": return p.custom_tax_rate != null ? `Custom ${p.custom_tax_rate}%` : "Custom";
+        default: return "No tax";
+    }
+};
+
+const productTypeLabel = (p: any): string => {
+    switch (p.product_type) {
+        case "consumable": return "Consumable";
+        case "both": return "Both";
+        default: return "Retail";
+    }
+};
+
 // ─── Products Service ─────────────────────────────────────────────────────────
 
 export const productsService = {
@@ -154,12 +174,15 @@ export const productsService = {
             const retailPrice = p.retail_price != null ? Number(p.retail_price) : null;
             csvStream.write({
                 Name: p.name, Barcode: p.barcode ?? "", Brand: p.brand_name ?? "", Category: p.category_name ?? "",
-                Measure: p.measure_unit, Amount: p.amount, Supply_Price: supplyPrice, Retail_Price: retailPrice ?? "",
+                Supplier: p.supplier_name ?? "", Product_Type: productTypeLabel(p),
+                Size: p.size ?? "", Measure: p.measure_unit, Amount: p.amount,
+                Supply_Price: supplyPrice, Retail_Price: retailPrice ?? "",
                 // Flat markup amount (retail - supply) — not a stored column, derived
                 // the same way the Create/Edit Product form's flat-markup mode does
                 // (see productPricing.ts's flatAmountFromRetail on the frontend).
                 Flat_Price: retailPrice != null ? (retailPrice - supplyPrice).toFixed(2) : "",
                 Markup: p.markup_percentage ?? "",
+                GST: gstLabel(p), HSN_SAC: p.hsn_sac ?? "",
             });
         });
         csvStream.end();
@@ -174,10 +197,13 @@ export const productsService = {
         sheet.columns = [
             { header: "Name", key: "name", width: 30 },
             { header: "Barcode", key: "barcode", width: 20 }, { header: "Brand", key: "brand_name", width: 20 },
-            { header: "Category", key: "category_name", width: 20 }, { header: "Measure", key: "measure_unit", width: 12 },
+            { header: "Category", key: "category_name", width: 20 }, { header: "Supplier", key: "supplier_name", width: 20 },
+            { header: "Product Type", key: "product_type_label", width: 14 },
+            { header: "Size", key: "size", width: 12 }, { header: "Measure", key: "measure_unit", width: 12 },
             { header: "Amount", key: "amount", width: 12 }, { header: "Supply Price", key: "supply_price", width: 15 },
             { header: "Retail Price", key: "retail_price", width: 15 }, { header: "Flat Price", key: "flat_price", width: 15 },
             { header: "Markup %", key: "markup_percentage", width: 12 },
+            { header: "GST", key: "gst", width: 14 }, { header: "HSN/SAC", key: "hsn_sac", width: 14 },
         ];
         sheet.getRow(1).eachCell((cell) => {
             cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
@@ -192,12 +218,17 @@ export const productsService = {
                 barcode: p.barcode ?? "",
                 brand_name: p.brand_name ?? "",
                 category_name: p.category_name ?? "",
+                supplier_name: p.supplier_name ?? "",
+                product_type_label: productTypeLabel(p),
+                size: p.size ?? "",
                 measure_unit: p.measure_unit,
                 amount: p.amount,
                 supply_price: supplyPrice,
                 retail_price: retailPrice ?? "",
                 flat_price: retailPrice != null ? Number((retailPrice - supplyPrice).toFixed(2)) : "",
                 markup_percentage: p.markup_percentage ?? "",
+                gst: gstLabel(p),
+                hsn_sac: p.hsn_sac ?? "",
             });
         });
         const buffer = await workbook.xlsx.writeBuffer();
@@ -222,7 +253,10 @@ export const productsService = {
         const tableWidth = doc.page.width - PAGE_MARGIN * 2;
         // Proportional column widths (sum to 1) — name gets the most room since
         // it's free text, the rest are fixed-format numbers/codes.
-        const colRatios = { name: 0.19, barcode: 0.16, brand: 0.14, measure: 0.11, supply: 0.13, retail: 0.13, stock: 0.14 };
+        const colRatios = {
+            name: 0.14, barcode: 0.09, brand: 0.10, supplier: 0.10, type: 0.08,
+            measure: 0.09, supply: 0.10, retail: 0.10, gst: 0.09, stock: 0.11,
+        };
         const colWidth  = (key: keyof typeof colRatios) => tableWidth * colRatios[key];
         let colX = tableX;
         const cols: Record<keyof typeof colRatios, number> = {} as any;
@@ -239,13 +273,16 @@ export const productsService = {
         const drawHeader = () => {
             doc.rect(tableX, y, tableWidth, 22).fill("#101828");
             doc.fillColor("#ffffff").fontSize(9).font("Helvetica-Bold");
-            doc.text("Name",         cols.name,    y + 7, { width: colWidth("name") - 6 });
-            doc.text("Barcode",      cols.barcode, y + 7, { width: colWidth("barcode") - 6 });
-            doc.text("Brand",        cols.brand,   y + 7, { width: colWidth("brand") - 6 });
-            doc.text("Measure",      cols.measure, y + 7, { width: colWidth("measure") - 6 });
-            doc.text("Supply Price", cols.supply,  y + 7, { width: colWidth("supply") - 6 });
-            doc.text("Retail Price", cols.retail,  y + 7, { width: colWidth("retail") - 6 });
-            doc.text("Stock",        cols.stock,   y + 7, { width: colWidth("stock") - 6 });
+            doc.text("Name",         cols.name,     y + 7, { width: colWidth("name") - 6 });
+            doc.text("Barcode",      cols.barcode,  y + 7, { width: colWidth("barcode") - 6 });
+            doc.text("Brand",        cols.brand,    y + 7, { width: colWidth("brand") - 6 });
+            doc.text("Supplier",     cols.supplier, y + 7, { width: colWidth("supplier") - 6 });
+            doc.text("Type",         cols.type,     y + 7, { width: colWidth("type") - 6 });
+            doc.text("Measure",      cols.measure,  y + 7, { width: colWidth("measure") - 6 });
+            doc.text("Supply Price", cols.supply,   y + 7, { width: colWidth("supply") - 6 });
+            doc.text("Retail Price", cols.retail,   y + 7, { width: colWidth("retail") - 6 });
+            doc.text("GST",          cols.gst,      y + 7, { width: colWidth("gst") - 6 });
+            doc.text("Stock",        cols.stock,    y + 7, { width: colWidth("stock") - 6 });
             y += 22;
         };
         drawHeader();
@@ -261,9 +298,12 @@ export const productsService = {
             doc.text(String(p.name).substring(0, 24), cols.name, y + 7, { width: colWidth("name") - 6 });
             doc.text(String(p.barcode ?? "—"), cols.barcode, y + 7, { width: colWidth("barcode") - 6 });
             doc.text(String(p.brand_name ?? "—"), cols.brand, y + 7, { width: colWidth("brand") - 6 });
-            doc.text(`${p.amount} ${p.measure_unit}`, cols.measure, y + 7, { width: colWidth("measure") - 6 });
+            doc.text(String(p.supplier_name ?? "—"), cols.supplier, y + 7, { width: colWidth("supplier") - 6 });
+            doc.text(productTypeLabel(p), cols.type, y + 7, { width: colWidth("type") - 6 });
+            doc.text(p.size ? String(p.size) : `${p.amount} ${p.measure_unit}`, cols.measure, y + 7, { width: colWidth("measure") - 6 });
             doc.text(money(Number(p.supply_price)), cols.supply, y + 7, { width: colWidth("supply") - 6 });
             doc.text(p.retail_price ? money(Number(p.retail_price)) : "—", cols.retail, y + 7, { width: colWidth("retail") - 6 });
+            doc.text(gstLabel(p), cols.gst, y + 7, { width: colWidth("gst") - 6 });
             doc.text(String(p.amount ?? 0), cols.stock, y + 7, { width: colWidth("stock") - 6 });
             y += 22;
         });

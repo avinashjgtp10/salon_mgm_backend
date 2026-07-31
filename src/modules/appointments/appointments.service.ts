@@ -48,6 +48,7 @@ import {
 function computeAppointmentTotals(appt: {
     services?: any[]; package_items?: any[]; product_items?: any[]; membership_items?: any[];
     discount_type?: string; discount_value?: number; ex_charges?: number; tip_amount?: number;
+    include_gst?: boolean;
 }, activeTaxes: ActiveTaxRow[]) {
     const toRow = (items: any[] = []) => (items || []).map((i) => ({
         price: Number(i?.price) || 0,
@@ -63,7 +64,11 @@ function computeAppointmentTotals(appt: {
         },
         discountType: (appt.discount_type === "percentage" ? "percentage" : "flat"),
         discountValue: Number(appt.discount_value) || 0,
-        taxes: activeTaxes,
+        // Respect this appointment's own persisted "Include GST" choice —
+        // without this gate, a bill deliberately saved with GST excluded
+        // gets the salon's active taxes silently added back in on every
+        // read-time backfill/reprice (see include_gst on the Appointment type).
+        taxes: appt.include_gst === false ? [] : activeTaxes,
         exCharges: Number(appt.ex_charges) || 0,
         tip: Number(appt.tip_amount) || 0,
     });
@@ -394,7 +399,7 @@ export const appointmentsService = {
         // inputs exactly so this decision and the recompute below can never
         // disagree about what "changed the bill" means.
         const isContentEdit = ["services", "package_items", "product_items", "membership_items",
-                                "discount_value", "discount_type", "ex_charges", "tip_amount"]
+                                "discount_value", "discount_type", "ex_charges", "tip_amount", "include_gst"]
                                 .some((k) => k in patch);
 
         if (existing.status === "no-show" && isReschedule) {
@@ -416,6 +421,7 @@ export const appointmentsService = {
                 discount_value:   patch.discount_value    ?? existing.discount_value,
                 ex_charges:       patch.ex_charges        ?? existing.ex_charges,
                 tip_amount:       patch.tip_amount         ?? existing.tip_amount,
+                include_gst:      patch.include_gst        ?? existing.include_gst,
             };
             const activeTaxes = await getActiveTaxes(existing.salon_id).catch(() => []);
             const newGrandTotal = computeAppointmentTotals(merged, activeTaxes).grandTotal;

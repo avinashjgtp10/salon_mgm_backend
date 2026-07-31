@@ -22,11 +22,12 @@ const getSalonId = (req: AuthRequest): string => {
 const getBaseUrl = (req: Request) => `${req.protocol}://${req.get("host")}`;
 
 const parseListFilters = (req: AuthRequest) => {
-    const { search, category_id, brand_id, retail_sales_enabled, min_price, max_price, stock, sort_by, sort_order } = req.query;
+    const { search, category_id, brand_id, product_type, retail_sales_enabled, min_price, max_price, stock, sort_by, sort_order } = req.query;
     return {
         search: search as string | undefined,
         category_id: category_id as string | undefined,
         brand_id: brand_id as string | undefined,
+        product_type: product_type as "retail" | "consumable" | "both" | undefined,
         retail_sales_enabled:
             retail_sales_enabled !== undefined ? retail_sales_enabled === "true" : undefined,
         min_price: min_price ? parseFloat(min_price as string) : undefined,

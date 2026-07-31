@@ -15,6 +15,16 @@ export async function ensureTable(): Promise<void> {
     await pool.query(
         `ALTER TABLE appointments ADD COLUMN IF NOT EXISTS apply_membership_wallet BOOLEAN NOT NULL DEFAULT FALSE`,
     );
+    // Persists the "Include GST" checkbox state on the appointment itself —
+    // previously it only ever reached the payments table (at actual
+    // checkout), so reopening a paid appointment that was deliberately
+    // billed without GST re-defaulted the checkbox to on and recomputed a
+    // phantom GST-sized due amount. TRUE for every pre-existing row, since
+    // that matches the assumed-on behavior every appointment had before this
+    // flag existed.
+    await pool.query(
+        `ALTER TABLE appointments ADD COLUMN IF NOT EXISTS include_gst BOOLEAN NOT NULL DEFAULT TRUE`,
+    );
     // "Delete Appointment" used to be a real SQL DELETE — switched to soft
     // delete so a removed booking can still show on the calendar (greyed out,
     // "Deleted" on the tooltip) instead of vanishing without a trace. NULL
@@ -40,11 +50,13 @@ export const appointmentsRepository = {
     async findById(id: string): Promise<Appointment | null> {
         const { rows } = await pool.query(
             `SELECT a.*,
-                (SELECT COUNT(*) FROM appointments a2
-                 WHERE a2.salon_id = a.salon_id
-                   AND (a2.created_at < a.created_at
-                        OR (a2.created_at = a.created_at AND a2.id <= a.id))
-                ) AS invoice_number,
+                -- The real invoice number is the linked sale's own sequential
+                -- invoice_number (sales.repository.ts's per-salon counter) —
+                -- NULL until the appointment is actually billed. Previously
+                -- this counted every appointment ever created for the salon
+                -- (paid or not), which diverged from Sales Summary/reports
+                -- (both read sales.invoice_number directly).
+                (SELECT s.invoice_number FROM sales s WHERE s.appointment_id = a.id LIMIT 1) AS invoice_number,
                 c.full_name                              AS client_name,
                 c.phone_number                           AS client_phone,
                 c.phone_country_code                     AS client_phone_code,
@@ -54,6 +66,7 @@ export const appointmentsRepository = {
                 st.email                                 AS staff_email,
                 s.business_name                          AS salon_name,
                 COALESCE(s.email, u.email)               AS salon_email,
+                s.currency                                AS salon_currency,
                 COALESCE((SELECT SUM(paid_amount) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS paid_amount,
                 (SELECT payment_method FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) AS payment_method,
                 COALESCE((SELECT SUM(reward_points_value) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS reward_points_value,
@@ -152,11 +165,10 @@ export const appointmentsRepository = {
                GROUP BY appointment_id
              )
              SELECT a.*,
-               (SELECT COUNT(*) FROM appointments a2
-                WHERE a2.salon_id = a.salon_id
-                  AND (a2.created_at < a.created_at
-                       OR (a2.created_at = a.created_at AND a2.id <= a.id))
-               ) AS invoice_number,
+               -- See findById()'s identical comment — invoice_number now comes
+               -- from the linked sale's own sequential number, not an
+               -- appointment-count, so it matches Sales Summary/reports.
+               (SELECT s.invoice_number FROM sales s WHERE s.appointment_id = a.id LIMIT 1) AS invoice_number,
                c.full_name    AS client_name,
                c.phone_number AS client_phone,
                c.email        AS client_email,
@@ -223,7 +235,7 @@ export const appointmentsRepository = {
                 colour, created_by,
                 services, package_items, product_items, membership_items,
                 discount_value, discount_type, ex_charges, tip_amount, gst_percent,
-                apply_membership_wallet
+                apply_membership_wallet, include_gst
             )
             VALUES (
                 $1, $2, $3, $4, $5,
@@ -233,7 +245,7 @@ export const appointmentsRepository = {
                 $12, $13,
                 $14::jsonb, $15::jsonb, $16::jsonb, $17::jsonb,
                 $18, $19, $20, $21, $22,
-                $23
+                $23, $24
             )
             RETURNING *`,
             [
@@ -260,6 +272,7 @@ export const appointmentsRepository = {
                 data.tip_amount         ?? 0,
                 data.gst_percent        ?? 0,
                 data.apply_membership_wallet ?? false,
+                data.include_gst        ?? true,
             ]
         );
         return rows[0];

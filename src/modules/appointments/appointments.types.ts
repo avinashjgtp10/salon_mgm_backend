@@ -81,8 +81,10 @@ export type Appointment = {
     updated_at: string;
     cancelled_at: string | null;
     cancel_reason: string | null;
-    // Computed at query time (not stored as a column)
-    invoice_number?: number | null;
+    // The linked sale's own invoice_number (e.g. "INV-00002") — computed at
+    // query time via a subquery to sales, not a stored appointments column.
+    // NULL until the appointment is actually billed (see appointments.repository.ts).
+    invoice_number?: string | null;
     reward_points_value?: number | null;
     tax_breakdown?: { name: string; rate: number; amount: number; inclusive: boolean }[] | null;
     // Backfilled at read time only for an appointment with no payment yet
@@ -113,6 +115,13 @@ export type Appointment = {
     ex_charges: number;
     tip_amount: number;
     gst_percent: number;
+    // Persisted "Include GST" checkbox state — independent of whether a
+    // payment has actually been made, so a bill deliberately billed without
+    // GST stays GST-free on reopen instead of being recomputed with the
+    // salon's active taxes added back in. Defaults true so every
+    // pre-existing row (and any appointment created before this flag
+    // existed) keeps today's GST-included behavior.
+    include_gst: boolean;
     // Persisted "Apply Membership" checkbox state — independent of whether a
     // payment has actually been made (payments.membership_wallet_used only
     // exists once checkout happens), so the checkbox survives Save/reopen.
@@ -155,6 +164,7 @@ export type CreateAppointmentBody = {
     ex_charges?: number;
     tip_amount?: number;
     gst_percent?: number;
+    include_gst?: boolean;
     apply_membership_wallet?: boolean;
     reopened_from_paid?: boolean;
 };

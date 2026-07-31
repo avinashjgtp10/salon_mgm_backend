@@ -22,6 +22,14 @@ export const suppliersRepository = {
         return rows;
     },
 
+    async findByName(name: string, salonId: string): Promise<Supplier | null> {
+        const { rows } = await pool.query(
+            `SELECT * FROM suppliers WHERE LOWER(name) = LOWER($1) AND salon_id = $2`,
+            [name, salonId]
+        );
+        return rows[0] || null;
+    },
+
     async create(data: CreateSupplierBody, salonId: string): Promise<Supplier> {
         const { rows } = await pool.query(
             `INSERT INTO suppliers (

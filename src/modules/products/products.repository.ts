@@ -4,14 +4,14 @@ import {
     ProductPhoto, Brand, CreateBrandBody, UpdateBrandBody,
 } from "./products.types";
 
-const PRODUCT_COLUMNS = `id, name, barcode, brand_id, category_id, measure_unit, amount, qty_alert,
+const PRODUCT_COLUMNS = `id, name, barcode, brand_id, category_id, supplier_id, measure_unit, product_type, size, amount, qty_alert,
     short_description, description, supply_price, retail_sales_enabled,
-    retail_price, markup_percentage, tax_type, custom_tax_rate,
+    retail_price, markup_percentage, tax_type, custom_tax_rate, hsn_sac,
     team_commission_enabled, team_commission_rate, created_at, updated_at`;
 
-const PRODUCT_COLUMNS_P = `p.id, p.name, p.barcode, p.brand_id, p.category_id, p.measure_unit, p.amount, p.qty_alert,
+const PRODUCT_COLUMNS_P = `p.id, p.name, p.barcode, p.brand_id, p.category_id, p.supplier_id, p.measure_unit, p.product_type, p.size, p.amount, p.qty_alert,
     p.short_description, p.description, p.supply_price, p.retail_sales_enabled,
-    p.retail_price, p.markup_percentage, p.tax_type, p.custom_tax_rate,
+    p.retail_price, p.markup_percentage, p.tax_type, p.custom_tax_rate, p.hsn_sac,
     p.team_commission_enabled, p.team_commission_rate, p.created_at, p.updated_at`;
 
 // ─── Products Repository ──────────────────────────────────────────────────────
@@ -45,7 +45,12 @@ export const productsRepository = {
         values.push(salonId);
 
         if (filters.search) {
-            conditions.push(`(${prefix}name ILIKE $${idx} OR ${prefix}barcode ILIKE $${idx})`);
+            conditions.push(
+                `(${prefix}name ILIKE $${idx} OR ${prefix}barcode ILIKE $${idx} OR EXISTS (
+                    SELECT 1 FROM suppliers sup_search
+                    WHERE sup_search.id = ${prefix}supplier_id AND sup_search.name ILIKE $${idx}
+                ))`
+            );
             values.push(`%${filters.search}%`);
             idx++;
         }
@@ -56,6 +61,10 @@ export const productsRepository = {
         if (filters.brand_id) {
             conditions.push(`${prefix}brand_id = $${idx++}`);
             values.push(filters.brand_id);
+        }
+        if (filters.product_type) {
+            conditions.push(`${prefix}product_type = $${idx++}`);
+            values.push(filters.product_type);
         }
         if (filters.retail_sales_enabled !== undefined) {
             conditions.push(`${prefix}retail_sales_enabled = $${idx++}`);
@@ -121,10 +130,11 @@ export const productsRepository = {
         const orderDir = filters.sort_order === "ASC" ? "ASC" : "DESC";
 
         const { rows } = await pool.query(
-            `SELECT ${PRODUCT_COLUMNS_P}, pb.name as brand_name, sc.name as category_name
+            `SELECT ${PRODUCT_COLUMNS_P}, pb.name as brand_name, sc.name as category_name, sup.name as supplier_name
              FROM products p
              LEFT JOIN product_brands pb ON p.brand_id = pb.id
              LEFT JOIN service_categories sc ON p.category_id = sc.id
+             LEFT JOIN suppliers sup ON p.supplier_id = sup.id
              ${where}
              ORDER BY p.${orderCol} ${orderDir}`,
             values
@@ -136,19 +146,19 @@ export const productsRepository = {
         const { rows } = await pool.query(
             `INSERT INTO products (
         salon_id,
-        name, barcode, brand_id, category_id, measure_unit, amount, qty_alert,
+        name, barcode, brand_id, category_id, supplier_id, measure_unit, product_type, size, amount, qty_alert,
         short_description, description,
         supply_price, retail_sales_enabled, retail_price, markup_percentage,
-        tax_type, custom_tax_rate, team_commission_enabled, team_commission_rate
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING ${PRODUCT_COLUMNS}`,
+        tax_type, custom_tax_rate, hsn_sac, team_commission_enabled, team_commission_rate
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) RETURNING ${PRODUCT_COLUMNS}`,
             [
                 salonId,
-                data.name, data.barcode ?? null, data.brand_id ?? null, data.category_id ?? null,
-                data.measure_unit ?? "ml", data.amount ?? 0, data.qty_alert ?? null,
+                data.name, data.barcode ?? null, data.brand_id ?? null, data.category_id ?? null, data.supplier_id ?? null,
+                data.measure_unit ?? "ml", data.product_type ?? "retail", data.size ?? null, data.amount ?? 0, data.qty_alert ?? null,
                 data.short_description ?? null, data.description ?? null,
                 data.supply_price ?? 0, data.retail_sales_enabled ?? true,
                 data.retail_price ?? null, data.markup_percentage ?? null,
-                data.tax_type ?? "no_tax", data.custom_tax_rate ?? null,
+                data.tax_type ?? "no_tax", data.custom_tax_rate ?? null, data.hsn_sac ?? null,
                 data.team_commission_enabled ?? false, data.team_commission_rate ?? null,
             ]
         );
