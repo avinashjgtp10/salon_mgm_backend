@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import {
   Membership, MembershipRow, CreateMembershipDTO,
   UpdateMembershipDTO, MembershipsListQuery, IncludedService,
+  LoyaltyEligibility,
 } from "./memberships.types";
 
 const SELECT_WITH_SERVICES = `
@@ -31,9 +32,11 @@ function toMembership(row: MembershipRow): Membership {
     enableOnlineSales: row.enable_online_sales,
     enableOnlineRedemption: row.enable_online_redemption,
     termsAndConditions: row.terms_and_conditions ?? undefined,
-    appliesToProducts: row.applies_to_products,
+    appliesTo: row.applies_to,
     pricingType: row.pricing_type,
     discountPercent: row.discount_percent ? parseFloat(row.discount_percent) : undefined,
+    discountBalance: row.discount_balance ? parseFloat(row.discount_balance) : undefined,
+    loyaltyThresholdValue: row.loyalty_threshold_value ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -110,6 +113,53 @@ export const membershipsRepository = {
     return rows.length ? toMembership(rows[0]) : null;
   },
 
+  // Loyalty plans are salon-wide and free — there is no per-client row to look
+  // up, so eligibility is evaluated live against the client's accumulated
+  // visits. Returns the single best-value qualifying plan, or the
+  // closest-to-unlocking one so the UI can show progress ("7 of 10 visits")
+  // rather than nothing at all.
+  async findLoyaltyEligibility(
+    clientId: string,
+    salonId: string,
+  ): Promise<LoyaltyEligibility | null> {
+    const { rows: planRows } = await pool.query(
+      `SELECT id, name, discount_percent, loyalty_threshold_value, applies_to
+       FROM memberships
+       WHERE salon_id = $1 AND pricing_type = 'loyalty'
+         AND COALESCE(discount_percent, 0) > 0
+         AND loyalty_threshold_value IS NOT NULL`,
+      [salonId],
+    );
+    if (!planRows.length) return null;
+
+    const { rows: clientRows } = await pool.query(
+      `SELECT total_visits FROM clients WHERE id = $1 AND salon_id = $2`,
+      [clientId, salonId],
+    );
+    if (!clientRows.length) return null;
+    const totalVisits = Number(clientRows[0].total_visits) || 0;
+
+    const evaluated: LoyaltyEligibility[] = planRows.map((p) => {
+      const thresholdValue = Number(p.loyalty_threshold_value) || 0;
+      return {
+        membershipId: p.id,
+        name: p.name,
+        discountPercent: Number(p.discount_percent) || 0,
+        thresholdValue,
+        current: totalVisits,
+        eligible: totalVisits >= thresholdValue,
+        appliesTo: p.applies_to ?? 'services',
+      };
+    });
+
+    const unlocked = evaluated.filter((e) => e.eligible);
+    if (unlocked.length) {
+      return unlocked.reduce((best, e) => (e.discountPercent > best.discountPercent ? e : best));
+    }
+    return evaluated.reduce((closest, e) =>
+      (e.thresholdValue - e.current) < (closest.thresholdValue - closest.current) ? e : closest);
+  },
+
   async create(data: CreateMembershipDTO, salonId: string): Promise<Membership> {
     const client = await pool.connect();
     try {
@@ -120,16 +170,19 @@ export const membershipsRepository = {
           (id, salon_id, name, description, session_type, number_of_sessions,
            valid_for, price, tax_rate, colour,
            enable_online_sales, enable_online_redemption, terms_and_conditions,
-           applies_to_products, pricing_type, discount_percent)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+           applies_to, pricing_type, discount_percent,
+           discount_balance, loyalty_threshold_value)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
         [
           membershipId, salonId, data.name, data.description ?? null,
           data.sessionType, data.numberOfSessions ?? null,
           data.validFor, data.price, data.taxRate ?? null,
           data.colour, data.enableOnlineSales,
           data.enableOnlineRedemption, data.termsAndConditions ?? null,
-          data.appliesToProducts ?? false,
+          data.appliesTo ?? 'services',
           data.pricingType ?? 'value', data.discountPercent ?? null,
+          data.discountBalance ?? null,
+          data.loyaltyThresholdValue ?? null,
         ]
       );
       await _linkServices(client, membershipId, data.includedServices);
@@ -157,9 +210,11 @@ export const membershipsRepository = {
         colour: "colour", enableOnlineSales: "enable_online_sales",
         enableOnlineRedemption: "enable_online_redemption",
         termsAndConditions: "terms_and_conditions",
-        appliesToProducts: "applies_to_products",
+        appliesTo: "applies_to",
         pricingType: "pricing_type",
         discountPercent: "discount_percent",
+        discountBalance: "discount_balance",
+        loyaltyThresholdValue: "loyalty_threshold_value",
       };
       const fields: string[] = [];
       const values: any[] = [];

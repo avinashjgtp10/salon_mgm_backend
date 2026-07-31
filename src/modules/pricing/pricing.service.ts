@@ -1,4 +1,9 @@
-import { computeBillTotals, rowsTotal, BucketAmounts, LineItem } from './pricing.engine';
+import {
+  computeBillTotals, rowsTotal, BucketAmounts, LineItem,
+  allocateMembershipDiscount,
+} from './pricing.engine';
+import { membershipsRepository } from '../memberships/memberships.repository';
+import type { MembershipAppliesTo } from '../memberships/memberships.types';
 import { getActiveTaxes } from '../settings/tax.util';
 import { ewalletRepository } from '../ewallet/ewallet.repository';
 import { rewardPointsRepository } from '../reward-points/reward-points.repository';
@@ -22,19 +27,22 @@ function splitMembershipWalletUsage(
   serviceRows: LineItem[],
   productRows: LineItem[],
   requestedAmount: number,
+  coversServices: boolean,
   coversProducts: boolean,
 ): { serviceWalletUsed: number; productWalletUsed: number; totalWalletUsed: number } {
   let remaining = Math.max(0, requestedAmount);
   let serviceWalletUsed = 0;
   let productWalletUsed = 0;
 
-  for (const row of serviceRows) {
-    if (row.isPackageService || remaining <= 0) continue;
-    const rowTotal = row.total ?? row.price * (row.qty || 1);
-    if (rowTotal <= 0) continue;
-    const used = Math.min(remaining, rowTotal);
-    remaining -= used;
-    serviceWalletUsed += used;
+  if (coversServices) {
+    for (const row of serviceRows) {
+      if (row.isPackageService || remaining <= 0) continue;
+      const rowTotal = row.total ?? row.price * (row.qty || 1);
+      if (rowTotal <= 0) continue;
+      const used = Math.min(remaining, rowTotal);
+      remaining -= used;
+      serviceWalletUsed += used;
+    }
   }
 
   if (coversProducts) {
@@ -65,6 +73,70 @@ function allocateWalletPerRow(rows: LineItem[], totalWallet: number, skipPackage
     remaining -= used;
     return used;
   });
+}
+
+export interface MembershipDiscountPreview {
+  total: number;
+  /** Index-aligned with the serviceRows/productRows this was resolved against. */
+  serviceDiscounts: number[];
+  productDiscounts: number[];
+}
+
+// Resolves how much discount a client's percentage membership — or, failing
+// that, an unlocked salon-wide loyalty plan — would grant on these rows, AND
+// which specific rows it lands on. Read-only: the balance is only actually
+// decremented at charge time, by payments.service.ts's applyMembershipDiscountForBooking
+// — but both call the shared allocateMembershipDiscount so the two can never
+// disagree about which rows got how much.
+export async function resolveMembershipDiscount(
+  salonId: string,
+  clientId: string,
+  serviceRows: LineItem[],
+  productRows: LineItem[],
+): Promise<MembershipDiscountPreview> {
+  const empty = (): MembershipDiscountPreview => ({
+    total: 0,
+    serviceDiscounts: serviceRows.map(() => 0),
+    productDiscounts: productRows.map(() => 0),
+  });
+
+  // Service rows in order, then product rows — either zeroed out per the
+  // plan's applies_to setting. Package-covered service rows are already ₹0 so
+  // they fall out naturally (allocateMembershipDiscount skips non-positive
+  // amounts). Combining into one ordered list mirrors the exact fill order
+  // the real ledger-writing deduction uses, so a balance that runs out
+  // mid-bill runs out at the identical row in both the preview and the charge.
+  const allocate = (percent: number, balance: number, appliesTo: MembershipAppliesTo): MembershipDiscountPreview => {
+    const serviceAmounts = appliesTo === 'products'
+      ? serviceRows.map(() => 0)
+      : serviceRows.map((r) => (r.isPackageService ? 0 : (r.total ?? r.price * (r.qty || 1))));
+    const productAmounts = appliesTo === 'services'
+      ? productRows.map(() => 0)
+      : productRows.map((r) => (r.total ?? r.price * (r.qty || 1)));
+    const { total, discounts } = allocateMembershipDiscount([...serviceAmounts, ...productAmounts], percent, balance);
+    return {
+      total,
+      serviceDiscounts: discounts.slice(0, serviceRows.length),
+      productDiscounts: discounts.slice(serviceRows.length),
+    };
+  };
+
+  const percentageMembership = await clientMembershipsRepository.findActivePercentageForClient(clientId, salonId);
+  if (percentageMembership) {
+    return allocate(
+      percentageMembership.discountPercent ?? 0,
+      percentageMembership.discountBalanceRemaining,
+      percentageMembership.appliesTo,
+    );
+  }
+
+  // Loyalty is uncapped once unlocked, so there is no balance to bound it.
+  const loyalty = await membershipsRepository.findLoyaltyEligibility(clientId, salonId);
+  if (loyalty?.eligible) {
+    return allocate(loyalty.discountPercent, Infinity, loyalty.appliesTo);
+  }
+
+  return empty();
 }
 
 export const pricingService = {
@@ -104,12 +176,35 @@ export const pricingService = {
     // exclusion only ever shifts the GST portion, not the whole bill, so this
     // is a safe, slightly conservative estimate) — recomputed exactly below
     // once every applied amount is known.
+    // ── Membership discount (percentage / loyalty) ─────────────────────────
+    // Unlike every benefit below, this is a PRE-TAX price reduction, so it has
+    // to be resolved before the ceiling is computed — it changes the taxable
+    // base and therefore the grand total the redemptions get capped against.
+    let appliedMembershipDiscount = 0;
+    let membershipServiceDiscounts: number[] = (body.serviceRows ?? []).map(() => 0);
+    let membershipProductDiscounts: number[] = (body.productRows ?? []).map(() => 0);
+    if (body.applyMembershipDiscount && body.client_id) {
+      try {
+        const discountPreview = await resolveMembershipDiscount(
+          salonId, body.client_id, body.serviceRows ?? [], body.productRows ?? [],
+        );
+        appliedMembershipDiscount = discountPreview.total;
+        membershipServiceDiscounts = discountPreview.serviceDiscounts;
+        membershipProductDiscounts = discountPreview.productDiscounts;
+      } catch { /* non-fatal — preview simply shows no discount */ }
+    }
+    const membershipServiceDiscountUsed = membershipServiceDiscounts.reduce((s, v) => s + v, 0);
+    const membershipProductDiscountUsed = membershipProductDiscounts.reduce((s, v) => s + v, 0);
+
     const preliminaryTaxes = body.includeGst ? await getActiveTaxes(salonId).catch(() => []) : [];
     const preliminaryTotals = computeBillTotals({
       actualAmounts,
       discountType: body.discountType,
       discountValue: body.discountValue,
       couponDiscount,
+      membershipDiscountAmount: appliedMembershipDiscount,
+      membershipServiceDiscountUsed,
+      membershipProductDiscountUsed,
       taxes: preliminaryTaxes,
       exCharges: body.exCharges ?? 0,
       tip: body.tip ?? 0,
@@ -118,10 +213,10 @@ export const pricingService = {
     let remaining = preliminaryTotals.grandTotal;
 
     // ── Membership wallet: read-only balance preview, no deduction ─────────
-    // Mirrors payments.service.ts's own eligibility gate (applies_to_products)
-    // and the frontend's row-by-row allocation, so the preview's service/
-    // product split — and therefore the tax it implies — matches what
-    // checkout will actually charge.
+    // Mirrors payments.service.ts's own eligibility gate (applies_to) and the
+    // frontend's row-by-row allocation, so the preview's service/product
+    // split — and therefore the tax it implies — matches what checkout will
+    // actually charge.
     let appliedMembershipWallet = 0;
     let membershipServiceWalletUsed = 0;
     let membershipProductWalletUsed = 0;
@@ -129,9 +224,10 @@ export const pricingService = {
       try {
         const memberships = await clientMembershipsRepository.findAllActiveWithBalanceForClient(body.client_id, salonId);
         const totalBalance = memberships.reduce((s, m) => s + (Number(m.membershipWalletBalance) || 0), 0);
-        const coversProducts = memberships.some((m) => m.appliesToProducts && Number(m.membershipWalletBalance) > 0);
+        const coversServices = memberships.some((m) => m.appliesTo !== 'products' && Number(m.membershipWalletBalance) > 0);
+        const coversProducts = memberships.some((m) => m.appliesTo !== 'services' && Number(m.membershipWalletBalance) > 0);
         const requested = Math.min(body.membershipWalletRequested ?? totalBalance, totalBalance, remaining);
-        const split = splitMembershipWalletUsage(body.serviceRows, body.productRows, requested, coversProducts);
+        const split = splitMembershipWalletUsage(body.serviceRows, body.productRows, requested, coversServices, coversProducts);
         membershipServiceWalletUsed = split.serviceWalletUsed;
         membershipProductWalletUsed = split.productWalletUsed;
         appliedMembershipWallet = split.totalWalletUsed;
@@ -227,6 +323,9 @@ export const pricingService = {
       discountType: body.discountType,
       discountValue: body.discountValue,
       couponDiscount: couponDiscount + referralDiscountPreview,
+      membershipDiscountAmount: appliedMembershipDiscount,
+      membershipServiceDiscountUsed,
+      membershipProductDiscountUsed,
       taxes,
       exCharges: body.exCharges ?? 0,
       tip: body.tip ?? 0,
@@ -241,9 +340,13 @@ export const pricingService = {
       // this flag in pricing.engine.ts.
       roundSubtotalBeforeDiscount: false,
       rows: {
-        service: (body.serviceRows ?? []).map((r, i) => ({ ...r, walletUsed: svcWalletPerRow[i] ?? 0 })),
+        service: (body.serviceRows ?? []).map((r, i) => ({
+          ...r, walletUsed: svcWalletPerRow[i] ?? 0, membershipDiscountUsed: membershipServiceDiscounts[i] ?? 0,
+        })),
         packages: body.packageRows ?? [],
-        product: (body.productRows ?? []).map((r, i) => ({ ...r, walletUsed: prodWalletPerRow[i] ?? 0 })),
+        product: (body.productRows ?? []).map((r, i) => ({
+          ...r, walletUsed: prodWalletPerRow[i] ?? 0, membershipDiscountUsed: membershipProductDiscounts[i] ?? 0,
+        })),
         membership: body.membershipRows ?? [],
       },
     });
@@ -258,10 +361,12 @@ export const pricingService = {
 
     return {
       ...result,
+      rowMembershipDiscount: { service: membershipServiceDiscounts, product: membershipProductDiscounts },
       appliedEWallet,
       appliedMembershipWallet,
       appliedRewardPointsValue,
       appliedReferralCredit,
+      appliedMembershipDiscount,
       referralDiscountPreview,
       couponRejectedReason,
       referralCreditRejectedReason,

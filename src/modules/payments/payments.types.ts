@@ -27,6 +27,7 @@ export type Payment = {
   created_at: string;
   updated_at: string;
   membership_wallet_used: number;
+  membership_discount_used: number;
   reward_points_value: number;
   referral_discount_applied: number;
   tax_breakdown: TaxBreakdownEntry[] | null;
@@ -63,6 +64,12 @@ export type CreatePaymentBody = {
   // deductWalletForBooking still caps further by real balance/eligible items.
   // Omitted/undefined preserves the old "use as much as needed" behavior.
   membership_wallet_requested?: number;
+  // Intent flag for a percentage/loyalty membership discount. There is no
+  // matching "requested" field — the amount follows entirely from the plan's
+  // percentage, the eligible line total, and the remaining discount balance.
+  apply_membership_discount?: boolean;
+  // Server-computed only — never trust a value sent by the frontend.
+  membership_discount_used?: number;
   // Server-computed only — never trust a value sent by the frontend for this
   // (see payments.service.ts's Refer & Earn block).
   referral_discount_applied?: number;

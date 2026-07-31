@@ -7,6 +7,34 @@ export interface MembershipsListQuery {
   limit?:       number;
 }
 
+/**
+ * 'value'      — wallet: pay a fee, get a spendable balance drawn down at face value.
+ * 'percentage' — discount balance: N% off every service, where the discount GIVEN
+ *                depletes a separate pool.
+ * 'loyalty'    — free/automatic: unlocks N% off once a visit threshold is met,
+ *                then applies indefinitely with no cap.
+ */
+export type MembershipPricingType = 'value' | 'percentage' | 'loyalty';
+
+/**
+ * Which line items a membership's benefit (wallet, discount, or loyalty
+ * unlock) is eligible to cover. Replaces an older `appliesToProducts`
+ * boolean, which could only ever express "services always eligible, products
+ * optionally too" — with no way to say "products only."
+ */
+export type MembershipAppliesTo = 'services' | 'products' | 'both';
+
+export interface LoyaltyEligibility {
+  membershipId:    string;
+  name:            string;
+  discountPercent: number;
+  thresholdValue:  number;
+  /** Visits accumulated so far. */
+  current:         number;
+  eligible:        boolean;
+  appliesTo:       MembershipAppliesTo;
+}
+
 // all other interfaces stay the same
 export interface IncludedService {
   serviceId:        string;
@@ -27,9 +55,14 @@ export interface CreateMembershipDTO {
   enableOnlineSales:      boolean;
   enableOnlineRedemption: boolean;
   termsAndConditions?:    string;
-  appliesToProducts?:     boolean;
-  pricingType?:           'value' | 'percentage';
+  /** Defaults to 'services' server-side when omitted, matching the old boolean's default. */
+  appliesTo?:             MembershipAppliesTo;
+  pricingType?:           MembershipPricingType;
   discountPercent?:       number;
+  /** 'percentage' only — the depleting pool of discount this plan may hand out. */
+  discountBalance?:       number;
+  /** 'loyalty' only — how many visits have to accumulate before the discount unlocks. */
+  loyaltyThresholdValue?: number;
 }
 
 export interface UpdateMembershipDTO extends Partial<CreateMembershipDTO> {}
@@ -53,9 +86,11 @@ export interface MembershipRow {
   enable_online_sales:      boolean;
   enable_online_redemption: boolean;
   terms_and_conditions:     string | null;
-  applies_to_products:      boolean;
-  pricing_type:             'value' | 'percentage';
+  applies_to:               MembershipAppliesTo;
+  pricing_type:             MembershipPricingType;
   discount_percent:         string | null;
+  discount_balance:         string | null;
+  loyalty_threshold_value:  number | null;
   created_at:               Date;
   updated_at:               Date;
   services:                 IncludedService[] | null;

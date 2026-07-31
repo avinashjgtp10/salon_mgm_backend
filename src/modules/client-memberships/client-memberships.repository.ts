@@ -9,7 +9,15 @@ import type {
   ClientMembershipsListQuery,
   WalletDeductionServiceInput,
   WalletDeductionResult,
+  DiscountDeductionServiceInput,
+  DiscountDeductionResult,
 } from "./client-memberships.types";
+import { allocateMembershipDiscount } from "../pricing/pricing.engine";
+
+// Money is stored as NUMERIC(10,2); a percentage of an arbitrary line amount
+// routinely produces more precision than that, so every arithmetic step is
+// rounded to keep the running balance exactly reconstructable from the ledger.
+const round2 = (v: number): number => Math.round((v + Number.EPSILON) * 100) / 100;
 
 export async function ensureTable(): Promise<void> {
   await pool.query(`
@@ -60,12 +68,26 @@ export async function ensureTable(): Promise<void> {
     // line item — that value is already inside the appointment's own total,
     // so client-revenue aggregation must skip any row with this set.
     `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS appointment_id  UUID REFERENCES appointments(id) ON DELETE SET NULL`,
-    // Denormalized from the membership plan at purchase time (same pattern as
-    // applies_to_products) — a sold membership keeps the pricing terms it was
-    // bought under even if the plan changes later, and the booking flow can
-    // read pricing type straight off client_memberships with no extra lookup.
+    // Denormalized from the membership plan at purchase time — a sold
+    // membership keeps the pricing terms it was bought under even if the plan
+    // changes later, and the booking flow can read pricing type straight off
+    // client_memberships with no extra lookup.
     `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS pricing_type    VARCHAR(20) NOT NULL DEFAULT 'value'`,
     `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS discount_percent NUMERIC(5,2)`,
+    // The percentage type's depleting pool, seeded from the plan's discount_balance
+    // at purchase. Depletes by the discount GIVEN, not by the service price — a
+    // ₹1,000 service at 20% takes ₹200 off this, not ₹1,000.
+    `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS discount_balance_remaining NUMERIC(10,2) NOT NULL DEFAULT 0`,
+    // Same denormalize-at-purchase pattern as pricing_type above. Genuinely
+    // new — the OLDER applies_to_products boolean was never actually
+    // denormalized here despite a comment once claiming it was: two read
+    // paths (findAllActiveWithBalanceForClient, findActivePercentageForClient)
+    // queried this table directly with no join to `memberships` at all, so
+    // `appliesToProducts` silently read as `false` there regardless of the
+    // plan's real setting — dead in practice for exactly the callers that
+    // matter (the real percentage-discount charge-time gate). A real column
+    // here removes the need for that join entirely.
+    `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS applies_to VARCHAR(10) NOT NULL DEFAULT 'services'`,
   ];
   for (const sql of patches) {
     await pool.query(sql);
@@ -157,9 +179,10 @@ function toClientMembership(row: ClientMembershipRow, log: UsageLogRow[] = []): 
     status:             row.status as ClientMembership['status'],
     pricePaid:          row.price_paid ? parseFloat(row.price_paid) : undefined,
     membershipWalletBalance: Number(row.membership_wallet_balance) || 0,
-    appliesToProducts:  row.applies_to_products ?? false,
+    appliesTo:          row.applies_to ?? 'services',
     pricingType:        (row.pricing_type as ClientMembership['pricingType']) ?? 'value',
     discountPercent:    row.discount_percent != null ? Number(row.discount_percent) : undefined,
+    discountBalanceRemaining: Number(row.discount_balance_remaining) || 0,
     appointmentId:      row.appointment_id ?? null,
     usageLog:           log.map(r => ({
       id:                  r.id,
@@ -206,20 +229,17 @@ export const clientMembershipsRepository = {
     query: ClientMembershipsListQuery,
   ): Promise<{ items: ClientMembership[]; total: number }> {
     const conds: string[]  = ['salon_id = $1'];
-    const condsJoined: string[] = ['cm.salon_id = $1'];
     const vals:  any[]     = [salonId];
     let idx = 2;
 
-    if (query.clientId) { conds.push(`client_id = $${idx}`); condsJoined.push(`cm.client_id = $${idx}`); idx++; vals.push(query.clientId); }
-    if (query.status)   { conds.push(`status = $${idx}`);    condsJoined.push(`cm.status = $${idx}`);    idx++; vals.push(query.status); }
+    if (query.clientId) { conds.push(`client_id = $${idx}`); idx++; vals.push(query.clientId); }
+    if (query.status)   { conds.push(`status = $${idx}`);    idx++; vals.push(query.status); }
     if (query.search) {
       conds.push(`(client_name ILIKE $${idx} OR membership_name ILIKE $${idx})`);
-      condsJoined.push(`(cm.client_name ILIKE $${idx} OR cm.membership_name ILIKE $${idx})`);
       vals.push(`%${query.search}%`); idx++;
     }
 
-    const where       = `WHERE ${conds.join(' AND ')}`;
-    const whereJoined = `WHERE ${condsJoined.join(' AND ')}`;
+    const where  = `WHERE ${conds.join(' AND ')}`;
     const page   = Math.max(1, query.page  ?? 1);
     const limit  = Math.min(100, query.limit ?? 20);
     const offset = (page - 1) * limit;
@@ -228,12 +248,12 @@ export const clientMembershipsRepository = {
       `SELECT COUNT(*) FROM client_memberships ${where}`, vals,
     );
 
+    // applies_to is denormalized directly onto this table (see ensureTable's
+    // patch list) — no join to `memberships` needed, unlike before.
     const { rows } = await pool.query(
-      `SELECT cm.*, m.applies_to_products
-       FROM client_memberships cm
-       LEFT JOIN memberships m ON m.id = cm.membership_id
-       ${whereJoined}
-       ORDER BY cm.purchased_at DESC LIMIT $${idx++} OFFSET $${idx++}`,
+      `SELECT * FROM client_memberships
+       ${where}
+       ORDER BY purchased_at DESC LIMIT $${idx++} OFFSET $${idx++}`,
       [...vals, limit, offset],
     );
 
@@ -297,7 +317,8 @@ export const clientMembershipsRepository = {
     // always funded as (catalog price + bonusCredit) no matter which of the
     // several sell flows created this row.
     const memRes = await pool.query(
-      `SELECT valid_for, price, description, pricing_type, discount_percent FROM memberships WHERE id = $1`,
+      `SELECT valid_for, price, description, pricing_type, discount_percent, discount_balance, applies_to
+       FROM memberships WHERE id = $1`,
       [dto.membershipId],
     );
     const memRow = memRes.rows[0];
@@ -305,14 +326,25 @@ export const clientMembershipsRepository = {
     let expiresAt: Date | string | null = dto.expiresAt ?? null;
     if (!expiresAt) expiresAt = computeExpiryDate(memRow?.valid_for);
 
-    let walletBalance = dto.pricePaid ?? 0;
-    if (memRow) {
-      let bonusCredit = 0;
-      try { bonusCredit = Number(JSON.parse(memRow.description ?? "{}").bonusCredit) || 0; } catch { /* plain text description */ }
-      walletBalance = (Number(memRow.price) || 0) + bonusCredit;
-    }
     const pricingType = memRow?.pricing_type ?? 'value';
     const discountPercent = memRow?.discount_percent ?? null;
+    const appliesTo = memRow?.applies_to ?? 'services';
+
+    // Only a 'value' plan funds a spendable wallet. A 'percentage' plan's fee buys
+    // a discount pool instead, so leaving its wallet at 0 is what keeps it out of
+    // deductWalletAcrossMemberships and the wallet benefit card entirely.
+    let walletBalance = 0;
+    let discountBalance = 0;
+    if (pricingType === 'percentage') {
+      discountBalance = Number(memRow?.discount_balance) || 0;
+    } else {
+      walletBalance = dto.pricePaid ?? 0;
+      if (memRow) {
+        let bonusCredit = 0;
+        try { bonusCredit = Number(JSON.parse(memRow.description ?? "{}").bonusCredit) || 0; } catch { /* plain text description */ }
+        walletBalance = (Number(memRow.price) || 0) + bonusCredit;
+      }
+    }
 
     const id = uuidv4();
     const { rows } = await pool.query(
@@ -320,8 +352,8 @@ export const clientMembershipsRepository = {
         (id, salon_id, client_id, client_name, mobile, email,
          membership_id, membership_name, colour, total_sessions, used_sessions,
          expires_at, end_date, status, price_paid, membership_wallet_balance, appointment_id,
-         pricing_type, discount_percent)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$11,$14,'active',$12,$13,$15,$16,$17)
+         pricing_type, discount_percent, discount_balance_remaining, applies_to)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$11,$14,'active',$12,$13,$15,$16,$17,$18,$19)
        RETURNING *`,
       [
         id, salonId, dto.clientId, clientName, mobile, email,
@@ -339,6 +371,8 @@ export const clientMembershipsRepository = {
         dto.appointmentId ?? null,
         pricingType,
         discountPercent,
+        discountBalance,
+        appliesTo,
       ],
     );
     return toClientMembership(rows[0]);
@@ -437,20 +471,29 @@ export const clientMembershipsRepository = {
     return rows.map((r) => toClientMembership(r));
   },
 
-  // True if any of the client's active, spendable memberships opted in to
-  // covering products (per-membership toggle) — gates whether payments.service.ts
-  // should feed product items into deductWalletAcrossMemberships at all.
-  async hasProductEligibleMembership(clientId: string, salonId: string): Promise<boolean> {
+  // Whether the client's active, spendable memberships' wallets cover
+  // services and/or products — gates whether payments.service.ts should feed
+  // each item type into deductWalletAcrossMemberships at all. Reads the
+  // denormalized applies_to directly off client_memberships (no join needed
+  // — it's the sold instance's own terms, not necessarily the live plan's).
+  // Services used to be unconditionally eligible (no exclusion existed); now
+  // that a plan can be "products only," this has to gate both directions.
+  async getWalletCoverageForClient(
+    clientId: string, salonId: string,
+  ): Promise<{ coversServices: boolean; coversProducts: boolean }> {
     const { rows } = await pool.query(
-      `SELECT EXISTS (
-         SELECT 1 FROM client_memberships cm
-         JOIN memberships m ON m.id = cm.membership_id
-         WHERE cm.client_id = $1 AND cm.salon_id = $2 AND cm.status = 'active'
-           AND cm.membership_wallet_balance > 0 AND m.applies_to_products = true
-       ) AS exists`,
+      `SELECT applies_to FROM client_memberships
+       WHERE client_id = $1 AND salon_id = $2 AND status = 'active' AND membership_wallet_balance > 0`,
       [clientId, salonId],
     );
-    return rows[0]?.exists === true;
+    let coversServices = false;
+    let coversProducts = false;
+    for (const r of rows) {
+      const appliesTo = r.applies_to ?? 'services';
+      if (appliesTo !== 'products') coversServices = true;
+      if (appliesTo !== 'services') coversProducts = true;
+    }
+    return { coversServices, coversProducts };
   },
 
   // Read-only — for display/history use only. NOT used to decide reuse-vs-deduct
@@ -583,6 +626,148 @@ export const clientMembershipsRepository = {
       await client.query('COMMIT');
       const remainingBalance = remainingByMembership.reduce((sum, v) => sum + v, 0);
       return { totalWalletUsed, remainingBalance, perService, reused: false };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  },
+
+  // ── Discount balance ('percentage' memberships) ────────────────────────────
+
+  // The single active percentage membership with discount left to give, richest
+  // first. Unlike the wallet, a bill only ever draws from one — stacking two
+  // percentage discounts on one service has no coherent meaning.
+  async findActivePercentageForClient(clientId: string, salonId: string): Promise<ClientMembership | null> {
+    const { rows } = await pool.query(
+      `SELECT * FROM client_memberships
+       WHERE client_id = $1 AND salon_id = $2 AND status = 'active'
+         AND pricing_type = 'percentage' AND discount_balance_remaining > 0
+         AND COALESCE(discount_percent, 0) > 0
+       ORDER BY discount_balance_remaining DESC
+       LIMIT 1`,
+      [clientId, salonId],
+    );
+    return rows.length ? toClientMembership(rows[0]) : null;
+  },
+
+  async getDiscountGivenForAppointment(appointmentId: string): Promise<number> {
+    const { rows } = await pool.query(
+      `SELECT COALESCE(SUM(amount_deducted),0) AS total FROM membership_usage_log
+       WHERE appointment_id = $1 AND notes = 'membership_discount'`,
+      [appointmentId],
+    );
+    return parseFloat(rows[0]?.total ?? '0');
+  },
+
+  // Per-item breakdown of discount already given for this appointment, keyed
+  // by service_id — mirrors getWalletUsedPerItemForAppointment. Needed so a
+  // repeat payment call (partial → completing) can still exclude the
+  // discounted portion of each row from GST/commission, not just the
+  // aggregate bill total.
+  async getDiscountGivenPerItemForAppointment(appointmentId: string): Promise<Map<string, number>> {
+    const { rows } = await pool.query(
+      `SELECT service_id, COALESCE(SUM(amount_deducted),0) AS used
+       FROM membership_usage_log
+       WHERE appointment_id = $1 AND notes = 'membership_discount' AND service_id IS NOT NULL
+       GROUP BY service_id`,
+      [appointmentId],
+    );
+    return new Map(rows.map((r) => [String(r.service_id), parseFloat(r.used)]));
+  },
+
+  // Deducts the DISCOUNT GIVEN (not the service price) from a percentage
+  // membership's pool. Same locking/idempotency contract as
+  // deductWalletAcrossMemberships — partial payments call the payment flow more
+  // than once per appointment, so without the in-transaction ledger check the
+  // same discount would be taken twice.
+  //
+  // Ledger rows are tagged notes='membership_discount' so they never get mixed
+  // into the wallet's SUM(amount_deducted) reads, which are untagged.
+  async deductDiscountBalanceForBooking(
+    clientMembershipId: string,
+    salonId: string,
+    params: { appointmentId: string; services: DiscountDeductionServiceInput[]; discountPercent: number },
+  ): Promise<DiscountDeductionResult> {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const { rows } = await client.query(
+        `SELECT * FROM client_memberships WHERE id = $1 AND salon_id = $2 FOR UPDATE`,
+        [clientMembershipId, salonId],
+      );
+      if (!rows.length) {
+        await client.query('ROLLBACK');
+        return { totalDiscountGiven: 0, remainingBalance: 0, perService: [], reused: false };
+      }
+      const cm = rows[0] as ClientMembershipRow;
+
+      // Read back the FULL per-line breakdown, not just the sum — a second
+      // call for this appointment (e.g. completing a partial payment) must
+      // keep excluding each row's own already-given discount from GST, not
+      // just the aggregate total. Previously this branch returned an empty
+      // perService, silently losing per-row precision on exactly the repeat
+      // calls where the discount was actually already committed.
+      const { rows: existingRows } = await client.query(
+        `SELECT service_id, service_name, amount_deducted FROM membership_usage_log
+         WHERE appointment_id = $1 AND client_membership_id = $2 AND notes = 'membership_discount'
+         ORDER BY used_at`,
+        [params.appointmentId, clientMembershipId],
+      );
+      if (existingRows.length) {
+        await client.query('ROLLBACK');
+        const alreadyGiven = existingRows.reduce((s: number, r: any) => s + (Number(r.amount_deducted) || 0), 0);
+        return {
+          totalDiscountGiven: round2(alreadyGiven),
+          remainingBalance: Number(cm.discount_balance_remaining) || 0,
+          perService: existingRows.map((r: any) => ({ serviceId: r.service_id, discountGiven: Number(r.amount_deducted) || 0 })),
+          reused: true,
+        };
+      }
+
+      const balanceBefore = Number(cm.discount_balance_remaining) || 0;
+      const { total: totalDiscountGiven, discounts } = allocateMembershipDiscount(
+        params.services.map((s) => Number(s.amount) || 0),
+        params.discountPercent,
+        balanceBefore,
+      );
+      const perService: DiscountDeductionResult['perService'] = [];
+      let remaining = balanceBefore;
+
+      for (let i = 0; i < params.services.length; i++) {
+        const discount = discounts[i];
+        if (discount <= 0) continue;
+        const svc = params.services[i];
+        remaining = round2(remaining - discount);
+
+        const isUuid = typeof svc.serviceId === 'string' &&
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(svc.serviceId);
+        await client.query(
+          `INSERT INTO membership_usage_log
+            (id, client_membership_id, client_id, membership_id, appointment_id,
+             service_id, service_name, sessions_consumed, amount_deducted, remaining_balance, notes)
+           VALUES (gen_random_uuid(), $1,$2,$3,$4,$5,$6,0,$7,$8,'membership_discount')`,
+          [
+            cm.id, cm.client_id, cm.membership_id, params.appointmentId,
+            isUuid ? svc.serviceId : null, svc.serviceName || null, discount, remaining,
+          ],
+        );
+        perService.push({ serviceId: svc.serviceId, discountGiven: discount });
+      }
+
+      if (totalDiscountGiven > 0) {
+        const newStatus = remaining <= 0 ? 'exhausted' : cm.status;
+        await client.query(
+          `UPDATE client_memberships
+           SET discount_balance_remaining = $1, status = $2, updated_at = NOW() WHERE id = $3`,
+          [remaining, newStatus, cm.id],
+        );
+      }
+
+      await client.query('COMMIT');
+      return { totalDiscountGiven, remainingBalance: remaining, perService, reused: false };
     } catch (err) {
       await client.query('ROLLBACK');
       throw err;
