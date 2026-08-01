@@ -25,11 +25,38 @@ export const productsRepository = {
         return rows[0] || null;
     },
 
-    async findByBarcode(barcode: string, salonId: string): Promise<Product | null> {
-        const { rows } = await pool.query(
-            `SELECT ${PRODUCT_COLUMNS} FROM products WHERE barcode = $1 AND salon_id = $2`,
-            [barcode, salonId]
-        );
+    async findByBarcode(barcode: string, salonId: string, excludeId?: string): Promise<Product | null> {
+        const values: unknown[] = [barcode, salonId];
+        let sql = `SELECT ${PRODUCT_COLUMNS} FROM products WHERE barcode = $1 AND salon_id = $2`;
+        if (excludeId) {
+            values.push(excludeId);
+            sql += ` AND id != $${values.length}`;
+        }
+        const { rows } = await pool.query(sql, values);
+        return rows[0] || null;
+    },
+
+    // Duplicate-guard for the name+brand+category combination — `IS NOT DISTINCT
+    // FROM` so two products that both have no brand/category still count as the
+    // same combination (a plain `=` would silently let NULL = NULL pass).
+    async findByNameBrandCategory(
+        name: string,
+        brandId: string | null | undefined,
+        categoryId: string | null | undefined,
+        salonId: string,
+        excludeId?: string
+    ): Promise<Product | null> {
+        const values: unknown[] = [name.trim(), brandId ?? null, categoryId ?? null, salonId];
+        let sql = `SELECT ${PRODUCT_COLUMNS} FROM products
+            WHERE LOWER(name) = LOWER($1)
+            AND brand_id IS NOT DISTINCT FROM $2
+            AND category_id IS NOT DISTINCT FROM $3
+            AND salon_id = $4`;
+        if (excludeId) {
+            values.push(excludeId);
+            sql += ` AND id != $${values.length}`;
+        }
+        const { rows } = await pool.query(sql, values);
         return rows[0] || null;
     },
 
