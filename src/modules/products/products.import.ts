@@ -600,6 +600,19 @@ export const productsImportService = {
                             );
                     }
 
+                    // No barcode match — fall back to the name+brand+category
+                    // combination so imports can't create a second product that's
+                    // otherwise identical to one already on file.
+                    if (!existingProduct) {
+                        existingProduct =
+                            await productsRepository.findByNameBrandCategory(
+                                productData.name,
+                                productData.brand_id || null,
+                                productData.category_id || null,
+                                salonId
+                            );
+                    }
+
                     if (existingProduct) {
                         if (updateExisting) {
                             await productsRepository.update(
