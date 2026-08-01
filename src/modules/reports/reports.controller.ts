@@ -995,7 +995,9 @@ async getProductRetailReport(
             end_date: asString(body.end_date),
             product_id: asString(body.product_id),
             search: asString(body.search),
-            staff_id: asString(body.staff_id),
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             brand_id: asString(body.brand_id),
             category_id: asString(body.category_id),
             min_price: body.min_price !== undefined ? Number(body.min_price) : undefined,
@@ -1035,8 +1037,19 @@ async getServiceSaleReport(
         const filters = {
             start_date: asString(body.start_date),
             end_date: asString(body.end_date),
-            staff_id: asString(body.staff_id),
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            category_id: asString(body.category_id),
+            service_id: asString(body.service_id),
+            min_price: body.min_price !== undefined ? Number(body.min_price) : undefined,
+            max_price: body.max_price !== undefined ? Number(body.max_price) : undefined,
+            payment_method: asString(body.payment_method),
             search: asString(body.search),
+            sort_by: asString(body.sort_by) as
+                | "date" | "invoice_no" | "service_name" | "staff_name" | "price" | "total"
+                | undefined,
+            sort_dir: asString(body.sort_dir) as "asc" | "desc" | undefined,
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,

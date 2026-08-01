@@ -1323,15 +1323,17 @@ async getServiceSaleReport(
     salonId: string,
     filters: ServiceSaleReportFilters
 ): Promise<ServiceSaleReportResponse> {
-    const [stats, rowsResult] = await Promise.all([
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
         reportsRepository.getServiceSaleReportStats(salonId, filters),
         reportsRepository.getServiceSaleReportRows(salonId, filters),
+        reportsRepository.getServiceSaleFiltersAvailable(salonId),
     ]);
 
     return {
         rows: rowsResult.items,
         pagination: rowsResult.pagination,
         stats,
+        filters_available: filtersAvailable,
     };
 },
 

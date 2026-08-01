@@ -764,7 +764,7 @@ export interface ProductRetailReportFilters {
     end_date?: string;
     product_id?: string;
     search?: string;
-    staff_id?: string;
+    staff_ids?: string[];
     brand_id?: string;
     category_id?: string;
     min_price?: number;
@@ -838,8 +838,15 @@ export interface ProductRetailReportResponse {
 export interface ServiceSaleReportFilters {
     start_date?: string;
     end_date?: string;
-    staff_id?: string;
+    staff_ids?: string[];
+    category_id?: string;
+    service_id?: string;
+    min_price?: number;
+    max_price?: number;
+    payment_method?: string;
     search?: string;
+    sort_by?: "date" | "invoice_no" | "service_name" | "staff_name" | "price" | "total";
+    sort_dir?: "asc" | "desc";
     page?: number;
     limit?: number;
     is_export?: boolean;
@@ -855,12 +862,16 @@ export interface ServiceSaleReportRow {
     staff_name: string | null;
     service_id: string | null;
     service_name: string;
+    category_id: string | null;
+    category_name: string | null;
     price: number;
     // This line item's own GST + the post-discount/post-wallet base it was
     // computed on (see pricing.engine.ts's per-row allocation). 0 for sales
     // recorded before per-item tax existed.
     tax_amount: number;
     taxable_amount: number;
+    payment_method: string | null;
+    status: string;
 }
 
 export interface ServiceSaleReportStats {
@@ -868,6 +879,9 @@ export interface ServiceSaleReportStats {
     total_revenue: number;
     avg_ticket: number;
     unique_services: number;
+    // Most-frequently-sold service by line-item count in the filtered period —
+    // null when there are no matching rows.
+    top_service: { name: string; count: number } | null;
 }
 
 export interface ServiceSaleReportPagination {
@@ -877,10 +891,18 @@ export interface ServiceSaleReportPagination {
     total_pages: number;
 }
 
+export interface ServiceSaleFilterOption {
+    id: string;
+    label: string;
+}
+
 export interface ServiceSaleReportResponse {
     rows: ServiceSaleReportRow[];
     pagination: ServiceSaleReportPagination;
     stats: ServiceSaleReportStats;
+    filters_available: {
+        staff: ServiceSaleFilterOption[];
+    };
 }
 
 // ===============================
