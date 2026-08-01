@@ -13,6 +13,7 @@ import {
     ProductRetailFilterOption,
     ServiceSaleReportRow,
     ServiceSaleReportStats,
+    ServiceSaleFilterOption,
     GstReportRow,
     GstReportStats,
     ProductMarginReportRow,
@@ -2173,7 +2174,7 @@ _buildProductRetailWhere(
     end_date?: string;
     product_id?: string;
     search?: string;
-    staff_id?: string;
+    staff_ids?: string[];
     brand_id?: string;
     category_id?: string;
     min_price?: number;
@@ -2196,9 +2197,9 @@ _buildProductRetailWhere(
     where.push(`si.item_id = $${idx++}`);
     values.push(filters.product_id);
   }
-  if (filters.staff_id) {
-    where.push(`COALESCE(si.staff_id, s.staff_id) = $${idx++}`);
-    values.push(filters.staff_id);
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    where.push(`COALESCE(si.staff_id, s.staff_id) = ANY($${idx++}::uuid[])`);
+    values.push(filters.staff_ids);
   }
   if (filters.brand_id) {
     where.push(`p.brand_id = $${idx++}`);
@@ -2234,7 +2235,7 @@ async getProductRetailReportStats(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; product_id?: string; search?: string;
-    staff_id?: string; brand_id?: string; category_id?: string; min_price?: number; max_price?: number;
+    staff_ids?: string[]; brand_id?: string; category_id?: string; min_price?: number; max_price?: number;
   }
 ): Promise<ProductRetailReportStats> {
   const { where, values } = this._buildProductRetailWhere(salonId, filters);
@@ -2273,7 +2274,7 @@ async getProductRetailReportRows(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; product_id?: string; search?: string;
-    staff_id?: string; brand_id?: string; category_id?: string; min_price?: number; max_price?: number;
+    staff_ids?: string[]; brand_id?: string; category_id?: string; min_price?: number; max_price?: number;
     page?: number; limit?: number; is_export?: boolean;
   }
 ): Promise<{
@@ -2467,7 +2468,11 @@ async getProductRetailFiltersAvailable(salonId: string): Promise<{
 
 _buildServiceSaleWhere(
   salonId: string,
-  filters: { start_date?: string; end_date?: string; staff_id?: string; search?: string }
+  filters: {
+    start_date?: string; end_date?: string; staff_ids?: string[]; search?: string;
+    category_id?: string; service_id?: string; min_price?: number; max_price?: number;
+    payment_method?: string;
+  }
 ): { where: string; values: any[]; nextIndex: number } {
   const values: any[] = [salonId];
   const where = ["s.salon_id = $1", "s.status <> 'draft'", "si.item_type = 'service'"];
@@ -2481,13 +2486,34 @@ _buildServiceSaleWhere(
     where.push(`s.created_at < ($${idx++}::date + interval '1 day')`);
     values.push(filters.end_date);
   }
-  if (filters.staff_id) {
-    where.push(`COALESCE(si.staff_id, s.staff_id) = $${idx++}`);
-    values.push(filters.staff_id);
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    where.push(`COALESCE(si.staff_id, s.staff_id) = ANY($${idx++}::uuid[])`);
+    values.push(filters.staff_ids);
+  }
+  if (filters.service_id) {
+    where.push(`si.item_id = $${idx++}`);
+    values.push(filters.service_id);
+  }
+  if (filters.category_id) {
+    where.push(`sv.category_id = $${idx++}`);
+    values.push(filters.category_id);
+  }
+  if (filters.min_price !== undefined) {
+    where.push(`si.unit_price >= $${idx++}`);
+    values.push(filters.min_price);
+  }
+  if (filters.max_price !== undefined) {
+    where.push(`si.unit_price <= $${idx++}`);
+    values.push(filters.max_price);
+  }
+  if (filters.payment_method) {
+    where.push(`s.payment_method = $${idx++}`);
+    values.push(filters.payment_method);
   }
   if (filters.search?.trim()) {
     where.push(`(
-      COALESCE(si.name, '') ILIKE $${idx}
+      COALESCE(s.invoice_number, '') ILIKE $${idx}
+      OR COALESCE(si.name, '') ILIKE $${idx}
       OR COALESCE(c.full_name, '') ILIKE $${idx}
       OR COALESCE(st.first_name, '') ILIKE $${idx}
       OR COALESCE(st.last_name, '') ILIKE $${idx}
@@ -2501,7 +2527,11 @@ _buildServiceSaleWhere(
 
 async getServiceSaleReportStats(
   salonId: string,
-  filters: { start_date?: string; end_date?: string; staff_id?: string; search?: string }
+  filters: {
+    start_date?: string; end_date?: string; staff_ids?: string[]; search?: string;
+    category_id?: string; service_id?: string; min_price?: number; max_price?: number;
+    payment_method?: string;
+  }
 ): Promise<ServiceSaleReportStats> {
   const { where, values } = this._buildServiceSaleWhere(salonId, filters);
 
@@ -2514,25 +2544,48 @@ async getServiceSaleReportStats(
     JOIN sales s ON s.id = si.sale_id
     LEFT JOIN clients c ON s.client_id = c.id
     LEFT JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
+    LEFT JOIN services sv ON sv.id = si.item_id
     WHERE ${where}
   `;
 
-  const { rows } = await safeQuery(() => pool.query(query, values));
+  const topServiceQuery = `
+    SELECT si.name AS name, COUNT(*)::int AS count
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    LEFT JOIN clients c ON s.client_id = c.id
+    LEFT JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
+    LEFT JOIN services sv ON sv.id = si.item_id
+    WHERE ${where}
+    GROUP BY si.name
+    ORDER BY COUNT(*) DESC, si.name ASC
+    LIMIT 1
+  `;
+
+  const [{ rows }, { rows: topRows }] = await Promise.all([
+    safeQuery(() => pool.query(query, values)),
+    safeQuery(() => pool.query(topServiceQuery, values)),
+  ]);
   const r = rows[0] ?? {};
   const services_sold = Number(r.services_sold ?? 0);
   const total_revenue = Number(r.total_revenue ?? 0);
+  const topRow = topRows[0];
   return {
     services_sold,
     total_revenue,
     avg_ticket: services_sold > 0 ? total_revenue / services_sold : 0,
     unique_services: Number(r.unique_services ?? 0),
+    top_service: topRow ? { name: String(topRow.name), count: Number(topRow.count ?? 0) } : null,
   };
 },
 
 async getServiceSaleReportRows(
   salonId: string,
   filters: {
-    start_date?: string; end_date?: string; staff_id?: string; search?: string;
+    start_date?: string; end_date?: string; staff_ids?: string[]; search?: string;
+    category_id?: string; service_id?: string; min_price?: number; max_price?: number;
+    payment_method?: string;
+    sort_by?: "date" | "invoice_no" | "service_name" | "staff_name" | "price" | "total";
+    sort_dir?: "asc" | "desc";
     page?: number; limit?: number; is_export?: boolean;
   }
 ): Promise<{
@@ -2549,6 +2602,22 @@ async getServiceSaleReportRows(
   const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
   const limitValues = limit ? [limit, offset] : [];
 
+  // Total = line's own tax-inclusive price. "total" sort key matches the
+  // Total column shown on the frontend (unit price + its own GST).
+  const sortColumns: Record<string, string> = {
+    date: "s.created_at",
+    invoice_no: "s.invoice_number",
+    service_name: "si.name",
+    staff_name: "staff_name",
+    price: "si.total_price",
+    total: "(si.total_price + si.tax_amount)",
+  };
+  const sortColumn = sortColumns[filters.sort_by ?? "date"] ?? sortColumns.date;
+  const sortDir = filters.sort_dir === "asc" ? "ASC" : "DESC";
+  const orderClause = filters.sort_by
+    ? `ORDER BY ${sortColumn} ${sortDir}, s.created_at DESC`
+    : `ORDER BY s.created_at DESC`;
+
   const query = `
     SELECT
       s.id AS sale_id,
@@ -2560,15 +2629,20 @@ async getServiceSaleReportRows(
       NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
       si.item_id AS service_id,
       si.name AS service_name,
+      sv.category_id, sc.name AS category_name,
       si.total_price AS price,
       si.tax_amount, si.taxable_amount,
+      s.payment_method,
+      s.status,
       COUNT(*) OVER() AS total_count
     FROM sale_items si
     JOIN sales s ON s.id = si.sale_id
     LEFT JOIN clients c ON s.client_id = c.id
     LEFT JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
+    LEFT JOIN services sv ON sv.id = si.item_id
+    LEFT JOIN service_categories sc ON sc.id = sv.category_id
     WHERE ${where}
-    ORDER BY s.created_at DESC
+    ${orderClause}
     ${limitClause}
   `;
 
@@ -2584,9 +2658,13 @@ async getServiceSaleReportRows(
     staff_name: row.staff_name,
     service_id: row.service_id,
     service_name: row.service_name,
+    category_id: row.category_id,
+    category_name: row.category_name,
     price: Number(row.price ?? 0),
     tax_amount: Number(row.tax_amount ?? 0),
     taxable_amount: Number(row.taxable_amount ?? 0),
+    payment_method: row.payment_method,
+    status: row.status,
   }));
   const effectiveLimit = limit ?? Math.max(total, 1);
   return {
@@ -2597,6 +2675,26 @@ async getServiceSaleReportRows(
       limit: effectiveLimit,
       total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
     },
+  };
+},
+
+// Distinct staff that have EVER sold a service in this salon — scoped only
+// to salon_id, not the current date/filters, so the dropdown stays complete.
+async getServiceSaleFiltersAvailable(salonId: string): Promise<{
+  staff: ServiceSaleFilterOption[];
+}> {
+  const { rows: staffRows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT st.id, TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))) AS label
+     FROM sale_items si
+     JOIN sales s ON s.id = si.sale_id
+     JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
+     WHERE s.salon_id = $1 AND s.status <> 'draft' AND si.item_type = 'service'
+     ORDER BY label ASC`,
+    [salonId]
+  ));
+
+  return {
+    staff: staffRows.map((r: any) => ({ id: r.id, label: r.label })),
   };
 },
 
