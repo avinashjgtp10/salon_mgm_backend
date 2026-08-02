@@ -38,6 +38,9 @@ export interface CalculateTotalsBody {
   // amount because the figure is fully determined by the plan's percentage, the
   // eligible line total, and whatever discount balance is left.
   applyMembershipDiscount?: boolean;
+  // Independent sibling flag for the salon-wide Loyalty discount — stacks
+  // additively with applyMembershipDiscount above when both are set.
+  applyLoyaltyDiscount?: boolean;
 
   applyRewardPoints?: boolean;
   rewardPointsToRedeem?: number;

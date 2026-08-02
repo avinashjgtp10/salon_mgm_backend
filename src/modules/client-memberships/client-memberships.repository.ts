@@ -12,7 +12,26 @@ import type {
   DiscountDeductionServiceInput,
   DiscountDeductionResult,
 } from "./client-memberships.types";
+import type { MembershipAppliesTo } from "../memberships/memberships.types";
 import { allocateMembershipDiscount } from "../pricing/pricing.engine";
+import { AppError } from "../../middleware/error.middleware";
+
+// Returns null (unrestricted) if ANY membership covering this bucket has no
+// category restriction, else the union of every covering membership's
+// allowed categories — mirrors the existing "OR across memberships" pattern
+// already used for coversServices/coversProducts, since wallet balances are
+// pooled across memberships the same way. Callers must only use this after
+// confirming the bucket is actually covered (an empty `memberships` list
+// would otherwise resolve to [] rather than the correct "not covered").
+export function resolveCategoryRestriction(
+  memberships: { appliesTo: MembershipAppliesTo; categoryIds: string[] }[],
+  bucket: 'service' | 'product',
+): string[] | null {
+  const excludeSide = bucket === 'service' ? 'products' : 'services';
+  const covering = memberships.filter((m) => m.appliesTo !== excludeSide);
+  if (covering.some((m) => !m.categoryIds.length)) return null;
+  return Array.from(new Set(covering.flatMap((m) => m.categoryIds)));
+}
 
 // Money is stored as NUMERIC(10,2); a percentage of an arbitrary line amount
 // routinely produces more precision than that, so every arithmetic step is
@@ -88,6 +107,16 @@ export async function ensureTable(): Promise<void> {
     // matter (the real percentage-discount charge-time gate). A real column
     // here removes the need for that join entirely.
     `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS applies_to VARCHAR(10) NOT NULL DEFAULT 'services'`,
+    // Optional narrowing of applies_to to specific categories (blank/null =
+    // unrestricted, matching every plan's behavior before this column
+    // existed) — same denormalize-at-purchase convention as applies_to above.
+    `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS category_ids UUID[]`,
+    // Plain-text description denormalized from the plan's JSON-encoded
+    // memberships.description at purchase time (same convention as
+    // pricing_type/applies_to above) — lets the calendar's membership
+    // popover show it without a live lookup against the (possibly since
+    // edited or deleted) catalog plan.
+    `ALTER TABLE client_memberships ADD COLUMN IF NOT EXISTS description TEXT`,
   ];
   for (const sql of patches) {
     await pool.query(sql);
@@ -123,11 +152,24 @@ export async function ensureTable(): Promise<void> {
 // static DEFAULT 0 instead of a real computed balance. Only touches rows
 // that have literally never been through the wallet-deduction flow (no
 // ledger entries), so a genuinely-exhausted membership is never "revived".
+//
+// pricing_type = 'value' is required — only that type ever funds a spendable
+// wallet (percentage/loyalty legitimately sit at 0 forever, see create()'s
+// walletBalance assignment). Without this filter, this backfill — which
+// re-runs on every server start via ensureTable() — funded a 'percentage'
+// membership's wallet with its own price the first time it restarted after
+// purchase (before any discount had been given yet, so it still looked like
+// an untouched "legacy" row), incorrectly turning a Discount Balance plan
+// into a second spendable wallet on top of its actual discount pool. That
+// bogus balance then got treated as a real wallet source at checkout,
+// corrupting the wallet-vs-discount ledger accounting for any bill that used
+// both benefits together.
 async function backfillLegacyWalletBalances(): Promise<void> {
   const { rows: candidates } = await pool.query(`
     SELECT cm.id, cm.membership_id
     FROM client_memberships cm
     WHERE cm.status = 'active'
+      AND cm.pricing_type = 'value'
       AND cm.membership_wallet_balance = 0
       AND NOT EXISTS (
         SELECT 1 FROM membership_usage_log ul
@@ -180,6 +222,8 @@ function toClientMembership(row: ClientMembershipRow, log: UsageLogRow[] = []): 
     pricePaid:          row.price_paid ? parseFloat(row.price_paid) : undefined,
     membershipWalletBalance: Number(row.membership_wallet_balance) || 0,
     appliesTo:          row.applies_to ?? 'services',
+    categoryIds:        row.category_ids ?? [],
+    description:        row.description ?? undefined,
     pricingType:        (row.pricing_type as ClientMembership['pricingType']) ?? 'value',
     discountPercent:    row.discount_percent != null ? Number(row.discount_percent) : undefined,
     discountBalanceRemaining: Number(row.discount_balance_remaining) || 0,
@@ -211,6 +255,14 @@ function toClientMembership(row: ClientMembershipRow, log: UsageLogRow[] = []): 
 
 function computeExpiryDate(validFor: string | undefined | null): Date {
   const d = new Date();
+  // Current plans store an exact "N days" duration (picked via a calendar in
+  // the Add Membership modal) — the fixed buckets below only remain for plans
+  // created before that change.
+  const daysMatch = /^(\d+)\s*days?$/i.exec((validFor ?? '').trim());
+  if (daysMatch) {
+    d.setDate(d.getDate() + parseInt(daysMatch[1], 10));
+    return d;
+  }
   switch (validFor) {
     case '1 month':  d.setMonth(d.getMonth() + 1); break;
     case '3 months': d.setMonth(d.getMonth() + 3); break;
@@ -319,7 +371,7 @@ export const clientMembershipsRepository = {
     // always funded as (catalog price + bonusCredit) no matter which of the
     // several sell flows created this row.
     const memRes = await pool.query(
-      `SELECT valid_for, price, description, pricing_type, discount_percent, discount_balance, applies_to
+      `SELECT valid_for, price, description, pricing_type, discount_percent, discount_balance, applies_to, category_ids
        FROM memberships WHERE id = $1`,
       [dto.membershipId],
     );
@@ -329,8 +381,33 @@ export const clientMembershipsRepository = {
     if (!expiresAt) expiresAt = computeExpiryDate(memRow?.valid_for);
 
     const pricingType = memRow?.pricing_type ?? 'value';
+    // Loyalty plans enroll every client automatically off their visit count
+    // (see memberships.repository.ts's findLoyaltyEligibility) — they have no
+    // price to charge and never need a client_memberships row. Block it here,
+    // not just in the frontend picker, since this same create() is also the
+    // landing spot for autoCreateFromPayment (a membership sold as a line
+    // item on an appointment) — one guard covers every sell entry point.
+    if (pricingType === 'loyalty') {
+      throw new AppError(400, 'Loyalty memberships enroll automatically and cannot be sold or purchased.', 'LOYALTY_NOT_SELLABLE');
+    }
     const discountPercent = memRow?.discount_percent ?? null;
     const appliesTo = memRow?.applies_to ?? 'services';
+    const categoryIds = memRow?.category_ids?.length ? memRow.category_ids : null;
+
+    // description is JSON-encoded on the plan ({"description": "...", "bonusCredit": N})
+    // — pull the plain text back out, falling back to the raw value for legacy
+    // plans that stored plain text before the JSON convention existed.
+    let description: string | null = null;
+    if (memRow?.description) {
+      try {
+        const parsed = JSON.parse(memRow.description);
+        description = typeof parsed?.description === 'string' && parsed.description.trim()
+          ? parsed.description
+          : null;
+      } catch {
+        description = memRow.description;
+      }
+    }
 
     // Only a 'value' plan funds a spendable wallet. A 'percentage' plan's fee buys
     // a discount pool instead, so leaving its wallet at 0 is what keeps it out of
@@ -354,8 +431,8 @@ export const clientMembershipsRepository = {
         (id, salon_id, client_id, client_name, mobile, email,
          membership_id, membership_name, colour, total_sessions, used_sessions,
          expires_at, end_date, status, price_paid, membership_wallet_balance, appointment_id,
-         pricing_type, discount_percent, discount_balance_remaining, applies_to, staff_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$11,$14,'active',$12,$13,$15,$16,$17,$18,$19,$20)
+         pricing_type, discount_percent, discount_balance_remaining, applies_to, category_ids, description, staff_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$11,$14,'active',$12,$13,$15,$16,$17,$18,$19,$20,$21,$22)
        RETURNING *`,
       [
         id, salonId, dto.clientId, clientName, mobile, email,
@@ -375,6 +452,8 @@ export const clientMembershipsRepository = {
         discountPercent,
         discountBalance,
         appliesTo,
+        categoryIds,
+        description,
         dto.staffId ?? null,
       ],
     );
@@ -494,9 +573,12 @@ export const clientMembershipsRepository = {
   // that a plan can be "products only," this has to gate both directions.
   async getWalletCoverageForClient(
     clientId: string, salonId: string,
-  ): Promise<{ coversServices: boolean; coversProducts: boolean }> {
+  ): Promise<{
+    coversServices: boolean; coversProducts: boolean;
+    serviceCategoryIds: string[] | null; productCategoryIds: string[] | null;
+  }> {
     const { rows } = await pool.query(
-      `SELECT applies_to FROM client_memberships
+      `SELECT applies_to, category_ids FROM client_memberships
        WHERE client_id = $1 AND salon_id = $2 AND status = 'active' AND membership_wallet_balance > 0`,
       [clientId, salonId],
     );
@@ -507,15 +589,29 @@ export const clientMembershipsRepository = {
       if (appliesTo !== 'products') coversServices = true;
       if (appliesTo !== 'services') coversProducts = true;
     }
-    return { coversServices, coversProducts };
+    const memberships = rows.map((r) => ({
+      appliesTo: (r.applies_to ?? 'services') as MembershipAppliesTo,
+      categoryIds: (r.category_ids ?? []) as string[],
+    }));
+    return {
+      coversServices, coversProducts,
+      serviceCategoryIds: coversServices ? resolveCategoryRestriction(memberships, 'service') : [],
+      productCategoryIds: coversProducts ? resolveCategoryRestriction(memberships, 'product') : [],
+    };
   },
 
-  // Read-only — for display/history use only. NOT used to decide reuse-vs-deduct
-  // in the payment flow (that check must happen inside the locked transaction
-  // below to avoid a double-spend race).
+  // Also used by payments.service.ts as the "wallet checkbox unchecked on
+  // this call, but a prior call on this appointment already deducted"
+  // recovery path — MUST stay scoped to wallet-type rows only (notes IS
+  // NULL, the tag deductWalletAcrossMemberships writes). Without this filter
+  // it also summed 'membership_discount' rows from the SAME appointment,
+  // so any appointment with both a membership discount and the wallet
+  // checkbox unchecked at payment time reported the discount's ledger total
+  // as phantom "already applied" wallet coverage — money the payment record
+  // claimed was covered but was never actually deducted from any balance.
   async getWalletUsedForAppointment(appointmentId: string): Promise<number> {
     const { rows } = await pool.query(
-      `SELECT COALESCE(SUM(amount_deducted),0) AS total FROM membership_usage_log WHERE appointment_id = $1`,
+      `SELECT COALESCE(SUM(amount_deducted),0) AS total FROM membership_usage_log WHERE appointment_id = $1 AND notes IS NULL`,
       [appointmentId],
     );
     return parseFloat(rows[0]?.total ?? '0');
@@ -525,11 +621,16 @@ export const clientMembershipsRepository = {
   // (which also holds the product's id for a product redemption — see
   // deductWalletAcrossMemberships below). Single source of truth for excluding
   // membership-covered amounts from tax (payments.service.ts) and staff
-  // commission (commissionCalculation.service.ts) on a per-item basis.
+  // commission (commissionCalculation.service.ts) on a per-item basis. Scoped
+  // to wallet-type rows only (notes IS NULL) — same reasoning as
+  // getWalletUsedForAppointment above: an appointment that also had a
+  // membership discount applied writes its own 'membership_discount' rows to
+  // this same table, and without this filter they'd be misread as wallet
+  // usage here too, corrupting both the tax exclusion and the commission base.
   async getWalletUsedPerItemForAppointment(appointmentId: string): Promise<Map<string, number>> {
     const { rows } = await pool.query(
       `SELECT service_id, COALESCE(SUM(amount_deducted),0) AS used
-       FROM membership_usage_log WHERE appointment_id = $1 AND service_id IS NOT NULL
+       FROM membership_usage_log WHERE appointment_id = $1 AND service_id IS NOT NULL AND notes IS NULL
        GROUP BY service_id`,
       [appointmentId],
     );
@@ -570,10 +671,17 @@ export const clientMembershipsRepository = {
         .filter((r): r is ClientMembershipRow => !!r);
 
       // Idempotency check — MUST happen inside this same locked transaction,
-      // same reasoning as the single-membership version above.
+      // same reasoning as the single-membership version above. Scoped to
+      // wallet-type rows only (notes IS NULL) — a membership row that ALSO
+      // wrote 'membership_discount' entries for this same appointment (a
+      // percentage plan can end up in clientMembershipIds if its wallet
+      // balance is non-zero) would otherwise make this see "already used"
+      // from the discount's own ledger and short-circuit the real wallet
+      // deduction entirely, reporting the discount's total as if it were
+      // wallet coverage instead of ever touching the actual wallet balance.
       const { rows: existing } = await client.query(
         `SELECT COALESCE(SUM(amount_deducted),0) AS total FROM membership_usage_log
-         WHERE appointment_id = $1 AND client_membership_id = ANY($2)`,
+         WHERE appointment_id = $1 AND client_membership_id = ANY($2) AND notes IS NULL`,
         [params.appointmentId, clientMembershipIds],
       );
       const alreadyUsed = parseFloat(existing[0]?.total ?? '0');

@@ -32,6 +32,14 @@ interface DiscountEligibleItem {
   /** Post-per-row-discount line total the percentage applies to. */
   amount: number;
   isPackageService: boolean;
+  categoryId?: string;
+}
+
+// Optional narrowing of appliesTo to specific categories — empty/undefined
+// means unrestricted, preserving today's behavior for every plan that
+// doesn't use this feature.
+function matchesCategoryRestriction(item: DiscountEligibleItem, categoryIds: string[] | undefined): boolean {
+  return !categoryIds?.length || (!!item.categoryId && categoryIds.includes(item.categoryId));
 }
 
 interface MembershipDiscountResult {
@@ -41,15 +49,22 @@ interface MembershipDiscountResult {
   perItem: Map<string, number>;
 }
 
+// Money is stored as NUMERIC(10,2); percentages of arbitrary line amounts
+// routinely produce more precision than that, so every accumulation step is
+// rounded to keep the total exactly reconstructable from its per-item parts.
+const round2 = (v: number): number => Math.round((v + Number.EPSILON) * 100) / 100;
+
 /**
  * Grants — and, for the percentage type, actually spends — a membership
  * discount for this appointment, returning both the total and a per-item
  * breakdown of exactly which rows it landed on.
  *
- * A client's own purchased percentage membership always wins over a salon-wide
- * loyalty plan; stacking both on one bill has no coherent meaning and would
- * double-discount every line. Loyalty writes no ledger row because it has no
- * balance to spend and no client_memberships row to attach one to — it is
+ * Discount Balance and Loyalty are independently toggled by staff (the
+ * `applyPercentage`/`applyLoyalty` flags) and stack additively when both are
+ * on — each source computes its own % off the SAME pre-discount line amount
+ * (e.g. 30% + 10% = 40% off), rather than one compounding on top of the
+ * other's already-reduced price. Loyalty writes no ledger row because it has
+ * no balance to spend and no client_memberships row to attach one to — it is
  * recomputed deterministically from the same rows on every call instead.
  */
 async function applyMembershipDiscountForBooking(
@@ -58,42 +73,54 @@ async function applyMembershipDiscountForBooking(
   appointmentId: string,
   serviceItems: DiscountEligibleItem[],
   productItems: DiscountEligibleItem[],
+  applyPercentage: boolean,
+  applyLoyalty: boolean,
 ): Promise<MembershipDiscountResult> {
-  const percentageMembership = await clientMembershipsRepository.findActivePercentageForClient(clientId, salonId);
+  let total = 0;
+  const perItem = new Map<string, number>();
+  const addDiscount = (itemId: string, amount: number) => {
+    perItem.set(itemId, round2((perItem.get(itemId) ?? 0) + amount));
+  };
 
-  if (percentageMembership) {
-    const appliesTo = percentageMembership.appliesTo;
-    const eligible = [
-      ...(appliesTo !== 'products' ? serviceItems.filter((i) => !i.isPackageService && i.amount > 0) : []),
-      ...(appliesTo !== 'services' ? productItems.filter((i) => i.amount > 0) : []),
-    ];
-    if (!eligible.length) return { total: 0, perItem: new Map() };
-
-    const result = await clientMembershipsRepository.deductDiscountBalanceForBooking(
-      percentageMembership.id,
-      salonId,
-      {
-        appointmentId,
-        discountPercent: percentageMembership.discountPercent ?? 0,
-        services: eligible.map((i) => ({ serviceId: i.itemId, serviceName: i.name, amount: i.amount })),
-      },
-    );
-    const perItem = new Map<string, number>();
-    result.perService.forEach((r) => { if (r.serviceId) perItem.set(String(r.serviceId), r.discountGiven); });
-    return { total: result.totalDiscountGiven, perItem };
+  if (applyPercentage) {
+    const percentageMembership = await clientMembershipsRepository.findActivePercentageForClient(clientId, salonId);
+    if (percentageMembership) {
+      const appliesTo = percentageMembership.appliesTo;
+      const categoryIds = percentageMembership.categoryIds;
+      const eligible = [
+        ...(appliesTo !== 'products' ? serviceItems.filter((i) => !i.isPackageService && i.amount > 0 && matchesCategoryRestriction(i, categoryIds)) : []),
+        ...(appliesTo !== 'services' ? productItems.filter((i) => i.amount > 0 && matchesCategoryRestriction(i, categoryIds)) : []),
+      ];
+      if (eligible.length) {
+        const result = await clientMembershipsRepository.deductDiscountBalanceForBooking(
+          percentageMembership.id,
+          salonId,
+          {
+            appointmentId,
+            discountPercent: percentageMembership.discountPercent ?? 0,
+            services: eligible.map((i) => ({ serviceId: i.itemId, serviceName: i.name, amount: i.amount })),
+          },
+        );
+        total += result.totalDiscountGiven;
+        result.perService.forEach((r) => { if (r.serviceId) addDiscount(String(r.serviceId), r.discountGiven); });
+      }
+    }
   }
 
-  const loyalty = await membershipsRepository.findLoyaltyEligibility(clientId, salonId);
-  if (!loyalty?.eligible) return { total: 0, perItem: new Map() };
+  if (applyLoyalty) {
+    const loyalty = await membershipsRepository.findLoyaltyEligibility(clientId, salonId);
+    if (loyalty?.eligible) {
+      const eligible = [
+        ...(loyalty.appliesTo !== 'products' ? serviceItems.filter((i) => !i.isPackageService && i.amount > 0 && matchesCategoryRestriction(i, loyalty.categoryIds)) : []),
+        ...(loyalty.appliesTo !== 'services' ? productItems.filter((i) => i.amount > 0 && matchesCategoryRestriction(i, loyalty.categoryIds)) : []),
+      ];
+      const { total: loyaltyTotal, discounts } = allocateMembershipDiscount(eligible.map((i) => i.amount), loyalty.discountPercent, Infinity);
+      total += loyaltyTotal;
+      eligible.forEach((item, i) => { if (item.itemId && discounts[i] > 0) addDiscount(String(item.itemId), discounts[i]); });
+    }
+  }
 
-  const eligible = [
-    ...(loyalty.appliesTo !== 'products' ? serviceItems.filter((i) => !i.isPackageService && i.amount > 0) : []),
-    ...(loyalty.appliesTo !== 'services' ? productItems.filter((i) => i.amount > 0) : []),
-  ];
-  const { total, discounts } = allocateMembershipDiscount(eligible.map((i) => i.amount), loyalty.discountPercent, Infinity);
-  const perItem = new Map<string, number>();
-  eligible.forEach((item, i) => { if (item.itemId && discounts[i] > 0) perItem.set(String(item.itemId), discounts[i]); });
-  return { total, perItem };
+  return { total: round2(total), perItem };
 }
 
 export const paymentsService = {
@@ -274,18 +301,22 @@ export const paymentsService = {
           // the per-ROW GST split degrades to 0 in that narrow, repeat-call
           // edge case.
           let membershipDiscountByItem = new Map<string, number>();
-          if (data.client_id && data.apply_membership_discount) {
+          if (data.client_id && (data.apply_membership_discount || data.apply_loyalty_discount)) {
             try {
               const result = await applyMembershipDiscountForBooking(
                 data.salon_id, data.client_id, data.appointment_id,
                 (appt.services || []).map(s => ({
                   itemId: s.service_id, name: s.name,
                   amount: lineTotal(s), isPackageService: !!(s as any).is_package_service,
+                  categoryId: s.category_id ?? undefined,
                 })),
                 (appt.product_items || []).filter(p => !!p.product_id).map(p => ({
                   itemId: p.product_id as string, name: p.name,
                   amount: lineTotal(p), isPackageService: false,
+                  categoryId: p.category_id ?? undefined,
                 })),
+                !!data.apply_membership_discount,
+                !!data.apply_loyalty_discount,
               );
               membershipDiscountUsed = result.total;
               membershipDiscountByItem = result.perItem;
@@ -357,16 +388,19 @@ export const paymentsService = {
                 // services-only, products-only, or both; services are no
                 // longer unconditionally eligible the way they used to be
                 // before "products only" existed as an option.
-                const { coversServices, coversProducts } =
+                const { coversServices, coversProducts, serviceCategoryIds, productCategoryIds } =
                   await clientMembershipsService.getWalletCoverage(data.salon_id, data.client_id);
                 const itemsForWallet = [
-                  ...(coversServices ? (appt.services || []).map(s => ({
-                    serviceId:   s.service_id,
-                    serviceName: s.name,
-                    amount:      (Number(s.price) || 0) * qty(s),
-                  })) : []),
+                  ...(coversServices ? (appt.services || [])
+                    .filter(s => !serviceCategoryIds?.length || (s.category_id && serviceCategoryIds.includes(s.category_id)))
+                    .map(s => ({
+                      serviceId:   s.service_id,
+                      serviceName: s.name,
+                      amount:      (Number(s.price) || 0) * qty(s),
+                    })) : []),
                   ...(coversProducts ? (appt.product_items || [])
                     .filter(p => !!p.product_id)
+                    .filter(p => !productCategoryIds?.length || (p.category_id && productCategoryIds.includes(p.category_id)))
                     .map(p => ({
                       serviceId:   p.product_id as string,
                       serviceName: p.name,
@@ -569,6 +603,17 @@ export const paymentsService = {
             taxableAmount = result.taxable;
             rowTaxByBucket = result.rowTax;
             rowTaxableByBucket = result.rowTaxableAmount;
+            // Overwrite whatever the frontend sent with this call's own
+            // authoritative recomputation — same reasoning as gross_amount/
+            // net_amount/paid_amount/due_amount below, which already don't
+            // trust the frontend. Without this, payments.repository.ts's
+            // INSERT persisted data.tax_breakdown verbatim from the request
+            // body, so the receipt/View Appointment always showed whatever
+            // GST the frontend's own (possibly stale, or simply differently-
+            // computed) preview had — e.g. computed on the pre-membership-
+            // -discount subtotal — even though this call had just computed
+            // the correct, discount-aware figure right here.
+            data.tax_breakdown = result.taxBreakdown;
           } catch (err: any) {
             logger.warn('[payments] tax computation failed:', err?.message ?? err);
           }

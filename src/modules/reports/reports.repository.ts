@@ -1267,43 +1267,66 @@ _UNBILLED_APPOINTMENT_ROWS_CTE(
 
   const sql = `
     SELECT
-      a.id,
-      a.id AS appointment_id,
-      NULL::text AS invoice_number,
-      a.status::text AS status,
-      a.created_at,
-      pay.latest_method AS payment_method,
-      c.full_name AS client_name,
-      c.phone_number AS client_phone,
-      NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
-      COALESCE(items.item_description, '—') AS item_description,
-      COALESCE(items.item_types, '—') AS item_types,
-      COALESCE(items.items_total, 0) AS actual_price,
-      -- Mirrors totalsUtils.ts::computeTotals() at a coarser grain: taxable =
-      -- items_total - discount, then GST applied on that taxable amount using
-      -- the flat rate saved on the appointment at booking time
-      -- (appointments.gst_percent — set from booking.gst in useAppointment.ts).
-      -- The real UI computes GST per item-type bucket against configured tax
-      -- rules, which isn't reproducible here without that config; gst_percent
-      -- is the single stored number closest to "the rate that was actually
-      -- applied to this specific bill".
+      base.id, base.appointment_id, base.invoice_number, base.status, base.created_at,
+      base.payment_method, base.client_name, base.client_phone, base.staff_name,
+      base.item_description, base.item_types, base.actual_price,
+      -- Manual/coupon discount only — the membership discount is a membership
+      -- benefit, grouped into membership_wallet_used below instead, not here
+      -- (see the identical split in sales_side above).
+      base.manual_discount AS discount_amount,
+      (GREATEST(base.items_total - base.manual_discount - base.membership_discount_used, 0)
+        * base.gst_percent / 100) AS tax_amount,
       GREATEST(
-        (
-          COALESCE(items.items_total, 0)
-            - (CASE WHEN a.discount_type = 'percentage'
-                     THEN COALESCE(items.items_total, 0) * (COALESCE(a.discount_value, 0) / 100)
-                     ELSE COALESCE(a.discount_value, 0) END)
-        ) * (1 + COALESCE(a.gst_percent, 0) / 100)
-          + COALESCE(a.ex_charges, 0) + COALESCE(a.tip_amount, 0),
+        GREATEST(base.items_total - base.manual_discount - base.membership_discount_used, 0)
+          * (1 + base.gst_percent / 100)
+          + base.ex_charges + base.tip_amount,
         0
       ) AS price,
-      COALESCE(a.tip_amount, 0) AS tip_amount,
-      COALESCE(pay.total_paid, 0) AS paid_amount,
-      COALESCE(pay.latest_due, 0) AS due_amount,
-      COALESCE(pay.ewallet_used, 0) AS ewallet_used,
-      COALESCE(pay.membership_wallet_used, 0) AS membership_wallet_used,
-      COALESCE(pay.reward_points_value, 0) AS reward_points_value,
-      COALESCE(pay.referral_credit_used, 0) AS referral_credit_used
+      base.tip_amount,
+      base.paid_amount, base.due_amount, base.ewallet_used,
+      (base.membership_wallet_used + base.membership_discount_used) AS membership_wallet_used,
+      base.reward_points_value, base.referral_credit_used
+    FROM (
+      SELECT
+        a.id,
+        a.id AS appointment_id,
+        NULL::text AS invoice_number,
+        a.status::text AS status,
+        a.created_at,
+        pay.latest_method AS payment_method,
+        c.full_name AS client_name,
+        c.phone_number AS client_phone,
+        NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
+        COALESCE(items.item_description, '—') AS item_description,
+        COALESCE(items.item_types, '—') AS item_types,
+        COALESCE(items.items_total, 0) AS actual_price,
+        COALESCE(items.items_total, 0) AS items_total,
+        -- Mirrors totalsUtils.ts::computeTotals() at a coarser grain: taxable =
+        -- items_total - discount, then GST applied on that taxable amount using
+        -- the flat rate saved on the appointment at booking time
+        -- (appointments.gst_percent — set from booking.gst in useAppointment.ts).
+        -- The real UI computes GST per item-type bucket against configured tax
+        -- rules, which isn't reproducible here without that config; gst_percent
+        -- is the single stored number closest to "the rate that was actually
+        -- applied to this specific bill".
+        (CASE WHEN a.discount_type = 'percentage'
+               THEN COALESCE(items.items_total, 0) * (COALESCE(a.discount_value, 0) / 100)
+               ELSE COALESCE(a.discount_value, 0) END) AS manual_discount,
+        -- Pre-tax reduction from a Discount Balance/Loyalty membership — never
+        -- factored into this CTE's price at all before, so a fully
+        -- membership-covered unbilled appointment both under-reported its
+        -- Discount column AND over-reported price/tax (computed as if the
+        -- membership discount never happened).
+        COALESCE(pay.membership_discount_used, 0) AS membership_discount_used,
+        COALESCE(a.gst_percent, 0) AS gst_percent,
+        COALESCE(a.ex_charges, 0) AS ex_charges,
+        COALESCE(a.tip_amount, 0) AS tip_amount,
+        COALESCE(pay.total_paid, 0) AS paid_amount,
+        COALESCE(pay.latest_due, 0) AS due_amount,
+        COALESCE(pay.ewallet_used, 0) AS ewallet_used,
+        COALESCE(pay.membership_wallet_used, 0) AS membership_wallet_used,
+        COALESCE(pay.reward_points_value, 0) AS reward_points_value,
+        COALESCE(pay.referral_credit_used, 0) AS referral_credit_used
     FROM appointments a
     LEFT JOIN clients c ON a.client_id = c.id
     LEFT JOIN staff st ON st.id = a.staff_id
@@ -1319,7 +1342,9 @@ _UNBILLED_APPOINTMENT_ROWS_CTE(
         COALESCE(SUM(p.ewallet_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS ewallet_used,
         COALESCE(SUM(p.membership_wallet_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS membership_wallet_used,
         COALESCE(SUM(p.reward_points_value) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS reward_points_value,
-        COALESCE(SUM(p.referral_credit_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS referral_credit_used
+        COALESCE(SUM(p.referral_credit_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS referral_credit_used,
+        -- MAX not SUM — see _PAYMENT_LATERAL's identical comment above.
+        COALESCE(MAX(p.membership_discount_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS membership_discount_used
       FROM payments p
       WHERE p.appointment_id = a.id
     ) pay ON TRUE
@@ -1351,6 +1376,7 @@ _UNBILLED_APPOINTMENT_ROWS_CTE(
       ) src
     ) items ON TRUE
     WHERE ${where.join(" AND ")}
+    ) base
   `;
 
   return { sql, values, nextIndex: idx };
@@ -1379,6 +1405,22 @@ _PAYMENT_LATERAL: `
       COALESCE(SUM(p.membership_wallet_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS membership_wallet_used,
       COALESCE(SUM(p.reward_points_value) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS reward_points_value,
       COALESCE(SUM(p.referral_credit_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS referral_credit_used,
+      -- Pre-tax price reduction from a Discount Balance/Loyalty membership —
+      -- separate column from payments.discount_amount (the manual/coupon
+      -- discount) below, see applyMembershipDiscountForBooking. MAX, not SUM
+      -- like the fields above: unlike an incremental delta, every payment row
+      -- for the same appointment carries the SAME cumulative total (a repeat/
+      -- completing call recovers and re-stores it via
+      -- getMembershipDiscountForAppointment's own MAX read) — summing across
+      -- multiple rows for one appointment (e.g. partial then completing
+      -- payment) would double- or triple-count the identical figure.
+      COALESCE(MAX(p.membership_discount_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS membership_discount_used,
+      -- Manual/coupon discount only. NOT the same figure as sales.discount_amount
+      -- (which payments.service.ts deliberately folds membership wallet +
+      -- membership discount into as well, for its own subtotal-minus-discount
+      -- revenue-recognition math) — this one is the customer-facing "discount
+      -- applied to the bill" figure the report actually wants to show.
+      COALESCE(SUM(p.discount_amount) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS manual_discount_used,
       COUNT(*) FILTER (WHERE p.status IN ('completed', 'partial')) > 0 AS has_payment
     FROM payments p
     WHERE p.appointment_id = s.appointment_id AND s.appointment_id IS NOT NULL
@@ -1570,7 +1612,16 @@ async getSalesSummaryReportRows(
         s.id, s.invoice_number, s.created_at, s.payment_method,
         s.appointment_id,
         ${this._STATUS_EXPR} AS status,
-        s.subtotal AS actual_price, s.total_amount AS price, s.tip_amount,
+        s.subtotal AS actual_price, s.total_amount AS price,
+        -- Deliberately NOT s.discount_amount — that column is a revenue-
+        -- recognition figure (payments.service.ts folds membership wallet +
+        -- membership discount into it too, see its recordTransaction() call),
+        -- not "the discount shown on the bill". Manual/coupon only — the
+        -- membership discount belongs with membership_wallet_used below (it's
+        -- a membership benefit, not a generic bill discount), not here.
+        COALESCE(pay.manual_discount_used, 0) AS discount_amount,
+        COALESCE(s.tax_amount, 0) AS tax_amount,
+        s.tip_amount,
         c.full_name AS client_name, c.phone_number AS client_phone,
         NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
         COALESCE(items.item_description, '—') AS item_description,
@@ -1582,7 +1633,10 @@ async getSalesSummaryReportRows(
         END AS paid_amount,
         COALESCE(pay.latest_due, 0) AS due_amount,
         COALESCE(pay.ewallet_used, 0) AS ewallet_used,
-        COALESCE(pay.membership_wallet_used, 0) AS membership_wallet_used,
+        -- Both membership benefits combined — wallet redemption AND discount
+        -- are each "covered by their membership", one column, not split
+        -- across "Membership" and "Discount".
+        COALESCE(pay.membership_wallet_used, 0) + COALESCE(pay.membership_discount_used, 0) AS membership_wallet_used,
         COALESCE(pay.reward_points_value, 0) AS reward_points_value,
         COALESCE(pay.referral_credit_used, 0) AS referral_credit_used
       FROM sales s
@@ -1610,7 +1664,7 @@ async getSalesSummaryReportRows(
       SELECT
         u.id, u.invoice_number, u.created_at, u.payment_method,
         u.appointment_id, u.status,
-        u.actual_price, u.price, u.tip_amount,
+        u.actual_price, u.price, u.discount_amount, u.tax_amount, u.tip_amount,
         u.client_name, u.client_phone, u.staff_name,
         u.item_description, u.item_types,
         u.paid_amount, u.due_amount,
@@ -1641,6 +1695,8 @@ async getSalesSummaryReportRows(
     item_types: row.item_types,
     actual_price: Number(row.actual_price ?? 0),
     price: Number(row.price ?? 0),
+    discount_amount: Number(row.discount_amount ?? 0),
+    tax_amount: Number(row.tax_amount ?? 0),
     paid_amount: Number(row.paid_amount ?? 0),
     due_amount: Number(row.due_amount ?? 0),
     tip_amount: Number(row.tip_amount ?? 0),

@@ -232,7 +232,10 @@ export const clientMembershipsService = {
   // Gate for whether payments.service.ts should include service/product items
   // in the wallet-deduction input, per the client's active memberships' own
   // applies_to setting.
-  async getWalletCoverage(salonId: string, clientId: string): Promise<{ coversServices: boolean; coversProducts: boolean }> {
+  async getWalletCoverage(salonId: string, clientId: string): Promise<{
+    coversServices: boolean; coversProducts: boolean;
+    serviceCategoryIds: string[] | null; productCategoryIds: string[] | null;
+  }> {
     return clientMembershipsRepository.getWalletCoverageForClient(clientId, salonId);
   },
 

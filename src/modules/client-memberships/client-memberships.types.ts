@@ -20,6 +20,10 @@ export interface ClientMembership {
   membershipWalletBalance: number;
   /** Denormalized from the plan at purchase time — see memberships.types.ts. */
   appliesTo: MembershipAppliesTo;
+  /** Optional narrowing of appliesTo to specific categories — empty means unrestricted. */
+  categoryIds: string[];
+  /** Denormalized plain-text description from the plan at purchase time — see memberships.types.ts. */
+  description?: string;
   pricingType: 'value' | 'percentage' | 'loyalty';
   discountPercent?: number;
   /** 'percentage' only — discount still available to hand out, depletes by discount given. */
@@ -139,6 +143,8 @@ export interface ClientMembershipRow {
   price_paid?: string | null;
   membership_wallet_balance?: string | number | null;
   applies_to?: MembershipAppliesTo | null;
+  category_ids?: string[] | null;
+  description?: string | null;
   pricing_type?: string | null;
   discount_percent?: string | number | null;
   discount_balance_remaining?: string | number | null;

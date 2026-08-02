@@ -37,6 +37,11 @@ export interface LineItem {
   qty: number;
   discount?: number;
   total?: number;
+  // Optional service_categories id — lets a category-restricted membership
+  // (wallet/discount/loyalty) filter which rows it's actually eligible to
+  // cover. Unused by this engine's own tax/discount math, only by the
+  // eligibility gating in pricing.service.ts/payments.service.ts.
+  categoryId?: string;
   // Membership-wallet-eligibility only (see pricing.service.ts's wallet split)
   // — unused by the rest of this engine, which only reads price/qty/total.
   isPackageService?: boolean;
