@@ -1363,6 +1363,15 @@ async getPackageSaleReport(
             start_date: asString(body.start_date),
             end_date: asString(body.end_date),
             search: asString(body.search),
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            package_name: asString(body.package_name),
+            package_status: asString(body.package_status),
+            payment_status: asString(body.payment_status),
+            payment_method: asString(body.payment_method),
+            min_amount: body.min_amount !== undefined ? Number(body.min_amount) : undefined,
+            max_amount: body.max_amount !== undefined ? Number(body.max_amount) : undefined,
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,

@@ -35,6 +35,11 @@ export interface ClientMembership {
   // aggregation (useClientDetails.ts) must skip any row with this set to
   // avoid double-counting. NULL/undefined means a genuine standalone sale.
   appointmentId?: string | null;
+  // Staff who sold the membership, and the sales row recordTransaction()
+  // (or the checkout that bundled this membership) created for it — for
+  // invoice_no lookup. NULL on rows sold before these columns existed.
+  staffId?: string | null;
+  saleId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -73,6 +78,8 @@ export interface CreateClientMembershipDTO {
   splitDetails?: Record<string, number>;
   /** Set only by autoCreateFromPayment — the appointment this membership was sold within. */
   appointmentId?: string | null;
+  /** Staff member who sold this membership — feeds client_memberships.staff_id and the sales/sale_items rows recordTransaction() creates. */
+  staffId?: string;
 }
 
 export interface ConsumeSessionDTO {
@@ -142,6 +149,8 @@ export interface ClientMembershipRow {
   discount_percent?: string | number | null;
   discount_balance_remaining?: string | number | null;
   appointment_id?: string | null;
+  staff_id?: string | null;
+  sale_id?: string | null;
   created_at: string;
   updated_at: string;
 }

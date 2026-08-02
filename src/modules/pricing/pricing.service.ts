@@ -1,6 +1,6 @@
 import {
   computeBillTotals, rowsTotal, BucketAmounts, LineItem,
-  allocateMembershipDiscount,
+  allocateMembershipDiscount, round2,
 } from './pricing.engine';
 import { membershipsRepository } from '../memberships/memberships.repository';
 import type { MembershipAppliesTo } from '../memberships/memberships.types';
@@ -16,18 +16,29 @@ import { AppError } from '../../middleware/error.middleware';
 import { CalculateTotalsBody, CalculateTotalsResponse } from './pricing.types';
 
 // Read-only mirror of AppointmentModal.tsx's membershipWalletMap allocation
-// (service rows first, excluding package-covered ones, then product rows
-// if the client's membership allows it) — NOT the same code path as
-// payments.service.ts's deductWalletForBooking, which actually WRITES to
-// membership_usage_log. This never touches the database: it only exists so
-// the live preview can show the correct service/product split for tax
-// purposes before checkout, without deducting anything. The real deduction
-// still happens exactly once, at actual charge time, in payments.service.ts.
+// — NOT the same code path as payments.service.ts's deductWalletForBooking,
+// which actually WRITES to membership_usage_log. This never touches the
+// database: it only exists so the live preview can show the correct
+// service/product split for tax purposes before checkout, without deducting
+// anything. The real deduction still happens exactly once, at actual charge
+// time, in payments.service.ts.
 // Optional narrowing of appliesTo to specific categories — empty/null means
 // unrestricted, preserving today's behavior for every plan that doesn't use
 // this feature.
 function matchesCategoryRestriction(row: LineItem, categoryIds: string[] | null): boolean {
   return !categoryIds?.length || (!!row.categoryId && categoryIds.includes(row.categoryId));
+}
+
+// Total ₹ value a bucket's rows are actually eligible to have the wallet
+// applied against — same eligibility filter (package-covered services
+// excluded, category restriction) used by the fill allocation below.
+function eligibleWalletTotal(rows: LineItem[], skipPackageRows: boolean, categoryIds: string[] | null): number {
+  return rows.reduce((sum, row) => {
+    if (skipPackageRows && row.isPackageService) return sum;
+    if (!matchesCategoryRestriction(row, categoryIds)) return sum;
+    const rowTotal = row.total ?? row.price * (row.qty || 1);
+    return rowTotal > 0 ? sum + rowTotal : sum;
+  }, 0);
 }
 
 function splitMembershipWalletUsage(
@@ -39,43 +50,36 @@ function splitMembershipWalletUsage(
   serviceCategoryIds: string[] | null = [],
   productCategoryIds: string[] | null = [],
 ): { serviceWalletUsed: number; productWalletUsed: number; totalWalletUsed: number } {
-  let remaining = Math.max(0, requestedAmount);
-  let serviceWalletUsed = 0;
-  let productWalletUsed = 0;
-
-  if (coversServices) {
-    for (const row of serviceRows) {
-      if (row.isPackageService || remaining <= 0) continue;
-      if (!matchesCategoryRestriction(row, serviceCategoryIds)) continue;
-      const rowTotal = row.total ?? row.price * (row.qty || 1);
-      if (rowTotal <= 0) continue;
-      const used = Math.min(remaining, rowTotal);
-      remaining -= used;
-      serviceWalletUsed += used;
-    }
+  const requested = Math.max(0, requestedAmount);
+  const serviceEligible = coversServices ? eligibleWalletTotal(serviceRows, true, serviceCategoryIds) : 0;
+  const productEligible = coversProducts ? eligibleWalletTotal(productRows, false, productCategoryIds) : 0;
+  const combinedEligible = serviceEligible + productEligible;
+  if (combinedEligible <= 0 || requested <= 0) {
+    return { serviceWalletUsed: 0, productWalletUsed: 0, totalWalletUsed: 0 };
   }
 
-  if (coversProducts) {
-    for (const row of productRows) {
-      if (remaining <= 0) continue;
-      if (!matchesCategoryRestriction(row, productCategoryIds)) continue;
-      const rowTotal = row.total ?? row.price * (row.qty || 1);
-      if (rowTotal <= 0) continue;
-      const used = Math.min(remaining, rowTotal);
-      remaining -= used;
-      productWalletUsed += used;
-    }
-  }
-
-  return { serviceWalletUsed, productWalletUsed, totalWalletUsed: serviceWalletUsed + productWalletUsed };
+  // Proportional split — the wallet covers the SAME percentage of both
+  // service and product value, rather than fully draining one bucket before
+  // touching the other. Used to be strict "services first" priority, which
+  // could zero out a product's coverage entirely just because an unrelated
+  // service also competed for the same shared balance (see
+  // allocateMembershipDiscount for the matching rework on the discount side).
+  // ratio is always exactly 1 when the balance covers everyone, same result
+  // as before this rework for that common case.
+  const ratio = Math.min(1, requested / combinedEligible);
+  const serviceWalletUsed = round2(serviceEligible * ratio);
+  const productWalletUsed = round2(productEligible * ratio);
+  return { serviceWalletUsed, productWalletUsed, totalWalletUsed: round2(serviceWalletUsed + productWalletUsed) };
 }
 
-// Per-row form of the same fill-in-order allocation splitMembershipWalletUsage
-// does — returns how much wallet each individual row absorbed, so the per-row
-// tax preview can exclude the wallet-covered portion of a row from its taxable
-// base (same as checkout does via payments.service.ts's walletUsedByItem).
-// Must apply the SAME category filter as splitMembershipWalletUsage above so
-// the per-row breakdown always sums back to the same aggregate total.
+// Per-row form of the same fill-in-order allocation used within a single
+// bucket — returns how much wallet each individual row absorbed, so the
+// per-row tax preview can exclude the wallet-covered portion of a row from
+// its taxable base (same as checkout does via payments.service.ts's
+// walletUsedByItem). `totalWallet` here is that bucket's OWN proportional
+// share from splitMembershipWalletUsage above (not the full requested
+// amount), so within a bucket, earlier rows still fill first — only the
+// cross-bucket (service vs product) split is proportional now.
 function allocateWalletPerRow(
   rows: LineItem[], totalWallet: number, skipPackageRows: boolean,
   categoryIds: string[] | null = [],
@@ -235,6 +239,33 @@ export const pricingService = {
     const membershipServiceDiscountUsed = membershipServiceDiscounts.reduce((s, v) => s + v, 0);
     const membershipProductDiscountUsed = membershipProductDiscounts.reduce((s, v) => s + v, 0);
 
+    // ── Referral first-bill discount eligibility preview — mirrors
+    // payments.service.ts's charge-time logic exactly, but read-only (no
+    // ledger writes, no markRefereeRewarded — those only happen at actual
+    // payment time). Only applies on the first-ever payment for this
+    // appointment, so an appointment_id with prior payments is disqualified.
+    // Resolved here, before the preliminary ceiling call below, because it's
+    // now part of the same waterfall the ceiling needs to already reflect
+    // (Referral Discount is applied before Membership Wallet/eWallet/Reward
+    // Points, per pricing.engine.ts's computeBillTotals).
+    let referralDiscountPreview = 0;
+    if (body.client_id) {
+      try {
+        const existingPaid = body.appointment_id
+          ? await paymentsRepository.getTotalPaidForAppointment(body.appointment_id)
+          : 0;
+        if (existingPaid === 0) {
+          const client = await clientsRepository.findById(body.client_id, salonId);
+          if (client?.referred_by_client_id && !client.referral_referee_rewarded) {
+            const refConfig = await referralRepository.getConfig(salonId);
+            if (refConfig.active && refConfig.referee_reward_amount > 0 && rawSubtotal >= refConfig.min_bill_amount) {
+              referralDiscountPreview = Math.min(refConfig.referee_reward_amount, rawSubtotal);
+            }
+          }
+        }
+      } catch { /* non-fatal — preview omits the hint rather than failing */ }
+    }
+
     const preliminaryTaxes = body.includeGst ? await getActiveTaxes(salonId).catch(() => []) : [];
     const preliminaryTotals = computeBillTotals({
       actualAmounts,
@@ -244,12 +275,17 @@ export const pricingService = {
       membershipDiscountAmount: appliedMembershipDiscount,
       membershipServiceDiscountUsed,
       membershipProductDiscountUsed,
+      referralDiscount: referralDiscountPreview,
       taxes: preliminaryTaxes,
       exCharges: body.exCharges ?? 0,
       tip: body.tip ?? 0,
       roundSubtotalBeforeDiscount: false,
     });
-    let remaining = preliminaryTotals.grandTotal;
+    // Ceiling for the sequential Membership Wallet → eWallet → Reward Points →
+    // Referral Credit capping below — rooted in the raw pre-redemption total,
+    // NOT grandTotal (which now already has those redemptions subtracted and
+    // would double-count if used as the ceiling here).
+    let remaining = preliminaryTotals.preRedemptionTotal;
 
     // ── Membership wallet: read-only balance preview, no deduction ─────────
     // Mirrors payments.service.ts's own eligibility gate (applies_to) and the
@@ -333,29 +369,6 @@ export const pricingService = {
     }
     remaining = Math.max(0, remaining - appliedReferralCredit);
 
-    // ── Referral first-bill discount eligibility preview — mirrors
-    // payments.service.ts's charge-time logic exactly, but read-only (no
-    // ledger writes, no markRefereeRewarded — those only happen at actual
-    // payment time). Only applies on the first-ever payment for this
-    // appointment, so an appointment_id with prior payments is disqualified.
-    let referralDiscountPreview = 0;
-    if (body.client_id) {
-      try {
-        const existingPaid = body.appointment_id
-          ? await paymentsRepository.getTotalPaidForAppointment(body.appointment_id)
-          : 0;
-        if (existingPaid === 0) {
-          const client = await clientsRepository.findById(body.client_id, salonId);
-          if (client?.referred_by_client_id && !client.referral_referee_rewarded) {
-            const refConfig = await referralRepository.getConfig(salonId);
-            if (refConfig.active && refConfig.referee_reward_amount > 0 && rawSubtotal >= refConfig.min_bill_amount) {
-              referralDiscountPreview = Math.min(refConfig.referee_reward_amount, rawSubtotal);
-            }
-          }
-        }
-      } catch { /* non-fatal — preview omits the hint rather than failing */ }
-    }
-
     // ── Tax ──────────────────────────────────────────────────────────────────
     const taxes = body.includeGst ? await getActiveTaxes(salonId) : [];
 
@@ -369,10 +382,11 @@ export const pricingService = {
       actualAmounts,
       discountType: body.discountType,
       discountValue: body.discountValue,
-      couponDiscount: couponDiscount + referralDiscountPreview,
+      couponDiscount,
       membershipDiscountAmount: appliedMembershipDiscount,
       membershipServiceDiscountUsed,
       membershipProductDiscountUsed,
+      referralDiscount: referralDiscountPreview,
       taxes,
       exCharges: body.exCharges ?? 0,
       tip: body.tip ?? 0,
@@ -409,6 +423,15 @@ export const pricingService = {
     return {
       ...result,
       rowMembershipDiscount: { service: membershipServiceDiscounts, product: membershipProductDiscounts },
+      // Per-row membership WALLET coverage — same fill-in-order split
+      // (services first, then products) already baked into rowTax above,
+      // exposed separately so the UI can show a row's own wallet-covered
+      // amount instead of re-deriving the fill order client-side, which can
+      // silently disagree with this authoritative split (e.g. showing a
+      // product still "fully covered" after an added service row actually
+      // took over that wallet share server-side — see AppointmentModal.tsx's
+      // membershipWalletMap).
+      rowMembershipWallet: { service: svcWalletPerRow, product: prodWalletPerRow },
       appliedEWallet,
       appliedMembershipWallet,
       appliedRewardPointsValue,

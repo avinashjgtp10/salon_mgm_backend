@@ -228,6 +228,8 @@ function toClientMembership(row: ClientMembershipRow, log: UsageLogRow[] = []): 
     discountPercent:    row.discount_percent != null ? Number(row.discount_percent) : undefined,
     discountBalanceRemaining: Number(row.discount_balance_remaining) || 0,
     appointmentId:      row.appointment_id ?? null,
+    staffId:            row.staff_id ?? null,
+    saleId:             row.sale_id ?? null,
     usageLog:           log.map(r => ({
       id:                  r.id,
       clientMembershipId:  r.client_membership_id,
@@ -429,8 +431,8 @@ export const clientMembershipsRepository = {
         (id, salon_id, client_id, client_name, mobile, email,
          membership_id, membership_name, colour, total_sessions, used_sessions,
          expires_at, end_date, status, price_paid, membership_wallet_balance, appointment_id,
-         pricing_type, discount_percent, discount_balance_remaining, applies_to, category_ids, description)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$11,$14,'active',$12,$13,$15,$16,$17,$18,$19,$20,$21)
+         pricing_type, discount_percent, discount_balance_remaining, applies_to, category_ids, description, staff_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$11,$14,'active',$12,$13,$15,$16,$17,$18,$19,$20,$21,$22)
        RETURNING *`,
       [
         id, salonId, dto.clientId, clientName, mobile, email,
@@ -452,9 +454,21 @@ export const clientMembershipsRepository = {
         appliesTo,
         categoryIds,
         description,
+        dto.staffId ?? null,
       ],
     );
     return toClientMembership(rows[0]);
+  },
+
+  // Links a client_memberships row to the sales row recordTransaction() (or
+  // the checkout that bundled this membership) created for it — called
+  // right after create(), once the sale id is known, so the Member Sale
+  // report can look up invoice_no via a join.
+  async setSaleId(id: string, salonId: string, saleId: string): Promise<void> {
+    await pool.query(
+      `UPDATE client_memberships SET sale_id = $1 WHERE id = $2 AND salon_id = $3`,
+      [saleId, id, salonId],
+    );
   },
 
   async consumeSession(
@@ -686,10 +700,24 @@ export const clientMembershipsRepository = {
       const hasBudgetCap = params.maxTotalAmount != null;
       const budgetCap = hasBudgetCap ? Math.max(0, params.maxTotalAmount!) : Infinity;
 
+      // Proportional split across items (params.services combines services
+      // AND products, in caller-given order — see payments.service.ts's
+      // itemsForWallet) — same principle as pricing.engine.ts's
+      // allocateMembershipDiscount: when the available wallet can't cover
+      // every item's full value, every eligible item loses the same
+      // percentage of ITS OWN value, rather than fully draining earlier
+      // items (by array position — services always listed first) before
+      // later ones get anything. This used to mean an unrelated service
+      // could silently zero out a product's wallet coverage just because it
+      // appeared earlier in the array.
+      const totalMembershipBalance = remainingByMembership.reduce((s, v) => s + v, 0);
+      const combinedEligible = params.services.reduce((s, svc) => s + Math.max(0, Number(svc.amount) || 0), 0);
+      const totalAvailable = Math.min(budgetCap, totalMembershipBalance);
+      const ratio = combinedEligible > 0 ? Math.min(1, totalAvailable / combinedEligible) : 0;
+
       for (const svc of params.services) {
-        if (totalWalletUsed >= budgetCap) break;
         const originalAmount = Number(svc.amount) || 0;
-        let amountLeft = Math.min(originalAmount, budgetCap - totalWalletUsed);
+        let amountLeft = round2(originalAmount * ratio);
         let svcWalletUsed = 0;
         const isUuid = typeof svc.serviceId === 'string' &&
           /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(svc.serviceId);
