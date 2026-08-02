@@ -344,52 +344,67 @@ export const salonDashboardRepository = {
     let sql: string;
 
     if (period === "today") {
+      // Axis and tooltip are identical here — the hour itself IS the full
+      // context ("09:00 AM"), so no separate full_label is needed.
       sql = `${eventsCte}
         SELECT
-          TO_CHAR(date_trunc('hour', event_at AT TIME ZONE 'UTC'), 'HH12AM') AS month,
-          date_trunc('hour', event_at AT TIME ZONE 'UTC')                     AS sort_key,
-          COALESCE(SUM(amount), 0)::numeric                                   AS revenue
+          TO_CHAR(date_trunc('hour', event_at AT TIME ZONE 'UTC'), 'HH12:MI AM') AS month,
+          TO_CHAR(date_trunc('hour', event_at AT TIME ZONE 'UTC'), 'HH12:MI AM') AS full_label,
+          date_trunc('hour', event_at AT TIME ZONE 'UTC')                        AS sort_key,
+          COALESCE(SUM(amount), 0)::numeric                                      AS revenue
         FROM revenue_events
         WHERE DATE(event_at AT TIME ZONE 'UTC') = CURRENT_DATE
         GROUP BY date_trunc('hour', event_at AT TIME ZONE 'UTC')
         ORDER BY sort_key ASC`;
     } else if (period === "weekly") {
+      // Axis: weekday only ("Tue") — the date used to also share the axis
+      // label ("Tue 28"), leaving no room for a distinct full-context
+      // tooltip; the full date now lives in full_label instead.
       sql = `${eventsCte}
         SELECT
-          TO_CHAR(DATE(event_at AT TIME ZONE 'UTC'), 'Dy DD') AS month,
-          DATE(event_at AT TIME ZONE 'UTC')                    AS sort_key,
-          COALESCE(SUM(amount), 0)::numeric                    AS revenue
+          TO_CHAR(DATE(event_at AT TIME ZONE 'UTC'), 'Dy')            AS month,
+          TO_CHAR(DATE(event_at AT TIME ZONE 'UTC'), 'Dy, DD Mon YYYY') AS full_label,
+          DATE(event_at AT TIME ZONE 'UTC')                            AS sort_key,
+          COALESCE(SUM(amount), 0)::numeric                            AS revenue
         FROM revenue_events
         WHERE event_at >= CURRENT_DATE - INTERVAL '6 days'
         GROUP BY DATE(event_at AT TIME ZONE 'UTC')
         ORDER BY sort_key ASC`;
     } else if (period === "yearly") {
+      // Axis: month only ("Jul") — the year used to sit right on the axis
+      // label ("Jul 26"); moved to full_label ("Jul 2026", 4-digit year) so
+      // the axis stays short across 12 ticks.
       sql = `${eventsCte}
         SELECT
-          TO_CHAR(date_trunc('month', event_at), 'Mon YY') AS month,
-          date_trunc('month', event_at)                     AS sort_key,
-          COALESCE(SUM(amount), 0)::numeric                 AS revenue
+          TO_CHAR(date_trunc('month', event_at), 'Mon')      AS month,
+          TO_CHAR(date_trunc('month', event_at), 'Mon YYYY') AS full_label,
+          date_trunc('month', event_at)                       AS sort_key,
+          COALESCE(SUM(amount), 0)::numeric                   AS revenue
         FROM revenue_events
         WHERE event_at >= NOW() - INTERVAL '12 months'
         GROUP BY date_trunc('month', event_at)
         ORDER BY sort_key ASC`;
     } else {
-      // monthly — daily data for the current calendar month
+      // monthly — daily data for the current calendar month, one tick per
+      // day of the month (never grouped into Week 1/2/3/4). FM strips the
+      // leading zero so the axis reads "1, 2, 3 … 28" not "01, 02, 03 … 28".
       sql = `${eventsCte}
         SELECT
-          TO_CHAR(DATE(event_at AT TIME ZONE 'UTC'), 'DD') AS month,
-          DATE(event_at AT TIME ZONE 'UTC')                 AS sort_key,
-          COALESCE(SUM(amount), 0)::numeric                 AS revenue
+          TO_CHAR(DATE(event_at AT TIME ZONE 'UTC'), 'FMDD')       AS month,
+          TO_CHAR(DATE(event_at AT TIME ZONE 'UTC'), 'DD Mon YYYY') AS full_label,
+          DATE(event_at AT TIME ZONE 'UTC')                         AS sort_key,
+          COALESCE(SUM(amount), 0)::numeric                         AS revenue
         FROM revenue_events
         WHERE date_trunc('month', event_at AT TIME ZONE 'UTC') = date_trunc('month', NOW() AT TIME ZONE 'UTC')
         GROUP BY DATE(event_at AT TIME ZONE 'UTC')
         ORDER BY sort_key ASC`;
     }
 
-    const { rows } = await pool.query<{ month: string; revenue: string }>(sql, [salonId]);
+    const { rows } = await pool.query<{ month: string; full_label: string; revenue: string }>(sql, [salonId]);
 
     return rows.map((row) => ({
       month: row.month,
+      fullLabel: row.full_label,
       revenue: parseFloat(row.revenue),
       expenses: 0,
     }));
