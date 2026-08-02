@@ -9,7 +9,7 @@ const APPLIES_TO_VALUES = ["services", "products", "both"];
 const validatePricingFields = (body: any) => {
   const {
     pricingType, discountPercent, discountBalance,
-    loyaltyThresholdValue, appliesTo,
+    loyaltyTiers, appliesTo, categoryIds,
   } = body;
 
   if (pricingType !== undefined && !PRICING_TYPES.includes(pricingType))
@@ -17,6 +17,12 @@ const validatePricingFields = (body: any) => {
 
   if (appliesTo !== undefined && !APPLIES_TO_VALUES.includes(appliesTo))
     throw new AppError(400, `appliesTo must be one of: ${APPLIES_TO_VALUES.join(", ")}`, "VALIDATION_ERROR");
+
+  // Optional narrowing of appliesTo — empty/omitted means unrestricted.
+  if (categoryIds !== undefined && categoryIds !== null) {
+    if (!Array.isArray(categoryIds) || categoryIds.some((c: unknown) => typeof c !== "string" || !c))
+      throw new AppError(400, "categoryIds must be an array of category id strings", "VALIDATION_ERROR");
+  }
 
   if (discountPercent !== undefined && discountPercent !== null &&
       (isNaN(Number(discountPercent)) || Number(discountPercent) < 0 || Number(discountPercent) > 100))
@@ -26,18 +32,29 @@ const validatePricingFields = (body: any) => {
       (isNaN(Number(discountBalance)) || Number(discountBalance) < 0))
     throw new AppError(400, "discountBalance must be a non-negative number", "VALIDATION_ERROR");
 
-  if (loyaltyThresholdValue !== undefined && loyaltyThresholdValue !== null &&
-      (isNaN(Number(loyaltyThresholdValue)) || Number(loyaltyThresholdValue) < 1))
-    throw new AppError(400, "loyaltyThresholdValue must be a positive number", "VALIDATION_ERROR");
-
-  // A loyalty plan without a threshold would unlock for everyone immediately, and
-  // without a percentage it would grant nothing — neither is ever intended.
-  if (pricingType === "loyalty") {
-    if (loyaltyThresholdValue === undefined || loyaltyThresholdValue === null)
-      throw new AppError(400, "loyaltyThresholdValue is required for a loyalty membership", "VALIDATION_ERROR");
-    if (!Number(discountPercent))
-      throw new AppError(400, "discountPercent is required for a loyalty membership", "VALIDATION_ERROR");
+  // A loyalty plan is a ladder of tiers (visits -> discount%) — at least one
+  // is required (an empty ladder would never unlock for anyone), each tier
+  // must be a valid threshold/percent pair, and thresholds must be strictly
+  // ascending or "the highest tier crossed" is ambiguous.
+  if (loyaltyTiers !== undefined && loyaltyTiers !== null) {
+    if (!Array.isArray(loyaltyTiers) || loyaltyTiers.length === 0)
+      throw new AppError(400, "loyaltyTiers must be a non-empty array", "VALIDATION_ERROR");
+    let prevThreshold = 0;
+    for (const tier of loyaltyTiers) {
+      const threshold = Number(tier?.thresholdValue);
+      const percent = Number(tier?.discountPercent);
+      if (isNaN(threshold) || threshold < 1)
+        throw new AppError(400, "Each loyalty tier's thresholdValue must be a positive number", "VALIDATION_ERROR");
+      if (isNaN(percent) || percent <= 0 || percent > 100)
+        throw new AppError(400, "Each loyalty tier's discountPercent must be between 0 and 100", "VALIDATION_ERROR");
+      if (threshold <= prevThreshold)
+        throw new AppError(400, "Loyalty tiers must have strictly ascending visit thresholds", "VALIDATION_ERROR");
+      prevThreshold = threshold;
+    }
   }
+
+  if (pricingType === "loyalty" && (!Array.isArray(loyaltyTiers) || loyaltyTiers.length === 0))
+    throw new AppError(400, "loyaltyTiers is required for a loyalty membership", "VALIDATION_ERROR");
 
   if (pricingType === "percentage" && !Number(discountPercent))
     throw new AppError(400, "discountPercent is required for a percentage membership", "VALIDATION_ERROR");

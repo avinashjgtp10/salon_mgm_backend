@@ -68,6 +68,11 @@ export type CreatePaymentBody = {
   // matching "requested" field — the amount follows entirely from the plan's
   // percentage, the eligible line total, and the remaining discount balance.
   apply_membership_discount?: boolean;
+  // Independent sibling flag for the salon-wide Loyalty discount — staff can
+  // check this alongside (or instead of) apply_membership_discount above;
+  // when both are checked their discounts stack additively (each computed
+  // off the pre-discount line amount), see applyMembershipDiscountForBooking.
+  apply_loyalty_discount?: boolean;
   // Server-computed only — never trust a value sent by the frontend.
   membership_discount_used?: number;
   // Server-computed only — never trust a value sent by the frontend for this

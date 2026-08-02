@@ -8,7 +8,7 @@ import { getActiveTaxes } from '../settings/tax.util';
 import { ewalletRepository } from '../ewallet/ewallet.repository';
 import { rewardPointsRepository } from '../reward-points/reward-points.repository';
 import { referralRepository } from '../referral/referral.repository';
-import { clientMembershipsRepository } from '../client-memberships/client-memberships.repository';
+import { clientMembershipsRepository, resolveCategoryRestriction } from '../client-memberships/client-memberships.repository';
 import { clientsRepository } from '../clients/clients.repository';
 import { paymentsRepository } from '../payments/payments.repository';
 import { couponsService } from '../coupons/coupons.service';
@@ -23,12 +23,21 @@ import { CalculateTotalsBody, CalculateTotalsResponse } from './pricing.types';
 // the live preview can show the correct service/product split for tax
 // purposes before checkout, without deducting anything. The real deduction
 // still happens exactly once, at actual charge time, in payments.service.ts.
+// Optional narrowing of appliesTo to specific categories — empty/null means
+// unrestricted, preserving today's behavior for every plan that doesn't use
+// this feature.
+function matchesCategoryRestriction(row: LineItem, categoryIds: string[] | null): boolean {
+  return !categoryIds?.length || (!!row.categoryId && categoryIds.includes(row.categoryId));
+}
+
 function splitMembershipWalletUsage(
   serviceRows: LineItem[],
   productRows: LineItem[],
   requestedAmount: number,
   coversServices: boolean,
   coversProducts: boolean,
+  serviceCategoryIds: string[] | null = [],
+  productCategoryIds: string[] | null = [],
 ): { serviceWalletUsed: number; productWalletUsed: number; totalWalletUsed: number } {
   let remaining = Math.max(0, requestedAmount);
   let serviceWalletUsed = 0;
@@ -37,6 +46,7 @@ function splitMembershipWalletUsage(
   if (coversServices) {
     for (const row of serviceRows) {
       if (row.isPackageService || remaining <= 0) continue;
+      if (!matchesCategoryRestriction(row, serviceCategoryIds)) continue;
       const rowTotal = row.total ?? row.price * (row.qty || 1);
       if (rowTotal <= 0) continue;
       const used = Math.min(remaining, rowTotal);
@@ -48,6 +58,7 @@ function splitMembershipWalletUsage(
   if (coversProducts) {
     for (const row of productRows) {
       if (remaining <= 0) continue;
+      if (!matchesCategoryRestriction(row, productCategoryIds)) continue;
       const rowTotal = row.total ?? row.price * (row.qty || 1);
       if (rowTotal <= 0) continue;
       const used = Math.min(remaining, rowTotal);
@@ -63,10 +74,16 @@ function splitMembershipWalletUsage(
 // does — returns how much wallet each individual row absorbed, so the per-row
 // tax preview can exclude the wallet-covered portion of a row from its taxable
 // base (same as checkout does via payments.service.ts's walletUsedByItem).
-function allocateWalletPerRow(rows: LineItem[], totalWallet: number, skipPackageRows: boolean): number[] {
+// Must apply the SAME category filter as splitMembershipWalletUsage above so
+// the per-row breakdown always sums back to the same aggregate total.
+function allocateWalletPerRow(
+  rows: LineItem[], totalWallet: number, skipPackageRows: boolean,
+  categoryIds: string[] | null = [],
+): number[] {
   let remaining = Math.max(0, totalWallet);
   return rows.map((row) => {
     if ((skipPackageRows && row.isPackageService) || remaining <= 0) return 0;
+    if (!matchesCategoryRestriction(row, categoryIds)) return 0;
     const rowTotal = row.total ?? row.price * (row.qty || 1);
     if (rowTotal <= 0) return 0;
     const used = Math.min(remaining, rowTotal);
@@ -93,6 +110,8 @@ export async function resolveMembershipDiscount(
   clientId: string,
   serviceRows: LineItem[],
   productRows: LineItem[],
+  applyPercentage: boolean,
+  applyLoyalty: boolean,
 ): Promise<MembershipDiscountPreview> {
   const empty = (): MembershipDiscountPreview => ({
     total: 0,
@@ -106,13 +125,14 @@ export async function resolveMembershipDiscount(
   // amounts). Combining into one ordered list mirrors the exact fill order
   // the real ledger-writing deduction uses, so a balance that runs out
   // mid-bill runs out at the identical row in both the preview and the charge.
-  const allocate = (percent: number, balance: number, appliesTo: MembershipAppliesTo): MembershipDiscountPreview => {
+  const allocate = (percent: number, balance: number, appliesTo: MembershipAppliesTo, categoryIds: string[]): MembershipDiscountPreview => {
+    const inCategory = (r: LineItem) => !categoryIds.length || (!!r.categoryId && categoryIds.includes(r.categoryId));
     const serviceAmounts = appliesTo === 'products'
       ? serviceRows.map(() => 0)
-      : serviceRows.map((r) => (r.isPackageService ? 0 : (r.total ?? r.price * (r.qty || 1))));
+      : serviceRows.map((r) => (r.isPackageService || !inCategory(r) ? 0 : (r.total ?? r.price * (r.qty || 1))));
     const productAmounts = appliesTo === 'services'
       ? productRows.map(() => 0)
-      : productRows.map((r) => (r.total ?? r.price * (r.qty || 1)));
+      : productRows.map((r) => (!inCategory(r) ? 0 : (r.total ?? r.price * (r.qty || 1))));
     const { total, discounts } = allocateMembershipDiscount([...serviceAmounts, ...productAmounts], percent, balance);
     return {
       total,
@@ -121,22 +141,40 @@ export async function resolveMembershipDiscount(
     };
   };
 
-  const percentageMembership = await clientMembershipsRepository.findActivePercentageForClient(clientId, salonId);
-  if (percentageMembership) {
-    return allocate(
-      percentageMembership.discountPercent ?? 0,
-      percentageMembership.discountBalanceRemaining,
-      percentageMembership.appliesTo,
-    );
+  // Discount Balance and Loyalty are independently toggled by staff and
+  // stack additively when both are on — see applyMembershipDiscountForBooking
+  // (payments.service.ts) for the same contract at actual charge time. Each
+  // source's % is computed off the SAME original line amount, not chained.
+  const previews: MembershipDiscountPreview[] = [];
+
+  if (applyPercentage) {
+    const percentageMembership = await clientMembershipsRepository.findActivePercentageForClient(clientId, salonId);
+    if (percentageMembership) {
+      previews.push(allocate(
+        percentageMembership.discountPercent ?? 0,
+        percentageMembership.discountBalanceRemaining,
+        percentageMembership.appliesTo,
+        percentageMembership.categoryIds,
+      ));
+    }
   }
 
-  // Loyalty is uncapped once unlocked, so there is no balance to bound it.
-  const loyalty = await membershipsRepository.findLoyaltyEligibility(clientId, salonId);
-  if (loyalty?.eligible) {
-    return allocate(loyalty.discountPercent, Infinity, loyalty.appliesTo);
+  if (applyLoyalty) {
+    // Loyalty is uncapped once unlocked, so there is no balance to bound it.
+    const loyalty = await membershipsRepository.findLoyaltyEligibility(clientId, salonId);
+    if (loyalty?.eligible) {
+      previews.push(allocate(loyalty.discountPercent, Infinity, loyalty.appliesTo, loyalty.categoryIds));
+    }
   }
 
-  return empty();
+  if (!previews.length) return empty();
+  if (previews.length === 1) return previews[0];
+
+  return {
+    total: previews.reduce((s, p) => s + p.total, 0),
+    serviceDiscounts: serviceRows.map((_, i) => previews.reduce((s, p) => s + p.serviceDiscounts[i], 0)),
+    productDiscounts: productRows.map((_, i) => previews.reduce((s, p) => s + p.productDiscounts[i], 0)),
+  };
 }
 
 export const pricingService = {
@@ -183,10 +221,11 @@ export const pricingService = {
     let appliedMembershipDiscount = 0;
     let membershipServiceDiscounts: number[] = (body.serviceRows ?? []).map(() => 0);
     let membershipProductDiscounts: number[] = (body.productRows ?? []).map(() => 0);
-    if (body.applyMembershipDiscount && body.client_id) {
+    if ((body.applyMembershipDiscount || body.applyLoyaltyDiscount) && body.client_id) {
       try {
         const discountPreview = await resolveMembershipDiscount(
           salonId, body.client_id, body.serviceRows ?? [], body.productRows ?? [],
+          !!body.applyMembershipDiscount, !!body.applyLoyaltyDiscount,
         );
         appliedMembershipDiscount = discountPreview.total;
         membershipServiceDiscounts = discountPreview.serviceDiscounts;
@@ -220,14 +259,22 @@ export const pricingService = {
     let appliedMembershipWallet = 0;
     let membershipServiceWalletUsed = 0;
     let membershipProductWalletUsed = 0;
+    let membershipServiceCategoryIds: string[] | null = [];
+    let membershipProductCategoryIds: string[] | null = [];
     if (body.applyMembershipWallet && body.client_id && remaining > 0) {
       try {
         const memberships = await clientMembershipsRepository.findAllActiveWithBalanceForClient(body.client_id, salonId);
         const totalBalance = memberships.reduce((s, m) => s + (Number(m.membershipWalletBalance) || 0), 0);
-        const coversServices = memberships.some((m) => m.appliesTo !== 'products' && Number(m.membershipWalletBalance) > 0);
-        const coversProducts = memberships.some((m) => m.appliesTo !== 'services' && Number(m.membershipWalletBalance) > 0);
+        const withBalance = memberships.filter((m) => Number(m.membershipWalletBalance) > 0);
+        const coversServices = withBalance.some((m) => m.appliesTo !== 'products');
+        const coversProducts = withBalance.some((m) => m.appliesTo !== 'services');
+        membershipServiceCategoryIds = coversServices ? resolveCategoryRestriction(withBalance, 'service') : [];
+        membershipProductCategoryIds = coversProducts ? resolveCategoryRestriction(withBalance, 'product') : [];
         const requested = Math.min(body.membershipWalletRequested ?? totalBalance, totalBalance, remaining);
-        const split = splitMembershipWalletUsage(body.serviceRows, body.productRows, requested, coversServices, coversProducts);
+        const split = splitMembershipWalletUsage(
+          body.serviceRows, body.productRows, requested, coversServices, coversProducts,
+          membershipServiceCategoryIds, membershipProductCategoryIds,
+        );
         membershipServiceWalletUsed = split.serviceWalletUsed;
         membershipProductWalletUsed = split.productWalletUsed;
         appliedMembershipWallet = split.totalWalletUsed;
@@ -315,8 +362,8 @@ export const pricingService = {
     // Per-row wallet coverage (same fill-in-order split as the aggregates
     // above) so each row's tax preview excludes the wallet-covered portion,
     // matching what checkout will actually store per sale_item.
-    const svcWalletPerRow = allocateWalletPerRow(body.serviceRows ?? [], membershipServiceWalletUsed, true);
-    const prodWalletPerRow = allocateWalletPerRow(body.productRows ?? [], membershipProductWalletUsed, false);
+    const svcWalletPerRow = allocateWalletPerRow(body.serviceRows ?? [], membershipServiceWalletUsed, true, membershipServiceCategoryIds);
+    const prodWalletPerRow = allocateWalletPerRow(body.productRows ?? [], membershipProductWalletUsed, false, membershipProductCategoryIds);
 
     const result = computeBillTotals({
       actualAmounts,

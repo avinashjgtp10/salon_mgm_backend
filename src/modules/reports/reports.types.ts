@@ -592,6 +592,8 @@ export interface SalesSummaryReportRow {
     item_types: string;
     actual_price: number;
     price: number;
+    discount_amount: number;
+    tax_amount: number;
     paid_amount: number;
     due_amount: number;
     tip_amount: number;
