@@ -700,10 +700,24 @@ export const clientMembershipsRepository = {
       const hasBudgetCap = params.maxTotalAmount != null;
       const budgetCap = hasBudgetCap ? Math.max(0, params.maxTotalAmount!) : Infinity;
 
+      // Proportional split across items (params.services combines services
+      // AND products, in caller-given order — see payments.service.ts's
+      // itemsForWallet) — same principle as pricing.engine.ts's
+      // allocateMembershipDiscount: when the available wallet can't cover
+      // every item's full value, every eligible item loses the same
+      // percentage of ITS OWN value, rather than fully draining earlier
+      // items (by array position — services always listed first) before
+      // later ones get anything. This used to mean an unrelated service
+      // could silently zero out a product's wallet coverage just because it
+      // appeared earlier in the array.
+      const totalMembershipBalance = remainingByMembership.reduce((s, v) => s + v, 0);
+      const combinedEligible = params.services.reduce((s, svc) => s + Math.max(0, Number(svc.amount) || 0), 0);
+      const totalAvailable = Math.min(budgetCap, totalMembershipBalance);
+      const ratio = combinedEligible > 0 ? Math.min(1, totalAvailable / combinedEligible) : 0;
+
       for (const svc of params.services) {
-        if (totalWalletUsed >= budgetCap) break;
         const originalAmount = Number(svc.amount) || 0;
-        let amountLeft = Math.min(originalAmount, budgetCap - totalWalletUsed);
+        let amountLeft = round2(originalAmount * ratio);
         let svcWalletUsed = 0;
         const isUuid = typeof svc.serviceId === 'string' &&
           /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(svc.serviceId);

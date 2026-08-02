@@ -46,7 +46,16 @@ export type CreatePaymentBody = {
   salon_id: string;
   client_id?: string;
   gross_amount: number;
+  // Combined manual Svc Discount + coupon discount — used for revenue/sale
+  // record netting. Kept for backward compat; prefer manual_discount_amount
+  // below to distinguish the two channels (coupon must stay pre-tax, Svc
+  // Discount is now post-tax — see pricing.engine.ts's computeBillTotals).
   discount_amount?: number;
+  // Manual Svc Discount ONLY, excluding coupon — when omitted, the whole of
+  // discount_amount is treated as manual (older client behavior, coupon
+  // effectively folds into the post-tax channel same as before this field
+  // existed).
+  manual_discount_amount?: number;
   ewallet_used?: number;
   net_amount: number;
   paid_amount?: number;

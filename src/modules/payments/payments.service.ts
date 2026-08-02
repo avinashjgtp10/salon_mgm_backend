@@ -198,7 +198,19 @@ export const paymentsService = {
           // If the appointment has no priced items, fall through to frontend values
           if (!isFinite(actualBill) || actualBill <= 0) throw new Error('no_priced_items');
 
-          const frontendDiscount = Math.max(0, Number(data.discount_amount) || 0);
+          // discount_amount arrives as manual Svc Discount + coupon COMBINED
+          // (see usePayment.ts's payloadDiscount) — but they need to travel
+          // through computeBillTotals on different channels now: coupon stays
+          // pre-tax, Svc Discount is post-tax. manual_discount_amount (when
+          // sent) isolates the manual-only portion; the rest is coupon.
+          // Falling back to treating the whole combined figure as manual
+          // (coupon = 0) preserves today's behavior for any caller that
+          // hasn't been updated to send the new field yet.
+          const combinedFrontendDiscount = Math.max(0, Number(data.discount_amount) || 0);
+          const frontendManualDiscount = data.manual_discount_amount != null
+            ? Math.max(0, Number(data.manual_discount_amount) || 0)
+            : combinedFrontendDiscount;
+          const frontendCouponDiscount = Math.max(0, combinedFrontendDiscount - frontendManualDiscount);
           const ewalletRequested = Math.max(0, Number(data.ewallet_used)    || 0);
 
           // Sum previously paid amounts across all prior payments for this appointment.
@@ -248,11 +260,13 @@ export const paymentsService = {
             }
           }
           data.referral_discount_applied = referralDiscount;
-          const discount = frontendDiscount + referralDiscount;
           // Persist the combined figure — the sale-creation block below reads
           // data.discount_amount to net revenue, and it must include this
           // referral piece too, same as it already does for coupon/manual.
-          data.discount_amount = discount;
+          // computeBillTotals below is given the three components separately
+          // (frontendManualDiscount/frontendCouponDiscount/referralDiscount) —
+          // this combined figure is ONLY for sale-record revenue netting.
+          data.discount_amount = combinedFrontendDiscount + referralDiscount;
 
           // Both are real amounts the client actually pays alongside the bill —
           // an ex-charge (business keeps it) and a tip (passed to staff) — so
@@ -355,16 +369,22 @@ export const paymentsService = {
           const preliminaryTotals = computeBillTotals({
             actualAmounts: { service: serviceTotal, packages: packageTotal, product: productTotal, membership: membershipTotal },
             discountType: 'flat',
-            discountValue: discount,
+            discountValue: frontendManualDiscount,
+            couponDiscount: frontendCouponDiscount,
             membershipDiscountAmount: membershipDiscountUsed,
             membershipServiceDiscountUsed,
             membershipProductDiscountUsed,
+            referralDiscount,
             taxes: activeTaxesForCeiling,
             exCharges: exChargesAmt,
             tip: tipAmt,
             roundSubtotalBeforeDiscount: true,
           });
-          let remaining = preliminaryTotals.grandTotal;
+          // Ceiling for the sequential Membership Wallet → eWallet → Reward
+          // Points → Referral Credit capping below — rooted in the raw
+          // pre-redemption total, NOT grandTotal (which now already has those
+          // redemptions subtracted and would double-count as a ceiling).
+          let remaining = preliminaryTotals.preRedemptionTotal;
 
           // ── Membership wallet: redeem against services, plus products when the
           // client's membership opted in ──────────────────────────────────────
@@ -534,11 +554,17 @@ export const paymentsService = {
           // Previously tax was skipped entirely here, so the receipt correctly
           // displayed tax but the appointment could be marked "Paid" for less
           // than what was shown to the client.
-          // Fallback if computeBillTotals below throws. membershipDiscountUsed is a
-          // pre-tax price reduction, so it belongs here alongside `discount` — not
-          // with the post-tax redemptions on the next line.
-          let grandTotal = Math.round(actualBill - discount - membershipDiscountUsed + exChargesAmt + tipAmt);
-          let effectiveBill = Math.max(0, grandTotal - ewallet - membershipWalletUsed - rewardPointsRedeemedValue - referralCreditRequestedValue);
+          // Fallback if computeBillTotals below throws. membershipDiscountUsed
+          // and frontendCouponDiscount are pre-tax reductions; Extra Charges/
+          // Tip are added after; Referral Discount and the redemptions are all
+          // subtracted after that — grandTotal here already IS the fully-
+          // reduced figure (merged with what used to be a separate
+          // effectiveBill concept), matching computeBillTotals's new formula.
+          let grandTotal = Math.round(Math.max(0,
+            actualBill - frontendManualDiscount - frontendCouponDiscount - membershipDiscountUsed
+          ) + exChargesAmt + tipAmt - referralDiscount - ewallet - membershipWalletUsed
+            - rewardPointsRedeemedValue - referralCreditRequestedValue);
+          let effectiveBill = grandTotal;
           try {
             const activeTaxes = data.include_gst === false ? [] : await getActiveTaxes(data.salon_id);
             // Same lineTotal fallback used by itemDiscount() further down
@@ -554,10 +580,12 @@ export const paymentsService = {
             const result = computeBillTotals({
               actualAmounts: { service: serviceTotal, packages: packageTotal, product: productTotal, membership: membershipTotal },
               discountType: 'flat',
-              discountValue: discount,
+              discountValue: frontendManualDiscount,
+              couponDiscount: frontendCouponDiscount,
               membershipDiscountAmount: membershipDiscountUsed,
               membershipServiceDiscountUsed,
               membershipProductDiscountUsed,
+              referralDiscount,
               taxes: activeTaxes,
               exCharges: exChargesAmt,
               tip: tipAmt,
@@ -599,7 +627,7 @@ export const paymentsService = {
             });
             taxAmount = result.gstAmount;
             grandTotal = result.grandTotal;
-            effectiveBill = result.effectiveTotal;
+            effectiveBill = result.grandTotal;
             taxableAmount = result.taxable;
             rowTaxByBucket = result.rowTax;
             rowTaxableByBucket = result.rowTaxableAmount;
