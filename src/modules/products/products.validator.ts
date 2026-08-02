@@ -38,7 +38,7 @@ const VALID_PRODUCT_TYPES: ProductType[] = ["retail", "consumable", "both"];
 
 const coerceProductFields = (b: Record<string, any>) => {
     if (!b || typeof b !== "object") return;
-    const floatFields = ["amount", "qty_alert", "supply_price", "retail_price", "markup_percentage", "custom_tax_rate", "team_commission_rate"];
+    const floatFields = ["amount", "qty_alert", "bottle_size", "supply_price", "retail_price", "markup_percentage", "custom_tax_rate", "team_commission_rate"];
     for (const f of floatFields) {
         if (typeof b[f] === "string" && b[f].trim() !== "") {
             const parsed = parseFloat(b[f]);
@@ -111,6 +111,27 @@ const validateProductFields = (b: Record<string, unknown>, requireName = false) 
     }
     if (!isOptionalNonNeg(b.qty_alert)) {
         throw new AppError(400, "qty_alert must be a non-negative number", "VALIDATION_ERROR");
+    }
+    // Bottle/container capacity for consumable stock tracking. Absent/null is
+    // valid (opts the product out of container-based tracking); zero is not,
+    // since stock quantity is derived as amount / bottle_size elsewhere.
+    if (b.bottle_size !== undefined && b.bottle_size !== null) {
+        if (!(typeof b.bottle_size === "number" && Number.isFinite(b.bottle_size) && b.bottle_size > 0)) {
+            throw new AppError(400, "bottle_size must be a positive number", "VALIDATION_ERROR");
+        }
+        // 'both'-type products can also be sold as a retail line item on an
+        // appointment (appointments.service.ts → productsRepository.deductStock),
+        // which decrements `amount` by a raw unit count, not by volume — mixing
+        // that with bottle-based volume tracking on the same `amount` column
+        // would silently corrupt the remaining-volume figure. Only a pure
+        // 'consumable' product (never sold as a standalone retail line item)
+        // is safe to opt into container tracking. Update-time patches that
+        // omit product_type are checked against the existing row in
+        // productsService.update, since the validator has no DB access here.
+        const effectiveType = b.product_type !== undefined ? b.product_type : (requireName ? "retail" : undefined);
+        if (effectiveType !== undefined && effectiveType !== "consumable") {
+            throw new AppError(400, "bottle_size (container tracking) is only supported for product_type 'consumable'", "VALIDATION_ERROR");
+        }
     }
     // Both fields are always sent together by the Create/Edit Product forms
     // (a full-form submit, not a sparse patch) — safe to cross-validate here

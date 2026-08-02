@@ -14,6 +14,13 @@ export type Product = {
     size: string | null;
     amount: number;
     qty_alert: number | null;
+    // Capacity of a single bottle/container, in `measure_unit`. Null means no
+    // container-based tracking is configured for this product — `amount` is
+    // then used directly as the stock figure, exactly as before this field
+    // existed. When set, `amount` is interpreted as the remaining volume
+    // across all bottles, and stock quantity (bottle count) is derived as
+    // ceil(amount / bottle_size) rather than stored separately.
+    bottle_size: number | null;
     short_description: string | null;
     description: string | null;
     supply_price: number;
@@ -57,6 +64,7 @@ export type CreateProductBody = {
     size?: string;
     amount?: number;
     qty_alert?: number;
+    bottle_size?: number | null;
     short_description?: string;
     description?: string;
     supply_price?: number;

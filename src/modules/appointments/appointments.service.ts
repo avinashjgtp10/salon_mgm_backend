@@ -216,6 +216,35 @@ function formatTime(dateStr: string): string {
     });
 }
 
+// A pure 'consumable' product must never be sold as a retail product_items
+// line — that path (productsRepository.deductStock/restoreStock) deducts a
+// raw unit count, while consumable stock is tracked as remaining volume
+// (see inventory.repository.ts's applyAppointmentCompletion). Mixing the two
+// on the same product would silently corrupt its stock figure, so this is
+// checked before the appointment is created/updated, not left to the
+// frontend picker alone.
+async function assertProductItemsAreRetailSellable(
+    productItems: { product_id?: string | null }[] | undefined,
+    salonId: string,
+): Promise<void> {
+    const productIds = [...new Set((productItems ?? [])
+        .map((item) => item.product_id)
+        .filter((id): id is string => !!id))];
+    if (productIds.length === 0) return;
+
+    const typeById = await productsRepository.findProductTypesByIds(productIds, salonId);
+    for (const productId of productIds) {
+        if (typeById.get(productId) === "consumable") {
+            throw new AppError(
+                400,
+                "This product is Consumable only and cannot be sold as a retail product.",
+                "PRODUCT_NOT_RETAIL_SELLABLE",
+                { product_id: productId },
+            );
+        }
+    }
+}
+
 // ── Service ───────────────────────────────────────────────────────────────────
 
 export const appointmentsService = {
@@ -256,6 +285,8 @@ export const appointmentsService = {
         if (!body.staff_id && body.services && body.services.length > 0 && body.services[0].staff_id) {
             body.staff_id = body.services[0].staff_id ?? undefined;
         }
+
+        await assertProductItemsAreRetailSellable(body.product_items, body.salon_id);
 
         const appointment = await appointmentsRepository.create(body, requesterUserId);
         logger.info("appointmentsService.create success", { appointmentId: appointment.id });
@@ -399,6 +430,10 @@ export const appointmentsService = {
         let patch = params.patch;
         const existing = await appointmentsRepository.findById(appointmentId);
         if (!existing) throw new AppError(404, "Appointment not found", "NOT_FOUND");
+
+        if (patch.product_items !== undefined) {
+            await assertProductItemsAreRetailSellable(patch.product_items, existing.salon_id);
+        }
 
         // A completed appointment consumable edit must use the same locked,
         // transactional flow as first completion. Keep this field out of the

@@ -39,6 +39,13 @@ export interface ConsumableUsageItem {
   last_used: string | null;
   usage_count: number;
   stock_status: StockStatus;
+  // Container-based stock tracking (bottle/container inventory). `bottle_size`
+  // is null when the product has no configured container size — in that case
+  // `stock_quantity` falls back to the raw `remaining_stock` figure and
+  // `total_available_volume` is null, matching pre-container behavior exactly.
+  bottle_size: number | null;
+  stock_quantity: number;
+  total_available_volume: number | null;
 }
 
 export interface ConsumableUsageResponse {

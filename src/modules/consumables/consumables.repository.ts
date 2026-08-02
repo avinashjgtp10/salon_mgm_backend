@@ -10,6 +10,23 @@ const SORT_COLUMNS = {
   category: "category_name",
 } as const;
 
+// ─── Container-based stock (single source of truth) ───────────────────────────
+// `p.amount` already holds the remaining quantity in the product's own unit
+// (ml, g, ...) — that hasn't changed. Stock QUANTITY (bottle/container count)
+// is derived from it rather than stored: a product with no bottle_size
+// configured falls back to the raw amount, exactly like before this feature
+// (backward compatible for every product that never sets a container size).
+// Defined once here and referenced everywhere a bottle-aware figure is
+// needed (SELECT list and WHERE filters both need their own textual copy —
+// column aliases from the SELECT list aren't visible to the WHERE of the same
+// query — but this string is the one place the formula itself is written).
+const STOCK_QTY_EXPR = `CASE WHEN p.bottle_size IS NOT NULL AND p.bottle_size > 0
+    THEN CEIL(COALESCE(p.amount, 0) / p.bottle_size)
+    ELSE COALESCE(p.amount, 0) END`;
+const STOCK_STATUS_EXPR = `CASE WHEN ${STOCK_QTY_EXPR} <= 0 THEN 'out_of_stock'
+    WHEN ${STOCK_QTY_EXPR} <= COALESCE(p.qty_alert, 0) THEN 'low_stock'
+    ELSE 'healthy' END`;
+
 function buildQuery(request: ConsumableUsageRequest) {
   const values: unknown[] = [request.salon_id];
   const param = (value: unknown) => { values.push(value); return `$${values.length}`; };
@@ -22,9 +39,11 @@ function buildQuery(request: ConsumableUsageRequest) {
   }
   if (filters.category_id) productWhere.push(`p.category_id = ${param(filters.category_id)}`);
   if (filters.unit) productWhere.push(`LOWER(p.measure_unit) = LOWER(${param(filters.unit)})`);
-  if (filters.stock_status === "out_of_stock") productWhere.push("COALESCE(p.amount, 0) <= 0");
-  if (filters.stock_status === "low_stock") productWhere.push("COALESCE(p.amount, 0) > 0 AND COALESCE(p.amount, 0) <= COALESCE(p.qty_alert, 0)");
-  if (filters.stock_status === "healthy") productWhere.push("COALESCE(p.amount, 0) > COALESCE(p.qty_alert, 0)");
+  // Low stock is evaluated against bottle/container count (STOCK_QTY_EXPR),
+  // not raw remaining volume — see the constant's own comment.
+  if (filters.stock_status === "out_of_stock") productWhere.push(`(${STOCK_QTY_EXPR}) <= 0`);
+  if (filters.stock_status === "low_stock") productWhere.push(`(${STOCK_QTY_EXPR}) > 0 AND (${STOCK_QTY_EXPR}) <= COALESCE(p.qty_alert, 0)`);
+  if (filters.stock_status === "healthy") productWhere.push(`(${STOCK_QTY_EXPR}) > COALESCE(p.qty_alert, 0)`);
   if (filters.service_id) {
     const p = param(filters.service_id);
     productWhere.push(`EXISTS (
@@ -63,9 +82,12 @@ function buildQuery(request: ConsumableUsageRequest) {
              COALESCE(actual.actual_used, 0) AS actual_used,
              COALESCE(p.amount, 0) AS remaining_stock, actual.last_used,
              COALESCE(actual.usage_count, 0)::int AS usage_count,
-             CASE WHEN COALESCE(p.amount, 0) <= 0 THEN 'out_of_stock'
-                  WHEN COALESCE(p.amount, 0) <= COALESCE(p.qty_alert, 0) THEN 'low_stock'
-                  ELSE 'healthy' END AS stock_status
+             ${STOCK_STATUS_EXPR} AS stock_status,
+             p.bottle_size AS bottle_size,
+             (${STOCK_QTY_EXPR}) AS stock_quantity,
+             CASE WHEN p.bottle_size IS NOT NULL AND p.bottle_size > 0
+                  THEN (${STOCK_QTY_EXPR}) * p.bottle_size
+                  ELSE NULL END AS total_available_volume
       FROM products p
       LEFT JOIN service_categories c ON c.id = p.category_id AND c.salon_id = p.salon_id
       LEFT JOIN configured ON configured.product_id = p.id::text
@@ -99,11 +121,15 @@ export const consumablesRepository = {
     ]);
 
     const number = (value: unknown) => Number(value ?? 0);
+    const nullableNumber = (value: unknown) => (value === null || value === undefined ? null : Number(value));
     const items: ConsumableUsageItem[] = itemsResult.rows.map((row) => ({
       ...row,
       current_stock: number(row.current_stock), configured_qty: number(row.configured_qty),
       actual_used: number(row.actual_used), remaining_stock: number(row.remaining_stock),
       usage_count: number(row.usage_count),
+      bottle_size: nullableNumber(row.bottle_size),
+      stock_quantity: number(row.stock_quantity),
+      total_available_volume: nullableNumber(row.total_available_volume),
     }));
     const totalRecords = number(countResult.rows[0]?.total);
     const summary = summaryResult.rows[0] ?? {};

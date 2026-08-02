@@ -107,7 +107,8 @@ export const productsService = {
         salonId: string;
         patch: UpdateProductBody;
     }): Promise<Product> {
-        const { productId, requesterUserId, requesterRole, salonId, patch } = params;
+        const { productId, requesterUserId, requesterRole, salonId } = params;
+        let { patch } = params;
         logger.info("productsService.update called", { productId, requesterUserId, requesterRole, salonId });
         const existing = await productsRepository.findById(productId, salonId);
         if (!existing) throw new AppError(404, "Product not found", "NOT_FOUND");
@@ -128,6 +129,22 @@ export const productsService = {
         );
         if (dupCombo) {
             throw new AppError(409, "A product with the same name, brand, and category already exists.", "DUPLICATE_PRODUCT");
+        }
+
+        // bottle_size (container tracking) is only safe on a pure 'consumable'
+        // product — see products.validator.ts's matching check for why 'both'
+        // is excluded. The validator only catches this when product_type is
+        // present in the same patch; here the existing row's type is known,
+        // so a bare product_type change (e.g. consumable → both) that would
+        // strand a stale bottle_size is caught too.
+        const effectiveProductType = patch.product_type !== undefined ? patch.product_type : existing.product_type;
+        if (effectiveProductType !== "consumable") {
+            if (patch.bottle_size !== undefined && patch.bottle_size !== null) {
+                throw new AppError(400, "bottle_size (container tracking) is only supported for product_type 'consumable'", "VALIDATION_ERROR");
+            }
+            if (patch.bottle_size === undefined && existing.bottle_size != null) {
+                patch = { ...patch, bottle_size: null };
+            }
         }
 
         const updated = await productsRepository.update(productId, patch, salonId);
