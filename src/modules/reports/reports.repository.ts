@@ -29,6 +29,7 @@ import {
     StaffItemSalesReportStats,
     PackageSaleReportRow,
     PackageSaleReportStats,
+    PackageSaleFilterOption,
     PackageHistoryReportRow,
     PackageHistoryReportStats,
     MemberSaleReportRow,
@@ -3649,7 +3650,12 @@ async getStaffItemSalesReportRows(
 
 _buildPackageSaleWhere(
   salonId: string,
-  filters: { start_date?: string; end_date?: string; search?: string }
+  filters: {
+    start_date?: string; end_date?: string; search?: string;
+    staff_ids?: string[]; package_name?: string; package_status?: string;
+    payment_status?: string; payment_method?: string;
+    min_amount?: number; max_amount?: number;
+  }
 ): { where: string; values: any[]; nextIndex: number } {
   const values: any[] = [salonId];
   const where = ["cp.salon_id = $1"];
@@ -3662,6 +3668,34 @@ _buildPackageSaleWhere(
   if (filters.end_date) {
     where.push(`cp.created_date < ($${idx++}::date + interval '1 day')`);
     values.push(filters.end_date);
+  }
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    where.push(`cp.staff_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.staff_ids);
+  }
+  if (filters.package_name) {
+    where.push(`cp.package_name = $${idx++}`);
+    values.push(filters.package_name);
+  }
+  if (filters.package_status) {
+    where.push(`cp.status = $${idx++}`);
+    values.push(filters.package_status);
+  }
+  if (filters.payment_status) {
+    where.push(`cp.payment_status = $${idx++}`);
+    values.push(filters.payment_status);
+  }
+  if (filters.payment_method) {
+    where.push(`cp.payment_method = $${idx++}`);
+    values.push(filters.payment_method);
+  }
+  if (filters.min_amount !== undefined) {
+    where.push(`cp.total_amount::numeric >= $${idx++}`);
+    values.push(filters.min_amount);
+  }
+  if (filters.max_amount !== undefined) {
+    where.push(`cp.total_amount::numeric <= $${idx++}`);
+    values.push(filters.max_amount);
   }
   if (filters.search?.trim()) {
     where.push(`(
@@ -3677,7 +3711,12 @@ _buildPackageSaleWhere(
 
 async getPackageSaleReportStats(
   salonId: string,
-  filters: { start_date?: string; end_date?: string; search?: string }
+  filters: {
+    start_date?: string; end_date?: string; search?: string;
+    staff_ids?: string[]; package_name?: string; package_status?: string;
+    payment_status?: string; payment_method?: string;
+    min_amount?: number; max_amount?: number;
+  }
 ): Promise<PackageSaleReportStats> {
   const { where, values } = this._buildPackageSaleWhere(salonId, filters);
 
@@ -3686,6 +3725,7 @@ async getPackageSaleReportStats(
       COUNT(*)::int AS packages_sold,
       COALESCE(SUM(cp.total_amount::numeric), 0) AS total_sale_value,
       COALESCE(SUM(cp.paid_amount::numeric), 0) AS total_received,
+      COALESCE(SUM(cp.pending_amount::numeric), 0) AS outstanding_balance,
       COUNT(DISTINCT cp.package_name)::int AS unique_packages
     FROM client_packages cp
     WHERE ${where}
@@ -3698,6 +3738,7 @@ async getPackageSaleReportStats(
     total_sale_value: Number(r.total_sale_value ?? 0),
     total_received: Number(r.total_received ?? 0),
     unique_packages: Number(r.unique_packages ?? 0),
+    outstanding_balance: Number(r.outstanding_balance ?? 0),
   };
 },
 
@@ -3705,6 +3746,9 @@ async getPackageSaleReportRows(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; search?: string;
+    staff_ids?: string[]; package_name?: string; package_status?: string;
+    payment_status?: string; payment_method?: string;
+    min_amount?: number; max_amount?: number;
     page?: number; limit?: number; is_export?: boolean;
   }
 ): Promise<{
@@ -3733,8 +3777,15 @@ async getPackageSaleReportRows(
       cp.pending_amount,
       cp.payment_status,
       cp.gst_amount,
+      s.invoice_number AS invoice_no,
+      st.id AS staff_id,
+      NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
+      cp.payment_method,
+      cp.status,
       COUNT(*) OVER() AS total_count
     FROM client_packages cp
+    LEFT JOIN sales s ON s.id = cp.sale_id
+    LEFT JOIN staff st ON st.id = cp.staff_id
     WHERE ${where}
     ORDER BY cp.created_date DESC
     ${limitClause}
@@ -3753,6 +3804,11 @@ async getPackageSaleReportRows(
     pending_amount: Number(row.pending_amount ?? 0),
     payment_status: row.payment_status,
     gst_amount: Number(row.gst_amount ?? 0),
+    invoice_no: row.invoice_no ?? null,
+    staff_id: row.staff_id ?? null,
+    staff_name: row.staff_name ?? null,
+    payment_method: row.payment_method,
+    status: row.status,
   }));
   const effectiveLimit = limit ?? Math.max(total, 1);
   return {
@@ -3763,6 +3819,36 @@ async getPackageSaleReportRows(
       limit: effectiveLimit,
       total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
     },
+  };
+},
+
+// Distinct staff/package names that have EVER appeared in this salon's
+// package sales — scoped only to salon_id, not the current date/filters, so
+// the dropdowns stay complete.
+async getPackageSaleFiltersAvailable(salonId: string): Promise<{
+  staff: PackageSaleFilterOption[];
+  packages: string[];
+}> {
+  const { rows: staffRows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT st.id, TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))) AS label
+     FROM client_packages cp
+     JOIN staff st ON st.id = cp.staff_id
+     WHERE cp.salon_id = $1
+     ORDER BY label ASC`,
+    [salonId]
+  ));
+
+  const { rows: packageRows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT package_name
+     FROM client_packages
+     WHERE salon_id = $1
+     ORDER BY package_name ASC`,
+    [salonId]
+  ));
+
+  return {
+    staff: staffRows.map((r: any) => ({ id: r.id, label: r.label })),
+    packages: packageRows.map((r: any) => String(r.package_name)),
   };
 },
 
