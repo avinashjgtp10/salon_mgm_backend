@@ -1215,6 +1215,13 @@ export interface PackageSaleReportFilters {
     start_date?: string;
     end_date?: string;
     search?: string;
+    staff_ids?: string[];
+    package_name?: string;
+    package_status?: string;
+    payment_status?: string;
+    payment_method?: string;
+    min_amount?: number;
+    max_amount?: number;
     page?: number;
     limit?: number;
     is_export?: boolean;
@@ -1234,6 +1241,14 @@ export interface PackageSaleReportRow {
     // independent of pricing.engine.ts — this row IS the whole sale, so it's
     // trivially "per item" already, unlike sale_items-derived reports.
     gst_amount: number;
+    // Via client_packages.sale_id -> sales.invoice_number. NULL for package
+    // sales recorded before staff_id/sale_id existed.
+    invoice_no: string | null;
+    staff_id: string | null;
+    staff_name: string | null;
+    payment_method: string;
+    // Package status (Active/Completed/...) — distinct from payment_status.
+    status: string;
 }
 
 export interface PackageSaleReportStats {
@@ -1241,6 +1256,7 @@ export interface PackageSaleReportStats {
     total_sale_value: number;
     total_received: number;
     unique_packages: number;
+    outstanding_balance: number;
 }
 
 export interface PackageSaleReportPagination {
@@ -1250,10 +1266,19 @@ export interface PackageSaleReportPagination {
     total_pages: number;
 }
 
+export interface PackageSaleFilterOption {
+    id: string;
+    label: string;
+}
+
 export interface PackageSaleReportResponse {
     rows: PackageSaleReportRow[];
     pagination: PackageSaleReportPagination;
     stats: PackageSaleReportStats;
+    filters_available: {
+        staff: PackageSaleFilterOption[];
+        packages: string[];
+    };
 }
 
 // ===============================

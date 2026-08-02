@@ -1484,15 +1484,17 @@ async getPackageSaleReport(
     salonId: string,
     filters: PackageSaleReportFilters
 ): Promise<PackageSaleReportResponse> {
-    const [stats, rowsResult] = await Promise.all([
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
         reportsRepository.getPackageSaleReportStats(salonId, filters),
         reportsRepository.getPackageSaleReportRows(salonId, filters),
+        reportsRepository.getPackageSaleFiltersAvailable(salonId),
     ]);
 
     return {
         rows: rowsResult.items,
         pagination: rowsResult.pagination,
         stats,
+        filters_available: filtersAvailable,
     };
 },
 

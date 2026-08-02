@@ -159,12 +159,13 @@ export const clientMembershipsService = {
     // at all, so any Sales/Revenue page built from those tables misses it entirely.
     try {
       const pricePaid = Number(membership.pricePaid || 0);
-      await recordTransaction({
+      const txn = await recordTransaction({
         salon_id:      salonId,
         client_id:     dto.clientId,
         origin:        'membership_purchase',
         payment_label: dto.paymentMethod || '',
         split_details: dto.splitDetails ?? undefined,
+        staff_id:      dto.staffId,
         items: [{
           item_type:  'membership',
           item_id:    dto.membershipId,
@@ -177,8 +178,13 @@ export const clientMembershipsService = {
           // per-item-tax ticket to also start taxing this flow.
           tax_amount: 0,
           taxable_amount: pricePaid,
+          staff_id: dto.staffId,
         }],
       });
+
+      // Link this membership row to its invoice-bearing sale so a Member
+      // Sale report can show invoice_no via a join.
+      await clientMembershipsRepository.setSaleId(membership.id, salonId, txn.sale.id);
     } catch (err) {
       logger.error('[clientMembershipsService] Failed to auto-create sale for membership purchase:', { error: err });
     }
@@ -466,6 +472,12 @@ export const clientMembershipsService = {
     colour?: string,
     expiresAt?: string,
     appointmentId?: string,
+    // Staff on the checkout appointment, and the sales row the checkout's own
+    // recordTransaction() call already created for this bill — passed through
+    // so a Member Sale report can show Staff/Invoice No for memberships sold
+    // as a line item on a bill, not just via the standalone purchase() flow.
+    staffId?: string,
+    saleId?: string,
   ): Promise<void> {
     logger.info(`[client-memberships/auto-create] salon=${salonId} client=${clientId} membership=${membershipId} name="${membershipName}" sessions=${totalSessions} price=${pricePaid}`);
     try {
@@ -483,7 +495,11 @@ export const clientMembershipsService = {
         pricePaid,
         expiresAt,
         appointmentId,
+        staffId,
       });
+      if (saleId) {
+        await clientMembershipsRepository.setSaleId(created.id, salonId, saleId);
+      }
       logger.info(`[client-memberships/auto-create] SUCCESS — client=${clientId}, membership=${membershipName}`);
       // Text only, no PDF here — the calling checkout flow (sales/payments)
       // already sent one PDF covering this whole sale, membership line included.

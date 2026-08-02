@@ -777,6 +777,12 @@ export const paymentsService = {
       }
     }
 
+    // Captured inside the recordTransaction block below (when it runs) so the
+    // package/membership auto-create calls further down — outside that
+    // block's own try/scope — can still link back to this bill's real sale
+    // row for Invoice No / Staff lookups.
+    let checkoutSaleId: string | undefined;
+
     // ── Auto-create sale record when calendar payment is fully completed ───────
     // Skip for package payments — revenue was already counted when the package was purchased.
     if (data.appointment_id && data.status === 'completed' && appt && !isPackagePayment) {
@@ -887,6 +893,7 @@ export const paymentsService = {
           discount_percent: appt.discount_type === 'percentage' ? Number(appt.discount_value ?? 0) : undefined,
           items,
         });
+        checkoutSaleId = sale.id;
 
         // Note: appointment.status is managed by the checkout flow
         // (POST /api/v1/appointments/:id/checkout) to avoid double-completion
@@ -992,6 +999,65 @@ export const paymentsService = {
       }
     }
 
+    // ── Zero-revenue sale record for package-covered visits ──────────────────
+    // A service/product paid entirely from an already-purchased package's
+    // included sessions collects no new money — the package's price was
+    // already booked as revenue when the package itself was bought, so this
+    // visit must NOT add revenue again. But without ANY sales row, the visit
+    // has no invoice number and no recorded staff anywhere (Sales Summary,
+    // Package Sale report, staff commission, etc. all show nothing for it).
+    // Record the sale with every item's own price fully offset by an equal
+    // discount, so subtotal/total_amount net to exactly 0 — same "wallet"
+    // payment_method already used for e-wallet-covered visits (no schema
+    // change), just for package sessions instead.
+    if (data.appointment_id && data.status === 'completed' && appt && isPackagePayment) {
+      try {
+        const items: Array<{ item_type: 'service' | 'package' | 'product' | 'membership'; item_id?: string; staff_id?: string; name: string; quantity: number; unit_price: number; discount_amount: number }> = [
+          ...(appt.services || []).map((s) => ({
+            item_type: 'service' as const,
+            item_id: s.service_id,
+            staff_id: s.staff_id || undefined,
+            name: s.name || 'Service',
+            quantity: Number(s.quantity) || 1,
+            unit_price: Number(s.price) || 0,
+            discount_amount: Number(s.price) || 0,
+          })),
+          ...(appt.product_items || []).map((p) => ({
+            item_type: 'product' as const,
+            item_id: p.product_id || undefined,
+            staff_id: p.staff_id || undefined,
+            name: p.name || 'Product',
+            quantity: Number(p.quantity) || 1,
+            unit_price: Number(p.price) || 0,
+            discount_amount: Number(p.price) || 0,
+          })),
+        ];
+
+        if (items.length > 0) {
+          const { sale } = await recordTransaction({
+            salon_id: data.salon_id,
+            client_id: data.client_id,
+            appointment_id: data.appointment_id,
+            staff_id: appt.staff_id || undefined,
+            origin: 'calendar_checkout',
+            // Every item's unit_price is exactly matched by its own
+            // discount_amount above, so subtotal (and therefore
+            // total_amount) is always 0 here — no revenue recorded twice.
+            // normalizePaymentMethod() only maps the literal label "ewallet"
+            // (not "wallet") to the sales.payment_method DB value 'wallet' —
+            // see payment-method.util.ts. Passing 'wallet' directly would
+            // throw UnrecognizedPaymentMethodError.
+            payment_label: 'ewallet',
+            items,
+          });
+          checkoutSaleId = sale.id;
+        }
+      } catch (err) {
+        logger.error('[paymentsService] Failed to auto-create zero-revenue sale for package-covered visit:', { error: err });
+        // Non-fatal: payment is already recorded
+      }
+    }
+
     // Payment email is handled by appointments.service checkout — skip here to avoid duplicates
 
     // ── Auto-create client_memberships when memberships are sold ─────────────
@@ -1033,6 +1099,8 @@ export const paymentsService = {
               mem.colour,
               undefined,
               data.appointment_id,
+              item.staff_id || appt?.staff_id || undefined,
+              checkoutSaleId,
             );
           } catch (err: any) {
             logger.warn('[payments] membership auto-create failed:', err?.message ?? err);
@@ -1105,6 +1173,8 @@ export const paymentsService = {
               gstPercentage,
               expiryDate,
               data.appointment_id,
+              item.staff_id || appt?.staff_id || undefined,
+              checkoutSaleId,
             );
           } catch (err: any) {
             logger.warn('[payments] package auto-create failed:', err?.message ?? err);
