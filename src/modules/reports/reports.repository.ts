@@ -3484,7 +3484,7 @@ async getStaffSalesReport(
 
 _buildStaffItemSalesWhere(
   salonId: string,
-  filters: { start_date?: string; end_date?: string; item_type?: string; staff_id?: string }
+  filters: { start_date?: string; end_date?: string; item_type?: string; staff_id?: string; search?: string }
 ): { where: string; values: any[]; nextIndex: number } {
   const values: any[] = [salonId, filters.item_type ?? "service"];
   const where = ["s.salon_id = $1", "s.status <> 'draft'", "si.item_type = $2"];
@@ -3502,13 +3502,22 @@ _buildStaffItemSalesWhere(
     where.push(`COALESCE(si.staff_id, s.staff_id) = $${idx++}`);
     values.push(filters.staff_id);
   }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(si.name, '') ILIKE $${idx}
+      OR COALESCE(st.first_name, '') ILIKE $${idx}
+      OR COALESCE(st.last_name, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
 
   return { where: where.join(" AND "), values, nextIndex: idx };
 },
 
 async getStaffItemSalesReportStats(
   salonId: string,
-  filters: { start_date?: string; end_date?: string; item_type?: string; staff_id?: string }
+  filters: { start_date?: string; end_date?: string; item_type?: string; staff_id?: string; search?: string }
 ): Promise<StaffItemSalesReportStats> {
   const { where, values } = this._buildStaffItemSalesWhere(salonId, filters);
 
@@ -3569,7 +3578,7 @@ async getStaffItemSalesReportStats(
 async getStaffItemSalesReportRows(
   salonId: string,
   filters: {
-    start_date?: string; end_date?: string; item_type?: string; staff_id?: string;
+    start_date?: string; end_date?: string; item_type?: string; staff_id?: string; search?: string;
     page?: number; limit?: number; is_export?: boolean;
   }
 ): Promise<{
@@ -3616,7 +3625,7 @@ async getStaffItemSalesReportRows(
         AND p.status IN ('completed', 'partial')
     ) mw ON TRUE
     WHERE ${where}
-    ORDER BY revenue DESC
+    ORDER BY s.created_at DESC
     ${limitClause}
   `;
 
