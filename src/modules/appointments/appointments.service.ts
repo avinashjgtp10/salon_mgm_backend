@@ -860,7 +860,7 @@ export const appointmentsService = {
                         clientName:    existing.client_name         ?? "Walk-in",
                         amount:        String(preExistingSale.total_amount ?? "0"),
                         paymentMethod: params.payment_method        ?? "N/A",
-                        invoiceId:     preExistingSale.id.slice(0, 8).toUpperCase(),
+                        invoiceId:     preExistingSale.invoice_number ?? "",
                     });
                 } catch (err: any) { logger.error("[email] newPayment (preexisting) failed:", err?.message ?? err); }
             })();
@@ -999,7 +999,7 @@ export const appointmentsService = {
                 variables: {
                     '1': existing.client_name         ?? 'Valued Customer',
                     '2': String(sale.total_amount     ?? '0'),
-                    '3': sale.id.slice(0, 8).toUpperCase(),
+                    '3': sale.invoice_number ?? '',
                 },
                 referenceId:   sale.id,
                 referenceType: 'invoice',
@@ -1095,7 +1095,7 @@ export const appointmentsService = {
                     clientName:    existing.client_name         ?? "Walk-in",
                     amount:        String(sale.total_amount     ?? "0"),
                     paymentMethod: params.payment_method        ?? "N/A",
-                    invoiceId:     sale.id.slice(0, 8).toUpperCase(),
+                    invoiceId:     sale.invoice_number ?? "",
                 });
                 logger.info(`[email] newPayment sent to ${ownerEmail}`);
             } catch (err: any) { logger.error("[email] newPayment (checkout) failed:", err?.message ?? err); }

@@ -630,7 +630,7 @@ const DAY_WISE_BASE_CTES = `
       s.appointment_id,
       s.created_at,
       DATE(s.created_at) AS sale_day,
-      COALESCE(s.invoice_number, s.id::text) AS invoice_no,
+      s.invoice_number AS invoice_no,
       COALESCE(c.full_name, 'Walk-in Client') AS customer_name,
       COALESCE(c.phone_number, '') AS mobile,
       COALESCE(
@@ -837,7 +837,7 @@ const buildCouponRedemptionBase = (
     WITH coupon_sales AS (
       SELECT
         s.id AS sale_id,
-        COALESCE(NULLIF(s.invoice_number, ''), CONCAT('INV-', s.id::text)) AS invoice_no,
+        NULLIF(s.invoice_number, '') AS invoice_no,
         UPPER(TRIM(s.coupon_code)) AS coupon_code,
         COALESCE(cp.type, 'flat') AS coupon_type,
         COALESCE(cp.value, 0)::numeric AS coupon_value,
@@ -2085,7 +2085,7 @@ async getDailySheetReport(
         s.appointment_id,
         s.id AS sale_id,
         TO_CHAR(s.created_at, 'HH12:MI AM') AS time,
-        COALESCE(s.invoice_number, s.id::text) AS ticket_no,
+        s.invoice_number AS ticket_no,
         s.client_id,
         c.full_name AS client_name,
         si.item_id::text AS service_id,
@@ -2352,7 +2352,7 @@ async getProductRetailReportRows(
     SELECT
       s.id AS sale_id,
       TO_CHAR(s.created_at, 'YYYY-MM-DD') AS date,
-      COALESCE(s.invoice_number, s.id::text) AS invoice_no,
+      s.invoice_number AS invoice_no,
       s.client_id,
       c.full_name AS client_name,
       st.id AS staff_id,
@@ -2679,7 +2679,7 @@ async getServiceSaleReportRows(
     SELECT
       s.id AS sale_id,
       TO_CHAR(s.created_at, 'YYYY-MM-DD') AS date,
-      COALESCE(s.invoice_number, s.id::text) AS invoice_no,
+      s.invoice_number AS invoice_no,
       s.client_id,
       c.full_name AS client_name,
       st.id AS staff_id,
@@ -2844,7 +2844,7 @@ async getGstReportRows(
     SELECT
       s.id AS sale_id,
       TO_CHAR(s.created_at, 'YYYY-MM-DD') AS date,
-      COALESCE(s.invoice_number, s.id::text) AS invoice_no,
+      s.invoice_number AS invoice_no,
       c.full_name AS client_name,
       GREATEST(s.subtotal::numeric - s.discount_amount::numeric, 0) AS taxable_amount,
       s.tax_amount::numeric AS tax_amount,
@@ -4829,7 +4829,7 @@ async getServiceRevenueTable(
     appointment_rows AS (
       SELECT
         a.id,
-        COALESCE(a.id::text, a.service_id::text) AS invoice_number,
+        NULL::text AS invoice_number,
         c.full_name AS client_name,
         src.item_name AS service_name,
         COALESCE(
@@ -5588,7 +5588,7 @@ async getSalesSummaryTable(
     sale_rows AS (
       SELECT
         s.id AS sale_id,
-        COALESCE(NULLIF(s.invoice_number, ''), CONCAT('INV-', s.id::text)) AS invoice_no,
+        NULLIF(s.invoice_number, '') AS invoice_no,
         s.created_at,
         COALESCE(c.full_name, 'Walk-in Client') AS customer_name,
         COALESCE(c.phone_number, '') AS mobile,
@@ -5652,7 +5652,7 @@ async getSalesSummaryTable(
     appointment_only_rows AS (
       SELECT
         a.id AS sale_id,
-        CONCAT('APT-', a.id::text) AS invoice_no,
+        NULL::text AS invoice_no,
         a.created_at,
         COALESCE(c.full_name, 'Walk-in Client') AS customer_name,
         COALESCE(c.phone_number, '') AS mobile,
@@ -7826,7 +7826,7 @@ async getTipReportTable(
   if (filters.search) {
     where.push(`
       (
-        COALESCE(inv.invoice_number_text, a.id::text) ILIKE $${index}
+        COALESCE(s.invoice_number, '') ILIKE $${index}
         OR COALESCE(c.full_name,'') ILIKE $${index}
         OR COALESCE(svc.service_name, sv.name, '') ILIKE $${index}
         OR COALESCE(svc.staff_name, CONCAT(st.first_name,' ',st.last_name), '') ILIKE $${index}
@@ -7932,7 +7932,7 @@ async getTipReportTable(
       )
       SELECT
         a.id,
-        COALESCE(inv.invoice_number_text, a.id::text) AS invoice_no,
+        s.invoice_number AS invoice_no,
         a.scheduled_at AS sale_date,
         COALESCE(c.full_name, 'Walk-in Client') AS client,
         COALESCE(c.phone_number, '') AS mobile,
@@ -7971,18 +7971,6 @@ async getTipReportTable(
           ELSE 'Collected'
         END AS status
       FROM appointments a
-      LEFT JOIN LATERAL (
-        SELECT (
-          SELECT COUNT(*)
-          FROM appointments a2
-          WHERE a2.salon_id = a.salon_id
-            AND (
-              a2.created_at < a.created_at
-              OR (a2.created_at = a.created_at AND a2.id <= a.id)
-            )
-        )::text AS invoice_number_text
-      ) inv
-        ON TRUE
       LEFT JOIN pay
         ON pay.appointment_id = a.id
       LEFT JOIN sales s
@@ -8700,7 +8688,7 @@ async getDailySheetTable(
           s.appointment_id,
           s.created_at AS sort_ts,
           TO_CHAR(s.created_at, 'HH12:MI AM') AS time,
-          COALESCE(s.invoice_number, s.id::text) AS ticket_no,
+          s.invoice_number AS ticket_no,
           COALESCE(c.full_name, 'Walk-in Client') AS client_name,
           COALESCE(NULLIF(sir.items, ''), NULLIF(air.services, ''), 'Service') AS service,
           COALESCE(ssr.staff_names, 'Unknown') AS staff,
@@ -9269,7 +9257,7 @@ async getGuestCollectionReport(
         m.id,
         m.id AS source_ref_id,
         'appointment'::text AS source_type,
-        COALESCE(s.invoice_number, inv.invoice_number_text) AS invoice_number,
+        s.invoice_number AS invoice_number,
         m.client_id,
         COALESCE(s.created_at, m.created_at, m.scheduled_at) AS created_at,
         DATE(COALESCE(s.created_at, m.scheduled_at, m.created_at)) AS bill_date,
@@ -9312,18 +9300,6 @@ async getGuestCollectionReport(
         ON sir.sale_id = s.id
       LEFT JOIN clients c
         ON c.id = m.client_id
-      LEFT JOIN LATERAL (
-        SELECT (
-          SELECT COUNT(*)
-          FROM appointments a2
-          WHERE a2.salon_id = m.salon_id
-            AND (
-              a2.created_at < m.created_at
-              OR (a2.created_at = m.created_at AND a2.id <= m.id)
-            )
-        )::text AS invoice_number_text
-      ) inv
-        ON TRUE
       WHERE
         m.salon_id = $1
         AND LOWER(COALESCE(m.status::text, '')) NOT IN ('cancelled', 'no-show')
@@ -9333,7 +9309,7 @@ async getGuestCollectionReport(
         s.id,
         s.id AS source_ref_id,
         'sale'::text AS source_type,
-        COALESCE(s.invoice_number, s.id::text) AS invoice_number,
+        s.invoice_number AS invoice_number,
         s.client_id,
         s.created_at,
         DATE(s.created_at) AS bill_date,
@@ -9580,7 +9556,7 @@ async getGuestCollectionReport(
       `
       ${GUEST_COLLECTION_BASE_CTES}
       SELECT
-        COALESCE(invoice_number, id::text) AS invoice_no,
+        invoice_number AS invoice_no,
         guest_name,
         phone,
         bill_amount,
@@ -11207,10 +11183,7 @@ async getBalanceReceivedReport(
         LOWER(COALESCE(p.status, 'completed')) AS raw_payment_status,
         COALESCE(c.full_name, 'Walk-in Client') AS customer_name,
         COALESCE(c.phone_number, '') AS mobile,
-        COALESCE(
-          s.invoice_number,
-          inv.invoice_number_text
-        ) AS invoice_no,
+        s.invoice_number AS invoice_no,
         COALESCE(ast.staff_name, 'Unknown') AS staff_name
       FROM payments p
       JOIN appointments a
@@ -11221,18 +11194,6 @@ async getBalanceReceivedReport(
         ON c.id = COALESCE(p.client_id, a.client_id)
       LEFT JOIN appointment_staff ast
         ON ast.appointment_id = a.id
-      LEFT JOIN LATERAL (
-        SELECT (
-          SELECT COUNT(*)
-          FROM appointments a2
-          WHERE a2.salon_id = a.salon_id
-            AND (
-              a2.created_at < a.created_at
-              OR (a2.created_at = a.created_at AND a2.id <= a.id)
-            )
-        )::text AS invoice_number_text
-      ) inv
-        ON TRUE
       WHERE
         p.salon_id = $1
         AND p.appointment_id IS NOT NULL
@@ -11247,7 +11208,7 @@ async getBalanceReceivedReport(
         payment_day,
         customer_name,
         mobile,
-        COALESCE(invoice_no, appointment_id::text) AS invoice_no,
+        invoice_no,
         staff_name,
         ${BALANCE_RECEIVED_PAYMENT_MODE_SQL} AS payment_method,
         ROUND(amount_received, 2) AS amount_received,
