@@ -4131,7 +4131,13 @@ async getAppointmentDetailReport(
     values.push(filters.to);
   }
   if (filters.statuses && filters.statuses.length > 0) {
-    where.push(`a.status = ANY($${idx++}::text[])`);
+    // appointments.status is a native Postgres ENUM (appointment_status),
+    // not text — `a.status = ANY($n::text[])` throws "operator does not
+    // exist: appointment_status = text" (no implicit enum/text comparison),
+    // which safeQuery lets propagate, failing the whole report request
+    // whenever any status filter is applied. Casting the column itself to
+    // text lets it compare against the plain text[] array from the request.
+    where.push(`a.status::text = ANY($${idx++}::text[])`);
     values.push(filters.statuses);
   }
 
