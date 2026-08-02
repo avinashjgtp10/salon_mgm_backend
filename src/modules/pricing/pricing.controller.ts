@@ -32,6 +32,7 @@ export const pricingController = {
           ? Number(body.membershipWalletRequested) || 0
           : undefined,
         applyMembershipDiscount: !!body.applyMembershipDiscount,
+        applyLoyaltyDiscount: !!body.applyLoyaltyDiscount,
         applyRewardPoints: !!body.applyRewardPoints,
         rewardPointsToRedeem: Number(body.rewardPointsToRedeem) || 0,
         applyReferralCredit: !!body.applyReferralCredit,

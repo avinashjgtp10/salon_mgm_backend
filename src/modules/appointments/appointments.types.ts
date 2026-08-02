@@ -17,6 +17,9 @@ export type AppointmentServiceItem = {
     quantity: number;
     time?: string | null; // "HH:MM" slot time
     is_package_service?: boolean;
+    // service_categories id, copied from the booking row at save time — lets
+    // a category-restricted membership benefit filter which rows it covers.
+    category_id?: string | null;
     // Read-time-only enrichment (never persisted on this JSONB column) — this
     // row's own real GST, read back from the linked sale's sale_items once
     // one exists. See appointmentsService's enrichItemsWithTax.
@@ -43,6 +46,9 @@ export type AppointmentProductItem = {
     staff_id?: string | null;
     staff_name?: string | null;
     start_time?: string | null;
+    // service_categories id, copied from the booking row at save time — lets
+    // a category-restricted membership benefit filter which rows it covers.
+    category_id?: string | null;
     tax_amount?: number;
 };
 

@@ -48,7 +48,7 @@ import {
 function computeAppointmentTotals(appt: {
     services?: any[]; package_items?: any[]; product_items?: any[]; membership_items?: any[];
     discount_type?: string; discount_value?: number; ex_charges?: number; tip_amount?: number;
-    include_gst?: boolean;
+    include_gst?: boolean; membership_discount_used?: number | string;
 }, activeTaxes: ActiveTaxRow[]) {
     const toRow = (items: any[] = []) => (items || []).map((i) => ({
         price: Number(i?.price) || 0,
@@ -64,6 +64,16 @@ function computeAppointmentTotals(appt: {
         },
         discountType: (appt.discount_type === "percentage" ? "percentage" : "flat"),
         discountValue: Number(appt.discount_value) || 0,
+        // A percentage/loyalty membership discount is a genuine pre-tax price
+        // cut, same as the manual discount above — already collected onto
+        // this appointment via findById()/listBySalonId()'s payments
+        // subquery (MAX per appointment, not a per-call delta). Without this,
+        // a read-time backfill (any appointment whose tax_breakdown is empty
+        // or stale) recomputed computed_grand_total as if no membership
+        // discount had ever been applied, overstating it by exactly that
+        // amount — see ComputeBillTotalsInput.membershipDiscountAmount for
+        // why this must go directly into grandTotal, not the discRatio.
+        membershipDiscountAmount: Number(appt.membership_discount_used) || 0,
         // Respect this appointment's own persisted "Include GST" choice —
         // without this gate, a bill deliberately saved with GST excluded
         // gets the salon's active taxes silently added back in on every
