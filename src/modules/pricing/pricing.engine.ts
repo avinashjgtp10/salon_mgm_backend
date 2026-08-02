@@ -98,6 +98,12 @@ export interface ComputeBillTotalsInput {
   // part of the post-tax effectiveTotal subtraction; folding it into both
   // would take it off the bill twice.
   membershipDiscountAmount?: number;
+  // First-bill referral welcome discount — unlike couponDiscount/
+  // membershipDiscountAmount above, this is a POST-tax, POST-Svc-Discount
+  // deduction (applied to the bill after GST and after the manual Svc
+  // Discount, before membership wallet/eWallet/reward points). See
+  // preRedemptionTotal on BillTotalsResult for exactly where this lands.
+  referralDiscount?: number;
   taxes: ActiveTaxRow[];
   exCharges: number;
   tip: number;
@@ -154,9 +160,35 @@ export interface BillTotalsResult {
   taxable: number;
   gstAmount: number;
   taxBreakdown: TaxBreakdownEntry[];
+  // The fully-reduced bill total — subtotal, GST, Svc Discount, Extra
+  // Charges/Tip, Referral Discount, Membership Wallet, eWallet, and Reward
+  // Points have ALL already been applied by the time this is produced.
+  // Rounded to the nearest whole rupee (the single rounding point in the
+  // whole waterfall — see preRedemptionTotal below). This IS what used to be
+  // called `effectiveTotal`/"Amount to Pay" — there is no longer a separate
+  // "gross bill before redemptions" concept; callers that need one should
+  // read `preRedemptionTotal` (unrounded, used for sequential-redemption
+  // capping) or `displaySubtotal`/`subtotal` above (item-level, before any
+  // bill-level deduction).
   grandTotal: number;
   roundOff: number;
-  effectiveTotal: number;
+  // Raw (unrounded) bill total after Svc Discount + Extra Charges/Tip +
+  // Referral Discount, but BEFORE membership wallet/eWallet/reward points are
+  // subtracted. This is the ceiling callers use to sequentially cap those
+  // four redemptions (Membership → eWallet → Reward Points → Referral
+  // Credit) against what's actually still owed — replaces the old pattern of
+  // capping against `grandTotal`, which now already has those redemptions
+  // baked in and would double-subtract if used as a ceiling. Never rounded,
+  // never shown as its own Sale Summary row.
+  preRedemptionTotal: number;
+  // Display-only: subtotal with membership-wallet-covered amounts already
+  // netted out, so a service fully paid via membership wallet reads as ₹0 in
+  // the summary — matching the ₹0 the service's own row already shows —
+  // instead of the summary still showing its full pre-coverage value.
+  // Meaningless to also have a displayGrandTotal now that grandTotal itself
+  // is the fully-reduced figure. Only meaningful when membershipWalletUsed >
+  // 0; identical to subtotal otherwise.
+  displaySubtotal: number;
   // Present only when the caller passed `ComputeBillTotalsInput.rows` --
   // each array is index-aligned with the corresponding `rows[type]` array
   // the caller supplied, so the caller matches entries back by index (no id
@@ -178,20 +210,32 @@ export interface MembershipDiscountAllocation {
 }
 
 /**
- * Discount a plan grants across these line amounts, stopping when the pool
- * runs dry — the SAME per-line, capped, in-order allocation used everywhere
- * a percentage/loyalty discount is calculated: the live preview, the real
- * ledger-writing deduction (client-memberships.repository.ts's
+ * Discount a plan grants across these line amounts — the SAME allocation
+ * used everywhere a percentage/loyalty discount is calculated: the live
+ * preview, the real ledger-writing deduction (client-memberships.repository.ts's
  * deductDiscountBalanceForBooking), and the per-row tax exclusion below. One
  * function, three call sites, so none of them can disagree.
+ *
+ * When the balance covers every line's own natural (amount × pct%) discount,
+ * every line simply gets its full cut — order doesn't matter. When the
+ * balance runs short, EVERY eligible line is scaled down by the SAME ratio
+ * (its natural discount × balance/totalNaturalDiscount), rather than filling
+ * lines in the order they happen to appear in `amounts` until the pool runs
+ * dry. The caller-side convention of listing services before products (see
+ * pricing.service.ts/payments.service.ts) used to mean an insufficient
+ * balance would fully satisfy every service and leave products with nothing
+ * (or vice versa) purely because of array position — proportional scaling
+ * makes every eligible line lose the same percentage of ITS OWN discount
+ * instead, regardless of type or position.
  *
  * Rounds per line rather than on the summed total, and must stay that way:
  * the real deduction writes one ledger row per line and rounds each, so
  * summing first would leave the preview and the charge disagreeing by paise.
  * Callers are responsible for pre-filtering to only eligible lines (skip
  * package-covered services; skip products unless the plan covers them) —
- * this function just allocates across whatever it's given, in order. Pass
- * Infinity as the balance for uncapped (loyalty) plans.
+ * this function just allocates across whatever it's given. Pass Infinity as
+ * the balance for uncapped (loyalty) plans — ratio is always 1 there, so
+ * every eligible line always gets its full natural discount.
  */
 export function allocateMembershipDiscount(
   amounts: number[],
@@ -202,16 +246,21 @@ export function allocateMembershipDiscount(
   const discounts = amounts.map(() => 0);
   if (pct <= 0) return { total: 0, discounts };
 
-  let remaining = Math.max(0, balanceRemaining);
+  const balance = Math.max(0, balanceRemaining);
+  const naturalDiscounts = amounts.map((amount) => (amount > 0 ? round2((amount * pct) / 100) : 0));
+  const totalNatural = naturalDiscounts.reduce((s, v) => s + v, 0);
+  if (totalNatural <= 0 || balance <= 0) return { total: 0, discounts };
+
+  // ratio is always exactly 1 when the balance fully covers everyone (or is
+  // Infinity, the uncapped loyalty case) — every line gets its own full cut,
+  // byte-for-byte the same result as before this rework for that common case.
+  const ratio = Math.min(1, balance / totalNatural);
   let total = 0;
-  amounts.forEach((amount, i) => {
-    if (remaining <= 0) return;
-    if (amount <= 0) return;
-    const discount = Math.min(round2((amount * pct) / 100), remaining);
-    if (discount <= 0) return;
-    remaining = round2(remaining - discount);
-    total = round2(total + discount);
-    discounts[i] = discount;
+  naturalDiscounts.forEach((natural, i) => {
+    if (natural <= 0) return;
+    const scaled = round2(natural * ratio);
+    discounts[i] = scaled;
+    total = round2(total + scaled);
   });
   return { total, discounts };
 }
@@ -252,7 +301,7 @@ function computeBucketTax(
   return { addOn, breakdown };
 }
 
-function round2(v: number): number {
+export function round2(v: number): number {
   return Math.round(v * 100) / 100;
 }
 
@@ -298,7 +347,7 @@ function mergeBreakdown(entries: TaxBreakdownEntry[]): TaxBreakdownEntry[] {
 export function computeBillTotals(input: ComputeBillTotalsInput): BillTotalsResult {
   const {
     actualAmounts, catalogAmounts = actualAmounts,
-    discountType, discountValue, couponDiscount = 0, membershipDiscountAmount = 0, taxes,
+    discountType, discountValue, couponDiscount = 0, membershipDiscountAmount = 0, referralDiscount = 0, taxes,
     exCharges, tip, eWalletUsed = 0, membershipWalletUsed = 0,
     membershipServiceWalletUsed = 0, membershipProductWalletUsed = 0,
     membershipServiceDiscountUsed = 0, membershipProductDiscountUsed = 0,
@@ -316,17 +365,13 @@ export function computeBillTotals(input: ComputeBillTotalsInput): BillTotalsResu
   // computed it before this engine existed).
   const itemDiscountTotal = Math.max(0, catalogTotal - rawSubtotal);
 
-  const serviceTotal = serviceBase + packageBase + membershipBase;
-  const itemDisc =
-    discountType === "percentage"
-      ? (serviceTotal * discountValue) / 100
-      : discountValue;
-
-  const manualDiscount = Math.max(0, itemDisc);
-  // membershipDiscountAmount is deliberately NOT folded in here — see the doc
-  // comment on ComputeBillTotalsInput.membershipDiscountAmount for why it gets
-  // its own flat subtraction + per-row exclusion instead of joining discRatio.
-  const totalDisc = manualDiscount + Math.max(0, couponDiscount);
+  // "Svc Discount" (discountType/discountValue) is now a POST-tax deduction —
+  // applied to the bill total AFTER GST, not to the pre-tax subtotal — per the
+  // discount-after-GST rework. Coupon discount (and membership discount, see
+  // below) are unaffected and still reduce the taxable base as before; only
+  // this one field moved. See the `manualDiscount`/`billTotal` computation
+  // after the tax bucket loop below for where it actually gets applied.
+  const totalDisc = Math.max(0, couponDiscount);
   const membershipDiscount = Math.max(0, membershipDiscountAmount);
 
   // Legacy backend quirk (see roundSubtotalBeforeDiscount doc comment above) —
@@ -335,11 +380,12 @@ export function computeBillTotals(input: ComputeBillTotalsInput): BillTotalsResu
   const subtotalForTaxable = roundSubtotalBeforeDiscount ? Math.round(rawSubtotal) : rawSubtotal;
   const taxable = Math.max(0, subtotalForTaxable - totalDisc - membershipDiscount);
 
-  // Allocate the manual/coupon discount proportionally across item types (by
-  // share of subtotal) so each bucket's post-discount amount is taxed, not its
-  // raw pre-discount price. Always uses the unrounded raw subtotal — matches
-  // both totalsUtils.ts and payments.service.ts's historical behavior exactly.
-  // The membership discount is excluded from this ratio on purpose (see above).
+  // Allocate the coupon discount proportionally across item types (by share of
+  // subtotal) so each bucket's post-discount amount is taxed, not its raw
+  // pre-discount price. Always uses the unrounded raw subtotal — matches both
+  // totalsUtils.ts and payments.service.ts's historical behavior exactly.
+  // Svc Discount no longer participates here (it's post-tax now); the
+  // membership discount is excluded from this ratio on purpose (see above).
   const discRatio = rawSubtotal > 0 ? Math.min(1, totalDisc / rawSubtotal) : 0;
 
   // Safety net: membershipDiscountAmount already reduced `taxable` above, but
@@ -370,6 +416,14 @@ export function computeBillTotals(input: ComputeBillTotalsInput): BillTotalsResu
   ];
 
   let gstAmount = 0;
+  // Exclusive-tax add-on for the service+packages+membership buckets only
+  // (never product) — feeds the percentage-type Svc Discount's base below,
+  // which (matching the pre-existing "never product" rule for that field)
+  // needs to be a POST-tax figure now, not just the raw pre-tax bucket sum.
+  // Inclusive tax is deliberately excluded here: it's already baked into the
+  // bucket's own base amount (serviceTotal below), so adding it again would
+  // double-count it in the discount base.
+  let nonProductExclusiveGst = 0;
   let allBreakdown: TaxBreakdownEntry[] = [];
   const rowTax = rows ? { service: [] as number[], packages: [] as number[], product: [] as number[], membership: [] as number[] } : undefined;
   const rowTaxableAmount = rows ? { service: [] as number[], packages: [] as number[], product: [] as number[], membership: [] as number[] } : undefined;
@@ -397,6 +451,7 @@ export function computeBillTotals(input: ComputeBillTotalsInput): BillTotalsResu
     bucketTaxable = Math.max(0, bucketTaxable);
     const { addOn, breakdown } = computeBucketTax(bucketTaxable, type, taxes);
     gstAmount += addOn;
+    if (type !== "product") nonProductExclusiveGst += addOn;
     allBreakdown = allBreakdown.concat(breakdown);
 
     if (rowTax && rowTaxableAmount) {
@@ -409,13 +464,62 @@ export function computeBillTotals(input: ComputeBillTotalsInput): BillTotalsResu
   });
 
   const taxBreakdown = mergeBreakdown(allBreakdown);
-  // Tip is collected from the client alongside the bill, but passed straight
-  // through to staff — it must be part of what's actually charged here, even
-  // though it's excluded from salon revenue further downstream (sales.total_amount).
-  const rawGrandTotal = taxable + gstAmount + exCharges + tip;
-  const grandTotal = Math.round(rawGrandTotal);
-  const roundOff = grandTotal - rawGrandTotal;
-  const effectiveTotal = Math.max(0, grandTotal - eWalletUsed - membershipWalletUsed - rewardPointsRedeemedValue - referralCreditUsed);
 
-  return { catalogTotal, itemDiscountTotal, subtotal: rawSubtotal, manualDiscount, totalDisc, taxable, gstAmount, taxBreakdown, grandTotal, roundOff, effectiveTotal, rowTax, rowTaxableAmount };
+  // "Bill Total" — subtotal (after coupon/membership discounts) plus GST,
+  // BEFORE Svc Discount. Svc Discount is a bill-level deduction applied here,
+  // after tax, instead of reducing the pre-tax taxable base like coupon/
+  // membership discount still do above.
+  const billTotal = taxable + gstAmount;
+  // Percentage type still applies only to service+packages+membership (never
+  // product), matching the pre-existing rule — against their POST-tax value
+  // (their bucket sum plus their own share of exclusive GST), with whatever
+  // membership wallet/discount already covered on those SAME rows netted out
+  // first — otherwise a row already paid off by a membership benefit still
+  // inflates the % base for a discount that has nothing left to reduce there.
+  const serviceTotal = (serviceBase - membershipServiceWalletUsed - membershipServiceDiscountUsed)
+    + packageBase + membershipBase;
+  const svcDiscountBase = serviceTotal + nonProductExclusiveGst;
+  const itemDisc =
+    discountType === "percentage"
+      ? (svcDiscountBase * discountValue) / 100
+      : discountValue;
+  const manualDiscount = Math.max(0, itemDisc);
+
+  const afterSvcDiscount = Math.max(0, billTotal - manualDiscount);
+  // Extra Charges and Tip are both excluded from the Svc Discount base above
+  // (see billTotal) — added here, after the discount, not before. Tip is
+  // collected from the client alongside the bill, passed straight through to
+  // staff — it must be part of what's actually charged here, even though
+  // it's excluded from salon revenue further downstream (sales.total_amount).
+  const withCharges = afterSvcDiscount + exCharges + tip;
+
+  // Referral Discount (first-bill welcome discount) is a POST-tax,
+  // POST-Svc-Discount deduction — applied here, not folded into the pre-tax
+  // coupon/membership discounts above.
+  const referralDisc = Math.max(0, referralDiscount);
+  // Raw (unrounded) ceiling for the sequential Membership Wallet → eWallet →
+  // Reward Points → Referral Credit capping done by callers — see
+  // BillTotalsResult.preRedemptionTotal doc comment. Never rounded, never
+  // shown as its own Sale Summary row.
+  const preRedemptionTotal = Math.max(0, withCharges - referralDisc);
+
+  // Every remaining deduction (membership wallet, eWallet, reward points)
+  // happens here, still in raw/unrounded form — rounding happens exactly
+  // once, at the very end, not partway through.
+  const rawFinalTotal = Math.max(0, preRedemptionTotal
+    - membershipWalletUsed - eWalletUsed - rewardPointsRedeemedValue - referralCreditUsed);
+  const grandTotal = Math.round(rawFinalTotal);
+  const roundOff = grandTotal - rawFinalTotal;
+
+  // Display-only — see BillTotalsResult.displaySubtotal doc comment. Never
+  // used for grandTotal/revenue/tax above, which already subtract
+  // membershipWalletUsed exactly once (in rawFinalTotal); this is a separate,
+  // parallel figure purely for the Subtotal display row.
+  const displaySubtotal = Math.max(0, rawSubtotal - membershipWalletUsed);
+
+  return {
+    catalogTotal, itemDiscountTotal, subtotal: rawSubtotal, manualDiscount, totalDisc: manualDiscount + totalDisc,
+    taxable, gstAmount, taxBreakdown, grandTotal, roundOff, preRedemptionTotal, displaySubtotal,
+    rowTax, rowTaxableAmount,
+  };
 }
