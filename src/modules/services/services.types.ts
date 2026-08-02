@@ -4,6 +4,12 @@ export type ScheduleType = "sequence" | "parallel";
 export type BundlePriceType = "service_pricing" | "fixed" | "free";
 export type AvailableFor = "all" | "male" | "female" | "other";
 
+export type ServiceConsumable = {
+  product_id: string;
+  standard_quantity: number;
+  unit: string;
+};
+
 // ─── Service ──────────────────────────────────────────────────────────────────
 export type Service = {
   id: string;
@@ -18,6 +24,7 @@ export type Service = {
   online_booking: boolean;
   commission_enabled: boolean;
   resource_required: boolean;
+  consumables: ServiceConsumable[];
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -95,6 +102,7 @@ export type CreateServiceBody = {
   online_booking?: boolean;
   commission_enabled?: boolean;
   resource_required?: boolean;
+  consumables?: ServiceConsumable[];
   staff_ids?: string[];
 };
 

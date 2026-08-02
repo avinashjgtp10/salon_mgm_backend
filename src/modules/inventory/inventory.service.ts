@@ -24,6 +24,7 @@ import {
     SaveReconciliationBody,
     SaveReconciliationRowBody,
     SaveConsumableUsageBody,
+    AppointmentConsumableInput,
 } from "./inventory.types";
 
 // ─── Suppliers ────────────────────────────────────────────────────────────────
@@ -224,11 +225,43 @@ export const consumableUsageService = {
         body: SaveConsumableUsageBody;
     }): Promise<{ recorded: number }> {
         const { requesterUserId, salonId, body } = params;
-        if (!body.branch_id) throw new AppError(400, "branch_id is required", "VALIDATION_ERROR");
         if (!body.items?.length) throw new AppError(400, "items are required", "VALIDATION_ERROR");
-        logger.info("consumableUsageService.save called", { branchId: body.branch_id, count: body.items.length });
+        logger.info("consumableUsageService.save called", { salonId, count: body.items.length });
         const recorded = await consumableUsageRepository.create(body, salonId, requesterUserId);
         logger.info("consumableUsageService.save success", { recorded });
         return { recorded };
+    },
+
+    async completeAppointment(params: {
+        appointmentId: string;
+        salonId: string;
+        requesterUserId: string;
+        actualConsumables?: AppointmentConsumableInput[];
+        saleId?: string;
+        status?: "paid" | "partial";
+    }) {
+        try {
+            const result = await consumableUsageRepository.applyAppointmentCompletion({
+                appointmentId: params.appointmentId,
+                salonId: params.salonId,
+                userId: params.requesterUserId,
+                actualConsumables: params.actualConsumables,
+                saleId: params.saleId,
+                status: params.status,
+            });
+            logger.info("Appointment completed with consumables", {
+                appointmentId: params.appointmentId,
+                deducted: result.deducted,
+                restored: result.restored,
+                usageRecorded: result.usageRecorded,
+            });
+            return result;
+        } catch (error: any) {
+            logger.error("Appointment consumable completion failed", {
+                appointmentId: params.appointmentId,
+                message: error?.message,
+            });
+            throw error;
+        }
     },
 };

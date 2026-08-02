@@ -14,6 +14,7 @@ const UUID_RE    = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-
 const isUUID         = (v: unknown): v is string => typeof v === "string" && UUID_RE.test(v);
 const isOptionalUUID = (v: unknown) => v === undefined || isUUID(v);
 const isEnum         = (v: unknown, allowed: string[]) => v === undefined || allowed.includes(String(v));
+const VALID_UNITS = new Set(["ml", "l", "g", "kg", "pcs", "oz", "lb", "bottle", "tube", "pack", "box", "roll"]);
 
 const validateUuidArray = (v: unknown, field: string): void => {
   if (!isOptionalStringArray(v))
@@ -22,11 +23,25 @@ const validateUuidArray = (v: unknown, field: string): void => {
     throw new AppError(400, `${field} must contain valid UUID strings`, "VALIDATION_ERROR");
 };
 
+const normalizeConsumables = (body: Record<string, any>): void => {
+  if (body.consumables !== undefined || body.consumables_used === undefined) return;
+  if (!Array.isArray(body.consumables_used)) {
+    body.consumables = body.consumables_used;
+    return;
+  }
+  body.consumables = body.consumables_used.map((item: any) => ({
+    product_id: item?.product_id,
+    standard_quantity: item?.standard_quantity ?? item?.qty,
+    unit: item?.unit,
+  }));
+};
+
 // ─── Services ─────────────────────────────────────────────────────────────────
 
 export const validateCreateService = (req: Request, _res: Response, next: NextFunction) => {
   try {
     const b = req.body;
+    normalizeConsumables(b);
     if (!isNonEmptyString(b.name))           throw new AppError(400, "name is required", "VALIDATION_ERROR");
     if (!isUUID(b.category_id))              throw new AppError(400, "category_id is required and must be a UUID", "VALIDATION_ERROR");
     if (!isOptionalString(b.treatment_type)) throw new AppError(400, "treatment_type must be a string", "VALIDATION_ERROR");
@@ -38,6 +53,7 @@ export const validateCreateService = (req: Request, _res: Response, next: NextFu
     if (!isOptionalBool(b.commission_enabled)) throw new AppError(400, "commission_enabled must be a boolean", "VALIDATION_ERROR");
     if (!isOptionalBool(b.resource_required))  throw new AppError(400, "resource_required must be a boolean", "VALIDATION_ERROR");
     validateUuidArray(b.staff_ids, "staff_ids");
+    validateConsumables(b.consumables);
     return next();
   } catch (err) { return next(err); }
 };
@@ -45,6 +61,7 @@ export const validateCreateService = (req: Request, _res: Response, next: NextFu
 export const validateUpdateService = (req: Request, _res: Response, next: NextFunction) => {
   try {
     const b = req.body;
+    normalizeConsumables(b);
     if (b.name !== undefined && !isNonEmptyString(b.name)) throw new AppError(400, "name must be a non-empty string", "VALIDATION_ERROR");
     if (!isOptionalUUID(b.category_id))      throw new AppError(400, "category_id must be a UUID", "VALIDATION_ERROR");
     if (!isOptionalString(b.treatment_type)) throw new AppError(400, "treatment_type must be a string", "VALIDATION_ERROR");
@@ -57,6 +74,7 @@ export const validateUpdateService = (req: Request, _res: Response, next: NextFu
     if (!isOptionalBool(b.resource_required))  throw new AppError(400, "resource_required must be a boolean", "VALIDATION_ERROR");
     if (!isOptionalBool(b.is_active))        throw new AppError(400, "is_active must be a boolean", "VALIDATION_ERROR");
     validateUuidArray(b.staff_ids, "staff_ids");
+    validateConsumables(b.consumables);
     return next();
   } catch (err) { return next(err); }
 };
@@ -163,4 +181,25 @@ export const validateUpdateBundle = (req: Request, _res: Response, next: NextFun
     validateUuidArray(b.service_ids, "service_ids");
     return next();
   } catch (err) { return next(err); }
+};
+
+const validateConsumables = (value: unknown): void => {
+  if (value === undefined) return;
+  if (!Array.isArray(value))
+    throw new AppError(400, "consumables must be an array", "VALIDATION_ERROR");
+  const seen = new Set<string>();
+  value.forEach((item, index) => {
+    if (!item || typeof item !== "object")
+      throw new AppError(400, `consumables[${index}] must be an object`, "VALIDATION_ERROR");
+    if (!isUUID(item.product_id))
+      throw new AppError(400, `consumables[${index}].product_id must be a UUID`, "VALIDATION_ERROR");
+    if (typeof item.standard_quantity !== "number" || !Number.isFinite(item.standard_quantity) || item.standard_quantity <= 0)
+      throw new AppError(400, `consumables[${index}].standard_quantity must be positive`, "INVALID_QUANTITY");
+    if (typeof item.unit !== "string" || !VALID_UNITS.has(item.unit.toLowerCase()))
+      throw new AppError(400, `consumables[${index}].unit is invalid`, "INVALID_UNIT");
+    if (seen.has(item.product_id))
+      throw new AppError(400, `Duplicate consumable product at index ${index}`, "DUPLICATE_CONSUMABLE");
+    seen.add(item.product_id);
+    item.unit = item.unit.toLowerCase();
+  });
 };

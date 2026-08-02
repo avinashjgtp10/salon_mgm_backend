@@ -15,6 +15,7 @@ import { membershipsRepository } from "../memberships/memberships.repository";
 import { clientMembershipsService } from "../client-memberships/client-memberships.service";
 import { sendPurchaseReceipt } from "./receipt-send.helper";
 import { notifyAppointmentCompleted } from "../appointments/appointment-completed.helper";
+import { consumableUsageService } from "../inventory/inventory.service";
 
 export const salesService = {
 
@@ -181,15 +182,17 @@ export const salesService = {
         // total) must not read as fully paid everywhere else (reports, client
         // history, dashboard) that now key off appointments.status directly.
         if (sale.appointment_id) {
-            try {
-                const apptStatus = saleDueAmount > 0 ? "partial" : "paid";
+            const apptStatus = saleDueAmount > 0 ? "partial" : "paid";
+            if (apptStatus === "paid") {
+                await consumableUsageService.completeAppointment({
+                    appointmentId: sale.appointment_id,
+                    salonId: sale.salon_id,
+                    requesterUserId: params.requesterUserId,
+                    saleId: sale.id,
+                });
+                notifyAppointmentCompleted(sale.appointment_id).catch(() => {});
+            } else {
                 await appointmentsRepository.updateStatus(sale.appointment_id, apptStatus);
-                // Only a fully-paid checkout should trigger the thank-you/review-request message.
-                if (apptStatus === "paid") {
-                    notifyAppointmentCompleted(sale.appointment_id).catch(() => {});
-                }
-            } catch (error) {
-                logger.error("Failed to update appointment status after checkout:", { appointmentId: sale.appointment_id, error })
             }
         }
 

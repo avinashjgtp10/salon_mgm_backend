@@ -20,7 +20,27 @@ import {
   UpdateBundleBody,
   UpdateConsultationFormBody,
   UpdateServiceBody,
+  ServiceConsumable,
 } from "./services.types";
+
+async function validateServiceConsumables(consumables: ServiceConsumable[] | undefined, salonId: string): Promise<void> {
+  if (consumables === undefined || consumables.length === 0) return;
+  const ids = consumables.map((item) => item.product_id);
+  const { rows } = await pool.query(
+    `SELECT id, product_type, measure_unit FROM products
+     WHERE salon_id = $1 AND id = ANY($2::uuid[])`,
+    [salonId, ids]
+  );
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  for (const item of consumables) {
+    const product = byId.get(item.product_id);
+    if (!product) throw new AppError(404, "Product not found", "PRODUCT_NOT_FOUND", { product_id: item.product_id });
+    if (!['consumable', 'both'].includes(product.product_type))
+      throw new AppError(400, "Product must be Consumable or Both", "INVALID_PRODUCT_TYPE", { product_id: item.product_id });
+    if (String(product.measure_unit).toLowerCase() !== item.unit.toLowerCase())
+      throw new AppError(400, "Consumable unit must match the product measure unit", "INVALID_UNIT", { product_id: item.product_id });
+  }
+}
 
 export const servicesService = {
   async list(query: ListServicesQuery, salonId: string): Promise<ServiceListResponse> {
@@ -35,6 +55,7 @@ export const servicesService = {
   }): Promise<Service> {
     const { requesterUserId, requesterRole, salonId, body } = params;
     logger.info("servicesService.create", { requesterUserId, requesterRole, salonId });
+    await validateServiceConsumables(body.consumables, salonId);
     const created = await servicesRepository.create(body, salonId);
     if (body.staff_ids?.length) {
       await servicesRepository.replaceStaff(created.id, body.staff_ids);
@@ -60,6 +81,7 @@ export const servicesService = {
     logger.info("servicesService.update", { serviceId, requesterUserId, requesterRole });
     const existing = await servicesRepository.findById(serviceId, salonId);
     if (!existing) throw new AppError(404, "Service not found", "NOT_FOUND");
+    await validateServiceConsumables(patch.consumables, salonId);
     const staffIds =
       patch.staff_ids ??
       ((patch as Record<string, unknown>).team_member_ids as string[] | undefined);

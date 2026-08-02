@@ -24,11 +24,13 @@ import { notifyAppointmentCompleted } from "./appointment-completed.helper";
 import { computeBillTotals, rowsTotal, ActiveTaxRow } from "../pricing/pricing.engine";
 import { getActiveTaxes } from "../settings/tax.util";
 import { paymentsRepository } from "../payments/payments.repository";
+import { consumableUsageService } from "../inventory/inventory.service";
 import {
     Appointment,
     CreateAppointmentBody,
     UpdateAppointmentBody,
     CancelAppointmentBody,
+    AppointmentActualConsumable,
 } from "./appointments.types";
 
 // A "Booked" (never paid) appointment has no persisted, tax-inclusive total
@@ -398,6 +400,15 @@ export const appointmentsService = {
         const existing = await appointmentsRepository.findById(appointmentId);
         if (!existing) throw new AppError(404, "Appointment not found", "NOT_FOUND");
 
+        // A completed appointment consumable edit must use the same locked,
+        // transactional flow as first completion. Keep this field out of the
+        // generic JSONB update so stock and the saved snapshot cannot diverge.
+        const actualConsumables = patch.actual_consumables;
+        if (actualConsumables !== undefined) {
+            patch = { ...patch };
+            delete patch.actual_consumables;
+        }
+
         // "no-show" is the one non-terminal terminal state: a reschedule (time,
         // staff, or duration change) brings it back to "booked" instead of being
         // blocked outright, since the whole point of dragging/editing it is to
@@ -465,7 +476,29 @@ export const appointmentsService = {
         // Overlapping appointments for the same staff are allowed (e.g. hair color
         // processing time) — no conflict check on reschedule/staff/duration changes.
 
-        const updated = await appointmentsRepository.update(appointmentId, patch);
+        const completionStatus = patch.status === "paid"
+            ? "paid"
+            : (actualConsumables !== undefined && existing.status === "paid"
+                ? (patch.status === "partial" ? "partial" : "paid")
+                : undefined);
+        if (completionStatus) {
+            patch = { ...patch };
+            delete patch.status;
+        }
+        let updated = await appointmentsRepository.update(appointmentId, patch);
+
+        if (completionStatus) {
+            const result = await consumableUsageService.completeAppointment({
+                appointmentId,
+                salonId: existing.salon_id,
+                requesterUserId: params.requesterUserId,
+                actualConsumables,
+                status: completionStatus,
+            });
+            updated = result.appointment;
+        } else if (actualConsumables !== undefined) {
+            updated = await appointmentsRepository.update(appointmentId, { actual_consumables: actualConsumables });
+        }
 
         // Adjust stock when product_items list changes (fire-and-forget)
         if (patch.product_items !== undefined) {
@@ -697,6 +730,7 @@ export const appointmentsService = {
         requesterUserId: string;
         requesterRole?: string;
         saleItems: any[];
+        actual_consumables?: AppointmentActualConsumable[];
         discount_amount?: number;
         tip_amount?: number;
         tax_amount?: number;
@@ -704,7 +738,7 @@ export const appointmentsService = {
         payment_method?: string;
         notes?: string;
     }): Promise<{ appointment: Appointment; saleId: string }> {
-        const { appointmentId, requesterUserId, requesterRole, saleItems, ...saleExtras } = params;
+        const { appointmentId, requesterUserId, requesterRole, saleItems, actual_consumables, ...saleExtras } = params;
         const existing = await appointmentsRepository.findById(appointmentId);
         if (!existing) throw new AppError(404, "Appointment not found", "NOT_FOUND");
 
@@ -725,10 +759,13 @@ export const appointmentsService = {
                 appointmentId, saleId: preExistingSale.id,
             });
 
-            // Link sale to appointment if not already linked
-            if (!existing.sale_id) {
-                await appointmentsRepository.linkSale(appointmentId, preExistingSale.id);
-            }
+            const completion = await consumableUsageService.completeAppointment({
+                appointmentId,
+                salonId: existing.salon_id,
+                requesterUserId,
+                actualConsumables: actual_consumables,
+                saleId: preExistingSale.id,
+            });
 
             // Fire commission on the existing sale items.
             const saleItems = await salesRepository.findItemsBySaleId(preExistingSale.id);
@@ -760,8 +797,7 @@ export const appointmentsService = {
                 }).catch(() => {});
             }
 
-            // Mark appointment as paid
-            const completedAppt = await appointmentsRepository.updateStatus(appointmentId, "paid");
+            const completedAppt = completion.appointment;
 
             // ── WhatsApp Automation: Thank You + Review Request (fire-and-forget) ──
             notifyAppointmentCompleted(appointmentId).catch(() => {});
@@ -966,7 +1002,14 @@ export const appointmentsService = {
             items:           resolvedItems as any,
         });
 
-        const appointment = await appointmentsRepository.linkSale(appointmentId, sale.id);
+        const completion = await consumableUsageService.completeAppointment({
+            appointmentId,
+            salonId: existing.salon_id,
+            requesterUserId,
+            actualConsumables: actual_consumables,
+            saleId: sale.id,
+        });
+        const appointment = completion.appointment;
 
         // ── Fire commission on the new sale items (fire-and-forget) ──────────
         commissionCalculationService.calculateForSale({

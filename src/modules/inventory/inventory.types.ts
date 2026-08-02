@@ -74,6 +74,9 @@ export type StockMovement = {
     created_by: string | null;
     created_at: string;
     updated_at: string;
+    reference_id: string | null;
+    before_stock: number | null;
+    after_stock: number | null;
 };
 
 export type CreateStockMovementBody = {
@@ -187,8 +190,14 @@ export type ConsumableUsageItem = {
     unit?: string;
 };
 
+export type AppointmentConsumableInput = {
+    service_id: string;
+    product_id: string;
+    actual_quantity: number;
+    unit: string;
+};
+
 export type SaveConsumableUsageBody = {
-    branch_id: string;
     booking_id?: string;
     items: ConsumableUsageItem[];
 };

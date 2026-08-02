@@ -25,6 +25,7 @@ import { getIO } from '../../config/socket';
 import { getActiveTaxes } from '../settings/tax.util';
 import { computeBillTotals, allocateMembershipDiscount } from '../pricing/pricing.engine';
 import pool from '../../config/database';
+import { consumableUsageService } from '../inventory/inventory.service';
 
 interface DiscountEligibleItem {
   itemId?: string;
@@ -125,7 +126,7 @@ async function applyMembershipDiscountForBooking(
 
 export const paymentsService = {
 
-  async create(data: CreatePaymentBody): Promise<Payment> {
+  async create(data: CreatePaymentBody, requesterUserId: string): Promise<Payment> {
     // ── Recompute financial fields from real appointment data ─────────────────
     // This prevents bugs where the frontend sends a wrong gross_amount
     // (e.g., partial-payment amount instead of the full bill total).
@@ -812,13 +813,17 @@ export const paymentsService = {
     // Mark appointment status based on computed due_amount — but never downgrade
     // a terminal state (cancelled/deleted) that may have raced ahead of this call.
     if (data.appointment_id) {
-      try {
-        if (!appt || !['cancelled', 'deleted'].includes(appt.status)) {
-          const apptStatus = (data.due_amount ?? 0) > 0 ? 'partial' : 'paid';
+      if (!appt || !['cancelled', 'deleted'].includes(appt.status)) {
+        const apptStatus = (data.due_amount ?? 0) > 0 ? 'partial' : 'paid';
+        if (apptStatus === 'paid') {
+          await consumableUsageService.completeAppointment({
+            appointmentId: data.appointment_id,
+            salonId: data.salon_id,
+            requesterUserId,
+          });
+        } else {
           await appointmentsRepository.updateStatus(data.appointment_id, apptStatus);
         }
-      } catch {
-        // Non-fatal: payment is still recorded
       }
     }
 

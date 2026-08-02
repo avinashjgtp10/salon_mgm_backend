@@ -64,6 +64,13 @@ export type AppointmentMembershipItem = {
     tax_amount?: number;
 };
 
+export type AppointmentActualConsumable = {
+    service_id: string;
+    product_id: string;
+    actual_quantity: number;
+    unit: string;
+};
+
 // ─── Core Appointment type ───────────────────────────────────────────────────
 
 export type Appointment = {
@@ -115,6 +122,7 @@ export type Appointment = {
     package_items: AppointmentPackageItem[];
     product_items: AppointmentProductItem[];
     membership_items: AppointmentMembershipItem[];
+    actual_consumables: AppointmentActualConsumable[];
     // Charges & discount (estimate, captured pre-payment)
     discount_value: number;
     discount_type: 'percentage' | 'flat';
@@ -164,6 +172,7 @@ export type CreateAppointmentBody = {
     package_items?: AppointmentPackageItem[];
     product_items?: AppointmentProductItem[];
     membership_items?: AppointmentMembershipItem[];
+    actual_consumables?: AppointmentActualConsumable[];
     // Charges & discount (estimate, captured pre-payment)
     discount_value?: number;
     discount_type?: 'percentage' | 'flat';

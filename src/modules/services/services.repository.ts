@@ -90,6 +90,15 @@ const buildBundleWhere = (q: ListBundlesQuery, salonId: string) => {
   return { whereSql: where.length ? `WHERE ${where.join(" AND ")}` : "", values };
 };
 
+const withConsumablesUsed = <T extends Service>(service: T): T & { consumables_used: unknown[] } => ({
+  ...service,
+  consumables_used: (service.consumables ?? []).map((item) => ({
+    product_id: item.product_id,
+    qty: Number(item.standard_quantity),
+    unit: item.unit,
+  })),
+});
+
 // ─── Services ─────────────────────────────────────────────────────────────────
 
 export const servicesRepository = {
@@ -101,7 +110,7 @@ export const servicesRepository = {
        WHERE s.id = $1 AND s.salon_id = $2`,
       [id, salonId]
     );
-    return rows[0] || null;
+    return rows[0] ? withConsumablesUsed(rows[0]) : null;
   },
 
   async list(query: ListServicesQuery, salonId: string): Promise<ServiceListResponse> {
@@ -127,7 +136,7 @@ export const servicesRepository = {
     );
 
     return {
-      data: dataRes.rows,
+      data: dataRes.rows.map(withConsumablesUsed),
       pagination: { total, page, limit, total_pages: Math.max(1, Math.ceil(total / limit)) },
     };
   },
@@ -142,7 +151,7 @@ export const servicesRepository = {
        ORDER BY s.created_at DESC`,
       values
     );
-    return rows;
+    return rows.map(withConsumablesUsed);
   },
 
   async create(data: CreateServiceBody, salonId: string): Promise<Service> {
@@ -150,8 +159,8 @@ export const servicesRepository = {
       `INSERT INTO services (
         salon_id, name, category_id, treatment_type, description,
         price_type, price, duration_minutes,
-        online_booking, commission_enabled, resource_required
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+        online_booking, commission_enabled, resource_required, consumables
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb)
       RETURNING *, duration_minutes AS duration`,
       [
         salonId,
@@ -165,9 +174,10 @@ export const servicesRepository = {
         data.online_booking ?? true,
         data.commission_enabled ?? false,
         data.resource_required ?? false,
+        JSON.stringify(data.consumables ?? []),
       ]
     );
-    return rows[0];
+    return withConsumablesUsed(rows[0]);
   },
 
   async update(id: string, patch: UpdateServiceBody, salonId: string): Promise<Service> {
@@ -179,6 +189,7 @@ export const servicesRepository = {
       "name", "category_id", "treatment_type", "description",
       "price_type", "price", "duration_minutes", "is_active",
       "online_booking", "commission_enabled", "resource_required",
+      "consumables",
     ]);
 
     const raw = patch as Record<string, unknown>;
@@ -204,11 +215,11 @@ export const servicesRepository = {
          WHERE s.id = $1 AND s.salon_id = $2`,
         [id, salonId]
       );
-      return rows[0];
+      return withConsumablesUsed(rows[0]);
     }
 
-    const setParts = keys.map((k, i) => `${k} = $${i + 1}`);
-    const values: unknown[] = keys.map((k) => normalized[k]);
+    const setParts = keys.map((k, i) => `${k} = $${i + 1}${k === "consumables" ? "::jsonb" : ""}`);
+    const values: unknown[] = keys.map((k) => k === "consumables" ? JSON.stringify(normalized[k]) : normalized[k]);
     setParts.push(`updated_at = NOW()`);
     values.push(id);
     values.push(salonId);
@@ -219,7 +230,7 @@ export const servicesRepository = {
        RETURNING *, duration_minutes AS duration`,
       values
     );
-    return rows[0];
+    return withConsumablesUsed(rows[0]);
   },
 
   async delete(id: string, salonId: string): Promise<void> {

@@ -27,6 +27,7 @@ import salesRoutes from "./modules/sales/sales.routes";
 import bookingsRoutes from "./modules/bookings/bookings.routes";
 import linkBuilderRoutes from "./modules/link-builder/link-builder.routes";
 import inventoryRoutes from "./modules/inventory/inventory.routes";
+import consumablesRoutes from "./modules/consumables/consumables.routes";
 import billingRoutes from "./modules/billing/billing.routes";
 import pricingRoutes from "./modules/pricing/pricing.routes";
 import subscriptionsRoutes from "./modules/subscriptions/subscriptions.routes";
@@ -230,6 +231,7 @@ app.use("/api/v1/link-builder", linkBuilderRoutes);
 app.use("/api/v1/calendar", calendarRoutes);
 app.use("/api/v1/sales", salesRoutes);
 app.use("/api/v1/inventory", inventoryRoutes);
+app.use("/api/v1/consumables", consumablesRoutes);
 //app.use('/api/v1//dashboard', marketingDashboardRoutes)
 app.use('/api/v1/marketing/dashboard', marketingDashboardRoutes);
 app.use('/api/v1/marketing/analytics', analyticsRoutes)

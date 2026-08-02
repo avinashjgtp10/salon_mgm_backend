@@ -1,8 +1,10 @@
 import pool from "../../config/database";
+import { AppError } from "../../middleware/error.middleware";
 import {
     Supplier, CreateSupplierBody, UpdateSupplierBody,
     StockMovement, CreateStockMovementBody, ListStockMovementsFilters,
     StockReconciliationRow, ReconciliationItemBody, SaveConsumableUsageBody,
+    AppointmentConsumableInput,
 } from "./inventory.types";
 
 // ─── Suppliers ────────────────────────────────────────────────────────────────
@@ -353,13 +355,14 @@ export const consumableUsageRepository = {
                 );
                 if (!prodRows.length) continue; // skip unknown products silently
 
-                // Record the usage event
+                // Record the usage event — salon-level, not per-branch (products.amount
+                // itself has no branch_id).
                 await client.query(
                     `INSERT INTO consumable_usage
                        (salon_id, branch_id, product_id, booking_id, qty, unit, used_by)
                      VALUES ($1, $2, $3, $4, $5, $6, $7)`,
                     [
-                        salonId, body.branch_id, item.product_id,
+                        salonId, null, item.product_id,
                         body.booking_id ?? null, item.qty,
                         item.unit ?? null, userId,
                     ]
@@ -379,7 +382,7 @@ export const consumableUsageRepository = {
                        (branch_id, product_id, movement_type, quantity, notes, created_by)
                      VALUES ($1, $2, 'out', $3, $4, $5)`,
                     [
-                        body.branch_id, item.product_id, item.qty,
+                        null, item.product_id, item.qty,
                         `Consumable used in appointment${body.booking_id ? ` (booking ${body.booking_id})` : ''}`,
                         userId,
                     ]
@@ -390,6 +393,202 @@ export const consumableUsageRepository = {
 
             await client.query("COMMIT");
             return recorded;
+        } catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        } finally {
+            client.release();
+        }
+    },
+
+    /**
+     * The single inventory mutation boundary for appointment consumables.
+     * Net consumable_usage already recorded for the booking is the idempotency
+     * ledger, so retries are no-ops and completed edits apply only the delta.
+     */
+    async applyAppointmentCompletion(params: {
+        appointmentId: string;
+        salonId: string;
+        userId: string;
+        actualConsumables?: AppointmentConsumableInput[];
+        saleId?: string;
+        status?: "paid" | "partial";
+    }): Promise<{ appointment: any; deducted: number; restored: number; usageRecorded: number }> {
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+
+            const { rows: appointmentRows } = await client.query(
+                `SELECT * FROM appointments WHERE id = $1 AND salon_id = $2 FOR UPDATE`,
+                [params.appointmentId, params.salonId]
+            );
+            const appointment = appointmentRows[0];
+            if (!appointment) throw new AppError(404, "Appointment not found", "APPOINTMENT_NOT_FOUND");
+            if (["cancelled", "deleted"].includes(appointment.status))
+                throw new AppError(400, `Cannot complete a '${appointment.status}' appointment`, "INVALID_APPOINTMENT_STATUS");
+
+            const savedConsumables = appointment.actual_consumables ?? [];
+            if (!Array.isArray(savedConsumables))
+                throw new AppError(400, "actual_consumables must be an array", "VALIDATION_ERROR");
+
+            let target: AppointmentConsumableInput[] = params.actualConsumables ?? savedConsumables;
+            if (!Array.isArray(target))
+                throw new AppError(400, "actual_consumables must be an array", "VALIDATION_ERROR");
+
+            // Payment completion does not always send actual_consumables. On the
+            // first completion, build the snapshot from the appointment's selected
+            // services so their configured standard quantities are still applied.
+            // An explicitly supplied empty array remains authoritative (and can
+            // reverse a previous deduction when a completed appointment is edited).
+            const selectedServiceQuantities = new Map<string, number>();
+            for (const item of Array.isArray(appointment.services) ? appointment.services : []) {
+                if (!item?.service_id) continue;
+                selectedServiceQuantities.set(
+                    item.service_id,
+                    (selectedServiceQuantities.get(item.service_id) ?? 0) + (Number(item.quantity) || 1)
+                );
+            }
+            if (selectedServiceQuantities.size === 0 && appointment.service_id)
+                selectedServiceQuantities.set(appointment.service_id, 1);
+
+            const shouldUseConfigured = params.actualConsumables === undefined && target.length === 0;
+            const requestedServiceIds = shouldUseConfigured
+                ? [...selectedServiceQuantities.keys()]
+                : target.map((item) => item.service_id);
+            const serviceIds = [...new Set(requestedServiceIds)];
+            const serviceById = new Map<string, any>();
+            if (serviceIds.length) {
+                const { rows } = await client.query(
+                    `SELECT id, consumables FROM services
+                     WHERE salon_id = $1 AND id = ANY($2::uuid[])`,
+                    [params.salonId, serviceIds]
+                );
+                rows.forEach((row) => serviceById.set(row.id, row));
+            }
+
+            if (shouldUseConfigured) {
+                target = serviceIds.flatMap((serviceId) => {
+                    const service = serviceById.get(serviceId);
+                    const serviceQuantity = selectedServiceQuantities.get(serviceId) ?? 1;
+                    return (Array.isArray(service?.consumables) ? service.consumables : []).map((item: any) => ({
+                        service_id: serviceId,
+                        product_id: item.product_id,
+                        actual_quantity: Number(item.standard_quantity ?? item.qty) * serviceQuantity,
+                        unit: item.unit,
+                    }));
+                });
+            }
+
+            const seen = new Set<string>();
+            const targetByProduct = new Map<string, number>();
+            const unitByProduct = new Map<string, string>();
+            for (const item of target) {
+                const key = `${item.service_id}:${item.product_id}`;
+                if (seen.has(key)) throw new AppError(400, "Duplicate consumable", "DUPLICATE_CONSUMABLE");
+                seen.add(key);
+                if (!Number.isFinite(item.actual_quantity) || item.actual_quantity <= 0)
+                    throw new AppError(400, "Consumable quantity must be positive", "INVALID_QUANTITY");
+                const service = serviceById.get(item.service_id);
+                if (!service) throw new AppError(404, "Service not found", "SERVICE_NOT_FOUND", { service_id: item.service_id });
+                const configured = Array.isArray(service.consumables)
+                    ? service.consumables.find((entry: any) => entry.product_id === item.product_id)
+                    : undefined;
+                if (!configured)
+                    throw new AppError(400, "Consumable configuration missing", "CONSUMABLE_CONFIGURATION_MISSING", {
+                        service_id: item.service_id, product_id: item.product_id,
+                    });
+                if (String(configured.unit).toLowerCase() !== String(item.unit).toLowerCase())
+                    throw new AppError(400, "Consumable unit does not match service configuration", "INVALID_UNIT");
+                targetByProduct.set(item.product_id, (targetByProduct.get(item.product_id) ?? 0) + item.actual_quantity);
+                unitByProduct.set(item.product_id, String(item.unit).toLowerCase());
+            }
+
+            const { rows: appliedRows } = await client.query(
+                `SELECT product_id, COALESCE(SUM(qty), 0)::numeric AS qty
+                 FROM consumable_usage WHERE booking_id = $1 GROUP BY product_id`,
+                [params.appointmentId]
+            );
+            const appliedByProduct = new Map<string, number>(
+                appliedRows.map((row) => [row.product_id, Number(row.qty)])
+            );
+            const productIds = [...new Set([...targetByProduct.keys(), ...appliedByProduct.keys()])].sort();
+
+            const productById = new Map<string, any>();
+            if (productIds.length) {
+                const { rows } = await client.query(
+                    `SELECT id, name, amount, product_type, measure_unit
+                     FROM products WHERE salon_id = $1 AND id = ANY($2::uuid[])
+                     ORDER BY id FOR UPDATE`,
+                    [params.salonId, productIds]
+                );
+                rows.forEach((row) => productById.set(row.id, row));
+            }
+
+            let deducted = 0;
+            let restored = 0;
+            let usageRecorded = 0;
+            for (const productId of productIds) {
+                const product = productById.get(productId);
+                if (!product) throw new AppError(404, "Product not found", "PRODUCT_NOT_FOUND", { product_id: productId });
+                const targetQty = targetByProduct.get(productId) ?? 0;
+                // A product may have been reclassified after an earlier
+                // completion. Always allow its historical usage to be reversed;
+                // eligibility is mandatory when the target still consumes it.
+                if (targetQty > 0 && !["consumable", "both"].includes(product.product_type))
+                    throw new AppError(400, "Product must be Consumable or Both", "INVALID_PRODUCT_TYPE", { product_id: productId });
+                const appliedQty = appliedByProduct.get(productId) ?? 0;
+                const delta = Number((targetQty - appliedQty).toFixed(3));
+                if (delta === 0) continue;
+
+                const before = Number(product.amount ?? 0);
+                if (delta > 0 && before < delta)
+                    throw new AppError(409, `Insufficient stock for ${product.name}`, "INSUFFICIENT_STOCK", {
+                        product_id: productId, available: before, required: delta,
+                    });
+                const after = Number((before - delta).toFixed(3));
+                if (after < 0) throw new AppError(409, "Insufficient stock", "INSUFFICIENT_STOCK");
+
+                await client.query(
+                    `UPDATE products SET amount = $1, updated_at = NOW() WHERE id = $2`,
+                    [after, productId]
+                );
+                // Consumables are tracked at the salon level, not per-branch —
+                // products.amount itself has no branch_id (a product is one row
+                // per salon). branch_id here is left NULL rather than sourced
+                // from the appointment.
+                await client.query(
+                    `INSERT INTO consumable_usage
+                       (salon_id, branch_id, product_id, booking_id, qty, unit, used_by)
+                     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+                    [params.salonId, null, productId, params.appointmentId, delta,
+                     unitByProduct.get(productId) ?? product.measure_unit, params.userId]
+                );
+                await client.query(
+                    `INSERT INTO stock_movements
+                       (branch_id, product_id, movement_type, quantity, reference_id, notes,
+                        created_by, before_stock, after_stock)
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+                    [null, productId, delta > 0 ? "out" : "in", Math.abs(delta),
+                     params.appointmentId,
+                     delta > 0 ? "Consumable used on completed appointment" : "Consumable reversal for completed appointment edit",
+                     params.userId, before, after]
+                );
+                usageRecorded++;
+                if (delta > 0) deducted += delta;
+                else restored += Math.abs(delta);
+            }
+
+            const { rows: updatedRows } = await client.query(
+                `UPDATE appointments
+                 SET actual_consumables = $2::jsonb,
+                     status = $3,
+                     sale_id = COALESCE($4, sale_id),
+                     updated_at = NOW()
+                 WHERE id = $1 RETURNING *`,
+                [params.appointmentId, JSON.stringify(target), params.status ?? "paid", params.saleId ?? null]
+            );
+            await client.query("COMMIT");
+            return { appointment: updatedRows[0], deducted, restored, usageRecorded };
         } catch (err) {
             await client.query("ROLLBACK");
             throw err;

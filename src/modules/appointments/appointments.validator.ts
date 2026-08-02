@@ -7,10 +7,37 @@ const isUUID = (v: unknown) => typeof v === "string" && UUID_RE.test(v);
 const isOptionalUUID = (v: unknown) => v === undefined || isUUID(v);
 const isOptionalString = (v: unknown) => v === undefined || typeof v === "string";
 const isISODatetime = (v: unknown) => typeof v === "string" && !isNaN(new Date(v).getTime());
+const VALID_UNITS = new Set(["ml", "l", "g", "kg", "pcs", "oz", "lb", "bottle", "tube", "pack", "box", "roll"]);
 
 const VALID_STATUSES: AppointmentStatus[] = [
     "booked", "paid", "partial", "cancelled", "no-show", "deleted",
 ];
+
+const validateActualConsumables = (value: unknown): void => {
+    if (value === undefined) return;
+    if (!Array.isArray(value))
+        throw new AppError(400, "actual_consumables must be an array", "VALIDATION_ERROR");
+    const seen = new Set<string>();
+    value.forEach((item, index) => {
+        if (!item || typeof item !== "object")
+            throw new AppError(400, `actual_consumables[${index}] must be an object`, "VALIDATION_ERROR");
+        if (!isUUID(item.service_id))
+            throw new AppError(400, `actual_consumables[${index}].service_id must be a UUID`, "VALIDATION_ERROR");
+        if (!isUUID(item.product_id))
+            throw new AppError(400, `actual_consumables[${index}].product_id must be a UUID`, "VALIDATION_ERROR");
+        if (item.actual_quantity === undefined && item.quantity !== undefined) item.actual_quantity = item.quantity;
+        delete item.quantity;
+        if (typeof item.actual_quantity !== "number" || !Number.isFinite(item.actual_quantity) || item.actual_quantity <= 0)
+            throw new AppError(400, `actual_consumables[${index}].actual_quantity must be positive`, "INVALID_QUANTITY");
+        if (typeof item.unit !== "string" || !VALID_UNITS.has(item.unit.toLowerCase()))
+            throw new AppError(400, `actual_consumables[${index}].unit is invalid`, "INVALID_UNIT");
+        const key = `${item.service_id}:${item.product_id}`;
+        if (seen.has(key))
+            throw new AppError(400, `Duplicate consumable at index ${index}`, "DUPLICATE_CONSUMABLE");
+        seen.add(key);
+        item.unit = item.unit.toLowerCase();
+    });
+};
 
 export const validateCreateAppointment = (req: Request, _res: Response, next: NextFunction) => {
     try {
@@ -33,6 +60,7 @@ export const validateCreateAppointment = (req: Request, _res: Response, next: Ne
             throw new AppError(400, "notes must be a string", "VALIDATION_ERROR");
         if (!isOptionalString(b.staff_alert))
             throw new AppError(400, "staff_alert must be a string", "VALIDATION_ERROR");
+        validateActualConsumables(b.actual_consumables);
         return next();
     } catch (err) { return next(err); }
 };
@@ -51,6 +79,7 @@ export const validateUpdateAppointment = (req: Request, _res: Response, next: Ne
             throw new AppError(400, `status must be one of: ${VALID_STATUSES.join(", ")}`, "VALIDATION_ERROR");
         if (!isOptionalString(b.notes)) throw new AppError(400, "notes must be a string", "VALIDATION_ERROR");
         if (!isOptionalString(b.staff_alert)) throw new AppError(400, "staff_alert must be a string", "VALIDATION_ERROR");
+        validateActualConsumables(b.actual_consumables);
         return next();
     } catch (err) { return next(err); }
 };
@@ -58,6 +87,7 @@ export const validateUpdateAppointment = (req: Request, _res: Response, next: Ne
 export const validateCheckoutAppointment = (req: Request, _res: Response, next: NextFunction) => {
     try {
         const b = req.body;
+        validateActualConsumables(b.actual_consumables);
         // items is optional — when omitted, appointmentsService.checkout() derives
         // them from the appointment's own saved services/products/etc (or, if a
         // payment already auto-created a sale, from that sale directly). Only
