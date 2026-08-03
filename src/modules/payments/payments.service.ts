@@ -1136,6 +1136,19 @@ export const paymentsService = {
       }
     }
 
+    // completeAppointment() above runs before this invoice exists, so its
+    // consumable_usage rows start with invoice_id NULL — stamp the real
+    // invoice on them now so the Consumable Usage page shows a number
+    // instead of blank. Non-fatal: never blocks a payment that already succeeded.
+    if (data.appointment_id && checkoutSaleId) {
+      consumableUsageService.linkInvoice({
+        appointmentId: data.appointment_id,
+        saleId: checkoutSaleId,
+      }).catch((err: any) => {
+        logger.warn('[payments] Failed to link invoice to consumable usage:', err?.message ?? err);
+      });
+    }
+
     // Payment email is handled by appointments.service checkout — skip here to avoid duplicates
 
     // ── Auto-create client_memberships when memberships are sold ─────────────

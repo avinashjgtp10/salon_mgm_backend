@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { AppError } from "../../middleware/error.middleware";
 import { bookingsRepository } from "./bookings.repository";
+import { branchesRepository } from "../branches/branches.repository";
 import { clientsRepository } from "../clients/clients.repository";
 import { generateUniqueReferralCode } from "../clients/clients.service";
 import { notificationsService } from "../notifications/notifications.service";
@@ -106,8 +107,16 @@ export const bookingsService = {
         const durationMinutes = services.reduce((sum, s) => sum + (Number(s!.duration) || 30), 0);
         const title = services.map((s) => s!.name).join(", ");
 
+        // Public booking requests don't collect a branch, so default the same
+        // way staff-created appointments do (appointments.service.ts) — otherwise
+        // the appointment is left without a branch_id and later fails consumable
+        // deduction at checkout with BRANCH_REQUIRED.
+        const branches = await branchesRepository.listBySalonId(body.salon_id);
+        const branchId = branches.find((branch) => branch.is_main)?.id ?? branches[0]?.id ?? null;
+
         const appointment = await bookingsRepository.createAppointment({
             salonId: body.salon_id,
+            branchId,
             clientId: client.id,
             staffId: body.staff_id || null,
             serviceId: body.service_ids[0],

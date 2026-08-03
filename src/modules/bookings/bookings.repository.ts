@@ -79,6 +79,7 @@ export const bookingsRepository = {
 
     async createAppointment(params: {
         salonId: string;
+        branchId: string | null;
         clientId: string;
         staffId?: string | null;
         serviceId: string;
@@ -90,23 +91,24 @@ export const bookingsRepository = {
     }) {
         const { rows } = await pool.query(
             `INSERT INTO appointments (
-                salon_id, client_id, staff_id, service_id,
+                salon_id, branch_id, client_id, staff_id, service_id,
                 title, notes, status,
                 scheduled_at, duration_minutes,
                 ends_at,
                 colour, created_by,
                 services
             ) VALUES (
-                $1, $2, $3, $4,
-                $5, $6, $7,
-                $8, $9,
-                ($8::timestamptz + ($9::integer * INTERVAL '1 minute')),
-                $10, $11,
-                $12::jsonb
+                $1, $2, $3, $4, $5,
+                $6, $7, $8,
+                $9, $10,
+                ($9::timestamptz + ($10::integer * INTERVAL '1 minute')),
+                $11, $12,
+                $13::jsonb
             )
             RETURNING *`,
             [
                 params.salonId,
+                params.branchId,
                 params.clientId,
                 params.staffId ?? null,
                 params.serviceId,

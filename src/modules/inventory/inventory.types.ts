@@ -186,8 +186,12 @@ export type SaveReconciliationRowBody = {
 export type ConsumableUsageItem = {
     product_id: string;
     product_name?: string;
+    service_id?: string;
     qty: number;
     unit?: string;
+    is_manual?: boolean;
+    configured_quantity?: number | null;
+    notes?: string | null;
 };
 
 export type AppointmentConsumableInput = {
@@ -195,9 +199,19 @@ export type AppointmentConsumableInput = {
     product_id: string;
     actual_quantity: number;
     unit: string;
+    // Added manually via "+ Add Consumable" for a service with no configured
+    // consumables (or an extra product beyond what's configured) — bypasses
+    // the "must match service.consumables" check in applyAppointmentCompletion.
+    is_manual?: boolean;
+    // The service's configured standard_quantity at the time this was staged,
+    // for audit/reporting only — null for manually added items.
+    configured_quantity?: number | null;
+    notes?: string | null;
 };
 
 export type SaveConsumableUsageBody = {
-    booking_id?: string;
+    booking_id: string;
+    branch_id?: string;
+    service_id?: string;
     items: ConsumableUsageItem[];
 };

@@ -69,6 +69,9 @@ export type AppointmentActualConsumable = {
     product_id: string;
     actual_quantity: number;
     unit: string;
+    is_manual?: boolean;
+    configured_quantity?: number | null;
+    notes?: string | null;
 };
 
 // ─── Core Appointment type ───────────────────────────────────────────────────

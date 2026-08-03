@@ -86,7 +86,7 @@ export const appointmentsController = {
             const id = String(req.params.id || "").trim();
             if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
             if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
-            const appointment = await appointmentsService.delete(id);
+            const appointment = await appointmentsService.delete(id, userId);
             return sendSuccess(res, 200, appointment, "Appointment deleted successfully");
         } catch (err) { return next(err); }
     },
@@ -99,7 +99,7 @@ export const appointmentsController = {
                 ? [...new Set(req.body.ids.map((id: unknown) => String(id).trim()).filter(Boolean))]
                 : [];
             if (ids.length === 0) throw new AppError(400, "ids must be a non-empty array", "VALIDATION_ERROR");
-            const result = await appointmentsService.bulkDelete(ids as string[]);
+            const result = await appointmentsService.bulkDelete(ids as string[], userId);
             return sendSuccess(res, 200, result, `${result.deleted.length} appointment(s) deleted`);
         } catch (err) { return next(err); }
     },

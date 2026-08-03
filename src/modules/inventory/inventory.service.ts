@@ -219,15 +219,27 @@ export const stockReconciliationService = {
 // ─── Consumable Usage ─────────────────────────────────────────────────────────
 
 export const consumableUsageService = {
+    // "Update & Continue" from the calendar — stages actual consumable
+    // selections on the appointment only. Deliberately does not touch stock,
+    // consumable_usage, or stock_movements; see saveDraft for why.
     async save(params: {
         requesterUserId: string;
         salonId: string;
         body: SaveConsumableUsageBody;
     }): Promise<{ recorded: number }> {
-        const { requesterUserId, salonId, body } = params;
+        const { salonId, body } = params;
         if (!body.items?.length) throw new AppError(400, "items are required", "VALIDATION_ERROR");
+        const productIds = new Set<string>();
+        for (const item of body.items) {
+            if (!item.product_id) throw new AppError(400, "product_id is required", "VALIDATION_ERROR");
+            if (!Number.isFinite(item.qty) || item.qty <= 0)
+                throw new AppError(400, "qty must be a positive number", "INVALID_QUANTITY");
+            if (productIds.has(item.product_id))
+                throw new AppError(400, "Duplicate consumable product", "DUPLICATE_CONSUMABLE");
+            productIds.add(item.product_id);
+        }
         logger.info("consumableUsageService.save called", { salonId, count: body.items.length });
-        const recorded = await consumableUsageRepository.create(body, salonId, requesterUserId);
+        const recorded = await consumableUsageRepository.saveDraft(body, salonId);
         logger.info("consumableUsageService.save success", { recorded });
         return { recorded };
     },
@@ -238,7 +250,7 @@ export const consumableUsageService = {
         requesterUserId: string;
         actualConsumables?: AppointmentConsumableInput[];
         saleId?: string;
-        status?: "paid" | "partial";
+        status?: "paid" | "partial" | "cancelled" | "deleted";
     }) {
         try {
             const result = await consumableUsageRepository.applyAppointmentCompletion({
@@ -263,5 +275,31 @@ export const consumableUsageService = {
             });
             throw error;
         }
+    },
+
+    async reverseAppointment(params: {
+        appointmentId: string;
+        salonId: string;
+        requesterUserId: string;
+        status: "cancelled" | "deleted";
+    }) {
+        const result = await consumableUsageRepository.applyAppointmentCompletion({
+            appointmentId: params.appointmentId,
+            salonId: params.salonId,
+            userId: params.requesterUserId,
+            actualConsumables: [],
+            status: params.status,
+        });
+        logger.info("Appointment consumables reversed", {
+            appointmentId: params.appointmentId,
+            status: params.status,
+            restored: result.restored,
+            usageRecorded: result.usageRecorded,
+        });
+        return result;
+    },
+
+    async linkInvoice(params: { appointmentId: string; saleId: string }) {
+        await consumableUsageRepository.backfillInvoiceId(params.appointmentId, params.saleId);
     },
 };

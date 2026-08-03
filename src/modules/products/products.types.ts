@@ -19,7 +19,7 @@ export type Product = {
     // then used directly as the stock figure, exactly as before this field
     // existed. When set, `amount` is interpreted as the remaining volume
     // across all bottles, and stock quantity (bottle count) is derived as
-    // ceil(amount / bottle_size) rather than stored separately.
+    // amount / bottle_size rather than stored separately.
     bottle_size: number | null;
     short_description: string | null;
     description: string | null;

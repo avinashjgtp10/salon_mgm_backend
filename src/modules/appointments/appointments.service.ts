@@ -286,6 +286,11 @@ export const appointmentsService = {
             body.staff_id = body.services[0].staff_id ?? undefined;
         }
 
+        if (!body.branch_id) {
+            const branches = await branchesRepository.listBySalonId(body.salon_id);
+            body.branch_id = branches.find((branch) => branch.is_main)?.id ?? branches[0]?.id;
+        }
+
         await assertProductItemsAreRetailSellable(body.product_items, body.salon_id);
 
         const appointment = await appointmentsRepository.create(body, requesterUserId);
@@ -632,7 +637,13 @@ export const appointmentsService = {
         if (["paid", "cancelled", "deleted"].includes(existing.status))
             throw new AppError(400, `Appointment is already '${existing.status}'`, "BAD_REQUEST");
 
-        const cancelled = await appointmentsRepository.updateStatus(params.appointmentId, "cancelled");
+        const cancellation = await consumableUsageService.reverseAppointment({
+            appointmentId: params.appointmentId,
+            salonId: existing.salon_id,
+            requesterUserId: params.requesterUserId,
+            status: "cancelled",
+        });
+        const cancelled = cancellation.appointment;
 
         // Restore stock for cancelled appointment products (fire-and-forget)
         const cancelledProducts = (existing.product_items ?? []).filter(p => p.product_id);
@@ -722,10 +733,16 @@ export const appointmentsService = {
         return cancelled;
     },
 
-    async delete(appointmentId: string): Promise<Appointment> {
+    async delete(appointmentId: string, requesterUserId: string): Promise<Appointment> {
         const existing = await appointmentsRepository.findById(appointmentId);
         if (!existing) throw new AppError(404, "Appointment not found", "NOT_FOUND");
-        const deleted = await appointmentsRepository.deleteById(appointmentId);
+        const deletion = await consumableUsageService.reverseAppointment({
+            appointmentId,
+            salonId: existing.salon_id,
+            requesterUserId,
+            status: "deleted",
+        });
+        const deleted = deletion.appointment;
         if (!deleted) throw new AppError(500, "Failed to delete appointment", "INTERNAL_ERROR");
         logger.info("appointmentsService.delete success", { appointmentId });
 
@@ -745,12 +762,12 @@ export const appointmentsService = {
     // delete() logic (soft delete + stock restore) so behavior stays identical to
     // deleting one at a time — just looped, with per-id failures collected instead
     // of aborting the whole batch.
-    async bulkDelete(appointmentIds: string[]): Promise<{ deleted: string[]; failed: { id: string; reason: string }[] }> {
+    async bulkDelete(appointmentIds: string[], requesterUserId: string): Promise<{ deleted: string[]; failed: { id: string; reason: string }[] }> {
         const deleted: string[] = [];
         const failed: { id: string; reason: string }[] = [];
         for (const id of appointmentIds) {
             try {
-                await this.delete(id);
+                await this.delete(id, requesterUserId);
                 deleted.push(id);
             } catch (err: any) {
                 failed.push({ id, reason: err?.message || "Unknown error" });

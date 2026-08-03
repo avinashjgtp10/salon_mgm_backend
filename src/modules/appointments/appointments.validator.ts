@@ -36,6 +36,13 @@ const validateActualConsumables = (value: unknown): void => {
             throw new AppError(400, `Duplicate consumable at index ${index}`, "DUPLICATE_CONSUMABLE");
         seen.add(key);
         item.unit = item.unit.toLowerCase();
+        if (item.is_manual !== undefined && typeof item.is_manual !== "boolean")
+            throw new AppError(400, `actual_consumables[${index}].is_manual must be a boolean`, "VALIDATION_ERROR");
+        if (item.configured_quantity !== undefined && item.configured_quantity !== null
+            && (typeof item.configured_quantity !== "number" || !Number.isFinite(item.configured_quantity)))
+            throw new AppError(400, `actual_consumables[${index}].configured_quantity must be a number or null`, "VALIDATION_ERROR");
+        if (item.notes !== undefined && item.notes !== null && typeof item.notes !== "string")
+            throw new AppError(400, `actual_consumables[${index}].notes must be a string`, "VALIDATION_ERROR");
     });
 };
 

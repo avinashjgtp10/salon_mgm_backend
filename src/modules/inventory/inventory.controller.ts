@@ -10,6 +10,7 @@ import {
     stockReconciliationService,
     consumableUsageService,
 } from "./inventory.service";
+import { appointmentsRepository } from "../appointments/appointments.repository";
 import {
     CreateSupplierBody,
     UpdateSupplierBody,
@@ -339,6 +340,9 @@ export const consumableUsageController = {
             const userId = req.user?.userId;
             const salonId = getSalonId(req);
 
+            // Temporary logging: capture raw request body before any validation/normalization
+            logger.info("POST /inventory/consumable-usage called - raw body", { userId, salonId, rawBody: req.body });
+
             if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
 
             logger.info("POST /inventory/consumable-usage called", { userId, salonId });
@@ -349,7 +353,18 @@ export const consumableUsageController = {
                 body: req.body as SaveConsumableUsageBody,
             });
 
-            sendSuccess(res, 200, result, "Consumable usage recorded successfully");
+            // After saving the draft, fetch the appointment to log what's stored
+            try {
+                const bookingId = (req.body as any).booking_id;
+                if (bookingId) {
+                    const appt = await appointmentsRepository.findById(bookingId);
+                    logger.info("POST /inventory/consumable-usage - saved appointment actual_consumables", { bookingId, actual_consumables: appt?.actual_consumables });
+                }
+            } catch (err: any) {
+                logger.warn("Failed to read appointment after saveDraft", { err: err?.message });
+            }
+
+            sendSuccess(res, 200, result, "Consumable usage saved");
         } catch (err) { next(err); }
     },
 };

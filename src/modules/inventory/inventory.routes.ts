@@ -20,7 +20,6 @@ import {
 const router = Router();
 const viewInventory = requirePermission("view_inventory");
 const stockAdjustment = requirePermission("stock_adjustment");
-const manageInventory = requirePermission("manage_inventory");
 
 // ─── Suppliers ────────────────────────────────────────────────────────────────
 
@@ -166,7 +165,7 @@ router.post(
     "/consumable-usage",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    manageInventory,
+    stockAdjustment,
     consumableUsageController.save
 );
 

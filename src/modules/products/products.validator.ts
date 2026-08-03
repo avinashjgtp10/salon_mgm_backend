@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response } from "express";
 import { AppError } from "../../middleware/error.middleware";
 import { MeasureUnit, TaxType, ProductType } from "./products.types";
+import { consumableStock } from "../consumables/consumable-stock";
 
 // ─── Primitive Helpers ────────────────────────────────────────────────────────
 
@@ -136,7 +137,10 @@ const validateProductFields = (b: Record<string, unknown>, requireName = false) 
     // Both fields are always sent together by the Create/Edit Product forms
     // (a full-form submit, not a sparse patch) — safe to cross-validate here
     // without needing the existing DB row for whichever field is "missing".
-    if (typeof b.amount === "number" && typeof b.qty_alert === "number" && b.qty_alert >= b.amount) {
+    const productQuantity = typeof b.amount === "number"
+        ? consumableStock.calculateProductQuantity(b.amount, typeof b.bottle_size === "number" ? b.bottle_size : null)
+        : undefined;
+    if (productQuantity !== undefined && typeof b.qty_alert === "number" && b.qty_alert >= productQuantity) {
         throw new AppError(400, "Low Stock Alert Quantity must be less than the Product Quantity.", "VALIDATION_ERROR");
     }
     if (!isOptionalString(b.short_description)) {

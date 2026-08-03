@@ -3,6 +3,7 @@ import {
     Product, CreateProductBody, UpdateProductBody, ProductListFilters,
     ProductPhoto, Brand, CreateBrandBody, UpdateBrandBody,
 } from "./products.types";
+import { consumableStockSql } from "../consumables/consumable-stock";
 
 const PRODUCT_COLUMNS = `id, name, barcode, brand_id, category_id, supplier_id, measure_unit, product_type, size, amount, qty_alert, bottle_size,
     short_description, description, supply_price, retail_sales_enabled,
@@ -106,10 +107,11 @@ export const productsRepository = {
             values.push(filters.max_price);
         }
         if (filters.stock !== undefined && filters.stock !== "all") {
+            const stockQuantity = consumableStockSql.productQuantity(prefix ? prefix.slice(0, -1) : "products");
             if (filters.stock === "low") {
-                conditions.push(`(${prefix}amount > 0 AND ${prefix}amount <= ${prefix}qty_alert)`);
+                conditions.push(`(${stockQuantity} > 0 AND ${stockQuantity} <= COALESCE(${prefix}qty_alert, 0))`);
             } else if (filters.stock === "out_of_stock") {
-                conditions.push(`${prefix}amount = 0`);
+                conditions.push(`${stockQuantity} <= 0`);
             }
         }
 

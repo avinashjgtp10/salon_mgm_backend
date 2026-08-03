@@ -5,6 +5,7 @@ import { CONSUMABLE_USAGE_SORT_FIELDS } from "./consumables.types";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const STOCK_STATUSES = new Set(["healthy", "low_stock", "out_of_stock"]);
+const USAGE_TXN_STATUSES = new Set(["completed", "skipped", "insufficient_override"]);
 
 const validDate = (value: unknown): value is string => {
   if (typeof value !== "string" || !DATE_RE.test(value)) return false;
@@ -28,14 +29,14 @@ export const validateConsumableUsage = (req: Request, _res: Response, next: Next
       throw new AppError(400, "search must be a string", "VALIDATION_ERROR");
     if (body.filters !== undefined && (typeof body.filters !== "object" || Array.isArray(body.filters) || body.filters === null))
       throw new AppError(400, "filters must be an object", "VALIDATION_ERROR");
-    for (const field of ["category_id", "service_id"] as const) {
+    for (const field of ["product_id", "category_id", "service_id", "staff_id", "branch_id"] as const) {
       if (filters[field] != null && (typeof filters[field] !== "string" || !UUID_RE.test(filters[field])))
         throw new AppError(400, `${field} must be a valid UUID`, "VALIDATION_ERROR");
     }
     if (filters.unit != null && (typeof filters.unit !== "string" || !filters.unit.trim()))
       throw new AppError(400, "unit must be a non-empty string", "VALIDATION_ERROR");
-    if (filters.stock_status != null && !STOCK_STATUSES.has(filters.stock_status))
-      throw new AppError(400, "stock_status must be healthy, low_stock, or out_of_stock", "VALIDATION_ERROR");
+    if (filters.status != null && !USAGE_TXN_STATUSES.has(filters.status))
+      throw new AppError(400, "status must be completed, skipped, or insufficient_override", "VALIDATION_ERROR");
     for (const field of ["date_from", "date_to"] as const) {
       if (filters[field] != null && !validDate(filters[field]))
         throw new AppError(400, `${field} must use YYYY-MM-DD format`, "VALIDATION_ERROR");
@@ -50,6 +51,35 @@ export const validateConsumableUsage = (req: Request, _res: Response, next: Next
     body.search = body.search?.trim() ?? "";
     body.filters = filters;
     body.sort = sort;
+    return next();
+  } catch (error) { return next(error); }
+};
+
+export const validateConsumableUsageHistory = (req: Request, _res: Response, next: NextFunction) => {
+  try {
+    const query = req.query;
+    const isExport = query.is_export === "true";
+    const page = query.page === undefined ? 1 : Number(query.page);
+    const pageSize = query.pageSize === undefined ? 20 : Number(query.pageSize);
+    if (!Number.isInteger(page) || page < 1)
+      throw new AppError(400, "page must be a positive integer", "VALIDATION_ERROR");
+    // Export requests bypass the page-size cap — same as reports.repository.ts's
+    // is_export handling — so the full filtered result set can be fetched in one
+    // call to build a CSV/Excel export client-side.
+    if (!Number.isInteger(pageSize) || pageSize < 1 || (!isExport && pageSize > 200))
+      throw new AppError(400, "pageSize must be an integer between 1 and 200", "VALIDATION_ERROR");
+    for (const field of ["product_id", "category_id", "service_id", "staff_id", "branch_id"] as const) {
+      if (query[field] !== undefined && (typeof query[field] !== "string" || !UUID_RE.test(query[field])))
+        throw new AppError(400, `${field} must be a valid UUID`, "VALIDATION_ERROR");
+    }
+    for (const field of ["date_from", "date_to"] as const) {
+      if (query[field] !== undefined && !validDate(query[field]))
+        throw new AppError(400, `${field} must use YYYY-MM-DD format`, "VALIDATION_ERROR");
+    }
+    if (query.date_from && query.date_to && String(query.date_from) > String(query.date_to))
+      throw new AppError(400, "date_from cannot be after date_to", "VALIDATION_ERROR");
+    if (query.status !== undefined && (typeof query.status !== "string" || !STOCK_STATUSES.has(query.status)))
+      throw new AppError(400, "status must be healthy, low_stock, or out_of_stock", "VALIDATION_ERROR");
     return next();
   } catch (error) { return next(error); }
 };
