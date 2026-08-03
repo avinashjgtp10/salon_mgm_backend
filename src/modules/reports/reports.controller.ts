@@ -1180,8 +1180,16 @@ async getRewardPointsReport(
         const salonId = await getSalonId(req);
         const body = req.body ?? {};
 
+        const numOrUndefined = (v: unknown) => v !== undefined && v !== null && v !== "" ? Number(v) : undefined;
         const filters = {
             search: asString(body.search),
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            status: asString(body.status) as any,
+            points_available_min: numOrUndefined(body.points_available_min),
+            points_available_max: numOrUndefined(body.points_available_max),
+            points_redeemed_min: numOrUndefined(body.points_redeemed_min),
+            points_redeemed_max: numOrUndefined(body.points_redeemed_max),
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,

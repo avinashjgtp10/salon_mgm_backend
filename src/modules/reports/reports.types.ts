@@ -1005,8 +1005,21 @@ export interface ProductMarginReportResponse {
 // one row per client. Never calls the Appointment API/service.
 // ===============================
 
+export type RewardStatusFilter = "active" | "inactive";
+
 export interface RewardPointsReportFilters {
     search?: string;
+    // Scopes points_earned/points_redeemed/last_activity_at to ledger entries
+    // in this range — points_available is always the live current balance,
+    // never date-scoped (it's a snapshot, not a period aggregate).
+    start_date?: string;
+    end_date?: string;
+    // 'active' = currently has a positive balance, 'inactive' = balance is 0.
+    status?: RewardStatusFilter;
+    points_available_min?: number;
+    points_available_max?: number;
+    points_redeemed_min?: number;
+    points_redeemed_max?: number;
     page?: number;
     limit?: number;
     is_export?: boolean;
@@ -1026,6 +1039,9 @@ export interface RewardPointsReportStats {
     points_available: number;
     total_points_earned: number;
     total_points_redeemed: number;
+    // Clients with at least one reward-points ledger entry in the filtered
+    // range (same scope as the rows themselves).
+    active_reward_clients: number;
 }
 
 export interface RewardPointsReportPagination {
