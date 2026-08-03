@@ -1445,6 +1445,16 @@ async getMemberSaleReport(
             start_date: asString(body.start_date),
             end_date: asString(body.end_date),
             search: asString(body.search),
+            status: asString(body.status) as any,
+            membership_id: asString(body.membership_id),
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+            pricing_type: asString(body.pricing_type),
+            price_min: body.price_min !== undefined && body.price_min !== null && body.price_min !== ""
+                ? Number(body.price_min) : undefined,
+            price_max: body.price_max !== undefined && body.price_max !== null && body.price_max !== ""
+                ? Number(body.price_max) : undefined,
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,

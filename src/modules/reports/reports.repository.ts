@@ -35,6 +35,7 @@ import {
     PackageHistoryReportStats,
     MemberSaleReportRow,
     MemberSaleReportStats,
+    MemberSaleFiltersAvailable,
     AppointmentDetailReportRow,
     CategoryTotalsRow,
     FootfallRow,
@@ -4126,9 +4127,29 @@ async getPackageHistoryReportRows(
 // per membership sale. Never calls the Appointment API.
 // ======================================================
 
+// client_memberships.status is only ever persisted as 'active' or
+// 'exhausted' (see client-memberships.repository.ts — nothing ever writes
+// 'expired'), so real-world expiry has to be derived here from expires_at
+// vs now(). 'exhausted' is remapped to 'complete' — a membership that used
+// up all its sessions/value is done, not an error state ("Exhausted" is
+// being retired from the UI entirely). 7-day lookahead window for
+// "Expiry Soon", same convention as a typical renewal-reminder threshold.
+_MEMBER_STATUS_EXPR: `
+  CASE
+    WHEN cm.status = 'exhausted' THEN 'complete'
+    WHEN cm.expires_at IS NOT NULL AND cm.expires_at < NOW() THEN 'expired'
+    WHEN cm.expires_at IS NOT NULL AND cm.expires_at < NOW() + INTERVAL '7 days' THEN 'expiry_soon'
+    ELSE 'active'
+  END
+`,
+
 _buildMemberSaleWhere(
   salonId: string,
-  filters: { start_date?: string; end_date?: string; search?: string }
+  filters: {
+    start_date?: string; end_date?: string; search?: string; status?: string;
+    membership_id?: string; staff_ids?: string[]; pricing_type?: string;
+    price_min?: number; price_max?: number;
+  }
 ): { where: string; values: any[]; nextIndex: number } {
   const values: any[] = [salonId];
   const where = ["cm.salon_id = $1"];
@@ -4145,18 +4166,75 @@ _buildMemberSaleWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(cm.client_name, '') ILIKE $${idx}
+      OR COALESCE(cm.mobile, '') ILIKE $${idx}
       OR COALESCE(cm.membership_name, '') ILIKE $${idx}
     )`);
     values.push(`%${filters.search.trim()}%`);
     idx++;
   }
+  if (filters.status) {
+    where.push(`(${this._MEMBER_STATUS_EXPR}) = $${idx++}`);
+    values.push(filters.status);
+  }
+  if (filters.membership_id) {
+    where.push(`cm.membership_id = $${idx++}`);
+    values.push(filters.membership_id);
+  }
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    where.push(`cm.staff_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.staff_ids);
+  }
+  if (filters.pricing_type) {
+    where.push(`cm.pricing_type = $${idx++}`);
+    values.push(filters.pricing_type);
+  }
+  if (filters.price_min != null) {
+    where.push(`cm.price_paid >= $${idx++}`);
+    values.push(filters.price_min);
+  }
+  if (filters.price_max != null) {
+    where.push(`cm.price_paid <= $${idx++}`);
+    values.push(filters.price_max);
+  }
 
   return { where: where.join(" AND "), values, nextIndex: idx };
 },
 
+// Membership catalog is loosely-typed free text (often a JSON blob a salon
+// owner pasted in while setting up the plan, sometimes double-encoded — see
+// e.g. "GoldMembership2026" in dev data) rather than a dedicated "extra
+// benefits" field. Best-effort unwrap: pull out a nested `.description`
+// string if present, otherwise fall back to the raw text as-is.
+_extractExtraBenefits(raw: string | null): string {
+  if (!raw || !raw.trim()) return "—";
+  let text: string = raw;
+  try {
+    let parsed: any = JSON.parse(raw);
+    let guard = 0;
+    while (parsed && typeof parsed === "object" && typeof parsed.description === "string" && guard < 3) {
+      const inner = parsed.description;
+      try {
+        parsed = JSON.parse(inner);
+      } catch {
+        text = inner;
+        parsed = null;
+      }
+      guard++;
+    }
+    if (typeof parsed === "string") text = parsed;
+  } catch {
+    // Not JSON — use the raw text as-is.
+  }
+  return text.trim() || "—";
+},
+
 async getMemberSaleReportStats(
   salonId: string,
-  filters: { start_date?: string; end_date?: string; search?: string }
+  filters: {
+    start_date?: string; end_date?: string; search?: string; status?: string;
+    membership_id?: string; staff_ids?: string[]; pricing_type?: string;
+    price_min?: number; price_max?: number;
+  }
 ): Promise<MemberSaleReportStats> {
   const { where, values } = this._buildMemberSaleWhere(salonId, filters);
 
@@ -4164,7 +4242,10 @@ async getMemberSaleReportStats(
     SELECT
       COUNT(*)::int AS memberships_sold,
       COALESCE(SUM(cm.price_paid::numeric), 0) AS total_revenue,
-      COUNT(*) FILTER (WHERE cm.status = 'active')::int AS active_memberships
+      COUNT(*) FILTER (WHERE (${this._MEMBER_STATUS_EXPR}) = 'active')::int AS active_memberships,
+      COUNT(*) FILTER (WHERE (${this._MEMBER_STATUS_EXPR}) = 'expiry_soon')::int AS expiry_soon_memberships,
+      COUNT(*) FILTER (WHERE (${this._MEMBER_STATUS_EXPR}) = 'expired')::int AS expired_memberships,
+      COUNT(*) FILTER (WHERE (${this._MEMBER_STATUS_EXPR}) = 'complete')::int AS completed_memberships
     FROM client_memberships cm
     WHERE ${where}
   `;
@@ -4175,13 +4256,42 @@ async getMemberSaleReportStats(
     memberships_sold: Number(r.memberships_sold ?? 0),
     total_revenue: Number(r.total_revenue ?? 0),
     active_memberships: Number(r.active_memberships ?? 0),
+    expiry_soon_memberships: Number(r.expiry_soon_memberships ?? 0),
+    expired_memberships: Number(r.expired_memberships ?? 0),
+    completed_memberships: Number(r.completed_memberships ?? 0),
+  };
+},
+
+async getMemberSaleFiltersAvailable(salonId: string): Promise<MemberSaleFiltersAvailable> {
+  const { rows } = await safeQuery(() => pool.query(
+    `SELECT id, name AS label FROM memberships WHERE salon_id = $1 ORDER BY name ASC`,
+    [salonId]
+  ));
+  const { rows: staffRows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT st.id, TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))) AS label
+     FROM client_memberships cm
+     JOIN staff st ON st.id = cm.staff_id
+     WHERE cm.salon_id = $1
+     ORDER BY label ASC`,
+    [salonId]
+  ));
+  const { rows: typeRows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT pricing_type FROM client_memberships WHERE salon_id = $1 AND pricing_type IS NOT NULL ORDER BY pricing_type ASC`,
+    [salonId]
+  ));
+  return {
+    memberships: rows.map((r: any) => ({ id: r.id, label: r.label })),
+    staff: staffRows.map((r: any) => ({ id: r.id, label: r.label })),
+    pricing_types: typeRows.map((r: any) => String(r.pricing_type)),
   };
 },
 
 async getMemberSaleReportRows(
   salonId: string,
   filters: {
-    start_date?: string; end_date?: string; search?: string;
+    start_date?: string; end_date?: string; search?: string; status?: string;
+    membership_id?: string; staff_ids?: string[]; pricing_type?: string;
+    price_min?: number; price_max?: number;
     page?: number; limit?: number; is_export?: boolean;
   }
 ): Promise<{
@@ -4203,14 +4313,27 @@ async getMemberSaleReportRows(
       cm.id,
       cm.client_id,
       TO_CHAR(cm.purchased_at, 'YYYY-MM-DD') AS purchased_at,
+      s.invoice_number,
       cm.client_name,
+      NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
       cm.membership_name,
+      cm.pricing_type,
+      -- The configured plan benefit (flat credit or discount %), not what
+      -- the client paid — that's price_paid below, a separate column.
+      CASE
+        WHEN cm.pricing_type = 'percentage' THEN cm.discount_percent
+        WHEN cm.pricing_type = 'value' THEN m.price
+        ELSE NULL
+      END AS value_amount,
+      m.description AS membership_description,
       cm.price_paid,
-      cm.total_sessions,
-      cm.used_sessions,
-      cm.status,
+      cm.payment_method,
+      (${this._MEMBER_STATUS_EXPR}) AS status,
       COUNT(*) OVER() AS total_count
     FROM client_memberships cm
+    LEFT JOIN memberships m ON m.id = cm.membership_id
+    LEFT JOIN staff st ON st.id = cm.staff_id
+    LEFT JOIN sales s ON s.id = cm.sale_id
     WHERE ${where}
     ORDER BY cm.purchased_at DESC
     ${limitClause}
@@ -4222,11 +4345,15 @@ async getMemberSaleReportRows(
     id: row.id,
     client_id: row.client_id,
     purchased_at: row.purchased_at,
+    invoice_number: row.invoice_number,
     client_name: row.client_name,
+    staff_name: row.staff_name ?? "—",
     membership_name: row.membership_name,
+    pricing_type: row.pricing_type,
+    value_amount: row.value_amount != null ? Number(row.value_amount) : null,
+    extra_benefits: this._extractExtraBenefits(row.membership_description),
     price_paid: Number(row.price_paid ?? 0),
-    total_sessions: Number(row.total_sessions ?? 0),
-    used_sessions: Number(row.used_sessions ?? 0),
+    payment_method: row.payment_method,
     status: row.status,
   }));
   const effectiveLimit = limit ?? Math.max(total, 1);

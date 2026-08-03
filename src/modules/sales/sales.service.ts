@@ -276,6 +276,10 @@ export const salesService = {
                             totalSessions,
                             pricePaid,
                             mem.colour,
+                            undefined,
+                            sale.appointment_id ?? undefined,
+                            item.staff_id ?? sale.staff_id ?? undefined,
+                            sale.id,
                         );
                     } catch (err: any) {
                         logger.warn("[sales/checkout] membership auto-create failed:", err?.message ?? err);
