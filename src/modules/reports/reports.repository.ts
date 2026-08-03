@@ -1634,6 +1634,11 @@ async getSalesSummaryReportRows(
         -- membership discount belongs with membership_wallet_used below (it's
         -- a membership benefit, not a generic bill discount), not here.
         COALESCE(pay.manual_discount_used, 0) AS discount_amount,
+        -- Stored on the sale itself at checkout (payments.service.ts) —
+        -- retrieved here, never recomputed, per report-consistency requirement.
+        s.coupon_code AS report_coupon_code,
+        COALESCE(s.coupon_discount_amount, 0) AS coupon_discount_amount,
+        COALESCE(s.referral_discount_amount, 0) AS referral_discount_amount,
         COALESCE(s.tax_amount, 0) AS tax_amount,
         s.tip_amount,
         c.full_name AS client_name, c.phone_number AS client_phone,
@@ -1680,6 +1685,7 @@ async getSalesSummaryReportRows(
         NULL::text AS payment_reference,
         u.appointment_id, u.status,
         u.actual_price, u.price, u.discount_amount, u.tax_amount, u.tip_amount,
+        NULL::text AS report_coupon_code, 0::numeric AS coupon_discount_amount, 0::numeric AS referral_discount_amount,
         u.client_name, u.client_phone, u.staff_name,
         u.item_description, u.item_types,
         u.paid_amount, u.due_amount,
@@ -1711,6 +1717,9 @@ async getSalesSummaryReportRows(
     actual_price: Number(row.actual_price ?? 0),
     price: Number(row.price ?? 0),
     discount_amount: Number(row.discount_amount ?? 0),
+    coupon_code: row.report_coupon_code,
+    coupon_discount_amount: Number(row.coupon_discount_amount ?? 0),
+    referral_discount_amount: Number(row.referral_discount_amount ?? 0),
     tax_amount: Number(row.tax_amount ?? 0),
     paid_amount: Number(row.paid_amount ?? 0),
     due_amount: Number(row.due_amount ?? 0),
@@ -1744,6 +1753,8 @@ async getSaleDetail(salonId: string, saleId: string): Promise<SaleDetailResponse
       s.subtotal, s.discount_amount, s.tip_amount, s.tax_amount, s.ex_charges, s.total_amount,
       s.payment_method, s.payment_reference, s.notes,
       s.coupon_code, s.discount_percent, s.discount_type,
+      s.manual_discount_amount, s.coupon_id, s.coupon_discount_amount, s.coupon_discount_type,
+      s.referral_discount_amount, s.referral_id, s.referral_source,
       c.full_name AS client_name, c.phone_number AS client_phone,
       NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name
     FROM sales s
@@ -1781,6 +1792,13 @@ async getSaleDetail(salonId: string, saleId: string): Promise<SaleDetailResponse
     discount_percent: saleRow.discount_percent != null ? Number(saleRow.discount_percent) : null,
     discount_type: saleRow.discount_type,
     appointment_id: saleRow.appointment_id,
+    manual_discount_amount: Number(saleRow.manual_discount_amount ?? 0),
+    coupon_id: saleRow.coupon_id,
+    coupon_discount_amount: Number(saleRow.coupon_discount_amount ?? 0),
+    coupon_discount_type: saleRow.coupon_discount_type,
+    referral_discount_amount: Number(saleRow.referral_discount_amount ?? 0),
+    referral_id: saleRow.referral_id,
+    referral_source: saleRow.referral_source,
   };
 
   const { rows: itemRows } = await safeQuery(() => pool.query(

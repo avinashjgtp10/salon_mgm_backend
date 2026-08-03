@@ -220,6 +220,28 @@ export const paymentsService = {
             ? Math.max(0, Number(data.manual_discount_amount) || 0)
             : combinedFrontendDiscount;
           const frontendCouponDiscount = Math.max(0, combinedFrontendDiscount - frontendManualDiscount);
+          // Hoisted onto `data` so the recordTransaction call further down
+          // (a separate try block, out of this scope) can read the
+          // server-resolved manual/coupon split — see package_covered_amount
+          // just above for the same pattern.
+          data.manual_discount_amount = frontendManualDiscount;
+          data.coupon_discount_amount = frontendCouponDiscount;
+          // Resolved server-side by looking up the real coupon by code —
+          // never trusted from the frontend — so Sale Details/reports can
+          // show which coupon (and its id/discount type) actually applied,
+          // not just re-derive it from whatever the coupon looks like NOW
+          // (which can drift if it's later edited/deleted).
+          if (data.coupon_code && frontendCouponDiscount > 0) {
+            try {
+              const coupon = await couponsRepository.findByCodeForSalon(data.coupon_code, data.salon_id);
+              if (coupon) {
+                data.coupon_id = coupon.id;
+                data.coupon_discount_type = coupon.type;
+              }
+            } catch (err: any) {
+              logger.warn('[payments] coupon lookup for persistence failed:', err?.message ?? err);
+            }
+          }
           const ewalletRequested = Math.max(0, Number(data.ewallet_used)    || 0);
 
           // Sum previously paid amounts across all prior payments for this appointment.
@@ -248,6 +270,11 @@ export const paymentsService = {
                 if (refConfig.active && refConfig.referee_reward_amount > 0) {
                   if (actualBill >= refConfig.min_bill_amount) {
                     referralDiscount = Math.min(refConfig.referee_reward_amount, actualBill);
+                    // Persisted onto the sale below (referral_id/referral_source)
+                    // so Sale Details/Client History can show who referred this
+                    // client, not just that "some" referral discount applied.
+                    data.referral_id = referredClient.referred_by_client_id;
+                    data.referral_source = 'referral_program';
                   } else {
                     refereeWalletCredit = refConfig.referee_reward_amount;
                     // Own dedicated referral balance now — no longer eWallet money.
@@ -564,14 +591,16 @@ export const paymentsService = {
           // displayed tax but the appointment could be marked "Paid" for less
           // than what was shown to the client.
           // Fallback if computeBillTotals below throws. membershipDiscountUsed
-          // and frontendCouponDiscount are pre-tax reductions; Extra Charges/
-          // Tip are added after; Referral Discount and the redemptions are all
-          // subtracted after that — grandTotal here already IS the fully-
-          // reduced figure (merged with what used to be a separate
-          // effectiveBill concept), matching computeBillTotals's new formula.
+          // and frontendCouponDiscount are pre-tax reductions; Extra Charges
+          // are added after (Tip is NOT — Staff Tip is display/record-only,
+          // never collected as part of the bill, see pricing.engine.ts);
+          // Referral Discount and the redemptions are all subtracted after
+          // that — grandTotal here already IS the fully-reduced figure
+          // (merged with what used to be a separate effectiveBill concept),
+          // matching computeBillTotals's new formula.
           let grandTotal = Math.round(Math.max(0,
             actualBill - frontendManualDiscount - frontendCouponDiscount - membershipDiscountUsed
-          ) + exChargesAmt + tipAmt - referralDiscount - ewallet - membershipWalletUsed
+          ) + exChargesAmt - referralDiscount - ewallet - membershipWalletUsed
             - rewardPointsRedeemedValue - referralCreditRequestedValue);
           let effectiveBill = grandTotal;
           try {
@@ -990,6 +1019,13 @@ export const paymentsService = {
           coupon_code: data.coupon_code || undefined,
           discount_type: appt.discount_type || undefined,
           discount_percent: appt.discount_type === 'percentage' ? Number(appt.discount_value ?? 0) : undefined,
+          manual_discount_amount: data.manual_discount_amount,
+          coupon_id: data.coupon_id,
+          coupon_discount_amount: data.coupon_discount_amount,
+          coupon_discount_type: data.coupon_discount_type,
+          referral_discount_amount: data.referral_discount_applied,
+          referral_id: data.referral_id,
+          referral_source: data.referral_source,
           items,
         });
         checkoutSaleId = sale.id;
