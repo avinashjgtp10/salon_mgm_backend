@@ -593,6 +593,9 @@ export interface SalesSummaryReportRow {
     actual_price: number;
     price: number;
     discount_amount: number;
+    coupon_code: string | null;
+    coupon_discount_amount: number;
+    referral_discount_amount: number;
     tax_amount: number;
     paid_amount: number;
     due_amount: number;
@@ -655,6 +658,13 @@ export interface SaleDetailHeader {
     discount_percent: number | null;
     discount_type: string | null;
     appointment_id: string | null;
+    manual_discount_amount: number;
+    coupon_id: string | null;
+    coupon_discount_amount: number;
+    coupon_discount_type: string | null;
+    referral_discount_amount: number;
+    referral_id: string | null;
+    referral_source: string | null;
 }
 
 export interface SaleDetailItem {

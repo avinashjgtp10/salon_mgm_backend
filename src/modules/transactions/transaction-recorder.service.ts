@@ -33,6 +33,20 @@ export async function recordTransaction(input: RecordTransactionInput): Promise<
         tax_amount:      input.tax_amount      != null ? String(input.tax_amount)      : undefined,
         tip_amount:      input.tip_amount      != null ? String(input.tip_amount)      : undefined,
         ex_charges:      input.ex_charges      != null ? String(input.ex_charges)      : undefined,
+        // Previously frozen at whatever a paid appointment's coupon/discount
+        // was when its sale row was FIRST created — editing/topping-up an
+        // already-paid appointment (e.g. a new coupon applied on the top-up)
+        // never updated it. Re-passed here every time, same as the fields above.
+        coupon_code:      input.coupon_code,
+        discount_percent: input.discount_percent != null ? String(input.discount_percent) : undefined,
+        discount_type:    input.discount_type,
+        manual_discount_amount:   input.manual_discount_amount   != null ? String(input.manual_discount_amount)   : undefined,
+        coupon_id:                input.coupon_id,
+        coupon_discount_amount:   input.coupon_discount_amount   != null ? String(input.coupon_discount_amount)   : undefined,
+        coupon_discount_type:     input.coupon_discount_type,
+        referral_discount_amount: input.referral_discount_amount != null ? String(input.referral_discount_amount) : undefined,
+        referral_id:              input.referral_id,
+        referral_source:          input.referral_source,
         items: input.items.map((item) => ({
           item_type: item.item_type,
           item_id: item.item_id,
@@ -72,6 +86,13 @@ export async function recordTransaction(input: RecordTransactionInput): Promise<
         coupon_code: input.coupon_code,
         discount_percent: input.discount_percent != null ? String(input.discount_percent) : undefined,
         discount_type: input.discount_type,
+        manual_discount_amount:   input.manual_discount_amount   != null ? String(input.manual_discount_amount)   : undefined,
+        coupon_id:                input.coupon_id,
+        coupon_discount_amount:   input.coupon_discount_amount   != null ? String(input.coupon_discount_amount)   : undefined,
+        coupon_discount_type:     input.coupon_discount_type,
+        referral_discount_amount: input.referral_discount_amount != null ? String(input.referral_discount_amount) : undefined,
+        referral_id:              input.referral_id,
+        referral_source:          input.referral_source,
         items: input.items.map((item) => ({
           item_type: item.item_type,
           item_id: item.item_id,

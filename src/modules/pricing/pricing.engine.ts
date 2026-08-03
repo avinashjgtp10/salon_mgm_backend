@@ -348,7 +348,9 @@ export function computeBillTotals(input: ComputeBillTotalsInput): BillTotalsResu
   const {
     actualAmounts, catalogAmounts = actualAmounts,
     discountType, discountValue, couponDiscount = 0, membershipDiscountAmount = 0, referralDiscount = 0, taxes,
-    exCharges, tip, eWalletUsed = 0, membershipWalletUsed = 0,
+    // `tip` (Staff Tip) is intentionally not destructured — it's display/
+    // record-only and never affects any total computed here.
+    exCharges, eWalletUsed = 0, membershipWalletUsed = 0,
     membershipServiceWalletUsed = 0, membershipProductWalletUsed = 0,
     membershipServiceDiscountUsed = 0, membershipProductDiscountUsed = 0,
     rewardPointsRedeemedValue = 0, referralCreditUsed = 0,
@@ -486,12 +488,13 @@ export function computeBillTotals(input: ComputeBillTotalsInput): BillTotalsResu
   const manualDiscount = Math.max(0, itemDisc);
 
   const afterSvcDiscount = Math.max(0, billTotal - manualDiscount);
-  // Extra Charges and Tip are both excluded from the Svc Discount base above
-  // (see billTotal) — added here, after the discount, not before. Tip is
-  // collected from the client alongside the bill, passed straight through to
-  // staff — it must be part of what's actually charged here, even though
-  // it's excluded from salon revenue further downstream (sales.total_amount).
-  const withCharges = afterSvcDiscount + exCharges + tip;
+  // Extra Charges are excluded from the Svc/Bill Discount base above (see
+  // billTotal) — added here, after the discount, not before. `tip` is
+  // deliberately NOT added — Staff Tip is a display-only, record-only figure
+  // (shown as its own Sale Summary row) that is never collected as part of
+  // the bill and never affects Grand Total, matching sales.total_amount
+  // (revenue) which already excludes it downstream — see sales.repository.ts.
+  const withCharges = afterSvcDiscount + exCharges;
 
   // Referral Discount (first-bill welcome discount) is a POST-tax,
   // POST-Svc-Discount deduction — applied here, not folded into the pre-tax
