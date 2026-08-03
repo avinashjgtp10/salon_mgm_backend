@@ -89,6 +89,18 @@ router.post(
 );
 
 // ======================================================
+// PRODUCT INVENTORY REPORT (independent report API)
+// Reads products directly (brand/category joined by name) — never calls the
+// Appointment API/service.
+// ======================================================
+
+router.post(
+    "/product-inventory",
+    ...guard,
+    reportsController.getProductInventoryReport
+);
+
+// ======================================================
 // PRODUCT MARGIN REPORT (independent report API)
 // Reads sale_items/products directly — never calls the Appointment
 // API/service.
