@@ -486,7 +486,12 @@ export const clientMembershipsService = {
     try {
       const existing = await clientMembershipsRepository.findActiveByClientAndMembership(clientId, membershipId, salonId);
       if (existing) {
-        logger.info(`[client-memberships/auto-create] already exists (id=${existing.id}), skipping`);
+        logger.info(`[client-memberships/auto-create] already active (id=${existing.id}) — renewing instead of creating a duplicate`);
+        const renewed = await clientMembershipsRepository.renew(existing.id, salonId, {
+          membershipId, pricePaid, totalSessions, staffId, saleId,
+        });
+        logger.info(`[client-memberships/auto-create] RENEWED — client=${clientId}, membership=${membershipName}`);
+        notifyMembershipPurchased(renewed, false).catch(() => {});
         return;
       }
       const created = await clientMembershipsRepository.create(salonId, {

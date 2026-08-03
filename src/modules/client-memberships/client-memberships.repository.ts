@@ -253,8 +253,8 @@ function toClientMembership(row: ClientMembershipRow, log: UsageLogRow[] = []): 
 // `end_date` is NOT NULL on client_memberships and is what expiry-reminder
 // queries (e.g. WhatsApp automation) read — it must always be populated.
 
-function computeExpiryDate(validFor: string | undefined | null): Date {
-  const d = new Date();
+function computeExpiryDate(validFor: string | undefined | null, from?: Date): Date {
+  const d = from ? new Date(from.getTime()) : new Date();
   // Current plans store an exact "N days" duration (picked via a calendar in
   // the Add Membership modal) — the fixed buckets below only remain for plans
   // created before that change.
@@ -456,6 +456,72 @@ export const clientMembershipsRepository = {
         description,
         dto.staffId ?? null,
       ],
+    );
+    return toClientMembership(rows[0]);
+  },
+
+  // Re-buying a membership plan the client already has an ACTIVE row for
+  // (autoCreateFromPayment's existing-row branch) used to just skip silently
+  // — payment collected, nothing to show for it, and the sale invisible on
+  // the Membership Sale report. This tops the existing row up instead: adds
+  // the newly-funded wallet/discount-balance credit, extends expiry from
+  // whichever is later (current expiry or now, so an early renewal doesn't
+  // lose remaining time), adds the newly bought session count, and stamps
+  // purchased_at/sale_id/staff_id to this renewal so it shows up as today's
+  // activity on the report — same "authoritative from the catalog row"
+  // funding math as create() above, not the raw price the client paid.
+  async renew(
+    id: string,
+    salonId: string,
+    dto: { membershipId: string; pricePaid: number; totalSessions: number; staffId?: string; saleId?: string },
+  ): Promise<ClientMembership> {
+    const { rows: existingRows } = await pool.query(
+      `SELECT expires_at FROM client_memberships WHERE id = $1 AND salon_id = $2`,
+      [id, salonId],
+    );
+    const existing = existingRows[0];
+    if (!existing) {
+      throw new AppError(404, 'Membership record not found for renewal', 'MEMBERSHIP_NOT_FOUND');
+    }
+
+    const memRes = await pool.query(
+      `SELECT valid_for, price, description, pricing_type, discount_balance
+       FROM memberships WHERE id = $1`,
+      [dto.membershipId],
+    );
+    const memRow = memRes.rows[0];
+    const pricingType = memRow?.pricing_type ?? 'value';
+
+    let walletTopUp = 0;
+    let discountTopUp = 0;
+    if (pricingType === 'percentage') {
+      discountTopUp = Number(memRow?.discount_balance) || 0;
+    } else if (memRow) {
+      let bonusCredit = 0;
+      try { bonusCredit = Number(JSON.parse(memRow.description ?? "{}").bonusCredit) || 0; } catch { /* plain text description */ }
+      walletTopUp = (Number(memRow.price) || 0) + bonusCredit;
+    }
+
+    const currentExpiry = existing.expires_at ? new Date(existing.expires_at) : null;
+    const extendFrom = currentExpiry && currentExpiry.getTime() > Date.now() ? currentExpiry : new Date();
+    const newExpiry = computeExpiryDate(memRow?.valid_for, extendFrom);
+
+    const { rows } = await pool.query(
+      `UPDATE client_memberships SET
+         price_paid = COALESCE(price_paid, 0) + $1,
+         membership_wallet_balance = membership_wallet_balance + $2,
+         discount_balance_remaining = discount_balance_remaining + $3,
+         total_sessions = total_sessions + $4,
+         expires_at = $5,
+         end_date = $5,
+         status = 'active',
+         purchased_at = NOW(),
+         updated_at = NOW(),
+         sale_id = COALESCE($6, sale_id),
+         staff_id = COALESCE($7, staff_id)
+       WHERE id = $8 AND salon_id = $9
+       RETURNING *`,
+      [dto.pricePaid ?? 0, walletTopUp, discountTopUp, dto.totalSessions ?? 0, newExpiry, dto.saleId ?? null, dto.staffId ?? null, id, salonId],
     );
     return toClientMembership(rows[0]);
   },

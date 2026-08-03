@@ -1402,10 +1402,24 @@ export interface PackageHistoryReportResponse {
 // touches the Appointment API.
 // ===============================
 
+// Computed status vocabulary — client_memberships.status is only ever
+// persisted as 'active' or 'exhausted' (nothing ever writes 'expired'), so
+// "Expired"/"Expiry Soon" are derived here from expires_at vs now(), and
+// "Complete" replaces the raw 'exhausted' value for display.
+export type MemberSaleStatus = "active" | "expiry_soon" | "expired" | "complete";
+
 export interface MemberSaleReportFilters {
     start_date?: string;
     end_date?: string;
     search?: string;
+    status?: MemberSaleStatus;
+    membership_id?: string;
+    staff_ids?: string[];
+    // 'value' (Flat Value) | 'percentage' | 'loyalty' — mirrors
+    // client_memberships.pricing_type as snapshotted at sale time.
+    pricing_type?: string;
+    price_min?: number;
+    price_max?: number;
     page?: number;
     limit?: number;
     is_export?: boolean;
@@ -1415,18 +1429,28 @@ export interface MemberSaleReportRow {
     id: string;
     client_id: string | null;
     purchased_at: string;
+    invoice_number: string | null;
     client_name: string;
+    staff_name: string;
     membership_name: string;
+    pricing_type: string | null;
+    // Pre-formatted by the row mapper: "₹500" for a flat-value membership,
+    // "10%" for a percentage one — the frontend still re-renders the numeric
+    // case through useCurrency for the configured currency symbol.
+    value_amount: number | null;
+    extra_benefits: string;
     price_paid: number;
-    total_sessions: number;
-    used_sessions: number;
-    status: string;
+    payment_method: string | null;
+    status: MemberSaleStatus;
 }
 
 export interface MemberSaleReportStats {
     memberships_sold: number;
     total_revenue: number;
     active_memberships: number;
+    expiry_soon_memberships: number;
+    expired_memberships: number;
+    completed_memberships: number;
 }
 
 export interface MemberSaleReportPagination {
@@ -1436,10 +1460,22 @@ export interface MemberSaleReportPagination {
     total_pages: number;
 }
 
+export interface MemberSaleFilterOption {
+    id: string;
+    label: string;
+}
+
+export interface MemberSaleFiltersAvailable {
+    memberships: MemberSaleFilterOption[];
+    staff: MemberSaleFilterOption[];
+    pricing_types: string[];
+}
+
 export interface MemberSaleReportResponse {
     rows: MemberSaleReportRow[];
     pagination: MemberSaleReportPagination;
     stats: MemberSaleReportStats;
+    filters_available: MemberSaleFiltersAvailable;
 }
 
 // ===============================

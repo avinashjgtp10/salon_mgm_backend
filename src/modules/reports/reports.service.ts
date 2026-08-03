@@ -1531,15 +1531,17 @@ async getMemberSaleReport(
     salonId: string,
     filters: MemberSaleReportFilters
 ): Promise<MemberSaleReportResponse> {
-    const [stats, rowsResult] = await Promise.all([
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
         reportsRepository.getMemberSaleReportStats(salonId, filters),
         reportsRepository.getMemberSaleReportRows(salonId, filters),
+        reportsRepository.getMemberSaleFiltersAvailable(salonId),
     ]);
 
     return {
         rows: rowsResult.items,
         pagination: rowsResult.pagination,
         stats,
+        filters_available: filtersAvailable,
     };
 },
 
