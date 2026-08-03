@@ -1099,6 +1099,7 @@ _buildSalesSummaryWhere(
     start_date?: string;
     end_date?: string;
     staff_id?: string;
+    staff_ids?: string[];
     search?: string;
     status?: string;
     category_id?: string;
@@ -1126,7 +1127,10 @@ _buildSalesSummaryWhere(
     where.push(`s.created_at < ($${idx++}::date + interval '1 day')`);
     values.push(filters.end_date);
   }
-  if (filters.staff_id) {
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    where.push(`s.staff_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.staff_ids);
+  } else if (filters.staff_id) {
     where.push(`s.staff_id = $${idx++}`);
     values.push(filters.staff_id);
   }
@@ -1191,7 +1195,7 @@ _buildSalesSummaryWhere(
 // already bound to salonId by the sales-side query it's UNIONed with.
 _UNBILLED_APPOINTMENT_ROWS_CTE(
   filters: {
-    start_date?: string; end_date?: string; staff_id?: string; search?: string; category_id?: string;
+    start_date?: string; end_date?: string; staff_id?: string; staff_ids?: string[]; search?: string; category_id?: string;
     payment_mode?: string; item_type?: string; service_id?: string;
   },
   startIdx: number
@@ -1213,7 +1217,10 @@ _UNBILLED_APPOINTMENT_ROWS_CTE(
     where.push(`a.scheduled_at < ($${idx++}::date + interval '1 day')`);
     values.push(filters.end_date);
   }
-  if (filters.staff_id) {
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    where.push(`a.staff_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.staff_ids);
+  } else if (filters.staff_id) {
     where.push(`a.staff_id = $${idx++}`);
     values.push(filters.staff_id);
   }
@@ -1271,7 +1278,7 @@ _UNBILLED_APPOINTMENT_ROWS_CTE(
   const sql = `
     SELECT
       base.id, base.appointment_id, base.invoice_number, base.status, base.created_at,
-      base.payment_method, base.client_name, base.client_phone, base.staff_name,
+      base.payment_method, base.client_name, base.client_phone, base.staff_id, base.staff_name,
       base.item_description, base.item_types, base.actual_price,
       -- Manual/coupon discount only — the membership discount is a membership
       -- benefit, grouped into membership_wallet_used below instead, not here
@@ -1299,6 +1306,7 @@ _UNBILLED_APPOINTMENT_ROWS_CTE(
         pay.latest_method AS payment_method,
         c.full_name AS client_name,
         c.phone_number AS client_phone,
+        a.staff_id,
         NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
         COALESCE(items.item_description, '—') AS item_description,
         COALESCE(items.item_types, '—') AS item_types,
@@ -3495,7 +3503,7 @@ async getClientRevenueReportRows(
 // per-row fields not needed for a sum.
 async getStaffSalesReportStats(
   salonId: string,
-  filters: { start_date?: string; end_date?: string; staff_id?: string; search?: string }
+  filters: { start_date?: string; end_date?: string; staff_id?: string; staff_ids?: string[]; search?: string }
 ): Promise<StaffSalesReportStats> {
   const { where, values, nextIndex } = this._buildSalesSummaryWhere(salonId, filters);
   const unbilled = this._UNBILLED_APPOINTMENT_ROWS_CTE(filters, nextIndex);
@@ -3510,7 +3518,11 @@ async getStaffSalesReportStats(
           ELSE 0
         END AS paid_amount,
         COALESCE(pay.latest_due, 0) AS due_amount,
-        COALESCE(comm.commission_amount, 0) AS commission_amount
+        COALESCE(comm.commission_amount, 0) AS commission_amount,
+        COALESCE(itype.service_revenue, 0) AS service_revenue,
+        COALESCE(itype.product_revenue, 0) AS product_revenue,
+        COALESCE(itype.package_revenue, 0) AS package_revenue,
+        COALESCE(itype.membership_revenue, 0) AS membership_revenue
       FROM sales s
       LEFT JOIN clients c ON s.client_id = c.id
       ${this._PAYMENT_LATERAL}
@@ -3523,10 +3535,25 @@ async getStaffSalesReportStats(
             (SELECT si.staff_id FROM sale_items si WHERE si.sale_id = s.id AND si.staff_id IS NOT NULL LIMIT 1)
           )
       ) comm ON TRUE
+      -- Item-type revenue breakdown — sales only (not unbilled appointments,
+      -- see appt_side's zeroed columns below), same simplification the GST
+      -- report's equivalent breakdown uses.
+      LEFT JOIN LATERAL (
+        SELECT
+          SUM(si.total_price) FILTER (WHERE si.item_type = 'service') AS service_revenue,
+          SUM(si.total_price) FILTER (WHERE si.item_type = 'product') AS product_revenue,
+          SUM(si.total_price) FILTER (WHERE si.item_type = 'package') AS package_revenue,
+          SUM(si.total_price) FILTER (WHERE si.item_type = 'membership') AS membership_revenue
+        FROM sale_items si
+        WHERE si.sale_id = s.id
+      ) itype ON TRUE
       WHERE ${where}
     ),
     appt_side AS (
-      SELECT u.price, u.paid_amount, u.due_amount, 0::numeric AS commission_amount
+      SELECT
+        u.price, u.paid_amount, u.due_amount, 0::numeric AS commission_amount,
+        0::numeric AS service_revenue, 0::numeric AS product_revenue,
+        0::numeric AS package_revenue, 0::numeric AS membership_revenue
       FROM (${unbilled.sql}) u
     ),
     unified AS (
@@ -3539,7 +3566,11 @@ async getStaffSalesReportStats(
       COALESCE(SUM(price), 0) AS total_sale,
       COALESCE(SUM(paid_amount), 0) AS total_paid,
       COALESCE(SUM(due_amount), 0) AS total_due,
-      COALESCE(SUM(commission_amount), 0) AS total_commission
+      COALESCE(SUM(commission_amount), 0) AS total_commission,
+      COALESCE(SUM(service_revenue), 0) AS service_revenue,
+      COALESCE(SUM(product_revenue), 0) AS product_revenue,
+      COALESCE(SUM(package_revenue), 0) AS package_revenue,
+      COALESCE(SUM(membership_revenue), 0) AS membership_revenue
     FROM unified
   `;
 
@@ -3551,6 +3582,10 @@ async getStaffSalesReportStats(
     total_paid: Number(r.total_paid ?? 0),
     total_due: Number(r.total_due ?? 0),
     total_commission: Number(r.total_commission ?? 0),
+    service_revenue: Number(r.service_revenue ?? 0),
+    product_revenue: Number(r.product_revenue ?? 0),
+    package_revenue: Number(r.package_revenue ?? 0),
+    membership_revenue: Number(r.membership_revenue ?? 0),
   };
 },
 
@@ -3566,7 +3601,7 @@ async getStaffSalesReportStats(
 async getStaffSalesReport(
   salonId: string,
   filters: {
-    start_date?: string; end_date?: string; staff_id?: string;
+    start_date?: string; end_date?: string; staff_id?: string; staff_ids?: string[];
     search?: string; page?: number; limit?: number; is_export?: boolean;
   }
 ): Promise<{ items: StaffSalesReportRow[]; pagination: { total: number; page: number; limit: number; total_pages: number } }> {
@@ -3589,6 +3624,7 @@ async getStaffSalesReport(
         s.payment_method,
         s.total_amount AS price,
         c.full_name AS client_name, c.phone_number AS client_phone,
+        st.id AS staff_id,
         NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
         COALESCE(items.item_description, '—') AS item_description,
         COALESCE(items.item_types, '—') AS item_types,
@@ -3635,7 +3671,7 @@ async getStaffSalesReport(
     appt_side AS (
       SELECT
         u.id, u.created_at, u.status, u.payment_method, u.price,
-        u.client_name, u.client_phone, u.staff_name,
+        u.client_name, u.client_phone, u.staff_id, u.staff_name,
         u.item_description, u.item_types,
         u.paid_amount, u.due_amount,
         0::numeric AS commission_amount,
@@ -3660,6 +3696,7 @@ async getStaffSalesReport(
   const total = rows.length ? Number(rows[0].total_count) : 0;
   const items: StaffSalesReportRow[] = rows.map((row: any) => ({
     id: row.id,
+    staff_id: row.staff_id ?? null,
     staff_name: row.staff_name ?? "—",
     staff_count: Number(row.staff_count ?? 1),
     is_unbilled: Boolean(row.is_unbilled),
