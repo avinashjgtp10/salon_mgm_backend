@@ -247,6 +247,8 @@ import {
     ClientRevenueReportResponse,
     StaffSalesReportFilters,
     StaffSalesReportResponse,
+    StaffPerformanceReportFilters,
+    StaffPerformanceReportResponse,
     StaffItemSalesReportFilters,
     StaffItemSalesReportResponse,
     PackageSaleReportFilters,
@@ -1457,6 +1459,27 @@ async getStaffSalesReport(
         reportsRepository.getStaffSalesReport(salonId, filters),
     ]);
     return { rows: rowsResult.items, pagination: rowsResult.pagination, stats };
+},
+
+// ======================================================
+// STAFF PERFORMANCE REPORT (independent report API)
+// ======================================================
+
+async getStaffPerformanceReport(
+    salonId: string,
+    filters: StaffPerformanceReportFilters
+): Promise<StaffPerformanceReportResponse> {
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
+        reportsRepository.getStaffPerformanceReportStats(salonId, filters),
+        reportsRepository.getStaffPerformanceReport(salonId, filters),
+        reportsRepository.getStaffPerformanceFiltersAvailable(salonId),
+    ]);
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+        filters_available: filtersAvailable,
+    };
 },
 
 // ======================================================

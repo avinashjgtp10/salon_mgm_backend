@@ -2,6 +2,7 @@ import { paymentsRepository } from './payments.repository';
 import { couponsRepository } from '../coupons/coupons.repository';
 import { appointmentsRepository } from '../appointments/appointments.repository';
 import { recordTransaction } from '../transactions/transaction-recorder.service';
+import { describePaymentMethod } from '../transactions/payment-method.util';
 import { membershipsRepository } from '../memberships/memberships.repository';
 import { clientMembershipsService } from '../client-memberships/client-memberships.service';
 import { clientMembershipsRepository } from '../client-memberships/client-memberships.repository';
@@ -189,6 +190,14 @@ export const paymentsService = {
           const productTotal    = (appt.product_items    || []).reduce((s, i) => s + lineTotal(i), 0);
           const membershipTotal = (appt.membership_items || []).reduce((s, i) => s + lineTotal(i), 0);
           const rawSubtotal     = serviceTotal + packageTotal + productTotal + membershipTotal;
+          // ₹ of this bill covered by an already-purchased Package's included
+          // sessions (row.price/qty preserved at full catalog value even
+          // though row.total nets to 0 — see ServiceRow.tsx/useAppointment.ts).
+          // Hoisted onto `data` below so the recordTransaction call further
+          // down (outside this try block's scope) can read it.
+          data.package_covered_amount = (appt.services || [])
+            .filter((i: any) => !!i.is_package_service)
+            .reduce((s, i) => s + lineTotal(i), 0);
           // Rounded to the nearest whole rupee — matches computeTotals() on the
           // frontend (totalsUtils.ts), which is what the client actually sees/
           // pays. Rounding here (not after discount/wallet deductions) keeps
@@ -679,6 +688,19 @@ export const paymentsService = {
       data.status       = 'completed';
     }
 
+    // Reports that read payments.payment_method directly (e.g. Sales Summary's
+    // COALESCE(pay.latest_method, ...) — see reports.repository.ts) must see
+    // the same corrected source, not the frontend's raw (often wrong, see
+    // buildMethodLabel()'s "Cash" fallback) label. payments.payment_method has
+    // no CHECK constraint, so it can carry the full readable "Package + Cash"
+    // form directly rather than the constrained sales.payment_method enum.
+    if (!isPackagePayment) {
+      data.payment_method = describePaymentMethod(data.payment_method || '', data.split_details, {
+        package: data.package_covered_amount,
+        membership: (Number(data.membership_wallet_used) || 0) + (Number(data.membership_discount_used) || 0),
+      });
+    }
+
     // Payment creation and the reward-points redemption ledger write must
     // not diverge: without a shared transaction, a ledger write failure
     // after the payment row was already persisted with reward_points_used/
@@ -961,6 +983,10 @@ export const paymentsService = {
           tip_amount: tipAmt,
           payment_label: data.payment_method || '',
           split_details: data.split_details ?? undefined,
+          source_amounts: {
+            package: data.package_covered_amount || 0,
+            membership: (Number(data.membership_wallet_used) || 0) + (Number(data.membership_discount_used) || 0),
+          },
           coupon_code: data.coupon_code || undefined,
           discount_type: appt.discount_type || undefined,
           discount_percent: appt.discount_type === 'percentage' ? Number(appt.discount_value ?? 0) : undefined,
@@ -1116,11 +1142,13 @@ export const paymentsService = {
             // Every item's unit_price is exactly matched by its own
             // discount_amount above, so subtotal (and therefore
             // total_amount) is always 0 here — no revenue recorded twice.
-            // normalizePaymentMethod() only maps the literal label "ewallet"
-            // (not "wallet") to the sales.payment_method DB value 'wallet' —
-            // see payment-method.util.ts. Passing 'wallet' directly would
-            // throw UnrecognizedPaymentMethodError.
+            // This whole visit was covered by the package's included
+            // sessions, so payment_method must read 'package', not the old
+            // 'wallet' workaround — see payment-method.util.ts. source_amounts
+            // takes priority whenever it's > 0; payment_label only matters as
+            // a fallback for the never-really-happens case of a ₹0 catalog item.
             payment_label: 'ewallet',
+            source_amounts: { package: items.reduce((s, i) => s + i.unit_price * i.quantity, 0) },
             items,
           });
           checkoutSaleId = sale.id;

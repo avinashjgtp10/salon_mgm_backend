@@ -1,5 +1,5 @@
 export type SaleStatus = "draft" | "completed" | "cancelled" | "refunded";
-export type PaymentMethod = "cash" | "card" | "gift_card" | "split" | "upi" | "wallet";
+export type PaymentMethod = "cash" | "card" | "gift_card" | "split" | "upi" | "wallet" | "package" | "membership";
 export type SaleItemType = "service" | "product" | "membership" | "gift_card" | "quick" | "package";
 
 export type Sale = {
