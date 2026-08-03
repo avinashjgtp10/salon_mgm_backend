@@ -1132,30 +1132,68 @@ export interface ClientRevenueReportResponse {
 
 // ===============================
 // Staff Sales Report (independent report API — POST /api/report/staff-sales)
-// Reads directly from sales/sale_items, bucketed by period (daily/weekly/
-// monthly/yearly) and optionally filtered to one staff member. Must never
-// call the Appointment API/service.
+// Reads directly from sales/sale_items/payments, one row per transaction,
+// optionally filtered to one staff member. Commission is joined from
+// commission_earned (keyed by sale_id + staff_id). Must never call the
+// Appointment API/service.
 // ===============================
-
-export type StaffSalesPeriod = "daily" | "weekly" | "monthly" | "yearly";
 
 export interface StaffSalesReportFilters {
     start_date?: string;
     end_date?: string;
-    period?: StaffSalesPeriod;
     staff_id?: string;
+    search?: string;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
 }
 
 export interface StaffSalesReportRow {
-    label: string;
-    bucket_date: string;
-    service_revenue: number;
-    product_revenue: number;
+    id: string;
+    staff_name: string;
+    // How many distinct staff members are attributed across this sale's line
+    // items — a sale with mixed staff (e.g. one client's service by Staff A
+    // and a retail product by Staff B) still only shows staff_name (the
+    // first one found), so the UI uses this to signal "there's more, click
+    // through to see the full per-item breakdown".
+    staff_count: number;
+    // True for synthetic rows sourced from a not-yet-billed appointment
+    // (see _UNBILLED_APPOINTMENT_ROWS_CTE) — these have no real sales.id, so
+    // the per-item drill-down (GET /api/report/sales-summary/:id) can't be
+    // looked up for them.
+    is_unbilled: boolean;
+    client_name: string;
+    client_phone: string;
+    item_types: string;
+    item_description: string;
+    price: number;
+    paid_amount: number;
+    due_amount: number;
+    commission_amount: number;
+    payment_method: string | null;
+    status: string;
+    created_at: string;
+}
+
+export interface StaffSalesReportPagination {
     total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface StaffSalesReportStats {
+    total_bill: number;
+    total_sale: number;
+    total_paid: number;
+    total_due: number;
+    total_commission: number;
 }
 
 export interface StaffSalesReportResponse {
     rows: StaffSalesReportRow[];
+    pagination: StaffSalesReportPagination;
+    stats: StaffSalesReportStats;
 }
 
 // ===============================
