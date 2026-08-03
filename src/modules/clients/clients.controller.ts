@@ -534,6 +534,16 @@ export const clientsController = {
             const client = await clientsRepository.findById(clientId, salonId);
             if (!client) throw new AppError(404, "Client not found", "NOT_FOUND");
 
+            // Not a raw `clients` column — computed from the referral ledger (same
+            // call clientsService.getById already makes for GET /clients/:id), needed
+            // here too for the Client History "Overview"/"Referrals & Rewards" tabs.
+            const referralStatsPromise = clientsRepository.getReferralStats(clientId);
+            // Same "who referred this client" lookup clientsService.getById already
+            // does — needed here too for the Overview tab's "Referred By" row.
+            const referredByPromise = client.referred_by_client_id
+                ? clientsRepository.getReferrerInfo(client.referred_by_client_id)
+                : Promise.resolve(null);
+
             const [apptRes, salesRes, pkgRes, memRes, statsRes, totalSpendRes] = await Promise.all([
 
                 // 1. Appointments
@@ -544,6 +554,7 @@ export const clientsController = {
                         a.status,
                         a.duration_minutes,
                         a.notes,
+                        a.staff_alert,
                         a.cancel_reason,
                         a.services,
                         a.product_items,
@@ -651,7 +662,12 @@ export const clientsController = {
                                 'item_type',   si.item_type,
                                 'quantity',    si.quantity,
                                 'unit_price',  si.unit_price,
-                                'total_price', si.total_price
+                                'total_price', si.total_price,
+                                -- Per-item staff (a Quick Sale row can assign a
+                                -- different staff member per line) falling back
+                                -- to the sale's own staff — same COALESCE
+                                -- convention already used by sales.repository.ts.
+                                'staff_id',    COALESCE(si.staff_id, s.staff_id)
                             ) ORDER BY si.created_at ASC
                         ) FILTER (WHERE si.id IS NOT NULL) AS items
                      FROM sales s
@@ -675,6 +691,7 @@ export const clientsController = {
                         cp.payment_status,
                         cp.expiry_date,
                         cp.created_date,
+                        cp.staff_id,
                         COALESCE(
                             json_agg(
                                 json_build_object(
@@ -706,7 +723,9 @@ export const clientsController = {
                         cm.purchased_at,
                         cm.total_sessions,
                         cm.used_sessions,
-                        cm.membership_wallet_balance
+                        cm.membership_wallet_balance,
+                        cm.staff_id,
+                        cm.discount_balance_remaining
                      FROM client_memberships cm
                      WHERE cm.client_id = $1 AND cm.salon_id = $2
                      ORDER BY cm.purchased_at DESC
@@ -748,6 +767,8 @@ export const clientsController = {
             ]);
 
             const pkgRows = pkgRes.rows;
+            const referralStats = await referralStatsPromise;
+            const referredBy = await referredByPromise;
 
             const data = {
                 client: {
@@ -761,6 +782,22 @@ export const clientsController = {
                     avatar_url:         client.avatar_url,
                     is_active:          client.is_active,
                     created_at:         client.created_at,
+                    // Added for the Client History "Overview" tab — all already
+                    // columns on `clients` (SELECT * in clientsRepository.findById),
+                    // same field names GET /clients/:id already exposes and
+                    // useClientDetails.ts's buildStats() already reads.
+                    gender:                     client.gender ?? null,
+                    wallet_balance:             Number(client.ewallet_balance ?? 0),
+                    reward_points_balance:      Number(client.reward_points_balance ?? 0),
+                    referral_balance:           Number(client.referral_balance ?? 0),
+                    referral_code:              client.referral_code ?? null,
+                    total_referral_earnings:    referralStats.total_referral_earnings,
+                    total_successful_referrals: referralStats.total_successful_referrals,
+                    // "Source" / "Referred By" / "Birth Date" rows on the Overview tab.
+                    client_source:      client.client_source ?? null,
+                    birthday_day_month: client.birthday_day_month ?? null,
+                    birthday_year:      client.birthday_year ?? null,
+                    referred_by:        referredBy,
                 },
                 stats: {
                     total_appointments:     statsRes.rows[0]?.total_appointments     ?? 0,
@@ -770,6 +807,9 @@ export const clientsController = {
                     lifetime_spend:         Number(totalSpendRes.rows[0]?.lifetime_spend ?? 0),
                     total_sales:            salesRes.rowCount ?? 0,
                     active_packages:        pkgRows.filter((p: any) => p.status === "active").length,
+                    // Overview tab's "Active Memberships" — same pattern as
+                    // active_packages just above.
+                    active_memberships:     memRes.rows.filter((m: any) => m.status === "active").length,
                     // Most recent paid visit; fall back to any appointment date.
                     last_visit_at:          apptRes.rows.find((a: any) => a.status === "paid")?.scheduled_at
                                               ?? apptRes.rows[0]?.scheduled_at
