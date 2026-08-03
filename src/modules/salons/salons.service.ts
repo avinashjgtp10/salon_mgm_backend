@@ -170,6 +170,10 @@ export const salonsService = {
         try {
             const updated = await salonsRepository.update(salonId, patch);
 
+            if (patch.onboarding_completed === true) {
+                await authRepository.markOnboardingComplete(requesterUserId);
+            }
+
             logger.info("salonsService.updateByOwnerOrAdmin success", {
                 salonId: updated.id,
                 slug: updated.slug,

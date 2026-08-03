@@ -27,6 +27,7 @@ export type Payment = {
   created_at: string;
   updated_at: string;
   membership_wallet_used: number;
+  membership_discount_used: number;
   reward_points_value: number;
   referral_discount_applied: number;
   tax_breakdown: TaxBreakdownEntry[] | null;
@@ -45,7 +46,16 @@ export type CreatePaymentBody = {
   salon_id: string;
   client_id?: string;
   gross_amount: number;
+  // Combined manual Svc Discount + coupon discount — used for revenue/sale
+  // record netting. Kept for backward compat; prefer manual_discount_amount
+  // below to distinguish the two channels (coupon must stay pre-tax, Svc
+  // Discount is now post-tax — see pricing.engine.ts's computeBillTotals).
   discount_amount?: number;
+  // Manual Svc Discount ONLY, excluding coupon — when omitted, the whole of
+  // discount_amount is treated as manual (older client behavior, coupon
+  // effectively folds into the post-tax channel same as before this field
+  // existed).
+  manual_discount_amount?: number;
   ewallet_used?: number;
   net_amount: number;
   paid_amount?: number;
@@ -63,6 +73,17 @@ export type CreatePaymentBody = {
   // deductWalletForBooking still caps further by real balance/eligible items.
   // Omitted/undefined preserves the old "use as much as needed" behavior.
   membership_wallet_requested?: number;
+  // Intent flag for a percentage/loyalty membership discount. There is no
+  // matching "requested" field — the amount follows entirely from the plan's
+  // percentage, the eligible line total, and the remaining discount balance.
+  apply_membership_discount?: boolean;
+  // Independent sibling flag for the salon-wide Loyalty discount — staff can
+  // check this alongside (or instead of) apply_membership_discount above;
+  // when both are checked their discounts stack additively (each computed
+  // off the pre-discount line amount), see applyMembershipDiscountForBooking.
+  apply_loyalty_discount?: boolean;
+  // Server-computed only — never trust a value sent by the frontend.
+  membership_discount_used?: number;
   // Server-computed only — never trust a value sent by the frontend for this
   // (see payments.service.ts's Refer & Earn block).
   referral_discount_applied?: number;

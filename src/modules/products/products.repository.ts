@@ -25,12 +25,54 @@ export const productsRepository = {
         return rows[0] || null;
     },
 
-    async findByBarcode(barcode: string, salonId: string): Promise<Product | null> {
-        const { rows } = await pool.query(
-            `SELECT ${PRODUCT_COLUMNS} FROM products WHERE barcode = $1 AND salon_id = $2`,
-            [barcode, salonId]
-        );
+    async findByBarcode(barcode: string, salonId: string, excludeId?: string): Promise<Product | null> {
+        const values: unknown[] = [barcode, salonId];
+        let sql = `SELECT ${PRODUCT_COLUMNS} FROM products WHERE barcode = $1 AND salon_id = $2`;
+        if (excludeId) {
+            values.push(excludeId);
+            sql += ` AND id != $${values.length}`;
+        }
+        const { rows } = await pool.query(sql, values);
         return rows[0] || null;
+    },
+
+    // Duplicate-guard for the name+brand+category combination — `IS NOT DISTINCT
+    // FROM` so two products that both have no brand/category still count as the
+    // same combination (a plain `=` would silently let NULL = NULL pass).
+    async findByNameBrandCategory(
+        name: string,
+        brandId: string | null | undefined,
+        categoryId: string | null | undefined,
+        salonId: string,
+        excludeId?: string
+    ): Promise<Product | null> {
+        const values: unknown[] = [name.trim(), brandId ?? null, categoryId ?? null, salonId];
+        let sql = `SELECT ${PRODUCT_COLUMNS} FROM products
+            WHERE LOWER(name) = LOWER($1)
+            AND brand_id IS NOT DISTINCT FROM $2
+            AND category_id IS NOT DISTINCT FROM $3
+            AND salon_id = $4`;
+        if (excludeId) {
+            values.push(excludeId);
+            sql += ` AND id != $${values.length}`;
+        }
+        const { rows } = await pool.query(sql, values);
+        return rows[0] || null;
+    },
+
+    // Bulk import needs to duplicate-check every row against every existing
+    // product (by barcode, and by name+brand+category) — doing that as two
+    // SELECTs per row means an N-row file fires ~2N sequential round-trips
+    // before it even starts creating anything, which is slow enough on a
+    // large file to trip an upstream proxy/gateway timeout well before the
+    // request actually finishes. Fetching just the columns duplicate-checks
+    // need, once, lets the import build its own in-memory lookup instead.
+    async listMinimalForImport(salonId: string): Promise<Array<{ id: string; barcode: string | null; name: string; brand_id: string | null; category_id: string | null }>> {
+        const { rows } = await pool.query(
+            `SELECT id, barcode, name, brand_id, category_id FROM products WHERE salon_id = $1`,
+            [salonId]
+        );
+        return rows;
     },
 
     // `prefix` is the column-qualifier to use (e.g. "p." when querying the aliased

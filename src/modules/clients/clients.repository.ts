@@ -330,6 +330,19 @@ export const clientsRepository = {
         );
     },
 
+    // Bumps the canonical visit counter that loyalty-membership thresholds read.
+    // Kept as a real incrementing column rather than a COUNT over appointments
+    // because the two places that previously derived a visit count disagreed
+    // (paid-only vs paid-or-partial), and a loyalty benefit needs one answer.
+    async recordVisit(clientId: string, salonId: string): Promise<void> {
+        await pool.query(
+            `UPDATE clients
+             SET total_visits = COALESCE(total_visits, 0) + 1
+             WHERE id = $1 AND salon_id = $2`,
+            [clientId, salonId]
+        );
+    },
+
     // Links a referred_by_code applied post-creation (e.g. at checkout) — kept
     // separate from the generic update() whitelist so a caller can never set
     // referral_reward_status directly through a normal client PATCH.

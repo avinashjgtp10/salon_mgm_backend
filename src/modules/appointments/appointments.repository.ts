@@ -15,6 +15,22 @@ export async function ensureTable(): Promise<void> {
     await pool.query(
         `ALTER TABLE appointments ADD COLUMN IF NOT EXISTS apply_membership_wallet BOOLEAN NOT NULL DEFAULT FALSE`,
     );
+    // Same persisted-checkbox pattern as apply_membership_wallet above, for the
+    // percentage/loyalty membership discount benefit — was referenced in
+    // appointment PATCH payloads without ever having a matching column, so
+    // saving a booking with this benefit toggled crashed the update with
+    // "column \"apply_membership_discount\" of relation \"appointments\" does
+    // not exist" the moment a real request included it.
+    await pool.query(
+        `ALTER TABLE appointments ADD COLUMN IF NOT EXISTS apply_membership_discount BOOLEAN NOT NULL DEFAULT FALSE`,
+    );
+    // Sibling of apply_membership_discount above — Discount Balance and
+    // Loyalty are now independently toggleable and stack when both are
+    // checked (see payments.service.ts's applyMembershipDiscountForBooking),
+    // so each needs its own persisted checkbox state.
+    await pool.query(
+        `ALTER TABLE appointments ADD COLUMN IF NOT EXISTS apply_loyalty_discount BOOLEAN NOT NULL DEFAULT FALSE`,
+    );
     // Persists the "Include GST" checkbox state on the appointment itself —
     // previously it only ever reached the payments table (at actual
     // checkout), so reopening a paid appointment that was deliberately
@@ -71,6 +87,17 @@ export const appointmentsRepository = {
                 (SELECT payment_method FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) AS payment_method,
                 COALESCE((SELECT SUM(reward_points_value) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS reward_points_value,
                 COALESCE((SELECT SUM(membership_wallet_used) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS membership_wallet_used,
+                -- MAX, not SUM — every payment row for this appointment carries
+                -- the SAME cumulative total (a repeat/completing call recovers
+                -- and re-stores it via getMembershipDiscountForAppointment's own
+                -- MAX read, see payments.service.ts), not a per-call delta.
+                COALESCE((SELECT MAX(membership_discount_used) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS membership_discount_used,
+                -- Just the Discount Balance (percentage) portion of the figure
+                -- above — the only part with its own ledger row (see
+                -- deductDiscountBalanceForBooking). Loyalty's share is derived
+                -- on the frontend as membership_discount_used minus this, since
+                -- loyalty never writes a ledger row (no balance to track).
+                COALESCE((SELECT SUM(amount_deducted) FROM membership_usage_log WHERE appointment_id = a.id AND notes = 'membership_discount'), 0) AS membership_percentage_discount_used,
                 COALESCE((SELECT SUM(ewallet_used) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS ewallet_used,
                 COALESCE((SELECT SUM(referral_credit_used) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS referral_credit_used,
                 (SELECT split_details FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) AS split_details,
@@ -159,6 +186,8 @@ export const appointmentsRepository = {
                  COUNT(*) FILTER (WHERE status IN ('completed','partial'))           AS pay_count,
                  SUM(reward_points_value) FILTER (WHERE status IN ('completed','partial')) AS total_reward_points_value,
                  SUM(membership_wallet_used) FILTER (WHERE status IN ('completed','partial')) AS total_membership_wallet_used,
+                 -- MAX not SUM — see findById()'s identical comment.
+                 MAX(membership_discount_used) FILTER (WHERE status IN ('completed','partial')) AS latest_membership_discount_used,
                  SUM(ewallet_used) FILTER (WHERE status IN ('completed','partial')) AS total_ewallet_used,
                  SUM(referral_credit_used) FILTER (WHERE status IN ('completed','partial')) AS total_referral_credit_used
                FROM payments
@@ -177,6 +206,8 @@ export const appointmentsRepository = {
                pa.latest_method              AS payment_method,
                COALESCE(pa.total_reward_points_value, 0) AS reward_points_value,
                COALESCE(pa.total_membership_wallet_used, 0) AS membership_wallet_used,
+               COALESCE(pa.latest_membership_discount_used, 0) AS membership_discount_used,
+               COALESCE((SELECT SUM(amount_deducted) FROM membership_usage_log WHERE appointment_id = a.id AND notes = 'membership_discount'), 0) AS membership_percentage_discount_used,
                COALESCE(pa.total_ewallet_used, 0) AS ewallet_used,
                COALESCE(pa.total_referral_credit_used, 0) AS referral_credit_used,
                (SELECT split_details FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) AS split_details,

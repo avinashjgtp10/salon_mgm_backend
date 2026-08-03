@@ -29,9 +29,27 @@ export async function ensureTable(): Promise<void> {
   await pool.query(
     `ALTER TABLE payments ADD COLUMN IF NOT EXISTS referral_credit_used NUMERIC(10,2) NOT NULL DEFAULT 0`,
   );
+  // Discount given by a percentage/loyalty membership. Unlike membership_wallet_used
+  // (a post-tax redemption of already-recognized revenue), this is a pre-tax price
+  // reduction — it lowers the taxable base, so it must never also be folded into
+  // discount_amount for revenue purposes the way the wallet is.
+  await pool.query(
+    `ALTER TABLE payments ADD COLUMN IF NOT EXISTS membership_discount_used NUMERIC(10,2) NOT NULL DEFAULT 0`,
+  );
 }
 
 export const paymentsRepository = {
+
+  // Cumulative (not additive) per appointment — every payment row for one
+  // appointment carries the same running total, so MAX is the figure already
+  // granted, matching how membership_wallet_used is recorded.
+  async getMembershipDiscountForAppointment(appointmentId: string): Promise<number> {
+    const { rows } = await pool.query(
+      `SELECT COALESCE(MAX(membership_discount_used),0) AS total FROM payments WHERE appointment_id = $1`,
+      [appointmentId],
+    );
+    return parseFloat(rows[0]?.total ?? '0');
+  },
 
   async create(data: CreatePaymentBody): Promise<Payment> {
     const { rows } = await pool.query(
@@ -42,13 +60,14 @@ export const paymentsRepository = {
         paid_amount, due_amount,
         coupon_code, payment_method, split_details,
         status, paid_at, notes, membership_wallet_used, reward_points_value, tax_breakdown,
-        referral_discount_applied, reward_points_used, referral_credit_used
+        referral_discount_applied, reward_points_used, referral_credit_used,
+        membership_discount_used
       ) VALUES (
         gen_random_uuid()::text, $13,
         $1,$2,$3,$4,$5,$6,$7,
         $14,$15,
         $8,$9,$10::jsonb,$11,NOW(),$12,$16,$17,$18::jsonb,
-        $19,$20,$21
+        $19,$20,$21,$22
       )
       RETURNING *`,
       [
@@ -73,6 +92,7 @@ export const paymentsRepository = {
         data.referral_discount_applied ?? 0, // $19
         data.reward_points_used ?? 0,        // $20
         data.referral_credit_used ?? 0,      // $21
+        data.membership_discount_used ?? 0,  // $22
       ]
     );
     return rows[0];

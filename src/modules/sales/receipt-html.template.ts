@@ -44,7 +44,7 @@ export function buildReceiptHtml(params: {
     const now = new Date();
     const printDate = now.toLocaleDateString("en-IN", { year: "numeric", month: "long", day: "numeric" });
     const printTime = now.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
-    const invoiceNo = sale.invoice_number ?? sale.id.slice(0, 8).toUpperCase();
+    const invoiceNo = sale.invoice_number ?? "Not billed yet";
 
     const formatTime12 = (iso: string) =>
         new Date(iso).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true });

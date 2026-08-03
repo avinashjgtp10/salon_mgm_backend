@@ -82,7 +82,14 @@ export interface TodayAppointment {
 }
 
 export interface RevenueDataPoint {
+  // Short, period-appropriate X-axis tick — hour ("09:00 AM") for today,
+  // weekday ("Tue") for weekly, bare day-of-month ("28") for monthly, month
+  // ("Jul") for yearly. Never grouped into "Week 1/2/3/4" for monthly.
   month: string;
+  // Full context for the tooltip — same as `month` for today (the hour IS
+  // the full context there); "Tue, 28 Jul 2026" for weekly; "28 Jul 2026" for
+  // monthly; "Jul 2026" for yearly.
+  fullLabel: string;
   revenue: number;
   expenses: number;
 }

@@ -76,6 +76,21 @@ export const productsService = {
     }): Promise<Product & { photos: ProductPhoto[] }> {
         const { requesterUserId, requesterRole, salonId, body, files } = params;
         logger.info("productsService.create called", { requesterUserId, requesterRole, salonId });
+
+        if (body.barcode && body.barcode.trim()) {
+            const dupBarcode = await productsRepository.findByBarcode(body.barcode.trim(), salonId);
+            if (dupBarcode) {
+                throw new AppError(409, "A product with the same barcode already exists.", "DUPLICATE_BARCODE");
+            }
+        }
+
+        const dupCombo = await productsRepository.findByNameBrandCategory(
+            body.name, body.brand_id ?? null, body.category_id ?? null, salonId
+        );
+        if (dupCombo) {
+            throw new AppError(409, "A product with the same name, brand, and category already exists.", "DUPLICATE_PRODUCT");
+        }
+
         const created = await productsRepository.create(body, salonId);
         let photos: ProductPhoto[] = [];
         if (files.length > 0) {
@@ -96,6 +111,25 @@ export const productsService = {
         logger.info("productsService.update called", { productId, requesterUserId, requesterRole, salonId });
         const existing = await productsRepository.findById(productId, salonId);
         if (!existing) throw new AppError(404, "Product not found", "NOT_FOUND");
+
+        const effectiveBarcode = patch.barcode !== undefined ? patch.barcode : existing.barcode;
+        if (effectiveBarcode && effectiveBarcode.trim()) {
+            const dupBarcode = await productsRepository.findByBarcode(effectiveBarcode.trim(), salonId, productId);
+            if (dupBarcode) {
+                throw new AppError(409, "A product with the same barcode already exists.", "DUPLICATE_BARCODE");
+            }
+        }
+
+        const effectiveName = patch.name !== undefined ? patch.name : existing.name;
+        const effectiveBrandId = patch.brand_id !== undefined ? patch.brand_id : existing.brand_id;
+        const effectiveCategoryId = patch.category_id !== undefined ? patch.category_id : existing.category_id;
+        const dupCombo = await productsRepository.findByNameBrandCategory(
+            effectiveName, effectiveBrandId ?? null, effectiveCategoryId ?? null, salonId, productId
+        );
+        if (dupCombo) {
+            throw new AppError(409, "A product with the same name, brand, and category already exists.", "DUPLICATE_PRODUCT");
+        }
+
         const updated = await productsRepository.update(productId, patch, salonId);
         logger.info("productsService.update success", { productId: updated.id });
         return updated;

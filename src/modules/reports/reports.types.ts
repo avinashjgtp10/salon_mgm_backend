@@ -567,6 +567,9 @@ export interface SalesSummaryReportFilters {
     search?: string;
     status?: string; // 'draft' | 'completed' | 'cancelled' | 'refunded'; default excludes 'draft'
     category_id?: string; // service_categories.id — only sales with a service line item in this category
+    payment_mode?: string; // sales.payment_method
+    item_type?: string; // sale_items.item_type — 'service' | 'product' | 'membership' | 'gift_card' | 'quick' | 'package'
+    service_id?: string; // sale_items.item_id where item_type = 'service'
     page?: number;
     limit?: number;
     is_export?: boolean; // bypasses the page-size cap for CSV export
@@ -574,6 +577,9 @@ export interface SalesSummaryReportFilters {
 
 export interface SalesSummaryFiltersAvailable {
     service_categories: { id: string; label: string }[];
+    staff: { id: string; label: string }[];
+    services: { id: string; label: string }[];
+    payment_modes: string[];
 }
 
 export interface SalesSummaryReportRow {
@@ -586,6 +592,8 @@ export interface SalesSummaryReportRow {
     item_types: string;
     actual_price: number;
     price: number;
+    discount_amount: number;
+    tax_amount: number;
     paid_amount: number;
     due_amount: number;
     tip_amount: number;
@@ -685,8 +693,13 @@ export interface SaleDetailResponse {
 export interface DailySheetReportFilters {
     date?: string;
     service_id?: string;
-    staff_id?: string;
+    staff_ids?: string[];
     search?: string;
+    payment_mode?: string;
+    status?: string;
+    item_type?: string;
+    time_from?: string;
+    time_to?: string;
     page?: number;
     limit?: number;
     is_export?: boolean; // bypasses the page-size cap for CSV export
@@ -697,9 +710,11 @@ export interface DailySheetReportRow {
     sale_id: string;
     time: string;
     ticket_no: string;
+    client_id: string | null;
     client_name: string | null;
     service_id: string | null;
     service: string;
+    item_type: string | null;
     staff_id: string | null;
     staff: string | null;
     amount: number;
@@ -722,12 +737,21 @@ export interface DailySheetFilterOption {
 export interface DailySheetFiltersAvailable {
     services: DailySheetFilterOption[];
     staff: DailySheetFilterOption[];
+    payment_modes: string[];
 }
 
 export interface DailySheetReportResponse {
     rows: DailySheetReportRow[];
     pagination: DailySheetReportPagination;
     total_amount: number;
+    // invoice_count = distinct invoices/appointments (NOT the same as
+    // pagination.total, which counts line-item rows since Daily Sheet is
+    // one-row-per-item); items_count === pagination.total, kept as an
+    // explicit field so the frontend stat card doesn't need to know that.
+    invoice_count: number;
+    client_count: number;
+    staff_count: number;
+    items_count: number;
     filters_available: DailySheetFiltersAvailable;
 }
 
@@ -742,6 +766,11 @@ export interface ProductRetailReportFilters {
     end_date?: string;
     product_id?: string;
     search?: string;
+    staff_ids?: string[];
+    brand_id?: string;
+    category_id?: string;
+    min_price?: number;
+    max_price?: number;
     page?: number;
     limit?: number;
     is_export?: boolean; // bypasses the page-size cap for CSV export
@@ -753,13 +782,21 @@ export interface ProductRetailReportRow {
     invoice_no: string;
     client_id: string | null;
     client_name: string | null;
+    staff_id: string | null;
+    staff_name: string | null;
     product_id: string | null;
     product_name: string;
+    brand_id: string | null;
+    brand_name: string | null;
+    category_id: string | null;
+    category_name: string | null;
     quantity: number;
     price: number;
     total: number;
     tax_amount: number;
     taxable_amount: number;
+    payment_method: string | null;
+    status: string;
 }
 
 export interface ProductRetailReportStats {
@@ -785,7 +822,12 @@ export interface ProductRetailReportResponse {
     rows: ProductRetailReportRow[];
     pagination: ProductRetailReportPagination;
     stats: ProductRetailReportStats;
-    filters_available: { products: ProductRetailFilterOption[] };
+    filters_available: {
+        products: ProductRetailFilterOption[];
+        staff: ProductRetailFilterOption[];
+        brands: ProductRetailFilterOption[];
+        categories: ProductRetailFilterOption[];
+    };
 }
 
 // ===============================
@@ -798,8 +840,15 @@ export interface ProductRetailReportResponse {
 export interface ServiceSaleReportFilters {
     start_date?: string;
     end_date?: string;
-    staff_id?: string;
+    staff_ids?: string[];
+    category_id?: string;
+    service_id?: string;
+    min_price?: number;
+    max_price?: number;
+    payment_method?: string;
     search?: string;
+    sort_by?: "date" | "invoice_no" | "service_name" | "staff_name" | "price" | "total";
+    sort_dir?: "asc" | "desc";
     page?: number;
     limit?: number;
     is_export?: boolean;
@@ -815,12 +864,16 @@ export interface ServiceSaleReportRow {
     staff_name: string | null;
     service_id: string | null;
     service_name: string;
+    category_id: string | null;
+    category_name: string | null;
     price: number;
     // This line item's own GST + the post-discount/post-wallet base it was
     // computed on (see pricing.engine.ts's per-row allocation). 0 for sales
     // recorded before per-item tax existed.
     tax_amount: number;
     taxable_amount: number;
+    payment_method: string | null;
+    status: string;
 }
 
 export interface ServiceSaleReportStats {
@@ -828,6 +881,9 @@ export interface ServiceSaleReportStats {
     total_revenue: number;
     avg_ticket: number;
     unique_services: number;
+    // Most-frequently-sold service by line-item count in the filtered period —
+    // null when there are no matching rows.
+    top_service: { name: string; count: number } | null;
 }
 
 export interface ServiceSaleReportPagination {
@@ -837,10 +893,18 @@ export interface ServiceSaleReportPagination {
     total_pages: number;
 }
 
+export interface ServiceSaleFilterOption {
+    id: string;
+    label: string;
+}
+
 export interface ServiceSaleReportResponse {
     rows: ServiceSaleReportRow[];
     pagination: ServiceSaleReportPagination;
     stats: ServiceSaleReportStats;
+    filters_available: {
+        staff: ServiceSaleFilterOption[];
+    };
 }
 
 // ===============================
@@ -867,6 +931,12 @@ export interface GstReportRow {
     date: string;
     invoice_no: string;
     client_name: string | null;
+    // Taxable-base breakdown by item type, summed from sale_items.taxable_amount
+    // — lets a user see how much of this invoice's GST base came from services
+    // vs products (packages/memberships/gift cards aren't broken out, they
+    // still count toward taxable_amount below, just not either of these two).
+    service_amount: number;
+    product_amount: number;
     taxable_amount: number;
     tax_amount: number;
     total: number;
@@ -941,8 +1011,21 @@ export interface ProductMarginReportResponse {
 // one row per client. Never calls the Appointment API/service.
 // ===============================
 
+export type RewardStatusFilter = "active" | "inactive";
+
 export interface RewardPointsReportFilters {
     search?: string;
+    // Scopes points_earned/points_redeemed/last_activity_at to ledger entries
+    // in this range — points_available is always the live current balance,
+    // never date-scoped (it's a snapshot, not a period aggregate).
+    start_date?: string;
+    end_date?: string;
+    // 'active' = currently has a positive balance, 'inactive' = balance is 0.
+    status?: RewardStatusFilter;
+    points_available_min?: number;
+    points_available_max?: number;
+    points_redeemed_min?: number;
+    points_redeemed_max?: number;
     page?: number;
     limit?: number;
     is_export?: boolean;
@@ -962,6 +1045,9 @@ export interface RewardPointsReportStats {
     points_available: number;
     total_points_earned: number;
     total_points_redeemed: number;
+    // Clients with at least one reward-points ledger entry in the filtered
+    // range (same scope as the rows themselves).
+    active_reward_clients: number;
 }
 
 export interface RewardPointsReportPagination {
@@ -1068,30 +1154,68 @@ export interface ClientRevenueReportResponse {
 
 // ===============================
 // Staff Sales Report (independent report API — POST /api/report/staff-sales)
-// Reads directly from sales/sale_items, bucketed by period (daily/weekly/
-// monthly/yearly) and optionally filtered to one staff member. Must never
-// call the Appointment API/service.
+// Reads directly from sales/sale_items/payments, one row per transaction,
+// optionally filtered to one staff member. Commission is joined from
+// commission_earned (keyed by sale_id + staff_id). Must never call the
+// Appointment API/service.
 // ===============================
-
-export type StaffSalesPeriod = "daily" | "weekly" | "monthly" | "yearly";
 
 export interface StaffSalesReportFilters {
     start_date?: string;
     end_date?: string;
-    period?: StaffSalesPeriod;
     staff_id?: string;
+    search?: string;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
 }
 
 export interface StaffSalesReportRow {
-    label: string;
-    bucket_date: string;
-    service_revenue: number;
-    product_revenue: number;
+    id: string;
+    staff_name: string;
+    // How many distinct staff members are attributed across this sale's line
+    // items — a sale with mixed staff (e.g. one client's service by Staff A
+    // and a retail product by Staff B) still only shows staff_name (the
+    // first one found), so the UI uses this to signal "there's more, click
+    // through to see the full per-item breakdown".
+    staff_count: number;
+    // True for synthetic rows sourced from a not-yet-billed appointment
+    // (see _UNBILLED_APPOINTMENT_ROWS_CTE) — these have no real sales.id, so
+    // the per-item drill-down (GET /api/report/sales-summary/:id) can't be
+    // looked up for them.
+    is_unbilled: boolean;
+    client_name: string;
+    client_phone: string;
+    item_types: string;
+    item_description: string;
+    price: number;
+    paid_amount: number;
+    due_amount: number;
+    commission_amount: number;
+    payment_method: string | null;
+    status: string;
+    created_at: string;
+}
+
+export interface StaffSalesReportPagination {
     total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface StaffSalesReportStats {
+    total_bill: number;
+    total_sale: number;
+    total_paid: number;
+    total_due: number;
+    total_commission: number;
 }
 
 export interface StaffSalesReportResponse {
     rows: StaffSalesReportRow[];
+    pagination: StaffSalesReportPagination;
+    stats: StaffSalesReportStats;
 }
 
 // ===============================
@@ -1109,6 +1233,10 @@ export interface StaffItemSalesReportFilters {
     end_date?: string;
     item_type?: StaffItemSalesType;
     staff_id?: string;
+    // Matches against staff name AND the current tab's item name (service/
+    // product/membership/package) — scoped to whichever item_type is active,
+    // not a cross-item-type search.
+    search?: string;
     page?: number;
     limit?: number;
     is_export?: boolean;
@@ -1153,6 +1281,13 @@ export interface PackageSaleReportFilters {
     start_date?: string;
     end_date?: string;
     search?: string;
+    staff_ids?: string[];
+    package_name?: string;
+    package_status?: string;
+    payment_status?: string;
+    payment_method?: string;
+    min_amount?: number;
+    max_amount?: number;
     page?: number;
     limit?: number;
     is_export?: boolean;
@@ -1172,6 +1307,14 @@ export interface PackageSaleReportRow {
     // independent of pricing.engine.ts — this row IS the whole sale, so it's
     // trivially "per item" already, unlike sale_items-derived reports.
     gst_amount: number;
+    // Via client_packages.sale_id -> sales.invoice_number. NULL for package
+    // sales recorded before staff_id/sale_id existed.
+    invoice_no: string | null;
+    staff_id: string | null;
+    staff_name: string | null;
+    payment_method: string;
+    // Package status (Active/Completed/...) — distinct from payment_status.
+    status: string;
 }
 
 export interface PackageSaleReportStats {
@@ -1179,6 +1322,7 @@ export interface PackageSaleReportStats {
     total_sale_value: number;
     total_received: number;
     unique_packages: number;
+    outstanding_balance: number;
 }
 
 export interface PackageSaleReportPagination {
@@ -1188,10 +1332,19 @@ export interface PackageSaleReportPagination {
     total_pages: number;
 }
 
+export interface PackageSaleFilterOption {
+    id: string;
+    label: string;
+}
+
 export interface PackageSaleReportResponse {
     rows: PackageSaleReportRow[];
     pagination: PackageSaleReportPagination;
     stats: PackageSaleReportStats;
+    filters_available: {
+        staff: PackageSaleFilterOption[];
+        packages: string[];
+    };
 }
 
 // ===============================
@@ -1202,10 +1355,21 @@ export interface PackageSaleReportResponse {
 // touches the Appointment API.
 // ===============================
 
+// client_packages.status is only ever persisted as 'Active' or 'Completed'
+// (see client-packages.repository.ts::completeSession(), which already
+// auto-flips it to 'Completed' the moment every service's sessions are
+// used up) — "Expired" is derived here from expiry_date vs now(), same
+// convention as the Membership Sale report's status computation.
+export type PackageHistoryStatus = "ongoing" | "complete" | "expired";
+
 export interface PackageHistoryReportFilters {
     start_date?: string;
     end_date?: string;
     search?: string;
+    package_name?: string;
+    service_name?: string;
+    staff_ids?: string[];
+    status?: PackageHistoryStatus;
     page?: number;
     limit?: number;
     is_export?: boolean;
@@ -1218,15 +1382,21 @@ export interface PackageHistoryReportRow {
     package_name: string;
     service_name: string;
     session_no: number;
+    // This service line's own remaining sessions (total - completed) — a
+    // live snapshot of current state, not a value frozen at the time this
+    // particular session was logged.
+    remaining_sessions: number;
     staff: string;
-    status: string;
+    status: PackageHistoryStatus;
 }
 
 export interface PackageHistoryReportStats {
     total_sessions: number;
     completed_sessions: number;
-    unique_clients: number;
-    unique_packages: number;
+    remaining_sessions: number;
+    ongoing_packages: number;
+    completed_packages: number;
+    expired_packages: number;
 }
 
 export interface PackageHistoryReportPagination {
@@ -1236,10 +1406,16 @@ export interface PackageHistoryReportPagination {
     total_pages: number;
 }
 
+export interface PackageHistoryFiltersAvailable {
+    packages: string[];
+    services: string[];
+}
+
 export interface PackageHistoryReportResponse {
     rows: PackageHistoryReportRow[];
     pagination: PackageHistoryReportPagination;
     stats: PackageHistoryReportStats;
+    filters_available: PackageHistoryFiltersAvailable;
 }
 
 // ===============================
@@ -1248,10 +1424,24 @@ export interface PackageHistoryReportResponse {
 // touches the Appointment API.
 // ===============================
 
+// Computed status vocabulary — client_memberships.status is only ever
+// persisted as 'active' or 'exhausted' (nothing ever writes 'expired'), so
+// "Expired"/"Expiry Soon" are derived here from expires_at vs now(), and
+// "Complete" replaces the raw 'exhausted' value for display.
+export type MemberSaleStatus = "active" | "expiry_soon" | "expired" | "complete";
+
 export interface MemberSaleReportFilters {
     start_date?: string;
     end_date?: string;
     search?: string;
+    status?: MemberSaleStatus;
+    membership_id?: string;
+    staff_ids?: string[];
+    // 'value' (Flat Value) | 'percentage' | 'loyalty' — mirrors
+    // client_memberships.pricing_type as snapshotted at sale time.
+    pricing_type?: string;
+    price_min?: number;
+    price_max?: number;
     page?: number;
     limit?: number;
     is_export?: boolean;
@@ -1261,18 +1451,28 @@ export interface MemberSaleReportRow {
     id: string;
     client_id: string | null;
     purchased_at: string;
+    invoice_number: string | null;
     client_name: string;
+    staff_name: string;
     membership_name: string;
+    pricing_type: string | null;
+    // Pre-formatted by the row mapper: "₹500" for a flat-value membership,
+    // "10%" for a percentage one — the frontend still re-renders the numeric
+    // case through useCurrency for the configured currency symbol.
+    value_amount: number | null;
+    extra_benefits: string;
     price_paid: number;
-    total_sessions: number;
-    used_sessions: number;
-    status: string;
+    payment_method: string | null;
+    status: MemberSaleStatus;
 }
 
 export interface MemberSaleReportStats {
     memberships_sold: number;
     total_revenue: number;
     active_memberships: number;
+    expiry_soon_memberships: number;
+    expired_memberships: number;
+    completed_memberships: number;
 }
 
 export interface MemberSaleReportPagination {
@@ -1282,10 +1482,22 @@ export interface MemberSaleReportPagination {
     total_pages: number;
 }
 
+export interface MemberSaleFilterOption {
+    id: string;
+    label: string;
+}
+
+export interface MemberSaleFiltersAvailable {
+    memberships: MemberSaleFilterOption[];
+    staff: MemberSaleFilterOption[];
+    pricing_types: string[];
+}
+
 export interface MemberSaleReportResponse {
     rows: MemberSaleReportRow[];
     pagination: MemberSaleReportPagination;
     stats: MemberSaleReportStats;
+    filters_available: MemberSaleFiltersAvailable;
 }
 
 // ===============================

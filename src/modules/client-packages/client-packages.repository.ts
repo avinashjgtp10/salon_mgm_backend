@@ -44,6 +44,8 @@ function toClientPackage(row: ClientPackageRow): ClientPackage {
     pendingAmount: pending,
     paymentStatus: row.payment_status,
     appointmentId: row.appointment_id ?? null,
+    staffId:       row.staff_id ?? null,
+    saleId:        row.sale_id ?? null,
     services: (row.services ?? []).map(s => ({
       serviceId:         s.service_id,
       catalogServiceId:  s.catalog_service_id ?? null,
@@ -194,8 +196,8 @@ export const clientPackagesRepository = {
           (id, salon_id, client_id, client_name, mobile, email,
            package_name, category, branch, expiry_date,
            base_price, gst_percentage, gst_amount, discount, total_amount,
-           payment_method, split_details, paid_amount, pending_amount, payment_status, status, appointment_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
+           payment_method, split_details, paid_amount, pending_amount, payment_status, status, appointment_id, staff_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
         [
           pkgId, salonId, dto.clientId, clientName,
           c.phone_number ?? null, c.email ?? null,
@@ -208,6 +210,7 @@ export const clientPackagesRepository = {
           "Paid",
           "Active",
           dto.appointmentId ?? null,
+          dto.staffId ?? null,
         ],
       );
 
@@ -233,6 +236,28 @@ export const clientPackagesRepository = {
     } finally {
       client.release();
     }
+  },
+
+  // Links a client_packages row to the sales row recordTransaction() created
+  // for it — called right after create(), once the sale id is known, so the
+  // Package Sale report can look up invoice_no via a join.
+  async setSaleId(id: string, salonId: string, saleId: string): Promise<void> {
+    await pool.query(
+      `UPDATE client_packages SET sale_id = $1 WHERE id = $2 AND salon_id = $3`,
+      [saleId, id, salonId],
+    );
+  },
+
+  // The real cash/card/upi/split method the client actually paid with, for
+  // a package auto-created as a line item on a bill (see autoCreateFromPayment
+  // in the service) — that flow has no payment method of its own to record at
+  // creation time, only the sale this package was bundled into.
+  async getSalePaymentMethod(saleId: string, salonId: string): Promise<string | null> {
+    const { rows } = await pool.query(
+      `SELECT payment_method FROM sales WHERE id = $1 AND salon_id = $2`,
+      [saleId, salonId],
+    );
+    return rows[0]?.payment_method ?? null;
   },
 
   async update(

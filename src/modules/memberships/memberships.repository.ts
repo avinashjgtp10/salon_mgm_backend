@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import {
   Membership, MembershipRow, CreateMembershipDTO,
   UpdateMembershipDTO, MembershipsListQuery, IncludedService,
+  LoyaltyEligibility, LoyaltyTier,
 } from "./memberships.types";
 
 const SELECT_WITH_SERVICES = `
@@ -31,9 +32,12 @@ function toMembership(row: MembershipRow): Membership {
     enableOnlineSales: row.enable_online_sales,
     enableOnlineRedemption: row.enable_online_redemption,
     termsAndConditions: row.terms_and_conditions ?? undefined,
-    appliesToProducts: row.applies_to_products,
+    appliesTo: row.applies_to,
+    categoryIds: row.category_ids ?? undefined,
     pricingType: row.pricing_type,
     discountPercent: row.discount_percent ? parseFloat(row.discount_percent) : undefined,
+    discountBalance: row.discount_balance ? parseFloat(row.discount_balance) : undefined,
+    loyaltyTiers: row.loyalty_tiers ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -110,6 +114,80 @@ export const membershipsRepository = {
     return rows.length ? toMembership(rows[0]) : null;
   },
 
+  // Loyalty plans are salon-wide and free — there is no per-client row to look
+  // up, so eligibility is evaluated live against the client's accumulated
+  // visits. Returns the single best-value qualifying plan, or the
+  // closest-to-unlocking one so the UI can show progress ("7 of 10 visits")
+  // rather than nothing at all.
+  async findLoyaltyEligibility(
+    clientId: string,
+    salonId: string,
+  ): Promise<LoyaltyEligibility | null> {
+    const { rows: planRows } = await pool.query(
+      `SELECT id, name, description, loyalty_tiers, applies_to, category_ids
+       FROM memberships
+       WHERE salon_id = $1 AND pricing_type = 'loyalty'
+         AND jsonb_typeof(loyalty_tiers) = 'array' AND jsonb_array_length(loyalty_tiers) > 0`,
+      [salonId],
+    );
+    if (!planRows.length) return null;
+
+    const { rows: clientRows } = await pool.query(
+      `SELECT total_visits FROM clients WHERE id = $1 AND salon_id = $2`,
+      [clientId, salonId],
+    );
+    if (!clientRows.length) return null;
+    const totalVisits = Number(clientRows[0].total_visits) || 0;
+
+    const evaluated: LoyaltyEligibility[] = planRows.map((p) => {
+      // Ascending by thresholdValue is enforced at write time (validator) —
+      // the highest tier crossed wins, tiers never stack.
+      const tiers: LoyaltyTier[] = (p.loyalty_tiers ?? []) as LoyaltyTier[];
+      const crossed = tiers.filter((t) => totalVisits >= t.thresholdValue);
+      const currentTier = crossed.length ? crossed[crossed.length - 1] : null;
+      const nextTier = tiers.find((t) => t.thresholdValue > totalVisits) ?? null;
+
+      // description is JSON-encoded ({"description": "...", "bonusCredit": N})
+      // — same convention as client-memberships.repository.ts's create().
+      let description: string | undefined;
+      if (p.description) {
+        try {
+          const parsed = JSON.parse(p.description);
+          description = typeof parsed?.description === 'string' && parsed.description.trim()
+            ? parsed.description
+            : undefined;
+        } catch {
+          description = p.description;
+        }
+      }
+
+      return {
+        membershipId: p.id,
+        name: p.name,
+        description,
+        current: totalVisits,
+        eligible: currentTier !== null,
+        currentTier,
+        nextTier,
+        discountPercent: currentTier?.discountPercent ?? 0,
+        appliesTo: p.applies_to ?? 'services',
+        categoryIds: p.category_ids ?? [],
+      };
+    });
+
+    const unlocked = evaluated.filter((e) => e.eligible);
+    if (unlocked.length) {
+      return unlocked.reduce((best, e) => (e.discountPercent > best.discountPercent ? e : best));
+    }
+    // None crossed even the first tier yet — surface whichever plan's first
+    // tier is closest to unlocking so the UI can show progress.
+    return evaluated.reduce((closest, e) => {
+      const eNext = e.nextTier?.thresholdValue ?? Infinity;
+      const closestNext = closest.nextTier?.thresholdValue ?? Infinity;
+      return (eNext - e.current) < (closestNext - closest.current) ? e : closest;
+    });
+  },
+
   async create(data: CreateMembershipDTO, salonId: string): Promise<Membership> {
     const client = await pool.connect();
     try {
@@ -120,16 +198,20 @@ export const membershipsRepository = {
           (id, salon_id, name, description, session_type, number_of_sessions,
            valid_for, price, tax_rate, colour,
            enable_online_sales, enable_online_redemption, terms_and_conditions,
-           applies_to_products, pricing_type, discount_percent)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+           applies_to, category_ids, pricing_type, discount_percent,
+           discount_balance, loyalty_tiers)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::jsonb)`,
         [
           membershipId, salonId, data.name, data.description ?? null,
           data.sessionType, data.numberOfSessions ?? null,
           data.validFor, data.price, data.taxRate ?? null,
           data.colour, data.enableOnlineSales,
           data.enableOnlineRedemption, data.termsAndConditions ?? null,
-          data.appliesToProducts ?? false,
+          data.appliesTo ?? 'services',
+          data.categoryIds?.length ? data.categoryIds : null,
           data.pricingType ?? 'value', data.discountPercent ?? null,
+          data.discountBalance ?? null,
+          data.loyaltyTiers ? JSON.stringify(data.loyaltyTiers) : null,
         ]
       );
       await _linkServices(client, membershipId, data.includedServices);
@@ -157,15 +239,24 @@ export const membershipsRepository = {
         colour: "colour", enableOnlineSales: "enable_online_sales",
         enableOnlineRedemption: "enable_online_redemption",
         termsAndConditions: "terms_and_conditions",
-        appliesToProducts: "applies_to_products",
+        appliesTo: "applies_to",
+        categoryIds: "category_ids",
         pricingType: "pricing_type",
         discountPercent: "discount_percent",
+        discountBalance: "discount_balance",
+        loyaltyTiers: "loyalty_tiers",
       };
       const fields: string[] = [];
       const values: any[] = [];
       let idx = 1;
       for (const [key, col] of Object.entries(colMap)) {
-        if (key in data) { fields.push(`${col} = $${idx++}`); values.push((data as any)[key] ?? null); }
+        if (key in data) {
+          const cast = key === "loyaltyTiers" ? "::jsonb" : "";
+          let raw = (data as any)[key] ?? null;
+          if (key === "categoryIds" && Array.isArray(raw) && raw.length === 0) raw = null;
+          fields.push(`${col} = $${idx++}${cast}`);
+          values.push(key === "loyaltyTiers" && raw ? JSON.stringify(raw) : raw);
+        }
       }
       if (fields.length > 0) {
         values.push(id);

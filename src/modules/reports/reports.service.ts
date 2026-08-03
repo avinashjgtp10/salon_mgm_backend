@@ -1285,6 +1285,10 @@ async getDailySheetReport(
         rows: result.items,
         pagination: result.pagination,
         total_amount: result.total_amount,
+        invoice_count: result.invoice_count,
+        client_count: result.client_count,
+        staff_count: result.staff_count,
+        items_count: result.items_count,
         filters_available: filtersAvailable,
     };
 },
@@ -1319,15 +1323,17 @@ async getServiceSaleReport(
     salonId: string,
     filters: ServiceSaleReportFilters
 ): Promise<ServiceSaleReportResponse> {
-    const [stats, rowsResult] = await Promise.all([
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
         reportsRepository.getServiceSaleReportStats(salonId, filters),
         reportsRepository.getServiceSaleReportRows(salonId, filters),
+        reportsRepository.getServiceSaleFiltersAvailable(salonId),
     ]);
 
     return {
         rows: rowsResult.items,
         pagination: rowsResult.pagination,
         stats,
+        filters_available: filtersAvailable,
     };
 },
 
@@ -1446,8 +1452,11 @@ async getStaffSalesReport(
     salonId: string,
     filters: StaffSalesReportFilters
 ): Promise<StaffSalesReportResponse> {
-    const rows = await reportsRepository.getStaffSalesReport(salonId, filters);
-    return { rows };
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getStaffSalesReportStats(salonId, filters),
+        reportsRepository.getStaffSalesReport(salonId, filters),
+    ]);
+    return { rows: rowsResult.items, pagination: rowsResult.pagination, stats };
 },
 
 // ======================================================
@@ -1478,15 +1487,17 @@ async getPackageSaleReport(
     salonId: string,
     filters: PackageSaleReportFilters
 ): Promise<PackageSaleReportResponse> {
-    const [stats, rowsResult] = await Promise.all([
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
         reportsRepository.getPackageSaleReportStats(salonId, filters),
         reportsRepository.getPackageSaleReportRows(salonId, filters),
+        reportsRepository.getPackageSaleFiltersAvailable(salonId),
     ]);
 
     return {
         rows: rowsResult.items,
         pagination: rowsResult.pagination,
         stats,
+        filters_available: filtersAvailable,
     };
 },
 
@@ -1498,15 +1509,17 @@ async getPackageHistoryReport(
     salonId: string,
     filters: PackageHistoryReportFilters
 ): Promise<PackageHistoryReportResponse> {
-    const [stats, rowsResult] = await Promise.all([
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
         reportsRepository.getPackageHistoryReportStats(salonId, filters),
         reportsRepository.getPackageHistoryReportRows(salonId, filters),
+        reportsRepository.getPackageHistoryFiltersAvailable(salonId),
     ]);
 
     return {
         rows: rowsResult.items,
         pagination: rowsResult.pagination,
         stats,
+        filters_available: filtersAvailable,
     };
 },
 
@@ -1518,15 +1531,17 @@ async getMemberSaleReport(
     salonId: string,
     filters: MemberSaleReportFilters
 ): Promise<MemberSaleReportResponse> {
-    const [stats, rowsResult] = await Promise.all([
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
         reportsRepository.getMemberSaleReportStats(salonId, filters),
         reportsRepository.getMemberSaleReportRows(salonId, filters),
+        reportsRepository.getMemberSaleFiltersAvailable(salonId),
     ]);
 
     return {
         rows: rowsResult.items,
         pagination: rowsResult.pagination,
         stats,
+        filters_available: filtersAvailable,
     };
 },
 

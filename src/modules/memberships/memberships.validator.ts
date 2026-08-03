@@ -1,6 +1,65 @@
 import { NextFunction, Request, Response } from "express";
 import { AppError } from "../../middleware/error.middleware";
 
+const PRICING_TYPES = ["value", "percentage", "loyalty"];
+const APPLIES_TO_VALUES = ["services", "products", "both"];
+
+// Shared by create and update — on update every field is optional, so each check
+// is gated on the field actually being present.
+const validatePricingFields = (body: any) => {
+  const {
+    pricingType, discountPercent, discountBalance,
+    loyaltyTiers, appliesTo, categoryIds,
+  } = body;
+
+  if (pricingType !== undefined && !PRICING_TYPES.includes(pricingType))
+    throw new AppError(400, `pricingType must be one of: ${PRICING_TYPES.join(", ")}`, "VALIDATION_ERROR");
+
+  if (appliesTo !== undefined && !APPLIES_TO_VALUES.includes(appliesTo))
+    throw new AppError(400, `appliesTo must be one of: ${APPLIES_TO_VALUES.join(", ")}`, "VALIDATION_ERROR");
+
+  // Optional narrowing of appliesTo — empty/omitted means unrestricted.
+  if (categoryIds !== undefined && categoryIds !== null) {
+    if (!Array.isArray(categoryIds) || categoryIds.some((c: unknown) => typeof c !== "string" || !c))
+      throw new AppError(400, "categoryIds must be an array of category id strings", "VALIDATION_ERROR");
+  }
+
+  if (discountPercent !== undefined && discountPercent !== null &&
+      (isNaN(Number(discountPercent)) || Number(discountPercent) < 0 || Number(discountPercent) > 100))
+    throw new AppError(400, "discountPercent must be between 0 and 100", "VALIDATION_ERROR");
+
+  if (discountBalance !== undefined && discountBalance !== null &&
+      (isNaN(Number(discountBalance)) || Number(discountBalance) < 0))
+    throw new AppError(400, "discountBalance must be a non-negative number", "VALIDATION_ERROR");
+
+  // A loyalty plan is a ladder of tiers (visits -> discount%) — at least one
+  // is required (an empty ladder would never unlock for anyone), each tier
+  // must be a valid threshold/percent pair, and thresholds must be strictly
+  // ascending or "the highest tier crossed" is ambiguous.
+  if (loyaltyTiers !== undefined && loyaltyTiers !== null) {
+    if (!Array.isArray(loyaltyTiers) || loyaltyTiers.length === 0)
+      throw new AppError(400, "loyaltyTiers must be a non-empty array", "VALIDATION_ERROR");
+    let prevThreshold = 0;
+    for (const tier of loyaltyTiers) {
+      const threshold = Number(tier?.thresholdValue);
+      const percent = Number(tier?.discountPercent);
+      if (isNaN(threshold) || threshold < 1)
+        throw new AppError(400, "Each loyalty tier's thresholdValue must be a positive number", "VALIDATION_ERROR");
+      if (isNaN(percent) || percent <= 0 || percent > 100)
+        throw new AppError(400, "Each loyalty tier's discountPercent must be between 0 and 100", "VALIDATION_ERROR");
+      if (threshold <= prevThreshold)
+        throw new AppError(400, "Loyalty tiers must have strictly ascending visit thresholds", "VALIDATION_ERROR");
+      prevThreshold = threshold;
+    }
+  }
+
+  if (pricingType === "loyalty" && (!Array.isArray(loyaltyTiers) || loyaltyTiers.length === 0))
+    throw new AppError(400, "loyaltyTiers is required for a loyalty membership", "VALIDATION_ERROR");
+
+  if (pricingType === "percentage" && !Number(discountPercent))
+    throw new AppError(400, "discountPercent is required for a percentage membership", "VALIDATION_ERROR");
+};
+
 export const validateCreateMembership = (req: Request, _res: Response, next: NextFunction) => {
   try {
     const {
@@ -23,6 +82,7 @@ export const validateCreateMembership = (req: Request, _res: Response, next: Nex
       throw new AppError(400, "enableOnlineSales is required", "VALIDATION_ERROR");
     if (enableOnlineRedemption === undefined)
       throw new AppError(400, "enableOnlineRedemption is required", "VALIDATION_ERROR");
+    validatePricingFields(req.body);
     return next();
   } catch (e) { return next(e); }
 };
@@ -34,6 +94,7 @@ export const validateUpdateMembership = (
     const { price } = req.body;
     if (price !== undefined && (isNaN(Number(price)) || Number(price) < 0))
       throw new AppError(400, "price must be a non-negative number", "VALIDATION_ERROR");
+    validatePricingFields(req.body);
     return next();
   } catch (e) { return next(e); }
 };

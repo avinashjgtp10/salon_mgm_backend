@@ -887,6 +887,9 @@ async getSalesSummaryReport(
             search: asString(body.search),
             status: asString(body.status),
             category_id: asString(body.category_id),
+            payment_mode: asString(body.payment_mode),
+            item_type: asString(body.item_type),
+            service_id: asString(body.service_id),
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,
@@ -946,8 +949,15 @@ async getDailySheetReport(
         const filters = {
             date: asString(body.date),
             service_id: asString(body.service_id),
-            staff_id: asString(body.staff_id),
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             search: asString(body.search),
+            payment_mode: asString(body.payment_mode),
+            status: asString(body.status),
+            item_type: asString(body.item_type),
+            time_from: asString(body.time_from),
+            time_to: asString(body.time_to),
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,
@@ -985,6 +995,13 @@ async getProductRetailReport(
             end_date: asString(body.end_date),
             product_id: asString(body.product_id),
             search: asString(body.search),
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            brand_id: asString(body.brand_id),
+            category_id: asString(body.category_id),
+            min_price: body.min_price !== undefined ? Number(body.min_price) : undefined,
+            max_price: body.max_price !== undefined ? Number(body.max_price) : undefined,
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,
@@ -1020,8 +1037,19 @@ async getServiceSaleReport(
         const filters = {
             start_date: asString(body.start_date),
             end_date: asString(body.end_date),
-            staff_id: asString(body.staff_id),
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            category_id: asString(body.category_id),
+            service_id: asString(body.service_id),
+            min_price: body.min_price !== undefined ? Number(body.min_price) : undefined,
+            max_price: body.max_price !== undefined ? Number(body.max_price) : undefined,
+            payment_method: asString(body.payment_method),
             search: asString(body.search),
+            sort_by: asString(body.sort_by) as
+                | "date" | "invoice_no" | "service_name" | "staff_name" | "price" | "total"
+                | undefined,
+            sort_dir: asString(body.sort_dir) as "asc" | "desc" | undefined,
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,
@@ -1152,8 +1180,16 @@ async getRewardPointsReport(
         const salonId = await getSalonId(req);
         const body = req.body ?? {};
 
+        const numOrUndefined = (v: unknown) => v !== undefined && v !== null && v !== "" ? Number(v) : undefined;
         const filters = {
             search: asString(body.search),
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            status: asString(body.status) as any,
+            points_available_min: numOrUndefined(body.points_available_min),
+            points_available_max: numOrUndefined(body.points_available_max),
+            points_redeemed_min: numOrUndefined(body.points_redeemed_min),
+            points_redeemed_max: numOrUndefined(body.points_redeemed_max),
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,
@@ -1256,13 +1292,13 @@ async getStaffSalesReport(
         const salonId = await getSalonId(req);
         const body = req.body ?? {};
 
-        const period = asString(body.period);
         const filters = {
             start_date: asString(body.start_date),
             end_date: asString(body.end_date),
-            period: (period === "weekly" || period === "monthly" || period === "yearly" ? period : "daily") as
-                "daily" | "weekly" | "monthly" | "yearly",
             staff_id: asString(body.staff_id),
+            search: asString(body.search),
+            page: body.page != null ? Number(body.page) : undefined,
+            limit: body.limit != null ? Number(body.limit) : undefined,
         };
 
         const data = await reportsService.getStaffSalesReport(salonId, filters);
@@ -1299,6 +1335,7 @@ async getStaffItemSalesReport(
             item_type: (["service", "product", "membership", "package"].includes(itemType ?? "")
                 ? itemType : "service") as "service" | "product" | "membership" | "package",
             staff_id: asString(body.staff_id),
+            search: asString(body.search),
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,
@@ -1335,6 +1372,15 @@ async getPackageSaleReport(
             start_date: asString(body.start_date),
             end_date: asString(body.end_date),
             search: asString(body.search),
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            package_name: asString(body.package_name),
+            package_status: asString(body.package_status),
+            payment_status: asString(body.payment_status),
+            payment_method: asString(body.payment_method),
+            min_amount: body.min_amount !== undefined ? Number(body.min_amount) : undefined,
+            max_amount: body.max_amount !== undefined ? Number(body.max_amount) : undefined,
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,
@@ -1371,6 +1417,12 @@ async getPackageHistoryReport(
             start_date: asString(body.start_date),
             end_date: asString(body.end_date),
             search: asString(body.search),
+            package_name: asString(body.package_name),
+            service_name: asString(body.service_name),
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+            status: asString(body.status) as any,
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,
@@ -1407,6 +1459,16 @@ async getMemberSaleReport(
             start_date: asString(body.start_date),
             end_date: asString(body.end_date),
             search: asString(body.search),
+            status: asString(body.status) as any,
+            membership_id: asString(body.membership_id),
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+            pricing_type: asString(body.pricing_type),
+            price_min: body.price_min !== undefined && body.price_min !== null && body.price_min !== ""
+                ? Number(body.price_min) : undefined,
+            price_max: body.price_max !== undefined && body.price_max !== null && body.price_max !== ""
+                ? Number(body.price_max) : undefined,
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,
