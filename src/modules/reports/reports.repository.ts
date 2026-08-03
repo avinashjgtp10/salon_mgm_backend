@@ -5246,6 +5246,7 @@ async getAppointmentDetailReport(
   salonId: string,
   filters: {
     from?: string; to?: string; statuses?: string[];
+    search?: string; payment_methods?: string[]; staff_ids?: string[];
     page?: number; limit?: number; is_export?: boolean;
   }
 ): Promise<{
@@ -5279,6 +5280,42 @@ async getAppointmentDetailReport(
   const requestedLimit = Math.max(1, Number(filters.limit ?? 10));
   const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
   const offset = limit ? (page - 1) * limit : 0;
+
+  // Outer-query filters (search/payment method/staff) run against columns
+  // only available after exploding+joining, so they're built as a second
+  // WHERE list applied to the final SELECT rather than folded into `where`
+  // above (which only scopes the `matched` CTE against raw appointments
+  // columns).
+  const outerWhere: string[] = [];
+  if (filters.search?.trim()) {
+    outerWhere.push(`(
+      COALESCE(e.client_name, '') ILIKE $${idx}
+      OR COALESCE(e.phone_number, '') ILIKE $${idx}
+      OR COALESCE(e.invoice_number, '') ILIKE $${idx}
+      OR COALESCE(e.item_name, '') ILIKE $${idx}
+      OR COALESCE(e.staff_name, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+  if (filters.payment_methods && filters.payment_methods.length > 0) {
+    // payment_method is a free-text label ("Cash", "Card", "Cash+Card", ...),
+    // not a fixed enum, so an exact match on "Cash" would miss split
+    // payments like "Cash+Card" — match by substring per selected method
+    // instead (confirmed with product owner).
+    outerWhere.push(`(${filters.payment_methods.map(() => `e.payment_method ILIKE $${idx++}`).join(" OR ")})`);
+    filters.payment_methods.forEach(m => values.push(`%${m}%`));
+  }
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    outerWhere.push(`COALESCE(
+      CASE WHEN e.item_staff_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+           THEN e.item_staff_id::uuid END,
+      e.staff_id
+    ) = ANY($${idx++}::uuid[])`);
+    values.push(filters.staff_ids);
+  }
+  const outerWhereClause = outerWhere.length ? `WHERE ${outerWhere.join(" AND ")}` : "";
+
   const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
   const limitValues = limit ? [limit, offset] : [];
 
@@ -5290,50 +5327,108 @@ async getAppointmentDetailReport(
     ),
     exploded AS (
       SELECT
-        m.id,
-        m.scheduled_at,
-        m.duration_minutes,
-        m.created_at,
-        m.client_id,
-        m.staff_id,
-        m.status,
-        svc.value->>'name' AS service_name,
-        NULLIF(svc.value->>'staff_id', '') AS svc_staff_id,
-        NULLIF(svc.value->>'staff_name', '') AS svc_staff_name,
-        COALESCE(NULLIF(svc.value->>'price', '')::numeric, 0) AS svc_price
+        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.status,
+        'service' AS item_type,
+        svc.value->>'name' AS item_name,
+        NULLIF(svc.value->>'staff_id', '') AS item_staff_id,
+        NULLIF(svc.value->>'staff_name', '') AS item_staff_name,
+        COALESCE(NULLIF(svc.value->>'price', '')::numeric, 0) AS item_price
       FROM matched m
       LEFT JOIN LATERAL jsonb_array_elements(COALESCE(m.services, '[]'::jsonb)) AS svc(value) ON TRUE
+      WHERE svc.value IS NOT NULL
+
+      UNION ALL
+
+      SELECT
+        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.status,
+        'product' AS item_type,
+        prod.value->>'name' AS item_name,
+        NULLIF(prod.value->>'staff_id', '') AS item_staff_id,
+        NULLIF(prod.value->>'staff_name', '') AS item_staff_name,
+        COALESCE(NULLIF(prod.value->>'price', '')::numeric, 0) AS item_price
+      FROM matched m
+      LEFT JOIN LATERAL jsonb_array_elements(COALESCE(m.product_items, '[]'::jsonb)) AS prod(value) ON TRUE
+      WHERE prod.value IS NOT NULL
+
+      UNION ALL
+
+      SELECT
+        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.status,
+        'package' AS item_type,
+        pkg.value->>'name' AS item_name,
+        NULLIF(pkg.value->>'staff_id', '') AS item_staff_id,
+        NULLIF(pkg.value->>'staff_name', '') AS item_staff_name,
+        COALESCE(NULLIF(pkg.value->>'price', '')::numeric, 0) AS item_price
+      FROM matched m
+      LEFT JOIN LATERAL jsonb_array_elements(COALESCE(m.package_items, '[]'::jsonb)) AS pkg(value) ON TRUE
+      WHERE pkg.value IS NOT NULL
+
+      UNION ALL
+
+      SELECT
+        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.status,
+        'membership' AS item_type,
+        mem.value->>'name' AS item_name,
+        NULLIF(mem.value->>'staff_id', '') AS item_staff_id,
+        NULLIF(mem.value->>'staff_name', '') AS item_staff_name,
+        COALESCE(NULLIF(mem.value->>'price', '')::numeric, 0) AS item_price
+      FROM matched m
+      LEFT JOIN LATERAL jsonb_array_elements(COALESCE(m.membership_items, '[]'::jsonb)) AS mem(value) ON TRUE
+      WHERE mem.value IS NOT NULL
+    ),
+    base AS (
+      SELECT
+        e.*,
+        TO_CHAR(e.scheduled_at, 'YYYY-MM-DD') AS appointment_date,
+        TO_CHAR(e.scheduled_at, 'HH12:MI AM') AS time,
+        TO_CHAR(e.created_at, 'YYYY-MM-DD') AS booked_date,
+        c.full_name AS client_name,
+        c.phone_number,
+        COALESCE(
+          e.item_staff_name,
+          NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '')
+        ) AS staff_name,
+        pay.payment_method,
+        pay.paid_amount,
+        s.invoice_number
+      FROM exploded e
+      LEFT JOIN clients c ON e.client_id = c.id
+      LEFT JOIN staff st ON st.id = COALESCE(
+        CASE WHEN e.item_staff_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+             THEN e.item_staff_id::uuid END,
+        e.staff_id
+      )
+      LEFT JOIN LATERAL (
+        SELECT p.payment_method, p.paid_amount
+        FROM payments p
+        WHERE p.appointment_id = e.id
+        ORDER BY p.created_at DESC
+        LIMIT 1
+      ) pay ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT s.invoice_number
+        FROM sales s
+        WHERE s.appointment_id = e.id
+        ORDER BY s.created_at DESC
+        LIMIT 1
+      ) s ON TRUE
     )
     SELECT
       e.id,
-      TO_CHAR(e.scheduled_at, 'YYYY-MM-DD') AS appointment_date,
-      TO_CHAR(e.scheduled_at, 'HH12:MI AM') AS time,
-      TO_CHAR(e.created_at, 'YYYY-MM-DD') AS booked_date,
-      c.full_name AS client_name,
-      COALESCE(e.service_name, '—') AS service_name,
-      COALESCE(
-        e.svc_staff_name,
-        NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '')
-      ) AS staff_name,
+      e.appointment_date,
+      e.time,
+      e.booked_date,
+      e.client_name,
+      COALESCE(e.item_name, '—') AS item_name,
+      e.item_type,
+      e.staff_name,
       e.duration_minutes AS duration,
-      COALESCE(pay.paid_amount, e.svc_price, 0) AS amount,
-      pay.payment_method,
+      COALESCE(e.paid_amount, e.item_price, 0) AS amount,
+      e.payment_method,
       e.status AS payment_status,
       COUNT(*) OVER() AS total_count
-    FROM exploded e
-    LEFT JOIN clients c ON e.client_id = c.id
-    LEFT JOIN staff st ON st.id = COALESCE(
-      CASE WHEN e.svc_staff_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-           THEN e.svc_staff_id::uuid END,
-      e.staff_id
-    )
-    LEFT JOIN LATERAL (
-      SELECT p.payment_method, p.paid_amount
-      FROM payments p
-      WHERE p.appointment_id = e.id
-      ORDER BY p.created_at DESC
-      LIMIT 1
-    ) pay ON TRUE
+    FROM base e
+    ${outerWhereClause}
     ORDER BY e.scheduled_at DESC
     ${limitClause}
   `;
@@ -5346,7 +5441,8 @@ async getAppointmentDetailReport(
     time: row.time,
     booked_date: row.booked_date,
     client_name: row.client_name,
-    service_name: row.service_name,
+    item_name: row.item_name,
+    item_type: row.item_type,
     staff_name: row.staff_name,
     duration: Number(row.duration ?? 0),
     amount: Number(row.amount ?? 0),

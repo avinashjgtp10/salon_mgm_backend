@@ -1689,6 +1689,9 @@ export interface AppointmentDetailReportFilters {
     from?: string;
     to?: string;
     statuses?: string[];
+    search?: string;
+    payment_methods?: string[];
+    staff_ids?: string[];
     page?: number;
     limit?: number;
     is_export?: boolean;
@@ -1700,7 +1703,8 @@ export interface AppointmentDetailReportRow {
     time: string;
     booked_date: string;
     client_name: string | null;
-    service_name: string;
+    item_name: string;
+    item_type: "service" | "product" | "package" | "membership";
     staff_name: string | null;
     duration: number;
     amount: number;

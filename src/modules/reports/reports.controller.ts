@@ -1609,6 +1609,13 @@ async getAppointmentDetailReport(
             statuses: Array.isArray(body.statuses)
                 ? body.statuses.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
                 : undefined,
+            search: asString(body.search),
+            payment_methods: Array.isArray(body.payment_methods)
+                ? body.payment_methods.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,
