@@ -33,6 +33,7 @@ import {
     PackageSaleFilterOption,
     PackageHistoryReportRow,
     PackageHistoryReportStats,
+    PackageHistoryFiltersAvailable,
     MemberSaleReportRow,
     MemberSaleReportStats,
     AppointmentDetailReportRow,
@@ -4000,10 +4001,40 @@ async getPackageSaleFiltersAvailable(salonId: string): Promise<{
 // session. Never calls the Appointment API.
 // ======================================================
 
-_buildPackageHistoryWhere(
+// client_packages.status only ever persists 'Active'/'Completed' (already
+// correctly auto-flipped by completeSession() the instant every service's
+// sessions are exhausted — see that function's comment). "Expired" isn't a
+// stored value at all, so it's derived here from expiry_date vs now(). Any
+// package that isn't Complete or Expired is Ongoing — deliberately not
+// gating on "at least one session completed" the way the ticket's prose
+// example implies, since a freshly-sold, not-yet-started package still
+// needs to land in exactly one of these three buckets (Ongoing is that
+// default "still has sessions, hasn't expired" bucket).
+_PACKAGE_STATUS_EXPR: `
+  CASE
+    WHEN cp.status = 'Completed' THEN 'complete'
+    WHEN cp.expiry_date < NOW() THEN 'expired'
+    ELSE 'ongoing'
+  END
+`,
+
+async _resolveStaffNames(salonId: string, staffIds: string[]): Promise<string[]> {
+  if (!staffIds.length) return [];
+  const { rows } = await safeQuery(() => pool.query(
+    `SELECT TRIM(CONCAT(COALESCE(first_name, ''), ' ', COALESCE(last_name, ''))) AS full_name
+     FROM staff WHERE id = ANY($1::uuid[]) AND salon_id = $2`,
+    [staffIds, salonId]
+  ));
+  return rows.map((r: any) => String(r.full_name)).filter(Boolean);
+},
+
+async _buildPackageHistoryWhere(
   salonId: string,
-  filters: { start_date?: string; end_date?: string; search?: string }
-): { where: string; values: any[]; nextIndex: number } {
+  filters: {
+    start_date?: string; end_date?: string; search?: string;
+    package_name?: string; service_name?: string; staff_ids?: string[]; status?: string;
+  }
+): Promise<{ where: string; values: any[]; nextIndex: number }> {
   const values: any[] = [salonId];
   const where = ["cp.salon_id = $1"];
   let idx = 2;
@@ -4025,26 +4056,92 @@ _buildPackageHistoryWhere(
     values.push(`%${filters.search.trim()}%`);
     idx++;
   }
+  if (filters.package_name) {
+    where.push(`cp.package_name = $${idx++}`);
+    values.push(filters.package_name);
+  }
+  if (filters.service_name) {
+    where.push(`cps.service_name = $${idx++}`);
+    values.push(filters.service_name);
+  }
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    // client_package_session_history has no staff_id FK, only a denormalized
+    // staff_name — resolve the picked staff ids to names first (see
+    // _resolveStaffNames), then match on those.
+    const names = await this._resolveStaffNames(salonId, filters.staff_ids);
+    where.push(names.length > 0 ? `h.staff_name = ANY($${idx++}::text[])` : "FALSE");
+    if (names.length > 0) values.push(names);
+  }
+  if (filters.status) {
+    where.push(`(${this._PACKAGE_STATUS_EXPR}) = $${idx++}`);
+    values.push(filters.status);
+  }
 
   return { where: where.join(" AND "), values, nextIndex: idx };
 },
 
+async getPackageHistoryFiltersAvailable(salonId: string): Promise<PackageHistoryFiltersAvailable> {
+  const { rows: pkgRows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT package_name FROM client_packages WHERE salon_id = $1 ORDER BY package_name ASC`,
+    [salonId]
+  ));
+  const { rows: svcRows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT cps.service_name
+     FROM client_package_services cps
+     JOIN client_packages cp ON cp.id = cps.client_package_id
+     WHERE cp.salon_id = $1
+     ORDER BY cps.service_name ASC`,
+    [salonId]
+  ));
+  return {
+    packages: pkgRows.map((r: any) => String(r.package_name)),
+    services: svcRows.map((r: any) => String(r.service_name)),
+  };
+},
+
 async getPackageHistoryReportStats(
   salonId: string,
-  filters: { start_date?: string; end_date?: string; search?: string }
+  filters: {
+    start_date?: string; end_date?: string; search?: string;
+    package_name?: string; service_name?: string; staff_ids?: string[]; status?: string;
+  }
 ): Promise<PackageHistoryReportStats> {
-  const { where, values } = this._buildPackageHistoryWhere(salonId, filters);
+  const { where, values } = await this._buildPackageHistoryWhere(salonId, filters);
 
   const query = `
+    WITH matched_history AS (
+      SELECT h.status AS h_status, cp.id AS pkg_id
+      FROM client_package_session_history h
+      JOIN client_package_services cps ON cps.id = h.client_package_service_id
+      JOIN client_packages cp ON cp.id = h.client_package_id
+      WHERE ${where}
+    ),
+    distinct_pkgs AS (
+      SELECT DISTINCT cp.id, cp.status AS raw_status, cp.expiry_date
+      FROM client_packages cp
+      WHERE cp.id IN (SELECT pkg_id FROM matched_history)
+    ),
+    pkg_computed AS (
+      SELECT
+        dp.id,
+        CASE
+          WHEN dp.raw_status = 'Completed' THEN 'complete'
+          WHEN dp.expiry_date < NOW() THEN 'expired'
+          ELSE 'ongoing'
+        END AS status,
+        COALESCE((
+          SELECT SUM(cps.total_sessions - cps.completed_sessions)
+          FROM client_package_services cps WHERE cps.client_package_id = dp.id
+        ), 0) AS remaining_sessions
+      FROM distinct_pkgs dp
+    )
     SELECT
-      COUNT(*)::int AS total_sessions,
-      COUNT(*) FILTER (WHERE LOWER(h.status) = 'completed')::int AS completed_sessions,
-      COUNT(DISTINCT cp.client_id)::int AS unique_clients,
-      COUNT(DISTINCT cp.package_name)::int AS unique_packages
-    FROM client_package_session_history h
-    JOIN client_package_services cps ON cps.id = h.client_package_service_id
-    JOIN client_packages cp ON cp.id = h.client_package_id
-    WHERE ${where}
+      (SELECT COUNT(*) FROM matched_history)::int AS total_sessions,
+      (SELECT COUNT(*) FROM matched_history WHERE LOWER(h_status) = 'completed')::int AS completed_sessions,
+      COALESCE((SELECT SUM(remaining_sessions) FROM pkg_computed), 0)::int AS remaining_sessions,
+      COALESCE((SELECT COUNT(*) FROM pkg_computed WHERE status = 'ongoing'), 0)::int AS ongoing_packages,
+      COALESCE((SELECT COUNT(*) FROM pkg_computed WHERE status = 'complete'), 0)::int AS completed_packages,
+      COALESCE((SELECT COUNT(*) FROM pkg_computed WHERE status = 'expired'), 0)::int AS expired_packages
   `;
 
   const { rows } = await safeQuery(() => pool.query(query, values));
@@ -4052,8 +4149,10 @@ async getPackageHistoryReportStats(
   return {
     total_sessions: Number(r.total_sessions ?? 0),
     completed_sessions: Number(r.completed_sessions ?? 0),
-    unique_clients: Number(r.unique_clients ?? 0),
-    unique_packages: Number(r.unique_packages ?? 0),
+    remaining_sessions: Number(r.remaining_sessions ?? 0),
+    ongoing_packages: Number(r.ongoing_packages ?? 0),
+    completed_packages: Number(r.completed_packages ?? 0),
+    expired_packages: Number(r.expired_packages ?? 0),
   };
 },
 
@@ -4061,13 +4160,14 @@ async getPackageHistoryReportRows(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; search?: string;
+    package_name?: string; service_name?: string; staff_ids?: string[]; status?: string;
     page?: number; limit?: number; is_export?: boolean;
   }
 ): Promise<{
   items: PackageHistoryReportRow[];
   pagination: { total: number; page: number; limit: number; total_pages: number };
 }> {
-  const { where, values, nextIndex } = this._buildPackageHistoryWhere(salonId, filters);
+  const { where, values, nextIndex } = await this._buildPackageHistoryWhere(salonId, filters);
   let idx = nextIndex;
 
   const page = Math.max(1, Number(filters.page ?? 1));
@@ -4085,8 +4185,9 @@ async getPackageHistoryReportRows(
       cp.package_name,
       cps.service_name,
       h.session_no,
+      (cps.total_sessions - cps.completed_sessions) AS remaining_sessions,
       h.staff_name AS staff,
-      h.status,
+      (${this._PACKAGE_STATUS_EXPR}) AS status,
       COUNT(*) OVER() AS total_count
     FROM client_package_session_history h
     JOIN client_package_services cps ON cps.id = h.client_package_service_id
@@ -4105,6 +4206,7 @@ async getPackageHistoryReportRows(
     package_name: row.package_name,
     service_name: row.service_name,
     session_no: Number(row.session_no ?? 0),
+    remaining_sessions: Number(row.remaining_sessions ?? 0),
     staff: row.staff,
     status: row.status,
   }));

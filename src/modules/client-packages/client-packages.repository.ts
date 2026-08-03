@@ -248,6 +248,18 @@ export const clientPackagesRepository = {
     );
   },
 
+  // The real cash/card/upi/split method the client actually paid with, for
+  // a package auto-created as a line item on a bill (see autoCreateFromPayment
+  // in the service) — that flow has no payment method of its own to record at
+  // creation time, only the sale this package was bundled into.
+  async getSalePaymentMethod(saleId: string, salonId: string): Promise<string | null> {
+    const { rows } = await pool.query(
+      `SELECT payment_method FROM sales WHERE id = $1 AND salon_id = $2`,
+      [saleId, salonId],
+    );
+    return rows[0]?.payment_method ?? null;
+  },
+
   async update(
     id:      string,
     salonId: string,

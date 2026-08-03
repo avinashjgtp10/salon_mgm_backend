@@ -1199,7 +1199,16 @@ export const paymentsService = {
             let services: Array<{ serviceId?: string; serviceName: string; totalSessions: number; price: number }> = [];
             let basePrice      = Number(item.price ?? 0) * Number(item.quantity ?? 1);
             let discount       = 0;
-            let gstPercentage  = 0;
+            // Package Templates carry their own precise gst_percentage (set
+            // below when one resolves). A plain Catalog package has no tax
+            // rate of its own at all — the bill's actual GST on this line was
+            // computed client-side from Tax Mapping rules and folded into the
+            // appointment total, never broken back out per item. Falling back
+            // to the appointment's own blended rate is the same convention
+            // reports.repository.ts's unbilled-appointment CTE already uses
+            // for the identical "closest rate we actually have" situation,
+            // rather than silently leaving this package's own record at 0 GST.
+            let gstPercentage  = appt?.gst_percent ?? 0;
             let expiryDate     = "2099-12-31";
 
             const template = item.package_id

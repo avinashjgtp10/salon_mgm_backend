@@ -1509,15 +1509,17 @@ async getPackageHistoryReport(
     salonId: string,
     filters: PackageHistoryReportFilters
 ): Promise<PackageHistoryReportResponse> {
-    const [stats, rowsResult] = await Promise.all([
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
         reportsRepository.getPackageHistoryReportStats(salonId, filters),
         reportsRepository.getPackageHistoryReportRows(salonId, filters),
+        reportsRepository.getPackageHistoryFiltersAvailable(salonId),
     ]);
 
     return {
         rows: rowsResult.items,
         pagination: rowsResult.pagination,
         stats,
+        filters_available: filtersAvailable,
     };
 },
 
