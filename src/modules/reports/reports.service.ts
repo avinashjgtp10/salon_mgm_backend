@@ -243,6 +243,8 @@ import {
     RewardPointsReportResponse,
     EwalletReportFilters,
     EwalletReportResponse,
+    ProductInventoryReportFilters,
+    ProductInventoryReportResponse,
     ClientRevenueReportFilters,
     ClientRevenueReportResponse,
     StaffSalesReportFilters,
@@ -1417,6 +1419,26 @@ async getEwalletReport(
     const [stats, rowsResult] = await Promise.all([
         reportsRepository.getEwalletReportStats(salonId, filters),
         reportsRepository.getEwalletReportRows(salonId, filters),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+    };
+},
+
+// ======================================================
+// PRODUCT INVENTORY REPORT (independent report API)
+// ======================================================
+
+async getProductInventoryReport(
+    salonId: string,
+    filters: ProductInventoryReportFilters
+): Promise<ProductInventoryReportResponse> {
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getProductInventoryReportStats(salonId, filters),
+        reportsRepository.getProductInventoryReportRows(salonId, filters),
     ]);
 
     return {

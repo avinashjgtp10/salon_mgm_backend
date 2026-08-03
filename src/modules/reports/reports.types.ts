@@ -1075,9 +1075,66 @@ export interface RewardPointsReportResponse {
 
 export interface EwalletReportFilters {
     search?: string;
+    as_of_date?: string;
     page?: number;
     limit?: number;
     is_export?: boolean;
+}
+
+// ===============================
+// Product Inventory Report (independent report API — POST /api/report/product-inventory)
+// Reads products directly (brand/category joined for display names), with
+// per-product sold-qty/revenue folded in from the same aggregate the
+// existing /product-inventory-sales endpoint already computes. Never calls
+// the Appointment API/service.
+// ===============================
+
+export interface ProductInventoryReportFilters {
+    search?: string;
+    category_id?: string;
+    brand_id?: string;
+    stock_status?: "in_stock" | "low_stock" | "out_of_stock";
+    date_from?: string;
+    date_to?: string;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface ProductInventoryReportRow {
+    product_id: string;
+    product_name: string;
+    category_name: string;
+    brand_name: string;
+    sku: string;
+    date_added: string;
+    current_stock: number;
+    reorder_level: number;
+    unit_cost: number;
+    total_value: number;
+    sales_qty: number;
+    sales_revenue: number;
+    status: "in_stock" | "low_stock" | "out_of_stock";
+}
+
+export interface ProductInventoryReportStats {
+    total_products: number;
+    total_stock_value: number;
+    low_stock_items: number;
+    out_of_stock_items: number;
+}
+
+export interface ProductInventoryReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface ProductInventoryReportResponse {
+    rows: ProductInventoryReportRow[];
+    pagination: ProductInventoryReportPagination;
+    stats: ProductInventoryReportStats;
 }
 
 export interface EwalletReportRow {

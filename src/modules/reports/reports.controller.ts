@@ -1226,6 +1226,7 @@ async getEwalletReport(
 
         const filters = {
             search: asString(body.search),
+            as_of_date: asString(body.as_of_date),
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,
@@ -1238,6 +1239,47 @@ async getEwalletReport(
             200,
             data,
             "E-wallet report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// PRODUCT INVENTORY REPORT (independent report API)
+// POST /api/report/product-inventory
+// ======================================================
+
+async getProductInventoryReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            search: asString(body.search),
+            category_id: asString(body.category_id),
+            brand_id: asString(body.brand_id),
+            stock_status: (body.stock_status === "in_stock" || body.stock_status === "low_stock" || body.stock_status === "out_of_stock")
+                ? body.stock_status
+                : undefined,
+            date_from: asString(body.date_from),
+            date_to: asString(body.date_to),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getProductInventoryReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Product inventory report fetched successfully"
         );
     } catch (error) {
         next(error);

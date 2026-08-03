@@ -22,6 +22,8 @@ import {
     RewardPointsReportStats,
     EwalletReportRow,
     EwalletReportStats,
+    ProductInventoryReportRow,
+    ProductInventoryReportStats,
     ClientRevenueReportRow,
     ClientRevenueReportStats,
     StaffSalesReportRow,
@@ -3252,12 +3254,22 @@ async getRewardPointsReportRows(
 
 _buildEwalletWhere(
   salonId: string,
-  filters: { search?: string }
+  filters: { search?: string; as_of_date?: string }
 ): { where: string; values: any[]; nextIndex: number } {
   const values: any[] = [salonId];
   const where = ["c.salon_id = $1"];
   let idx = 2;
 
+  // Wallet balance is a live running total (clients.ewallet_balance) — there's
+  // no historical snapshot to reconstruct, so "as of date" only narrows which
+  // clients are included (those who existed by that date), not the balance
+  // value itself. No lower bound: every client registered on/before the date
+  // is in scope, so existing clients never vanish just because they signed
+  // up before some earlier "from" date (the previous From/To range bug).
+  if (filters.as_of_date) {
+    where.push(`c.created_at < ($${idx++}::date + interval '1 day')`);
+    values.push(filters.as_of_date);
+  }
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
@@ -3273,7 +3285,7 @@ _buildEwalletWhere(
 
 async getEwalletReportStats(
   salonId: string,
-  filters: { search?: string }
+  filters: { search?: string; as_of_date?: string }
 ): Promise<EwalletReportStats> {
   const { where, values } = this._buildEwalletWhere(salonId, filters);
 
@@ -3300,7 +3312,7 @@ async getEwalletReportStats(
 
 async getEwalletReportRows(
   salonId: string,
-  filters: { search?: string; page?: number; limit?: number; is_export?: boolean }
+  filters: { search?: string; as_of_date?: string; page?: number; limit?: number; is_export?: boolean }
 ): Promise<{
   items: EwalletReportRow[];
   pagination: { total: number; page: number; limit: number; total_pages: number };
@@ -3337,6 +3349,191 @@ async getEwalletReportRows(
     phone: row.phone,
     email: row.email,
     balance: Number(row.balance ?? 0),
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// ======================================================
+// PRODUCT INVENTORY REPORT (independent report API)
+// POST /api/report/product-inventory — reads products directly (brand/
+// category joined by name), one row per product. Never calls the
+// Appointment API/service.
+// ======================================================
+
+_buildProductInventoryWhere(
+  salonId: string,
+  filters: {
+    search?: string; category_id?: string; brand_id?: string;
+    stock_status?: "in_stock" | "low_stock" | "out_of_stock";
+    date_from?: string; date_to?: string;
+  }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["p.salon_id = $1"];
+  let idx = 2;
+
+  if (filters.search?.trim()) {
+    where.push(`(
+      p.name ILIKE $${idx}
+      OR COALESCE(p.barcode, '') ILIKE $${idx}
+      OR EXISTS (SELECT 1 FROM product_brands pb_search WHERE pb_search.id = p.brand_id AND pb_search.name ILIKE $${idx})
+      OR EXISTS (SELECT 1 FROM service_categories sc_search WHERE sc_search.id = p.category_id AND sc_search.name ILIKE $${idx})
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+  if (filters.category_id) {
+    where.push(`p.category_id = $${idx++}`);
+    values.push(filters.category_id);
+  }
+  if (filters.brand_id) {
+    where.push(`p.brand_id = $${idx++}`);
+    values.push(filters.brand_id);
+  }
+  if (filters.stock_status === "low_stock") {
+    where.push(`(p.amount > 0 AND p.amount <= p.qty_alert)`);
+  } else if (filters.stock_status === "out_of_stock") {
+    where.push(`p.amount = 0`);
+  } else if (filters.stock_status === "in_stock") {
+    where.push(`p.amount > p.qty_alert`);
+  }
+  if (filters.date_from) {
+    where.push(`p.created_at >= $${idx++}::date`);
+    values.push(filters.date_from);
+  }
+  if (filters.date_to) {
+    where.push(`p.created_at < ($${idx++}::date + interval '1 day')`);
+    values.push(filters.date_to);
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+async getProductInventoryReportStats(
+  salonId: string,
+  filters: {
+    search?: string; category_id?: string; brand_id?: string;
+    stock_status?: "in_stock" | "low_stock" | "out_of_stock";
+    date_from?: string; date_to?: string;
+  }
+): Promise<ProductInventoryReportStats> {
+  const { where, values } = this._buildProductInventoryWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      COUNT(*)::int AS total_products,
+      COALESCE(SUM(p.amount * COALESCE(NULLIF(p.supply_price, 0), p.retail_price, 0)), 0) AS total_stock_value,
+      COUNT(*) FILTER (WHERE p.amount > 0 AND p.amount <= p.qty_alert)::int AS low_stock_items,
+      COUNT(*) FILTER (WHERE p.amount = 0)::int AS out_of_stock_items
+    FROM products p
+    WHERE ${where}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  return {
+    total_products: Number(r.total_products ?? 0),
+    total_stock_value: Number(r.total_stock_value ?? 0),
+    low_stock_items: Number(r.low_stock_items ?? 0),
+    out_of_stock_items: Number(r.out_of_stock_items ?? 0),
+  };
+},
+
+async getProductInventoryReportRows(
+  salonId: string,
+  filters: {
+    search?: string; category_id?: string; brand_id?: string;
+    stock_status?: "in_stock" | "low_stock" | "out_of_stock";
+    date_from?: string; date_to?: string;
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: ProductInventoryReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildProductInventoryWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  // "Sales" reuses the exact same per-product units-sold + tax-inclusive
+  // revenue aggregate already computed for the standalone
+  // /product-inventory-sales endpoint, so the two stay consistent.
+  const query = `
+    SELECT
+      p.id AS product_id,
+      p.name AS product_name,
+      COALESCE(sc.name, '—') AS category_name,
+      COALESCE(pb.name, '—') AS brand_name,
+      COALESCE(p.barcode, '—') AS sku,
+      p.created_at AS date_added,
+      COALESCE(p.amount, 0) AS current_stock,
+      COALESCE(p.qty_alert, 0) AS reorder_level,
+      COALESCE(NULLIF(p.supply_price, 0), p.retail_price, 0) AS unit_cost,
+      COALESCE(p.amount, 0) * COALESCE(NULLIF(p.supply_price, 0), p.retail_price, 0) AS total_value,
+      COALESCE(sales_agg.quantity, 0) AS sales_qty,
+      COALESCE(sales_agg.revenue, 0) AS sales_revenue,
+      CASE
+        WHEN COALESCE(p.amount, 0) = 0 THEN 'out_of_stock'
+        WHEN p.amount <= p.qty_alert THEN 'low_stock'
+        ELSE 'in_stock'
+      END AS status,
+      COUNT(*) OVER() AS total_count
+    FROM products p
+    LEFT JOIN product_brands pb ON p.brand_id = pb.id
+    LEFT JOIN service_categories sc ON p.category_id = sc.id
+    LEFT JOIN (
+      SELECT
+        si.item_id AS product_id,
+        SUM(si.quantity) AS quantity,
+        SUM(
+          si.total_price + (
+            CASE WHEN COALESCE(s.subtotal, 0) > 0
+                 THEN COALESCE(s.tax_amount, 0) * (si.total_price / s.subtotal)
+                 ELSE 0
+            END
+          )
+        ) AS revenue
+      FROM sale_items si
+      JOIN sales s ON s.id = si.sale_id
+      WHERE s.salon_id = $1 AND s.status <> 'draft' AND si.item_type = 'product' AND si.item_id IS NOT NULL
+      GROUP BY si.item_id
+    ) sales_agg ON sales_agg.product_id = p.id
+    WHERE ${where}
+    ORDER BY p.created_at DESC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: ProductInventoryReportRow[] = rows.map((row: any) => ({
+    product_id: row.product_id,
+    product_name: row.product_name,
+    category_name: row.category_name,
+    brand_name: row.brand_name,
+    sku: row.sku,
+    date_added: row.date_added,
+    current_stock: Number(row.current_stock ?? 0),
+    reorder_level: Number(row.reorder_level ?? 0),
+    unit_cost: Number(row.unit_cost ?? 0),
+    total_value: Number(row.total_value ?? 0),
+    sales_qty: Number(row.sales_qty ?? 0),
+    sales_revenue: Number(row.sales_revenue ?? 0),
+    status: row.status,
   }));
   const effectiveLimit = limit ?? Math.max(total, 1);
   return {
