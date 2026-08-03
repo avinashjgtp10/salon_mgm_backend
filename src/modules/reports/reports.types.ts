@@ -1120,6 +1120,13 @@ export interface ClientRevenueReportFilters {
     start_date?: string;
     end_date?: string;
     search?: string;
+    staff_ids?: string[];
+    gender?: string;
+    membership_status?: string;
+    last_visit_from?: string;
+    last_visit_to?: string;
+    sort_by?: string;
+    sort_dir?: "asc" | "desc";
     page?: number;
     limit?: number;
     is_export?: boolean;
