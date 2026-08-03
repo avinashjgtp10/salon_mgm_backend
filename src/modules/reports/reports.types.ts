@@ -1165,6 +1165,7 @@ export interface StaffSalesReportFilters {
     start_date?: string;
     end_date?: string;
     staff_id?: string;
+    staff_ids?: string[];
     search?: string;
     page?: number;
     limit?: number;
@@ -1173,6 +1174,10 @@ export interface StaffSalesReportFilters {
 
 export interface StaffSalesReportRow {
     id: string;
+    // Resolved staff (see the sales_side/appt_side st.id join) — null on the
+    // rare row where no staff could be resolved at all. Powers the Staff
+    // Sales report's staff-name click-through to that staff's history.
+    staff_id: string | null;
     staff_name: string;
     // How many distinct staff members are attributed across this sale's line
     // items — a sale with mixed staff (e.g. one client's service by Staff A
@@ -1211,6 +1216,10 @@ export interface StaffSalesReportStats {
     total_paid: number;
     total_due: number;
     total_commission: number;
+    service_revenue: number;
+    product_revenue: number;
+    package_revenue: number;
+    membership_revenue: number;
 }
 
 export interface StaffSalesReportResponse {
