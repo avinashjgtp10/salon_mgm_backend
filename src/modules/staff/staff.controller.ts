@@ -527,7 +527,12 @@ export const staffCommissionsController = {
       const month     = req.query.month      ? String(req.query.month)      : undefined;
       const startDate = req.query.start_date ? String(req.query.start_date) : undefined;
       const endDate   = req.query.end_date   ? String(req.query.end_date)   : undefined;
-      const data = await staffCommissionsService.getEarnedBySalon(salonId, month, startDate, endDate);
+      const staffIds  = req.query.staff_ids
+        ? String(req.query.staff_ids).split(",").map(s => s.trim()).filter(Boolean)
+        : undefined;
+      const category  = req.query.category ? String(req.query.category) : undefined;
+      const status    = req.query.status   ? String(req.query.status)   : undefined;
+      const data = await staffCommissionsService.getEarnedBySalon(salonId, month, startDate, endDate, staffIds, category, status);
       return sendSuccess(res, 200, data, "Commission earned by staff fetched successfully");
     } catch (err) { return next(err); }
   },
@@ -552,7 +557,11 @@ export const staffCommissionsController = {
       const month     = req.query.month      ? String(req.query.month)      : undefined; // "YYYY-MM"
       const startDate = req.query.start_date ? String(req.query.start_date) : undefined;
       const endDate   = req.query.end_date   ? String(req.query.end_date)   : undefined;
-      const data = await staffCommissionsService.getSalonSummary(salonId, month, startDate, endDate);
+      const staffIds  = req.query.staff_ids
+        ? String(req.query.staff_ids).split(",").map(s => s.trim()).filter(Boolean)
+        : undefined;
+      const category  = req.query.category ? String(req.query.category) : undefined;
+      const data = await staffCommissionsService.getSalonSummary(salonId, month, startDate, endDate, staffIds, category);
       return sendSuccess(res, 200, data, "Commission summary fetched successfully");
     } catch (err) { return next(err); }
   },

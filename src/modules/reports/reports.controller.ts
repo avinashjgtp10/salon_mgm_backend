@@ -1262,6 +1262,15 @@ async getClientRevenueReport(
             start_date: asString(body.start_date),
             end_date: asString(body.end_date),
             search: asString(body.search),
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+            gender: asString(body.gender),
+            membership_status: asString(body.membership_status),
+            last_visit_from: asString(body.last_visit_from),
+            last_visit_to: asString(body.last_visit_to),
+            sort_by: asString(body.sort_by),
+            sort_dir: body.sort_dir === "asc" ? "asc" as const : body.sort_dir === "desc" ? "desc" as const : undefined,
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,

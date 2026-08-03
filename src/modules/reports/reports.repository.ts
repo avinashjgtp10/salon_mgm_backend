@@ -3365,7 +3365,10 @@ async getEwalletReportRows(
 // JOIN, which is the exact bug being fixed here.
 _buildClientRevenueWhere(
   salonId: string,
-  filters: { start_date?: string; end_date?: string; search?: string }
+  filters: {
+    start_date?: string; end_date?: string; search?: string;
+    staff_ids?: string[]; gender?: string; membership_status?: string;
+  }
 ): { where: string; saleJoin: string; values: any[]; nextIndex: number } {
   const values: any[] = [salonId];
   const where = ["c.salon_id = $1"];
@@ -3380,6 +3383,16 @@ _buildClientRevenueWhere(
     saleJoin.push(`s.created_at < ($${idx++}::date + interval '1 day')`);
     values.push(filters.end_date);
   }
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    // Matches if ANY line item's resolved staff (its own staff_id, falling
+    // back to the sale's) is one of the picked staff — same convention used
+    // by the staff-sales report's staff_ids filter.
+    saleJoin.push(`EXISTS (
+      SELECT 1 FROM sale_items si2
+      WHERE si2.sale_id = s.id AND COALESCE(si2.staff_id, s.staff_id) = ANY($${idx++}::uuid[])
+    )`);
+    values.push(filters.staff_ids);
+  }
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
@@ -3388,6 +3401,21 @@ _buildClientRevenueWhere(
     values.push(`%${filters.search.trim()}%`);
     idx++;
   }
+  if (filters.gender && filters.gender !== "all") {
+    where.push(`LOWER(c.gender) = $${idx++}`);
+    values.push(filters.gender.toLowerCase());
+  }
+  if (filters.membership_status === "member") {
+    where.push(`EXISTS (
+      SELECT 1 FROM client_memberships cm
+      WHERE cm.client_id = c.id AND cm.salon_id = c.salon_id AND cm.status = 'active'
+    )`);
+  } else if (filters.membership_status === "non_member") {
+    where.push(`NOT EXISTS (
+      SELECT 1 FROM client_memberships cm
+      WHERE cm.client_id = c.id AND cm.salon_id = c.salon_id AND cm.status = 'active'
+    )`);
+  }
 
   return { where: where.join(" AND "), saleJoin: saleJoin.join(" AND "), values, nextIndex: idx };
 },
@@ -3395,8 +3423,10 @@ _buildClientRevenueWhere(
 // Shared aggregation CTE — one row per registered client (LEFT JOIN sales,
 // so a client with zero completed sales in the filtered range still shows
 // up, with visits/total_spend/last_visit all zero/null rather than the
-// client vanishing from the report entirely).
-_CLIENT_REVENUE_AGG(where: string, saleJoin: string): string {
+// client vanishing from the report entirely). `having` applies the optional
+// "last visit" date-range filter, which must run per-client on the
+// aggregated MAX(created_at), so it can't live in the WHERE/saleJoin.
+_CLIENT_REVENUE_AGG(where: string, saleJoin: string, having: string): string {
   return `
     WITH revenue_agg AS (
       SELECT
@@ -3410,18 +3440,49 @@ _CLIENT_REVENUE_AGG(where: string, saleJoin: string): string {
       LEFT JOIN sales s ON ${saleJoin}
       WHERE ${where}
       GROUP BY c.id, c.full_name, c.phone_number, c.phone_country_code
+      ${having}
     )
   `;
 },
 
+// "Last visit" is a separate date range from the report's main start/end
+// date filter — it narrows to clients whose most recent completed sale
+// (already aggregated as MAX(created_at) above) falls in this window, so it
+// must be a HAVING clause against the aggregate, not a per-row WHERE.
+_buildClientRevenueHaving(
+  filters: { last_visit_from?: string; last_visit_to?: string },
+  startIdx: number
+): { having: string; values: any[]; nextIndex: number } {
+  const clauses: string[] = [];
+  const values: any[] = [];
+  let idx = startIdx;
+
+  if (filters.last_visit_from) {
+    clauses.push(`MAX(s.created_at) >= $${idx++}::date`);
+    values.push(filters.last_visit_from);
+  }
+  if (filters.last_visit_to) {
+    clauses.push(`MAX(s.created_at) < ($${idx++}::date + interval '1 day')`);
+    values.push(filters.last_visit_to);
+  }
+
+  return { having: clauses.length ? `HAVING ${clauses.join(" AND ")}` : "", values, nextIndex: idx };
+},
+
 async getClientRevenueReportStats(
   salonId: string,
-  filters: { start_date?: string; end_date?: string; search?: string }
+  filters: {
+    start_date?: string; end_date?: string; search?: string;
+    staff_ids?: string[]; gender?: string; membership_status?: string;
+    last_visit_from?: string; last_visit_to?: string;
+  }
 ): Promise<ClientRevenueReportStats> {
-  const { where, saleJoin, values } = this._buildClientRevenueWhere(salonId, filters);
+  const { where, saleJoin, values, nextIndex } = this._buildClientRevenueWhere(salonId, filters);
+  const { having, values: havingValues } = this._buildClientRevenueHaving(filters, nextIndex);
+  const allValues = [...values, ...havingValues];
 
   const query = `
-    ${this._CLIENT_REVENUE_AGG(where, saleJoin)}
+    ${this._CLIENT_REVENUE_AGG(where, saleJoin, having)}
     SELECT
       COUNT(*)::int AS total_clients,
       COALESCE(SUM(total_spend), 0) AS total_revenue,
@@ -3429,7 +3490,7 @@ async getClientRevenueReportStats(
     FROM revenue_agg
   `;
 
-  const { rows } = await safeQuery(() => pool.query(query, values));
+  const { rows } = await safeQuery(() => pool.query(query, allValues));
   const r = rows[0] ?? {};
   const total_clients = Number(r.total_clients ?? 0);
   const total_revenue = Number(r.total_revenue ?? 0);
@@ -3445,6 +3506,9 @@ async getClientRevenueReportRows(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; search?: string;
+    staff_ids?: string[]; gender?: string; membership_status?: string;
+    last_visit_from?: string; last_visit_to?: string;
+    sort_by?: string; sort_dir?: "asc" | "desc";
     page?: number; limit?: number; is_export?: boolean;
   }
 ): Promise<{
@@ -3452,7 +3516,8 @@ async getClientRevenueReportRows(
   pagination: { total: number; page: number; limit: number; total_pages: number };
 }> {
   const { where, saleJoin, values, nextIndex } = this._buildClientRevenueWhere(salonId, filters);
-  let idx = nextIndex;
+  const { having, values: havingValues, nextIndex: afterHavingIdx } = this._buildClientRevenueHaving(filters, nextIndex);
+  let idx = afterHavingIdx;
 
   const page = Math.max(1, Number(filters.page ?? 1));
   const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
@@ -3461,17 +3526,30 @@ async getClientRevenueReportRows(
   const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
   const limitValues = limit ? [limit, offset] : [];
 
+  const sortColumns: Record<string, string> = {
+    total_spend: "total_spend",
+    visits: "visits",
+    avg_ticket: "(CASE WHEN visits > 0 THEN total_spend::numeric / visits ELSE 0 END)",
+    last_visit: "last_visit",
+    client_name: "client_name",
+  };
+  const sortColumn = sortColumns[filters.sort_by ?? "last_visit"] ?? sortColumns.last_visit;
+  const sortDir = filters.sort_dir === "asc" ? "ASC" : "DESC";
+  const orderClause = filters.sort_by === "client_name"
+    ? `ORDER BY client_name ${sortDir}`
+    : `ORDER BY ${sortColumn} ${sortDir} NULLS LAST, client_name ASC`;
+
   const query = `
-    ${this._CLIENT_REVENUE_AGG(where, saleJoin)}
+    ${this._CLIENT_REVENUE_AGG(where, saleJoin, having)}
     SELECT
       client_id, client_name, contact, visits, total_spend, last_visit,
       COUNT(*) OVER() AS total_count
     FROM revenue_agg
-    ORDER BY total_spend DESC, client_name ASC
+    ${orderClause}
     ${limitClause}
   `;
 
-  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...havingValues, ...limitValues]));
   const total = rows.length ? Number(rows[0].total_count) : 0;
   const items: ClientRevenueReportRow[] = rows.map((row: any) => {
     const visits = Number(row.visits ?? 0);
