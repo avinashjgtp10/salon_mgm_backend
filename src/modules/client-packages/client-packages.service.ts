@@ -259,6 +259,14 @@ export const clientPackagesService = {
   ): Promise<void> {
     logger.info(`[client-packages/auto-create] salon=${salonId} client=${clientId} name="${packageName}" services=${services.length} price=${basePrice}`);
     try {
+      // Resolve the real method the client paid with off the linked sale —
+      // this flow has no payment method of its own at creation time (see
+      // the comment above), and "included_in_sale" as a stored value used to
+      // leak straight through to the Package Sale report/receipts instead of
+      // ever being resolved to cash/card/upi/etc.
+      const paymentMethod = saleId
+        ? (await clientPackagesRepository.getSalePaymentMethod(saleId, salonId)) ?? "included_in_sale"
+        : "included_in_sale";
       const created = await clientPackagesRepository.create(salonId, {
         clientId,
         packageName,
@@ -266,7 +274,7 @@ export const clientPackagesService = {
         basePrice,
         gstPercentage,
         discount,
-        paymentMethod: "included_in_sale",
+        paymentMethod,
         services,
         appointmentId,
         staffId,

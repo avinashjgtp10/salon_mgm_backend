@@ -1333,10 +1333,21 @@ export interface PackageSaleReportResponse {
 // touches the Appointment API.
 // ===============================
 
+// client_packages.status is only ever persisted as 'Active' or 'Completed'
+// (see client-packages.repository.ts::completeSession(), which already
+// auto-flips it to 'Completed' the moment every service's sessions are
+// used up) — "Expired" is derived here from expiry_date vs now(), same
+// convention as the Membership Sale report's status computation.
+export type PackageHistoryStatus = "ongoing" | "complete" | "expired";
+
 export interface PackageHistoryReportFilters {
     start_date?: string;
     end_date?: string;
     search?: string;
+    package_name?: string;
+    service_name?: string;
+    staff_ids?: string[];
+    status?: PackageHistoryStatus;
     page?: number;
     limit?: number;
     is_export?: boolean;
@@ -1349,15 +1360,21 @@ export interface PackageHistoryReportRow {
     package_name: string;
     service_name: string;
     session_no: number;
+    // This service line's own remaining sessions (total - completed) — a
+    // live snapshot of current state, not a value frozen at the time this
+    // particular session was logged.
+    remaining_sessions: number;
     staff: string;
-    status: string;
+    status: PackageHistoryStatus;
 }
 
 export interface PackageHistoryReportStats {
     total_sessions: number;
     completed_sessions: number;
-    unique_clients: number;
-    unique_packages: number;
+    remaining_sessions: number;
+    ongoing_packages: number;
+    completed_packages: number;
+    expired_packages: number;
 }
 
 export interface PackageHistoryReportPagination {
@@ -1367,10 +1384,16 @@ export interface PackageHistoryReportPagination {
     total_pages: number;
 }
 
+export interface PackageHistoryFiltersAvailable {
+    packages: string[];
+    services: string[];
+}
+
 export interface PackageHistoryReportResponse {
     rows: PackageHistoryReportRow[];
     pagination: PackageHistoryReportPagination;
     stats: PackageHistoryReportStats;
+    filters_available: PackageHistoryFiltersAvailable;
 }
 
 // ===============================
