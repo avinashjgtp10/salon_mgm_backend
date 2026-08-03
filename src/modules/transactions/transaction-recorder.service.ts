@@ -51,7 +51,7 @@ export async function recordTransaction(input: RecordTransactionInput): Promise<
     }
   }
 
-  const { method, reference } = normalizePaymentMethod(input.payment_label, input.split_details);
+  const { method, reference } = normalizePaymentMethod(input.payment_label, input.split_details, input.source_amounts);
 
   try {
     const sale = await salesRepository.create(

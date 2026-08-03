@@ -1085,7 +1085,9 @@ async getGstReport(
         const filters = {
             start_date: asString(body.start_date),
             end_date: asString(body.end_date),
-            staff_id: asString(body.staff_id),
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
             search: asString(body.search),
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
@@ -1296,6 +1298,9 @@ async getStaffSalesReport(
             start_date: asString(body.start_date),
             end_date: asString(body.end_date),
             staff_id: asString(body.staff_id),
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
             search: asString(body.search),
             page: body.page != null ? Number(body.page) : undefined,
             limit: body.limit != null ? Number(body.limit) : undefined,
@@ -1308,6 +1313,52 @@ async getStaffSalesReport(
             200,
             data,
             "Staff sales report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// STAFF PERFORMANCE REPORT (independent report API)
+// POST /api/report/staff-performance
+// ======================================================
+
+async getStaffPerformanceReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+            branch_id: asString(body.branch_id),
+            payment_mode: asString(body.payment_mode),
+            payment_status: asString(body.payment_status),
+            item_type: asString(body.item_type),
+            service_id: asString(body.service_id),
+            product_id: asString(body.product_id),
+            package_id: asString(body.package_id),
+            membership_id: asString(body.membership_id),
+            page: body.page != null ? Number(body.page) : undefined,
+            limit: body.limit != null ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getStaffPerformanceReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Staff performance report fetched successfully"
         );
     } catch (error) {
         next(error);

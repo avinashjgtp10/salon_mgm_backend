@@ -653,6 +653,7 @@ export const clientsController = {
                         s.tax_amount,
                         s.total_amount,
                         s.payment_method,
+                        s.payment_reference,
                         s.notes,
                         s.created_at,
                         s.appointment_id,
