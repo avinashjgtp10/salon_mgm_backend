@@ -60,6 +60,21 @@ export const productsRepository = {
         return rows[0] || null;
     },
 
+    // Bulk import needs to duplicate-check every row against every existing
+    // product (by barcode, and by name+brand+category) — doing that as two
+    // SELECTs per row means an N-row file fires ~2N sequential round-trips
+    // before it even starts creating anything, which is slow enough on a
+    // large file to trip an upstream proxy/gateway timeout well before the
+    // request actually finishes. Fetching just the columns duplicate-checks
+    // need, once, lets the import build its own in-memory lookup instead.
+    async listMinimalForImport(salonId: string): Promise<Array<{ id: string; barcode: string | null; name: string; brand_id: string | null; category_id: string | null }>> {
+        const { rows } = await pool.query(
+            `SELECT id, barcode, name, brand_id, category_id FROM products WHERE salon_id = $1`,
+            [salonId]
+        );
+        return rows;
+    },
+
     // `prefix` is the column-qualifier to use (e.g. "p." when querying the aliased
     // `products p` join used by listExport, "" for the unaliased table in `list`).
     _buildFilterConditions(filters: ProductListFilters, salonId: string, prefix = ""): { where: string; values: unknown[] } {
