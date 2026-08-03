@@ -1452,8 +1452,11 @@ async getStaffSalesReport(
     salonId: string,
     filters: StaffSalesReportFilters
 ): Promise<StaffSalesReportResponse> {
-    const rows = await reportsRepository.getStaffSalesReport(salonId, filters);
-    return { rows };
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getStaffSalesReportStats(salonId, filters),
+        reportsRepository.getStaffSalesReport(salonId, filters),
+    ]);
+    return { rows: rowsResult.items, pagination: rowsResult.pagination, stats };
 },
 
 // ======================================================

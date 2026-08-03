@@ -25,6 +25,7 @@ import {
     ClientRevenueReportRow,
     ClientRevenueReportStats,
     StaffSalesReportRow,
+    StaffSalesReportStats,
     StaffItemSalesReportRow,
     StaffItemSalesReportStats,
     PackageSaleReportRow,
@@ -3409,70 +3410,201 @@ async getClientRevenueReportRows(
 // staff member. Never calls the Appointment API/service.
 // ======================================================
 
+// Aggregate totals over the WHOLE filtered set (not just the current page) —
+// same sales_side/appt_side shape as getStaffSalesReport below, minus the
+// per-row fields not needed for a sum.
+async getStaffSalesReportStats(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; staff_id?: string; search?: string }
+): Promise<StaffSalesReportStats> {
+  const { where, values, nextIndex } = this._buildSalesSummaryWhere(salonId, filters);
+  const unbilled = this._UNBILLED_APPOINTMENT_ROWS_CTE(filters, nextIndex);
+
+  const query = `
+    WITH sales_side AS (
+      SELECT
+        s.total_amount::numeric AS price,
+        CASE
+          WHEN s.appointment_id IS NOT NULL THEN pay.paid_from_payments
+          WHEN s.status = 'completed' THEN s.total_amount::numeric
+          ELSE 0
+        END AS paid_amount,
+        COALESCE(pay.latest_due, 0) AS due_amount,
+        COALESCE(comm.commission_amount, 0) AS commission_amount
+      FROM sales s
+      LEFT JOIN clients c ON s.client_id = c.id
+      ${this._PAYMENT_LATERAL}
+      LEFT JOIN LATERAL (
+        SELECT SUM(ce.commission_amount) AS commission_amount
+        FROM commission_earned ce
+        WHERE ce.sale_id = s.id
+          AND ce.staff_id = COALESCE(
+            s.staff_id,
+            (SELECT si.staff_id FROM sale_items si WHERE si.sale_id = s.id AND si.staff_id IS NOT NULL LIMIT 1)
+          )
+      ) comm ON TRUE
+      WHERE ${where}
+    ),
+    appt_side AS (
+      SELECT u.price, u.paid_amount, u.due_amount, 0::numeric AS commission_amount
+      FROM (${unbilled.sql}) u
+    ),
+    unified AS (
+      SELECT * FROM sales_side
+      UNION ALL
+      SELECT * FROM appt_side
+    )
+    SELECT
+      COUNT(*)::int AS total_bill,
+      COALESCE(SUM(price), 0) AS total_sale,
+      COALESCE(SUM(paid_amount), 0) AS total_paid,
+      COALESCE(SUM(due_amount), 0) AS total_due,
+      COALESCE(SUM(commission_amount), 0) AS total_commission
+    FROM unified
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...unbilled.values]));
+  const r = rows[0] ?? {};
+  return {
+    total_bill: Number(r.total_bill ?? 0),
+    total_sale: Number(r.total_sale ?? 0),
+    total_paid: Number(r.total_paid ?? 0),
+    total_due: Number(r.total_due ?? 0),
+    total_commission: Number(r.total_commission ?? 0),
+  };
+},
+
+// One row per transaction (sale), scoped to whichever staff member the sale
+// (or its line items) is attributed to. Reuses the same sales_side/appt_side
+// UNION ALL shape as getSalesSummaryReportRows (same helpers: _buildSalesSummaryWhere,
+// _UNBILLED_APPOINTMENT_ROWS_CTE, _PAYMENT_LATERAL, _APPOINTMENT_STATUS_JOIN,
+// _STATUS_EXPR) so filters/behavior stay consistent with Sales Summary, plus
+// a commission_amount column joined from commission_earned (keyed by
+// sale_id + staff_id — unbilled appointments have no sale yet, so their
+// commission is always 0, matching the fact that commission_earned rows are
+// only ever written once a sale exists).
 async getStaffSalesReport(
   salonId: string,
   filters: {
-    start_date?: string; end_date?: string;
-    period?: "daily" | "weekly" | "monthly" | "yearly";
-    staff_id?: string;
+    start_date?: string; end_date?: string; staff_id?: string;
+    search?: string; page?: number; limit?: number; is_export?: boolean;
   }
-): Promise<StaffSalesReportRow[]> {
-  const values: any[] = [salonId];
-  const where = ["s.salon_id = $1", "s.status <> 'draft'", "si.item_type IN ('service', 'product')"];
-  let idx = 2;
+): Promise<{ items: StaffSalesReportRow[]; pagination: { total: number; page: number; limit: number; total_pages: number } }> {
+  const { where, values, nextIndex } = this._buildSalesSummaryWhere(salonId, filters);
+  const unbilled = this._UNBILLED_APPOINTMENT_ROWS_CTE(filters, nextIndex);
+  let idx = unbilled.nextIndex;
 
-  if (filters.start_date) {
-    where.push(`s.created_at >= $${idx++}::date`);
-    values.push(filters.start_date);
-  }
-  if (filters.end_date) {
-    where.push(`s.created_at < ($${idx++}::date + interval '1 day')`);
-    values.push(filters.end_date);
-  }
-  if (filters.staff_id) {
-    where.push(`COALESCE(si.staff_id, s.staff_id) = $${idx++}`);
-    values.push(filters.staff_id);
-  }
-
-  const period = filters.period ?? "daily";
-  const truncUnit = period === "yearly" ? "year" : period === "monthly" ? "month" : period === "weekly" ? "week" : "day";
-  const labelExpr =
-    period === "yearly"  ? `TO_CHAR(bucket, 'YYYY')` :
-    period === "monthly" ? `TO_CHAR(bucket, 'Mon YY')` :
-    period === "weekly"  ? `'W' || TO_CHAR(bucket, 'DD Mon')` :
-                            `TO_CHAR(bucket, 'DD Mon')`;
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
 
   const query = `
-    SELECT
-      ${labelExpr} AS label,
-      TO_CHAR(bucket, 'YYYY-MM-DD') AS bucket_date,
-      COALESCE(SUM(total_price) FILTER (WHERE item_type = 'service'), 0) AS service_revenue,
-      COALESCE(SUM(total_price) FILTER (WHERE item_type = 'product'), 0) AS product_revenue
-    FROM (
+    WITH sales_side AS (
       SELECT
-        date_trunc('${truncUnit}', s.created_at) AS bucket,
-        si.item_type,
-        si.total_price
-      FROM sale_items si
-      JOIN sales s ON s.id = si.sale_id
-      WHERE ${where.join(" AND ")}
-    ) bucketed
-    GROUP BY bucket
-    ORDER BY bucket ASC
+        s.id, s.created_at,
+        ${this._STATUS_EXPR} AS status,
+        s.payment_method,
+        s.total_amount AS price,
+        c.full_name AS client_name, c.phone_number AS client_phone,
+        NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
+        COALESCE(items.item_description, '—') AS item_description,
+        COALESCE(items.item_types, '—') AS item_types,
+        CASE
+          WHEN s.appointment_id IS NOT NULL THEN pay.paid_from_payments
+          WHEN s.status = 'completed' THEN s.total_amount::numeric
+          ELSE 0
+        END AS paid_amount,
+        COALESCE(pay.latest_due, 0) AS due_amount,
+        COALESCE(comm.commission_amount, 0) AS commission_amount,
+        COALESCE(NULLIF(items.staff_count, 0), 1) AS staff_count,
+        FALSE AS is_unbilled
+      FROM sales s
+      LEFT JOIN clients c ON s.client_id = c.id
+      LEFT JOIN staff st ON st.id = COALESCE(
+        s.staff_id,
+        (SELECT si.staff_id FROM sale_items si WHERE si.sale_id = s.id AND si.staff_id IS NOT NULL LIMIT 1)
+      )
+      ${this._PAYMENT_LATERAL}
+      ${this._APPOINTMENT_STATUS_JOIN}
+      LEFT JOIN LATERAL (
+        SELECT
+          STRING_AGG(DISTINCT si.name, ', ') AS item_description,
+          STRING_AGG(DISTINCT si.item_type, ', ') AS item_types,
+          -- Distinct staff attributed across this sale's line items (falling
+          -- back to the sale's own staff_id per item, same convention as the
+          -- staff_name join above) — >1 means this sale involved multiple
+          -- staff, which staff_name alone (just the first one found) hides.
+          COUNT(DISTINCT COALESCE(si.staff_id, s.staff_id)) AS staff_count
+        FROM sale_items si
+        WHERE si.sale_id = s.id
+      ) items ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT SUM(ce.commission_amount) AS commission_amount
+        FROM commission_earned ce
+        WHERE ce.sale_id = s.id
+          AND ce.staff_id = COALESCE(
+            s.staff_id,
+            (SELECT si.staff_id FROM sale_items si WHERE si.sale_id = s.id AND si.staff_id IS NOT NULL LIMIT 1)
+          )
+      ) comm ON TRUE
+      WHERE ${where}
+    ),
+    appt_side AS (
+      SELECT
+        u.id, u.created_at, u.status, u.payment_method, u.price,
+        u.client_name, u.client_phone, u.staff_name,
+        u.item_description, u.item_types,
+        u.paid_amount, u.due_amount,
+        0::numeric AS commission_amount,
+        -- Unbilled appointments carry one staff_id for the whole appointment
+        -- (no per-item assignment yet) — never a multi-staff sale.
+        1::bigint AS staff_count,
+        TRUE AS is_unbilled
+      FROM (${unbilled.sql}) u
+    ),
+    unified AS (
+      SELECT * FROM sales_side
+      UNION ALL
+      SELECT * FROM appt_side
+    )
+    SELECT *, COUNT(*) OVER() AS total_count
+    FROM unified
+    ORDER BY created_at DESC
+    ${limitClause}
   `;
 
-  const { rows } = await safeQuery(() => pool.query(query, values));
-  return rows.map((row: any) => {
-    const service_revenue = Math.round(Number(row.service_revenue ?? 0));
-    const product_revenue = Math.round(Number(row.product_revenue ?? 0));
-    return {
-      label: row.label,
-      bucket_date: row.bucket_date,
-      service_revenue,
-      product_revenue,
-      total: service_revenue + product_revenue,
-    };
-  });
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...unbilled.values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: StaffSalesReportRow[] = rows.map((row: any) => ({
+    id: row.id,
+    staff_name: row.staff_name ?? "—",
+    staff_count: Number(row.staff_count ?? 1),
+    is_unbilled: Boolean(row.is_unbilled),
+    client_name: row.client_name ?? "Walk-in",
+    client_phone: row.client_phone ?? "—",
+    item_types: row.item_types ?? "—",
+    item_description: row.item_description ?? "—",
+    price: Number(row.price ?? 0),
+    paid_amount: Number(row.paid_amount ?? 0),
+    due_amount: Number(row.due_amount ?? 0),
+    commission_amount: Number(row.commission_amount ?? 0),
+    payment_method: row.payment_method,
+    status: row.status,
+    created_at: row.created_at,
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
 },
 
 // ======================================================

@@ -1284,13 +1284,13 @@ async getStaffSalesReport(
         const salonId = await getSalonId(req);
         const body = req.body ?? {};
 
-        const period = asString(body.period);
         const filters = {
             start_date: asString(body.start_date),
             end_date: asString(body.end_date),
-            period: (period === "weekly" || period === "monthly" || period === "yearly" ? period : "daily") as
-                "daily" | "weekly" | "monthly" | "yearly",
             staff_id: asString(body.staff_id),
+            search: asString(body.search),
+            page: body.page != null ? Number(body.page) : undefined,
+            limit: body.limit != null ? Number(body.limit) : undefined,
         };
 
         const data = await reportsService.getStaffSalesReport(salonId, filters);
