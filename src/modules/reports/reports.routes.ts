@@ -146,6 +146,17 @@ router.post(
 );
 
 // ======================================================
+// STAFF PERFORMANCE REPORT (independent report API)
+// Reads sales/sale_items directly — never calls the Appointment API/service.
+// ======================================================
+
+router.post(
+    "/staff-performance",
+    ...guard,
+    reportsController.getStaffPerformanceReport
+);
+
+// ======================================================
 // STAFF ITEM SALES REPORT (independent report API)
 // Reads sale_items directly — never calls the Appointment API/service.
 // ======================================================

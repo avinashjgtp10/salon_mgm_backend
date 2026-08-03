@@ -602,6 +602,7 @@ export interface SalesSummaryReportRow {
     reward_points_value: number;
     referral_credit_used: number;
     payment_method: string | null;
+    payment_reference: string | null;
     status: string;
     created_at: string;
     staff_name: string | null;
@@ -719,6 +720,7 @@ export interface DailySheetReportRow {
     staff: string | null;
     amount: number;
     payment_method: string | null;
+    payment_reference: string | null;
     status: string;
 }
 
@@ -1226,6 +1228,95 @@ export interface StaffSalesReportResponse {
     rows: StaffSalesReportRow[];
     pagination: StaffSalesReportPagination;
     stats: StaffSalesReportStats;
+}
+
+// ===============================
+// Staff Performance Report (independent report API —
+// POST /api/report/staff-performance)
+// One row per staff member — aggregates sale_items (grouped by the item's
+// resolved staff) for per-type counts/revenue, and sales (grouped by the
+// sale's own resolved staff) for collected/due, so a sale split across
+// multiple staff never double-counts money collected. Must never call the
+// Appointment API/service.
+// ===============================
+
+export interface StaffPerformanceReportFilters {
+    start_date?: string;
+    end_date?: string;
+    staff_ids?: string[];
+    branch_id?: string;
+    payment_mode?: string;
+    // Maps onto sales.status: 'completed' | 'partial' | 'cancelled' | 'refunded'.
+    payment_status?: string;
+    item_type?: string;
+    service_id?: string;
+    product_id?: string;
+    package_id?: string;
+    membership_id?: string;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface StaffPerformanceReportRow {
+    staff_id: string;
+    staff_name: string;
+    staff_avatar: string | null;
+    contact: string;
+    invoice_count: number;
+    service_count: number;
+    service_revenue: number;
+    product_count: number;
+    product_revenue: number;
+    package_count: number;
+    package_revenue: number;
+    membership_count: number;
+    membership_revenue: number;
+    total_revenue: number;
+    avg_bill: number;
+    commission: number;
+    collected: number;
+    due: number;
+}
+
+export interface StaffPerformanceReportStats {
+    total_staff: number;
+    total_revenue: number;
+    service_revenue: number;
+    product_revenue: number;
+    package_revenue: number;
+    membership_revenue: number;
+    total_commission: number;
+    avg_revenue_per_staff: number;
+}
+
+export interface StaffPerformanceFilterOption {
+    id: string;
+    label: string;
+}
+
+export interface StaffPerformanceFiltersAvailable {
+    staff: StaffPerformanceFilterOption[];
+    branches: StaffPerformanceFilterOption[];
+    payment_modes: string[];
+    services: StaffPerformanceFilterOption[];
+    products: StaffPerformanceFilterOption[];
+    packages: StaffPerformanceFilterOption[];
+    memberships: StaffPerformanceFilterOption[];
+}
+
+export interface StaffPerformanceReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface StaffPerformanceReportResponse {
+    rows: StaffPerformanceReportRow[];
+    pagination: StaffPerformanceReportPagination;
+    stats: StaffPerformanceReportStats;
+    filters_available: StaffPerformanceFiltersAvailable;
 }
 
 // ===============================

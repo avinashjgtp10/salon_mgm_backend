@@ -84,6 +84,12 @@ export type CreatePaymentBody = {
   apply_loyalty_discount?: boolean;
   // Server-computed only — never trust a value sent by the frontend.
   membership_discount_used?: number;
+  // Server-computed only — sum of appt.services[].price×quantity for every
+  // row flagged is_package_service (an already-purchased Package's included
+  // session covering this row), used to label sales.payment_method
+  // 'package'/'split' correctly instead of the frontend's own (often wrong)
+  // payment_method label. See payments.service.ts / payment-method.util.ts.
+  package_covered_amount?: number;
   // Server-computed only — never trust a value sent by the frontend for this
   // (see payments.service.ts's Refer & Earn block).
   referral_discount_applied?: number;

@@ -31,6 +31,15 @@ export interface RecordTransactionInput {
   payment_label: string;
   /** Method -> amount, when the payment was split across more than one method. */
   split_details?: Record<string, number>;
+  /**
+   * ₹ of this transaction actually offset by an already-purchased Package's
+   * sessions / a Membership's wallet+discount benefit — computed by the
+   * caller from real catalog/ledger amounts, never from the frontend's own
+   * payment_label. Folded into payment_method/payment_reference by
+   * normalizePaymentMethod() so reports show "Package"/"Membership"/
+   * "Package + Cash" instead of silently mislabeling these as wallet/cash.
+   */
+  source_amounts?: { package?: number; membership?: number };
   discount_amount?: number;
   /** Must be pre-computed by the caller — tax rules differ enough by origin that this function does not recompute it. */
   tax_amount?: number;
