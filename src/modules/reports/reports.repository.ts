@@ -3026,28 +3026,73 @@ async getProductMarginReportRows(
 
 _buildRewardPointsWhere(
   salonId: string,
-  filters: { search?: string }
-): { where: string; values: any[]; nextIndex: number } {
+  filters: {
+    search?: string; start_date?: string; end_date?: string; status?: string;
+    points_available_min?: number; points_available_max?: number;
+    points_redeemed_min?: number; points_redeemed_max?: number;
+  }
+): { clientWhere: string; ledgerWhere: string; postAggWhere: string; values: any[]; nextIndex: number } {
   const values: any[] = [salonId];
-  const where = ["c.salon_id = $1"];
   let idx = 2;
+  const clientWhere = ["c.salon_id = $1"];
+  const ledgerWhere: string[] = [];
+  const postAggWhere: string[] = [];
 
   if (filters.search?.trim()) {
-    where.push(`(
+    clientWhere.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
     )`);
     values.push(`%${filters.search.trim()}%`);
     idx++;
   }
+  if (filters.start_date) {
+    ledgerWhere.push(`rl.created_at >= $${idx++}::date`);
+    values.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    ledgerWhere.push(`rl.created_at < ($${idx++}::date + interval '1 day')`);
+    values.push(filters.end_date);
+  }
+  if (filters.status === "active") {
+    postAggWhere.push(`points_available > 0`);
+  } else if (filters.status === "inactive") {
+    postAggWhere.push(`points_available = 0`);
+  }
+  if (filters.points_available_min != null) {
+    postAggWhere.push(`points_available >= $${idx++}`);
+    values.push(filters.points_available_min);
+  }
+  if (filters.points_available_max != null) {
+    postAggWhere.push(`points_available <= $${idx++}`);
+    values.push(filters.points_available_max);
+  }
+  if (filters.points_redeemed_min != null) {
+    postAggWhere.push(`points_redeemed >= $${idx++}`);
+    values.push(filters.points_redeemed_min);
+  }
+  if (filters.points_redeemed_max != null) {
+    postAggWhere.push(`points_redeemed <= $${idx++}`);
+    values.push(filters.points_redeemed_max);
+  }
 
-  return { where: where.join(" AND "), values, nextIndex: idx };
+  return {
+    clientWhere: clientWhere.join(" AND "),
+    ledgerWhere: ledgerWhere.length ? `WHERE ${ledgerWhere.join(" AND ")}` : "",
+    postAggWhere: postAggWhere.length ? `WHERE ${postAggWhere.join(" AND ")}` : "",
+    values,
+    nextIndex: idx,
+  };
 },
 
-// Shared aggregation CTE — only clients that have ever had a reward-points
-// ledger entry are included (matches the old report's scope: clients with
-// zero reward-points history never show up in a "reward points" report).
-_REWARD_POINTS_AGG(where: string): string {
+// Shared aggregation CTE — only clients with a reward-points ledger entry
+// IN THE FILTERED DATE RANGE are included (matches the old report's "only
+// clients with reward-points history" scope, now date-scoped the same way
+// every other date-filtered report in this app works: earned/redeemed/
+// last-activity are period aggregates). points_available is deliberately
+// NOT date-scoped — it's the live current balance, a snapshot rather than
+// something that accrues within a window.
+_REWARD_POINTS_AGG(clientWhere: string, ledgerWhere: string, postAggWhere: string): string {
   return `
     WITH ledger_agg AS (
       SELECT
@@ -3056,6 +3101,7 @@ _REWARD_POINTS_AGG(where: string): string {
         COALESCE(SUM(-rl.points) FILTER (WHERE rl.type = 'redeem'), 0) AS points_redeemed,
         MAX(rl.created_at) AS last_activity_at
       FROM reward_points_ledger rl
+      ${ledgerWhere}
       GROUP BY rl.client_id
     ),
     reward_agg AS (
@@ -3069,24 +3115,33 @@ _REWARD_POINTS_AGG(where: string): string {
         la.last_activity_at
       FROM clients c
       JOIN ledger_agg la ON la.client_id = c.id
-      WHERE ${where}
+      WHERE ${clientWhere}
+    ),
+    filtered AS (
+      SELECT * FROM reward_agg
+      ${postAggWhere}
     )
   `;
 },
 
 async getRewardPointsReportStats(
   salonId: string,
-  filters: { search?: string }
+  filters: {
+    search?: string; start_date?: string; end_date?: string; status?: string;
+    points_available_min?: number; points_available_max?: number;
+    points_redeemed_min?: number; points_redeemed_max?: number;
+  }
 ): Promise<RewardPointsReportStats> {
-  const { where, values } = this._buildRewardPointsWhere(salonId, filters);
+  const { clientWhere, ledgerWhere, postAggWhere, values } = this._buildRewardPointsWhere(salonId, filters);
 
   const query = `
-    ${this._REWARD_POINTS_AGG(where)}
+    ${this._REWARD_POINTS_AGG(clientWhere, ledgerWhere, postAggWhere)}
     SELECT
       COALESCE(SUM(points_available), 0) AS points_available,
       COALESCE(SUM(points_earned), 0) AS total_points_earned,
-      COALESCE(SUM(points_redeemed), 0) AS total_points_redeemed
-    FROM reward_agg
+      COALESCE(SUM(points_redeemed), 0) AS total_points_redeemed,
+      COUNT(*)::int AS active_reward_clients
+    FROM filtered
   `;
 
   const { rows } = await safeQuery(() => pool.query(query, values));
@@ -3095,17 +3150,23 @@ async getRewardPointsReportStats(
     points_available: Number(r.points_available ?? 0),
     total_points_earned: Number(r.total_points_earned ?? 0),
     total_points_redeemed: Number(r.total_points_redeemed ?? 0),
+    active_reward_clients: Number(r.active_reward_clients ?? 0),
   };
 },
 
 async getRewardPointsReportRows(
   salonId: string,
-  filters: { search?: string; page?: number; limit?: number; is_export?: boolean }
+  filters: {
+    search?: string; start_date?: string; end_date?: string; status?: string;
+    points_available_min?: number; points_available_max?: number;
+    points_redeemed_min?: number; points_redeemed_max?: number;
+    page?: number; limit?: number; is_export?: boolean;
+  }
 ): Promise<{
   items: RewardPointsReportRow[];
   pagination: { total: number; page: number; limit: number; total_pages: number };
 }> {
-  const { where, values, nextIndex } = this._buildRewardPointsWhere(salonId, filters);
+  const { clientWhere, ledgerWhere, postAggWhere, values, nextIndex } = this._buildRewardPointsWhere(salonId, filters);
   let idx = nextIndex;
 
   const page = Math.max(1, Number(filters.page ?? 1));
@@ -3116,12 +3177,12 @@ async getRewardPointsReportRows(
   const limitValues = limit ? [limit, offset] : [];
 
   const query = `
-    ${this._REWARD_POINTS_AGG(where)}
+    ${this._REWARD_POINTS_AGG(clientWhere, ledgerWhere, postAggWhere)}
     SELECT
       client_id, client_name, mobile, points_available, points_earned,
       points_redeemed, last_activity_at,
       COUNT(*) OVER() AS total_count
-    FROM reward_agg
+    FROM filtered
     ORDER BY points_available DESC
     ${limitClause}
   `;
