@@ -931,6 +931,12 @@ export interface GstReportRow {
     date: string;
     invoice_no: string;
     client_name: string | null;
+    // Taxable-base breakdown by item type, summed from sale_items.taxable_amount
+    // — lets a user see how much of this invoice's GST base came from services
+    // vs products (packages/memberships/gift cards aren't broken out, they
+    // still count toward taxable_amount below, just not either of these two).
+    service_amount: number;
+    product_amount: number;
     taxable_amount: number;
     tax_amount: number;
     total: number;

@@ -2849,12 +2849,21 @@ async getGstReportRows(
       TO_CHAR(s.created_at, 'YYYY-MM-DD') AS date,
       s.invoice_number AS invoice_no,
       c.full_name AS client_name,
+      COALESCE(items.service_amount, 0) AS service_amount,
+      COALESCE(items.product_amount, 0) AS product_amount,
       GREATEST(s.subtotal::numeric - s.discount_amount::numeric, 0) AS taxable_amount,
       s.tax_amount::numeric AS tax_amount,
       s.total_amount::numeric AS total,
       COUNT(*) OVER() AS total_count
     FROM sales s
     LEFT JOIN clients c ON s.client_id = c.id
+    LEFT JOIN LATERAL (
+      SELECT
+        SUM(si.taxable_amount) FILTER (WHERE si.item_type = 'service') AS service_amount,
+        SUM(si.taxable_amount) FILTER (WHERE si.item_type = 'product') AS product_amount
+      FROM sale_items si
+      WHERE si.sale_id = s.id
+    ) items ON TRUE
     WHERE ${where}
     ORDER BY s.created_at DESC
     ${limitClause}
@@ -2867,6 +2876,8 @@ async getGstReportRows(
     date: row.date,
     invoice_no: row.invoice_no,
     client_name: row.client_name,
+    service_amount: Number(row.service_amount ?? 0),
+    product_amount: Number(row.product_amount ?? 0),
     taxable_amount: Number(row.taxable_amount ?? 0),
     tax_amount: Number(row.tax_amount ?? 0),
     total: Number(row.total ?? 0),
