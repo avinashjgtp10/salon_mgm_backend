@@ -2768,7 +2768,7 @@ async getServiceSaleFiltersAvailable(salonId: string): Promise<{
 
 _buildGstWhere(
   salonId: string,
-  filters: { start_date?: string; end_date?: string; staff_id?: string; search?: string }
+  filters: { start_date?: string; end_date?: string; staff_ids?: string[]; search?: string }
 ): { where: string; values: any[]; nextIndex: number } {
   const values: any[] = [salonId];
   const where = ["s.salon_id = $1", "s.status <> 'draft'", "s.tax_amount::numeric > 0"];
@@ -2782,9 +2782,9 @@ _buildGstWhere(
     where.push(`s.created_at < ($${idx++}::date + interval '1 day')`);
     values.push(filters.end_date);
   }
-  if (filters.staff_id) {
-    where.push(`s.staff_id = $${idx++}`);
-    values.push(filters.staff_id);
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    where.push(`s.staff_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.staff_ids);
   }
   if (filters.search?.trim()) {
     where.push(`(
@@ -2800,7 +2800,7 @@ _buildGstWhere(
 
 async getGstReportStats(
   salonId: string,
-  filters: { start_date?: string; end_date?: string; staff_id?: string; search?: string }
+  filters: { start_date?: string; end_date?: string; staff_ids?: string[]; search?: string }
 ): Promise<GstReportStats> {
   const { where, values } = this._buildGstWhere(salonId, filters);
 
@@ -2826,7 +2826,7 @@ async getGstReportStats(
 async getGstReportRows(
   salonId: string,
   filters: {
-    start_date?: string; end_date?: string; staff_id?: string; search?: string;
+    start_date?: string; end_date?: string; staff_ids?: string[]; search?: string;
     page?: number; limit?: number; is_export?: boolean;
   }
 ): Promise<{
@@ -2851,6 +2851,8 @@ async getGstReportRows(
       c.full_name AS client_name,
       COALESCE(items.service_amount, 0) AS service_amount,
       COALESCE(items.product_amount, 0) AS product_amount,
+      COALESCE(items.package_amount, 0) AS package_amount,
+      COALESCE(items.membership_amount, 0) AS membership_amount,
       GREATEST(s.subtotal::numeric - s.discount_amount::numeric, 0) AS taxable_amount,
       s.tax_amount::numeric AS tax_amount,
       s.total_amount::numeric AS total,
@@ -2860,7 +2862,9 @@ async getGstReportRows(
     LEFT JOIN LATERAL (
       SELECT
         SUM(si.taxable_amount) FILTER (WHERE si.item_type = 'service') AS service_amount,
-        SUM(si.taxable_amount) FILTER (WHERE si.item_type = 'product') AS product_amount
+        SUM(si.taxable_amount) FILTER (WHERE si.item_type = 'product') AS product_amount,
+        SUM(si.taxable_amount) FILTER (WHERE si.item_type = 'package') AS package_amount,
+        SUM(si.taxable_amount) FILTER (WHERE si.item_type = 'membership') AS membership_amount
       FROM sale_items si
       WHERE si.sale_id = s.id
     ) items ON TRUE
@@ -2878,6 +2882,8 @@ async getGstReportRows(
     client_name: row.client_name,
     service_amount: Number(row.service_amount ?? 0),
     product_amount: Number(row.product_amount ?? 0),
+    package_amount: Number(row.package_amount ?? 0),
+    membership_amount: Number(row.membership_amount ?? 0),
     taxable_amount: Number(row.taxable_amount ?? 0),
     tax_amount: Number(row.tax_amount ?? 0),
     total: Number(row.total ?? 0),
@@ -4183,7 +4189,7 @@ async getPackageHistoryReportStats(
 
   const query = `
     WITH matched_history AS (
-      SELECT h.status AS h_status, cp.id AS pkg_id
+      SELECT cp.id AS pkg_id
       FROM client_package_session_history h
       JOIN client_package_services cps ON cps.id = h.client_package_service_id
       JOIN client_packages cp ON cp.id = h.client_package_id
@@ -4194,6 +4200,12 @@ async getPackageHistoryReportStats(
       FROM client_packages cp
       WHERE cp.id IN (SELECT pkg_id FROM matched_history)
     ),
+    -- Capacity-based, not an event count: every client_package_session_history
+    -- row is always status='Completed' (nothing else is ever written there),
+    -- so counting history rows made "Total Sessions" identically equal
+    -- "Completed Sessions" — always, for every filter. These are summed from
+    -- the service-level session allocation instead, so Total = Completed +
+    -- Remaining actually reconciles like the cards imply it should.
     pkg_computed AS (
       SELECT
         dp.id,
@@ -4203,14 +4215,22 @@ async getPackageHistoryReportStats(
           ELSE 'ongoing'
         END AS status,
         COALESCE((
+          SELECT SUM(cps.total_sessions)
+          FROM client_package_services cps WHERE cps.client_package_id = dp.id
+        ), 0) AS total_sessions,
+        COALESCE((
+          SELECT SUM(cps.completed_sessions)
+          FROM client_package_services cps WHERE cps.client_package_id = dp.id
+        ), 0) AS completed_sessions,
+        COALESCE((
           SELECT SUM(cps.total_sessions - cps.completed_sessions)
           FROM client_package_services cps WHERE cps.client_package_id = dp.id
         ), 0) AS remaining_sessions
       FROM distinct_pkgs dp
     )
     SELECT
-      (SELECT COUNT(*) FROM matched_history)::int AS total_sessions,
-      (SELECT COUNT(*) FROM matched_history WHERE LOWER(h_status) = 'completed')::int AS completed_sessions,
+      COALESCE((SELECT SUM(total_sessions) FROM pkg_computed), 0)::int AS total_sessions,
+      COALESCE((SELECT SUM(completed_sessions) FROM pkg_computed), 0)::int AS completed_sessions,
       COALESCE((SELECT SUM(remaining_sessions) FROM pkg_computed), 0)::int AS remaining_sessions,
       COALESCE((SELECT COUNT(*) FROM pkg_computed WHERE status = 'ongoing'), 0)::int AS ongoing_packages,
       COALESCE((SELECT COUNT(*) FROM pkg_computed WHERE status = 'complete'), 0)::int AS completed_packages,

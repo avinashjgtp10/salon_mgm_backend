@@ -1085,7 +1085,9 @@ async getGstReport(
         const filters = {
             start_date: asString(body.start_date),
             end_date: asString(body.end_date),
-            staff_id: asString(body.staff_id),
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
             search: asString(body.search),
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,

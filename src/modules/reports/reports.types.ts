@@ -919,7 +919,7 @@ export interface ServiceSaleReportResponse {
 export interface GstReportFilters {
     start_date?: string;
     end_date?: string;
-    staff_id?: string;
+    staff_ids?: string[];
     search?: string;
     page?: number;
     limit?: number;
@@ -932,11 +932,12 @@ export interface GstReportRow {
     invoice_no: string;
     client_name: string | null;
     // Taxable-base breakdown by item type, summed from sale_items.taxable_amount
-    // — lets a user see how much of this invoice's GST base came from services
-    // vs products (packages/memberships/gift cards aren't broken out, they
-    // still count toward taxable_amount below, just not either of these two).
+    // — service+product+package+membership always accounts for the full
+    // taxable_amount below (those are the only item types that exist).
     service_amount: number;
     product_amount: number;
+    package_amount: number;
+    membership_amount: number;
     taxable_amount: number;
     tax_amount: number;
     total: number;
