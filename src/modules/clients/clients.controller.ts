@@ -693,6 +693,8 @@ export const clientsController = {
                         cp.expiry_date,
                         cp.created_date,
                         cp.staff_id,
+                        cp.sale_id,
+                        cp.appointment_id,
                         COALESCE(
                             json_agg(
                                 json_build_object(

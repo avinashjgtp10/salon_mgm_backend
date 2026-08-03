@@ -61,7 +61,12 @@ export const salonDashboardRepository = {
            -- appointment's own status can still read 'partial' after that
            -- (e.g. a top-up that settles the balance without flipping the
            -- appointment back to 'paid').
-           SELECT s.created_at AS event_at, s.total_amount AS amount
+           -- ROUND to the nearest rupee, same as the checkout rounding that
+           -- produced the actual amount the client paid (pricing.engine.ts's
+           -- grandTotal = Math.round(rawFinalTotal)) — sales.total_amount
+           -- itself is stored unrounded, so summing it raw silently drops
+           -- every sale's own ±0.01–0.99 round-off adjustment.
+           SELECT s.created_at AS event_at, ROUND(s.total_amount) AS amount
            FROM sales s
            LEFT JOIN appointments a ON a.id = s.appointment_id
            WHERE s.salon_id = $1
@@ -180,7 +185,8 @@ export const salonDashboardRepository = {
       pool.query<{ all_time_revenue: string }>(
         `SELECT COALESCE(SUM(amount), 0)::numeric AS all_time_revenue
          FROM (
-           SELECT s.total_amount AS amount
+           -- ROUND — see sales_rows in getSummary above for why.
+           SELECT ROUND(s.total_amount) AS amount
            FROM sales s
            LEFT JOIN appointments a ON a.id = s.appointment_id
            WHERE s.salon_id = $1 AND s.status = 'completed'
@@ -313,7 +319,8 @@ export const salonDashboardRepository = {
     // bounded while covering every period branch that reads from it.
     const eventsCte = `
       WITH sales_rows AS (
-        SELECT s.created_at AS event_at, s.total_amount AS amount
+        -- ROUND — see getSummary's sales_rows for why.
+        SELECT s.created_at AS event_at, ROUND(s.total_amount) AS amount
         FROM sales s
         LEFT JOIN appointments a ON a.id = s.appointment_id
         WHERE s.salon_id = $1
@@ -425,7 +432,8 @@ export const salonDashboardRepository = {
 
     const { rows } = await pool.query<{ id: string; name: string; role: string; revenue: string }>(
       `WITH sales_rows AS (
-         SELECT sl.staff_id, sl.created_at AS event_at, sl.total_amount AS amount
+         -- ROUND — see getSummary's sales_rows for why.
+         SELECT sl.staff_id, sl.created_at AS event_at, ROUND(sl.total_amount) AS amount
          FROM sales sl
          LEFT JOIN appointments a ON a.id = sl.appointment_id
          WHERE sl.salon_id = $1
@@ -502,7 +510,8 @@ export const salonDashboardRepository = {
          GROUP BY staff_id
        ),
        sales_rows AS (
-         SELECT sl.staff_id, sl.total_amount AS amount
+         -- ROUND — see getSummary's sales_rows for why.
+         SELECT sl.staff_id, ROUND(sl.total_amount) AS amount
          FROM sales sl
          LEFT JOIN appointments a ON a.id = sl.appointment_id
          WHERE sl.salon_id = $1
