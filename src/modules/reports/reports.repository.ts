@@ -1602,19 +1602,6 @@ async getSalesSummaryReportRows(
   const unbilled = this._UNBILLED_APPOINTMENT_ROWS_CTE(filters, nextIndex);
   let idx = unbilled.nextIndex;
 
-  // TEMP DEBUG — remove after diagnosing SCRUM sales-summary-zero-rows
-  console.log("[DEBUG sales-summary] salonId=", salonId, "filters=", filters, "where=", where, "values=", values);
-  const dbgRaw = await safeQuery(() => pool.query(
-    `SELECT id, status, created_at, salon_id FROM sales WHERE salon_id = $1 ORDER BY created_at DESC LIMIT 10`,
-    [salonId]
-  ));
-  console.log("[DEBUG sales-summary] raw sales for salon (any date/status):", dbgRaw.rows);
-  const dbgCount = await safeQuery(() => pool.query(
-    `SELECT COUNT(*) FROM sales s LEFT JOIN clients c ON s.client_id = c.id WHERE ${where}`,
-    values
-  ));
-  console.log("[DEBUG sales-summary] count matching where clause:", dbgCount.rows);
-
   const page = Math.max(1, Number(filters.page ?? 1));
   const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
   const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
@@ -1686,8 +1673,9 @@ async getSalesSummaryReportRows(
         u.id, u.invoice_number, u.created_at, u.payment_method,
         NULL::text AS payment_reference,
         u.appointment_id, u.status,
-        u.actual_price, u.price, u.discount_amount, u.tax_amount, u.tip_amount,
+        u.actual_price, u.price, u.discount_amount,
         NULL::text AS report_coupon_code, 0::numeric AS coupon_discount_amount, 0::numeric AS referral_discount_amount,
+        u.tax_amount, u.tip_amount,
         u.client_name, u.client_phone, u.staff_name,
         u.item_description, u.item_types,
         u.paid_amount, u.due_amount,
