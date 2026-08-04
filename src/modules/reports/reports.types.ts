@@ -1723,3 +1723,71 @@ export interface AppointmentDetailReportResponse {
     rows: AppointmentDetailReportRow[];
     pagination: AppointmentDetailReportPagination;
 }
+
+// ===============================
+// WA Marketing Campaign Report (independent report API — POST /api/report/wa-campaign)
+// Reads wa_campaigns directly (template joined by name, per-contact status
+// counts aggregated live from wa_campaign_contacts — the campaign's own
+// sent_count/delivered_count/etc columns are unmaintained/stale, never
+// written to after insert, so they are NOT the source of truth here).
+// ===============================
+
+export interface WaCampaignReportFilters {
+    search?: string;
+    statuses?: string[];
+    template_ids?: string[];
+    date_from?: string;
+    date_to?: string;
+    delivery_bucket?: "high" | "medium" | "low" | "none";
+    read_bucket?: "high" | "medium" | "low" | "none";
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface WaCampaignReportRow {
+    id: string;
+    name: string;
+    template_id: string | null;
+    template_name: string;
+    status: string;
+    created_at: string;
+    total_contacts: number;
+    sent: number;
+    delivered: number;
+    read: number;
+    failed: number;
+    blocked: number;
+}
+
+export interface WaCampaignReportStats {
+    total_campaigns: number;
+    total_contacts: number;
+    total_sent: number;
+    total_delivered: number;
+    total_read: number;
+    total_failed: number;
+    total_blocked: number;
+    avg_delivery_rate: number;
+    avg_read_rate: number;
+}
+
+export interface WaCampaignFilterOption { id: string; label: string; }
+
+export interface WaCampaignFiltersAvailable {
+    templates: WaCampaignFilterOption[];
+}
+
+export interface WaCampaignReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface WaCampaignReportResponse {
+    rows: WaCampaignReportRow[];
+    pagination: WaCampaignReportPagination;
+    stats: WaCampaignReportStats;
+    filters_available: WaCampaignFiltersAvailable;
+}

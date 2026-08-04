@@ -225,4 +225,15 @@ router.post(
     reportsController.getAppointmentDetailReport
 );
 
+// ======================================================
+// WA MARKETING CAMPAIGN REPORT (independent report API)
+// Reads wa_campaigns directly — never calls the campaigns HTTP API/service.
+// ======================================================
+
+router.post(
+    "/wa-campaign",
+    ...guard,
+    reportsController.getWaCampaignReport
+);
+
 export default router;

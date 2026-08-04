@@ -24,6 +24,9 @@ import {
     EwalletReportStats,
     ProductInventoryReportRow,
     ProductInventoryReportStats,
+    WaCampaignReportRow,
+    WaCampaignReportStats,
+    WaCampaignFiltersAvailable,
     ClientRevenueReportRow,
     ClientRevenueReportStats,
     StaffSalesReportRow,
@@ -5447,6 +5450,210 @@ async getAppointmentDetailReport(
       total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
     },
   };
+},
+
+// ======================================================
+// WA MARKETING CAMPAIGN REPORT (independent report API)
+// POST /api/report/wa-campaign — reads wa_campaigns directly (template
+// joined by name), one row per campaign, with per-contact status counts
+// aggregated live from wa_campaign_contacts (wa_campaigns' own
+// sent_count/delivered_count/etc columns are never written to after
+// insert — stale, not the source of truth).
+// ======================================================
+
+_buildWaCampaignWhere(
+  salonId: string,
+  filters: {
+    search?: string; statuses?: string[]; template_ids?: string[];
+    date_from?: string; date_to?: string;
+  }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["c.salon_id = $1"];
+  let idx = 2;
+
+  if (filters.search?.trim()) {
+    where.push(`(
+      c.name ILIKE $${idx}
+      OR COALESCE(t.name, '') ILIKE $${idx}
+      OR c.id::text ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+  if (filters.statuses && filters.statuses.length > 0) {
+    where.push(`c.status = ANY($${idx++}::text[])`);
+    values.push(filters.statuses);
+  }
+  if (filters.template_ids && filters.template_ids.length > 0) {
+    where.push(`c.template_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.template_ids);
+  }
+  if (filters.date_from) {
+    where.push(`c.created_at >= $${idx++}::date`);
+    values.push(filters.date_from);
+  }
+  if (filters.date_to) {
+    where.push(`c.created_at < ($${idx++}::date + interval '1 day')`);
+    values.push(filters.date_to);
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+// Delivery/read rate bucket, applied as a HAVING-equivalent filter on the
+// already-aggregated per-campaign counts (sent/delivered/read only exist
+// after the wa_campaign_contacts GROUP BY, so this can't be a plain WHERE).
+_waCampaignBucketClause(column: "delivered" | "read", bucket?: "high" | "medium" | "low" | "none"): string | null {
+  if (!bucket) return null;
+  const rate = `(CASE WHEN sent = 0 THEN 0 ELSE ${column}::numeric / sent END)`;
+  if (bucket === "none") return `${rate} = 0`;
+  if (bucket === "low") return `sent > 0 AND ${rate} > 0 AND ${rate} < 0.5`;
+  if (bucket === "medium") return `${rate} >= 0.5 AND ${rate} < 0.9`;
+  return `${rate} >= 0.9`; // high
+},
+
+_WA_CAMPAIGN_AGG(where: string): string {
+  return `
+    WITH agg AS (
+      SELECT
+        c.id, c.name, c.template_id, c.status, c.created_at,
+        COALESCE(t.name, 'Deleted template') AS template_name,
+        COALESCE(c.total_contacts, 0) AS total_contacts,
+        COUNT(cc.id) FILTER (WHERE cc.status IN ('SENT','DELIVERED','READ','FAILED','BLOCKED'))::int AS sent,
+        COUNT(cc.id) FILTER (WHERE cc.status IN ('DELIVERED','READ'))::int AS delivered,
+        COUNT(cc.id) FILTER (WHERE cc.status = 'READ')::int AS read,
+        COUNT(cc.id) FILTER (WHERE cc.status = 'FAILED')::int AS failed,
+        COUNT(cc.id) FILTER (WHERE cc.status = 'BLOCKED')::int AS blocked
+      FROM wa_campaigns c
+      LEFT JOIN wa_templates t ON t.id = c.template_id
+      LEFT JOIN wa_campaign_contacts cc ON cc.campaign_id = c.id
+      WHERE ${where}
+      GROUP BY c.id, c.name, c.template_id, c.status, c.created_at, t.name, c.total_contacts
+    )
+  `;
+},
+
+async getWaCampaignReportStats(
+  salonId: string,
+  filters: {
+    search?: string; statuses?: string[]; template_ids?: string[];
+    date_from?: string; date_to?: string;
+    delivery_bucket?: "high" | "medium" | "low" | "none";
+    read_bucket?: "high" | "medium" | "low" | "none";
+  }
+): Promise<WaCampaignReportStats> {
+  const { where, values } = this._buildWaCampaignWhere(salonId, filters);
+
+  const bucketClauses = [
+    this._waCampaignBucketClause("delivered", filters.delivery_bucket),
+    this._waCampaignBucketClause("read", filters.read_bucket),
+  ].filter((c): c is string => !!c);
+  const havingClause = bucketClauses.length ? `WHERE ${bucketClauses.join(" AND ")}` : "";
+
+  const query = `
+    ${this._WA_CAMPAIGN_AGG(where)}
+    SELECT
+      COUNT(*)::int AS total_campaigns,
+      COALESCE(SUM(total_contacts), 0) AS total_contacts,
+      COALESCE(SUM(sent), 0) AS total_sent,
+      COALESCE(SUM(delivered), 0) AS total_delivered,
+      COALESCE(SUM(read), 0) AS total_read,
+      COALESCE(SUM(failed), 0) AS total_failed,
+      COALESCE(SUM(blocked), 0) AS total_blocked
+    FROM agg
+    ${havingClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  const total_sent = Number(r.total_sent ?? 0);
+  const total_delivered = Number(r.total_delivered ?? 0);
+  const total_read = Number(r.total_read ?? 0);
+  return {
+    total_campaigns: Number(r.total_campaigns ?? 0),
+    total_contacts: Number(r.total_contacts ?? 0),
+    total_sent,
+    total_delivered,
+    total_read,
+    total_failed: Number(r.total_failed ?? 0),
+    total_blocked: Number(r.total_blocked ?? 0),
+    avg_delivery_rate: total_sent > 0 ? (total_delivered / total_sent) * 100 : 0,
+    avg_read_rate: total_sent > 0 ? (total_read / total_sent) * 100 : 0,
+  };
+},
+
+async getWaCampaignReportRows(
+  salonId: string,
+  filters: {
+    search?: string; statuses?: string[]; template_ids?: string[];
+    date_from?: string; date_to?: string;
+    delivery_bucket?: "high" | "medium" | "low" | "none";
+    read_bucket?: "high" | "medium" | "low" | "none";
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: WaCampaignReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values } = this._buildWaCampaignWhere(salonId, filters);
+
+  const bucketClauses = [
+    this._waCampaignBucketClause("delivered", filters.delivery_bucket),
+    this._waCampaignBucketClause("read", filters.read_bucket),
+  ].filter((c): c is string => !!c);
+  const havingClause = bucketClauses.length ? `WHERE ${bucketClauses.join(" AND ")}` : "";
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${values.length + 1} OFFSET $${values.length + 2}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    ${this._WA_CAMPAIGN_AGG(where)}
+    SELECT *, COUNT(*) OVER() AS total_count
+    FROM agg
+    ${havingClause}
+    ORDER BY created_at DESC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: WaCampaignReportRow[] = rows.map((row: any) => ({
+    id: row.id,
+    name: row.name,
+    template_id: row.template_id,
+    template_name: row.template_name,
+    status: row.status,
+    created_at: row.created_at,
+    total_contacts: Number(row.total_contacts ?? 0),
+    sent: Number(row.sent ?? 0),
+    delivered: Number(row.delivered ?? 0),
+    read: Number(row.read ?? 0),
+    failed: Number(row.failed ?? 0),
+    blocked: Number(row.blocked ?? 0),
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+async getWaCampaignFiltersAvailable(salonId: string): Promise<WaCampaignFiltersAvailable> {
+  const { rows } = await safeQuery(() => pool.query(
+    `SELECT id, name AS label FROM wa_templates WHERE salon_id = $1 ORDER BY name ASC`,
+    [salonId]
+  ));
+  return { templates: rows.map((r: any) => ({ id: r.id, label: r.label })) };
 },
 
 // ======================================================
