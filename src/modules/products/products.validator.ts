@@ -1,6 +1,6 @@
 import { NextFunction, Request, Response } from "express";
 import { AppError } from "../../middleware/error.middleware";
-import { MeasureUnit, TaxType } from "./products.types";
+import { MeasureUnit, TaxType, ProductType } from "./products.types";
 
 // ─── Primitive Helpers ────────────────────────────────────────────────────────
 
@@ -30,14 +30,15 @@ const UUID_RE =
 const isUUID = (v: unknown): v is string => typeof v === "string" && UUID_RE.test(v);
 const isOptionalUUID = (v: unknown) => v === undefined || v === null || isUUID(v);
 
-const VALID_MEASURE_UNITS: MeasureUnit[] = ["ml", "l", "g", "kg", "pcs", "oz", "lb"];
+const VALID_MEASURE_UNITS: MeasureUnit[] = ["ml", "l", "g", "kg", "pcs", "oz", "lb", "bottle", "tube", "pack", "box", "roll"];
 const VALID_TAX_TYPES: TaxType[] = ["no_tax", "gst_5", "gst_12", "gst_18", "gst_28", "custom"];
+const VALID_PRODUCT_TYPES: ProductType[] = ["retail", "consumable", "both"];
 
 // ─── Coercion for FormData (Multipart) Requests ───────────────────────────────
 
 const coerceProductFields = (b: Record<string, any>) => {
     if (!b || typeof b !== "object") return;
-    const floatFields = ["amount", "supply_price", "retail_price", "markup_percentage", "custom_tax_rate", "team_commission_rate"];
+    const floatFields = ["amount", "qty_alert", "supply_price", "retail_price", "markup_percentage", "custom_tax_rate", "team_commission_rate"];
     for (const f of floatFields) {
         if (typeof b[f] === "string" && b[f].trim() !== "") {
             const parsed = parseFloat(b[f]);
@@ -49,6 +50,18 @@ const coerceProductFields = (b: Record<string, any>) => {
         if (b[f] === "true" || b[f] === "1") b[f] = true;
         if (b[f] === "false" || b[f] === "0") b[f] = false;
     }
+    // The frontend's product-type/unit UI sends `unit`, but the DB column
+    // (and every other layer here) is `measure_unit` — alias it across, then
+    // drop the frontend-only key so it doesn't leak into repository.update()'s
+    // dynamic `SET <key> = $n` loop (there's no `unit` column to set).
+    // `unit: null` means "leave measure_unit as-is" (e.g. switching a product
+    // to Retail doesn't clear it — the column is NOT NULL with no "no unit"
+    // state), not "clear the column", so skip aliasing in that case.
+    if (b.unit !== undefined) {
+        if (b.unit !== null && b.measure_unit === undefined) b.measure_unit = b.unit;
+        delete b.unit;
+    }
+    if (typeof b.measure_unit === "string") b.measure_unit = b.measure_unit.toLowerCase();
     for (const key of Object.keys(b)) {
         if (b[key] === "" || b[key] === "undefined" || b[key] === "null") {
             b[key] = undefined;
@@ -78,11 +91,32 @@ const validateProductFields = (b: Record<string, unknown>, requireName = false) 
     if (!isOptionalUUID(b.category_id)) {
         throw new AppError(400, "category_id must be a UUID", "VALIDATION_ERROR");
     }
+    if (!isOptionalUUID(b.supplier_id)) {
+        throw new AppError(400, "supplier_id must be a UUID", "VALIDATION_ERROR");
+    }
     if (b.measure_unit !== undefined && !VALID_MEASURE_UNITS.includes(b.measure_unit as MeasureUnit)) {
         throw new AppError(400, `measure_unit must be one of: ${VALID_MEASURE_UNITS.join(", ")}`, "VALIDATION_ERROR");
     }
+    if (b.product_type !== undefined && !VALID_PRODUCT_TYPES.includes(b.product_type as ProductType)) {
+        throw new AppError(400, `product_type must be one of: ${VALID_PRODUCT_TYPES.join(", ")}`, "VALIDATION_ERROR");
+    }
+    if (!isOptionalString(b.size)) {
+        throw new AppError(400, "size must be a string", "VALIDATION_ERROR");
+    }
+    if (typeof b.size === "string" && b.size.length > 30) {
+        throw new AppError(400, "size must be at most 30 characters", "VALIDATION_ERROR");
+    }
     if (!isOptionalNonNeg(b.amount)) {
         throw new AppError(400, "amount must be a non-negative number", "VALIDATION_ERROR");
+    }
+    if (!isOptionalNonNeg(b.qty_alert)) {
+        throw new AppError(400, "qty_alert must be a non-negative number", "VALIDATION_ERROR");
+    }
+    // Both fields are always sent together by the Create/Edit Product forms
+    // (a full-form submit, not a sparse patch) — safe to cross-validate here
+    // without needing the existing DB row for whichever field is "missing".
+    if (typeof b.amount === "number" && typeof b.qty_alert === "number" && b.qty_alert >= b.amount) {
+        throw new AppError(400, "Low Stock Alert Quantity must be less than the Product Quantity.", "VALIDATION_ERROR");
     }
     if (!isOptionalString(b.short_description)) {
         throw new AppError(400, "short_description must be a string", "VALIDATION_ERROR");
@@ -113,6 +147,12 @@ const validateProductFields = (b: Record<string, unknown>, requireName = false) 
     }
     if (!isOptionalNumber(b.custom_tax_rate)) {
         throw new AppError(400, "custom_tax_rate must be a number", "VALIDATION_ERROR");
+    }
+    if (!isOptionalString(b.hsn_sac)) {
+        throw new AppError(400, "hsn_sac must be a string", "VALIDATION_ERROR");
+    }
+    if (typeof b.hsn_sac === "string" && b.hsn_sac.length > 20) {
+        throw new AppError(400, "hsn_sac must be at most 20 characters", "VALIDATION_ERROR");
     }
     if (!isOptionalBoolean(b.team_commission_enabled)) {
         throw new AppError(400, "team_commission_enabled must be a boolean", "VALIDATION_ERROR");

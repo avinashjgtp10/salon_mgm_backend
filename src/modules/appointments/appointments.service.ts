@@ -48,6 +48,7 @@ import {
 function computeAppointmentTotals(appt: {
     services?: any[]; package_items?: any[]; product_items?: any[]; membership_items?: any[];
     discount_type?: string; discount_value?: number; ex_charges?: number; tip_amount?: number;
+    include_gst?: boolean; membership_discount_used?: number | string;
 }, activeTaxes: ActiveTaxRow[]) {
     const toRow = (items: any[] = []) => (items || []).map((i) => ({
         price: Number(i?.price) || 0,
@@ -63,7 +64,21 @@ function computeAppointmentTotals(appt: {
         },
         discountType: (appt.discount_type === "percentage" ? "percentage" : "flat"),
         discountValue: Number(appt.discount_value) || 0,
-        taxes: activeTaxes,
+        // A percentage/loyalty membership discount is a genuine pre-tax price
+        // cut, same as the manual discount above — already collected onto
+        // this appointment via findById()/listBySalonId()'s payments
+        // subquery (MAX per appointment, not a per-call delta). Without this,
+        // a read-time backfill (any appointment whose tax_breakdown is empty
+        // or stale) recomputed computed_grand_total as if no membership
+        // discount had ever been applied, overstating it by exactly that
+        // amount — see ComputeBillTotalsInput.membershipDiscountAmount for
+        // why this must go directly into grandTotal, not the discRatio.
+        membershipDiscountAmount: Number(appt.membership_discount_used) || 0,
+        // Respect this appointment's own persisted "Include GST" choice —
+        // without this gate, a bill deliberately saved with GST excluded
+        // gets the salon's active taxes silently added back in on every
+        // read-time backfill/reprice (see include_gst on the Appointment type).
+        taxes: appt.include_gst === false ? [] : activeTaxes,
         exCharges: Number(appt.ex_charges) || 0,
         tip: Number(appt.tip_amount) || 0,
     });
@@ -394,7 +409,7 @@ export const appointmentsService = {
         // inputs exactly so this decision and the recompute below can never
         // disagree about what "changed the bill" means.
         const isContentEdit = ["services", "package_items", "product_items", "membership_items",
-                                "discount_value", "discount_type", "ex_charges", "tip_amount"]
+                                "discount_value", "discount_type", "ex_charges", "tip_amount", "include_gst"]
                                 .some((k) => k in patch);
 
         if (existing.status === "no-show" && isReschedule) {
@@ -416,6 +431,7 @@ export const appointmentsService = {
                 discount_value:   patch.discount_value    ?? existing.discount_value,
                 ex_charges:       patch.ex_charges        ?? existing.ex_charges,
                 tip_amount:       patch.tip_amount         ?? existing.tip_amount,
+                include_gst:      patch.include_gst        ?? existing.include_gst,
             };
             const activeTaxes = await getActiveTaxes(existing.salon_id).catch(() => []);
             const newGrandTotal = computeAppointmentTotals(merged, activeTaxes).grandTotal;
@@ -450,6 +466,24 @@ export const appointmentsService = {
         // processing time) — no conflict check on reschedule/staff/duration changes.
 
         const updated = await appointmentsRepository.update(appointmentId, patch);
+
+        // Reassigning a paid/partial appointment to a different staff member
+        // (calendar drag-drop or manual edit) must also move the already-
+        // recorded sale's revenue/commission credit to the new staff —
+        // otherwise Staff Performance/Commission reports keep crediting
+        // whoever the sale was originally attributed to, silently
+        // disagreeing with what the calendar now shows. Booked/unpaid
+        // appointments have no linked sale yet, so this is a no-op for them.
+        if (
+            patch.staff_id &&
+            patch.staff_id !== existing.staff_id &&
+            (existing.status === "paid" || existing.status === "partial")
+        ) {
+            salesRepository.reassignStaffForAppointment(appointmentId, patch.staff_id)
+                .catch(err => logger.warn("Sale staff reassignment failed (non-fatal)", {
+                    appointmentId, newStaffId: patch.staff_id, err: err?.message,
+                }));
+        }
 
         // Adjust stock when product_items list changes (fire-and-forget)
         if (patch.product_items !== undefined) {
@@ -844,7 +878,7 @@ export const appointmentsService = {
                         clientName:    existing.client_name         ?? "Walk-in",
                         amount:        String(preExistingSale.total_amount ?? "0"),
                         paymentMethod: params.payment_method        ?? "N/A",
-                        invoiceId:     preExistingSale.id.slice(0, 8).toUpperCase(),
+                        invoiceId:     preExistingSale.invoice_number ?? "",
                     });
                 } catch (err: any) { logger.error("[email] newPayment (preexisting) failed:", err?.message ?? err); }
             })();
@@ -983,7 +1017,7 @@ export const appointmentsService = {
                 variables: {
                     '1': existing.client_name         ?? 'Valued Customer',
                     '2': String(sale.total_amount     ?? '0'),
-                    '3': sale.id.slice(0, 8).toUpperCase(),
+                    '3': sale.invoice_number ?? '',
                 },
                 referenceId:   sale.id,
                 referenceType: 'invoice',
@@ -1079,7 +1113,7 @@ export const appointmentsService = {
                     clientName:    existing.client_name         ?? "Walk-in",
                     amount:        String(sale.total_amount     ?? "0"),
                     paymentMethod: params.payment_method        ?? "N/A",
-                    invoiceId:     sale.id.slice(0, 8).toUpperCase(),
+                    invoiceId:     sale.invoice_number ?? "",
                 });
                 logger.info(`[email] newPayment sent to ${ownerEmail}`);
             } catch (err: any) { logger.error("[email] newPayment (checkout) failed:", err?.message ?? err); }

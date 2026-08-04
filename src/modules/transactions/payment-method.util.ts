@@ -21,7 +21,7 @@ export interface NormalizedPaymentMethod {
  * raw label reach the INSERT — that's what silently broke sale creation
  * for composite labels before this module existed.
  */
-export function normalizePaymentMethod(
+function resolveMoneyMethod(
   label: string,
   splitDetails?: Record<string, number>
 ): NormalizedPaymentMethod {
@@ -74,4 +74,78 @@ export function normalizePaymentMethod(
   }
 
   throw new UnrecognizedPaymentMethodError(label);
+}
+
+/**
+ * Package/Membership coverage, in ₹ actually offset this transaction (not a
+ * boolean flag) — computed server-side by the caller from the real catalog
+ * value of package-covered items / the real membership_wallet_used +
+ * membership_discount_used, never trusted from the frontend's own label.
+ */
+export interface PaymentSourceAmounts {
+  package?: number;
+  membership?: number;
+}
+
+export function normalizePaymentMethod(
+  label: string,
+  splitDetails?: Record<string, number>,
+  sourceAmounts?: PaymentSourceAmounts
+): NormalizedPaymentMethod {
+  const packageAmt = Number(sourceAmounts?.package) || 0;
+  const membershipAmt = Number(sourceAmounts?.membership) || 0;
+
+  if (packageAmt <= 0 && membershipAmt <= 0) {
+    return resolveMoneyMethod(label, splitDetails);
+  }
+
+  // Real money actually collected this transaction (Cash/Card/UPI only —
+  // eWallet is intentionally excluded from the visible legs here, same as
+  // resolveMoneyMethod above: it has its own dedicated ewallet_used column
+  // and was never surfaced as a payment_method leg). Read straight off
+  // split_details (the real amounts charged) rather than re-deriving from
+  // `label`, since a fully package/membership-covered bill can carry a
+  // leftover "Cash" label from the frontend's UI default even though ₹0 was
+  // actually charged via Cash — trusting the label here would wrongly turn
+  // a pure Package/Membership payment into a fabricated "Package + Cash".
+  const activeMoneyLegs = Object.entries(splitDetails ?? {})
+    .filter(([key, amount]) => Number(amount) > 0 && key.toLowerCase() !== "ewallet");
+
+  const legs: Record<string, number> = Object.fromEntries(activeMoneyLegs);
+  if (packageAmt > 0) legs["Package"] = packageAmt;
+  if (membershipAmt > 0) legs["Membership"] = membershipAmt;
+
+  const legNames = Object.keys(legs);
+  if (legNames.length === 1) {
+    if (legNames[0] === "Package") return { method: "package" };
+    if (legNames[0] === "Membership") return { method: "membership" };
+  }
+
+  return { method: "split", reference: JSON.stringify(legs) };
+}
+
+/**
+ * Human-readable "Package + Cash" / "Membership + UPI" style label for the
+ * unconstrained payments.payment_method column — mirrors normalizePaymentMethod's
+ * leg computation above but spells every leg out instead of collapsing to the
+ * sales_payment_method_check enum value ('split'). Returns `label` unchanged
+ * when no package/membership coverage applies.
+ */
+export function describePaymentMethod(
+  label: string,
+  splitDetails?: Record<string, number>,
+  sourceAmounts?: PaymentSourceAmounts
+): string {
+  const packageAmt = Number(sourceAmounts?.package) || 0;
+  const membershipAmt = Number(sourceAmounts?.membership) || 0;
+  if (packageAmt <= 0 && membershipAmt <= 0) return label;
+
+  const legs = Object.entries(splitDetails ?? {})
+    .filter(([key, amount]) => Number(amount) > 0 && key.toLowerCase() !== "ewallet")
+    .map(([key]) => key);
+
+  if (packageAmt > 0) legs.push("Package");
+  if (membershipAmt > 0) legs.push("Membership");
+
+  return legs.length > 0 ? legs.join(" + ") : label;
 }

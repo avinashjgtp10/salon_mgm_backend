@@ -156,6 +156,11 @@ export const usersService = {
       throw new AppError(400, "Current password is incorrect", "INVALID_PASSWORD");
     }
 
+    const isSameAsCurrent = await bcrypt.compare(newPassword, user.password_hash);
+    if (isSameAsCurrent) {
+      throw new AppError(400, "New password must be different from your current password", "SAME_PASSWORD");
+    }
+
     const hash = await bcrypt.hash(newPassword, 12);
     await usersRepo.updateById(userId, { password_hash: hash });
 

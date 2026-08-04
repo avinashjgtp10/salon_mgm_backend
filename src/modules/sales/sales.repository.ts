@@ -223,6 +223,28 @@ export const salesRepository = {
         try {
             await client.query('BEGIN');
 
+            // Two independent call sites can race to create the sale for the same
+            // appointment (payments.service.ts's auto-create-on-completed-payment,
+            // and appointments.service.ts's checkout -> recordTransaction, fired
+            // back-to-back by usePayment.ts without awaiting one before the other).
+            // recordTransaction's own findByAppointmentId check happens BEFORE this
+            // transaction starts, so it can't see a sale the other request is still
+            // mid-COMMIT on. Lock on the appointment id here so the second caller
+            // blocks until the first's transaction finishes, then re-check for an
+            // existing sale inside the lock before inserting a duplicate.
+            if (data.appointment_id) {
+                await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [data.appointment_id]);
+                const { rows: dupRows } = await client.query(
+                    `SELECT id FROM sales WHERE appointment_id = $1 LIMIT 1`,
+                    [data.appointment_id]
+                );
+                if (dupRows[0]) {
+                    await client.query('COMMIT');
+                    const existing = await this.findById(dupRows[0].id);
+                    if (existing) return existing;
+                }
+            }
+
             let subtotal = 0;
             data.items.forEach(item => {
                 const discAmt = item.discount_amount ? parseFloat(item.discount_amount) : 0;
@@ -236,30 +258,67 @@ export const salesRepository = {
             // the salon, so it must never count as revenue. ex_charges DOES count
             // (a client-facing surcharge the business actually keeps), unlike tip.
             const total = subtotal - discountAmt + taxAmt + exChargesAmt;
-
-            // Timestamp alone collides under concurrent inserts (e.g. a backfill
-            // running in a tight loop) since sales_invoice_number_key is UNIQUE.
             const { invoice_prefix } = await getTaxModuleConfig(data.salon_id);
-            const invoiceNumber = `${invoice_prefix || "INV"}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
             const createdAtVal = parseCreatedAt(data.created_at);
 
-            const saleResult = await client.query(
-                `INSERT INTO sales (
-                    salon_id, client_id, appointment_id, staff_id, status, subtotal,
-                    discount_amount, tip_amount, tax_amount, ex_charges, total_amount, payment_method,
-                    payment_reference, notes, invoice_number, created_by, created_at,
-                    coupon_code, discount_percent, discount_type
-                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING *`,
-                [
-                    data.salon_id, data.client_id || null, data.appointment_id || null, data.staff_id || null,
-                    data.status || 'draft', subtotal.toString(), data.discount_amount || '0',
-                    data.tip_amount || '0', data.tax_amount || '0', data.ex_charges || '0', total.toString(),
-                    data.payment_method ? data.payment_method.toLowerCase() : null, data.payment_reference || null, data.notes || null,
-                    invoiceNumber, createdBy, createdAtVal,
-                    data.coupon_code || null, data.discount_percent || null, data.discount_type || null,
-                ]
-            );
-            const sale = saleResult.rows[0];
+            // Per-salon sequential invoice numbers (1, 2, 3, ...). The UPDATE...
+            // RETURNING serializes on the salon's own row under Postgres row-level
+            // locking, so concurrent inserts for the same salon never READ the same
+            // sequence number. But next_invoice_seq can still drift behind reality
+            // (e.g. a row was inserted directly, or a prior attempt's INSERT failed
+            // for an unrelated reason after the counter had already been bumped by
+            // an earlier successful transaction that this one didn't know about) —
+            // if the resulting invoice_number collides with one already used
+            // (sales_invoice_number_salon_key), bump the counter again and retry
+            // rather than failing the whole sale outright.
+            let sale: any;
+            for (let attempt = 0; ; attempt++) {
+                const { rows: seqRows } = await client.query(
+                    `UPDATE salons SET next_invoice_seq = next_invoice_seq + 1
+                     WHERE id = $1 RETURNING next_invoice_seq - 1 AS seq`,
+                    [data.salon_id]
+                );
+                const seq = seqRows[0].seq;
+                const invoiceNumber = `${invoice_prefix || "INV"}-${String(seq).padStart(5, "0")}`;
+
+                // SAVEPOINT so a collision here only unwinds this one INSERT —
+                // without it, Postgres marks the whole transaction aborted on
+                // error, and the next loop iteration's UPDATE would fail too.
+                await client.query('SAVEPOINT sale_insert_attempt');
+                try {
+                    const saleResult = await client.query(
+                        `INSERT INTO sales (
+                            salon_id, client_id, appointment_id, staff_id, status, subtotal,
+                            discount_amount, tip_amount, tax_amount, ex_charges, total_amount, payment_method,
+                            payment_reference, notes, invoice_number, created_by, created_at,
+                            coupon_code, discount_percent, discount_type,
+                            manual_discount_amount, coupon_id, coupon_discount_amount, coupon_discount_type,
+                            referral_discount_amount, referral_id, referral_source
+                        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27) RETURNING *`,
+                        [
+                            data.salon_id, data.client_id || null, data.appointment_id || null, data.staff_id || null,
+                            data.status || 'draft', subtotal.toString(), data.discount_amount || '0',
+                            data.tip_amount || '0', data.tax_amount || '0', data.ex_charges || '0', total.toString(),
+                            data.payment_method ? data.payment_method.toLowerCase() : null, data.payment_reference || null, data.notes || null,
+                            invoiceNumber, createdBy, createdAtVal,
+                            data.coupon_code || null, data.discount_percent || null, data.discount_type || null,
+                            data.manual_discount_amount || '0', data.coupon_id || null,
+                            data.coupon_discount_amount || '0', data.coupon_discount_type || null,
+                            data.referral_discount_amount || '0', data.referral_id || null, data.referral_source || null,
+                        ]
+                    );
+                    await client.query('RELEASE SAVEPOINT sale_insert_attempt');
+                    sale = saleResult.rows[0];
+                    break;
+                } catch (insertErr: any) {
+                    await client.query('ROLLBACK TO SAVEPOINT sale_insert_attempt');
+                    const isInvoiceCollision = insertErr?.code === '23505'
+                        && insertErr?.constraint === 'sales_invoice_number_salon_key';
+                    if (!isInvoiceCollision || attempt >= 5) throw insertErr;
+                    // Retry with a fresh sequence number — the loop's next
+                    // iteration re-reads/re-increments next_invoice_seq.
+                }
+            }
 
             for (const item of data.items) {
                 const discAmt       = item.discount_amount ? parseFloat(item.discount_amount) : 0;
@@ -320,7 +379,12 @@ export const salesRepository = {
                 const values: any[]      = [subtotal.toString(), total.toString()];
                 let idx = 3;
 
-                const extraFields = ['client_id', 'discount_amount', 'tip_amount', 'tax_amount', 'ex_charges', 'notes', 'status', 'payment_method', 'payment_reference', 'created_at'];
+                const extraFields = [
+                    'client_id', 'discount_amount', 'tip_amount', 'tax_amount', 'ex_charges', 'notes', 'status', 'payment_method', 'payment_reference', 'created_at',
+                    'coupon_code', 'discount_percent', 'discount_type',
+                    'manual_discount_amount', 'coupon_id', 'coupon_discount_amount', 'coupon_discount_type',
+                    'referral_discount_amount', 'referral_id', 'referral_source',
+                ];
                 for (const key of extraFields) {
                     if (key in salePatch && (salePatch as any)[key] !== undefined) {
                         setParts.push(`${key} = $${idx++}`);
@@ -384,6 +448,28 @@ export const salesRepository = {
             [id, params.payment_method?.toLowerCase() ?? null, params.payment_reference || null, params.status || 'completed']
         ));
         return rows[0];
+    },
+
+    // Moves revenue/commission credit to a new staff member for whichever
+    // sale is linked to this appointment — called when a paid/partial
+    // appointment is reassigned to a different staff (calendar drag-drop or
+    // manual edit), so Staff Performance/Commission reports follow the
+    // reassignment instead of still crediting whoever the sale was
+    // originally attributed to. Updates every line item's staff_id too
+    // (not just the sale-level one), matching the "new staff owns the whole
+    // sale" rule — a no-op if the appointment has no linked sale yet
+    // (unpaid/booked appointments have nothing to reassign).
+    async reassignStaffForAppointment(appointmentId: string, newStaffId: string): Promise<void> {
+        await safeQuery(() => pool.query(
+            `UPDATE sales SET staff_id = $2, updated_at = NOW() WHERE appointment_id = $1`,
+            [appointmentId, newStaffId]
+        ));
+        await safeQuery(() => pool.query(
+            `UPDATE sale_items si SET staff_id = $2
+             FROM sales s
+             WHERE si.sale_id = s.id AND s.appointment_id = $1`,
+            [appointmentId, newStaffId]
+        ));
     },
 
     async exportList(filters: { salon_id?: string; status?: string; date?: string }): Promise<Sale[]> {

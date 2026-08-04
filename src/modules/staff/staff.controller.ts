@@ -226,36 +226,36 @@ export const staffController = {
   },
 
   _exportFields: [
-    { label: "First Name", value: "first_name" },
-    { label: "Last Name", value: "last_name" },
-    { label: "Email", value: "email" },
-    { label: "Phone", value: "phone" },
-    { label: "Phone Country Code", value: "phone_country_code" },
-    { label: "Additional Phone", value: "additional_phone" },
-    { label: "Employee Code", value: "employee_code" },
-    { label: "Designation", value: "designation" },
-    { label: "Employment Type", value: "employment_type" },
-    { label: "Active", value: "is_active" },
-    { label: "Invitation Status", value: "invitation_status" },
-    { label: "Branch ID", value: "branch_id" },
-    { label: "Country", value: "country" },
-    { label: "Calendar Color", value: "calendar_color" },
-    { label: "Experience (Years)", value: "experience_years" },
-    { label: "Specialization", value: "specialization" },
-    { label: "Commission Type", value: "commission_type" },
-    { label: "Commission Value", value: "commission_value" },
-    { label: "Joined Date", value: "joined_date" },
-    { label: "Birthday Day", value: "birthday_day" },
-    { label: "Birthday Month", value: "birthday_month" },
-    { label: "Start Date Day", value: "start_date_day" },
-    { label: "Start Date Month", value: "start_date_month" },
-    { label: "Start Year", value: "start_year" },
-    { label: "End Date Day", value: "end_date_day" },
-    { label: "End Date Month", value: "end_date_month" },
-    { label: "End Year", value: "end_year" },
-    { label: "Staff External ID", value: "staff_external_id" },
-    { label: "Notes", value: "notes" },
-    { label: "Created At", value: "created_at" },
+    { label: "First Name", value: "first_name", width: 16 },
+    { label: "Last Name", value: "last_name", width: 16 },
+    { label: "Email", value: "email", width: 28 },
+    { label: "Phone", value: "phone", width: 14 },
+    { label: "Phone Country Code", value: "phone_country_code", width: 12 },
+    { label: "Additional Phone", value: "additional_phone", width: 16 },
+    { label: "Employee Code", value: "employee_code", width: 16 },
+    { label: "Designation", value: "designation", width: 20 },
+    { label: "Employment Type", value: "employment_type", width: 16 },
+    { label: "Active", value: "is_active", width: 10 },
+    { label: "Invitation Status", value: "invitation_status", width: 18 },
+    { label: "Branch ID", value: "branch_id", width: 26 },
+    { label: "Country", value: "country", width: 12 },
+    { label: "Calendar Color", value: "calendar_color", width: 14 },
+    { label: "Experience (Years)", value: "experience_years", width: 12 },
+    { label: "Specialization", value: "specialization", width: 26 },
+    { label: "Commission Type", value: "commission_type", width: 16 },
+    { label: "Commission Value", value: "commission_value", width: 14 },
+    { label: "Joined Date", value: "joined_date", width: 14 },
+    { label: "Birthday Day", value: "birthday_day", width: 12 },
+    { label: "Birthday Month", value: "birthday_month", width: 14 },
+    { label: "Start Date Day", value: "start_date_day", width: 14 },
+    { label: "Start Date Month", value: "start_date_month", width: 16 },
+    { label: "Start Year", value: "start_year", width: 12 },
+    { label: "End Date Day", value: "end_date_day", width: 12 },
+    { label: "End Date Month", value: "end_date_month", width: 14 },
+    { label: "End Year", value: "end_year", width: 12 },
+    { label: "Staff External ID", value: "staff_external_id", width: 20 },
+    { label: "Notes", value: "notes", width: 30 },
+    { label: "Created At", value: "created_at", width: 20 },
   ] as const,
 
   async exportExcel(req: AuthRequest, res: Response, next: NextFunction) {
@@ -271,6 +271,16 @@ export const staffController = {
         })
       );
       const ws = XLSX.utils.aoa_to_sheet([headers, ...data]);
+      // Explicit per-column widths — aoa_to_sheet leaves every column at
+      // Excel's default ~8.43-char width regardless of content, which with
+      // 30 columns (several long labels like "Employment Type"/"Invitation
+      // Status"/"Staff External ID") rendered as a wall of truncated,
+      // misaligned-looking headers and overflowing data. Sized to comfortably
+      // fit each field's own header + typical content.
+      ws['!cols'] = staffController._exportFields.map(f => ({ wch: f.width }));
+      // Lets staff filter/sort the export directly in Excel — a small,
+      // well-supported readability win alongside the width fix above.
+      ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } }) };
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Staff");
       const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
@@ -517,7 +527,12 @@ export const staffCommissionsController = {
       const month     = req.query.month      ? String(req.query.month)      : undefined;
       const startDate = req.query.start_date ? String(req.query.start_date) : undefined;
       const endDate   = req.query.end_date   ? String(req.query.end_date)   : undefined;
-      const data = await staffCommissionsService.getEarnedBySalon(salonId, month, startDate, endDate);
+      const staffIds  = req.query.staff_ids
+        ? String(req.query.staff_ids).split(",").map(s => s.trim()).filter(Boolean)
+        : undefined;
+      const category  = req.query.category ? String(req.query.category) : undefined;
+      const status    = req.query.status   ? String(req.query.status)   : undefined;
+      const data = await staffCommissionsService.getEarnedBySalon(salonId, month, startDate, endDate, staffIds, category, status);
       return sendSuccess(res, 200, data, "Commission earned by staff fetched successfully");
     } catch (err) { return next(err); }
   },
@@ -542,7 +557,11 @@ export const staffCommissionsController = {
       const month     = req.query.month      ? String(req.query.month)      : undefined; // "YYYY-MM"
       const startDate = req.query.start_date ? String(req.query.start_date) : undefined;
       const endDate   = req.query.end_date   ? String(req.query.end_date)   : undefined;
-      const data = await staffCommissionsService.getSalonSummary(salonId, month, startDate, endDate);
+      const staffIds  = req.query.staff_ids
+        ? String(req.query.staff_ids).split(",").map(s => s.trim()).filter(Boolean)
+        : undefined;
+      const category  = req.query.category ? String(req.query.category) : undefined;
+      const data = await staffCommissionsService.getSalonSummary(salonId, month, startDate, endDate, staffIds, category);
       return sendSuccess(res, 200, data, "Commission summary fetched successfully");
     } catch (err) { return next(err); }
   },

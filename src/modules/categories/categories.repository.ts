@@ -10,6 +10,14 @@ export const categoriesRepository = {
     return rows[0] || null;
   },
 
+  async findByName(name: string, salonId: string): Promise<ServiceCategory | null> {
+    const { rows } = await pool.query(
+      `SELECT * FROM service_categories WHERE LOWER(name) = LOWER($1) AND salon_id = $2`,
+      [name, salonId]
+    );
+    return rows[0] || null;
+  },
+
   async listBySalonId(salonId: string): Promise<ServiceCategory[]> {
     const { rows } = await pool.query(
       `SELECT *

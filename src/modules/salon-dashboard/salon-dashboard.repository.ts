@@ -61,7 +61,12 @@ export const salonDashboardRepository = {
            -- appointment's own status can still read 'partial' after that
            -- (e.g. a top-up that settles the balance without flipping the
            -- appointment back to 'paid').
-           SELECT s.created_at AS event_at, s.total_amount AS amount
+           -- ROUND to the nearest rupee, same as the checkout rounding that
+           -- produced the actual amount the client paid (pricing.engine.ts's
+           -- grandTotal = Math.round(rawFinalTotal)) — sales.total_amount
+           -- itself is stored unrounded, so summing it raw silently drops
+           -- every sale's own ±0.01–0.99 round-off adjustment.
+           SELECT s.created_at AS event_at, ROUND(s.total_amount) AS amount
            FROM sales s
            LEFT JOIN appointments a ON a.id = s.appointment_id
            WHERE s.salon_id = $1
@@ -149,10 +154,13 @@ export const salonDashboardRepository = {
         [salonId]
       ),
 
-      // New clients — a client's first-ever appointment/sale at THIS salon fell
-      // today / this month. (clients table has no salon_id, so "new to this
-      // salon" is derived from their earliest interaction here, same pattern
-      // as the active-clients query above.)
+      // New clients — earliest of: their client profile being created (e.g. via
+      // Clients → Add Client, with no booking/sale at all yet), or their
+      // first-ever appointment/sale at this salon (Calendar/Quick Sale, which
+      // create the client record and the appointment together). Including the
+      // clients row itself means a client added ONLY via Add Client (no
+      // appointment/sale ever) still counts as "new" the day they were added,
+      // instead of never appearing here at all.
       pool.query<{ new_today: string; new_this_month: string }>(
         `WITH first_visit AS (
            SELECT client_id, MIN(created_at) AS first_at
@@ -160,6 +168,8 @@ export const salonDashboardRepository = {
              SELECT client_id, created_at FROM appointments WHERE salon_id = $1 AND client_id IS NOT NULL AND deleted_at IS NULL
              UNION ALL
              SELECT client_id, created_at FROM sales       WHERE salon_id = $1 AND client_id IS NOT NULL
+             UNION ALL
+             SELECT id AS client_id, created_at FROM clients WHERE salon_id = $1
            ) combined
            GROUP BY client_id
          )
@@ -175,7 +185,8 @@ export const salonDashboardRepository = {
       pool.query<{ all_time_revenue: string }>(
         `SELECT COALESCE(SUM(amount), 0)::numeric AS all_time_revenue
          FROM (
-           SELECT s.total_amount AS amount
+           -- ROUND — see sales_rows in getSummary above for why.
+           SELECT ROUND(s.total_amount) AS amount
            FROM sales s
            LEFT JOIN appointments a ON a.id = s.appointment_id
            WHERE s.salon_id = $1 AND s.status = 'completed'
@@ -308,7 +319,8 @@ export const salonDashboardRepository = {
     // bounded while covering every period branch that reads from it.
     const eventsCte = `
       WITH sales_rows AS (
-        SELECT s.created_at AS event_at, s.total_amount AS amount
+        -- ROUND — see getSummary's sales_rows for why.
+        SELECT s.created_at AS event_at, ROUND(s.total_amount) AS amount
         FROM sales s
         LEFT JOIN appointments a ON a.id = s.appointment_id
         WHERE s.salon_id = $1
@@ -339,52 +351,67 @@ export const salonDashboardRepository = {
     let sql: string;
 
     if (period === "today") {
+      // Axis and tooltip are identical here — the hour itself IS the full
+      // context ("09:00 AM"), so no separate full_label is needed.
       sql = `${eventsCte}
         SELECT
-          TO_CHAR(date_trunc('hour', event_at AT TIME ZONE 'UTC'), 'HH12AM') AS month,
-          date_trunc('hour', event_at AT TIME ZONE 'UTC')                     AS sort_key,
-          COALESCE(SUM(amount), 0)::numeric                                   AS revenue
+          TO_CHAR(date_trunc('hour', event_at AT TIME ZONE 'UTC'), 'HH12:MI AM') AS month,
+          TO_CHAR(date_trunc('hour', event_at AT TIME ZONE 'UTC'), 'HH12:MI AM') AS full_label,
+          date_trunc('hour', event_at AT TIME ZONE 'UTC')                        AS sort_key,
+          COALESCE(SUM(amount), 0)::numeric                                      AS revenue
         FROM revenue_events
         WHERE DATE(event_at AT TIME ZONE 'UTC') = CURRENT_DATE
         GROUP BY date_trunc('hour', event_at AT TIME ZONE 'UTC')
         ORDER BY sort_key ASC`;
     } else if (period === "weekly") {
+      // Axis: weekday only ("Tue") — the date used to also share the axis
+      // label ("Tue 28"), leaving no room for a distinct full-context
+      // tooltip; the full date now lives in full_label instead.
       sql = `${eventsCte}
         SELECT
-          TO_CHAR(DATE(event_at AT TIME ZONE 'UTC'), 'Dy DD') AS month,
-          DATE(event_at AT TIME ZONE 'UTC')                    AS sort_key,
-          COALESCE(SUM(amount), 0)::numeric                    AS revenue
+          TO_CHAR(DATE(event_at AT TIME ZONE 'UTC'), 'Dy')            AS month,
+          TO_CHAR(DATE(event_at AT TIME ZONE 'UTC'), 'Dy, DD Mon YYYY') AS full_label,
+          DATE(event_at AT TIME ZONE 'UTC')                            AS sort_key,
+          COALESCE(SUM(amount), 0)::numeric                            AS revenue
         FROM revenue_events
         WHERE event_at >= CURRENT_DATE - INTERVAL '6 days'
         GROUP BY DATE(event_at AT TIME ZONE 'UTC')
         ORDER BY sort_key ASC`;
     } else if (period === "yearly") {
+      // Axis: month only ("Jul") — the year used to sit right on the axis
+      // label ("Jul 26"); moved to full_label ("Jul 2026", 4-digit year) so
+      // the axis stays short across 12 ticks.
       sql = `${eventsCte}
         SELECT
-          TO_CHAR(date_trunc('month', event_at), 'Mon YY') AS month,
-          date_trunc('month', event_at)                     AS sort_key,
-          COALESCE(SUM(amount), 0)::numeric                 AS revenue
+          TO_CHAR(date_trunc('month', event_at), 'Mon')      AS month,
+          TO_CHAR(date_trunc('month', event_at), 'Mon YYYY') AS full_label,
+          date_trunc('month', event_at)                       AS sort_key,
+          COALESCE(SUM(amount), 0)::numeric                   AS revenue
         FROM revenue_events
         WHERE event_at >= NOW() - INTERVAL '12 months'
         GROUP BY date_trunc('month', event_at)
         ORDER BY sort_key ASC`;
     } else {
-      // monthly — daily data for the current calendar month
+      // monthly — daily data for the current calendar month, one tick per
+      // day of the month (never grouped into Week 1/2/3/4). FM strips the
+      // leading zero so the axis reads "1, 2, 3 … 28" not "01, 02, 03 … 28".
       sql = `${eventsCte}
         SELECT
-          TO_CHAR(DATE(event_at AT TIME ZONE 'UTC'), 'DD') AS month,
-          DATE(event_at AT TIME ZONE 'UTC')                 AS sort_key,
-          COALESCE(SUM(amount), 0)::numeric                 AS revenue
+          TO_CHAR(DATE(event_at AT TIME ZONE 'UTC'), 'FMDD')       AS month,
+          TO_CHAR(DATE(event_at AT TIME ZONE 'UTC'), 'DD Mon YYYY') AS full_label,
+          DATE(event_at AT TIME ZONE 'UTC')                         AS sort_key,
+          COALESCE(SUM(amount), 0)::numeric                         AS revenue
         FROM revenue_events
         WHERE date_trunc('month', event_at AT TIME ZONE 'UTC') = date_trunc('month', NOW() AT TIME ZONE 'UTC')
         GROUP BY DATE(event_at AT TIME ZONE 'UTC')
         ORDER BY sort_key ASC`;
     }
 
-    const { rows } = await pool.query<{ month: string; revenue: string }>(sql, [salonId]);
+    const { rows } = await pool.query<{ month: string; full_label: string; revenue: string }>(sql, [salonId]);
 
     return rows.map((row) => ({
       month: row.month,
+      fullLabel: row.full_label,
       revenue: parseFloat(row.revenue),
       expenses: 0,
     }));
@@ -405,7 +432,8 @@ export const salonDashboardRepository = {
 
     const { rows } = await pool.query<{ id: string; name: string; role: string; revenue: string }>(
       `WITH sales_rows AS (
-         SELECT sl.staff_id, sl.created_at AS event_at, sl.total_amount AS amount
+         -- ROUND — see getSummary's sales_rows for why.
+         SELECT sl.staff_id, sl.created_at AS event_at, ROUND(sl.total_amount) AS amount
          FROM sales sl
          LEFT JOIN appointments a ON a.id = sl.appointment_id
          WHERE sl.salon_id = $1
@@ -482,7 +510,8 @@ export const salonDashboardRepository = {
          GROUP BY staff_id
        ),
        sales_rows AS (
-         SELECT sl.staff_id, sl.total_amount AS amount
+         -- ROUND — see getSummary's sales_rows for why.
+         SELECT sl.staff_id, ROUND(sl.total_amount) AS amount
          FROM sales sl
          LEFT JOIN appointments a ON a.id = sl.appointment_id
          WHERE sl.salon_id = $1
@@ -520,9 +549,13 @@ export const salonDashboardRepository = {
          s.id,
          TRIM(COALESCE(s.first_name, '') || ' ' || COALESCE(s.last_name, '')) AS name,
          COALESCE(s.designation, 'Staff') AS role,
+         -- Initials only — first+last when both exist, else just the one
+         -- available name's first letter (never a literal "?" filler for a
+         -- missing last name, which is what NULLIF(...,'') || COALESCE
+         -- guards against below).
          UPPER(
-           LEFT(COALESCE(s.first_name, '?'), 1) ||
-           LEFT(COALESCE(s.last_name,  '?'), 1)
+           LEFT(COALESCE(s.first_name, ''), 1) ||
+           LEFT(COALESCE(NULLIF(s.last_name, ''), ''), 1)
          ) AS avatar,
          COALESCE(appt_stats.client_count, 0) AS client_count,
          COALESCE(sales_stats.revenue, 0)     AS revenue,
@@ -712,12 +745,8 @@ export const salonDashboardRepository = {
     const { rows } = await pool.query<{ id: string; name: string }>(
       `SELECT c.id, COALESCE(c.full_name, TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,''))) AS name
        FROM clients c
-       INNER JOIN (
-         SELECT client_id FROM appointments WHERE salon_id = $1 AND client_id IS NOT NULL AND deleted_at IS NULL
-         UNION
-         SELECT client_id FROM sales       WHERE salon_id = $1 AND client_id IS NOT NULL
-       ) visited ON visited.client_id = c.id
-       WHERE c.is_active = true
+       WHERE c.salon_id = $1
+         AND c.is_active = true
          AND c.birthday_day_month IS NOT NULL
          AND (
            -- Intended format is "MM-DD" (5 chars) — but most existing rows were

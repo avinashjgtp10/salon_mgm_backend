@@ -34,6 +34,14 @@ export interface CalculateTotalsBody {
   // (pricing.service.ts). Omit to default to the full available balance.
   membershipWalletRequested?: number;
 
+  // Percentage/loyalty membership discount. Intent only — there is no requested
+  // amount because the figure is fully determined by the plan's percentage, the
+  // eligible line total, and whatever discount balance is left.
+  applyMembershipDiscount?: boolean;
+  // Independent sibling flag for the salon-wide Loyalty discount — stacks
+  // additively with applyMembershipDiscount above when both are set.
+  applyLoyaltyDiscount?: boolean;
+
   applyRewardPoints?: boolean;
   rewardPointsToRedeem?: number;
 
@@ -50,9 +58,20 @@ export interface CalculateTotalsResponse {
   taxable: number;
   gstAmount: number;
   taxBreakdown: { name: string; rate: number; amount: number; inclusive: boolean }[];
+  // The fully-reduced bill total (Svc Discount, Extra Charges/Tip, Referral
+  // Discount, Membership Wallet, eWallet, Reward Points all already applied)
+  // — this IS what used to be a separate `effectiveTotal`/"Amount to Pay".
+  // There is no longer a distinct "gross bill before redemptions" field.
   grandTotal: number;
   roundOff: number;
-  effectiveTotal: number;
+  // Raw (unrounded) ceiling for sequentially capping Membership Wallet →
+  // eWallet → Reward Points → Referral Credit against what's actually still
+  // owed — see pricing.engine.ts's BillTotalsResult doc comment. Never
+  // rounded, never shown as its own Sale Summary row.
+  preRedemptionTotal: number;
+  // Display-only Subtotal with membership-wallet-covered amounts netted out —
+  // see pricing.engine.ts's BillTotalsResult doc comment.
+  displaySubtotal: number;
 
   // Per-row GST + taxable base, index-aligned with the serviceRows/packageRows/
   // productRows/membershipRows the caller sent — lets the live sale-building
@@ -61,12 +80,30 @@ export interface CalculateTotalsResponse {
   rowTax?: { service: number[]; packages: number[]; product: number[]; membership: number[] };
   rowTaxableAmount?: { service: number[]; packages: number[]; product: number[]; membership: number[] };
 
+  // Per-row membership discount (Discount Balance/Loyalty), index-aligned
+  // with serviceRows/productRows — same fill-in-order split already folded
+  // into rowTax above, exposed separately so the UI can show "-₹X Membership"
+  // against the row it actually reduced instead of only a bill-level total.
+  rowMembershipDiscount?: { service: number[]; product: number[] };
+
+  // Per-row membership WALLET coverage — same fill-in-order split (services
+  // first, then products) already folded into rowTax above, exposed
+  // separately so the UI can show a row's own wallet-covered amount without
+  // re-deriving the fill order client-side (which can disagree with this
+  // authoritative split once services and products compete for the same
+  // balance — see AppointmentModal.tsx's membershipWalletMap).
+  rowMembershipWallet?: { service: number[]; product: number[] };
+
   // Server-clamped amounts actually applied — authoritative, may be lower
   // than what was requested (real balance, coupon rejected, etc).
   appliedEWallet: number;
   appliedMembershipWallet: number;
   appliedRewardPointsValue: number;
   appliedReferralCredit: number;
+  // Pre-tax discount actually granted by a percentage/loyalty membership —
+  // already reflected inside totalDisc/taxable/grandTotal above, unlike the
+  // applied* redemptions which are only subtracted in effectiveTotal.
+  appliedMembershipDiscount: number;
 
   // Referral first-bill-discount eligibility preview (payments.service.ts
   // already computes this server-side at charge time — exposed here so the

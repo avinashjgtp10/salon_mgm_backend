@@ -41,6 +41,13 @@ function buildSyntheticSale(pkg: ClientPackage): { sale: Sale; items: SaleItem[]
     coupon_code: null,
     discount_percent: null,
     discount_type: null,
+    manual_discount_amount: '0',
+    coupon_id: null,
+    coupon_discount_amount: '0',
+    coupon_discount_type: null,
+    referral_discount_amount: '0',
+    referral_id: null,
+    referral_source: null,
   };
 
   const items: SaleItem[] =
@@ -137,7 +144,7 @@ export const clientPackagesService = {
     try {
       const gstAmt      = Number(pkg.gstAmount  || 0);
       const discountAmt = Number(pkg.discount    || 0);
-      await recordTransaction({
+      const txn = await recordTransaction({
         salon_id:        salonId,
         client_id:       dto.clientId,
         origin:          "package_purchase",
@@ -145,6 +152,7 @@ export const clientPackagesService = {
         split_details:   dto.splitDetails ?? undefined,
         discount_amount: discountAmt,
         tax_amount:      gstAmt,
+        staff_id:        dto.staffId,
         items: [{
           item_type:       "package",
           name:            pkg.packageName,
@@ -155,8 +163,13 @@ export const clientPackagesService = {
           // client-packages.repository.ts) is trivially this one item's tax.
           tax_amount:      gstAmt,
           taxable_amount:  Number(pkg.basePrice || 0),
+          staff_id:        dto.staffId,
         }],
       });
+
+      // Link this package row to its invoice-bearing sale so the Package
+      // Sale report can show invoice_no via a join.
+      await clientPackagesRepository.setSaleId(pkg.id, salonId, txn.sale.id);
     } catch (err) {
       logger.error('[clientPackagesService] Failed to auto-create sale for package purchase:', { error: err });
     }
@@ -243,9 +256,24 @@ export const clientPackagesService = {
     discount:     number,
     gstPercentage: number,
     expiryDate:   string,
+    appointmentId?: string,
+    // Staff on the checkout appointment, and the sales row the checkout's own
+    // recordTransaction() call already created for this bill — passed through
+    // so the Package Sale report can show Staff/Invoice No for packages sold
+    // as a line item on a bill, not just via the standalone Create Package form.
+    staffId?:     string,
+    saleId?:      string,
   ): Promise<void> {
     logger.info(`[client-packages/auto-create] salon=${salonId} client=${clientId} name="${packageName}" services=${services.length} price=${basePrice}`);
     try {
+      // Resolve the real method the client paid with off the linked sale —
+      // this flow has no payment method of its own at creation time (see
+      // the comment above), and "included_in_sale" as a stored value used to
+      // leak straight through to the Package Sale report/receipts instead of
+      // ever being resolved to cash/card/upi/etc.
+      const paymentMethod = saleId
+        ? (await clientPackagesRepository.getSalePaymentMethod(saleId, salonId)) ?? "included_in_sale"
+        : "included_in_sale";
       const created = await clientPackagesRepository.create(salonId, {
         clientId,
         packageName,
@@ -253,9 +281,14 @@ export const clientPackagesService = {
         basePrice,
         gstPercentage,
         discount,
-        paymentMethod: "included_in_sale",
+        paymentMethod,
         services,
+        appointmentId,
+        staffId,
       });
+      if (saleId) {
+        await clientPackagesRepository.setSaleId(created.id, salonId, saleId);
+      }
       logger.info(`[client-packages/auto-create] SUCCESS — client=${clientId}, package=${packageName}`);
       // Text only, no PDF here — the calling checkout flow (payments) already
       // sent one PDF covering this whole sale, package line included.

@@ -1,3 +1,5 @@
+import type { MembershipAppliesTo } from "../memberships/memberships.types";
+
 export interface ClientMembership {
   id: string;
   salonId: string;
@@ -16,8 +18,28 @@ export interface ClientMembership {
   status: 'active' | 'expired' | 'exhausted' | 'cancelled';
   pricePaid?: number;
   membershipWalletBalance: number;
-  appliesToProducts?: boolean;
+  /** Denormalized from the plan at purchase time — see memberships.types.ts. */
+  appliesTo: MembershipAppliesTo;
+  /** Optional narrowing of appliesTo to specific categories — empty means unrestricted. */
+  categoryIds: string[];
+  /** Denormalized plain-text description from the plan at purchase time — see memberships.types.ts. */
+  description?: string;
+  pricingType: 'value' | 'percentage' | 'loyalty';
+  discountPercent?: number;
+  /** 'percentage' only — discount still available to hand out, depletes by discount given. */
+  discountBalanceRemaining: number;
   usageLog?: UsageLogEntry[];
+  // Set only when this row was auto-created as a byproduct of paying an
+  // appointment that had this membership as a line item — that value is
+  // already counted in the appointment's own total, so client-revenue
+  // aggregation (useClientDetails.ts) must skip any row with this set to
+  // avoid double-counting. NULL/undefined means a genuine standalone sale.
+  appointmentId?: string | null;
+  // Staff who sold the membership, and the sales row recordTransaction()
+  // (or the checkout that bundled this membership) created for it — for
+  // invoice_no lookup. NULL on rows sold before these columns existed.
+  staffId?: string | null;
+  saleId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -54,6 +76,10 @@ export interface CreateClientMembershipDTO {
   paymentMethod?: string;
   /** Method -> amount breakdown, present only when paymentMethod is a split combo. */
   splitDetails?: Record<string, number>;
+  /** Set only by autoCreateFromPayment — the appointment this membership was sold within. */
+  appointmentId?: string | null;
+  /** Staff member who sold this membership — feeds client_memberships.staff_id and the sales/sale_items rows recordTransaction() creates. */
+  staffId?: string;
 }
 
 export interface ConsumeSessionDTO {
@@ -73,6 +99,20 @@ export interface WalletDeductionResult {
   totalWalletUsed: number;
   remainingBalance: number;
   perService: Array<{ serviceId?: string; walletUsed: number; customerPays: number }>;
+  reused: boolean;
+}
+
+export interface DiscountDeductionServiceInput {
+  serviceId?: string;
+  serviceName?: string;
+  /** Pre-discount line amount the percentage is applied to. */
+  amount: number;
+}
+
+export interface DiscountDeductionResult {
+  totalDiscountGiven: number;
+  remainingBalance: number;
+  perService: Array<{ serviceId?: string; discountGiven: number }>;
   reused: boolean;
 }
 
@@ -102,7 +142,15 @@ export interface ClientMembershipRow {
   status: string;
   price_paid?: string | null;
   membership_wallet_balance?: string | number | null;
-  applies_to_products?: boolean | null;
+  applies_to?: MembershipAppliesTo | null;
+  category_ids?: string[] | null;
+  description?: string | null;
+  pricing_type?: string | null;
+  discount_percent?: string | number | null;
+  discount_balance_remaining?: string | number | null;
+  appointment_id?: string | null;
+  staff_id?: string | null;
+  sale_id?: string | null;
   created_at: string;
   updated_at: string;
 }

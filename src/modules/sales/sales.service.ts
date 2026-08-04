@@ -62,7 +62,7 @@ export const salesService = {
                 countryCode:   (sale as any).client_phone_code ?? null,
                 variables: {
                     "1": (sale as any).client_name  ?? "Valued Customer",
-                    "2": sale.id.slice(0, 8).toUpperCase(),
+                    "2": sale.invoice_number ?? "",
                     "3": String(sale.total_amount   ?? "0"),
                     "4": (sale as any).salon_name   ?? "our salon",
                 },
@@ -276,6 +276,10 @@ export const salesService = {
                             totalSessions,
                             pricePaid,
                             mem.colour,
+                            undefined,
+                            sale.appointment_id ?? undefined,
+                            item.staff_id ?? sale.staff_id ?? undefined,
+                            sale.id,
                         );
                     } catch (err: any) {
                         logger.warn("[sales/checkout] membership auto-create failed:", err?.message ?? err);

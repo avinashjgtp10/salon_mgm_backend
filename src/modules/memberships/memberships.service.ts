@@ -50,6 +50,10 @@ export const membershipsService = {
     return membershipsRepository.create(data, salonId);
   },
 
+  async getLoyaltyEligibility(clientId: string, salonId: string) {
+    return membershipsRepository.findLoyaltyEligibility(clientId, salonId);
+  },
+
   async getById(id: string, salonId: string) {
     const m = await membershipsRepository.findById(id, salonId);
     if (!m) throw new Error(`Membership '${id}' not found`);

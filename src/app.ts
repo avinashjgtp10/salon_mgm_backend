@@ -58,6 +58,11 @@ import { ensurePackageTemplateTables } from "./modules/package-templates/package
 import clientMembershipsRoutes from "./modules/client-memberships/client-memberships.routes";
 import { ensureTable as ensureClientMembershipsTables } from "./modules/client-memberships/client-memberships.repository";
 import ewalletRoutes from "./modules/ewallet/ewallet.routes";
+import rewardPointsRoutes from "./modules/reward-points/reward-points.routes";
+import referralRoutes from "./modules/referral/referral.routes";
+import clientNotesRoutes from "./modules/client-notes/client-notes.routes";
+import { ensureTable as ensureClientNotesTable } from "./modules/client-notes/client-notes.repository";
+import clientCommunicationRoutes from "./modules/client-communication/client-communication.routes";
 import { ensureTable as ensurePaymentsTables } from "./modules/payments/payments.repository";
 import { ensureTable as ensureAppointmentsTables } from "./modules/appointments/appointments.repository";
 import cashManagementRoutes from "./modules/cash-management/cash-management.routes";
@@ -89,6 +94,11 @@ ensureClientMembershipsTables().catch(err =>
 // Bootstrap payments table wallet column (idempotent)
 ensurePaymentsTables().catch(err =>
   logger.warn("payments table init warning:", err?.message ?? err),
+);
+
+// Bootstrap client_notes table (idempotent)
+ensureClientNotesTable().catch(err =>
+  logger.warn("client_notes table init warning:", err?.message ?? err),
 );
 
 // Bootstrap appointments table apply_membership_wallet column (idempotent)
@@ -218,6 +228,8 @@ app.use("/api/v1/branches", branchesRoutes);
 app.use("/api/v1/staff", staffRoutes);
 app.use("/api/v1/commission-rules", commissionRulesRoutes);
 app.use("/api/v1/clients", clientsRoutes);
+app.use("/api/v1/clients", clientNotesRoutes);
+app.use("/api/v1/clients", clientCommunicationRoutes);
 app.use("/api/v1/services", servicesRoutes);
 app.use("/api/v1/marketplace", marketplaceRoutes);
 app.use("/api/v1/memberships", membershipsRoutes);
@@ -255,6 +267,8 @@ app.use("/api/v1/devices", deviceApiRouter);
 app.use("/api/v1/package-templates", packageTemplatesRoutes);
 app.use("/api/v1/client-memberships", clientMembershipsRoutes);
 app.use("/api/v1/ewallet", ewalletRoutes);
+app.use("/api/v1/reward-points", rewardPointsRoutes);
+app.use("/api/v1/referral", referralRoutes);
 app.use("/api/v1/super-admin", superAdminRoutes);
 app.use("/api/v1/demo-requests", demoRequestsRoutes);
 app.use("/api/v1/support", supportRoutes);

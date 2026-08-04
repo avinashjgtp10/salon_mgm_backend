@@ -615,13 +615,19 @@ export const staffWagesService = {
 
 export const staffCommissionsService = {
     // ── Summary: total earned, paid, pending for the whole salon ─────────────
-    async getSalonSummary(salonId: string, month?: string, startDate?: string, endDate?: string) {
-        return commissionCalculationService.getSalonSummary(salonId, month, startDate, endDate);
+    async getSalonSummary(
+        salonId: string, month?: string, startDate?: string, endDate?: string,
+        staffIds?: string[], category?: string
+    ) {
+        return commissionCalculationService.getSalonSummary(salonId, month, startDate, endDate, staffIds, category);
     },
 
     // ── Earned commissions grouped by staff ───────────────────────────────────
-    async getEarnedBySalon(salonId: string, month?: string, startDate?: string, endDate?: string) {
-        return commissionCalculationService.getEarnedBySalon(salonId, month, startDate, endDate);
+    async getEarnedBySalon(
+        salonId: string, month?: string, startDate?: string, endDate?: string,
+        staffIds?: string[], category?: string, status?: string
+    ) {
+        return commissionCalculationService.getEarnedBySalon(salonId, month, startDate, endDate, staffIds, category, status);
     },
 
     // ── Mark all pending commissions as paid for a staff member ───────────────

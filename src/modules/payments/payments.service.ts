@@ -2,6 +2,7 @@ import { paymentsRepository } from './payments.repository';
 import { couponsRepository } from '../coupons/coupons.repository';
 import { appointmentsRepository } from '../appointments/appointments.repository';
 import { recordTransaction } from '../transactions/transaction-recorder.service';
+import { describePaymentMethod } from '../transactions/payment-method.util';
 import { membershipsRepository } from '../memberships/memberships.repository';
 import { clientMembershipsService } from '../client-memberships/client-memberships.service';
 import { clientMembershipsRepository } from '../client-memberships/client-memberships.repository';
@@ -23,8 +24,105 @@ import { staffService } from '../staff/staff.service';
 import { clientsRepository } from '../clients/clients.repository';
 import { getIO } from '../../config/socket';
 import { getActiveTaxes } from '../settings/tax.util';
-import { computeBillTotals } from '../pricing/pricing.engine';
+import { computeBillTotals, allocateMembershipDiscount } from '../pricing/pricing.engine';
 import pool from '../../config/database';
+
+interface DiscountEligibleItem {
+  itemId?: string;
+  name?: string;
+  /** Post-per-row-discount line total the percentage applies to. */
+  amount: number;
+  isPackageService: boolean;
+  categoryId?: string;
+}
+
+// Optional narrowing of appliesTo to specific categories — empty/undefined
+// means unrestricted, preserving today's behavior for every plan that
+// doesn't use this feature.
+function matchesCategoryRestriction(item: DiscountEligibleItem, categoryIds: string[] | undefined): boolean {
+  return !categoryIds?.length || (!!item.categoryId && categoryIds.includes(item.categoryId));
+}
+
+interface MembershipDiscountResult {
+  total: number;
+  /** Keyed by itemId (service_id or product_id) — lets the tax engine exclude
+   *  each row's OWN discount from its taxable base, not a uniform ratio. */
+  perItem: Map<string, number>;
+}
+
+// Money is stored as NUMERIC(10,2); percentages of arbitrary line amounts
+// routinely produce more precision than that, so every accumulation step is
+// rounded to keep the total exactly reconstructable from its per-item parts.
+const round2 = (v: number): number => Math.round((v + Number.EPSILON) * 100) / 100;
+
+/**
+ * Grants — and, for the percentage type, actually spends — a membership
+ * discount for this appointment, returning both the total and a per-item
+ * breakdown of exactly which rows it landed on.
+ *
+ * Discount Balance and Loyalty are independently toggled by staff (the
+ * `applyPercentage`/`applyLoyalty` flags) and stack additively when both are
+ * on — each source computes its own % off the SAME pre-discount line amount
+ * (e.g. 30% + 10% = 40% off), rather than one compounding on top of the
+ * other's already-reduced price. Loyalty writes no ledger row because it has
+ * no balance to spend and no client_memberships row to attach one to — it is
+ * recomputed deterministically from the same rows on every call instead.
+ */
+async function applyMembershipDiscountForBooking(
+  salonId: string,
+  clientId: string,
+  appointmentId: string,
+  serviceItems: DiscountEligibleItem[],
+  productItems: DiscountEligibleItem[],
+  applyPercentage: boolean,
+  applyLoyalty: boolean,
+): Promise<MembershipDiscountResult> {
+  let total = 0;
+  const perItem = new Map<string, number>();
+  const addDiscount = (itemId: string, amount: number) => {
+    perItem.set(itemId, round2((perItem.get(itemId) ?? 0) + amount));
+  };
+
+  if (applyPercentage) {
+    const percentageMembership = await clientMembershipsRepository.findActivePercentageForClient(clientId, salonId);
+    if (percentageMembership) {
+      const appliesTo = percentageMembership.appliesTo;
+      const categoryIds = percentageMembership.categoryIds;
+      const eligible = [
+        ...(appliesTo !== 'products' ? serviceItems.filter((i) => !i.isPackageService && i.amount > 0 && matchesCategoryRestriction(i, categoryIds)) : []),
+        ...(appliesTo !== 'services' ? productItems.filter((i) => i.amount > 0 && matchesCategoryRestriction(i, categoryIds)) : []),
+      ];
+      if (eligible.length) {
+        const result = await clientMembershipsRepository.deductDiscountBalanceForBooking(
+          percentageMembership.id,
+          salonId,
+          {
+            appointmentId,
+            discountPercent: percentageMembership.discountPercent ?? 0,
+            services: eligible.map((i) => ({ serviceId: i.itemId, serviceName: i.name, amount: i.amount })),
+          },
+        );
+        total += result.totalDiscountGiven;
+        result.perService.forEach((r) => { if (r.serviceId) addDiscount(String(r.serviceId), r.discountGiven); });
+      }
+    }
+  }
+
+  if (applyLoyalty) {
+    const loyalty = await membershipsRepository.findLoyaltyEligibility(clientId, salonId);
+    if (loyalty?.eligible) {
+      const eligible = [
+        ...(loyalty.appliesTo !== 'products' ? serviceItems.filter((i) => !i.isPackageService && i.amount > 0 && matchesCategoryRestriction(i, loyalty.categoryIds)) : []),
+        ...(loyalty.appliesTo !== 'services' ? productItems.filter((i) => i.amount > 0 && matchesCategoryRestriction(i, loyalty.categoryIds)) : []),
+      ];
+      const { total: loyaltyTotal, discounts } = allocateMembershipDiscount(eligible.map((i) => i.amount), loyalty.discountPercent, Infinity);
+      total += loyaltyTotal;
+      eligible.forEach((item, i) => { if (item.itemId && discounts[i] > 0) addDiscount(String(item.itemId), discounts[i]); });
+    }
+  }
+
+  return { total: round2(total), perItem };
+}
 
 export const paymentsService = {
 
@@ -62,6 +160,10 @@ export const paymentsService = {
     // (falls back to 0 per item) if that call throws.
     let rowTaxByBucket: { service: number[]; packages: number[]; product: number[]; membership: number[] } | undefined;
     let rowTaxableByBucket: { service: number[]; packages: number[]; product: number[]; membership: number[] } | undefined;
+    // Hoisted for the visit-counter block after the payment row exists. A visit
+    // must be counted once per appointment, so a partial payment followed by a
+    // completing one may only ever increment on the first of the two.
+    let isFirstPaymentForAppointment = false;
 
     const isPackagePayment = (data.payment_method || '').toLowerCase() === 'package';
 
@@ -88,6 +190,14 @@ export const paymentsService = {
           const productTotal    = (appt.product_items    || []).reduce((s, i) => s + lineTotal(i), 0);
           const membershipTotal = (appt.membership_items || []).reduce((s, i) => s + lineTotal(i), 0);
           const rawSubtotal     = serviceTotal + packageTotal + productTotal + membershipTotal;
+          // ₹ of this bill covered by an already-purchased Package's included
+          // sessions (row.price/qty preserved at full catalog value even
+          // though row.total nets to 0 — see ServiceRow.tsx/useAppointment.ts).
+          // Hoisted onto `data` below so the recordTransaction call further
+          // down (outside this try block's scope) can read it.
+          data.package_covered_amount = (appt.services || [])
+            .filter((i: any) => !!i.is_package_service)
+            .reduce((s, i) => s + lineTotal(i), 0);
           // Rounded to the nearest whole rupee — matches computeTotals() on the
           // frontend (totalsUtils.ts), which is what the client actually sees/
           // pays. Rounding here (not after discount/wallet deductions) keeps
@@ -97,7 +207,41 @@ export const paymentsService = {
           // If the appointment has no priced items, fall through to frontend values
           if (!isFinite(actualBill) || actualBill <= 0) throw new Error('no_priced_items');
 
-          const frontendDiscount = Math.max(0, Number(data.discount_amount) || 0);
+          // discount_amount arrives as manual Svc Discount + coupon COMBINED
+          // (see usePayment.ts's payloadDiscount) — but they need to travel
+          // through computeBillTotals on different channels now: coupon stays
+          // pre-tax, Svc Discount is post-tax. manual_discount_amount (when
+          // sent) isolates the manual-only portion; the rest is coupon.
+          // Falling back to treating the whole combined figure as manual
+          // (coupon = 0) preserves today's behavior for any caller that
+          // hasn't been updated to send the new field yet.
+          const combinedFrontendDiscount = Math.max(0, Number(data.discount_amount) || 0);
+          const frontendManualDiscount = data.manual_discount_amount != null
+            ? Math.max(0, Number(data.manual_discount_amount) || 0)
+            : combinedFrontendDiscount;
+          const frontendCouponDiscount = Math.max(0, combinedFrontendDiscount - frontendManualDiscount);
+          // Hoisted onto `data` so the recordTransaction call further down
+          // (a separate try block, out of this scope) can read the
+          // server-resolved manual/coupon split — see package_covered_amount
+          // just above for the same pattern.
+          data.manual_discount_amount = frontendManualDiscount;
+          data.coupon_discount_amount = frontendCouponDiscount;
+          // Resolved server-side by looking up the real coupon by code —
+          // never trusted from the frontend — so Sale Details/reports can
+          // show which coupon (and its id/discount type) actually applied,
+          // not just re-derive it from whatever the coupon looks like NOW
+          // (which can drift if it's later edited/deleted).
+          if (data.coupon_code && frontendCouponDiscount > 0) {
+            try {
+              const coupon = await couponsRepository.findByCodeForSalon(data.coupon_code, data.salon_id);
+              if (coupon) {
+                data.coupon_id = coupon.id;
+                data.coupon_discount_type = coupon.type;
+              }
+            } catch (err: any) {
+              logger.warn('[payments] coupon lookup for persistence failed:', err?.message ?? err);
+            }
+          }
           const ewalletRequested = Math.max(0, Number(data.ewallet_used)    || 0);
 
           // Sum previously paid amounts across all prior payments for this appointment.
@@ -105,6 +249,7 @@ export const paymentsService = {
           // FIRST payment attempt for an appointment, never re-applied on a second
           // (e.g. completing) call for the same bill.
           const existingPaid = await paymentsRepository.getTotalPaidForAppointment(data.appointment_id);
+          isFirstPaymentForAppointment = existingPaid === 0;
 
           // ── Refer & Earn: welcome reward for the referred client's first
           // qualifying bill ────────────────────────────────────────────────────
@@ -125,6 +270,11 @@ export const paymentsService = {
                 if (refConfig.active && refConfig.referee_reward_amount > 0) {
                   if (actualBill >= refConfig.min_bill_amount) {
                     referralDiscount = Math.min(refConfig.referee_reward_amount, actualBill);
+                    // Persisted onto the sale below (referral_id/referral_source)
+                    // so Sale Details/Client History can show who referred this
+                    // client, not just that "some" referral discount applied.
+                    data.referral_id = referredClient.referred_by_client_id;
+                    data.referral_source = 'referral_program';
                   } else {
                     refereeWalletCredit = refConfig.referee_reward_amount;
                     // Own dedicated referral balance now — no longer eWallet money.
@@ -146,11 +296,13 @@ export const paymentsService = {
             }
           }
           data.referral_discount_applied = referralDiscount;
-          const discount = frontendDiscount + referralDiscount;
           // Persist the combined figure — the sale-creation block below reads
           // data.discount_amount to net revenue, and it must include this
           // referral piece too, same as it already does for coupon/manual.
-          data.discount_amount = discount;
+          // computeBillTotals below is given the three components separately
+          // (frontendManualDiscount/frontendCouponDiscount/referralDiscount) —
+          // this combined figure is ONLY for sale-record revenue netting.
+          data.discount_amount = combinedFrontendDiscount + referralDiscount;
 
           // Both are real amounts the client actually pays alongside the bill —
           // an ex-charge (business keeps it) and a tip (passed to staff) — so
@@ -182,17 +334,93 @@ export const paymentsService = {
           // so this is a safe, slightly conservative estimate) and
           // recomputing the exact final figure with computeBillTotals() once
           // every actual deduction is known.
+          // ── Membership discount (percentage / loyalty) ──────────────────────
+          // Resolved BEFORE the ceiling, unlike the four redemptions below,
+          // because this is a genuine pre-tax price reduction: it lowers the
+          // taxable base and therefore the grand total everything else is
+          // capped against. Deducting the pool is idempotent per appointment
+          // (same contract as the wallet), so repeat/partial payment calls
+          // re-read the already-given amount instead of granting it twice.
+          let membershipDiscountUsed = 0;
+          // Keyed by service_id/product_id — lets the tax engine exclude each
+          // row's OWN discount from its taxable base below, mirroring
+          // walletUsedByItem. Empty in the fallback branch for a loyalty
+          // discount specifically (no ledger row exists to read it back from,
+          // since loyalty has no balance to protect) — the aggregate total
+          // still stays correct via getMembershipDiscountForAppointment, only
+          // the per-ROW GST split degrades to 0 in that narrow, repeat-call
+          // edge case.
+          let membershipDiscountByItem = new Map<string, number>();
+          if (data.client_id && (data.apply_membership_discount || data.apply_loyalty_discount)) {
+            try {
+              const result = await applyMembershipDiscountForBooking(
+                data.salon_id, data.client_id, data.appointment_id,
+                (appt.services || []).map(s => ({
+                  itemId: s.service_id, name: s.name,
+                  amount: lineTotal(s), isPackageService: !!(s as any).is_package_service,
+                  categoryId: s.category_id ?? undefined,
+                })),
+                (appt.product_items || []).filter(p => !!p.product_id).map(p => ({
+                  itemId: p.product_id as string, name: p.name,
+                  amount: lineTotal(p), isPackageService: false,
+                  categoryId: p.category_id ?? undefined,
+                })),
+                !!data.apply_membership_discount,
+                !!data.apply_loyalty_discount,
+              );
+              membershipDiscountUsed = result.total;
+              membershipDiscountByItem = result.perItem;
+            } catch (err: any) {
+              logger.warn('[payments] membership discount failed:', err?.message ?? err);
+            }
+          } else if (data.client_id) {
+            // Box unchecked, but a prior call on this appointment may already
+            // have granted it — it cannot be un-granted, so the bill has to
+            // keep reflecting it.
+            // Prior payments, not the usage ledger — this has to cover loyalty
+            // too, which grants a discount without ever writing a ledger row.
+            membershipDiscountUsed = await paymentsRepository
+              .getMembershipDiscountForAppointment(data.appointment_id).catch(() => 0);
+            // Recover the per-item split too, if a percentage membership's
+            // ledger has it (loyalty never writes one — see comment above).
+            membershipDiscountByItem = await clientMembershipsRepository
+              .getDiscountGivenPerItemForAppointment(data.appointment_id).catch(() => new Map<string, number>());
+          }
+          data.membership_discount_used = membershipDiscountUsed;
+
+          // Bucket split of the discount, computed once and reused by BOTH
+          // computeBillTotals calls below — gstAmount is computed from this
+          // per-bucket carve-out, not from membershipDiscountAmount directly,
+          // so omitting it here (even though only `taxable`/`grandTotal` from
+          // this preliminary call actually get used as the redemption ceiling)
+          // would silently overstate the ceiling's own tax component.
+          const membershipServiceDiscountUsed = (appt.services || []).reduce(
+            (s, i) => s + (membershipDiscountByItem.get(String(i.service_id)) ?? 0), 0,
+          );
+          const membershipProductDiscountUsed = (appt.product_items || []).reduce(
+            (s, i) => s + (membershipDiscountByItem.get(String(i.product_id)) ?? 0), 0,
+          );
+
           const activeTaxesForCeiling = data.include_gst === false ? [] : await getActiveTaxes(data.salon_id).catch(() => []);
           const preliminaryTotals = computeBillTotals({
             actualAmounts: { service: serviceTotal, packages: packageTotal, product: productTotal, membership: membershipTotal },
             discountType: 'flat',
-            discountValue: discount,
+            discountValue: frontendManualDiscount,
+            couponDiscount: frontendCouponDiscount,
+            membershipDiscountAmount: membershipDiscountUsed,
+            membershipServiceDiscountUsed,
+            membershipProductDiscountUsed,
+            referralDiscount,
             taxes: activeTaxesForCeiling,
             exCharges: exChargesAmt,
             tip: tipAmt,
             roundSubtotalBeforeDiscount: true,
           });
-          let remaining = preliminaryTotals.grandTotal;
+          // Ceiling for the sequential Membership Wallet → eWallet → Reward
+          // Points → Referral Credit capping below — rooted in the raw
+          // pre-redemption total, NOT grandTotal (which now already has those
+          // redemptions subtracted and would double-count as a ceiling).
+          let remaining = preliminaryTotals.preRedemptionTotal;
 
           // ── Membership wallet: redeem against services, plus products when the
           // client's membership opted in ──────────────────────────────────────
@@ -212,25 +440,29 @@ export const paymentsService = {
           if (data.client_id) {
             try {
               if (data.apply_membership_wallet) {
-                const itemsForWallet = (appt.services || []).map(s => ({
-                  serviceId:   s.service_id,
-                  serviceName: s.name,
-                  amount:      (Number(s.price) || 0) * qty(s),
-                }));
-                // Per-membership toggle — a product only becomes redeemable once
-                // at least one of the client's active memberships explicitly
-                // allows it (memberships.applies_to_products); by default
-                // products are excluded, same as before this feature existed.
-                const productsEligible = await clientMembershipsService.isProductEligible(data.salon_id, data.client_id);
-                if (productsEligible) {
-                  itemsForWallet.push(...(appt.product_items || [])
+                // Per-membership applies_to setting — a plan can now be
+                // services-only, products-only, or both; services are no
+                // longer unconditionally eligible the way they used to be
+                // before "products only" existed as an option.
+                const { coversServices, coversProducts, serviceCategoryIds, productCategoryIds } =
+                  await clientMembershipsService.getWalletCoverage(data.salon_id, data.client_id);
+                const itemsForWallet = [
+                  ...(coversServices ? (appt.services || [])
+                    .filter(s => !serviceCategoryIds?.length || (s.category_id && serviceCategoryIds.includes(s.category_id)))
+                    .map(s => ({
+                      serviceId:   s.service_id,
+                      serviceName: s.name,
+                      amount:      (Number(s.price) || 0) * qty(s),
+                    })) : []),
+                  ...(coversProducts ? (appt.product_items || [])
                     .filter(p => !!p.product_id)
+                    .filter(p => !productCategoryIds?.length || (p.category_id && productCategoryIds.includes(p.category_id)))
                     .map(p => ({
                       serviceId:   p.product_id as string,
                       serviceName: p.name,
                       amount:      (Number(p.price) || 0) * qty(p),
-                    })));
-                }
+                    })) : []),
+                ];
                 if (itemsForWallet.length > 0 && remaining > 0) {
                   // Cap at whatever's still left on the bill, not just
                   // whatever the staff requested — otherwise this could
@@ -358,8 +590,19 @@ export const paymentsService = {
           // Previously tax was skipped entirely here, so the receipt correctly
           // displayed tax but the appointment could be marked "Paid" for less
           // than what was shown to the client.
-          let grandTotal = Math.round(actualBill - discount + exChargesAmt + tipAmt);
-          let effectiveBill = Math.max(0, grandTotal - ewallet - membershipWalletUsed - rewardPointsRedeemedValue - referralCreditRequestedValue);
+          // Fallback if computeBillTotals below throws. membershipDiscountUsed
+          // and frontendCouponDiscount are pre-tax reductions; Extra Charges
+          // are added after (Tip is NOT — Staff Tip is display/record-only,
+          // never collected as part of the bill, see pricing.engine.ts);
+          // Referral Discount and the redemptions are all subtracted after
+          // that — grandTotal here already IS the fully-reduced figure
+          // (merged with what used to be a separate effectiveBill concept),
+          // matching computeBillTotals's new formula.
+          let grandTotal = Math.round(Math.max(0,
+            actualBill - frontendManualDiscount - frontendCouponDiscount - membershipDiscountUsed
+          ) + exChargesAmt - referralDiscount - ewallet - membershipWalletUsed
+            - rewardPointsRedeemedValue - referralCreditRequestedValue);
+          let effectiveBill = grandTotal;
           try {
             const activeTaxes = data.include_gst === false ? [] : await getActiveTaxes(data.salon_id);
             // Same lineTotal fallback used by itemDiscount() further down
@@ -375,7 +618,12 @@ export const paymentsService = {
             const result = computeBillTotals({
               actualAmounts: { service: serviceTotal, packages: packageTotal, product: productTotal, membership: membershipTotal },
               discountType: 'flat',
-              discountValue: discount,
+              discountValue: frontendManualDiscount,
+              couponDiscount: frontendCouponDiscount,
+              membershipDiscountAmount: membershipDiscountUsed,
+              membershipServiceDiscountUsed,
+              membershipProductDiscountUsed,
+              referralDiscount,
               taxes: activeTaxes,
               exCharges: exChargesAmt,
               tip: tipAmt,
@@ -385,6 +633,7 @@ export const paymentsService = {
                 service: (appt.services || []).map(s => ({
                   price: Number(s.price) || 0, qty: Number(s.quantity) || 1, total: rowTotal(s),
                   walletUsed: walletUsedByItem.get(String(s.service_id)) ?? 0,
+                  membershipDiscountUsed: membershipDiscountByItem.get(String(s.service_id)) ?? 0,
                 })),
                 packages: (appt.package_items || []).map(p => ({
                   price: Number(p.price) || 0, qty: Number(p.quantity) || 1, total: rowTotal(p),
@@ -392,6 +641,7 @@ export const paymentsService = {
                 product: (appt.product_items || []).map(p => ({
                   price: Number(p.price) || 0, qty: Number(p.quantity) || 1, total: rowTotal(p),
                   walletUsed: walletUsedByItem.get(String(p.product_id)) ?? 0,
+                  membershipDiscountUsed: membershipDiscountByItem.get(String(p.product_id)) ?? 0,
                 })),
                 membership: (appt.membership_items || []).map(m => ({
                   price: Number(m.price) || 0, qty: Number(m.quantity) || 1, total: rowTotal(m),
@@ -415,10 +665,21 @@ export const paymentsService = {
             });
             taxAmount = result.gstAmount;
             grandTotal = result.grandTotal;
-            effectiveBill = result.effectiveTotal;
+            effectiveBill = result.grandTotal;
             taxableAmount = result.taxable;
             rowTaxByBucket = result.rowTax;
             rowTaxableByBucket = result.rowTaxableAmount;
+            // Overwrite whatever the frontend sent with this call's own
+            // authoritative recomputation — same reasoning as gross_amount/
+            // net_amount/paid_amount/due_amount below, which already don't
+            // trust the frontend. Without this, payments.repository.ts's
+            // INSERT persisted data.tax_breakdown verbatim from the request
+            // body, so the receipt/View Appointment always showed whatever
+            // GST the frontend's own (possibly stale, or simply differently-
+            // computed) preview had — e.g. computed on the pre-membership-
+            // -discount subtotal — even though this call had just computed
+            // the correct, discount-aware figure right here.
+            data.tax_breakdown = result.taxBreakdown;
           } catch (err: any) {
             logger.warn('[payments] tax computation failed:', err?.message ?? err);
           }
@@ -454,6 +715,19 @@ export const paymentsService = {
       data.paid_amount  = 0;
       data.due_amount   = 0;
       data.status       = 'completed';
+    }
+
+    // Reports that read payments.payment_method directly (e.g. Sales Summary's
+    // COALESCE(pay.latest_method, ...) — see reports.repository.ts) must see
+    // the same corrected source, not the frontend's raw (often wrong, see
+    // buildMethodLabel()'s "Cash" fallback) label. payments.payment_method has
+    // no CHECK constraint, so it can carry the full readable "Package + Cash"
+    // form directly rather than the constrained sales.payment_method enum.
+    if (!isPackagePayment) {
+      data.payment_method = describePaymentMethod(data.payment_method || '', data.split_details, {
+        package: data.package_covered_amount,
+        membership: (Number(data.membership_wallet_used) || 0) + (Number(data.membership_discount_used) || 0),
+      });
     }
 
     // Payment creation and the reward-points redemption ledger write must
@@ -524,6 +798,19 @@ export const paymentsService = {
         });
       } catch (err: any) {
         logger.warn('[payments] referral credit redeem ledger write failed:', err?.message ?? err);
+      }
+    }
+
+    // ── Visit counter: powers loyalty-membership thresholds ────────────────
+    // Counted on the first payment for an appointment rather than on
+    // completion, so a bill left partially paid still registers the visit —
+    // the client did turn up. Non-fatal: a failure here must never block a
+    // payment, it only delays a loyalty unlock.
+    if (data.client_id && !isPackagePayment && isFirstPaymentForAppointment) {
+      try {
+        await clientsRepository.recordVisit(data.client_id, data.salon_id);
+      } catch (err: any) {
+        logger.warn('[payments] visit counter update failed:', err?.message ?? err);
       }
     }
 
@@ -613,6 +900,12 @@ export const paymentsService = {
         // Non-fatal: payment is still recorded
       }
     }
+
+    // Captured inside the recordTransaction block below (when it runs) so the
+    // package/membership auto-create calls further down — outside that
+    // block's own try/scope — can still link back to this bill's real sale
+    // row for Invoice No / Staff lookups.
+    let checkoutSaleId: string | undefined;
 
     // ── Auto-create sale record when calendar payment is fully completed ───────
     // Skip for package payments — revenue was already counted when the package was purchased.
@@ -706,17 +999,36 @@ export const paymentsService = {
           // counts the same money as revenue a second time. (eWallet, by
           // contrast, is correctly NOT subtracted — top-ups and referral
           // credits are never counted as revenue when added, only when spent.)
-          discount_amount: (Number(data.discount_amount) || 0) + (Number(data.membership_wallet_used) || 0),
+          //
+          // A membership discount is subtracted for a different reason: `items`
+          // below carry their full pre-discount prices, and sales.repository.ts
+          // computes revenue as subtotal - discount_amount, so omitting it would
+          // book revenue the client was never charged.
+          discount_amount: (Number(data.discount_amount) || 0)
+            + (Number(data.membership_wallet_used) || 0)
+            + (Number(data.membership_discount_used) || 0),
           tax_amount: taxAmount,
           ex_charges: exChargesAmt,
           tip_amount: tipAmt,
           payment_label: data.payment_method || '',
           split_details: data.split_details ?? undefined,
+          source_amounts: {
+            package: data.package_covered_amount || 0,
+            membership: (Number(data.membership_wallet_used) || 0) + (Number(data.membership_discount_used) || 0),
+          },
           coupon_code: data.coupon_code || undefined,
           discount_type: appt.discount_type || undefined,
           discount_percent: appt.discount_type === 'percentage' ? Number(appt.discount_value ?? 0) : undefined,
+          manual_discount_amount: data.manual_discount_amount,
+          coupon_id: data.coupon_id,
+          coupon_discount_amount: data.coupon_discount_amount,
+          coupon_discount_type: data.coupon_discount_type,
+          referral_discount_amount: data.referral_discount_applied,
+          referral_id: data.referral_id,
+          referral_source: data.referral_source,
           items,
         });
+        checkoutSaleId = sale.id;
 
         // Note: appointment.status is managed by the checkout flow
         // (POST /api/v1/appointments/:id/checkout) to avoid double-completion
@@ -822,6 +1134,67 @@ export const paymentsService = {
       }
     }
 
+    // ── Zero-revenue sale record for package-covered visits ──────────────────
+    // A service/product paid entirely from an already-purchased package's
+    // included sessions collects no new money — the package's price was
+    // already booked as revenue when the package itself was bought, so this
+    // visit must NOT add revenue again. But without ANY sales row, the visit
+    // has no invoice number and no recorded staff anywhere (Sales Summary,
+    // Package Sale report, staff commission, etc. all show nothing for it).
+    // Record the sale with every item's own price fully offset by an equal
+    // discount, so subtotal/total_amount net to exactly 0 — same "wallet"
+    // payment_method already used for e-wallet-covered visits (no schema
+    // change), just for package sessions instead.
+    if (data.appointment_id && data.status === 'completed' && appt && isPackagePayment) {
+      try {
+        const items: Array<{ item_type: 'service' | 'package' | 'product' | 'membership'; item_id?: string; staff_id?: string; name: string; quantity: number; unit_price: number; discount_amount: number }> = [
+          ...(appt.services || []).map((s) => ({
+            item_type: 'service' as const,
+            item_id: s.service_id,
+            staff_id: s.staff_id || undefined,
+            name: s.name || 'Service',
+            quantity: Number(s.quantity) || 1,
+            unit_price: Number(s.price) || 0,
+            discount_amount: Number(s.price) || 0,
+          })),
+          ...(appt.product_items || []).map((p) => ({
+            item_type: 'product' as const,
+            item_id: p.product_id || undefined,
+            staff_id: p.staff_id || undefined,
+            name: p.name || 'Product',
+            quantity: Number(p.quantity) || 1,
+            unit_price: Number(p.price) || 0,
+            discount_amount: Number(p.price) || 0,
+          })),
+        ];
+
+        if (items.length > 0) {
+          const { sale } = await recordTransaction({
+            salon_id: data.salon_id,
+            client_id: data.client_id,
+            appointment_id: data.appointment_id,
+            staff_id: appt.staff_id || undefined,
+            origin: 'calendar_checkout',
+            // Every item's unit_price is exactly matched by its own
+            // discount_amount above, so subtotal (and therefore
+            // total_amount) is always 0 here — no revenue recorded twice.
+            // This whole visit was covered by the package's included
+            // sessions, so payment_method must read 'package', not the old
+            // 'wallet' workaround — see payment-method.util.ts. source_amounts
+            // takes priority whenever it's > 0; payment_label only matters as
+            // a fallback for the never-really-happens case of a ₹0 catalog item.
+            payment_label: 'ewallet',
+            source_amounts: { package: items.reduce((s, i) => s + i.unit_price * i.quantity, 0) },
+            items,
+          });
+          checkoutSaleId = sale.id;
+        }
+      } catch (err) {
+        logger.error('[paymentsService] Failed to auto-create zero-revenue sale for package-covered visit:', { error: err });
+        // Non-fatal: payment is already recorded
+      }
+    }
+
     // Payment email is handled by appointments.service checkout — skip here to avoid duplicates
 
     // ── Auto-create client_memberships when memberships are sold ─────────────
@@ -861,6 +1234,10 @@ export const paymentsService = {
               totalSessions,
               pricePaid,
               mem.colour,
+              undefined,
+              data.appointment_id,
+              item.staff_id || appt?.staff_id || undefined,
+              checkoutSaleId,
             );
           } catch (err: any) {
             logger.warn('[payments] membership auto-create failed:', err?.message ?? err);
@@ -886,7 +1263,16 @@ export const paymentsService = {
             let services: Array<{ serviceId?: string; serviceName: string; totalSessions: number; price: number }> = [];
             let basePrice      = Number(item.price ?? 0) * Number(item.quantity ?? 1);
             let discount       = 0;
-            let gstPercentage  = 0;
+            // Package Templates carry their own precise gst_percentage (set
+            // below when one resolves). A plain Catalog package has no tax
+            // rate of its own at all — the bill's actual GST on this line was
+            // computed client-side from Tax Mapping rules and folded into the
+            // appointment total, never broken back out per item. Falling back
+            // to the appointment's own blended rate is the same convention
+            // reports.repository.ts's unbilled-appointment CTE already uses
+            // for the identical "closest rate we actually have" situation,
+            // rather than silently leaving this package's own record at 0 GST.
+            let gstPercentage  = appt?.gst_percent ?? 0;
             let expiryDate     = "2099-12-31";
 
             const template = item.package_id
@@ -932,6 +1318,9 @@ export const paymentsService = {
               discount,
               gstPercentage,
               expiryDate,
+              data.appointment_id,
+              item.staff_id || appt?.staff_id || undefined,
+              checkoutSaleId,
             );
           } catch (err: any) {
             logger.warn('[payments] package auto-create failed:', err?.message ?? err);

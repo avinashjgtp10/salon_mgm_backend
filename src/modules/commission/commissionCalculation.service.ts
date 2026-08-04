@@ -90,7 +90,10 @@ const commissionEarnedRepository = {
         return rows;
     },
 
-    async summaryBySalon(salonId: string, month?: string, startDate?: string, endDate?: string): Promise<{
+    async summaryBySalon(
+        salonId: string, month?: string, startDate?: string, endDate?: string,
+        staffIds?: string[], category?: string
+    ): Promise<{
         total_commission: number;
         total_revenue: number;
         pending_payout: number;
@@ -98,14 +101,24 @@ const commissionEarnedRepository = {
         count: number;
     }> {
         const params: any[] = [salonId];
-        let dateFilter = "";
+        const clauses: string[] = [];
+        let idx = 2;
         if (startDate && endDate) {
-            dateFilter = `AND earned_at::date BETWEEN $2::date AND $3::date`;
+            clauses.push(`earned_at::date BETWEEN $${idx++}::date AND $${idx++}::date`);
             params.push(startDate, endDate);
         } else if (month) {
-            dateFilter = `AND date_trunc('month', earned_at) = date_trunc('month', $2::date)`;
+            clauses.push(`date_trunc('month', earned_at) = date_trunc('month', $${idx++}::date)`);
             params.push(`${month}-01`);
         }
+        if (staffIds && staffIds.length > 0) {
+            clauses.push(`staff_id = ANY($${idx++}::uuid[])`);
+            params.push(staffIds);
+        }
+        if (category) {
+            clauses.push(`category = $${idx++}`);
+            params.push(category);
+        }
+        const filter = clauses.length ? `AND ${clauses.join(" AND ")}` : "";
         const { rows } = await pool.query(
             `SELECT
                 COALESCE(SUM(commission_amount), 0)                           AS total_commission,
@@ -114,7 +127,7 @@ const commissionEarnedRepository = {
                 COALESCE(SUM(CASE WHEN status='paid'    THEN commission_amount ELSE 0 END), 0) AS paid_out,
                 COUNT(*)                                                      AS count
              FROM commission_earned
-             WHERE salon_id = $1 ${dateFilter}`,
+             WHERE salon_id = $1 ${filter}`,
             params
         );
         return {
@@ -126,7 +139,10 @@ const commissionEarnedRepository = {
         };
     },
 
-    async earnedBySalon(salonId: string, month?: string, startDate?: string, endDate?: string): Promise<{
+    async earnedBySalon(
+        salonId: string, month?: string, startDate?: string, endDate?: string,
+        staffIds?: string[], category?: string, status?: string
+    ): Promise<{
         staff_id: string;
         staff_first_name: string;
         staff_last_name: string | null;
@@ -141,15 +157,29 @@ const commissionEarnedRepository = {
         categories: string[];
     }[]> {
         const params: any[] = [salonId];
-        let dateFilter = "";
+        const clauses: string[] = [];
+        let idx = 2;
         if (startDate && endDate) {
-            dateFilter = `AND ce.earned_at::date BETWEEN $2::date AND $3::date`;
+            clauses.push(`ce.earned_at::date BETWEEN $${idx++}::date AND $${idx++}::date`);
             params.push(startDate, endDate);
         } else if (month) {
-            dateFilter = `AND date_trunc('month', ce.earned_at) = date_trunc('month', $2::date)`;
+            clauses.push(`date_trunc('month', ce.earned_at) = date_trunc('month', $${idx++}::date)`);
             params.push(`${month}-01`);
         }
+        if (staffIds && staffIds.length > 0) {
+            clauses.push(`ce.staff_id = ANY($${idx++}::uuid[])`);
+            params.push(staffIds);
+        }
+        if (category) {
+            clauses.push(`ce.category = $${idx++}`);
+            params.push(category);
+        }
+        const filter = clauses.length ? `AND ${clauses.join(" AND ")}` : "";
 
+        // "Partial" (status filter) isn't a per-row concept — commission_earned
+        // rows are always 'pending' or 'paid' individually — so it's applied
+        // post-aggregation below: a staff row counts as Partial when it has
+        // both pending and paid commission in the filtered range.
         const { rows } = await pool.query(
             `SELECT
                 ce.staff_id,
@@ -166,12 +196,12 @@ const commissionEarnedRepository = {
                 array_agg(DISTINCT ce.category) AS categories
              FROM commission_earned ce
              JOIN staff s ON s.id = ce.staff_id
-             WHERE ce.salon_id = $1 ${dateFilter}
+             WHERE ce.salon_id = $1 ${filter}
              GROUP BY ce.staff_id, s.first_name, s.last_name, s.email, s.calendar_color, s.designation
              ORDER BY total_earned DESC`,
             params
         );
-        return rows.map((r) => ({
+        const mapped = rows.map((r) => ({
             ...r,
             total_revenue:     parseFloat(r.total_revenue),
             total_earned:      parseFloat(r.total_earned),
@@ -179,6 +209,16 @@ const commissionEarnedRepository = {
             paid_out:          parseFloat(r.paid_out),
             transaction_count: parseInt(r.transaction_count),
         }));
+
+        if (!status) return mapped;
+        return mapped.filter((r) => {
+            const hasPending = r.pending_payout > 0;
+            const hasPaid = r.paid_out > 0;
+            if (status === "partial") return hasPending && hasPaid;
+            if (status === "pending") return hasPending && !hasPaid;
+            if (status === "paid") return hasPaid && !hasPending;
+            return true;
+        });
     },
 
     async markPaid(salonId: string, staffId: string): Promise<number> {
@@ -661,16 +701,22 @@ export const commissionCalculationService = {
     },
 
     // Expose repository methods for the overview/payroll pages
-    async getSalonSummary(salonId: string, month?: string, startDate?: string, endDate?: string) {
-        return commissionEarnedRepository.summaryBySalon(salonId, month, startDate, endDate);
+    async getSalonSummary(
+        salonId: string, month?: string, startDate?: string, endDate?: string,
+        staffIds?: string[], category?: string
+    ) {
+        return commissionEarnedRepository.summaryBySalon(salonId, month, startDate, endDate, staffIds, category);
     },
 
     async getStaffEarnings(staffId: string, month?: string) {
         return commissionEarnedRepository.listByStaff(staffId, month);
     },
 
-    async getEarnedBySalon(salonId: string, month?: string, startDate?: string, endDate?: string) {
-        return commissionEarnedRepository.earnedBySalon(salonId, month, startDate, endDate);
+    async getEarnedBySalon(
+        salonId: string, month?: string, startDate?: string, endDate?: string,
+        staffIds?: string[], category?: string, status?: string
+    ) {
+        return commissionEarnedRepository.earnedBySalon(salonId, month, startDate, endDate, staffIds, category, status);
     },
 
     async markStaffPaid(salonId: string, staffId: string) {

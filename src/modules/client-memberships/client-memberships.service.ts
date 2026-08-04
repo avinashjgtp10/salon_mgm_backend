@@ -47,6 +47,13 @@ function buildSyntheticSale(membership: ClientMembership): { sale: Sale; items: 
     coupon_code: null,
     discount_percent: null,
     discount_type: null,
+    manual_discount_amount: '0',
+    coupon_id: null,
+    coupon_discount_amount: '0',
+    coupon_discount_type: null,
+    referral_discount_amount: '0',
+    referral_id: null,
+    referral_source: null,
   };
 
   const items: SaleItem[] = [
@@ -159,12 +166,13 @@ export const clientMembershipsService = {
     // at all, so any Sales/Revenue page built from those tables misses it entirely.
     try {
       const pricePaid = Number(membership.pricePaid || 0);
-      await recordTransaction({
+      const txn = await recordTransaction({
         salon_id:      salonId,
         client_id:     dto.clientId,
         origin:        'membership_purchase',
         payment_label: dto.paymentMethod || '',
         split_details: dto.splitDetails ?? undefined,
+        staff_id:      dto.staffId,
         items: [{
           item_type:  'membership',
           item_id:    dto.membershipId,
@@ -177,8 +185,13 @@ export const clientMembershipsService = {
           // per-item-tax ticket to also start taxing this flow.
           tax_amount: 0,
           taxable_amount: pricePaid,
+          staff_id: dto.staffId,
         }],
       });
+
+      // Link this membership row to its invoice-bearing sale so a Member
+      // Sale report can show invoice_no via a join.
+      await clientMembershipsRepository.setSaleId(membership.id, salonId, txn.sale.id);
     } catch (err) {
       logger.error('[clientMembershipsService] Failed to auto-create sale for membership purchase:', { error: err });
     }
@@ -223,11 +236,14 @@ export const clientMembershipsService = {
     );
   },
 
-  // Gate for whether payments.service.ts should include product items in the
-  // wallet-deduction input — true only if at least one of the client's active,
-  // spendable memberships has appliesToProducts enabled.
-  async isProductEligible(salonId: string, clientId: string): Promise<boolean> {
-    return clientMembershipsRepository.hasProductEligibleMembership(clientId, salonId);
+  // Gate for whether payments.service.ts should include service/product items
+  // in the wallet-deduction input, per the client's active memberships' own
+  // applies_to setting.
+  async getWalletCoverage(salonId: string, clientId: string): Promise<{
+    coversServices: boolean; coversProducts: boolean;
+    serviceCategoryIds: string[] | null; productCategoryIds: string[] | null;
+  }> {
+    return clientMembershipsRepository.getWalletCoverageForClient(clientId, salonId);
   },
 
   // Backfill: scan paid appointments and completed sales to create missing client_membership records
@@ -465,12 +481,24 @@ export const clientMembershipsService = {
     pricePaid: number,
     colour?: string,
     expiresAt?: string,
+    appointmentId?: string,
+    // Staff on the checkout appointment, and the sales row the checkout's own
+    // recordTransaction() call already created for this bill — passed through
+    // so a Member Sale report can show Staff/Invoice No for memberships sold
+    // as a line item on a bill, not just via the standalone purchase() flow.
+    staffId?: string,
+    saleId?: string,
   ): Promise<void> {
     logger.info(`[client-memberships/auto-create] salon=${salonId} client=${clientId} membership=${membershipId} name="${membershipName}" sessions=${totalSessions} price=${pricePaid}`);
     try {
       const existing = await clientMembershipsRepository.findActiveByClientAndMembership(clientId, membershipId, salonId);
       if (existing) {
-        logger.info(`[client-memberships/auto-create] already exists (id=${existing.id}), skipping`);
+        logger.info(`[client-memberships/auto-create] already active (id=${existing.id}) — renewing instead of creating a duplicate`);
+        const renewed = await clientMembershipsRepository.renew(existing.id, salonId, {
+          membershipId, pricePaid, totalSessions, staffId, saleId,
+        });
+        logger.info(`[client-memberships/auto-create] RENEWED — client=${clientId}, membership=${membershipName}`);
+        notifyMembershipPurchased(renewed, false).catch(() => {});
         return;
       }
       const created = await clientMembershipsRepository.create(salonId, {
@@ -481,7 +509,12 @@ export const clientMembershipsService = {
         totalSessions,
         pricePaid,
         expiresAt,
+        appointmentId,
+        staffId,
       });
+      if (saleId) {
+        await clientMembershipsRepository.setSaleId(created.id, salonId, saleId);
+      }
       logger.info(`[client-memberships/auto-create] SUCCESS — client=${clientId}, membership=${membershipName}`);
       // Text only, no PDF here — the calling checkout flow (sales/payments)
       // already sent one PDF covering this whole sale, membership line included.

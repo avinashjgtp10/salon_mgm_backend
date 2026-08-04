@@ -31,6 +31,15 @@ export interface RecordTransactionInput {
   payment_label: string;
   /** Method -> amount, when the payment was split across more than one method. */
   split_details?: Record<string, number>;
+  /**
+   * ₹ of this transaction actually offset by an already-purchased Package's
+   * sessions / a Membership's wallet+discount benefit — computed by the
+   * caller from real catalog/ledger amounts, never from the frontend's own
+   * payment_label. Folded into payment_method/payment_reference by
+   * normalizePaymentMethod() so reports show "Package"/"Membership"/
+   * "Package + Cash" instead of silently mislabeling these as wallet/cash.
+   */
+  source_amounts?: { package?: number; membership?: number };
   discount_amount?: number;
   /** Must be pre-computed by the caller — tax rules differ enough by origin that this function does not recompute it. */
   tax_amount?: number;
@@ -41,6 +50,16 @@ export interface RecordTransactionInput {
   coupon_code?: string;
   discount_percent?: number;
   discount_type?: string;
+  /** Bill-level "Service/Bill Discount" alone, excluding coupon/referral/membership. */
+  manual_discount_amount?: number;
+  /** Real coupons.id, resolved server-side by looking up coupon_code — never trusted from the frontend. */
+  coupon_id?: string;
+  coupon_discount_amount?: number;
+  coupon_discount_type?: string;
+  referral_discount_amount?: number;
+  /** The referring client's id (clients.id), when referral_discount_amount > 0. */
+  referral_id?: string;
+  referral_source?: string;
   notes?: string;
   created_at?: string;
   created_by?: string | null;

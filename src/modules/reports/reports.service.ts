@@ -243,10 +243,14 @@ import {
     RewardPointsReportResponse,
     EwalletReportFilters,
     EwalletReportResponse,
+    ProductInventoryReportFilters,
+    ProductInventoryReportResponse,
     ClientRevenueReportFilters,
     ClientRevenueReportResponse,
     StaffSalesReportFilters,
     StaffSalesReportResponse,
+    StaffPerformanceReportFilters,
+    StaffPerformanceReportResponse,
     StaffItemSalesReportFilters,
     StaffItemSalesReportResponse,
     PackageSaleReportFilters,
@@ -257,6 +261,8 @@ import {
     MemberSaleReportResponse,
     AppointmentDetailReportFilters,
     AppointmentDetailReportResponse,
+    WaCampaignReportFilters,
+    WaCampaignReportResponse,
 } from "./reports.types";
 
 // ======================================================
@@ -1285,6 +1291,10 @@ async getDailySheetReport(
         rows: result.items,
         pagination: result.pagination,
         total_amount: result.total_amount,
+        invoice_count: result.invoice_count,
+        client_count: result.client_count,
+        staff_count: result.staff_count,
+        items_count: result.items_count,
         filters_available: filtersAvailable,
     };
 },
@@ -1319,15 +1329,17 @@ async getServiceSaleReport(
     salonId: string,
     filters: ServiceSaleReportFilters
 ): Promise<ServiceSaleReportResponse> {
-    const [stats, rowsResult] = await Promise.all([
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
         reportsRepository.getServiceSaleReportStats(salonId, filters),
         reportsRepository.getServiceSaleReportRows(salonId, filters),
+        reportsRepository.getServiceSaleFiltersAvailable(salonId),
     ]);
 
     return {
         rows: rowsResult.items,
         pagination: rowsResult.pagination,
         stats,
+        filters_available: filtersAvailable,
     };
 },
 
@@ -1419,6 +1431,26 @@ async getEwalletReport(
 },
 
 // ======================================================
+// PRODUCT INVENTORY REPORT (independent report API)
+// ======================================================
+
+async getProductInventoryReport(
+    salonId: string,
+    filters: ProductInventoryReportFilters
+): Promise<ProductInventoryReportResponse> {
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getProductInventoryReportStats(salonId, filters),
+        reportsRepository.getProductInventoryReportRows(salonId, filters),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+    };
+},
+
+// ======================================================
 // CLIENT REVENUE REPORT (independent report API)
 // ======================================================
 
@@ -1446,8 +1478,32 @@ async getStaffSalesReport(
     salonId: string,
     filters: StaffSalesReportFilters
 ): Promise<StaffSalesReportResponse> {
-    const rows = await reportsRepository.getStaffSalesReport(salonId, filters);
-    return { rows };
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getStaffSalesReportStats(salonId, filters),
+        reportsRepository.getStaffSalesReport(salonId, filters),
+    ]);
+    return { rows: rowsResult.items, pagination: rowsResult.pagination, stats };
+},
+
+// ======================================================
+// STAFF PERFORMANCE REPORT (independent report API)
+// ======================================================
+
+async getStaffPerformanceReport(
+    salonId: string,
+    filters: StaffPerformanceReportFilters
+): Promise<StaffPerformanceReportResponse> {
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
+        reportsRepository.getStaffPerformanceReportStats(salonId, filters),
+        reportsRepository.getStaffPerformanceReport(salonId, filters),
+        reportsRepository.getStaffPerformanceFiltersAvailable(salonId),
+    ]);
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+        filters_available: filtersAvailable,
+    };
 },
 
 // ======================================================
@@ -1478,15 +1534,17 @@ async getPackageSaleReport(
     salonId: string,
     filters: PackageSaleReportFilters
 ): Promise<PackageSaleReportResponse> {
-    const [stats, rowsResult] = await Promise.all([
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
         reportsRepository.getPackageSaleReportStats(salonId, filters),
         reportsRepository.getPackageSaleReportRows(salonId, filters),
+        reportsRepository.getPackageSaleFiltersAvailable(salonId),
     ]);
 
     return {
         rows: rowsResult.items,
         pagination: rowsResult.pagination,
         stats,
+        filters_available: filtersAvailable,
     };
 },
 
@@ -1498,15 +1556,17 @@ async getPackageHistoryReport(
     salonId: string,
     filters: PackageHistoryReportFilters
 ): Promise<PackageHistoryReportResponse> {
-    const [stats, rowsResult] = await Promise.all([
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
         reportsRepository.getPackageHistoryReportStats(salonId, filters),
         reportsRepository.getPackageHistoryReportRows(salonId, filters),
+        reportsRepository.getPackageHistoryFiltersAvailable(salonId),
     ]);
 
     return {
         rows: rowsResult.items,
         pagination: rowsResult.pagination,
         stats,
+        filters_available: filtersAvailable,
     };
 },
 
@@ -1518,15 +1578,17 @@ async getMemberSaleReport(
     salonId: string,
     filters: MemberSaleReportFilters
 ): Promise<MemberSaleReportResponse> {
-    const [stats, rowsResult] = await Promise.all([
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
         reportsRepository.getMemberSaleReportStats(salonId, filters),
         reportsRepository.getMemberSaleReportRows(salonId, filters),
+        reportsRepository.getMemberSaleFiltersAvailable(salonId),
     ]);
 
     return {
         rows: rowsResult.items,
         pagination: rowsResult.pagination,
         stats,
+        filters_available: filtersAvailable,
     };
 },
 
@@ -1542,6 +1604,24 @@ async getAppointmentDetailReport(
     return {
         rows: result.items,
         pagination: result.pagination,
+    };
+},
+
+async getWaCampaignReport(
+    salonId: string,
+    filters: WaCampaignReportFilters
+): Promise<WaCampaignReportResponse> {
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
+        reportsRepository.getWaCampaignReportStats(salonId, filters),
+        reportsRepository.getWaCampaignReportRows(salonId, filters),
+        reportsRepository.getWaCampaignFiltersAvailable(salonId),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+        filters_available: filtersAvailable,
     };
 },
 
