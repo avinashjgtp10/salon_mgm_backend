@@ -13,6 +13,12 @@ export type Product = {
     product_type: ProductType;
     size: string | null;
     amount: number;
+    // Opt-in bottle-based stock tracking (nullable — most products don't use
+    // this). When set, `amount` is the remaining volume in the recipe's
+    // consumption unit (e.g. ml), and Stock Quantity for display purposes is
+    // CEIL(amount / bottle_size), computed at the Stock Reconciliation query
+    // — not stored redundantly here.
+    bottle_size: number | null;
     qty_alert: number | null;
     short_description: string | null;
     description: string | null;
@@ -56,6 +62,7 @@ export type CreateProductBody = {
     product_type?: string;
     size?: string;
     amount?: number;
+    bottle_size?: number | null;
     qty_alert?: number;
     short_description?: string;
     description?: string;

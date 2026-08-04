@@ -39,6 +39,9 @@ export const servicesService = {
     if (body.staff_ids?.length) {
       await servicesRepository.replaceStaff(created.id, body.staff_ids);
     }
+    if (body.consumables_used?.length) {
+      await servicesRepository.replaceConsumables(created.id, body.consumables_used);
+    }
     logger.info("servicesService.create success", { serviceId: created.id });
     return created;
   },
@@ -66,6 +69,9 @@ export const servicesService = {
     const updated = await servicesRepository.update(serviceId, patch, salonId);
     if (staffIds !== undefined) {
       await servicesRepository.replaceStaff(serviceId, staffIds);
+    }
+    if (patch.consumables_used !== undefined) {
+      await servicesRepository.replaceConsumables(serviceId, patch.consumables_used);
     }
     logger.info("servicesService.update success", { serviceId });
     return updated;

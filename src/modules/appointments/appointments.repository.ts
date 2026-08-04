@@ -1,6 +1,7 @@
 import pool from "../../config/database";
 import {
     Appointment,
+    AppointmentServiceConsumableRecord,
     CreateAppointmentBody,
     UpdateAppointmentBody,
 } from "./appointments.types";
@@ -359,12 +360,59 @@ export const appointmentsRepository = {
         return rows[0];
     },
 
-    async updateStatus(id: string, status: string): Promise<Appointment> {
-        const { rows } = await pool.query(
+    async updateStatus(id: string, status: string, client?: import("pg").PoolClient): Promise<Appointment> {
+        const db = client ?? pool;
+        const { rows } = await db.query(
             `UPDATE appointments SET status = $2, updated_at = NOW() WHERE id = $1 RETURNING *`,
             [id, status]
         );
         return rows[0];
+    },
+
+    // ─── Appointment Consumables (current-state, relational) ───────────────────
+    // Deliberately a separate table rather than a field inside the `services`
+    // JSONB column above — see appointment_service_consumables' migration
+    // header comment for why (reporting: most-consumed products, avg usage
+    // per service, staff/branch comparisons all need a plain GROUP BY here).
+
+    async getServiceConsumables(appointmentId: string): Promise<AppointmentServiceConsumableRecord[]> {
+        const { rows } = await pool.query(
+            `SELECT asc_.service_row_id, asc_.service_id, asc_.product_id, p.name AS product_name,
+                    asc_.standard_qty, asc_.actual_qty, asc_.unit, asc_.branch_id, asc_.staff_id
+             FROM appointment_service_consumables asc_
+             LEFT JOIN products p ON p.id = asc_.product_id
+             WHERE asc_.appointment_id = $1`,
+            [appointmentId]
+        );
+        return rows;
+    },
+
+    // Full replace (delete + reinsert), same convention as
+    // servicesRepository.replaceConsumables / replaceStaff. Callers that need
+    // the PRIOR state (to compute a deduct/return delta) must call
+    // getServiceConsumables() before calling this — it does not return what
+    // it deleted.
+    async replaceServiceConsumables(appointmentId: string, rows: AppointmentServiceConsumableRecord[]): Promise<void> {
+        await pool.query(`DELETE FROM appointment_service_consumables WHERE appointment_id = $1`, [appointmentId]);
+        if (!rows.length) return;
+        const values: unknown[] = [];
+        const rowsSql: string[] = [];
+        rows.forEach((r, i) => {
+            const base = i * 9;
+            values.push(
+                appointmentId, r.service_row_id, r.service_id ?? null, r.product_id,
+                r.standard_qty, r.actual_qty, r.unit ?? null, r.branch_id ?? null, r.staff_id ?? null
+            );
+            rowsSql.push(
+                `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9})`
+            );
+        });
+        await pool.query(
+            `INSERT INTO appointment_service_consumables
+               (appointment_id, service_row_id, service_id, product_id, standard_qty, actual_qty, unit, branch_id, staff_id)
+             VALUES ${rowsSql.join(", ")}`,
+            values
+        );
     },
 
     // Bulk-flips overdue, never-paid appointments to no-show. Deliberately

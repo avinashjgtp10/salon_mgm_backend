@@ -5,6 +5,13 @@ export type BundlePriceType = "service_pricing" | "fixed" | "free";
 export type AvailableFor = "all" | "male" | "female" | "other";
 
 // ─── Service ──────────────────────────────────────────────────────────────────
+export type ServiceConsumableItem = {
+  product_id: string;
+  product_name?: string;
+  qty: number;
+  unit?: string;
+};
+
 export type Service = {
   id: string;
   name: string;
@@ -19,6 +26,7 @@ export type Service = {
   commission_enabled: boolean;
   resource_required: boolean;
   is_active: boolean;
+  consumables_used: ServiceConsumableItem[];
   created_at: string;
   updated_at: string;
 };
@@ -96,6 +104,7 @@ export type CreateServiceBody = {
   commission_enabled?: boolean;
   resource_required?: boolean;
   staff_ids?: string[];
+  consumables_used?: ServiceConsumableItem[];
 };
 
 export type UpdateServiceBody = Partial<CreateServiceBody> & {
