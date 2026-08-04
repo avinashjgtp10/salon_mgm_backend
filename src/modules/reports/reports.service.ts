@@ -261,6 +261,8 @@ import {
     MemberSaleReportResponse,
     AppointmentDetailReportFilters,
     AppointmentDetailReportResponse,
+    WaCampaignReportFilters,
+    WaCampaignReportResponse,
 } from "./reports.types";
 
 // ======================================================
@@ -1602,6 +1604,24 @@ async getAppointmentDetailReport(
     return {
         rows: result.items,
         pagination: result.pagination,
+    };
+},
+
+async getWaCampaignReport(
+    salonId: string,
+    filters: WaCampaignReportFilters
+): Promise<WaCampaignReportResponse> {
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
+        reportsRepository.getWaCampaignReportStats(salonId, filters),
+        reportsRepository.getWaCampaignReportRows(salonId, filters),
+        reportsRepository.getWaCampaignFiltersAvailable(salonId),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+        filters_available: filtersAvailable,
     };
 },
 

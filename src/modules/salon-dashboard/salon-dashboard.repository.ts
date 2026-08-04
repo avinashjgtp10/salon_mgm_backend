@@ -549,9 +549,13 @@ export const salonDashboardRepository = {
          s.id,
          TRIM(COALESCE(s.first_name, '') || ' ' || COALESCE(s.last_name, '')) AS name,
          COALESCE(s.designation, 'Staff') AS role,
+         -- Initials only — first+last when both exist, else just the one
+         -- available name's first letter (never a literal "?" filler for a
+         -- missing last name, which is what NULLIF(...,'') || COALESCE
+         -- guards against below).
          UPPER(
-           LEFT(COALESCE(s.first_name, '?'), 1) ||
-           LEFT(COALESCE(s.last_name,  '?'), 1)
+           LEFT(COALESCE(s.first_name, ''), 1) ||
+           LEFT(COALESCE(NULLIF(s.last_name, ''), ''), 1)
          ) AS avatar,
          COALESCE(appt_stats.client_count, 0) AS client_count,
          COALESCE(sales_stats.revenue, 0)     AS revenue,

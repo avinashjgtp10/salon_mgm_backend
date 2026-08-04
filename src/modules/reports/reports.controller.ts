@@ -1398,6 +1398,7 @@ async getStaffPerformanceReport(
             product_id: asString(body.product_id),
             package_id: asString(body.package_id),
             membership_id: asString(body.membership_id),
+            search: asString(body.search),
             page: body.page != null ? Number(body.page) : undefined,
             limit: body.limit != null ? Number(body.limit) : undefined,
             is_export: body.is_export === true,
@@ -1609,6 +1610,13 @@ async getAppointmentDetailReport(
             statuses: Array.isArray(body.statuses)
                 ? body.statuses.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
                 : undefined,
+            search: asString(body.search),
+            payment_methods: Array.isArray(body.payment_methods)
+                ? body.payment_methods.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,
@@ -1621,6 +1629,52 @@ async getAppointmentDetailReport(
             200,
             data,
             "Appointment detail report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// WA MARKETING CAMPAIGN REPORT (independent report API)
+// POST /api/report/wa-campaign
+// ======================================================
+
+async getWaCampaignReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const validBuckets = ["high", "medium", "low", "none"];
+
+        const filters = {
+            search: asString(body.search),
+            statuses: Array.isArray(body.statuses)
+                ? body.statuses.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            template_ids: Array.isArray(body.template_ids)
+                ? body.template_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+            date_from: asString(body.date_from),
+            date_to: asString(body.date_to),
+            delivery_bucket: validBuckets.includes(body.delivery_bucket) ? body.delivery_bucket : undefined,
+            read_bucket: validBuckets.includes(body.read_bucket) ? body.read_bucket : undefined,
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getWaCampaignReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "WA campaign report fetched successfully"
         );
     } catch (error) {
         next(error);

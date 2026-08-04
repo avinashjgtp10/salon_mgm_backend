@@ -24,6 +24,9 @@ import {
     EwalletReportStats,
     ProductInventoryReportRow,
     ProductInventoryReportStats,
+    WaCampaignReportRow,
+    WaCampaignReportStats,
+    WaCampaignFiltersAvailable,
     ClientRevenueReportRow,
     ClientRevenueReportStats,
     StaffSalesReportRow,
@@ -1602,19 +1605,6 @@ async getSalesSummaryReportRows(
   const unbilled = this._UNBILLED_APPOINTMENT_ROWS_CTE(filters, nextIndex);
   let idx = unbilled.nextIndex;
 
-  // TEMP DEBUG — remove after diagnosing SCRUM sales-summary-zero-rows
-  console.log("[DEBUG sales-summary] salonId=", salonId, "filters=", filters, "where=", where, "values=", values);
-  const dbgRaw = await safeQuery(() => pool.query(
-    `SELECT id, status, created_at, salon_id FROM sales WHERE salon_id = $1 ORDER BY created_at DESC LIMIT 10`,
-    [salonId]
-  ));
-  console.log("[DEBUG sales-summary] raw sales for salon (any date/status):", dbgRaw.rows);
-  const dbgCount = await safeQuery(() => pool.query(
-    `SELECT COUNT(*) FROM sales s LEFT JOIN clients c ON s.client_id = c.id WHERE ${where}`,
-    values
-  ));
-  console.log("[DEBUG sales-summary] count matching where clause:", dbgCount.rows);
-
   const page = Math.max(1, Number(filters.page ?? 1));
   const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
   const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
@@ -1686,8 +1676,9 @@ async getSalesSummaryReportRows(
         u.id, u.invoice_number, u.created_at, u.payment_method,
         NULL::text AS payment_reference,
         u.appointment_id, u.status,
-        u.actual_price, u.price, u.discount_amount, u.tax_amount, u.tip_amount,
+        u.actual_price, u.price, u.discount_amount,
         NULL::text AS report_coupon_code, 0::numeric AS coupon_discount_amount, 0::numeric AS referral_discount_amount,
+        u.tax_amount, u.tip_amount,
         u.client_name, u.client_phone, u.staff_name,
         u.item_description, u.item_types,
         u.paid_amount, u.due_amount,
@@ -4040,6 +4031,7 @@ _buildStaffPerformanceWhere(
     start_date?: string; end_date?: string; staff_ids?: string[]; branch_id?: string;
     payment_mode?: string; payment_status?: string; item_type?: string;
     service_id?: string; product_id?: string; package_id?: string; membership_id?: string;
+    search?: string;
   }
 ): { where: string; values: any[]; nextIndex: number } {
   const values: any[] = [salonId];
@@ -4098,6 +4090,15 @@ _buildStaffPerformanceWhere(
   if (filters.membership_id) {
     where.push(`EXISTS (SELECT 1 FROM sale_items si WHERE si.sale_id = s.id AND si.item_type = 'membership' AND si.item_id = $${idx++})`);
     values.push(filters.membership_id);
+  }
+  if (filters.search?.trim()) {
+    // Matches if the sale has ANY service or product line item whose name
+    // contains the search text — combined Service+Product name search.
+    where.push(`EXISTS (
+      SELECT 1 FROM sale_items si3
+      WHERE si3.sale_id = s.id AND si3.item_type IN ('service', 'product') AND si3.name ILIKE $${idx++}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
   }
 
   return { where: where.join(" AND "), values, nextIndex: idx };
@@ -5246,6 +5247,7 @@ async getAppointmentDetailReport(
   salonId: string,
   filters: {
     from?: string; to?: string; statuses?: string[];
+    search?: string; payment_methods?: string[]; staff_ids?: string[];
     page?: number; limit?: number; is_export?: boolean;
   }
 ): Promise<{
@@ -5279,6 +5281,42 @@ async getAppointmentDetailReport(
   const requestedLimit = Math.max(1, Number(filters.limit ?? 10));
   const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
   const offset = limit ? (page - 1) * limit : 0;
+
+  // Outer-query filters (search/payment method/staff) run against columns
+  // only available after exploding+joining, so they're built as a second
+  // WHERE list applied to the final SELECT rather than folded into `where`
+  // above (which only scopes the `matched` CTE against raw appointments
+  // columns).
+  const outerWhere: string[] = [];
+  if (filters.search?.trim()) {
+    outerWhere.push(`(
+      COALESCE(e.client_name, '') ILIKE $${idx}
+      OR COALESCE(e.phone_number, '') ILIKE $${idx}
+      OR COALESCE(e.invoice_number, '') ILIKE $${idx}
+      OR COALESCE(e.item_name, '') ILIKE $${idx}
+      OR COALESCE(e.staff_name, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+  if (filters.payment_methods && filters.payment_methods.length > 0) {
+    // payment_method is a free-text label ("Cash", "Card", "Cash+Card", ...),
+    // not a fixed enum, so an exact match on "Cash" would miss split
+    // payments like "Cash+Card" — match by substring per selected method
+    // instead (confirmed with product owner).
+    outerWhere.push(`(${filters.payment_methods.map(() => `e.payment_method ILIKE $${idx++}`).join(" OR ")})`);
+    filters.payment_methods.forEach(m => values.push(`%${m}%`));
+  }
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    outerWhere.push(`COALESCE(
+      CASE WHEN e.item_staff_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+           THEN e.item_staff_id::uuid END,
+      e.staff_id
+    ) = ANY($${idx++}::uuid[])`);
+    values.push(filters.staff_ids);
+  }
+  const outerWhereClause = outerWhere.length ? `WHERE ${outerWhere.join(" AND ")}` : "";
+
   const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
   const limitValues = limit ? [limit, offset] : [];
 
@@ -5290,50 +5328,108 @@ async getAppointmentDetailReport(
     ),
     exploded AS (
       SELECT
-        m.id,
-        m.scheduled_at,
-        m.duration_minutes,
-        m.created_at,
-        m.client_id,
-        m.staff_id,
-        m.status,
-        svc.value->>'name' AS service_name,
-        NULLIF(svc.value->>'staff_id', '') AS svc_staff_id,
-        NULLIF(svc.value->>'staff_name', '') AS svc_staff_name,
-        COALESCE(NULLIF(svc.value->>'price', '')::numeric, 0) AS svc_price
+        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.status,
+        'service' AS item_type,
+        svc.value->>'name' AS item_name,
+        NULLIF(svc.value->>'staff_id', '') AS item_staff_id,
+        NULLIF(svc.value->>'staff_name', '') AS item_staff_name,
+        COALESCE(NULLIF(svc.value->>'price', '')::numeric, 0) AS item_price
       FROM matched m
       LEFT JOIN LATERAL jsonb_array_elements(COALESCE(m.services, '[]'::jsonb)) AS svc(value) ON TRUE
+      WHERE svc.value IS NOT NULL
+
+      UNION ALL
+
+      SELECT
+        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.status,
+        'product' AS item_type,
+        prod.value->>'name' AS item_name,
+        NULLIF(prod.value->>'staff_id', '') AS item_staff_id,
+        NULLIF(prod.value->>'staff_name', '') AS item_staff_name,
+        COALESCE(NULLIF(prod.value->>'price', '')::numeric, 0) AS item_price
+      FROM matched m
+      LEFT JOIN LATERAL jsonb_array_elements(COALESCE(m.product_items, '[]'::jsonb)) AS prod(value) ON TRUE
+      WHERE prod.value IS NOT NULL
+
+      UNION ALL
+
+      SELECT
+        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.status,
+        'package' AS item_type,
+        pkg.value->>'name' AS item_name,
+        NULLIF(pkg.value->>'staff_id', '') AS item_staff_id,
+        NULLIF(pkg.value->>'staff_name', '') AS item_staff_name,
+        COALESCE(NULLIF(pkg.value->>'price', '')::numeric, 0) AS item_price
+      FROM matched m
+      LEFT JOIN LATERAL jsonb_array_elements(COALESCE(m.package_items, '[]'::jsonb)) AS pkg(value) ON TRUE
+      WHERE pkg.value IS NOT NULL
+
+      UNION ALL
+
+      SELECT
+        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.status,
+        'membership' AS item_type,
+        mem.value->>'name' AS item_name,
+        NULLIF(mem.value->>'staff_id', '') AS item_staff_id,
+        NULLIF(mem.value->>'staff_name', '') AS item_staff_name,
+        COALESCE(NULLIF(mem.value->>'price', '')::numeric, 0) AS item_price
+      FROM matched m
+      LEFT JOIN LATERAL jsonb_array_elements(COALESCE(m.membership_items, '[]'::jsonb)) AS mem(value) ON TRUE
+      WHERE mem.value IS NOT NULL
+    ),
+    base AS (
+      SELECT
+        e.*,
+        TO_CHAR(e.scheduled_at, 'YYYY-MM-DD') AS appointment_date,
+        TO_CHAR(e.scheduled_at, 'HH12:MI AM') AS time,
+        TO_CHAR(e.created_at, 'YYYY-MM-DD') AS booked_date,
+        c.full_name AS client_name,
+        c.phone_number,
+        COALESCE(
+          e.item_staff_name,
+          NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '')
+        ) AS staff_name,
+        pay.payment_method,
+        pay.paid_amount,
+        s.invoice_number
+      FROM exploded e
+      LEFT JOIN clients c ON e.client_id = c.id
+      LEFT JOIN staff st ON st.id = COALESCE(
+        CASE WHEN e.item_staff_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+             THEN e.item_staff_id::uuid END,
+        e.staff_id
+      )
+      LEFT JOIN LATERAL (
+        SELECT p.payment_method, p.paid_amount
+        FROM payments p
+        WHERE p.appointment_id = e.id
+        ORDER BY p.created_at DESC
+        LIMIT 1
+      ) pay ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT s.invoice_number
+        FROM sales s
+        WHERE s.appointment_id = e.id
+        ORDER BY s.created_at DESC
+        LIMIT 1
+      ) s ON TRUE
     )
     SELECT
       e.id,
-      TO_CHAR(e.scheduled_at, 'YYYY-MM-DD') AS appointment_date,
-      TO_CHAR(e.scheduled_at, 'HH12:MI AM') AS time,
-      TO_CHAR(e.created_at, 'YYYY-MM-DD') AS booked_date,
-      c.full_name AS client_name,
-      COALESCE(e.service_name, '—') AS service_name,
-      COALESCE(
-        e.svc_staff_name,
-        NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '')
-      ) AS staff_name,
+      e.appointment_date,
+      e.time,
+      e.booked_date,
+      e.client_name,
+      COALESCE(e.item_name, '—') AS item_name,
+      e.item_type,
+      e.staff_name,
       e.duration_minutes AS duration,
-      COALESCE(pay.paid_amount, e.svc_price, 0) AS amount,
-      pay.payment_method,
+      COALESCE(e.paid_amount, e.item_price, 0) AS amount,
+      e.payment_method,
       e.status AS payment_status,
       COUNT(*) OVER() AS total_count
-    FROM exploded e
-    LEFT JOIN clients c ON e.client_id = c.id
-    LEFT JOIN staff st ON st.id = COALESCE(
-      CASE WHEN e.svc_staff_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-           THEN e.svc_staff_id::uuid END,
-      e.staff_id
-    )
-    LEFT JOIN LATERAL (
-      SELECT p.payment_method, p.paid_amount
-      FROM payments p
-      WHERE p.appointment_id = e.id
-      ORDER BY p.created_at DESC
-      LIMIT 1
-    ) pay ON TRUE
+    FROM base e
+    ${outerWhereClause}
     ORDER BY e.scheduled_at DESC
     ${limitClause}
   `;
@@ -5346,7 +5442,8 @@ async getAppointmentDetailReport(
     time: row.time,
     booked_date: row.booked_date,
     client_name: row.client_name,
-    service_name: row.service_name,
+    item_name: row.item_name,
+    item_type: row.item_type,
     staff_name: row.staff_name,
     duration: Number(row.duration ?? 0),
     amount: Number(row.amount ?? 0),
@@ -5363,6 +5460,210 @@ async getAppointmentDetailReport(
       total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
     },
   };
+},
+
+// ======================================================
+// WA MARKETING CAMPAIGN REPORT (independent report API)
+// POST /api/report/wa-campaign — reads wa_campaigns directly (template
+// joined by name), one row per campaign, with per-contact status counts
+// aggregated live from wa_campaign_contacts (wa_campaigns' own
+// sent_count/delivered_count/etc columns are never written to after
+// insert — stale, not the source of truth).
+// ======================================================
+
+_buildWaCampaignWhere(
+  salonId: string,
+  filters: {
+    search?: string; statuses?: string[]; template_ids?: string[];
+    date_from?: string; date_to?: string;
+  }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["c.salon_id = $1"];
+  let idx = 2;
+
+  if (filters.search?.trim()) {
+    where.push(`(
+      c.name ILIKE $${idx}
+      OR COALESCE(t.name, '') ILIKE $${idx}
+      OR c.id::text ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+  if (filters.statuses && filters.statuses.length > 0) {
+    where.push(`c.status = ANY($${idx++}::text[])`);
+    values.push(filters.statuses);
+  }
+  if (filters.template_ids && filters.template_ids.length > 0) {
+    where.push(`c.template_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.template_ids);
+  }
+  if (filters.date_from) {
+    where.push(`c.created_at >= $${idx++}::date`);
+    values.push(filters.date_from);
+  }
+  if (filters.date_to) {
+    where.push(`c.created_at < ($${idx++}::date + interval '1 day')`);
+    values.push(filters.date_to);
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+// Delivery/read rate bucket, applied as a HAVING-equivalent filter on the
+// already-aggregated per-campaign counts (sent/delivered/read only exist
+// after the wa_campaign_contacts GROUP BY, so this can't be a plain WHERE).
+_waCampaignBucketClause(column: "delivered" | "read", bucket?: "high" | "medium" | "low" | "none"): string | null {
+  if (!bucket) return null;
+  const rate = `(CASE WHEN sent = 0 THEN 0 ELSE ${column}::numeric / sent END)`;
+  if (bucket === "none") return `${rate} = 0`;
+  if (bucket === "low") return `sent > 0 AND ${rate} > 0 AND ${rate} < 0.5`;
+  if (bucket === "medium") return `${rate} >= 0.5 AND ${rate} < 0.9`;
+  return `${rate} >= 0.9`; // high
+},
+
+_WA_CAMPAIGN_AGG(where: string): string {
+  return `
+    WITH agg AS (
+      SELECT
+        c.id, c.name, c.template_id, c.status, c.created_at,
+        COALESCE(t.name, 'Deleted template') AS template_name,
+        COALESCE(c.total_contacts, 0) AS total_contacts,
+        COUNT(cc.id) FILTER (WHERE cc.status IN ('SENT','DELIVERED','READ','FAILED','BLOCKED'))::int AS sent,
+        COUNT(cc.id) FILTER (WHERE cc.status IN ('DELIVERED','READ'))::int AS delivered,
+        COUNT(cc.id) FILTER (WHERE cc.status = 'READ')::int AS read,
+        COUNT(cc.id) FILTER (WHERE cc.status = 'FAILED')::int AS failed,
+        COUNT(cc.id) FILTER (WHERE cc.status = 'BLOCKED')::int AS blocked
+      FROM wa_campaigns c
+      LEFT JOIN wa_templates t ON t.id = c.template_id
+      LEFT JOIN wa_campaign_contacts cc ON cc.campaign_id = c.id
+      WHERE ${where}
+      GROUP BY c.id, c.name, c.template_id, c.status, c.created_at, t.name, c.total_contacts
+    )
+  `;
+},
+
+async getWaCampaignReportStats(
+  salonId: string,
+  filters: {
+    search?: string; statuses?: string[]; template_ids?: string[];
+    date_from?: string; date_to?: string;
+    delivery_bucket?: "high" | "medium" | "low" | "none";
+    read_bucket?: "high" | "medium" | "low" | "none";
+  }
+): Promise<WaCampaignReportStats> {
+  const { where, values } = this._buildWaCampaignWhere(salonId, filters);
+
+  const bucketClauses = [
+    this._waCampaignBucketClause("delivered", filters.delivery_bucket),
+    this._waCampaignBucketClause("read", filters.read_bucket),
+  ].filter((c): c is string => !!c);
+  const havingClause = bucketClauses.length ? `WHERE ${bucketClauses.join(" AND ")}` : "";
+
+  const query = `
+    ${this._WA_CAMPAIGN_AGG(where)}
+    SELECT
+      COUNT(*)::int AS total_campaigns,
+      COALESCE(SUM(total_contacts), 0) AS total_contacts,
+      COALESCE(SUM(sent), 0) AS total_sent,
+      COALESCE(SUM(delivered), 0) AS total_delivered,
+      COALESCE(SUM(read), 0) AS total_read,
+      COALESCE(SUM(failed), 0) AS total_failed,
+      COALESCE(SUM(blocked), 0) AS total_blocked
+    FROM agg
+    ${havingClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  const total_sent = Number(r.total_sent ?? 0);
+  const total_delivered = Number(r.total_delivered ?? 0);
+  const total_read = Number(r.total_read ?? 0);
+  return {
+    total_campaigns: Number(r.total_campaigns ?? 0),
+    total_contacts: Number(r.total_contacts ?? 0),
+    total_sent,
+    total_delivered,
+    total_read,
+    total_failed: Number(r.total_failed ?? 0),
+    total_blocked: Number(r.total_blocked ?? 0),
+    avg_delivery_rate: total_sent > 0 ? (total_delivered / total_sent) * 100 : 0,
+    avg_read_rate: total_sent > 0 ? (total_read / total_sent) * 100 : 0,
+  };
+},
+
+async getWaCampaignReportRows(
+  salonId: string,
+  filters: {
+    search?: string; statuses?: string[]; template_ids?: string[];
+    date_from?: string; date_to?: string;
+    delivery_bucket?: "high" | "medium" | "low" | "none";
+    read_bucket?: "high" | "medium" | "low" | "none";
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: WaCampaignReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values } = this._buildWaCampaignWhere(salonId, filters);
+
+  const bucketClauses = [
+    this._waCampaignBucketClause("delivered", filters.delivery_bucket),
+    this._waCampaignBucketClause("read", filters.read_bucket),
+  ].filter((c): c is string => !!c);
+  const havingClause = bucketClauses.length ? `WHERE ${bucketClauses.join(" AND ")}` : "";
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${values.length + 1} OFFSET $${values.length + 2}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    ${this._WA_CAMPAIGN_AGG(where)}
+    SELECT *, COUNT(*) OVER() AS total_count
+    FROM agg
+    ${havingClause}
+    ORDER BY created_at DESC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: WaCampaignReportRow[] = rows.map((row: any) => ({
+    id: row.id,
+    name: row.name,
+    template_id: row.template_id,
+    template_name: row.template_name,
+    status: row.status,
+    created_at: row.created_at,
+    total_contacts: Number(row.total_contacts ?? 0),
+    sent: Number(row.sent ?? 0),
+    delivered: Number(row.delivered ?? 0),
+    read: Number(row.read ?? 0),
+    failed: Number(row.failed ?? 0),
+    blocked: Number(row.blocked ?? 0),
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+async getWaCampaignFiltersAvailable(salonId: string): Promise<WaCampaignFiltersAvailable> {
+  const { rows } = await safeQuery(() => pool.query(
+    `SELECT id, name AS label FROM wa_templates WHERE salon_id = $1 ORDER BY name ASC`,
+    [salonId]
+  ));
+  return { templates: rows.map((r: any) => ({ id: r.id, label: r.label })) };
 },
 
 // ======================================================
