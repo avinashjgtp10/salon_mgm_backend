@@ -50,6 +50,16 @@ export interface RecordTransactionInput {
   coupon_code?: string;
   discount_percent?: number;
   discount_type?: string;
+  /** Bill-level "Service/Bill Discount" alone, excluding coupon/referral/membership. */
+  manual_discount_amount?: number;
+  /** Real coupons.id, resolved server-side by looking up coupon_code — never trusted from the frontend. */
+  coupon_id?: string;
+  coupon_discount_amount?: number;
+  coupon_discount_type?: string;
+  referral_discount_amount?: number;
+  /** The referring client's id (clients.id), when referral_discount_amount > 0. */
+  referral_id?: string;
+  referral_source?: string;
   notes?: string;
   created_at?: string;
   created_by?: string | null;

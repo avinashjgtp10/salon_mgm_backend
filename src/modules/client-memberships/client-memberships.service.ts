@@ -47,6 +47,13 @@ function buildSyntheticSale(membership: ClientMembership): { sale: Sale; items: 
     coupon_code: null,
     discount_percent: null,
     discount_type: null,
+    manual_discount_amount: '0',
+    coupon_id: null,
+    coupon_discount_amount: '0',
+    coupon_discount_type: null,
+    referral_discount_amount: '0',
+    referral_id: null,
+    referral_source: null,
   };
 
   const items: SaleItem[] = [

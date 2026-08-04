@@ -1226,6 +1226,7 @@ async getEwalletReport(
 
         const filters = {
             search: asString(body.search),
+            as_of_date: asString(body.as_of_date),
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,
@@ -1238,6 +1239,47 @@ async getEwalletReport(
             200,
             data,
             "E-wallet report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// PRODUCT INVENTORY REPORT (independent report API)
+// POST /api/report/product-inventory
+// ======================================================
+
+async getProductInventoryReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            search: asString(body.search),
+            category_id: asString(body.category_id),
+            brand_id: asString(body.brand_id),
+            stock_status: (body.stock_status === "in_stock" || body.stock_status === "low_stock" || body.stock_status === "out_of_stock")
+                ? body.stock_status
+                : undefined,
+            date_from: asString(body.date_from),
+            date_to: asString(body.date_to),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getProductInventoryReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Product inventory report fetched successfully"
         );
     } catch (error) {
         next(error);
@@ -1262,6 +1304,15 @@ async getClientRevenueReport(
             start_date: asString(body.start_date),
             end_date: asString(body.end_date),
             search: asString(body.search),
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+            gender: asString(body.gender),
+            membership_status: asString(body.membership_status),
+            last_visit_from: asString(body.last_visit_from),
+            last_visit_to: asString(body.last_visit_to),
+            sort_by: asString(body.sort_by),
+            sort_dir: body.sort_dir === "asc" ? "asc" as const : body.sort_dir === "desc" ? "desc" as const : undefined,
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,
@@ -1347,6 +1398,7 @@ async getStaffPerformanceReport(
             product_id: asString(body.product_id),
             package_id: asString(body.package_id),
             membership_id: asString(body.membership_id),
+            search: asString(body.search),
             page: body.page != null ? Number(body.page) : undefined,
             limit: body.limit != null ? Number(body.limit) : undefined,
             is_export: body.is_export === true,
@@ -1558,6 +1610,13 @@ async getAppointmentDetailReport(
             statuses: Array.isArray(body.statuses)
                 ? body.statuses.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
                 : undefined,
+            search: asString(body.search),
+            payment_methods: Array.isArray(body.payment_methods)
+                ? body.payment_methods.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,
@@ -1570,6 +1629,52 @@ async getAppointmentDetailReport(
             200,
             data,
             "Appointment detail report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// WA MARKETING CAMPAIGN REPORT (independent report API)
+// POST /api/report/wa-campaign
+// ======================================================
+
+async getWaCampaignReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const validBuckets = ["high", "medium", "low", "none"];
+
+        const filters = {
+            search: asString(body.search),
+            statuses: Array.isArray(body.statuses)
+                ? body.statuses.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            template_ids: Array.isArray(body.template_ids)
+                ? body.template_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+            date_from: asString(body.date_from),
+            date_to: asString(body.date_to),
+            delivery_bucket: validBuckets.includes(body.delivery_bucket) ? body.delivery_bucket : undefined,
+            read_bucket: validBuckets.includes(body.read_bucket) ? body.read_bucket : undefined,
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getWaCampaignReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "WA campaign report fetched successfully"
         );
     } catch (error) {
         next(error);

@@ -593,6 +593,9 @@ export interface SalesSummaryReportRow {
     actual_price: number;
     price: number;
     discount_amount: number;
+    coupon_code: string | null;
+    coupon_discount_amount: number;
+    referral_discount_amount: number;
     tax_amount: number;
     paid_amount: number;
     due_amount: number;
@@ -655,6 +658,13 @@ export interface SaleDetailHeader {
     discount_percent: number | null;
     discount_type: string | null;
     appointment_id: string | null;
+    manual_discount_amount: number;
+    coupon_id: string | null;
+    coupon_discount_amount: number;
+    coupon_discount_type: string | null;
+    referral_discount_amount: number;
+    referral_id: string | null;
+    referral_source: string | null;
 }
 
 export interface SaleDetailItem {
@@ -1075,9 +1085,66 @@ export interface RewardPointsReportResponse {
 
 export interface EwalletReportFilters {
     search?: string;
+    as_of_date?: string;
     page?: number;
     limit?: number;
     is_export?: boolean;
+}
+
+// ===============================
+// Product Inventory Report (independent report API — POST /api/report/product-inventory)
+// Reads products directly (brand/category joined for display names), with
+// per-product sold-qty/revenue folded in from the same aggregate the
+// existing /product-inventory-sales endpoint already computes. Never calls
+// the Appointment API/service.
+// ===============================
+
+export interface ProductInventoryReportFilters {
+    search?: string;
+    category_id?: string;
+    brand_id?: string;
+    stock_status?: "in_stock" | "low_stock" | "out_of_stock";
+    date_from?: string;
+    date_to?: string;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface ProductInventoryReportRow {
+    product_id: string;
+    product_name: string;
+    category_name: string;
+    brand_name: string;
+    sku: string;
+    date_added: string;
+    current_stock: number;
+    reorder_level: number;
+    unit_cost: number;
+    total_value: number;
+    sales_qty: number;
+    sales_revenue: number;
+    status: "in_stock" | "low_stock" | "out_of_stock";
+}
+
+export interface ProductInventoryReportStats {
+    total_products: number;
+    total_stock_value: number;
+    low_stock_items: number;
+    out_of_stock_items: number;
+}
+
+export interface ProductInventoryReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface ProductInventoryReportResponse {
+    rows: ProductInventoryReportRow[];
+    pagination: ProductInventoryReportPagination;
+    stats: ProductInventoryReportStats;
 }
 
 export interface EwalletReportRow {
@@ -1120,6 +1187,13 @@ export interface ClientRevenueReportFilters {
     start_date?: string;
     end_date?: string;
     search?: string;
+    staff_ids?: string[];
+    gender?: string;
+    membership_status?: string;
+    last_visit_from?: string;
+    last_visit_to?: string;
+    sort_by?: string;
+    sort_dir?: "asc" | "desc";
     page?: number;
     limit?: number;
     is_export?: boolean;
@@ -1615,6 +1689,9 @@ export interface AppointmentDetailReportFilters {
     from?: string;
     to?: string;
     statuses?: string[];
+    search?: string;
+    payment_methods?: string[];
+    staff_ids?: string[];
     page?: number;
     limit?: number;
     is_export?: boolean;
@@ -1626,7 +1703,8 @@ export interface AppointmentDetailReportRow {
     time: string;
     booked_date: string;
     client_name: string | null;
-    service_name: string;
+    item_name: string;
+    item_type: "service" | "product" | "package" | "membership";
     staff_name: string | null;
     duration: number;
     amount: number;
@@ -1644,4 +1722,72 @@ export interface AppointmentDetailReportPagination {
 export interface AppointmentDetailReportResponse {
     rows: AppointmentDetailReportRow[];
     pagination: AppointmentDetailReportPagination;
+}
+
+// ===============================
+// WA Marketing Campaign Report (independent report API — POST /api/report/wa-campaign)
+// Reads wa_campaigns directly (template joined by name, per-contact status
+// counts aggregated live from wa_campaign_contacts — the campaign's own
+// sent_count/delivered_count/etc columns are unmaintained/stale, never
+// written to after insert, so they are NOT the source of truth here).
+// ===============================
+
+export interface WaCampaignReportFilters {
+    search?: string;
+    statuses?: string[];
+    template_ids?: string[];
+    date_from?: string;
+    date_to?: string;
+    delivery_bucket?: "high" | "medium" | "low" | "none";
+    read_bucket?: "high" | "medium" | "low" | "none";
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface WaCampaignReportRow {
+    id: string;
+    name: string;
+    template_id: string | null;
+    template_name: string;
+    status: string;
+    created_at: string;
+    total_contacts: number;
+    sent: number;
+    delivered: number;
+    read: number;
+    failed: number;
+    blocked: number;
+}
+
+export interface WaCampaignReportStats {
+    total_campaigns: number;
+    total_contacts: number;
+    total_sent: number;
+    total_delivered: number;
+    total_read: number;
+    total_failed: number;
+    total_blocked: number;
+    avg_delivery_rate: number;
+    avg_read_rate: number;
+}
+
+export interface WaCampaignFilterOption { id: string; label: string; }
+
+export interface WaCampaignFiltersAvailable {
+    templates: WaCampaignFilterOption[];
+}
+
+export interface WaCampaignReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface WaCampaignReportResponse {
+    rows: WaCampaignReportRow[];
+    pagination: WaCampaignReportPagination;
+    stats: WaCampaignReportStats;
+    filters_available: WaCampaignFiltersAvailable;
 }

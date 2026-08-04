@@ -657,6 +657,10 @@ export const clientsController = {
                         s.notes,
                         s.created_at,
                         s.appointment_id,
+                        s.coupon_code,
+                        s.manual_discount_amount,
+                        s.coupon_discount_amount,
+                        s.referral_discount_amount,
                         json_agg(
                             json_build_object(
                                 'name',        si.name,
@@ -693,6 +697,8 @@ export const clientsController = {
                         cp.expiry_date,
                         cp.created_date,
                         cp.staff_id,
+                        cp.sale_id,
+                        cp.appointment_id,
                         COALESCE(
                             json_agg(
                                 json_build_object(

@@ -61,6 +61,15 @@ export type CreatePaymentBody = {
   paid_amount?: number;
   due_amount?: number;
   coupon_code?: string;
+  // Server-computed only — resolved by looking up coupon_code against the
+  // real coupons table, never trusted from the frontend. See payments.service.ts.
+  coupon_id?: string;
+  coupon_discount_type?: string;
+  coupon_discount_amount?: number;
+  // Server-computed only — set alongside referral_discount_used below when
+  // the Refer & Earn welcome discount applies. See payments.service.ts.
+  referral_id?: string;
+  referral_source?: string;
   payment_method: string;
   split_details?: Record<string, number>;
   status?: PaymentStatus;

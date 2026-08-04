@@ -28,6 +28,18 @@ export type Sale = {
     coupon_code: string | null;
     discount_percent: string | null;
     discount_type: string | null;
+    // ── Discount breakdown — each source's own ₹, distinct from the combined
+    // discount_amount above (manual+coupon+referral+membership all merged,
+    // used only for revenue netting). Lets Sale Details/reports/receipts show
+    // "Service Discount"/"Coupon Discount"/"Referral Discount" as separate
+    // lines instead of one opaque figure. ──────────────────────────────────
+    manual_discount_amount: string;
+    coupon_id: string | null;
+    coupon_discount_amount: string;
+    coupon_discount_type: string | null;
+    referral_discount_amount: string;
+    referral_id: string | null;
+    referral_source: string | null;
 };
 
 export type SaleItem = {
@@ -67,6 +79,13 @@ export type CreateSaleBody = {
     coupon_code?: string;
     discount_percent?: string;
     discount_type?: string;
+    manual_discount_amount?: string;
+    coupon_id?: string;
+    coupon_discount_amount?: string;
+    coupon_discount_type?: string;
+    referral_discount_amount?: string;
+    referral_id?: string;
+    referral_source?: string;
     items: Array<{
         item_type: SaleItemType;
         item_id?: string;
