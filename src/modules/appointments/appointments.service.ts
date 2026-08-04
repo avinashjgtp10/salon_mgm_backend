@@ -657,6 +657,8 @@ export const appointmentsService = {
                 }
             }
             await appointmentsRepository.replaceServiceConsumables(appointmentId, newConsumableRows);
+        }
+
         // Reassigning a paid/partial appointment to a different staff member
         // (calendar drag-drop or manual edit) must also move the already-
         // recorded sale's revenue/commission credit to the new staff —
