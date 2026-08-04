@@ -450,6 +450,28 @@ export const salesRepository = {
         return rows[0];
     },
 
+    // Moves revenue/commission credit to a new staff member for whichever
+    // sale is linked to this appointment — called when a paid/partial
+    // appointment is reassigned to a different staff (calendar drag-drop or
+    // manual edit), so Staff Performance/Commission reports follow the
+    // reassignment instead of still crediting whoever the sale was
+    // originally attributed to. Updates every line item's staff_id too
+    // (not just the sale-level one), matching the "new staff owns the whole
+    // sale" rule — a no-op if the appointment has no linked sale yet
+    // (unpaid/booked appointments have nothing to reassign).
+    async reassignStaffForAppointment(appointmentId: string, newStaffId: string): Promise<void> {
+        await safeQuery(() => pool.query(
+            `UPDATE sales SET staff_id = $2, updated_at = NOW() WHERE appointment_id = $1`,
+            [appointmentId, newStaffId]
+        ));
+        await safeQuery(() => pool.query(
+            `UPDATE sale_items si SET staff_id = $2
+             FROM sales s
+             WHERE si.sale_id = s.id AND s.appointment_id = $1`,
+            [appointmentId, newStaffId]
+        ));
+    },
+
     async exportList(filters: { salon_id?: string; status?: string; date?: string }): Promise<Sale[]> {
         const conditions: string[] = [];
         const values: any[] = [];

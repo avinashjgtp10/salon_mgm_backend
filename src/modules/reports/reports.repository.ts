@@ -4031,6 +4031,7 @@ _buildStaffPerformanceWhere(
     start_date?: string; end_date?: string; staff_ids?: string[]; branch_id?: string;
     payment_mode?: string; payment_status?: string; item_type?: string;
     service_id?: string; product_id?: string; package_id?: string; membership_id?: string;
+    search?: string;
   }
 ): { where: string; values: any[]; nextIndex: number } {
   const values: any[] = [salonId];
@@ -4089,6 +4090,15 @@ _buildStaffPerformanceWhere(
   if (filters.membership_id) {
     where.push(`EXISTS (SELECT 1 FROM sale_items si WHERE si.sale_id = s.id AND si.item_type = 'membership' AND si.item_id = $${idx++})`);
     values.push(filters.membership_id);
+  }
+  if (filters.search?.trim()) {
+    // Matches if the sale has ANY service or product line item whose name
+    // contains the search text — combined Service+Product name search.
+    where.push(`EXISTS (
+      SELECT 1 FROM sale_items si3
+      WHERE si3.sale_id = s.id AND si3.item_type IN ('service', 'product') AND si3.name ILIKE $${idx++}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
   }
 
   return { where: where.join(" AND "), values, nextIndex: idx };
