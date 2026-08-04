@@ -10,6 +10,7 @@ import {
     stockReconciliationController,
     consumableUsageController,
 } from "./inventory.controller";
+import { consumableInventoryController } from "./consumable-inventory.controller";
 import {
     validateCreateSupplier,
     validateUpdateSupplier,
@@ -157,6 +158,56 @@ router.patch(
     authMiddleware,
     roleMiddleware("salon_owner", "admin"),
     stockReconciliationController.saveRow
+);
+
+// ─── Consumable Inventory (dedicated page — replaces Stock Reconciliation's
+// consumable-facing role) ───────────────────────────────────────────────────
+
+// GET /inventory/consumables?search=&category_id=&brand_id=&supplier_id=&status=&unit=&service_id=&sort_by=&page=&limit=
+router.get(
+    "/consumables",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    consumableInventoryController.list
+);
+
+// GET /inventory/consumables/kpis
+router.get(
+    "/consumables/kpis",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    consumableInventoryController.kpis
+);
+
+// GET /inventory/consumables/usage-history?product_id=&service_id=&direction=&from=&to=&page=&limit=
+// Must be registered BEFORE /consumables/:id or Express would match
+// "usage-history" as the :id param.
+router.get(
+    "/consumables/usage-history",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    consumableInventoryController.usageHistory
+);
+
+// GET /inventory/consumables/:id
+router.get(
+    "/consumables/:id",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    consumableInventoryController.getById
+);
+
+// POST /inventory/consumables/:id/adjust
+router.post(
+    "/consumables/:id/adjust",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    stockAdjustment,
+    consumableInventoryController.adjustStock
 );
 
 // ─── Consumable Usage (from Calendar appointments) ────────────────────────────

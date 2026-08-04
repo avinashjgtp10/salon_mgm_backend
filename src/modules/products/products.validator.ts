@@ -38,7 +38,7 @@ const VALID_PRODUCT_TYPES: ProductType[] = ["retail", "consumable", "both"];
 
 const coerceProductFields = (b: Record<string, any>) => {
     if (!b || typeof b !== "object") return;
-    const floatFields = ["amount", "qty_alert", "supply_price", "retail_price", "markup_percentage", "custom_tax_rate", "team_commission_rate"];
+    const floatFields = ["amount", "bottle_size", "qty_alert", "supply_price", "retail_price", "markup_percentage", "custom_tax_rate", "team_commission_rate"];
     for (const f of floatFields) {
         if (typeof b[f] === "string" && b[f].trim() !== "") {
             const parsed = parseFloat(b[f]);
@@ -108,6 +108,13 @@ const validateProductFields = (b: Record<string, unknown>, requireName = false) 
     }
     if (!isOptionalNonNeg(b.amount)) {
         throw new AppError(400, "amount must be a non-negative number", "VALIDATION_ERROR");
+    }
+    // Opt-in bottle-based tracking: null/omitted means "not used for this
+    // product" (today's flat behavior). A zero bottle_size would make the
+    // CEIL(amount / bottle_size) display divide by zero, so it's excluded
+    // here even though it's otherwise a plain non-negative number.
+    if (b.bottle_size !== undefined && b.bottle_size !== null && !(typeof b.bottle_size === "number" && Number.isFinite(b.bottle_size) && b.bottle_size > 0)) {
+        throw new AppError(400, "bottle_size must be a positive number, or null to disable bottle tracking", "VALIDATION_ERROR");
     }
     if (!isOptionalNonNeg(b.qty_alert)) {
         throw new AppError(400, "qty_alert must be a non-negative number", "VALIDATION_ERROR");
