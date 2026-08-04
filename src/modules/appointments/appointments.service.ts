@@ -467,6 +467,24 @@ export const appointmentsService = {
 
         const updated = await appointmentsRepository.update(appointmentId, patch);
 
+        // Reassigning a paid/partial appointment to a different staff member
+        // (calendar drag-drop or manual edit) must also move the already-
+        // recorded sale's revenue/commission credit to the new staff —
+        // otherwise Staff Performance/Commission reports keep crediting
+        // whoever the sale was originally attributed to, silently
+        // disagreeing with what the calendar now shows. Booked/unpaid
+        // appointments have no linked sale yet, so this is a no-op for them.
+        if (
+            patch.staff_id &&
+            patch.staff_id !== existing.staff_id &&
+            (existing.status === "paid" || existing.status === "partial")
+        ) {
+            salesRepository.reassignStaffForAppointment(appointmentId, patch.staff_id)
+                .catch(err => logger.warn("Sale staff reassignment failed (non-fatal)", {
+                    appointmentId, newStaffId: patch.staff_id, err: err?.message,
+                }));
+        }
+
         // Adjust stock when product_items list changes (fire-and-forget)
         if (patch.product_items !== undefined) {
             const oldItems = (existing.product_items ?? []).filter(p => p.product_id);

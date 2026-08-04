@@ -1398,6 +1398,7 @@ async getStaffPerformanceReport(
             product_id: asString(body.product_id),
             package_id: asString(body.package_id),
             membership_id: asString(body.membership_id),
+            search: asString(body.search),
             page: body.page != null ? Number(body.page) : undefined,
             limit: body.limit != null ? Number(body.limit) : undefined,
             is_export: body.is_export === true,
