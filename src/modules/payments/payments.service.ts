@@ -693,11 +693,16 @@ export const paymentsService = {
           // silently records the full pre-discount catalog price as "paid" whenever a
           // coupon/wallet/points deduction legitimately brings paid_amount to ₹0 (e.g. a
           // 100%-off coupon), overcharging the customer's recorded payment by the full bill.
-          const thisPaid = Math.max(0, (
+          // Capped at what's actually still owed — there's no "change given back" concept
+          // in this system, so a frontend-sent amount above the remaining due (e.g. a POS
+          // cash/split entry typo) must never be persisted as-is, or reports/KPIs downstream
+          // silently show paid > billed for that transaction.
+          const requestedPaid = Math.max(0, (
             data.paid_amount != null ? Number(data.paid_amount)
             : data.net_amount  != null ? Number(data.net_amount)
             : Number(data.gross_amount) || 0
           ));
+          const thisPaid = Math.min(requestedPaid, Math.max(0, effectiveBill - existingPaid));
 
           data.gross_amount = actualBill;
           data.net_amount   = effectiveBill;

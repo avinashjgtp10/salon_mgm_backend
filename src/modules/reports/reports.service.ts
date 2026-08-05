@@ -1482,11 +1482,17 @@ async getStaffSalesReport(
     salonId: string,
     filters: StaffSalesReportFilters
 ): Promise<StaffSalesReportResponse> {
-    const [stats, rowsResult] = await Promise.all([
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
         reportsRepository.getStaffSalesReportStats(salonId, filters),
         reportsRepository.getStaffSalesReport(salonId, filters),
+        reportsRepository.getSalesSummaryFiltersAvailable(salonId),
     ]);
-    return { rows: rowsResult.items, pagination: rowsResult.pagination, stats };
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+        filters_available: { payment_modes: filtersAvailable.payment_modes },
+    };
 },
 
 // ======================================================

@@ -1256,6 +1256,10 @@ export interface StaffSalesReportFilters {
     page?: number;
     limit?: number;
     is_export?: boolean;
+    payment_mode?: string;
+    item_type?: string;
+    payment_status?: string;
+    sort?: "sales_desc" | "sales_asc";
 }
 
 export interface StaffSalesReportRow {
@@ -1312,6 +1316,7 @@ export interface StaffSalesReportResponse {
     rows: StaffSalesReportRow[];
     pagination: StaffSalesReportPagination;
     stats: StaffSalesReportStats;
+    filters_available: { payment_modes: string[] };
 }
 
 // ===============================

@@ -1114,6 +1114,13 @@ _buildSalesSummaryWhere(
     payment_mode?: string;
     item_type?: string;
     service_id?: string;
+    // Filters against the same displayed-status vocabulary as _STATUS_EXPR
+    // ('paid' | 'booked' | 'cancelled' | 'refunded'), NOT the raw sales.status
+    // column that `status` above filters on — the two are deliberately
+    // separate knobs (see getStaffSalesReport's Payment Status filter).
+    // Every call site using this filter must have _APPOINTMENT_STATUS_JOIN's
+    // `a` alias already joined, same requirement as _STATUS_EXPR itself.
+    payment_status?: string;
   }
 ): { where: string; values: any[]; nextIndex: number } {
   const values: any[] = [salonId];
@@ -1194,6 +1201,18 @@ _buildSalesSummaryWhere(
         : "sale_items si";
       where.push(`EXISTS (SELECT 1 FROM ${joinClause} WHERE ${lineItemConditions.join(" AND ")})`);
     }
+  }
+  if (filters.payment_status) {
+    where.push(`(
+      CASE
+        WHEN s.appointment_id IS NOT NULL THEN COALESCE(a.status::text, 'booked')
+        WHEN s.status = 'completed' THEN 'paid'
+        WHEN s.status = 'cancelled' THEN 'cancelled'
+        WHEN s.status = 'refunded' THEN 'refunded'
+        ELSE 'booked'
+      END
+    ) = $${idx++}`);
+    values.push(filters.payment_status);
   }
   if (filters.search?.trim()) {
     where.push(`(
@@ -3977,7 +3996,10 @@ async getClientRevenueReportRows(
 // per-row fields not needed for a sum.
 async getStaffSalesReportStats(
   salonId: string,
-  filters: { start_date?: string; end_date?: string; staff_id?: string; staff_ids?: string[]; search?: string }
+  filters: {
+    start_date?: string; end_date?: string; staff_id?: string; staff_ids?: string[]; search?: string;
+    payment_mode?: string; item_type?: string; payment_status?: string;
+  }
 ): Promise<StaffSalesReportStats> {
   const { where, values, nextIndex } = this._buildSalesSummaryWhere(salonId, filters);
   const unbilled = this._UNBILLED_APPOINTMENT_ROWS_CTE(filters, nextIndex);
@@ -3999,6 +4021,7 @@ async getStaffSalesReportStats(
         COALESCE(itype.membership_revenue, 0) AS membership_revenue
       FROM sales s
       LEFT JOIN clients c ON s.client_id = c.id
+      ${this._APPOINTMENT_STATUS_JOIN}
       ${this._PAYMENT_LATERAL}
       LEFT JOIN LATERAL (
         SELECT SUM(ce.commission_amount) AS commission_amount
@@ -4010,14 +4033,15 @@ async getStaffSalesReportStats(
           )
       ) comm ON TRUE
       -- Item-type revenue breakdown — sales only (not unbilled appointments,
-      -- see appt_side's zeroed columns below), same simplification the GST
-      -- report's equivalent breakdown uses.
+      -- see appt_side's zeroed columns below). Tax-inclusive (total_price +
+      -- tax_amount) so these four cards sum to the tax-inclusive total_sale
+      -- above instead of silently excluding GST.
       LEFT JOIN LATERAL (
         SELECT
-          SUM(si.total_price) FILTER (WHERE si.item_type = 'service') AS service_revenue,
-          SUM(si.total_price) FILTER (WHERE si.item_type = 'product') AS product_revenue,
-          SUM(si.total_price) FILTER (WHERE si.item_type = 'package') AS package_revenue,
-          SUM(si.total_price) FILTER (WHERE si.item_type = 'membership') AS membership_revenue
+          SUM(si.total_price + COALESCE(si.tax_amount, 0)) FILTER (WHERE si.item_type = 'service') AS service_revenue,
+          SUM(si.total_price + COALESCE(si.tax_amount, 0)) FILTER (WHERE si.item_type = 'product') AS product_revenue,
+          SUM(si.total_price + COALESCE(si.tax_amount, 0)) FILTER (WHERE si.item_type = 'package') AS package_revenue,
+          SUM(si.total_price + COALESCE(si.tax_amount, 0)) FILTER (WHERE si.item_type = 'membership') AS membership_revenue
         FROM sale_items si
         WHERE si.sale_id = s.id
       ) itype ON TRUE
@@ -4077,6 +4101,10 @@ async getStaffSalesReport(
   filters: {
     start_date?: string; end_date?: string; staff_id?: string; staff_ids?: string[];
     search?: string; page?: number; limit?: number; is_export?: boolean;
+    payment_mode?: string; item_type?: string; payment_status?: string;
+    // 'sales_desc'/'sales_asc' = "Most/Least Staff Sales" (each row's own
+    // Total Sales amount) — default is newest-first, matching prior behavior.
+    sort?: "sales_desc" | "sales_asc";
   }
 ): Promise<{ items: StaffSalesReportRow[]; pagination: { total: number; page: number; limit: number; total_pages: number } }> {
   const { where, values, nextIndex } = this._buildSalesSummaryWhere(salonId, filters);
@@ -4089,6 +4117,9 @@ async getStaffSalesReport(
   const offset = limit ? (page - 1) * limit : 0;
   const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
   const limitValues = limit ? [limit, offset] : [];
+  const orderClause = filters.sort === "sales_desc" ? "ORDER BY price DESC, created_at DESC"
+    : filters.sort === "sales_asc" ? "ORDER BY price ASC, created_at DESC"
+    : "ORDER BY created_at DESC";
 
   const query = `
     WITH sales_side AS (
@@ -4162,7 +4193,7 @@ async getStaffSalesReport(
     )
     SELECT *, COUNT(*) OVER() AS total_count
     FROM unified
-    ORDER BY created_at DESC
+    ${orderClause}
     ${limitClause}
   `;
 
