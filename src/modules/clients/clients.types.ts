@@ -45,6 +45,10 @@ export type Client = {
     ewallet_balance: string;                     // pg decimal returns string
 
     is_active: boolean;
+    // Independent of is_active — a blocked client stays visible/manageable
+    // (appears in the client list, can still be booked in-person); is_active
+    // is reserved for actual soft-deletion. See is_blocked migration.
+    is_blocked: boolean;
     block_reason: string | null;
 
     email_notifications: boolean;
