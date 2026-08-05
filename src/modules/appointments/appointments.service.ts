@@ -387,12 +387,23 @@ export const appointmentsService = {
             ).catch(err => logger.warn("Stock deduction failed (non-fatal)", { err: err?.message }));
         }
 
+        // `appointment` here is the raw `INSERT ... RETURNING *` row
+        // (appointments.repository.ts::create()), which has client_id but NOT
+        // client_name (that's only ever populated by a JOIN to clients — see
+        // findById() — appointments.types.ts marks it explicitly as a "joined
+        // field, not a stored column"). Using `appointment.client_name`
+        // directly always evaluated to undefined, so every "New Appointment
+        // Booked" notification showed "Walk-in" regardless of which client
+        // was actually picked. Re-fetched (with the join) once here and
+        // reused below for WhatsApp automation, rather than querying twice.
+        const full = appointment.client_id ? await appointmentsRepository.findById(appointment.id) : null;
+
         // Fire notification (fire-and-forget)
         notificationsService.create({
             salon_id: appointment.salon_id,
             type:     "appointment",
             title:    "New Appointment Booked",
-            body:     `${appointment.client_name ?? "Walk-in"} — ${formatDate(appointment.scheduled_at)} at ${formatTime(appointment.scheduled_at)}`,
+            body:     `${full?.client_name ?? "Walk-in"} — ${formatDate(appointment.scheduled_at)} at ${formatTime(appointment.scheduled_at)}`,
             event_key: "newAppointment",
         }).catch((err: any) => {
             logger.error("New appointment notification failed", {
@@ -408,7 +419,6 @@ export const appointmentsService = {
         // Dedup check — NEVER send confirmation twice for the same appointment
         if (appointment.client_id) {
             try {
-                const full = await appointmentsRepository.findById(appointment.id);
                 if (full && (full as any).client_phone) {
                     const alreadySent = await whatsappAutomationRepository.logExistsForReference(
                         full.id,
