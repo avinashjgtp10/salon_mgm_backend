@@ -813,6 +813,8 @@ export interface ProductRetailReportRow {
     total: number;
     tax_amount: number;
     taxable_amount: number;
+    paid_amount: number;
+    due_amount: number;
     payment_method: string | null;
     status: string;
 }
@@ -890,6 +892,8 @@ export interface ServiceSaleReportRow {
     // recorded before per-item tax existed.
     tax_amount: number;
     taxable_amount: number;
+    paid_amount: number;
+    due_amount: number;
     payment_method: string | null;
     status: string;
 }
