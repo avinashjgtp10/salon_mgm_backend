@@ -1,7 +1,7 @@
 import { PoolClient } from "pg";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
-import { branchesRepository } from "../branches/branches.repository";
+import { branchesService } from "../branches/branches.service";
 import {
     suppliersRepository,
     stockMovementsRepository,
@@ -244,12 +244,18 @@ export const consumableUsageService = {
 
 export const appointmentConsumablesService = {
     // Resolves which branch to attribute a stock movement to when the caller
-    // doesn't already have one on hand — mirrors the existing "main branch,
-    // else first branch" heuristic used elsewhere in this codebase (e.g.
-    // appointments.service.ts, payments.service.ts) so all three call sites agree.
+    // doesn't already have one on hand — mirrors the "main branch, else
+    // first branch" heuristic used elsewhere in this codebase (e.g.
+    // appointments.service.ts, payments.service.ts's WhatsApp-receipt
+    // address lookups). Unlike those cosmetic lookups, THIS one gates
+    // whether consumable stock gets deducted at all — going through
+    // branchesService.listBranchesBySalon (not the raw repository call)
+    // matters here specifically, since it auto-creates a "Main Branch" for
+    // a salon that never set one up, instead of returning an empty list and
+    // silently skipping every consumable deduction with no error anywhere.
     async resolveBranchId(salonId: string, apptBranchId?: string | null): Promise<string | null> {
         if (apptBranchId) return apptBranchId;
-        const branches = await branchesRepository.listBySalonId(salonId);
+        const branches = await branchesService.listBranchesBySalon(salonId);
         const main = branches.find((b) => b.is_main) ?? branches[0] ?? null;
         return main?.id ?? null;
     },
