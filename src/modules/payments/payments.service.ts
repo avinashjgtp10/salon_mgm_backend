@@ -971,9 +971,19 @@ export const paymentsService = {
     // row for Invoice No / Staff lookups.
     let checkoutSaleId: string | undefined;
 
-    // ── Auto-create sale record when calendar payment is fully completed ───────
+    // ── Auto-create sale record on any real calendar payment (partial or full) ──
+    // Previously gated on data.status === 'completed' only, so a deposit/
+    // partial payment (due_amount > 0, data.status = 'partial' — see the
+    // status assignment above) never reached this block at all: no sale row,
+    // no invoice_number, silently. Every 'partial' appointment across dev/QA/
+    // prod with a genuine partial payment had sale_id = NULL as a result.
+    // Now matches Quick Sale/POS checkout, which already generates an invoice
+    // regardless of amount paid. recordTransaction() is idempotent per
+    // appointment_id (updates the existing sale rather than duplicating), so
+    // the later payment that actually settles the balance reuses the same
+    // invoice number instead of minting a second one.
     // Skip for package payments — revenue was already counted when the package was purchased.
-    if (data.appointment_id && data.status === 'completed' && appt && !isPackagePayment) {
+    if (data.appointment_id && (data.status === 'completed' || data.status === 'partial') && appt && !isPackagePayment) {
       try {
         // Per-row "Disc %" (see ServiceRow.tsx calcTotal()) is baked into each
         // item's own `total`, but was never carried over into the sale-item's
