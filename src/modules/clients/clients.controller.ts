@@ -668,6 +668,13 @@ export const clientsController = {
                                 'quantity',    si.quantity,
                                 'unit_price',  si.unit_price,
                                 'total_price', si.total_price,
+                                -- Per-item discount/GST — same sale_items columns
+                                -- Reports (Service/Product Sale Report) already
+                                -- reads; just weren't selected here before, even
+                                -- though they're always populated by the pricing
+                                -- engine at sale time.
+                                'discount_amount', si.discount_amount,
+                                'tax_amount',      si.tax_amount,
                                 -- Per-item staff (a Quick Sale row can assign a
                                 -- different staff member per line) falling back
                                 -- to the sale's own staff — same COALESCE
@@ -732,7 +739,13 @@ export const clientsController = {
                         cm.used_sessions,
                         cm.membership_wallet_balance,
                         cm.staff_id,
-                        cm.discount_balance_remaining
+                        cm.discount_balance_remaining,
+                        -- Needed for the Memberships tab's Invoice column — same
+                        -- sale_id/appointment_id link client_packages already
+                        -- exposes above, resolved to a real invoice number
+                        -- frontend-side via the matching sales row.
+                        cm.sale_id,
+                        cm.appointment_id
                      FROM client_memberships cm
                      WHERE cm.client_id = $1 AND cm.salon_id = $2
                      ORDER BY cm.purchased_at DESC
