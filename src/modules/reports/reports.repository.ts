@@ -2025,7 +2025,9 @@ _UNBILLED_APPOINTMENT_DAILY_ROWS_CTE(
       NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff,
       (src.price * src.quantity) AS amount,
       pay.latest_method AS payment_method,
-      a.status::text AS status
+      a.status::text AS status,
+      pay.total_paid,
+      pay.latest_due
     FROM (
       SELECT a.id, a.id AS appointment_id, a.salon_id, a.client_id, a.staff_id, a.status,
              a.created_at, a.scheduled_at, a.deleted_at, a.services,
@@ -2066,9 +2068,19 @@ _UNBILLED_APPOINTMENT_DAILY_ROWS_CTE(
     ) src ON TRUE
     LEFT JOIN staff st ON st.id = COALESCE(src.staff_id, a.staff_id)
     LEFT JOIN LATERAL (
-      SELECT MAX(p.payment_method) FILTER (
-        WHERE p.created_at = (SELECT MAX(p2.created_at) FROM payments p2 WHERE p2.appointment_id = a.appointment_id)
-      ) AS latest_method
+      SELECT
+        MAX(p.payment_method) FILTER (
+          WHERE p.created_at = (SELECT MAX(p2.created_at) FROM payments p2 WHERE p2.appointment_id = a.appointment_id)
+        ) AS latest_method,
+        -- A "partial" appointment (paid something, not yet fully checked
+        -- out/invoiced) has real payments rows even with no sales row yet —
+        -- same source Sales Summary's own unbilled CTE uses
+        -- (_UNBILLED_APPOINTMENT_ROWS_CTE's pay.total_paid/latest_due), so
+        -- this reconciles instead of always showing "$0 paid, fully due".
+        COALESCE(SUM(p.paid_amount) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS total_paid,
+        COALESCE(MAX(p.due_amount) FILTER (
+          WHERE p.created_at = (SELECT MAX(p2.created_at) FROM payments p2 WHERE p2.appointment_id = a.appointment_id)
+        ), 0) AS latest_due
       FROM payments p
       WHERE p.appointment_id = a.appointment_id
     ) pay ON TRUE
@@ -2090,10 +2102,14 @@ async getDailySheetReport(
   items: DailySheetReportRow[];
   pagination: { total: number; page: number; limit: number; total_pages: number };
   total_amount: number;
+  total_paid: number;
+  total_due: number;
   invoice_count: number;
   client_count: number;
   staff_count: number;
   items_count: number;
+  pending_payment_count: number;
+  fully_paid_count: number;
 }> {
   const { where, saleItemsJoin, values, nextIndex } = this._buildDailySheetWhere(salonId, filters);
   const unbilled = this._UNBILLED_APPOINTMENT_DAILY_ROWS_CTE(filters, nextIndex);
@@ -2121,6 +2137,19 @@ async getDailySheetReport(
         st.id AS staff_id,
         NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff,
         COALESCE(si.total_price, s.total_amount) AS amount,
+        -- Sale-level paid/due, exactly as Sales Summary computes it (same
+        -- _PAYMENT_LATERAL fields, same branches) — NOT prorated per line
+        -- item. Every line item of the same sale carries the identical
+        -- invoice-level figure; the grouped CTE re-collapses to one row per
+        -- invoice via MIN/MAX (a no-op on a constant), so this always
+        -- reconciles exactly with Sales Summary instead of drifting from
+        -- proration rounding (si.total_price / s.subtotal can be lossy).
+        CASE
+          WHEN s.appointment_id IS NOT NULL THEN pay.paid_from_payments
+          WHEN s.status = 'completed' THEN s.total_amount::numeric
+          ELSE 0
+        END AS paid_amount,
+        COALESCE(pay.latest_due, 0) AS due_amount,
         s.payment_method,
         s.payment_reference,
         ${this._STATUS_EXPR} AS status,
@@ -2137,6 +2166,14 @@ async getDailySheetReport(
       SELECT
         u.appointment_id, u.sale_id, u.time, u.ticket_no, u.client_id, u.client_name,
         u.service_id, u.service, u.item_type, u.staff_id, u.staff, u.amount,
+        -- Real payments can exist on an appointment before it's ever invoiced
+        -- (a "partial" checkout) — same source as Sales Summary's own
+        -- unbilled CTE (pay.total_paid/latest_due), not hardcoded to
+        -- "$0 paid, fully due" like before. Appointment-level constant
+        -- (same on every line item row), so grouped's MAX() is a no-op here
+        -- too, same as sales_side.
+        COALESCE(u.total_paid, 0) AS paid_amount,
+        COALESCE(u.latest_due, 0) AS due_amount,
         u.payment_method, NULL::text AS payment_reference, u.status,
         (SELECT a2.created_at FROM appointments a2 WHERE a2.id = u.appointment_id) AS sort_at
       FROM (${unbilled.sql}) u
@@ -2145,6 +2182,36 @@ async getDailySheetReport(
       SELECT * FROM sales_side
       UNION ALL
       SELECT * FROM appt_side
+    ),
+    -- One row per invoice/appointment (not per line item) — multi-item sales
+    -- (e.g. a service + a membership on the same bill) used to surface as
+    -- separate rows sharing an invoice number, which read as duplicates.
+    -- Items/staff are combined into one display string per invoice; amount
+    -- and tax are summed back up to the invoice total.
+    grouped AS (
+      SELECT
+        COALESCE(sale_id::text, appointment_id::text) AS group_key,
+        MIN(appointment_id::text)::uuid AS appointment_id,
+        MIN(sale_id::text)::uuid AS sale_id,
+        MIN(time) AS time,
+        MIN(ticket_no) AS ticket_no,
+        MIN(client_id::text)::uuid AS client_id,
+        MIN(client_name) AS client_name,
+        STRING_AGG(DISTINCT service, ', ') AS service,
+        STRING_AGG(DISTINCT item_type, ', ') AS item_type,
+        STRING_AGG(DISTINCT staff, ', ') AS staff,
+        SUM(amount) AS amount,
+        -- paid/due are a constant per invoice/appointment (every line item
+        -- row of the same group carries the identical value), so MAX is a
+        -- no-op collapse back to one row, not a real aggregation.
+        MAX(paid_amount) AS paid_amount,
+        MAX(due_amount) AS due_amount,
+        MIN(payment_method) AS payment_method,
+        MIN(payment_reference) AS payment_reference,
+        MIN(status) AS status,
+        MIN(sort_at) AS sort_at
+      FROM unified
+      GROUP BY COALESCE(sale_id::text, appointment_id::text)
     ),
     -- COUNT(DISTINCT ...) can't be a window function in Postgres, so these
     -- distinct counts over the WHOLE filtered set are computed as a single
@@ -2156,23 +2223,31 @@ async getDailySheetReport(
         COUNT(DISTINCT staff_id) AS staff_count
       FROM unified
     )
-    SELECT unified.*,
-      SUM(amount) OVER() AS grand_total,
+    SELECT grouped.*,
+      SUM(amount) OVER() AS total_amount_sum,
+      SUM(paid_amount) OVER() AS total_paid_sum,
+      SUM(due_amount) OVER() AS total_due_sum,
+      COUNT(*) FILTER (WHERE due_amount > 0.01) OVER() AS pending_payment_count,
+      COUNT(*) FILTER (WHERE due_amount <= 0.01) OVER() AS fully_paid_count,
       COUNT(*) OVER() AS total_count,
       aggregates.invoice_count,
       aggregates.client_count,
       aggregates.staff_count
-    FROM unified, aggregates
+    FROM grouped, aggregates
     ORDER BY sort_at ASC
     ${limitClause}
   `;
 
   const { rows } = await safeQuery(() => pool.query(query, [...values, ...unbilled.values, ...limitValues]));
   const total = rows.length ? Number(rows[0].total_count) : 0;
-  const totalAmount = rows.length ? Number(rows[0].grand_total ?? 0) : 0;
+  const totalAmount = rows.length ? Number(rows[0].total_amount_sum ?? 0) : 0;
+  const totalPaid = rows.length ? Number(rows[0].total_paid_sum ?? 0) : 0;
+  const totalDue = rows.length ? Number(rows[0].total_due_sum ?? 0) : 0;
   const invoiceCount = rows.length ? Number(rows[0].invoice_count ?? 0) : 0;
   const clientCount = rows.length ? Number(rows[0].client_count ?? 0) : 0;
   const staffCount = rows.length ? Number(rows[0].staff_count ?? 0) : 0;
+  const pendingPaymentCount = rows.length ? Number(rows[0].pending_payment_count ?? 0) : 0;
+  const fullyPaidCount = rows.length ? Number(rows[0].fully_paid_count ?? 0) : 0;
   const items: DailySheetReportRow[] = rows.map((row: any) => ({
     appointment_id: row.appointment_id,
     sale_id: row.sale_id,
@@ -2180,12 +2255,17 @@ async getDailySheetReport(
     ticket_no: row.ticket_no,
     client_id: row.client_id,
     client_name: row.client_name,
-    service_id: row.service_id,
+    // One row per invoice now (grouped from potentially several line items),
+    // so a single service_id/staff_id is no longer meaningful — `service`/
+    // `staff` are comma-joined display strings instead.
+    service_id: null,
     service: row.service,
     item_type: row.item_type,
-    staff_id: row.staff_id,
+    staff_id: null,
     staff: row.staff,
     amount: Number(row.amount ?? 0),
+    paid_amount: Number(row.paid_amount ?? 0),
+    due_amount: Number(row.due_amount ?? 0),
     payment_method: row.payment_method,
     payment_reference: row.payment_reference,
     status: row.status,
@@ -2200,10 +2280,14 @@ async getDailySheetReport(
       total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
     },
     total_amount: totalAmount,
+    total_paid: totalPaid,
+    total_due: totalDue,
     invoice_count: invoiceCount,
     client_count: clientCount,
     staff_count: staffCount,
     items_count: total,
+    pending_payment_count: pendingPaymentCount,
+    fully_paid_count: fullyPaidCount,
   };
 },
 

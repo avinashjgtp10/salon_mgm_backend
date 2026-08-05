@@ -729,6 +729,8 @@ export interface DailySheetReportRow {
     staff_id: string | null;
     staff: string | null;
     amount: number;
+    paid_amount: number;
+    due_amount: number;
     payment_method: string | null;
     payment_reference: string | null;
     status: string;
@@ -756,6 +758,8 @@ export interface DailySheetReportResponse {
     rows: DailySheetReportRow[];
     pagination: DailySheetReportPagination;
     total_amount: number;
+    total_paid: number;
+    total_due: number;
     // invoice_count = distinct invoices/appointments (NOT the same as
     // pagination.total, which counts line-item rows since Daily Sheet is
     // one-row-per-item); items_count === pagination.total, kept as an
@@ -764,6 +768,8 @@ export interface DailySheetReportResponse {
     client_count: number;
     staff_count: number;
     items_count: number;
+    pending_payment_count: number;
+    fully_paid_count: number;
     filters_available: DailySheetFiltersAvailable;
 }
 
