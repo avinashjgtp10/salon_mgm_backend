@@ -3074,6 +3074,7 @@ async getGstReportRows(
   const query = `
     SELECT
       s.id AS sale_id,
+      s.appointment_id,
       TO_CHAR(s.created_at, 'YYYY-MM-DD') AS date,
       s.invoice_number AS invoice_no,
       c.full_name AS client_name,
@@ -3105,6 +3106,7 @@ async getGstReportRows(
   const total = rows.length ? Number(rows[0].total_count) : 0;
   const items: GstReportRow[] = rows.map((row: any) => ({
     sale_id: row.sale_id,
+    appointment_id: row.appointment_id ?? null,
     date: row.date,
     invoice_no: row.invoice_no,
     client_name: row.client_name,

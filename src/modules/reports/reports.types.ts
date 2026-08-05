@@ -950,6 +950,7 @@ export interface GstReportFilters {
 
 export interface GstReportRow {
     sale_id: string;
+    appointment_id: string | null;
     date: string;
     invoice_no: string;
     client_name: string | null;
