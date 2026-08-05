@@ -26,6 +26,25 @@ import {
   UpdateServiceBody,
 } from "./services.types";
 
+// Correlated subquery, spliced into every services SELECT below — returns
+// each service's configured consumable recipe as a JSON array so callers
+// never need a second round-trip to fetch it (services.repository.ts is the
+// only place this fragment should live; don't copy it elsewhere).
+const CONSUMABLES_USED_SUBQUERY = `
+  COALESCE(
+    (SELECT json_agg(json_build_object(
+        'product_id', sc.product_id,
+        'product_name', p.name,
+        'qty', sc.qty,
+        'unit', sc.unit
+      ) ORDER BY sc.sort_order)
+     FROM service_consumables sc
+     JOIN products p ON p.id = sc.product_id
+     WHERE sc.service_id = s.id),
+    '[]'::json
+  ) AS consumables_used
+`;
+
 // ─── Query builders ───────────────────────────────────────────────────────────
 
 const buildServiceWhere = (q: ListServicesQuery, salonId: string) => {
@@ -95,7 +114,7 @@ const buildBundleWhere = (q: ListBundlesQuery, salonId: string) => {
 export const servicesRepository = {
   async findById(id: string, salonId: string): Promise<Service | null> {
     const { rows } = await pool.query(
-      `SELECT s.*, s.duration_minutes AS duration, c.name AS category_name
+      `SELECT s.*, s.duration_minutes AS duration, c.name AS category_name, ${CONSUMABLES_USED_SUBQUERY}
        FROM services s
        LEFT JOIN service_categories c ON c.id = s.category_id
        WHERE s.id = $1 AND s.salon_id = $2`,
@@ -117,7 +136,7 @@ export const servicesRepository = {
     const total: number = countRes.rows[0]?.total ?? 0;
 
     const dataRes = await pool.query(
-      `SELECT s.*, s.duration_minutes AS duration, c.name AS category_name
+      `SELECT s.*, s.duration_minutes AS duration, c.name AS category_name, ${CONSUMABLES_USED_SUBQUERY}
        FROM services s
        LEFT JOIN service_categories c ON c.id = s.category_id
        ${whereSql}
@@ -135,7 +154,7 @@ export const servicesRepository = {
   async listAll(query: ListServicesQuery, salonId: string): Promise<Service[]> {
     const { whereSql, values } = buildServiceWhere(query, salonId);
     const { rows } = await pool.query(
-      `SELECT s.*, s.duration_minutes AS duration, c.name AS category_name
+      `SELECT s.*, s.duration_minutes AS duration, c.name AS category_name, ${CONSUMABLES_USED_SUBQUERY}
        FROM services s
        LEFT JOIN service_categories c ON c.id = s.category_id
        ${whereSql}
@@ -237,6 +256,22 @@ export const servicesRepository = {
     });
     await pool.query(
       `INSERT INTO service_staff (service_id, staff_id) VALUES ${rowsSql.join(", ")}`,
+      values
+    );
+  },
+
+  async replaceConsumables(serviceId: string, items: { product_id: string; qty: number; unit?: string }[]): Promise<void> {
+    await pool.query(`DELETE FROM service_consumables WHERE service_id = $1`, [serviceId]);
+    if (!items.length) return;
+    const values: unknown[] = [];
+    const rowsSql: string[] = [];
+    items.forEach((item, i) => {
+      values.push(serviceId, item.product_id, item.qty, item.unit ?? null, i);
+      const base = i * 5;
+      rowsSql.push(`($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5})`);
+    });
+    await pool.query(
+      `INSERT INTO service_consumables (service_id, product_id, qty, unit, sort_order) VALUES ${rowsSql.join(", ")}`,
       values
     );
   },

@@ -198,14 +198,31 @@ export const stockReconciliationRepository = {
                p.id                                                          AS product_id,
                COALESCE(c.name, '')                                          AS category_name,
                p.name                                                        AS item_name,
-               COALESCE(p.amount, 0)                                         AS actual_stock,
-               COALESCE(sr.adjust_stock,  p.amount, 0)                       AS adjust_stock,
-               COALESCE(sr.adjust_stock,  p.amount, 0) - COALESCE(p.amount, 0) AS stock_difference,
+               -- Opt-in bottle-based tracking: amount is always the raw
+               -- remaining volume (e.g. ml) — the deduction engine's source
+               -- of truth is unchanged. Where bottle_size is set, Stock
+               -- Quantity is a DERIVED bottle count (a partially-consumed
+               -- bottle still counts as 1 until fully empty — see that
+               -- migration's header comment), not the raw volume.
+               CASE WHEN p.bottle_size IS NOT NULL AND p.bottle_size > 0
+                    THEN CEIL(COALESCE(p.amount, 0) / p.bottle_size)
+                    ELSE COALESCE(p.amount, 0) END                           AS actual_stock,
+               COALESCE(sr.adjust_stock,
+                 CASE WHEN p.bottle_size IS NOT NULL AND p.bottle_size > 0
+                      THEN CEIL(COALESCE(p.amount, 0) / p.bottle_size)
+                      ELSE COALESCE(p.amount, 0) END, 0)                     AS adjust_stock,
+               COALESCE(sr.adjust_stock,
+                 CASE WHEN p.bottle_size IS NOT NULL AND p.bottle_size > 0
+                      THEN CEIL(COALESCE(p.amount, 0) / p.bottle_size)
+                      ELSE COALESCE(p.amount, 0) END, 0)
+                 - (CASE WHEN p.bottle_size IS NOT NULL AND p.bottle_size > 0
+                         THEN CEIL(COALESCE(p.amount, 0) / p.bottle_size)
+                         ELSE COALESCE(p.amount, 0) END)                     AS stock_difference,
                ROUND(COALESCE(p.amount, 0) * COALESCE(p.retail_price::numeric, 0), 2) AS stock_value,
-               COALESCE(SUM(cu.qty), 0)                                      AS actual_consumable,
-               COALESCE(sr.adjust_consumable, SUM(cu.qty), 0)                AS adjust_consumable,
+               COALESCE(SUM(CASE WHEN cu.direction = 'return' THEN -cu.qty ELSE cu.qty END), 0)                AS actual_consumable,
+               COALESCE(sr.adjust_consumable, SUM(CASE WHEN cu.direction = 'return' THEN -cu.qty ELSE cu.qty END), 0) AS adjust_consumable,
                COALESCE(p.measure_unit, '—')                                 AS unit,
-               COALESCE(sr.adjust_consumable, 0) - COALESCE(SUM(cu.qty), 0) AS consumable_difference,
+               COALESCE(sr.adjust_consumable, 0) - COALESCE(SUM(CASE WHEN cu.direction = 'return' THEN -cu.qty ELSE cu.qty END), 0) AS consumable_difference,
                COALESCE(sr.remark, '')                                        AS remark
              FROM products p
              LEFT JOIN service_categories c   ON c.id = p.category_id
@@ -214,7 +231,7 @@ export const stockReconciliationRepository = {
              LEFT JOIN consumable_usage cu
                     ON cu.product_id = p.id AND cu.branch_id = $2
              WHERE ${where}
-             GROUP BY p.id, c.name, p.amount, p.retail_price, p.measure_unit,
+             GROUP BY p.id, c.name, p.amount, p.bottle_size, p.retail_price, p.measure_unit,
                       sr.adjust_stock, sr.adjust_consumable, sr.remark
              ORDER BY c.name NULLS LAST, p.name`,
             [salonId, branchId, ...values.slice(1)]
@@ -251,9 +268,18 @@ export const stockReconciliationRepository = {
                 [salonId, branchId, item.product_id, item.adjust_stock, item.adjust_consumable, item.remark ?? null, userId]
             );
 
-            // Write the physically-counted qty back to actual stock
+            // Write the physically-counted qty back to actual stock. When
+            // bottle-tracked, `item.adjust_stock` is a BOTTLE COUNT (what
+            // the reconciliation UI now displays/collects) — convert back to
+            // the raw volume products.amount actually stores, using the
+            // product's own bottle_size so this stays correct without a
+            // separate read first.
             await client.query(
-                `UPDATE products SET amount = $1, updated_at = NOW()
+                `UPDATE products
+                 SET amount = CASE WHEN bottle_size IS NOT NULL AND bottle_size > 0
+                                    THEN $1::numeric * bottle_size
+                                    ELSE $1::numeric END,
+                     updated_at = NOW()
                  WHERE id = $2 AND salon_id = $3`,
                 [item.adjust_stock, item.product_id, salonId]
             );
@@ -272,20 +298,24 @@ export const stockReconciliationRepository = {
                p.id                                                AS product_id,
                COALESCE(c.name, '')                                AS category_name,
                p.name                                              AS item_name,
-               COALESCE(p.amount, 0)                              AS actual_stock,
+               CASE WHEN p.bottle_size IS NOT NULL AND p.bottle_size > 0
+                    THEN CEIL(COALESCE(p.amount, 0) / p.bottle_size)
+                    ELSE COALESCE(p.amount, 0) END                AS actual_stock,
                $3::numeric                                         AS adjust_stock,
-               $3::numeric - COALESCE(p.amount, 0)               AS stock_difference,
+               $3::numeric - (CASE WHEN p.bottle_size IS NOT NULL AND p.bottle_size > 0
+                                   THEN CEIL(COALESCE(p.amount, 0) / p.bottle_size)
+                                   ELSE COALESCE(p.amount, 0) END) AS stock_difference,
                ROUND(COALESCE(p.amount,0)*COALESCE(p.retail_price::numeric,0),2) AS stock_value,
-               COALESCE(SUM(cu.qty), 0)                           AS actual_consumable,
+               COALESCE(SUM(CASE WHEN cu.direction = 'return' THEN -cu.qty ELSE cu.qty END), 0) AS actual_consumable,
                $4::numeric                                         AS adjust_consumable,
                COALESCE(p.measure_unit,'—')                        AS unit,
-               $4::numeric - COALESCE(SUM(cu.qty),0)              AS consumable_difference,
+               $4::numeric - COALESCE(SUM(CASE WHEN cu.direction = 'return' THEN -cu.qty ELSE cu.qty END), 0) AS consumable_difference,
                COALESCE($5,'')                                     AS remark
              FROM products p
              LEFT JOIN service_categories c ON c.id = p.category_id
              LEFT JOIN consumable_usage cu ON cu.product_id = p.id AND cu.branch_id = $2
              WHERE p.id = $1 AND p.salon_id = $6
-             GROUP BY p.id, c.name`,
+             GROUP BY p.id, c.name, p.amount, p.bottle_size, p.retail_price, p.measure_unit`,
             [item.product_id, branchId, item.adjust_stock, item.adjust_consumable, item.remark ?? null, salonId]
         );
         return rows[0] || null;
@@ -318,9 +348,14 @@ export const stockReconciliationRepository = {
                     [salonId, branchId, item.product_id, item.adjust_stock, item.adjust_consumable, item.remark ?? null, userId]
                 );
 
-                // Write the physically-counted qty back to actual stock
+                // Write the physically-counted qty back to actual stock —
+                // same bottle-count-to-volume conversion as upsertRow() above.
                 await client.query(
-                    `UPDATE products SET amount = $1, updated_at = NOW()
+                    `UPDATE products
+                     SET amount = CASE WHEN bottle_size IS NOT NULL AND bottle_size > 0
+                                        THEN $1::numeric * bottle_size
+                                        ELSE $1::numeric END,
+                         updated_at = NOW()
                      WHERE id = $2 AND salon_id = $3`,
                     [item.adjust_stock, item.product_id, salonId]
                 );
@@ -346,18 +381,26 @@ export const consumableUsageRepository = {
 
             let recorded = 0;
             for (const item of body.items) {
-                // Verify product belongs to this salon
+                // Verify product belongs to this salon; lock the row so a
+                // concurrent deduction (e.g. an appointment completing at
+                // the same moment) can't read/write past this one.
                 const { rows: prodRows } = await client.query(
-                    `SELECT id, amount FROM products WHERE id = $1 AND salon_id = $2`,
+                    `SELECT id, amount FROM products WHERE id = $1 AND salon_id = $2 FOR UPDATE`,
                     [item.product_id, salonId]
                 );
                 if (!prodRows.length) continue; // skip unknown products silently
 
-                // Record the usage event
+                // Record the usage event. direction is always 'deduct' and
+                // source is always 'manual' here — this is the standalone
+                // "Update Consumable Items" endpoint; appointment-driven
+                // deduction/return goes through inventoryTransactionsRepository
+                // instead (see inventory-transactions.repository.ts), which
+                // stamps source='appointment_complete'/'appointment_adjustment'
+                // so reports can tell the two apart.
                 await client.query(
                     `INSERT INTO consumable_usage
-                       (salon_id, branch_id, product_id, booking_id, qty, unit, used_by)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                       (salon_id, branch_id, product_id, booking_id, qty, unit, used_by, direction, source)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, 'deduct', 'manual')`,
                     [
                         salonId, body.branch_id, item.product_id,
                         body.booking_id ?? null, item.qty,

@@ -9,6 +9,13 @@ export type AppointmentStatus =
 // ─── JSONB item types ────────────────────────────────────────────────────────
 
 export type AppointmentServiceItem = {
+    // Stable id for this row, assigned server-side the first time it's saved
+    // (see appointments.service.ts::assignServiceRowIds) and echoed back
+    // verbatim thereafter. This is the join key to
+    // appointment_service_consumables.service_row_id — without it, two rows
+    // using the same service/product within one appointment couldn't be told
+    // apart for consumable deduction/audit purposes.
+    id?: string;
     service_id: string;
     staff_id?: string | null;
     staff_name?: string | null;
@@ -24,6 +31,38 @@ export type AppointmentServiceItem = {
     // row's own real GST, read back from the linked sale's sale_items once
     // one exists. See appointmentsService's enrichItemsWithTax.
     tax_amount?: number;
+};
+
+// What the frontend actually sends per service row — layers a transient
+// `consumables` array on top of AppointmentServiceItem. The service layer
+// peels this off and persists it separately into appointment_service_consumables
+// (a relational table, not JSON) before the row is written to the JSONB
+// `services` column — never write `consumables` into that column itself.
+export type IncomingAppointmentServiceItem = AppointmentServiceItem & {
+    consumables?: {
+        product_id: string;
+        product_name?: string;
+        qty: number; // configured/recipe qty
+        unit?: string;
+        actual_qty?: number; // editable; defaults to qty when omitted
+    }[];
+};
+
+// A row of declared per-appointment consumable usage, as persisted in
+// appointment_service_consumables (current state — see the migration's
+// header comment for why this isn't stored as JSON alongside `services`).
+export type AppointmentServiceConsumableRecord = {
+    service_row_id: string;
+    service_id?: string | null;
+    product_id: string;
+    // Read-time-only enrichment (joined from products, never persisted on
+    // this table) — see appointmentsRepository.getServiceConsumables.
+    product_name?: string;
+    standard_qty: number;
+    actual_qty: number;
+    unit?: string | null;
+    branch_id?: string | null;
+    staff_id?: string | null;
 };
 
 export type AppointmentPackageItem = {
@@ -160,7 +199,7 @@ export type CreateAppointmentBody = {
     status?: AppointmentStatus;
     colour?: string;
     // JSONB items
-    services?: AppointmentServiceItem[];
+    services?: IncomingAppointmentServiceItem[];
     package_items?: AppointmentPackageItem[];
     product_items?: AppointmentProductItem[];
     membership_items?: AppointmentMembershipItem[];

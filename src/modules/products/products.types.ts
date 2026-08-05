@@ -13,6 +13,12 @@ export type Product = {
     product_type: ProductType;
     size: string | null;
     amount: number;
+    // Opt-in bottle-based stock tracking (nullable — most products don't use
+    // this). When set, `amount` is the remaining volume in the recipe's
+    // consumption unit (e.g. ml), and Stock Quantity for display purposes is
+    // CEIL(amount / bottle_size), computed at the Stock Reconciliation query
+    // — not stored redundantly here.
+    bottle_size: number | null;
     qty_alert: number | null;
     short_description: string | null;
     description: string | null;
@@ -25,6 +31,11 @@ export type Product = {
     hsn_sac: string | null;
     team_commission_enabled: boolean;
     team_commission_rate: number | null;
+    // Soft-delete/deactivate flag — a deactivated product drops out of
+    // Consumable Inventory's default list and stops being sellable/usable
+    // (Products page, service consumable pickers), but stays in the DB so its
+    // history (sales, consumable_usage, service_consumables) is never orphaned.
+    is_active: boolean;
     created_at: string;
     updated_at: string;
 };
@@ -56,6 +67,7 @@ export type CreateProductBody = {
     product_type?: string;
     size?: string;
     amount?: number;
+    bottle_size?: number | null;
     qty_alert?: number;
     short_description?: string;
     description?: string;
@@ -68,6 +80,7 @@ export type CreateProductBody = {
     hsn_sac?: string;
     team_commission_enabled?: boolean;
     team_commission_rate?: number;
+    is_active?: boolean;
 };
 
 export type UpdateProductBody = Partial<CreateProductBody>;
@@ -87,6 +100,9 @@ export type ProductListFilters = {
     min_price?: number;
     max_price?: number;
     stock?: "all" | "low" | "out_of_stock";
+    // Defaults to active-only (see _buildFilterConditions) — pass false
+    // explicitly to see deactivated products, e.g. a future "Show inactive" toggle.
+    is_active?: boolean;
     sort_by?: string;
     sort_order?: "ASC" | "DESC";
     page?: number;

@@ -38,14 +38,14 @@ const VALID_PRODUCT_TYPES: ProductType[] = ["retail", "consumable", "both"];
 
 const coerceProductFields = (b: Record<string, any>) => {
     if (!b || typeof b !== "object") return;
-    const floatFields = ["amount", "qty_alert", "supply_price", "retail_price", "markup_percentage", "custom_tax_rate", "team_commission_rate"];
+    const floatFields = ["amount", "bottle_size", "qty_alert", "supply_price", "retail_price", "markup_percentage", "custom_tax_rate", "team_commission_rate"];
     for (const f of floatFields) {
         if (typeof b[f] === "string" && b[f].trim() !== "") {
             const parsed = parseFloat(b[f]);
             if (!Number.isNaN(parsed)) b[f] = parsed;
         }
     }
-    const boolFields = ["retail_sales_enabled", "team_commission_enabled"];
+    const boolFields = ["retail_sales_enabled", "team_commission_enabled", "is_active"];
     for (const f of boolFields) {
         if (b[f] === "true" || b[f] === "1") b[f] = true;
         if (b[f] === "false" || b[f] === "0") b[f] = false;
@@ -109,6 +109,13 @@ const validateProductFields = (b: Record<string, unknown>, requireName = false) 
     if (!isOptionalNonNeg(b.amount)) {
         throw new AppError(400, "amount must be a non-negative number", "VALIDATION_ERROR");
     }
+    // Opt-in bottle-based tracking: null/omitted means "not used for this
+    // product" (today's flat behavior). A zero bottle_size would make the
+    // CEIL(amount / bottle_size) display divide by zero, so it's excluded
+    // here even though it's otherwise a plain non-negative number.
+    if (b.bottle_size !== undefined && b.bottle_size !== null && !(typeof b.bottle_size === "number" && Number.isFinite(b.bottle_size) && b.bottle_size > 0)) {
+        throw new AppError(400, "bottle_size must be a positive number, or null to disable bottle tracking", "VALIDATION_ERROR");
+    }
     if (!isOptionalNonNeg(b.qty_alert)) {
         throw new AppError(400, "qty_alert must be a non-negative number", "VALIDATION_ERROR");
     }
@@ -159,6 +166,9 @@ const validateProductFields = (b: Record<string, unknown>, requireName = false) 
     }
     if (!isOptionalNumber(b.team_commission_rate)) {
         throw new AppError(400, "team_commission_rate must be a number", "VALIDATION_ERROR");
+    }
+    if (!isOptionalBoolean(b.is_active)) {
+        throw new AppError(400, "is_active must be a boolean", "VALIDATION_ERROR");
     }
 };
 
