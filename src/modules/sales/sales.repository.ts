@@ -257,7 +257,14 @@ export const salesRepository = {
             // excluded from this total — it passes through to staff, not
             // the salon, so it must never count as revenue. ex_charges DOES count
             // (a client-facing surcharge the business actually keeps), unlike tip.
-            const total = subtotal - discountAmt + taxAmt + exChargesAmt;
+            // Rounded to the nearest rupee — same rounding pricing.engine.ts applies
+            // to grandTotal at checkout (the actual amount collected from the
+            // client, and what the bill/receipt displays). Storing the raw
+            // unrounded sum here instead meant sales.total_amount (what every
+            // report reads) could differ from the real charged amount by up to
+            // ~₹1 — e.g. a ₹1650.60 raw total showed as ₹1651 on the bill but
+            // ₹1650.60 in reports, for the same sale.
+            const total = Math.round(subtotal - discountAmt + taxAmt + exChargesAmt);
             const { invoice_prefix } = await getTaxModuleConfig(data.salon_id);
             const createdAtVal = parseCreatedAt(data.created_at);
 
@@ -372,8 +379,8 @@ export const salesRepository = {
                 const discountAmt  = salePatch.discount_amount ? parseFloat(salePatch.discount_amount) : 0;
                 const taxAmt       = salePatch.tax_amount      ? parseFloat(salePatch.tax_amount)      : 0;
                 const exChargesAmt = salePatch.ex_charges      ? parseFloat(salePatch.ex_charges)      : 0;
-                // tip_amount excluded from total — see create()'s comment.
-                const total        = subtotal - discountAmt + taxAmt + exChargesAmt;
+                // tip_amount excluded from total, rounded — see create()'s comment.
+                const total        = Math.round(subtotal - discountAmt + taxAmt + exChargesAmt);
 
                 const setParts: string[] = ['subtotal = $1', 'total_amount = $2', 'updated_at = NOW()'];
                 const values: any[]      = [subtotal.toString(), total.toString()];
