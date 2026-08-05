@@ -28,6 +28,7 @@ const TOTAL_STOCK_EXPR = `CASE WHEN p.bottle_size IS NOT NULL AND p.bottle_size 
   THEN (${PRODUCT_QTY_EXPR}) * p.bottle_size
   ELSE COALESCE(p.amount, 0) END`;
 const STATUS_EXPR = `CASE
+  WHEN p.is_active = false THEN 'deactivated'
   WHEN COALESCE(p.amount, 0) <= 0 THEN 'out_of_stock'
   WHEN p.qty_alert IS NOT NULL AND (${PRODUCT_QTY_EXPR}) <= p.qty_alert THEN 'low'
   ELSE 'healthy' END`;
@@ -50,9 +51,10 @@ const LIST_ROW_NUMERIC_FIELDS = ["unit_size", "product_qty", "total_stock", "rem
 const DETAIL_ROW_NUMERIC_FIELDS = ["bottle_size", "unit_size", "product_qty", "total_stock", "remaining_stock", "qty_alert", "supply_price"] as const;
 
 function buildWhere(filters: ConsumableListFilters, salonId: string): { where: string; values: unknown[] } {
-  // Deactivated products drop out of this page entirely — same "hidden by
-  // default" behavior as the Products list (see products.repository.ts).
-  const conditions: string[] = [`p.salon_id = $1`, `p.product_type IN ('consumable', 'both')`, `p.is_active = true`];
+  // Deactivated products stay VISIBLE here (unlike the Products list) —
+  // shown with status 'deactivated' (see STATUS_EXPR) so staff can find and
+  // reactivate one instead of it silently vanishing with no way back.
+  const conditions: string[] = [`p.salon_id = $1`, `p.product_type IN ('consumable', 'both')`];
   const values: unknown[] = [salonId];
   let idx = 2;
 
@@ -60,29 +62,38 @@ function buildWhere(filters: ConsumableListFilters, salonId: string): { where: s
     conditions.push(`p.name ILIKE $${idx++}`);
     values.push(`%${filters.search}%`);
   }
-  if (filters.category_id) {
-    conditions.push(`p.category_id = $${idx++}`);
+  // Multi-select — `= ANY($n::type[])` reduces to a plain equality for the
+  // common length-1 case but also handles 2+ selections without branching.
+  if (filters.category_id?.length) {
+    conditions.push(`p.category_id = ANY($${idx++}::uuid[])`);
     values.push(filters.category_id);
   }
-  if (filters.brand_id) {
-    conditions.push(`p.brand_id = $${idx++}`);
+  if (filters.brand_id?.length) {
+    conditions.push(`p.brand_id = ANY($${idx++}::uuid[])`);
     values.push(filters.brand_id);
   }
-  if (filters.supplier_id) {
-    conditions.push(`p.supplier_id = $${idx++}`);
+  if (filters.supplier_id?.length) {
+    conditions.push(`p.supplier_id = ANY($${idx++}::uuid[])`);
     values.push(filters.supplier_id);
   }
-  if (filters.unit) {
-    conditions.push(`p.measure_unit = $${idx++}`);
+  if (filters.unit?.length) {
+    conditions.push(`p.measure_unit = ANY($${idx++}::text[])`);
     values.push(filters.unit);
   }
-  if (filters.service_id) {
-    conditions.push(`EXISTS (SELECT 1 FROM service_consumables sc WHERE sc.product_id = p.id AND sc.service_id = $${idx++})`);
+  if (filters.service_id?.length) {
+    conditions.push(`EXISTS (SELECT 1 FROM service_consumables sc WHERE sc.product_id = p.id AND sc.service_id = ANY($${idx++}::uuid[]))`);
     values.push(filters.service_id);
   }
-  if (filters.status && filters.status !== "all") {
-    conditions.push(`(${STATUS_EXPR}) = $${idx++}`);
+  if (filters.status?.length) {
+    conditions.push(`(${STATUS_EXPR}) = ANY($${idx++}::text[])`);
     values.push(filters.status);
+  }
+  // Narrows the page's own base "consumable or both" universe further —
+  // e.g. ["consumable"] alone hides retail-and-consumable dual-purpose
+  // products, leaving only pure consumables.
+  if (filters.product_type?.length) {
+    conditions.push(`p.product_type = ANY($${idx++}::text[])`);
+    values.push(filters.product_type);
   }
 
   return { where: `WHERE ${conditions.join(" AND ")}`, values };
@@ -148,6 +159,7 @@ export const consumableInventoryRepository = {
          COUNT(*)::int AS total_consumables,
          COALESCE(SUM(COALESCE(p.amount, 0)), 0) AS total_available_stock,
          COUNT(*) FILTER (WHERE (${STATUS_EXPR}) = 'low')::int AS low_stock_items,
+         COUNT(*) FILTER (WHERE (${STATUS_EXPR}) = 'out_of_stock')::int AS out_of_stock_items,
          COALESCE((
            SELECT COUNT(DISTINCT sc.service_id)::int
            FROM service_consumables sc
