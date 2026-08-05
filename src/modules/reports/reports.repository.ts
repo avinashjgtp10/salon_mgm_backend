@@ -5486,7 +5486,7 @@ async getAppointmentDetailReport(
   pagination: { total: number; page: number; limit: number; total_pages: number };
 }> {
   const values: any[] = [salonId];
-  const where = ["a.salon_id = $1", "a.deleted_at IS NULL"];
+  const where = ["a.salon_id = $1"];
   let idx = 2;
 
   if (filters.from) {
@@ -5507,6 +5507,17 @@ async getAppointmentDetailReport(
     where.push(`a.status::text = ANY($${idx++}::text[])`);
     values.push(filters.statuses);
   }
+  // No `else` branch excluding 'deleted' here on purpose — with no status
+  // filter applied, every status (including deleted) shows by default, same
+  // as any other status. Previously this had a hardcoded `a.deleted_at IS
+  // NULL`, which — since deletion sets both status='deleted' AND
+  // deleted_at=NOW() together (appointments.repository.ts `UPDATE
+  // appointments SET status = 'deleted', deleted_at = NOW()`) — silently
+  // dropped every deleted row unconditionally, even when the caller
+  // explicitly asked for statuses=['deleted']; the "Deleted" status filter
+  // could never return anything. Product decision: deleted appointments stay
+  // visible in the report by default (not hidden) so deleting one doesn't
+  // make it disappear from view entirely — confirmed with the report owner.
 
   const page = Math.max(1, Number(filters.page ?? 1));
   const requestedLimit = Math.max(1, Number(filters.limit ?? 10));
