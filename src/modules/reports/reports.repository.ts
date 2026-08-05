@@ -328,8 +328,14 @@ const SERVICE_REMINDER_BASE_CTES = `
       l.event_type,
       l.template_name,
       l.status AS log_status,
-      COALESCE(l.read_at, l.delivered_at, l.sent_at, l.created_at) AS message_at,
-      DATE(COALESCE(l.sent_at, l.created_at)) AS reminder_date,
+      -- Converted to IST once, here at the source, so every downstream
+      -- TO_CHAR/DATE_TRUNC/DATE() on message_at or reminder_date (several
+      -- call sites below) inherits correct IST semantics without needing
+      -- its own AT TIME ZONE — wa_automation_logs' sent_at/delivered_at/
+      -- read_at/created_at are all timestamptz, formatted in the UTC session
+      -- otherwise (see config/database.ts).
+      COALESCE(l.read_at, l.delivered_at, l.sent_at, l.created_at) AT TIME ZONE 'Asia/Kolkata' AS message_at,
+      DATE(COALESCE(l.sent_at, l.created_at) AT TIME ZONE 'Asia/Kolkata') AS reminder_date,
       l.sent_at,
       l.delivered_at,
       l.read_at,
@@ -640,7 +646,7 @@ const DAY_WISE_BASE_CTES = `
       s.client_id,
       s.appointment_id,
       s.created_at,
-      DATE(s.created_at) AS sale_day,
+      DATE(s.created_at AT TIME ZONE 'Asia/Kolkata') AS sale_day,
       s.invoice_number AS invoice_no,
       COALESCE(c.full_name, 'Walk-in Client') AS customer_name,
       COALESCE(c.phone_number, '') AS mobile,
@@ -722,12 +728,12 @@ const DAY_WISE_BASE_CTES = `
       a.id,
       a.salon_id,
       a.client_id,
-      DATE(a.created_at) AS appointment_day
+      DATE(a.created_at AT TIME ZONE 'Asia/Kolkata') AS appointment_day
     FROM appointments a
     WHERE
       a.salon_id = $1
-      AND DATE(a.created_at) >= $4
-      AND DATE(a.created_at) <= $3
+      AND DATE(a.created_at AT TIME ZONE 'Asia/Kolkata') >= $4
+      AND DATE(a.created_at AT TIME ZONE 'Asia/Kolkata') <= $3
   ),
   current_appointments AS (
     SELECT *
@@ -741,7 +747,7 @@ const DAY_WISE_BASE_CTES = `
   ),
   staff_productivity_base AS (
     SELECT
-      DATE(s.created_at) AS sale_day,
+      DATE(s.created_at AT TIME ZONE 'Asia/Kolkata') AS sale_day,
       COALESCE(
         NULLIF(asr.service_staff_names, ''),
         asr.fallback_staff_name,
@@ -763,7 +769,7 @@ const DAY_WISE_BASE_CTES = `
     WHERE
       1 = 1
     GROUP BY
-      DATE(s.created_at),
+      DATE(s.created_at AT TIME ZONE 'Asia/Kolkata'),
       COALESCE(
         NULLIF(asr.service_staff_names, ''),
         asr.fallback_staff_name,
@@ -862,6 +868,14 @@ const buildCouponRedemptionBase = (
           NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), ''),
           'Unknown'
         ) AS staff_name,
+        -- Left as a real timestamptz (not converted here) — this alias is
+        -- also returned raw to the JS layer as usedAt further down; a
+        -- "timestamp without time zone" (what AT TIME ZONE would produce)
+        -- gets parsed by node-postgres using the server process's local
+        -- clock, not IST, which would silently corrupt that field depending
+        -- on the server's OS timezone. TO_CHAR/DATE_TRUNC call sites below
+        -- apply the IST conversion locally instead, since their output is
+        -- SQL-formatted text/dates, not a raw value handed back to JS.
         s.created_at AS used_at,
         INITCAP(COALESCE(s.status::text, 'completed')) AS status,
         c.id AS client_id
@@ -2102,7 +2116,7 @@ _UNBILLED_APPOINTMENT_DAILY_ROWS_CTE(
       SELECT a.id, a.id AS appointment_id, a.salon_id, a.client_id, a.staff_id, a.status,
              a.created_at, a.scheduled_at, a.deleted_at, a.services,
              a.package_items, a.product_items, a.membership_items,
-             TO_CHAR(a.created_at, 'HH12:MI AM') AS time,
+             TO_CHAR(a.created_at AT TIME ZONE 'Asia/Kolkata', 'HH12:MI AM') AS time,
              NULL::text AS ticket_no
       FROM appointments a
     ) a
@@ -2197,7 +2211,7 @@ async getDailySheetReport(
       SELECT
         s.appointment_id,
         s.id AS sale_id,
-        TO_CHAR(s.created_at, 'HH12:MI AM') AS time,
+        TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'HH12:MI AM') AS time,
         s.invoice_number AS ticket_no,
         s.client_id,
         c.full_name AS client_name,
@@ -2541,7 +2555,7 @@ async getProductRetailReportRows(
   const query = `
     SELECT
       s.id AS sale_id,
-      TO_CHAR(s.created_at, 'YYYY-MM-DD') AS date,
+      TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS date,
       s.invoice_number AS invoice_no,
       s.client_id,
       c.full_name AS client_name,
@@ -2902,7 +2916,7 @@ async getServiceSaleReportRows(
   const query = `
     SELECT
       s.id AS sale_id,
-      TO_CHAR(s.created_at, 'YYYY-MM-DD') AS date,
+      TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS date,
       s.invoice_number AS invoice_no,
       s.client_id,
       c.full_name AS client_name,
@@ -3090,7 +3104,7 @@ async getGstReportRows(
     SELECT
       s.id AS sale_id,
       s.appointment_id,
-      TO_CHAR(s.created_at, 'YYYY-MM-DD') AS date,
+      TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS date,
       s.invoice_number AS invoice_no,
       c.full_name AS client_name,
       COALESCE(items.service_amount, 0) AS service_amount,
@@ -3860,7 +3874,7 @@ _CLIENT_REVENUE_AGG(where: string, saleJoin: string, having: string): string {
         COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS contact,
         COUNT(s.id) AS visits,
         COALESCE(SUM(s.total_amount::numeric), 0) AS total_spend,
-        MAX(TO_CHAR(s.created_at, 'YYYY-MM-DD')) AS last_visit
+        MAX(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS last_visit
       FROM clients c
       LEFT JOIN sales s ON ${saleJoin}
       WHERE ${where}
@@ -4729,7 +4743,7 @@ async getStaffItemSalesReportRows(
           END
         )
       END AS revenue,
-      TO_CHAR(s.created_at, 'YYYY-MM-DD') AS date,
+      TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS date,
       COUNT(*) OVER() AS total_count
     FROM sale_items si
     JOIN sales s ON s.id = si.sale_id
@@ -4893,7 +4907,7 @@ async getPackageSaleReportRows(
   const query = `
     SELECT
       cp.id,
-      TO_CHAR(cp.created_date, 'YYYY-MM-DD') AS date,
+      TO_CHAR(cp.created_date AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS date,
       cp.client_id,
       cp.client_name,
       cp.package_name,
@@ -5176,7 +5190,7 @@ async getPackageHistoryReportRows(
 
   const query = `
     SELECT
-      TO_CHAR(h.session_date, 'YYYY-MM-DD') AS date,
+      TO_CHAR(h.session_date AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS date,
       cp.client_id,
       cp.client_name,
       cp.package_name,
@@ -5410,7 +5424,7 @@ async getMemberSaleReportRows(
     SELECT
       cm.id,
       cm.client_id,
-      TO_CHAR(cm.purchased_at, 'YYYY-MM-DD') AS purchased_at,
+      TO_CHAR(cm.purchased_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS purchased_at,
       s.invoice_number,
       cm.client_name,
       NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
@@ -5489,13 +5503,18 @@ async getAppointmentDetailReport(
   const where = ["a.salon_id = $1"];
   let idx = 2;
 
+  // Anchored to +05:30 (IST) day boundaries, not the DB session's UTC —
+  // see the identical fix/comment in appointments.repository.ts::listBySalonId.
+  // Casting a bare "YYYY-MM-DD" to ::date compares against UTC midnight
+  // (05:30 IST), silently dropping/shifting appointments booked in the
+  // IST 00:00–05:30 window across the date boundary.
   if (filters.from) {
-    where.push(`a.scheduled_at >= $${idx++}::date`);
-    values.push(filters.from);
+    where.push(`a.scheduled_at >= $${idx++}::timestamptz`);
+    values.push(`${filters.from}T00:00:00+05:30`);
   }
   if (filters.to) {
-    where.push(`a.scheduled_at < ($${idx++}::date + interval '1 day')`);
-    values.push(filters.to);
+    where.push(`a.scheduled_at < ($${idx++}::timestamptz + interval '1 day')`);
+    values.push(`${filters.to}T00:00:00+05:30`);
   }
   if (filters.statuses && filters.statuses.length > 0) {
     // appointments.status is a native Postgres ENUM (appointment_status),
@@ -5622,9 +5641,16 @@ async getAppointmentDetailReport(
     base AS (
       SELECT
         e.*,
-        TO_CHAR(e.scheduled_at, 'YYYY-MM-DD') AS appointment_date,
-        TO_CHAR(e.scheduled_at, 'HH12:MI AM') AS time,
-        TO_CHAR(e.created_at, 'YYYY-MM-DD') AS booked_date,
+        -- DB session runs in UTC (see config/database.ts) — TO_CHAR on a bare
+        -- timestamptz here silently formatted the UTC instant, not the IST
+        -- wall-clock time the booking was made for, so this report's Time
+        -- column disagreed with the Booking Details page (which the frontend
+        -- renders from the raw scheduled_at, converted to IST in the
+        -- browser). Converting explicitly to IST here keeps this report's
+        -- formatted strings consistent with every other screen.
+        TO_CHAR(e.scheduled_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS appointment_date,
+        TO_CHAR(e.scheduled_at AT TIME ZONE 'Asia/Kolkata', 'HH12:MI AM') AS time,
+        TO_CHAR(e.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS booked_date,
         c.full_name AS client_name,
         c.phone_number,
         COALESCE(
@@ -5999,7 +6025,7 @@ async getServiceRevenueTrend(
     index++;
   }
 
-  let groupExpr = `TO_CHAR(s.created_at, 'Mon YYYY')`;
+  let groupExpr = `TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'Mon YYYY')`;
 
   if (filters.from && filters.to) {
     const from = new Date(filters.from);
@@ -6011,13 +6037,13 @@ async getServiceRevenueTrend(
       ) + 1;
 
     if (diffDays === 1) {
-      groupExpr = `TO_CHAR(s.created_at, 'HH24:00')`;
+      groupExpr = `TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'HH24:00')`;
     } else if (diffDays <= 7) {
-      groupExpr = `TO_CHAR(s.created_at, 'Dy')`;
+      groupExpr = `TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'Dy')`;
     } else if (diffDays <= 31) {
-      groupExpr = `TO_CHAR(s.created_at, 'DD Mon')`;
+      groupExpr = `TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'DD Mon')`;
     } else {
-      groupExpr = `TO_CHAR(s.created_at, 'Mon')`;
+      groupExpr = `TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'Mon')`;
     }
   }
 
@@ -6271,7 +6297,7 @@ async getServiceRevenueAnalytics(
     pool.query(
       `
       SELECT
-        TO_CHAR(s.created_at, 'FMDay') AS day_name,
+        TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'FMDay') AS day_name,
         SUM(si.total_price) AS revenue
       FROM sales s
       JOIN sale_items si
@@ -8179,9 +8205,16 @@ async getRevenueTrend(
       filters
     );
 
-  // Dynamic grouping
-  let groupFormat = `TO_CHAR(DATE_TRUNC('month', pr.sale_date), 'Mon YYYY')`;
-  let groupBy = `DATE_TRUNC('month', pr.sale_date)`;
+  // Dynamic grouping. pr.sale_date is a timestamptz (sales.created_at or
+  // appointments.created_at, both confirmed timestamptz — see
+  // buildProductRevenueSourceQuery), so DATE_TRUNC/TO_CHAR need the same
+  // explicit IST conversion as everywhere else, or "day"/"hour" buckets
+  // silently shift by the UTC offset. groupFormat and groupBy must stay
+  // textually identical in the AT TIME ZONE expression they wrap — Postgres
+  // only allows the SELECT-list TO_CHAR(...) here because it's a function of
+  // the exact GROUP BY expression.
+  let groupFormat = `TO_CHAR(DATE_TRUNC('month', pr.sale_date AT TIME ZONE 'Asia/Kolkata'), 'Mon YYYY')`;
+  let groupBy = `DATE_TRUNC('month', pr.sale_date AT TIME ZONE 'Asia/Kolkata')`;
 
   if (filters.from && filters.to) {
     const from = new Date(filters.from);
@@ -8194,17 +8227,17 @@ async getRevenueTrend(
       ) + 1;
 
     if (diffDays === 1) {
-      groupFormat = `TO_CHAR(DATE_TRUNC('hour', pr.sale_date), 'HH24:00')`;
-      groupBy = `DATE_TRUNC('hour', pr.sale_date)`;
+      groupFormat = `TO_CHAR(DATE_TRUNC('hour', pr.sale_date AT TIME ZONE 'Asia/Kolkata'), 'HH24:00')`;
+      groupBy = `DATE_TRUNC('hour', pr.sale_date AT TIME ZONE 'Asia/Kolkata')`;
     } else if (diffDays <= 7) {
-      groupFormat = `TO_CHAR(DATE_TRUNC('day', pr.sale_date), 'Dy')`;
-      groupBy = `DATE_TRUNC('day', pr.sale_date)`;
+      groupFormat = `TO_CHAR(DATE_TRUNC('day', pr.sale_date AT TIME ZONE 'Asia/Kolkata'), 'Dy')`;
+      groupBy = `DATE_TRUNC('day', pr.sale_date AT TIME ZONE 'Asia/Kolkata')`;
     } else if (diffDays <= 31) {
-      groupFormat = `TO_CHAR(DATE_TRUNC('day', pr.sale_date), 'DD Mon')`;
-      groupBy = `DATE_TRUNC('day', pr.sale_date)`;
+      groupFormat = `TO_CHAR(DATE_TRUNC('day', pr.sale_date AT TIME ZONE 'Asia/Kolkata'), 'DD Mon')`;
+      groupBy = `DATE_TRUNC('day', pr.sale_date AT TIME ZONE 'Asia/Kolkata')`;
     } else {
-      groupFormat = `TO_CHAR(DATE_TRUNC('month', pr.sale_date), 'Mon')`;
-      groupBy = `DATE_TRUNC('month', pr.sale_date)`;
+      groupFormat = `TO_CHAR(DATE_TRUNC('month', pr.sale_date AT TIME ZONE 'Asia/Kolkata'), 'Mon')`;
+      groupBy = `DATE_TRUNC('month', pr.sale_date AT TIME ZONE 'Asia/Kolkata')`;
     }
   }
 
@@ -8806,8 +8839,8 @@ async getStylistRevenueTrend(
     index++;
   }
 
-  let groupExpr = `TO_CHAR(s.created_at, 'Mon YYYY')`;
-  let groupByExpr = `DATE_TRUNC('month', s.created_at)`;
+  let groupExpr = `TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'Mon YYYY')`;
+  let groupByExpr = `DATE_TRUNC('month', s.created_at AT TIME ZONE 'Asia/Kolkata')`;
 
   if (filters.from && filters.to) {
     const from = new Date(filters.from);
@@ -8817,17 +8850,17 @@ async getStylistRevenueTrend(
       Math.floor((to.getTime() - from.getTime()) / (1000 * 60 * 60 * 24)) + 1;
 
     if (diffDays === 1) {
-      groupExpr = `TO_CHAR(DATE_TRUNC('hour', s.created_at), 'HH24:00')`;
-      groupByExpr = `DATE_TRUNC('hour', s.created_at)`;
+      groupExpr = `TO_CHAR(DATE_TRUNC('hour', s.created_at AT TIME ZONE 'Asia/Kolkata'), 'HH24:00')`;
+      groupByExpr = `DATE_TRUNC('hour', s.created_at AT TIME ZONE 'Asia/Kolkata')`;
     } else if (diffDays <= 7) {
-      groupExpr = `TO_CHAR(DATE_TRUNC('day', s.created_at), 'Dy')`;
-      groupByExpr = `DATE_TRUNC('day', s.created_at)`;
+      groupExpr = `TO_CHAR(DATE_TRUNC('day', s.created_at AT TIME ZONE 'Asia/Kolkata'), 'Dy')`;
+      groupByExpr = `DATE_TRUNC('day', s.created_at AT TIME ZONE 'Asia/Kolkata')`;
     } else if (diffDays <= 31) {
-      groupExpr = `TO_CHAR(DATE_TRUNC('day', s.created_at), 'DD Mon')`;
-      groupByExpr = `DATE_TRUNC('day', s.created_at)`;
+      groupExpr = `TO_CHAR(DATE_TRUNC('day', s.created_at AT TIME ZONE 'Asia/Kolkata'), 'DD Mon')`;
+      groupByExpr = `DATE_TRUNC('day', s.created_at AT TIME ZONE 'Asia/Kolkata')`;
     } else {
-      groupExpr = `TO_CHAR(DATE_TRUNC('month', s.created_at), 'Mon')`;
-      groupByExpr = `DATE_TRUNC('month', s.created_at)`;
+      groupExpr = `TO_CHAR(DATE_TRUNC('month', s.created_at AT TIME ZONE 'Asia/Kolkata'), 'Mon')`;
+      groupByExpr = `DATE_TRUNC('month', s.created_at AT TIME ZONE 'Asia/Kolkata')`;
     }
   }
 
@@ -9825,12 +9858,12 @@ async getAppointmentCharts(
       `
       ${APPOINTMENT_BASE_CTES}
       SELECT
-        TO_CHAR(DATE_TRUNC('day', m.scheduled_at), 'Dy') AS date,
+        TO_CHAR(DATE_TRUNC('day', m.scheduled_at AT TIME ZONE 'Asia/Kolkata'), 'Dy') AS date,
         COUNT(*) AS appointments
       FROM metrics m
       WHERE ${where.join(" AND ")}
-      GROUP BY DATE_TRUNC('day', m.scheduled_at)
-      ORDER BY DATE_TRUNC('day', m.scheduled_at)
+      GROUP BY DATE_TRUNC('day', m.scheduled_at AT TIME ZONE 'Asia/Kolkata')
+      ORDER BY DATE_TRUNC('day', m.scheduled_at AT TIME ZONE 'Asia/Kolkata')
       `,
       values
     )
@@ -9973,22 +10006,22 @@ async getAppointmentAnalytics(
         SELECT * FROM metrics m WHERE ${where.join(" AND ")}
       ),
       peak_day AS (
-        SELECT TO_CHAR(DATE_TRUNC('day', scheduled_at), 'FMDay') AS value
+        SELECT TO_CHAR(DATE_TRUNC('day', scheduled_at AT TIME ZONE 'Asia/Kolkata'), 'FMDay') AS value
         FROM filtered
-        GROUP BY DATE_TRUNC('day', scheduled_at)
-        ORDER BY COUNT(*) DESC, DATE_TRUNC('day', scheduled_at) ASC
+        GROUP BY DATE_TRUNC('day', scheduled_at AT TIME ZONE 'Asia/Kolkata')
+        ORDER BY COUNT(*) DESC, DATE_TRUNC('day', scheduled_at AT TIME ZONE 'Asia/Kolkata') ASC
         LIMIT 1
       ),
       peak_hour AS (
         SELECT
           CONCAT(
-            TO_CHAR(DATE_TRUNC('hour', scheduled_at), 'FMHH12 AM'),
+            TO_CHAR(DATE_TRUNC('hour', scheduled_at AT TIME ZONE 'Asia/Kolkata'), 'FMHH12 AM'),
             ' - ',
-            TO_CHAR(DATE_TRUNC('hour', scheduled_at) + INTERVAL '2 hour', 'FMHH12 AM')
+            TO_CHAR(DATE_TRUNC('hour', scheduled_at AT TIME ZONE 'Asia/Kolkata') + INTERVAL '2 hour', 'FMHH12 AM')
           ) AS value
         FROM filtered
-        GROUP BY DATE_TRUNC('hour', scheduled_at)
-        ORDER BY COUNT(*) DESC, DATE_TRUNC('hour', scheduled_at) ASC
+        GROUP BY DATE_TRUNC('hour', scheduled_at AT TIME ZONE 'Asia/Kolkata')
+        ORDER BY COUNT(*) DESC, DATE_TRUNC('hour', scheduled_at AT TIME ZONE 'Asia/Kolkata') ASC
         LIMIT 1
       ),
       best_stylist AS (
@@ -10215,9 +10248,9 @@ async getAppointmentDetailTable(
       )
       SELECT
         m.id,
-        TO_CHAR(m.scheduled_at, 'YYYY-MM-DD') AS appointment_date,
-        TO_CHAR(m.scheduled_at, 'HH12:MI AM') AS appointment_time,
-        TO_CHAR(m.created_at, 'YYYY-MM-DD') AS booked_date,
+        TO_CHAR(m.scheduled_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS appointment_date,
+        TO_CHAR(m.scheduled_at AT TIME ZONE 'Asia/Kolkata', 'HH12:MI AM') AS appointment_time,
+        TO_CHAR(m.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS booked_date,
         COALESCE(c.full_name, 'Walk-in Client') AS client_name,
         COALESCE(sr.service_name, sv.name, 'Service') AS service_name,
         COALESCE(sr.staff_name, CONCAT(st.first_name, ' ', st.last_name), 'Unknown') AS staff_name,
@@ -10355,7 +10388,7 @@ async getDailySheetTable(
           s.id,
           s.appointment_id,
           s.created_at AS sort_ts,
-          TO_CHAR(s.created_at, 'HH12:MI AM') AS time,
+          TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'HH12:MI AM') AS time,
           s.invoice_number AS ticket_no,
           COALESCE(c.full_name, 'Walk-in Client') AS client_name,
           COALESCE(NULLIF(sir.items, ''), NULLIF(air.services, ''), 'Service') AS service,
@@ -10928,7 +10961,7 @@ async getGuestCollectionReport(
         s.invoice_number AS invoice_number,
         m.client_id,
         COALESCE(s.created_at, m.created_at, m.scheduled_at) AS created_at,
-        DATE(COALESCE(s.created_at, m.scheduled_at, m.created_at)) AS bill_date,
+        DATE(COALESCE(s.created_at, m.scheduled_at, m.created_at) AT TIME ZONE 'Asia/Kolkata') AS bill_date,
         COALESCE(c.full_name, 'Walk-in Client') AS guest_name,
         COALESCE(c.phone_number, '') AS phone,
         COALESCE(m.appointment_amount, 0)::numeric AS bill_amount,
@@ -10980,7 +11013,7 @@ async getGuestCollectionReport(
         s.invoice_number AS invoice_number,
         s.client_id,
         s.created_at,
-        DATE(s.created_at) AS bill_date,
+        DATE(s.created_at AT TIME ZONE 'Asia/Kolkata') AS bill_date,
         COALESCE(c.full_name, 'Walk-in Client') AS guest_name,
         COALESCE(c.phone_number, '') AS phone,
         COALESCE(s.total_amount::numeric, 0) AS bill_amount,
@@ -11471,7 +11504,11 @@ async getStaffAttendanceReport(
     appointment_counts AS (
       SELECT
         a.staff_id,
-        DATE(a.scheduled_at) AS appointment_date,
+        -- Must stay attendance.date's calendar day (IST, see attendance_range
+        -- above), not the UTC session's — otherwise a late-evening IST
+        -- appointment near the UTC day rollover joins to the wrong
+        -- attendance_date below and silently drops out of that staff's count.
+        DATE(a.scheduled_at AT TIME ZONE 'Asia/Kolkata') AS appointment_date,
         COUNT(*) FILTER (WHERE a.status = 'paid') AS completed_appointments
       FROM appointments a
       JOIN active_staff s
@@ -11480,7 +11517,7 @@ async getStaffAttendanceReport(
         a.salon_id = $1
         AND DATE(a.scheduled_at) >= $2::date
         AND DATE(a.scheduled_at) <= $3::date
-      GROUP BY a.staff_id, DATE(a.scheduled_at)
+      GROUP BY a.staff_id, DATE(a.scheduled_at AT TIME ZONE 'Asia/Kolkata')
     ),
     merged AS (
       SELECT
@@ -12500,12 +12537,12 @@ async getCouponRedemptionCharts(
         `
         ${ctes}
         SELECT
-          TO_CHAR(DATE_TRUNC('day', used_at), 'Dy') AS day,
+          TO_CHAR(DATE_TRUNC('day', used_at AT TIME ZONE 'Asia/Kolkata'), 'Dy') AS day,
           COUNT(*) AS redemptions,
           COALESCE(SUM(discount_amount), 0) AS discount
         FROM coupon_sales
-        GROUP BY DATE_TRUNC('day', used_at)
-        ORDER BY DATE_TRUNC('day', used_at)
+        GROUP BY DATE_TRUNC('day', used_at AT TIME ZONE 'Asia/Kolkata')
+        ORDER BY DATE_TRUNC('day', used_at AT TIME ZONE 'Asia/Kolkata')
         `,
         values
       )
@@ -12589,9 +12626,9 @@ async getCouponRedemptionAnalytics(
       LIMIT 1
     ),
     best_day AS (
-      SELECT TO_CHAR(DATE_TRUNC('day', used_at), 'DD Mon YYYY') AS label, COUNT(*) AS redemptions
+      SELECT TO_CHAR(DATE_TRUNC('day', used_at AT TIME ZONE 'Asia/Kolkata'), 'DD Mon YYYY') AS label, COUNT(*) AS redemptions
       FROM coupon_sales
-      GROUP BY DATE_TRUNC('day', used_at)
+      GROUP BY DATE_TRUNC('day', used_at AT TIME ZONE 'Asia/Kolkata')
       ORDER BY redemptions DESC
       LIMIT 1
     )
@@ -12781,18 +12818,18 @@ async getBalanceReceivedReport(
     ? "ASC"
     : "DESC";
 
-  let trendLabelExpr = `TO_CHAR(DATE_TRUNC('day', payment_date), 'Dy')`;
-  let trendDateExpr = `TO_CHAR(DATE_TRUNC('day', payment_date), 'YYYY-MM-DD')`;
-  let trendGroupExpr = `DATE_TRUNC('day', payment_date)`;
+  let trendLabelExpr = `TO_CHAR(DATE_TRUNC('day', payment_date AT TIME ZONE 'Asia/Kolkata'), 'Dy')`;
+  let trendDateExpr = `TO_CHAR(DATE_TRUNC('day', payment_date AT TIME ZONE 'Asia/Kolkata'), 'YYYY-MM-DD')`;
+  let trendGroupExpr = `DATE_TRUNC('day', payment_date AT TIME ZONE 'Asia/Kolkata')`;
 
   if (diffDays > 31 && diffDays <= 120) {
-    trendLabelExpr = `CONCAT('Week ', TO_CHAR(DATE_TRUNC('week', payment_date), 'DD Mon'))`;
-    trendDateExpr = `TO_CHAR(DATE_TRUNC('week', payment_date), 'YYYY-MM-DD')`;
-    trendGroupExpr = `DATE_TRUNC('week', payment_date)`;
+    trendLabelExpr = `CONCAT('Week ', TO_CHAR(DATE_TRUNC('week', payment_date AT TIME ZONE 'Asia/Kolkata'), 'DD Mon'))`;
+    trendDateExpr = `TO_CHAR(DATE_TRUNC('week', payment_date AT TIME ZONE 'Asia/Kolkata'), 'YYYY-MM-DD')`;
+    trendGroupExpr = `DATE_TRUNC('week', payment_date AT TIME ZONE 'Asia/Kolkata')`;
   } else if (diffDays > 120) {
-    trendLabelExpr = `TO_CHAR(DATE_TRUNC('month', payment_date), 'Mon YYYY')`;
-    trendDateExpr = `TO_CHAR(DATE_TRUNC('month', payment_date), 'YYYY-MM-DD')`;
-    trendGroupExpr = `DATE_TRUNC('month', payment_date)`;
+    trendLabelExpr = `TO_CHAR(DATE_TRUNC('month', payment_date AT TIME ZONE 'Asia/Kolkata'), 'Mon YYYY')`;
+    trendDateExpr = `TO_CHAR(DATE_TRUNC('month', payment_date AT TIME ZONE 'Asia/Kolkata'), 'YYYY-MM-DD')`;
+    trendGroupExpr = `DATE_TRUNC('month', payment_date AT TIME ZONE 'Asia/Kolkata')`;
   }
 
   const BALANCE_RECEIVED_BASE_CTES = `
@@ -12837,8 +12874,19 @@ async getBalanceReceivedReport(
         p.id,
         p.appointment_id,
         p.client_id,
+        -- payment_date is left as a real timestamptz (paid_at is timestamptz;
+        -- created_at is timestamp-without-tz but was written under this app's
+        -- forced-UTC DB session — see config/database.ts — so Postgres's
+        -- implicit timestamp->timestamptz promotion in this COALESCE
+        -- correctly reconstructs the true instant). It's also returned raw
+        -- to JS as paymentDate further down, so it must stay a proper
+        -- timestamptz, not get converted to a naive IST value here — a
+        -- "timestamp without time zone" would be parsed by node-postgres
+        -- using the server process's local clock, not IST. payment_day only
+        -- feeds date-bucketing/filtering (never returned raw), so it's safe
+        -- to bucket by the IST calendar day directly.
         COALESCE(p.paid_at, p.created_at) AS payment_date,
-        DATE(COALESCE(p.paid_at, p.created_at)) AS payment_day,
+        DATE(COALESCE(p.paid_at, p.created_at) AT TIME ZONE 'Asia/Kolkata') AS payment_day,
         COALESCE(p.paid_amount, p.net_amount, 0)::numeric AS amount_received,
         COALESCE(p.due_amount, 0)::numeric AS remaining_balance,
         (
