@@ -523,8 +523,12 @@ export const clientsRepository = {
     },
 
     async blockClients(ids: string[], reason: string, salonId: string): Promise<void> {
+        // Deliberately does NOT touch is_active — that's the "deleted" flag.
+        // A blocked client stays fully visible/manageable in the salon's own
+        // client list; only online booking (bookings.service.ts) checks
+        // is_blocked to actually restrict them.
         await pool.query(
-            `UPDATE clients SET is_active = false, block_reason = $1, updated_at = NOW()
+            `UPDATE clients SET is_blocked = true, block_reason = $1, updated_at = NOW()
              WHERE id = ANY($2::uuid[]) AND salon_id = $3`,
             [reason, ids, salonId]
         );
@@ -532,7 +536,7 @@ export const clientsRepository = {
 
     async unblockClients(ids: string[], salonId: string): Promise<void> {
         await pool.query(
-            `UPDATE clients SET is_active = true, block_reason = NULL, updated_at = NOW()
+            `UPDATE clients SET is_blocked = false, block_reason = NULL, updated_at = NOW()
              WHERE id = ANY($1::uuid[]) AND salon_id = $2`,
             [ids, salonId]
         );
@@ -798,11 +802,18 @@ export const clientsRepository = {
         // number) — alphabetical only as the final tiebreaker within each tier.
         // Without this, a plain `ORDER BY full_name ASC` put "Anita" ahead of a
         // closer/prefix match like "Nita ..." purely because A < N alphabetically.
+        // This is the shared "pick a client for something new" search — Quick
+        // Sale/Calendar's client picker, Calendar's top-bar lookup, and
+        // selling a Package all go through it. A blocked client is excluded
+        // here (not just from online booking) rather than just being
+        // unselectable once found, so they don't show up at all — staff
+        // manage/unblock a blocked client from the Clients list page, which
+        // reads from a separate, unfiltered query.
         const { rows } = await pool.query(
             `SELECT id, first_name, last_name, full_name, email,
-                    phone_country_code, phone_number, avatar_url, is_active, created_at, updated_at
+                    phone_country_code, phone_number, avatar_url, is_active, is_blocked, created_at, updated_at
              FROM clients
-             WHERE salon_id = $1 AND is_active = true
+             WHERE salon_id = $1 AND is_active = true AND is_blocked = false
                AND (
                    LOWER(full_name) LIKE $2
                 OR LOWER(COALESCE(phone_number, '')) LIKE $2
