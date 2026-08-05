@@ -1355,6 +1355,10 @@ async getStaffSalesReport(
             search: asString(body.search),
             page: body.page != null ? Number(body.page) : undefined,
             limit: body.limit != null ? Number(body.limit) : undefined,
+            payment_mode: asString(body.payment_mode),
+            item_type: asString(body.item_type),
+            payment_status: asString(body.payment_status),
+            sort: body.sort === "sales_desc" || body.sort === "sales_asc" ? body.sort : undefined,
         };
 
         const data = await reportsService.getStaffSalesReport(salonId, filters);
