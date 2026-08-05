@@ -7,6 +7,8 @@ import {
   ConsumableListResponse,
   ConsumableUsageStats,
   RecentConsumptionRow,
+  UnitConversion,
+  UnitConversionInput,
   UsageHistoryFilters,
   UsageHistoryResponse,
 } from "./consumable-inventory.types";
@@ -30,8 +32,27 @@ const STATUS_EXPR = `CASE
   WHEN p.qty_alert IS NOT NULL AND (${PRODUCT_QTY_EXPR}) <= p.qty_alert THEN 'low'
   ELSE 'healthy' END`;
 
+// pg returns NUMERIC columns as strings (no type parser registered for oid
+// 1700 — see config/database.ts), not JS numbers — left unconverted, "100.000"
+// renders literally instead of "100" on the frontend (Number.toLocaleString()
+// formats; String.toLocaleString() is just a no-op passthrough via
+// Object.prototype). Every numeric-typed field on a row returned from this
+// module is coerced here, once, at the data-access boundary.
+function coerceRowNumerics<T extends Record<string, unknown>>(row: T, fields: (keyof T)[]): T {
+  const out = { ...row };
+  for (const f of fields) {
+    if (out[f] !== null && out[f] !== undefined) (out as any)[f] = Number(out[f]);
+  }
+  return out;
+}
+
+const LIST_ROW_NUMERIC_FIELDS = ["unit_size", "product_qty", "total_stock", "remaining_stock", "qty_alert", "used_today", "used_this_month"] as const;
+const DETAIL_ROW_NUMERIC_FIELDS = ["bottle_size", "unit_size", "product_qty", "total_stock", "remaining_stock", "qty_alert", "supply_price"] as const;
+
 function buildWhere(filters: ConsumableListFilters, salonId: string): { where: string; values: unknown[] } {
-  const conditions: string[] = [`p.salon_id = $1`, `p.product_type IN ('consumable', 'both')`];
+  // Deactivated products drop out of this page entirely — same "hidden by
+  // default" behavior as the Products list (see products.repository.ts).
+  const conditions: string[] = [`p.salon_id = $1`, `p.product_type IN ('consumable', 'both')`, `p.is_active = true`];
   const values: unknown[] = [salonId];
   let idx = 2;
 
@@ -106,6 +127,7 @@ export const consumableInventoryRepository = {
            WHERE cu.product_id = p.id AND cu.created_at >= date_trunc('month', CURRENT_DATE)
          ), 0) AS used_this_month,
          COALESCE((SELECT COUNT(*)::int FROM service_consumables sc WHERE sc.product_id = p.id), 0) AS assigned_services_count,
+         (SELECT MAX(cu.created_at) FROM consumable_usage cu WHERE cu.product_id = p.id) AS last_used_at,
          (${STATUS_EXPR}) AS status
        FROM products p
        LEFT JOIN service_categories c ON c.id = p.category_id
@@ -117,7 +139,7 @@ export const consumableInventoryRepository = {
       [...values, limit, offset]
     );
 
-    return { data: rows, total };
+    return { data: rows.map((r) => coerceRowNumerics(r, [...LIST_ROW_NUMERIC_FIELDS])), total };
   },
 
   async getKpis(salonId: string): Promise<ConsumableKpis> {
@@ -126,31 +148,30 @@ export const consumableInventoryRepository = {
          COUNT(*)::int AS total_consumables,
          COALESCE(SUM(COALESCE(p.amount, 0)), 0) AS total_available_stock,
          COUNT(*) FILTER (WHERE (${STATUS_EXPR}) = 'low')::int AS low_stock_items,
-         COUNT(*) FILTER (WHERE (${STATUS_EXPR}) = 'out_of_stock')::int AS out_of_stock_items,
-         COALESCE(SUM(COALESCE(p.amount, 0) * COALESCE(p.supply_price, 0)), 0) AS inventory_value,
          COALESCE((
-           SELECT SUM(CASE WHEN cu.direction = 'return' THEN -cu.qty ELSE cu.qty END)
-           FROM consumable_usage cu
-           JOIN products p2 ON p2.id = cu.product_id
-           WHERE p2.salon_id = $1 AND p2.product_type IN ('consumable','both') AND cu.created_at >= CURRENT_DATE
-         ), 0) AS todays_consumption
+           SELECT COUNT(DISTINCT sc.service_id)::int
+           FROM service_consumables sc
+           JOIN products p2 ON p2.id = sc.product_id
+           WHERE p2.salon_id = $1 AND p2.product_type IN ('consumable','both') AND p2.is_active = true
+         ), 0) AS assigned_services
        FROM products p
-       WHERE p.salon_id = $1 AND p.product_type IN ('consumable', 'both')`,
+       WHERE p.salon_id = $1 AND p.product_type IN ('consumable', 'both') AND p.is_active = true`,
       [salonId]
     );
-    return rows[0];
+    return coerceRowNumerics(rows[0], ["total_available_stock"]);
   },
 
   async getDetail(productId: string, salonId: string): Promise<ConsumableDetail | null> {
     const { rows } = await pool.query(
       `SELECT
          p.id AS product_id, p.name, c.name AS category_name, b.name AS brand_name, sup.name AS supplier_name,
-         p.measure_unit, p.measure_unit AS unit, p.bottle_size, p.bottle_size AS unit_size,
+         p.measure_unit, p.measure_unit AS unit, p.bottle_size, p.bottle_size AS unit_size, p.is_active,
          (${PRODUCT_QTY_EXPR}) AS product_qty,
          (${TOTAL_STOCK_EXPR}) AS total_stock,
          COALESCE(p.amount, 0) AS remaining_stock,
          p.qty_alert, p.supply_price,
          COALESCE((SELECT COUNT(*)::int FROM service_consumables sc WHERE sc.product_id = p.id), 0) AS assigned_services_count,
+         (SELECT MAX(cu.created_at) FROM consumable_usage cu WHERE cu.product_id = p.id) AS last_used_at,
          (${STATUS_EXPR}) AS status
        FROM products p
        LEFT JOIN service_categories c ON c.id = p.category_id
@@ -159,17 +180,59 @@ export const consumableInventoryRepository = {
        WHERE p.id = $1 AND p.salon_id = $2 AND p.product_type IN ('consumable', 'both')`,
       [productId, salonId]
     );
-    const base = rows[0];
+    const base = rows[0] ? coerceRowNumerics(rows[0], [...DETAIL_ROW_NUMERIC_FIELDS]) : undefined;
     if (!base) return null;
 
-    const [usageStats, assignedServices, recentConsumption, stockTimeline] = await Promise.all([
+    const [usageStats, assignedServices, recentConsumption, stockTimeline, unitConversions] = await Promise.all([
       this.getUsageStats(productId, salonId, Number(base.remaining_stock)),
       this.getAssignedServices(productId),
       this.getRecentConsumption(productId, salonId),
       this.getStockTimeline(productId, salonId, Number(base.remaining_stock)),
+      this.getUnitConversions(productId),
     ]);
 
-    return { ...base, usage_stats: usageStats, assigned_services: assignedServices, recent_consumption: recentConsumption, stock_timeline: stockTimeline };
+    return {
+      ...base, usage_stats: usageStats, assigned_services: assignedServices,
+      recent_consumption: recentConsumption, stock_timeline: stockTimeline,
+      unit_conversions: unitConversions,
+    };
+  },
+
+  async getUnitConversions(productId: string): Promise<UnitConversion[]> {
+    const { rows } = await pool.query(
+      `SELECT id, unit_name, conversion_to_base FROM product_unit_conversions
+       WHERE product_id = $1 ORDER BY sort_order ASC, unit_name ASC`,
+      [productId]
+    );
+    return rows.map((r) => ({ id: r.id, unit_name: r.unit_name, conversion_to_base: Number(r.conversion_to_base) }));
+  },
+
+  // Delete-all-and-reinsert — same convention as servicesRepository.replaceConsumables().
+  async replaceUnitConversions(productId: string, conversions: UnitConversionInput[]): Promise<UnitConversion[]> {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(`DELETE FROM product_unit_conversions WHERE product_id = $1`, [productId]);
+      if (conversions.length > 0) {
+        const values: unknown[] = [];
+        const placeholders = conversions.map((c, i) => {
+          values.push(productId, c.unit_name, c.conversion_to_base, i);
+          const base = i * 4;
+          return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4})`;
+        });
+        await client.query(
+          `INSERT INTO product_unit_conversions (product_id, unit_name, conversion_to_base, sort_order) VALUES ${placeholders.join(", ")}`,
+          values
+        );
+      }
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+    return this.getUnitConversions(productId);
   },
 
   async getUsageStats(productId: string, salonId: string, currentRemaining: number): Promise<ConsumableUsageStats> {
@@ -206,7 +269,7 @@ export const consumableInventoryRepository = {
        ORDER BY s.name ASC`,
       [productId]
     );
-    return rows;
+    return rows.map((r) => coerceRowNumerics(r, ["qty"]));
   },
 
   async getRecentConsumption(productId: string, salonId: string, limit = 10): Promise<RecentConsumptionRow[]> {
@@ -228,7 +291,7 @@ export const consumableInventoryRepository = {
        LIMIT $3`,
       [productId, salonId, limit]
     );
-    return rows;
+    return rows.map((r) => coerceRowNumerics(r, ["qty"]));
   },
 
   // Reconstructs the last few distinct "days with activity" closing balances by
@@ -305,6 +368,6 @@ export const consumableInventoryRepository = {
       [...values, limit, offset]
     );
 
-    return { data: rows, total };
+    return { data: rows.map((r) => coerceRowNumerics(r, ["qty"])), total };
   },
 };
