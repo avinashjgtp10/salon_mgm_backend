@@ -1359,7 +1359,13 @@ _UNBILLED_APPOINTMENT_ROWS_CTE(
         c.full_name AS client_name,
         c.phone_number AS client_phone,
         a.staff_id,
-        NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
+        -- Every distinct staff member attributed across this unbilled
+        -- appointment's items — each of services/package_items/product_items/
+        -- membership_items can carry its own staff_name (assigned per item at
+        -- booking time), falling back to the appointment's single staff_id
+        -- when an item has none. Same "don't hide the other staff" fix as
+        -- sales_side above.
+        COALESCE(items.staff_names, NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '')) AS staff_name,
         COALESCE(items.item_description, '—') AS item_description,
         COALESCE(items.item_types, '—') AS item_types,
         COALESCE(items.items_total, 0) AS actual_price,
@@ -1415,26 +1421,31 @@ _UNBILLED_APPOINTMENT_ROWS_CTE(
       SELECT
         STRING_AGG(DISTINCT src.name, ', ') AS item_description,
         STRING_AGG(DISTINCT src.item_type, ', ') AS item_types,
-        SUM(src.price * src.quantity) AS items_total
+        SUM(src.price * src.quantity) AS items_total,
+        NULLIF(STRING_AGG(DISTINCT NULLIF(TRIM(src.staff_name), ''), ', ' ORDER BY NULLIF(TRIM(src.staff_name), '')), '') AS staff_names
       FROM (
         SELECT svc.value->>'name' AS name, 'service' AS item_type,
                COALESCE(NULLIF(svc.value->>'price', '')::numeric, 0) AS price,
-               COALESCE(NULLIF(svc.value->>'quantity', '')::numeric, 1) AS quantity
+               COALESCE(NULLIF(svc.value->>'quantity', '')::numeric, 1) AS quantity,
+               svc.value->>'staff_name' AS staff_name
         FROM jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) AS svc(value)
         UNION ALL
         SELECT pkg.value->>'name', 'package',
                COALESCE(NULLIF(pkg.value->>'price', '')::numeric, 0),
-               COALESCE(NULLIF(pkg.value->>'quantity', '')::numeric, 1)
+               COALESCE(NULLIF(pkg.value->>'quantity', '')::numeric, 1),
+               pkg.value->>'staff_name'
         FROM jsonb_array_elements(COALESCE(a.package_items, '[]'::jsonb)) AS pkg(value)
         UNION ALL
         SELECT prod.value->>'name', 'product',
                COALESCE(NULLIF(prod.value->>'price', '')::numeric, 0),
-               COALESCE(NULLIF(prod.value->>'quantity', '')::numeric, 1)
+               COALESCE(NULLIF(prod.value->>'quantity', '')::numeric, 1),
+               prod.value->>'staff_name'
         FROM jsonb_array_elements(COALESCE(a.product_items, '[]'::jsonb)) AS prod(value)
         UNION ALL
         SELECT mem.value->>'name', 'membership',
                COALESCE(NULLIF(mem.value->>'price', '')::numeric, 0),
-               COALESCE(NULLIF(mem.value->>'quantity', '')::numeric, 1)
+               COALESCE(NULLIF(mem.value->>'quantity', '')::numeric, 1),
+               mem.value->>'staff_name'
         FROM jsonb_array_elements(COALESCE(a.membership_items, '[]'::jsonb)) AS mem(value)
       ) src
     ) items ON TRUE
@@ -1678,7 +1689,14 @@ async getSalesSummaryReportRows(
         COALESCE(s.tax_amount, 0) AS tax_amount,
         s.tip_amount,
         c.full_name AS client_name, c.phone_number AS client_phone,
-        NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
+        -- Every distinct staff member attributed across this sale's line
+        -- items (falling back to the sale's own staff_id per item, same
+        -- COALESCE(si.staff_id, s.staff_id) convention as
+        -- sales.repository.ts::findItemsBySaleId()) — a single joined staff
+        -- name here used to show only whichever staff happened to be picked
+        -- first, hiding every other staff member on a multi-staff sale (e.g.
+        -- one staff on the service, another on a retail product).
+        COALESCE(items.staff_names, '—') AS staff_name,
         COALESCE(items.item_description, '—') AS item_description,
         COALESCE(items.item_types, '—') AS item_types,
         CASE
@@ -1696,21 +1714,18 @@ async getSalesSummaryReportRows(
         COALESCE(pay.referral_credit_used, 0) AS referral_credit_used
       FROM sales s
       LEFT JOIN clients c ON s.client_id = c.id
-      -- Sales don't always carry their own staff_id (e.g. membership/package/
-      -- product-only sales record staff per line item instead) — fall back to
-      -- any line item's staff_id, same COALESCE(si.staff_id, s.staff_id)
-      -- convention already used by sales.repository.ts::findItemsBySaleId().
-      LEFT JOIN staff st ON st.id = COALESCE(
-        s.staff_id,
-        (SELECT si.staff_id FROM sale_items si WHERE si.sale_id = s.id AND si.staff_id IS NOT NULL LIMIT 1)
-      )
       ${this._PAYMENT_LATERAL}
       ${this._APPOINTMENT_STATUS_JOIN}
       LEFT JOIN LATERAL (
         SELECT
           STRING_AGG(DISTINCT si.name, ', ') AS item_description,
-          STRING_AGG(DISTINCT si.item_type, ', ') AS item_types
+          STRING_AGG(DISTINCT si.item_type, ', ') AS item_types,
+          STRING_AGG(DISTINCT staff_lines.staff_name, ', ' ORDER BY staff_lines.staff_name) AS staff_names
         FROM sale_items si
+        LEFT JOIN LATERAL (
+          SELECT NULLIF(TRIM(CONCAT(COALESCE(st2.first_name, ''), ' ', COALESCE(st2.last_name, ''))), '') AS staff_name
+          FROM staff st2 WHERE st2.id = COALESCE(si.staff_id, s.staff_id)
+        ) staff_lines ON TRUE
         WHERE si.sale_id = s.id
       ) items ON TRUE
       WHERE ${where}
