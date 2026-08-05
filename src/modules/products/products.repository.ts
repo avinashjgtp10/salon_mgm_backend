@@ -7,12 +7,12 @@ import {
 const PRODUCT_COLUMNS = `id, name, barcode, brand_id, category_id, supplier_id, measure_unit, product_type, size, amount, bottle_size, qty_alert,
     short_description, description, supply_price, retail_sales_enabled,
     retail_price, markup_percentage, tax_type, custom_tax_rate, hsn_sac,
-    team_commission_enabled, team_commission_rate, created_at, updated_at`;
+    team_commission_enabled, team_commission_rate, is_active, created_at, updated_at`;
 
 const PRODUCT_COLUMNS_P = `p.id, p.name, p.barcode, p.brand_id, p.category_id, p.supplier_id, p.measure_unit, p.product_type, p.size, p.amount, p.bottle_size, p.qty_alert,
     p.short_description, p.description, p.supply_price, p.retail_sales_enabled,
     p.retail_price, p.markup_percentage, p.tax_type, p.custom_tax_rate, p.hsn_sac,
-    p.team_commission_enabled, p.team_commission_rate, p.created_at, p.updated_at`;
+    p.team_commission_enabled, p.team_commission_rate, p.is_active, p.created_at, p.updated_at`;
 
 // ─── Products Repository ──────────────────────────────────────────────────────
 
@@ -127,6 +127,11 @@ export const productsRepository = {
                 conditions.push(`${prefix}amount = 0`);
             }
         }
+        // Deactivated products are hidden by default everywhere this filter is
+        // used (Products list, exports) — pass is_active: false explicitly to
+        // see them (no caller does yet, but the option exists for later).
+        conditions.push(`${prefix}is_active = $${idx++}`);
+        values.push(filters.is_active ?? true);
 
         const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
         return { where, values };

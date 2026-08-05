@@ -31,6 +31,11 @@ export type Product = {
     hsn_sac: string | null;
     team_commission_enabled: boolean;
     team_commission_rate: number | null;
+    // Soft-delete/deactivate flag — a deactivated product drops out of
+    // Consumable Inventory's default list and stops being sellable/usable
+    // (Products page, service consumable pickers), but stays in the DB so its
+    // history (sales, consumable_usage, service_consumables) is never orphaned.
+    is_active: boolean;
     created_at: string;
     updated_at: string;
 };
@@ -75,6 +80,7 @@ export type CreateProductBody = {
     hsn_sac?: string;
     team_commission_enabled?: boolean;
     team_commission_rate?: number;
+    is_active?: boolean;
 };
 
 export type UpdateProductBody = Partial<CreateProductBody>;
@@ -94,6 +100,9 @@ export type ProductListFilters = {
     min_price?: number;
     max_price?: number;
     stock?: "all" | "low" | "out_of_stock";
+    // Defaults to active-only (see _buildFilterConditions) — pass false
+    // explicitly to see deactivated products, e.g. a future "Show inactive" toggle.
+    is_active?: boolean;
     sort_by?: string;
     sort_order?: "ASC" | "DESC";
     page?: number;

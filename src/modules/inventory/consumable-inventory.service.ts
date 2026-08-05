@@ -5,13 +5,41 @@ import { inventoryTransactionsRepository } from "./inventory-transactions.reposi
 import { appointmentConsumablesService } from "./inventory.service";
 import {
   AdjustStockBody,
+  AssignedServiceRow,
   ConsumableDetail,
   ConsumableKpis,
   ConsumableListFilters,
   ConsumableListResponse,
+  UnitConversion,
+  UnitConversionInput,
   UsageHistoryFilters,
   UsageHistoryResponse,
 } from "./consumable-inventory.types";
+
+const VALID_UNIT_NAME_RE = /^[a-zA-Z0-9 _/-]{1,30}$/;
+
+function validateUnitConversions(conversions: unknown): UnitConversionInput[] {
+  if (!Array.isArray(conversions)) {
+    throw new AppError(400, "unit_conversions must be an array", "VALIDATION_ERROR");
+  }
+  const seen = new Set<string>();
+  return conversions.map((c: any) => {
+    const unitName = String(c?.unit_name ?? "").trim();
+    const conversion = Number(c?.conversion_to_base);
+    if (!VALID_UNIT_NAME_RE.test(unitName)) {
+      throw new AppError(400, `Invalid unit name: "${unitName}"`, "VALIDATION_ERROR");
+    }
+    if (!Number.isFinite(conversion) || conversion <= 0) {
+      throw new AppError(400, `${unitName}: conversion_to_base must be a positive number`, "VALIDATION_ERROR");
+    }
+    const key = unitName.toLowerCase();
+    if (seen.has(key)) {
+      throw new AppError(400, `Duplicate unit name: "${unitName}"`, "VALIDATION_ERROR");
+    }
+    seen.add(key);
+    return { unit_name: unitName, conversion_to_base: conversion };
+  });
+}
 
 export const consumableInventoryService = {
   async list(filters: ConsumableListFilters, salonId: string): Promise<ConsumableListResponse> {
@@ -70,5 +98,27 @@ export const consumableInventoryService = {
     } else {
       await inventoryTransactionsRepository.deduct(params2);
     }
+  },
+
+  // Thin, single-purpose read for the table's "Assigned Services" click-popup
+  // — the full getById() above does several other unrelated queries (usage
+  // stats, recent consumption, unit conversions) the popup doesn't need.
+  async getAssignedServices(productId: string, salonId: string): Promise<AssignedServiceRow[]> {
+    const product = await productsRepository.findById(productId, salonId);
+    if (!product) throw new AppError(404, "Consumable product not found", "NOT_FOUND");
+    return consumableInventoryRepository.getAssignedServices(productId);
+  },
+
+  async getUnitConversions(productId: string, salonId: string): Promise<UnitConversion[]> {
+    const product = await productsRepository.findById(productId, salonId);
+    if (!product) throw new AppError(404, "Consumable product not found", "NOT_FOUND");
+    return consumableInventoryRepository.getUnitConversions(productId);
+  },
+
+  async replaceUnitConversions(productId: string, salonId: string, conversions: unknown): Promise<UnitConversion[]> {
+    const product = await productsRepository.findById(productId, salonId);
+    if (!product) throw new AppError(404, "Consumable product not found", "NOT_FOUND");
+    const validated = validateUnitConversions(conversions);
+    return consumableInventoryRepository.replaceUnitConversions(productId, validated);
   },
 };

@@ -210,6 +210,34 @@ router.post(
     consumableInventoryController.adjustStock
 );
 
+// GET /inventory/consumables/:id/assigned-services — thin Service/Usage list
+// for the table's "Assigned Services" click-popup (see Consumable Inventory redesign).
+router.get(
+    "/consumables/:id/assigned-services",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    consumableInventoryController.assignedServices
+);
+
+// GET/PUT /inventory/consumables/:id/unit-conversions — named-unit conversion
+// factors (e.g. "Bottle" = 1000 ml) shown in the side panel and entered via
+// the Add/Edit Consumable form.
+router.get(
+    "/consumables/:id/unit-conversions",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    consumableInventoryController.getUnitConversions
+);
+router.put(
+    "/consumables/:id/unit-conversions",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    stockAdjustment,
+    consumableInventoryController.replaceUnitConversions
+);
+
 // ─── Consumable Usage (from Calendar appointments) ────────────────────────────
 
 // POST /inventory/consumable-usage

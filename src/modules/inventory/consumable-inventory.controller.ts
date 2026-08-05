@@ -111,4 +111,34 @@ export const consumableInventoryController = {
       return sendSuccess(res, 200, null, "Stock adjusted");
     } catch (err) { return next(err); }
   },
+
+  // GET /api/v1/inventory/consumables/:id/assigned-services
+  async assignedServices(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = getSalonId(req);
+      const id = String(req.params.id || "").trim();
+      const rows = await consumableInventoryService.getAssignedServices(id, salonId);
+      return sendSuccess(res, 200, rows, "Assigned services fetched");
+    } catch (err) { return next(err); }
+  },
+
+  // GET /api/v1/inventory/consumables/:id/unit-conversions
+  async getUnitConversions(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = getSalonId(req);
+      const id = String(req.params.id || "").trim();
+      const rows = await consumableInventoryService.getUnitConversions(id, salonId);
+      return sendSuccess(res, 200, rows, "Unit conversions fetched");
+    } catch (err) { return next(err); }
+  },
+
+  // PUT /api/v1/inventory/consumables/:id/unit-conversions
+  async replaceUnitConversions(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = getSalonId(req);
+      const id = String(req.params.id || "").trim();
+      const rows = await consumableInventoryService.replaceUnitConversions(id, salonId, req.body?.unit_conversions);
+      return sendSuccess(res, 200, rows, "Unit conversions saved");
+    } catch (err) { return next(err); }
+  },
 };

@@ -45,7 +45,7 @@ const coerceProductFields = (b: Record<string, any>) => {
             if (!Number.isNaN(parsed)) b[f] = parsed;
         }
     }
-    const boolFields = ["retail_sales_enabled", "team_commission_enabled"];
+    const boolFields = ["retail_sales_enabled", "team_commission_enabled", "is_active"];
     for (const f of boolFields) {
         if (b[f] === "true" || b[f] === "1") b[f] = true;
         if (b[f] === "false" || b[f] === "0") b[f] = false;
@@ -166,6 +166,9 @@ const validateProductFields = (b: Record<string, unknown>, requireName = false) 
     }
     if (!isOptionalNumber(b.team_commission_rate)) {
         throw new AppError(400, "team_commission_rate must be a number", "VALIDATION_ERROR");
+    }
+    if (!isOptionalBoolean(b.is_active)) {
+        throw new AppError(400, "is_active must be a boolean", "VALIDATION_ERROR");
     }
 };
 

@@ -23,8 +23,8 @@ export type ConsumableListFilters = {
 export type ConsumableListRow = {
   product_id: string;
   name: string;
-  category_name: string | null;
   brand_name: string | null;
+  category_name: string | null;
   supplier_name: string | null;
   unit: string; // measure_unit
   unit_size: number | null; // bottle_size — null when this product doesn't use bottle-based tracking
@@ -35,6 +35,9 @@ export type ConsumableListRow = {
   used_today: number;
   used_this_month: number;
   assigned_services_count: number;
+  // Latest consumable_usage.created_at for this product — null when it's
+  // never actually been used (only configured on a recipe, never deducted).
+  last_used_at: string | null;
   status: ConsumableStatus;
 };
 
@@ -47,12 +50,13 @@ export type ConsumableKpis = {
   total_consumables: number;
   total_available_stock: number; // naive sum of remaining_stock across all consumables — mixed units, see repository note
   low_stock_items: number;
-  out_of_stock_items: number;
-  inventory_value: number; // sum(amount * supply_price)
-  todays_consumption: number; // sum of today's net deduct qty (deduct - return), mixed units
+  assigned_services: number; // COUNT(DISTINCT service_id) across service_consumables for this salon's consumables
 };
 
 export type AssignedServiceRow = { service_id: string; name: string; qty: number; unit: string | null };
+
+export type UnitConversion = { id: string; unit_name: string; conversion_to_base: number };
+export type UnitConversionInput = { unit_name: string; conversion_to_base: number };
 
 export type RecentConsumptionRow = {
   date: string;
@@ -74,10 +78,12 @@ export type ConsumableDetail = ConsumableListRow & {
   bottle_size: number | null;
   supply_price: number | null;
   measure_unit: string;
+  is_active: boolean;
   usage_stats: ConsumableUsageStats;
   assigned_services: AssignedServiceRow[];
   recent_consumption: RecentConsumptionRow[];
   stock_timeline: { label: string; remaining: number }[];
+  unit_conversions: UnitConversion[];
 };
 
 export type UsageHistoryFilters = {
