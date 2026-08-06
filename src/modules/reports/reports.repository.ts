@@ -5263,8 +5263,8 @@ _buildPackageSaleWhere(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; search?: string;
-    staff_ids?: string[]; package_name?: string; package_status?: string;
-    payment_status?: string; payment_method?: string;
+    staff_ids?: string[]; package_name?: string; package_names?: string[]; package_status?: string; package_statuses?: string[];
+    payment_status?: string; payment_statuses?: string[]; payment_method?: string; payment_methods?: string[];
     min_amount?: number; max_amount?: number;
   }
 ): { where: string; values: any[]; nextIndex: number } {
@@ -5284,19 +5284,31 @@ _buildPackageSaleWhere(
     where.push(`cp.staff_id = ANY($${idx++}::uuid[])`);
     values.push(filters.staff_ids);
   }
-  if (filters.package_name) {
+  if (filters.package_names && filters.package_names.length > 0) {
+    where.push(`cp.package_name = ANY($${idx++}::text[])`);
+    values.push(filters.package_names);
+  } else if (filters.package_name) {
     where.push(`cp.package_name = $${idx++}`);
     values.push(filters.package_name);
   }
-  if (filters.package_status) {
+  if (filters.package_statuses && filters.package_statuses.length > 0) {
+    where.push(`cp.status = ANY($${idx++}::text[])`);
+    values.push(filters.package_statuses);
+  } else if (filters.package_status) {
     where.push(`cp.status = $${idx++}`);
     values.push(filters.package_status);
   }
-  if (filters.payment_status) {
+  if (filters.payment_statuses && filters.payment_statuses.length > 0) {
+    where.push(`cp.payment_status = ANY($${idx++}::text[])`);
+    values.push(filters.payment_statuses);
+  } else if (filters.payment_status) {
     where.push(`cp.payment_status = $${idx++}`);
     values.push(filters.payment_status);
   }
-  if (filters.payment_method) {
+  if (filters.payment_methods && filters.payment_methods.length > 0) {
+    where.push(`cp.payment_method = ANY($${idx++}::text[])`);
+    values.push(filters.payment_methods);
+  } else if (filters.payment_method) {
     where.push(`cp.payment_method = $${idx++}`);
     values.push(filters.payment_method);
   }
@@ -5324,8 +5336,8 @@ async getPackageSaleReportStats(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; search?: string;
-    staff_ids?: string[]; package_name?: string; package_status?: string;
-    payment_status?: string; payment_method?: string;
+    staff_ids?: string[]; package_name?: string; package_names?: string[]; package_status?: string; package_statuses?: string[];
+    payment_status?: string; payment_statuses?: string[]; payment_method?: string; payment_methods?: string[];
     min_amount?: number; max_amount?: number;
   }
 ): Promise<PackageSaleReportStats> {
@@ -5357,8 +5369,8 @@ async getPackageSaleReportRows(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; search?: string;
-    staff_ids?: string[]; package_name?: string; package_status?: string;
-    payment_status?: string; payment_method?: string;
+    staff_ids?: string[]; package_name?: string; package_names?: string[]; package_status?: string; package_statuses?: string[];
+    payment_status?: string; payment_statuses?: string[]; payment_method?: string; payment_methods?: string[];
     min_amount?: number; max_amount?: number;
     page?: number; limit?: number; is_export?: boolean;
   }
@@ -5501,7 +5513,8 @@ async _buildPackageHistoryWhere(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; search?: string;
-    package_name?: string; service_name?: string; staff_ids?: string[]; status?: string;
+    package_name?: string; package_names?: string[]; service_name?: string; service_names?: string[];
+    staff_ids?: string[]; status?: string; statuses?: string[];
   }
 ): Promise<{ where: string; values: any[]; nextIndex: number }> {
   const values: any[] = [salonId];
@@ -5525,11 +5538,17 @@ async _buildPackageHistoryWhere(
     values.push(`%${filters.search.trim()}%`);
     idx++;
   }
-  if (filters.package_name) {
+  if (filters.package_names && filters.package_names.length > 0) {
+    where.push(`cp.package_name = ANY($${idx++}::text[])`);
+    values.push(filters.package_names);
+  } else if (filters.package_name) {
     where.push(`cp.package_name = $${idx++}`);
     values.push(filters.package_name);
   }
-  if (filters.service_name) {
+  if (filters.service_names && filters.service_names.length > 0) {
+    where.push(`cps.service_name = ANY($${idx++}::text[])`);
+    values.push(filters.service_names);
+  } else if (filters.service_name) {
     where.push(`cps.service_name = $${idx++}`);
     values.push(filters.service_name);
   }
@@ -5541,7 +5560,10 @@ async _buildPackageHistoryWhere(
     where.push(names.length > 0 ? `h.staff_name = ANY($${idx++}::text[])` : "FALSE");
     if (names.length > 0) values.push(names);
   }
-  if (filters.status) {
+  if (filters.statuses && filters.statuses.length > 0) {
+    where.push(`(${this._PACKAGE_STATUS_EXPR}) = ANY($${idx++}::text[])`);
+    values.push(filters.statuses);
+  } else if (filters.status) {
     where.push(`(${this._PACKAGE_STATUS_EXPR}) = $${idx++}`);
     values.push(filters.status);
   }
@@ -5572,7 +5594,8 @@ async getPackageHistoryReportStats(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; search?: string;
-    package_name?: string; service_name?: string; staff_ids?: string[]; status?: string;
+    package_name?: string; package_names?: string[]; service_name?: string; service_names?: string[];
+    staff_ids?: string[]; status?: string; statuses?: string[];
   }
 ): Promise<PackageHistoryReportStats> {
   const { where, values } = await this._buildPackageHistoryWhere(salonId, filters);
@@ -5643,7 +5666,8 @@ async getPackageHistoryReportRows(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; search?: string;
-    package_name?: string; service_name?: string; staff_ids?: string[]; status?: string;
+    package_name?: string; package_names?: string[]; service_name?: string; service_names?: string[];
+    staff_ids?: string[]; status?: string; statuses?: string[];
     page?: number; limit?: number; is_export?: boolean;
   }
 ): Promise<{
@@ -5730,8 +5754,8 @@ _MEMBER_STATUS_EXPR: `
 _buildMemberSaleWhere(
   salonId: string,
   filters: {
-    start_date?: string; end_date?: string; search?: string; status?: string;
-    membership_id?: string; staff_ids?: string[]; pricing_type?: string;
+    start_date?: string; end_date?: string; search?: string; status?: string; statuses?: string[];
+    membership_id?: string; membership_ids?: string[]; staff_ids?: string[]; pricing_type?: string; pricing_types?: string[];
     price_min?: number; price_max?: number;
   }
 ): { where: string; values: any[]; nextIndex: number } {
@@ -5756,11 +5780,17 @@ _buildMemberSaleWhere(
     values.push(`%${filters.search.trim()}%`);
     idx++;
   }
-  if (filters.status) {
+  if (filters.statuses && filters.statuses.length > 0) {
+    where.push(`(${this._MEMBER_STATUS_EXPR}) = ANY($${idx++}::text[])`);
+    values.push(filters.statuses);
+  } else if (filters.status) {
     where.push(`(${this._MEMBER_STATUS_EXPR}) = $${idx++}`);
     values.push(filters.status);
   }
-  if (filters.membership_id) {
+  if (filters.membership_ids && filters.membership_ids.length > 0) {
+    where.push(`cm.membership_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.membership_ids);
+  } else if (filters.membership_id) {
     where.push(`cm.membership_id = $${idx++}`);
     values.push(filters.membership_id);
   }
@@ -5768,7 +5798,10 @@ _buildMemberSaleWhere(
     where.push(`cm.staff_id = ANY($${idx++}::uuid[])`);
     values.push(filters.staff_ids);
   }
-  if (filters.pricing_type) {
+  if (filters.pricing_types && filters.pricing_types.length > 0) {
+    where.push(`cm.pricing_type = ANY($${idx++}::text[])`);
+    values.push(filters.pricing_types);
+  } else if (filters.pricing_type) {
     where.push(`cm.pricing_type = $${idx++}`);
     values.push(filters.pricing_type);
   }
@@ -5815,8 +5848,8 @@ _extractExtraBenefits(raw: string | null): string {
 async getMemberSaleReportStats(
   salonId: string,
   filters: {
-    start_date?: string; end_date?: string; search?: string; status?: string;
-    membership_id?: string; staff_ids?: string[]; pricing_type?: string;
+    start_date?: string; end_date?: string; search?: string; status?: string; statuses?: string[];
+    membership_id?: string; membership_ids?: string[]; staff_ids?: string[]; pricing_type?: string; pricing_types?: string[];
     price_min?: number; price_max?: number;
   }
 ): Promise<MemberSaleReportStats> {
@@ -5873,8 +5906,8 @@ async getMemberSaleFiltersAvailable(salonId: string): Promise<MemberSaleFiltersA
 async getMemberSaleReportRows(
   salonId: string,
   filters: {
-    start_date?: string; end_date?: string; search?: string; status?: string;
-    membership_id?: string; staff_ids?: string[]; pricing_type?: string;
+    start_date?: string; end_date?: string; search?: string; status?: string; statuses?: string[];
+    membership_id?: string; membership_ids?: string[]; staff_ids?: string[]; pricing_type?: string; pricing_types?: string[];
     price_min?: number; price_max?: number;
     page?: number; limit?: number; is_export?: boolean;
   }

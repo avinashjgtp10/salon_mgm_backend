@@ -1571,9 +1571,13 @@ export interface PackageSaleReportFilters {
     search?: string;
     staff_ids?: string[];
     package_name?: string;
+    package_names?: string[];
     package_status?: string;
+    package_statuses?: string[];
     payment_status?: string;
+    payment_statuses?: string[];
     payment_method?: string;
+    payment_methods?: string[];
     min_amount?: number;
     max_amount?: number;
     page?: number;
@@ -1655,9 +1659,12 @@ export interface PackageHistoryReportFilters {
     end_date?: string;
     search?: string;
     package_name?: string;
+    package_names?: string[];
     service_name?: string;
+    service_names?: string[];
     staff_ids?: string[];
     status?: PackageHistoryStatus;
+    statuses?: string[];
     page?: number;
     limit?: number;
     is_export?: boolean;
@@ -1723,11 +1730,14 @@ export interface MemberSaleReportFilters {
     end_date?: string;
     search?: string;
     status?: MemberSaleStatus;
+    statuses?: string[];
     membership_id?: string;
+    membership_ids?: string[];
     staff_ids?: string[];
     // 'value' (Flat Value) | 'percentage' | 'loyalty' — mirrors
     // client_memberships.pricing_type as snapshotted at sale time.
     pricing_type?: string;
+    pricing_types?: string[];
     price_min?: number;
     price_max?: number;
     page?: number;
