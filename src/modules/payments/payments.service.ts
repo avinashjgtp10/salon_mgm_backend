@@ -723,14 +723,25 @@ export const paymentsService = {
       data.paid_amount  = 0;
       data.due_amount   = 0;
       data.status       = 'completed';
+      // Package payments skip the existingPaid lookup above (no money changes
+      // hands), so derive the same "first payment" signal from appt.status
+      // directly — needed so the consumable deduction below still fires for
+      // ₹0 package-covered appointments, which never reach /checkout but do
+      // still need their consumables deducted on this, their one settling call.
+      isFirstPaymentForAppointment = !!appt && !['partial', 'paid'].includes(appt.status);
     }
 
     // ── Consumables: pre-validate BEFORE the payment row is written ─────────
-    // If this call is the one that finally clears the due amount
-    // (data.status === 'completed') and the appointment isn't already paid,
-    // this is its first real completion — check consumable stock now so a
-    // shortfall blocks the payment outright, before anything is written,
-    // rather than surfacing after money has already changed hands.
+    // Products are physically used the moment the service is rendered, not
+    // when the bill is finally settled — so deduction fires on the FIRST
+    // payment ever recorded against this appointment (isFirstPaymentForAppointment,
+    // computed above from existingPaid === 0), whether that first payment is
+    // itself partial or full. Previously this was gated on data.status ===
+    // 'completed', so a partially-paid appointment never deducted stock even
+    // though the consumables had already been used, causing an inventory
+    // mismatch. A second, later call that only tops up an already-partial
+    // payment (or finally clears it to 'paid') must NOT deduct again —
+    // existingPaid > 0 by then, so this only ever fires once.
     // Consumables never affect any of the money math above (they were never
     // part of it) — this is purely an inventory side-effect of completion.
     // The actual deduction happens later, at the status-flip below, once
@@ -738,8 +749,7 @@ export const paymentsService = {
     // re-check inside deduct() there is what actually guards against a race
     // in the (very rare) time between this check and that write.
     let pendingConsumableRows: AppointmentServiceConsumableRecord[] = [];
-    const willBecomePaid = !!appt && !!data.appointment_id && appt.status !== 'paid' && data.status === 'completed';
-    if (willBecomePaid) {
+    if (isFirstPaymentForAppointment && !!appt && !!data.appointment_id) {
       pendingConsumableRows = await appointmentsRepository.getServiceConsumables(data.appointment_id!);
       const items = appointmentConsumablesService.collectServiceRowItems(pendingConsumableRows);
       if (items.length) {
@@ -929,10 +939,11 @@ export const paymentsService = {
         if (!appt || !['cancelled', 'deleted'].includes(appt.status)) {
           const apptStatus = (data.due_amount ?? 0) > 0 ? 'partial' : 'paid';
 
-          if (willBecomePaid && apptStatus === 'paid' && pendingConsumableRows.length && requesterUserId) {
-            // The actual completion trigger the pre-check above validated
+          if (isFirstPaymentForAppointment && pendingConsumableRows.length && requesterUserId) {
+            // The actual first-payment trigger the pre-check above validated
             // against — deduct now, in the same small transaction as the
-            // status flip, so neither can commit without the other.
+            // status flip (to 'partial' or 'paid', whichever this call
+            // produces), so neither can commit without the other.
             const branchId = await appointmentConsumablesService.resolveBranchId(data.salon_id, appt?.branch_id ?? null);
             if (branchId) {
               const txClient = await pool.connect();
@@ -950,7 +961,7 @@ export const paymentsService = {
                 // this only fires on a genuine race (stock moved in between).
                 // Logged loudly rather than silently swallowed: a payment
                 // already exists at this point, so the appointment must
-                // still reach 'paid' even though the deduction didn't land.
+                // still reach its new status even though the deduction didn't land.
                 logger.error('[payments] consumable deduction failed after pre-check passed — status flip applied without it', {
                   appointmentId: data.appointment_id, message: err?.message,
                 });
