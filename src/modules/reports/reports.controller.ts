@@ -968,13 +968,25 @@ async getDailySheetReport(
         const filters = {
             date: asString(body.date),
             service_id: asString(body.service_id),
+            service_ids: Array.isArray(body.service_ids)
+                ? body.service_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             staff_ids: Array.isArray(body.staff_ids)
                 ? body.staff_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
                 : undefined,
             search: asString(body.search),
             payment_mode: asString(body.payment_mode),
+            payment_modes: Array.isArray(body.payment_modes)
+                ? body.payment_modes.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             status: asString(body.status),
+            statuses: Array.isArray(body.statuses)
+                ? body.statuses.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             item_type: asString(body.item_type),
+            item_types: Array.isArray(body.item_types)
+                ? body.item_types.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             time_from: asString(body.time_from),
             time_to: asString(body.time_to),
             page: body.page !== undefined ? Number(body.page) : undefined,
