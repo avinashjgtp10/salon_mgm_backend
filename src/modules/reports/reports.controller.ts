@@ -1617,9 +1617,13 @@ async getPackageSaleReport(
                 ? body.staff_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
                 : undefined,
             package_name: asString(body.package_name),
+            package_names: Array.isArray(body.package_names) ? body.package_names.map(String) : undefined,
             package_status: asString(body.package_status),
+            package_statuses: Array.isArray(body.package_statuses) ? body.package_statuses.map(String) : undefined,
             payment_status: asString(body.payment_status),
+            payment_statuses: Array.isArray(body.payment_statuses) ? body.payment_statuses.map(String) : undefined,
             payment_method: asString(body.payment_method),
+            payment_methods: Array.isArray(body.payment_methods) ? body.payment_methods.map(String) : undefined,
             min_amount: body.min_amount !== undefined ? Number(body.min_amount) : undefined,
             max_amount: body.max_amount !== undefined ? Number(body.max_amount) : undefined,
             page: body.page !== undefined ? Number(body.page) : undefined,
@@ -1659,11 +1663,14 @@ async getPackageHistoryReport(
             end_date: asString(body.end_date),
             search: asString(body.search),
             package_name: asString(body.package_name),
+            package_names: Array.isArray(body.package_names) ? body.package_names.map(String) : undefined,
             service_name: asString(body.service_name),
+            service_names: Array.isArray(body.service_names) ? body.service_names.map(String) : undefined,
             staff_ids: Array.isArray(body.staff_ids)
                 ? body.staff_ids.map((v: unknown) => String(v)).filter(Boolean)
                 : undefined,
             status: asString(body.status) as any,
+            statuses: Array.isArray(body.statuses) ? body.statuses.map(String) : undefined,
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,
@@ -1701,11 +1708,14 @@ async getMemberSaleReport(
             end_date: asString(body.end_date),
             search: asString(body.search),
             status: asString(body.status) as any,
+            statuses: Array.isArray(body.statuses) ? body.statuses.map(String) : undefined,
             membership_id: asString(body.membership_id),
+            membership_ids: Array.isArray(body.membership_ids) ? body.membership_ids.map(String) : undefined,
             staff_ids: Array.isArray(body.staff_ids)
                 ? body.staff_ids.map((v: unknown) => String(v)).filter(Boolean)
                 : undefined,
             pricing_type: asString(body.pricing_type),
+            pricing_types: Array.isArray(body.pricing_types) ? body.pricing_types.map(String) : undefined,
             price_min: body.price_min !== undefined && body.price_min !== null && body.price_min !== ""
                 ? Number(body.price_min) : undefined,
             price_max: body.price_max !== undefined && body.price_max !== null && body.price_max !== ""
