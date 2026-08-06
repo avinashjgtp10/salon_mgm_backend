@@ -2883,8 +2883,10 @@ _buildServiceSaleWhere(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; staff_ids?: string[]; search?: string;
-    category_id?: string; service_id?: string; min_price?: number; max_price?: number;
-    payment_method?: string;
+    category_id?: string; category_ids?: string[];
+    service_id?: string; service_ids?: string[];
+    min_price?: number; max_price?: number;
+    payment_method?: string; payment_methods?: string[];
   }
 ): { where: string; values: any[]; nextIndex: number } {
   const values: any[] = [salonId];
@@ -2903,11 +2905,17 @@ _buildServiceSaleWhere(
     where.push(`COALESCE(si.staff_id, s.staff_id) = ANY($${idx++}::uuid[])`);
     values.push(filters.staff_ids);
   }
-  if (filters.service_id) {
+  if (filters.service_ids && filters.service_ids.length > 0) {
+    where.push(`si.item_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.service_ids);
+  } else if (filters.service_id) {
     where.push(`si.item_id = $${idx++}`);
     values.push(filters.service_id);
   }
-  if (filters.category_id) {
+  if (filters.category_ids && filters.category_ids.length > 0) {
+    where.push(`sv.category_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.category_ids);
+  } else if (filters.category_id) {
     where.push(`sv.category_id = $${idx++}`);
     values.push(filters.category_id);
   }
@@ -2919,7 +2927,10 @@ _buildServiceSaleWhere(
     where.push(`si.unit_price <= $${idx++}`);
     values.push(filters.max_price);
   }
-  if (filters.payment_method) {
+  if (filters.payment_methods && filters.payment_methods.length > 0) {
+    where.push(`s.payment_method = ANY($${idx++}::text[])`);
+    values.push(filters.payment_methods);
+  } else if (filters.payment_method) {
     where.push(`s.payment_method = $${idx++}`);
     values.push(filters.payment_method);
   }
@@ -2942,8 +2953,10 @@ async getServiceSaleReportStats(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; staff_ids?: string[]; search?: string;
-    category_id?: string; service_id?: string; min_price?: number; max_price?: number;
-    payment_method?: string;
+    category_id?: string; category_ids?: string[];
+    service_id?: string; service_ids?: string[];
+    min_price?: number; max_price?: number;
+    payment_method?: string; payment_methods?: string[];
   }
 ): Promise<ServiceSaleReportStats> {
   const { where, values } = this._buildServiceSaleWhere(salonId, filters);
@@ -3008,8 +3021,10 @@ async getServiceSaleReportRows(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; staff_ids?: string[]; search?: string;
-    category_id?: string; service_id?: string; min_price?: number; max_price?: number;
-    payment_method?: string;
+    category_id?: string; category_ids?: string[];
+    service_id?: string; service_ids?: string[];
+    min_price?: number; max_price?: number;
+    payment_method?: string; payment_methods?: string[];
     sort_by?: "date" | "invoice_no" | "service_name" | "staff_name" | "price" | "total";
     sort_dir?: "asc" | "desc";
     page?: number; limit?: number; is_export?: boolean;

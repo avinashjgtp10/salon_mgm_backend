@@ -877,10 +877,13 @@ export interface ServiceSaleReportFilters {
     end_date?: string;
     staff_ids?: string[];
     category_id?: string;
+    category_ids?: string[];
     service_id?: string;
+    service_ids?: string[];
     min_price?: number;
     max_price?: number;
     payment_method?: string;
+    payment_methods?: string[];
     search?: string;
     sort_by?: "date" | "invoice_no" | "service_name" | "staff_name" | "price" | "total";
     sort_dir?: "asc" | "desc";
