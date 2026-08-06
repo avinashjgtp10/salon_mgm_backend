@@ -799,7 +799,9 @@ export interface ProductRetailReportFilters {
     search?: string;
     staff_ids?: string[];
     brand_id?: string;
+    brand_ids?: string[];
     category_id?: string;
+    category_ids?: string[];
     min_price?: number;
     max_price?: number;
     page?: number;

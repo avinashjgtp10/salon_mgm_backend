@@ -1030,7 +1030,13 @@ async getProductRetailReport(
                 ? body.staff_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
                 : undefined,
             brand_id: asString(body.brand_id),
+            brand_ids: Array.isArray(body.brand_ids)
+                ? body.brand_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             category_id: asString(body.category_id),
+            category_ids: Array.isArray(body.category_ids)
+                ? body.category_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             min_price: body.min_price !== undefined ? Number(body.min_price) : undefined,
             max_price: body.max_price !== undefined ? Number(body.max_price) : undefined,
             page: body.page !== undefined ? Number(body.page) : undefined,
