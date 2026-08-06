@@ -1324,7 +1324,9 @@ async getProductInventoryReport(
         const filters = {
             search: asString(body.search),
             category_id: asString(body.category_id),
+            category_ids: Array.isArray(body.category_ids) ? body.category_ids.map(String) : undefined,
             brand_id: asString(body.brand_id),
+            brand_ids: Array.isArray(body.brand_ids) ? body.brand_ids.map(String) : undefined,
             stock_status: (body.stock_status === "in_stock" || body.stock_status === "low_stock" || body.stock_status === "out_of_stock")
                 ? body.stock_status
                 : undefined,

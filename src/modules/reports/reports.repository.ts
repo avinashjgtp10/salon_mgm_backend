@@ -3831,7 +3831,7 @@ async getEwalletReportRows(
 _buildProductInventoryWhere(
   salonId: string,
   filters: {
-    search?: string; category_id?: string; brand_id?: string;
+    search?: string; category_id?: string; category_ids?: string[]; brand_id?: string; brand_ids?: string[];
     stock_status?: "in_stock" | "low_stock" | "out_of_stock";
     date_from?: string; date_to?: string;
   }
@@ -3850,11 +3850,17 @@ _buildProductInventoryWhere(
     values.push(`%${filters.search.trim()}%`);
     idx++;
   }
-  if (filters.category_id) {
+  if (filters.category_ids && filters.category_ids.length > 0) {
+    where.push(`p.category_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.category_ids);
+  } else if (filters.category_id) {
     where.push(`p.category_id = $${idx++}`);
     values.push(filters.category_id);
   }
-  if (filters.brand_id) {
+  if (filters.brand_ids && filters.brand_ids.length > 0) {
+    where.push(`p.brand_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.brand_ids);
+  } else if (filters.brand_id) {
     where.push(`p.brand_id = $${idx++}`);
     values.push(filters.brand_id);
   }
@@ -3880,7 +3886,7 @@ _buildProductInventoryWhere(
 async getProductInventoryReportStats(
   salonId: string,
   filters: {
-    search?: string; category_id?: string; brand_id?: string;
+    search?: string; category_id?: string; category_ids?: string[]; brand_id?: string; brand_ids?: string[];
     stock_status?: "in_stock" | "low_stock" | "out_of_stock";
     date_from?: string; date_to?: string;
   }
@@ -3910,7 +3916,7 @@ async getProductInventoryReportStats(
 async getProductInventoryReportRows(
   salonId: string,
   filters: {
-    search?: string; category_id?: string; brand_id?: string;
+    search?: string; category_id?: string; category_ids?: string[]; brand_id?: string; brand_ids?: string[];
     stock_status?: "in_stock" | "low_stock" | "out_of_stock";
     date_from?: string; date_to?: string;
     page?: number; limit?: number; is_export?: boolean;
