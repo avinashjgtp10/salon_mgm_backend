@@ -1072,10 +1072,19 @@ async getServiceSaleReport(
                 ? body.staff_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
                 : undefined,
             category_id: asString(body.category_id),
+            category_ids: Array.isArray(body.category_ids)
+                ? body.category_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             service_id: asString(body.service_id),
+            service_ids: Array.isArray(body.service_ids)
+                ? body.service_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             min_price: body.min_price !== undefined ? Number(body.min_price) : undefined,
             max_price: body.max_price !== undefined ? Number(body.max_price) : undefined,
             payment_method: asString(body.payment_method),
+            payment_methods: Array.isArray(body.payment_methods)
+                ? body.payment_methods.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             search: asString(body.search),
             sort_by: asString(body.sort_by) as
                 | "date" | "invoice_no" | "service_name" | "staff_name" | "price" | "total"
