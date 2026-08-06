@@ -7,7 +7,6 @@ import { salesRepository } from "../sales/sales.repository";
 import type { SaleItem } from "../sales/sales.types";
 import { productsRepository } from "../products/products.repository";
 import { appointmentConsumablesService } from "../inventory/inventory.service";
-import { inventoryTransactionsRepository } from "../inventory/inventory-transactions.repository";
 import { commissionCalculationService } from "../commission/commissionCalculation.service";
 import { blockedTimesRepository } from "../blocked_times/blocked_times.repository";
 import { recordTransaction } from "../transactions/transaction-recorder.service";
@@ -273,11 +272,6 @@ function flattenServiceConsumables(
 function stripConsumables(services: IncomingAppointmentServiceItem[] | undefined) {
     if (!services) return services;
     return services.map(({ consumables, ...rest }) => rest);
-}
-
-function buildShortfallError(shortfalls: { product_name: string; available: number; required: number }[]): AppError {
-    const summary = shortfalls.map((s) => `${s.product_name} (need ${s.required}, have ${s.available})`).join("; ");
-    return new AppError(400, `Insufficient stock: ${summary}`, "INSUFFICIENT_STOCK", { shortfalls });
 }
 
 // Read-side counterpart to assignServiceRowIds/flattenServiceConsumables —
