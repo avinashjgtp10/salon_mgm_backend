@@ -4454,7 +4454,9 @@ async getStaffSalesReportStats(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; staff_id?: string; staff_ids?: string[]; search?: string;
-    payment_mode?: string; item_type?: string; payment_status?: string;
+    payment_mode?: string; payment_modes?: string[];
+    item_type?: string; item_types?: string[];
+    payment_status?: string; payment_statuses?: string[];
   }
 ): Promise<StaffSalesReportStats> {
   const { where, values, nextIndex } = this._buildSalesSummaryWhere(salonId, filters);
@@ -4557,7 +4559,9 @@ async getStaffSalesReport(
   filters: {
     start_date?: string; end_date?: string; staff_id?: string; staff_ids?: string[];
     search?: string; page?: number; limit?: number; is_export?: boolean;
-    payment_mode?: string; item_type?: string; payment_status?: string;
+    payment_mode?: string; payment_modes?: string[];
+    item_type?: string; item_types?: string[];
+    payment_status?: string; payment_statuses?: string[];
     // 'sales_desc'/'sales_asc' = "Most/Least Staff Sales" (each row's own
     // Total Sales amount) — default is newest-first, matching prior behavior.
     sort?: "sales_desc" | "sales_asc";
@@ -4699,8 +4703,12 @@ _buildStaffPerformanceWhere(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; staff_ids?: string[]; branch_id?: string;
-    payment_mode?: string; payment_status?: string; item_type?: string;
-    service_id?: string; product_id?: string; package_id?: string; membership_id?: string;
+    payment_mode?: string; payment_modes?: string[];
+    payment_status?: string; payment_statuses?: string[];
+    item_type?: string; item_types?: string[];
+    service_id?: string; product_id?: string;
+    package_id?: string; package_ids?: string[];
+    membership_id?: string; membership_ids?: string[];
     search?: string;
   }
 ): { where: string; values: any[]; nextIndex: number } {
@@ -4716,11 +4724,17 @@ _buildStaffPerformanceWhere(
     where.push(`s.created_at < ($${idx++}::date + interval '1 day')`);
     values.push(filters.end_date);
   }
-  if (filters.payment_status) {
+  if (filters.payment_statuses && filters.payment_statuses.length > 0) {
+    where.push(`s.status = ANY($${idx++}::text[])`);
+    values.push(filters.payment_statuses);
+  } else if (filters.payment_status) {
     where.push(`s.status = $${idx++}`);
     values.push(filters.payment_status);
   }
-  if (filters.payment_mode) {
+  if (filters.payment_modes && filters.payment_modes.length > 0) {
+    where.push(`s.payment_method = ANY($${idx++}::text[])`);
+    values.push(filters.payment_modes);
+  } else if (filters.payment_mode) {
     where.push(`s.payment_method = $${idx++}`);
     values.push(filters.payment_mode);
   }
@@ -4741,7 +4755,10 @@ _buildStaffPerformanceWhere(
     ) IN (SELECT id FROM staff WHERE branch_id = $${idx++})`);
     values.push(filters.branch_id);
   }
-  if (filters.item_type) {
+  if (filters.item_types && filters.item_types.length > 0) {
+    where.push(`EXISTS (SELECT 1 FROM sale_items si WHERE si.sale_id = s.id AND si.item_type = ANY($${idx++}::text[]))`);
+    values.push(filters.item_types);
+  } else if (filters.item_type) {
     where.push(`EXISTS (SELECT 1 FROM sale_items si WHERE si.sale_id = s.id AND si.item_type = $${idx++})`);
     values.push(filters.item_type);
   }
@@ -4753,11 +4770,17 @@ _buildStaffPerformanceWhere(
     where.push(`EXISTS (SELECT 1 FROM sale_items si WHERE si.sale_id = s.id AND si.item_type = 'product' AND si.item_id = $${idx++})`);
     values.push(filters.product_id);
   }
-  if (filters.package_id) {
+  if (filters.package_ids && filters.package_ids.length > 0) {
+    where.push(`EXISTS (SELECT 1 FROM sale_items si WHERE si.sale_id = s.id AND si.item_type = 'package' AND si.item_id = ANY($${idx++}::uuid[]))`);
+    values.push(filters.package_ids);
+  } else if (filters.package_id) {
     where.push(`EXISTS (SELECT 1 FROM sale_items si WHERE si.sale_id = s.id AND si.item_type = 'package' AND si.item_id = $${idx++})`);
     values.push(filters.package_id);
   }
-  if (filters.membership_id) {
+  if (filters.membership_ids && filters.membership_ids.length > 0) {
+    where.push(`EXISTS (SELECT 1 FROM sale_items si WHERE si.sale_id = s.id AND si.item_type = 'membership' AND si.item_id = ANY($${idx++}::uuid[]))`);
+    values.push(filters.membership_ids);
+  } else if (filters.membership_id) {
     where.push(`EXISTS (SELECT 1 FROM sale_items si WHERE si.sale_id = s.id AND si.item_type = 'membership' AND si.item_id = $${idx++})`);
     values.push(filters.membership_id);
   }
@@ -4862,8 +4885,12 @@ async getStaffPerformanceReportStats(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; staff_ids?: string[]; branch_id?: string;
-    payment_mode?: string; payment_status?: string; item_type?: string;
-    service_id?: string; product_id?: string; package_id?: string; membership_id?: string;
+    payment_mode?: string; payment_modes?: string[];
+    payment_status?: string; payment_statuses?: string[];
+    item_type?: string; item_types?: string[];
+    service_id?: string; product_id?: string;
+    package_id?: string; package_ids?: string[];
+    membership_id?: string; membership_ids?: string[];
   }
 ): Promise<StaffPerformanceReportStats> {
   const { where, values } = this._buildStaffPerformanceWhere(salonId, filters);
@@ -4901,8 +4928,12 @@ async getStaffPerformanceReport(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; staff_ids?: string[]; branch_id?: string;
-    payment_mode?: string; payment_status?: string; item_type?: string;
-    service_id?: string; product_id?: string; package_id?: string; membership_id?: string;
+    payment_mode?: string; payment_modes?: string[];
+    payment_status?: string; payment_statuses?: string[];
+    item_type?: string; item_types?: string[];
+    service_id?: string; product_id?: string;
+    package_id?: string; package_ids?: string[];
+    membership_id?: string; membership_ids?: string[];
     page?: number; limit?: number; is_export?: boolean;
   }
 ): Promise<{

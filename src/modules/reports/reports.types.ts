@@ -1345,8 +1345,11 @@ export interface StaffSalesReportFilters {
     limit?: number;
     is_export?: boolean;
     payment_mode?: string;
+    payment_modes?: string[];
     item_type?: string;
+    item_types?: string[];
     payment_status?: string;
+    payment_statuses?: string[];
     sort?: "sales_desc" | "sales_asc";
 }
 
@@ -1423,13 +1426,18 @@ export interface StaffPerformanceReportFilters {
     staff_ids?: string[];
     branch_id?: string;
     payment_mode?: string;
+    payment_modes?: string[];
     // Maps onto sales.status: 'completed' | 'partial' | 'cancelled' | 'refunded'.
     payment_status?: string;
+    payment_statuses?: string[];
     item_type?: string;
+    item_types?: string[];
     service_id?: string;
     product_id?: string;
     package_id?: string;
+    package_ids?: string[];
     membership_id?: string;
+    membership_ids?: string[];
     page?: number;
     limit?: number;
     is_export?: boolean;

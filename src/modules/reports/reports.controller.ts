@@ -1463,8 +1463,17 @@ async getStaffSalesReport(
             page: body.page != null ? Number(body.page) : undefined,
             limit: body.limit != null ? Number(body.limit) : undefined,
             payment_mode: asString(body.payment_mode),
+            payment_modes: Array.isArray(body.payment_modes)
+                ? body.payment_modes.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             item_type: asString(body.item_type),
+            item_types: Array.isArray(body.item_types)
+                ? body.item_types.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             payment_status: asString(body.payment_status),
+            payment_statuses: Array.isArray(body.payment_statuses)
+                ? body.payment_statuses.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             sort: body.sort === "sales_desc" || body.sort === "sales_asc" ? body.sort : undefined,
         };
 
@@ -1503,12 +1512,27 @@ async getStaffPerformanceReport(
                 : undefined,
             branch_id: asString(body.branch_id),
             payment_mode: asString(body.payment_mode),
+            payment_modes: Array.isArray(body.payment_modes)
+                ? body.payment_modes.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             payment_status: asString(body.payment_status),
+            payment_statuses: Array.isArray(body.payment_statuses)
+                ? body.payment_statuses.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             item_type: asString(body.item_type),
+            item_types: Array.isArray(body.item_types)
+                ? body.item_types.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             service_id: asString(body.service_id),
             product_id: asString(body.product_id),
             package_id: asString(body.package_id),
+            package_ids: Array.isArray(body.package_ids)
+                ? body.package_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             membership_id: asString(body.membership_id),
+            membership_ids: Array.isArray(body.membership_ids)
+                ? body.membership_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             search: asString(body.search),
             page: body.page != null ? Number(body.page) : undefined,
             limit: body.limit != null ? Number(body.limit) : undefined,
