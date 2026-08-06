@@ -247,6 +247,8 @@ import {
     ProductInventoryReportResponse,
     ClientRevenueReportFilters,
     ClientRevenueReportResponse,
+    CustomerFrequencyReportFilters,
+    CustomerFrequencyReportResponse,
     StaffSalesReportFilters,
     StaffSalesReportResponse,
     StaffPerformanceReportFilters,
@@ -1465,6 +1467,26 @@ async getClientRevenueReport(
     const [stats, rowsResult] = await Promise.all([
         reportsRepository.getClientRevenueReportStats(salonId, filters),
         reportsRepository.getClientRevenueReportRows(salonId, filters),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+    };
+},
+
+// ======================================================
+// CUSTOMER FREQUENCY REPORT (independent report API)
+// ======================================================
+
+async getCustomerFrequencyReport(
+    salonId: string,
+    filters: CustomerFrequencyReportFilters
+): Promise<CustomerFrequencyReportResponse> {
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getCustomerFrequencyReportStats(salonId, filters),
+        reportsRepository.getCustomerFrequencyReportRows(salonId, filters),
     ]);
 
     return {

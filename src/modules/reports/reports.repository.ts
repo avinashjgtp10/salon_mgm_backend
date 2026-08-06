@@ -29,6 +29,8 @@ import {
     WaCampaignFiltersAvailable,
     ClientRevenueReportRow,
     ClientRevenueReportStats,
+    CustomerFrequencyReportRow,
+    CustomerFrequencyReportStats,
     StaffSalesReportRow,
     StaffSalesReportStats,
     StaffPerformanceReportRow,
@@ -4171,6 +4173,216 @@ async getClientRevenueReportRows(
       last_visit: row.last_visit,
     };
   });
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// ======================================================
+// CUSTOMER FREQUENCY REPORT (independent report API)
+// POST /api/report/customer-frequency — reads clients/sales directly, never
+// the Appointment API. One row per registered client (LEFT JOIN sales, same
+// convention as _CLIENT_REVENUE_AGG, so a client with zero completed sales
+// still shows up instead of vanishing from the report).
+// ======================================================
+
+_buildCustomerFrequencyWhere(
+  salonId: string,
+  filters: { search?: string; staff_ids?: string[] }
+): { where: string; saleJoin: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["c.salon_id = $1"];
+  const saleJoin = ["s.client_id = c.id", "s.status = 'completed'"];
+  let idx = 2;
+
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    saleJoin.push(`EXISTS (
+      SELECT 1 FROM sale_items si2
+      WHERE si2.sale_id = s.id AND COALESCE(si2.staff_id, s.staff_id) = ANY($${idx++}::uuid[])
+    )`);
+    values.push(filters.staff_ids);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  return { where: where.join(" AND "), saleJoin: saleJoin.join(" AND "), values, nextIndex: idx };
+},
+
+// Shared aggregation CTE — one row per registered client, with first/last
+// completed-sale timestamps and a visitor_type/customer_type derived from
+// them. `startDateIdx`/`endDateIdx` are the bound params for the report's
+// date-range filter (the window "New" is evaluated against); LOST_DAYS is a
+// fixed 90-day-since-last-visit cutoff, independent of that range, per the
+// same convention _buildClientRevenueHaving uses for "last visit" being a
+// separate knob from the main date filter.
+_CUSTOMER_FREQUENCY_AGG(where: string, saleJoin: string, startDateIdx: number | null, endDateIdx: number | null): string {
+  // A client with no completed sale at all has first_visit/last_visit both
+  // NULL — such a client can never be "new" (no visit to be new about) and
+  // is bucketed as 'old' rather than 'lost' (never visited isn't the same
+  // as "used to visit, stopped").
+  const newExpr = startDateIdx
+    ? `first_visit IS NOT NULL AND first_visit >= $${startDateIdx}::date${endDateIdx ? ` AND first_visit < ($${endDateIdx}::date + interval '1 day')` : ""}`
+    : `first_visit IS NOT NULL AND first_visit >= (CURRENT_DATE - INTERVAL '30 days')`;
+
+  return `
+    WITH revenue_agg AS (
+      SELECT
+        c.id AS client_id,
+        COALESCE(NULLIF(TRIM(c.full_name), ''), 'Walk-in') AS client_name,
+        COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS contact,
+        COUNT(s.id) AS visits,
+        COALESCE(SUM(s.total_amount::numeric), 0) AS total_spend,
+        MIN(s.created_at AT TIME ZONE 'Asia/Kolkata') AS first_visit_ts,
+        MAX(s.created_at AT TIME ZONE 'Asia/Kolkata') AS last_visit_ts,
+        MIN(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD'))::date AS first_visit,
+        MAX(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD'))::date AS last_visit
+      FROM clients c
+      LEFT JOIN sales s ON ${saleJoin}
+      WHERE ${where}
+      GROUP BY c.id, c.full_name, c.phone_number, c.phone_country_code
+    ),
+    segmented AS (
+      SELECT *,
+        CASE WHEN ${newExpr} THEN 'new' ELSE 'returning' END AS visitor_type,
+        CASE
+          WHEN first_visit IS NULL THEN 'old'
+          WHEN ${newExpr} THEN 'new'
+          WHEN last_visit < (CURRENT_DATE - INTERVAL '90 days') THEN 'lost'
+          ELSE 'old'
+        END AS customer_type
+      FROM revenue_agg
+    )
+  `;
+},
+
+async getCustomerFrequencyReportStats(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; search?: string; staff_ids?: string[] }
+): Promise<CustomerFrequencyReportStats> {
+  const { where, saleJoin, values, nextIndex } = this._buildCustomerFrequencyWhere(salonId, filters);
+  const dateValues: any[] = [];
+  let startDateIdx: number | null = null;
+  let endDateIdx: number | null = null;
+  let idx = nextIndex;
+  if (filters.start_date) {
+    startDateIdx = idx++;
+    dateValues.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    endDateIdx = idx++;
+    dateValues.push(filters.end_date);
+  }
+
+  const query = `
+    ${this._CUSTOMER_FREQUENCY_AGG(where, saleJoin, startDateIdx, endDateIdx)}
+    SELECT
+      COUNT(*)::int AS total_clients,
+      COUNT(*) FILTER (WHERE visitor_type = 'new')::int AS new_clients,
+      COUNT(*) FILTER (WHERE visitor_type = 'returning')::int AS returning_clients,
+      COUNT(*) FILTER (WHERE customer_type = 'lost')::int AS lost_clients
+    FROM segmented
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...dateValues]));
+  const r = rows[0] ?? {};
+  return {
+    total_clients: Number(r.total_clients ?? 0),
+    new_clients: Number(r.new_clients ?? 0),
+    returning_clients: Number(r.returning_clients ?? 0),
+    lost_clients: Number(r.lost_clients ?? 0),
+  };
+},
+
+async getCustomerFrequencyReportRows(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string; staff_ids?: string[];
+    customer_type?: "most_frequent" | "least_frequent" | "most_spending" | "least_spending" | "new" | "old" | "lost";
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: CustomerFrequencyReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, saleJoin, values, nextIndex } = this._buildCustomerFrequencyWhere(salonId, filters);
+  const dateValues: any[] = [];
+  let startDateIdx: number | null = null;
+  let endDateIdx: number | null = null;
+  let idx = nextIndex;
+  if (filters.start_date) {
+    startDateIdx = idx++;
+    dateValues.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    endDateIdx = idx++;
+    dateValues.push(filters.end_date);
+  }
+
+  // 'most_frequent'/'least_frequent' and 'most_spending'/'least_spending'
+  // are a sort, not a bucket filter (see CustomerFrequencyReportFilters) —
+  // they only change ORDER BY. 'new'/'old'/'lost' filter to that
+  // customer_type segment instead.
+  const segmentFilter = ["new", "old", "lost"].includes(filters.customer_type ?? "")
+    ? `WHERE customer_type = $${idx}`
+    : "";
+  const segmentValues: any[] = segmentFilter ? [filters.customer_type] : [];
+  if (segmentFilter) idx++;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const orderClause = filters.customer_type === "least_frequent"
+    ? "ORDER BY visits ASC, client_name ASC"
+    : filters.customer_type === "most_frequent"
+    ? "ORDER BY visits DESC, client_name ASC"
+    : filters.customer_type === "least_spending"
+    ? "ORDER BY total_spend ASC, client_name ASC"
+    : filters.customer_type === "most_spending"
+    ? "ORDER BY total_spend DESC, client_name ASC"
+    : "ORDER BY last_visit DESC NULLS LAST, client_name ASC";
+
+  const query = `
+    ${this._CUSTOMER_FREQUENCY_AGG(where, saleJoin, startDateIdx, endDateIdx)}
+    SELECT
+      client_id, client_name, contact, visits, total_spend,
+      first_visit, last_visit, visitor_type, customer_type,
+      COUNT(*) OVER() AS total_count
+    FROM segmented
+    ${segmentFilter}
+    ${orderClause}
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...dateValues, ...segmentValues, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: CustomerFrequencyReportRow[] = rows.map((row: any) => ({
+    client_id: row.client_id,
+    client_name: row.client_name,
+    contact: row.contact,
+    visits: Number(row.visits ?? 0),
+    total_spend: Math.round(Number(row.total_spend ?? 0)),
+    first_visit: row.first_visit,
+    last_visit: row.last_visit,
+    visitor_type: row.visitor_type,
+    customer_type: row.customer_type,
+  }));
   const effectiveLimit = limit ?? Math.max(total, 1);
   return {
     items,
