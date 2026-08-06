@@ -1267,6 +1267,67 @@ export interface ClientRevenueReportResponse {
 }
 
 // ===============================
+// Customer Frequency Report (independent report API —
+// POST /api/report/customer-frequency)
+// Reads clients/sales directly, never the Appointment API. One row per
+// registered client, bucketed into New/Returning plus a customer_type
+// segment (new/old/lost) derived from first_visit/last_visit against the
+// selected date range — see _CUSTOMER_FREQUENCY_AGG for the exact rules.
+// ===============================
+
+export interface CustomerFrequencyReportFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    // Single-select segment/sort applied together, same convention as the
+    // Commission Report's Status filter: 'most_frequent'/'least_frequent'
+    // sort the table by visit count and 'most_spending'/'least_spending'
+    // sort it by total spend, instead of bucketing it; 'new'/'old'/
+    // 'lost' filter to that customer_type segment.
+    customer_type?: "most_frequent" | "least_frequent" | "most_spending" | "least_spending" | "new" | "old" | "lost";
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface CustomerFrequencyReportRow {
+    client_id: string | null;
+    client_name: string;
+    contact: string;
+    visits: number;
+    total_spend: number;
+    first_visit: string | null;
+    last_visit: string | null;
+    // 'new' = first visit falls inside the selected date range; 'returning'
+    // = client had at least one visit before the range started.
+    visitor_type: "new" | "returning";
+    // 'new'/'old'/'lost' per visitor_type + last_visit-vs-today, independent
+    // of whichever customer_type filter value (if any) was applied.
+    customer_type: "new" | "old" | "lost";
+}
+
+export interface CustomerFrequencyReportStats {
+    total_clients: number;
+    new_clients: number;
+    returning_clients: number;
+    lost_clients: number;
+}
+
+export interface CustomerFrequencyReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface CustomerFrequencyReportResponse {
+    rows: CustomerFrequencyReportRow[];
+    pagination: CustomerFrequencyReportPagination;
+    stats: CustomerFrequencyReportStats;
+}
+
+// ===============================
 // Staff Sales Report (independent report API — POST /api/report/staff-sales)
 // Reads directly from sales/sale_items/payments, one row per transaction,
 // optionally filtered to one staff member. Commission is joined from

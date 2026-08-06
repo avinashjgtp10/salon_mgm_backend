@@ -147,6 +147,17 @@ router.post(
 );
 
 // ======================================================
+// CUSTOMER FREQUENCY REPORT (independent report API)
+// Reads clients/sales directly — never calls the Appointment API/service.
+// ======================================================
+
+router.post(
+    "/customer-frequency",
+    ...guard,
+    reportsController.getCustomerFrequencyReport
+);
+
+// ======================================================
 // STAFF SALES REPORT (independent report API)
 // Reads sale_items/sales directly — never calls the Appointment API/service.
 // ======================================================

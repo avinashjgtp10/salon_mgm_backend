@@ -1394,6 +1394,51 @@ async getClientRevenueReport(
 },
 
 // ======================================================
+// CUSTOMER FREQUENCY REPORT (independent report API)
+// POST /api/report/customer-frequency
+// ======================================================
+
+async getCustomerFrequencyReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const allowedCustomerTypes = ["most_frequent", "least_frequent", "most_spending", "least_spending", "new", "old", "lost"];
+        const customerType = asString(body.customer_type);
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            search: asString(body.search),
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+            customer_type: customerType && allowedCustomerTypes.includes(customerType)
+                ? customerType as "most_frequent" | "least_frequent" | "most_spending" | "least_spending" | "new" | "old" | "lost"
+                : undefined,
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getCustomerFrequencyReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Customer frequency report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
 // STAFF SALES REPORT (independent report API)
 // POST /api/report/staff-sales
 // ======================================================
