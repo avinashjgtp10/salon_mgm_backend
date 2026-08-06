@@ -3314,7 +3314,10 @@ async getGstReportRows(
 
 _buildProductMarginWhere(
   salonId: string,
-  filters: { start_date?: string; end_date?: string }
+  filters: {
+    start_date?: string; end_date?: string; search?: string;
+    brand_ids?: string[]; category_ids?: string[];
+  }
 ): { where: string; values: any[]; nextIndex: number } {
   const values: any[] = [salonId];
   const where = ["s.salon_id = $1", "s.status <> 'draft'", "si.item_type = 'product'"];
@@ -3327,6 +3330,24 @@ _buildProductMarginWhere(
   if (filters.end_date) {
     where.push(`s.created_at < ($${idx++}::date + interval '1 day')`);
     values.push(filters.end_date);
+  }
+  if (filters.search?.trim()) {
+    where.push(`si.name ILIKE $${idx++}`);
+    values.push(`%${filters.search.trim()}%`);
+  }
+  // Brand/Category are product attributes, not sale_items columns — matched
+  // via si.item_id same as the cost lookup below. A line item whose
+  // product_id no longer resolves (deleted/renamed product) can't be
+  // attributed to a brand/category, so it's correctly excluded when either
+  // filter is active (same edge case the cost lookup's name-fallback below
+  // already accepts for cost purposes only, not filtering).
+  if (filters.brand_ids && filters.brand_ids.length > 0) {
+    where.push(`EXISTS (SELECT 1 FROM products p2 WHERE p2.id = si.item_id AND p2.brand_id = ANY($${idx++}::uuid[]))`);
+    values.push(filters.brand_ids);
+  }
+  if (filters.category_ids && filters.category_ids.length > 0) {
+    where.push(`EXISTS (SELECT 1 FROM products p2 WHERE p2.id = si.item_id AND p2.category_id = ANY($${idx++}::uuid[]))`);
+    values.push(filters.category_ids);
   }
 
   return { where: where.join(" AND "), values, nextIndex: idx };
@@ -3361,7 +3382,7 @@ _PRODUCT_MARGIN_AGG(where: string): string {
 
 async getProductMarginReportStats(
   salonId: string,
-  filters: { start_date?: string; end_date?: string }
+  filters: { start_date?: string; end_date?: string; search?: string; brand_ids?: string[]; category_ids?: string[] }
 ): Promise<ProductMarginReportStats> {
   const { where, values } = this._buildProductMarginWhere(salonId, filters);
 
@@ -3388,7 +3409,10 @@ async getProductMarginReportStats(
 
 async getProductMarginReportRows(
   salonId: string,
-  filters: { start_date?: string; end_date?: string; page?: number; limit?: number; is_export?: boolean }
+  filters: {
+    start_date?: string; end_date?: string; search?: string; brand_ids?: string[]; category_ids?: string[];
+    page?: number; limit?: number; is_export?: boolean;
+  }
 ): Promise<{
   items: ProductMarginReportRow[];
   pagination: { total: number; page: number; limit: number; total_pages: number };

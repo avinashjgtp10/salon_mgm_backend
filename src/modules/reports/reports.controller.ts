@@ -1196,6 +1196,13 @@ async getProductMarginReport(
         const filters = {
             start_date: asString(body.start_date),
             end_date: asString(body.end_date),
+            search: asString(body.search),
+            brand_ids: Array.isArray(body.brand_ids)
+                ? body.brand_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            category_ids: Array.isArray(body.category_ids)
+                ? body.category_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,
