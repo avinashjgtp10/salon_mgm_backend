@@ -2029,11 +2029,15 @@ _buildDailySheetWhere(
   filters: {
     date?: string;
     service_id?: string;
+    service_ids?: string[];
     staff_ids?: string[];
     search?: string;
     payment_mode?: string;
+    payment_modes?: string[];
     status?: string;
+    statuses?: string[];
     item_type?: string;
+    item_types?: string[];
     time_from?: string;
     time_to?: string;
   }
@@ -2065,7 +2069,12 @@ _buildDailySheetWhere(
   // admitting the sale with no matching line item at all, same reasoning as
   // the old per-filter EXISTS checks — just combined into one now).
   const lineItemConditions2: string[] = [];
-  if (filters.service_id) {
+  if (filters.service_ids && filters.service_ids.length > 0) {
+    saleItemsJoin.push(`si.item_id = ANY($${idx}::uuid[])`);
+    lineItemConditions2.push(`si2.item_id = ANY($${idx}::uuid[])`);
+    values.push(filters.service_ids);
+    idx++;
+  } else if (filters.service_id) {
     saleItemsJoin.push(`si.item_id = $${idx}`);
     lineItemConditions2.push(`si2.item_id = $${idx}`);
     values.push(filters.service_id);
@@ -2077,7 +2086,12 @@ _buildDailySheetWhere(
     values.push(filters.staff_ids);
     idx++;
   }
-  if (filters.item_type) {
+  if (filters.item_types && filters.item_types.length > 0) {
+    saleItemsJoin.push(`si.item_type = ANY($${idx}::text[])`);
+    lineItemConditions2.push(`si2.item_type = ANY($${idx}::text[])`);
+    values.push(filters.item_types);
+    idx++;
+  } else if (filters.item_type) {
     saleItemsJoin.push(`si.item_type = $${idx}`);
     lineItemConditions2.push(`si2.item_type = $${idx}`);
     values.push(filters.item_type);
@@ -2086,15 +2100,21 @@ _buildDailySheetWhere(
   if (lineItemConditions2.length > 0) {
     where.push(`EXISTS (SELECT 1 FROM sale_items si2 WHERE si2.sale_id = s.id AND ${lineItemConditions2.join(" AND ")})`);
   }
-  if (filters.payment_mode) {
+  if (filters.payment_modes && filters.payment_modes.length > 0) {
+    where.push(`s.payment_method = ANY($${idx++}::text[])`);
+    values.push(filters.payment_modes);
+  } else if (filters.payment_mode) {
     where.push(`s.payment_method = $${idx++}`);
     values.push(filters.payment_mode);
   }
-  if (filters.status) {
+  if (filters.statuses && filters.statuses.length > 0) {
     // Mirrors _STATUS_EXPR (appointment-linked sales trust appointments.status,
     // walk-ins fall back to sales.status mapped onto the same vocabulary) —
     // filtering post-computation since the expression itself needs the
     // _APPOINTMENT_STATUS_JOIN alias `a`, already joined by the caller.
+    where.push(`(${this._STATUS_EXPR}) = ANY($${idx++}::text[])`);
+    values.push(filters.statuses);
+  } else if (filters.status) {
     where.push(`(${this._STATUS_EXPR}) = $${idx++}`);
     values.push(filters.status);
   }
@@ -2123,8 +2143,10 @@ _buildDailySheetWhere(
 // is already bound (see getDailySheetReport).
 _UNBILLED_APPOINTMENT_DAILY_ROWS_CTE(
   filters: {
-    date?: string; service_id?: string; staff_ids?: string[]; search?: string;
-    payment_mode?: string; status?: string; item_type?: string;
+    date?: string; service_id?: string; service_ids?: string[]; staff_ids?: string[]; search?: string;
+    payment_mode?: string; payment_modes?: string[];
+    status?: string; statuses?: string[];
+    item_type?: string; item_types?: string[];
     time_from?: string; time_to?: string;
   },
   startIdx: number
@@ -2150,7 +2172,10 @@ _UNBILLED_APPOINTMENT_DAILY_ROWS_CTE(
     where.push(`a.created_at::time <= $${idx++}::time`);
     values.push(filters.time_to);
   }
-  if (filters.service_id) {
+  if (filters.service_ids && filters.service_ids.length > 0) {
+    where.push(`src.item_id = ANY($${idx++}::text[])`);
+    values.push(filters.service_ids);
+  } else if (filters.service_id) {
     where.push(`src.item_id = $${idx++}`);
     values.push(filters.service_id);
   }
@@ -2158,15 +2183,24 @@ _UNBILLED_APPOINTMENT_DAILY_ROWS_CTE(
     where.push(`COALESCE(src.staff_id, a.staff_id) = ANY($${idx++}::uuid[])`);
     values.push(filters.staff_ids);
   }
-  if (filters.payment_mode) {
+  if (filters.payment_modes && filters.payment_modes.length > 0) {
+    where.push(`pay.latest_method = ANY($${idx++}::text[])`);
+    values.push(filters.payment_modes);
+  } else if (filters.payment_mode) {
     where.push(`pay.latest_method = $${idx++}`);
     values.push(filters.payment_mode);
   }
-  if (filters.item_type) {
+  if (filters.item_types && filters.item_types.length > 0) {
+    where.push(`src.item_type = ANY($${idx++}::text[])`);
+    values.push(filters.item_types);
+  } else if (filters.item_type) {
     where.push(`src.item_type = $${idx++}`);
     values.push(filters.item_type);
   }
-  if (filters.status) {
+  if (filters.statuses && filters.statuses.length > 0) {
+    where.push(`a.status::text = ANY($${idx++}::text[])`);
+    values.push(filters.statuses);
+  } else if (filters.status) {
     where.push(`a.status::text = $${idx++}`);
     values.push(filters.status);
   }
@@ -2264,8 +2298,10 @@ _UNBILLED_APPOINTMENT_DAILY_ROWS_CTE(
 async getDailySheetReport(
   salonId: string,
   filters: {
-    date?: string; service_id?: string; staff_ids?: string[]; search?: string;
-    payment_mode?: string; status?: string; item_type?: string;
+    date?: string; service_id?: string; service_ids?: string[]; staff_ids?: string[]; search?: string;
+    payment_mode?: string; payment_modes?: string[];
+    status?: string; statuses?: string[];
+    item_type?: string; item_types?: string[];
     time_from?: string; time_to?: string;
     page?: number; limit?: number; is_export?: boolean;
   }

@@ -713,11 +713,15 @@ export interface SaleDetailResponse {
 export interface DailySheetReportFilters {
     date?: string;
     service_id?: string;
+    service_ids?: string[];
     staff_ids?: string[];
     search?: string;
     payment_mode?: string;
+    payment_modes?: string[];
     status?: string;
+    statuses?: string[];
     item_type?: string;
+    item_types?: string[];
     time_from?: string;
     time_to?: string;
     page?: number;
