@@ -5086,7 +5086,7 @@ async getStaffPerformanceFiltersAvailable(salonId: string): Promise<StaffPerform
 
 _buildStaffItemSalesWhere(
   salonId: string,
-  filters: { start_date?: string; end_date?: string; item_type?: string; staff_id?: string; search?: string }
+  filters: { start_date?: string; end_date?: string; item_type?: string; staff_id?: string; staff_ids?: string[]; search?: string }
 ): { where: string; values: any[]; nextIndex: number } {
   const values: any[] = [salonId, filters.item_type ?? "service"];
   const where = ["s.salon_id = $1", "s.status <> 'draft'", "si.item_type = $2"];
@@ -5100,7 +5100,10 @@ _buildStaffItemSalesWhere(
     where.push(`s.created_at < ($${idx++}::date + interval '1 day')`);
     values.push(filters.end_date);
   }
-  if (filters.staff_id) {
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    where.push(`COALESCE(si.staff_id, s.staff_id) = ANY($${idx++}::uuid[])`);
+    values.push(filters.staff_ids);
+  } else if (filters.staff_id) {
     where.push(`COALESCE(si.staff_id, s.staff_id) = $${idx++}`);
     values.push(filters.staff_id);
   }
@@ -5119,7 +5122,7 @@ _buildStaffItemSalesWhere(
 
 async getStaffItemSalesReportStats(
   salonId: string,
-  filters: { start_date?: string; end_date?: string; item_type?: string; staff_id?: string; search?: string }
+  filters: { start_date?: string; end_date?: string; item_type?: string; staff_id?: string; staff_ids?: string[]; search?: string }
 ): Promise<StaffItemSalesReportStats> {
   const { where, values } = this._buildStaffItemSalesWhere(salonId, filters);
 
@@ -5180,7 +5183,7 @@ async getStaffItemSalesReportStats(
 async getStaffItemSalesReportRows(
   salonId: string,
   filters: {
-    start_date?: string; end_date?: string; item_type?: string; staff_id?: string; search?: string;
+    start_date?: string; end_date?: string; item_type?: string; staff_id?: string; staff_ids?: string[]; search?: string;
     page?: number; limit?: number; is_export?: boolean;
   }
 ): Promise<{

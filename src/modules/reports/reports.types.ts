@@ -1521,6 +1521,7 @@ export interface StaffItemSalesReportFilters {
     end_date?: string;
     item_type?: StaffItemSalesType;
     staff_id?: string;
+    staff_ids?: string[];
     // Matches against staff name AND the current tab's item name (service/
     // product/membership/package) — scoped to whichever item_type is active,
     // not a cross-item-type search.
