@@ -884,12 +884,31 @@ async getSalesSummaryReport(
             start_date: asString(body.start_date),
             end_date: asString(body.end_date),
             staff_id: asString(body.staff_id),
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
             search: asString(body.search),
             status: asString(body.status),
             category_id: asString(body.category_id),
+            category_ids: Array.isArray(body.category_ids)
+                ? body.category_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
             payment_mode: asString(body.payment_mode),
+            payment_modes: Array.isArray(body.payment_modes)
+                ? body.payment_modes.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             item_type: asString(body.item_type),
+            item_types: Array.isArray(body.item_types)
+                ? body.item_types.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             service_id: asString(body.service_id),
+            service_ids: Array.isArray(body.service_ids)
+                ? body.service_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+            payment_status: asString(body.payment_status),
+            payment_statuses: Array.isArray(body.payment_statuses)
+                ? body.payment_statuses.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,

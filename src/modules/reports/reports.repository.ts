@@ -1125,9 +1125,13 @@ _buildSalesSummaryWhere(
     search?: string;
     status?: string;
     category_id?: string;
+    category_ids?: string[];
     payment_mode?: string;
+    payment_modes?: string[];
     item_type?: string;
+    item_types?: string[];
     service_id?: string;
+    service_ids?: string[];
     // Filters against the same displayed-status vocabulary as _STATUS_EXPR
     // ('paid' | 'booked' | 'cancelled' | 'refunded'), NOT the raw sales.status
     // column that `status` above filters on — the two are deliberately
@@ -1135,6 +1139,7 @@ _buildSalesSummaryWhere(
     // Every call site using this filter must have _APPOINTMENT_STATUS_JOIN's
     // `a` alias already joined, same requirement as _STATUS_EXPR itself.
     payment_status?: string;
+    payment_statuses?: string[];
   }
 ): { where: string; values: any[]; nextIndex: number } {
   const values: any[] = [salonId];
@@ -1156,7 +1161,10 @@ _buildSalesSummaryWhere(
     where.push(`s.created_at < ($${idx++}::date + interval '1 day')`);
     values.push(filters.end_date);
   }
-  if (filters.payment_mode) {
+  if (filters.payment_modes && filters.payment_modes.length > 0) {
+    where.push(`s.payment_method = ANY($${idx++}::text[])`);
+    values.push(filters.payment_modes);
+  } else if (filters.payment_mode) {
     where.push(`s.payment_method = $${idx++}`);
     values.push(filters.payment_mode);
   }
@@ -1183,22 +1191,37 @@ _buildSalesSummaryWhere(
       values.push(filters.staff_id);
       idx++;
     }
-    if (filters.item_type) {
+    if (filters.item_types && filters.item_types.length > 0) {
+      lineItemConditions.push(`si.item_type = ANY($${idx}::text[])`);
+      values.push(filters.item_types);
+      idx++;
+    } else if (filters.item_type) {
       lineItemConditions.push(`si.item_type = $${idx}`);
       values.push(filters.item_type);
       idx++;
     }
-    if (filters.service_id) {
+    if (filters.service_ids && filters.service_ids.length > 0) {
+      lineItemConditions.push(`si.item_type = 'service'`);
+      lineItemConditions.push(`si.item_id = ANY($${idx}::uuid[])`);
+      values.push(filters.service_ids);
+      idx++;
+    } else if (filters.service_id) {
       lineItemConditions.push(`si.item_type = 'service'`);
       lineItemConditions.push(`si.item_id = $${idx}`);
       values.push(filters.service_id);
       idx++;
     }
-    if (filters.category_id) {
+    if (filters.category_ids && filters.category_ids.length > 0) {
       // A sale only "belongs" to a service category if the SAME line item
       // that satisfies the other filters above is also a service in that
       // category — sales.category has no column of its own, since one
       // invoice can mix categories.
+      lineItemConditions.push(`si.item_type = 'service'`);
+      lineItemConditions.push(`sv.category_id = ANY($${idx}::uuid[])`);
+      values.push(filters.category_ids);
+      idx++;
+      needsServicesJoin = true;
+    } else if (filters.category_id) {
       lineItemConditions.push(`si.item_type = 'service'`);
       lineItemConditions.push(`sv.category_id = $${idx}`);
       values.push(filters.category_id);
@@ -1216,7 +1239,18 @@ _buildSalesSummaryWhere(
       where.push(`EXISTS (SELECT 1 FROM ${joinClause} WHERE ${lineItemConditions.join(" AND ")})`);
     }
   }
-  if (filters.payment_status) {
+  if (filters.payment_statuses && filters.payment_statuses.length > 0) {
+    where.push(`(
+      CASE
+        WHEN s.appointment_id IS NOT NULL THEN COALESCE(a.status::text, 'booked')
+        WHEN s.status = 'completed' THEN 'paid'
+        WHEN s.status = 'cancelled' THEN 'cancelled'
+        WHEN s.status = 'refunded' THEN 'refunded'
+        ELSE 'booked'
+      END
+    ) = ANY($${idx++}::text[])`);
+    values.push(filters.payment_statuses);
+  } else if (filters.payment_status) {
     where.push(`(
       CASE
         WHEN s.appointment_id IS NOT NULL THEN COALESCE(a.status::text, 'booked')
@@ -1261,8 +1295,18 @@ _buildSalesSummaryWhere(
 // already bound to salonId by the sales-side query it's UNIONed with.
 _UNBILLED_APPOINTMENT_ROWS_CTE(
   filters: {
-    start_date?: string; end_date?: string; staff_id?: string; staff_ids?: string[]; search?: string; category_id?: string;
-    payment_mode?: string; item_type?: string; service_id?: string;
+    start_date?: string; end_date?: string; staff_id?: string; staff_ids?: string[]; search?: string;
+    category_id?: string; category_ids?: string[];
+    payment_mode?: string; payment_modes?: string[];
+    item_type?: string; item_types?: string[];
+    service_id?: string; service_ids?: string[];
+    // Same displayed-status vocabulary as _STATUS_EXPR/_buildSalesSummaryWhere's
+    // payment_status. An unbilled appointment (this CTE's whole reason for
+    // being) can only ever show up here as 'booked' or 'partial' — never
+    // 'paid'/'cancelled'/'refunded', since those require a real sales row —
+    // so this filters directly on the raw a.status rather than needing the
+    // CASE expression those other two use (there's no sales row to branch on).
+    payment_status?: string; payment_statuses?: string[];
   },
   startIdx: number
 ): { sql: string; values: any[]; nextIndex: number } {
@@ -1290,7 +1334,14 @@ _UNBILLED_APPOINTMENT_ROWS_CTE(
     where.push(`a.staff_id = $${idx++}`);
     values.push(filters.staff_id);
   }
-  if (filters.category_id) {
+  if (filters.category_ids && filters.category_ids.length > 0) {
+    where.push(`EXISTS (
+      SELECT 1 FROM jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) AS svc(value)
+      JOIN services sv ON sv.id = NULLIF(svc.value->>'service_id', '')::uuid
+      WHERE sv.category_id = ANY($${idx++}::uuid[])
+    )`);
+    values.push(filters.category_ids);
+  } else if (filters.category_id) {
     // Unbilled appointments have no sale_items yet — match against the raw
     // services JSONB via each entry's service_id, joined to services/
     // service_categories, same category semantics as the sales_side filter.
@@ -1301,7 +1352,15 @@ _UNBILLED_APPOINTMENT_ROWS_CTE(
     )`);
     values.push(filters.category_id);
   }
-  if (filters.payment_mode) {
+  if (filters.payment_modes && filters.payment_modes.length > 0) {
+    where.push(`EXISTS (
+      SELECT 1 FROM payments p
+      WHERE p.appointment_id = a.id
+        AND p.created_at = (SELECT MAX(p2.created_at) FROM payments p2 WHERE p2.appointment_id = a.id)
+        AND p.payment_method = ANY($${idx++}::text[])
+    )`);
+    values.push(filters.payment_modes);
+  } else if (filters.payment_mode) {
     // Unbilled appointments have no sales.payment_method yet — the closest
     // signal is the latest linked payment's method, same source the row's
     // own payment_method column (pay.latest_method) is built from below.
@@ -1313,24 +1372,45 @@ _UNBILLED_APPOINTMENT_ROWS_CTE(
     )`);
     values.push(filters.payment_mode);
   }
-  if (filters.item_type) {
-    // Unbilled appointments store line items across four separate JSONB
-    // arrays (one per item type) rather than a unified sale_items table —
-    // presence of a non-empty array for the requested type is equivalent to
-    // "this bill has at least one item of this type".
-    const arrayCol =
-      filters.item_type === "service" ? "a.services" :
-      filters.item_type === "product" ? "a.product_items" :
-      filters.item_type === "membership" ? "a.membership_items" :
-      filters.item_type === "package" ? "a.package_items" : null;
+  // Unbilled appointments store line items across four separate JSONB
+  // arrays (one per item type) rather than a unified sale_items table —
+  // presence of a non-empty array for the requested type is equivalent to
+  // "this bill has at least one item of this type". item_type values outside
+  // service/product/membership/package (e.g. gift_card/quick) have no
+  // corresponding JSONB array on appointments at all, so they always exclude
+  // every unbilled row here — same as before, just extended to multi-select.
+  const ITEM_TYPE_ARRAY_COL: Record<string, string> = {
+    service: "a.services", product: "a.product_items",
+    membership: "a.membership_items", package: "a.package_items",
+  };
+  if (filters.item_types && filters.item_types.length > 0) {
+    const cols = filters.item_types.map((t) => ITEM_TYPE_ARRAY_COL[t]).filter((c): c is string => !!c);
+    where.push(cols.length > 0
+      ? `(${cols.map((c) => `jsonb_array_length(COALESCE(${c}, '[]'::jsonb)) > 0`).join(" OR ")})`
+      : "FALSE");
+  } else if (filters.item_type) {
+    const arrayCol = ITEM_TYPE_ARRAY_COL[filters.item_type] ?? null;
     where.push(arrayCol ? `jsonb_array_length(COALESCE(${arrayCol}, '[]'::jsonb)) > 0` : "FALSE");
   }
-  if (filters.service_id) {
+  if (filters.service_ids && filters.service_ids.length > 0) {
+    where.push(`EXISTS (
+      SELECT 1 FROM jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) AS svc(value)
+      WHERE NULLIF(svc.value->>'service_id', '')::uuid = ANY($${idx++}::uuid[])
+    )`);
+    values.push(filters.service_ids);
+  } else if (filters.service_id) {
     where.push(`EXISTS (
       SELECT 1 FROM jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) AS svc(value)
       WHERE NULLIF(svc.value->>'service_id', '')::uuid = $${idx++}
     )`);
     values.push(filters.service_id);
+  }
+  if (filters.payment_statuses && filters.payment_statuses.length > 0) {
+    where.push(`COALESCE(a.status::text, 'booked') = ANY($${idx++}::text[])`);
+    values.push(filters.payment_statuses);
+  } else if (filters.payment_status) {
+    where.push(`COALESCE(a.status::text, 'booked') = $${idx++}`);
+    values.push(filters.payment_status);
   }
   if (filters.search?.trim()) {
     where.push(`(
@@ -1593,9 +1673,12 @@ _STATUS_EXPR: `
 async getSalesSummaryReportStats(
   salonId: string,
   filters: {
-    start_date?: string; end_date?: string; staff_id?: string;
-    search?: string; status?: string; category_id?: string;
-    payment_mode?: string; item_type?: string; service_id?: string;
+    start_date?: string; end_date?: string; staff_id?: string; staff_ids?: string[];
+    search?: string; status?: string; category_id?: string; category_ids?: string[];
+    payment_mode?: string; payment_modes?: string[];
+    item_type?: string; item_types?: string[];
+    service_id?: string; service_ids?: string[];
+    payment_status?: string; payment_statuses?: string[];
   }
 ): Promise<{
   total_bill: number; total_sale: number; received_amount: number; total_tip: number;
@@ -1619,6 +1702,7 @@ async getSalesSummaryReportStats(
       FROM sales s
       LEFT JOIN clients c ON s.client_id = c.id
       ${this._PAYMENT_LATERAL}
+      ${this._APPOINTMENT_STATUS_JOIN}
       WHERE ${where}
     ),
     appt_side AS (
@@ -1662,9 +1746,12 @@ async getSalesSummaryReportStats(
 async getSalesSummaryReportRows(
   salonId: string,
   filters: {
-    start_date?: string; end_date?: string; staff_id?: string; search?: string;
-    status?: string; category_id?: string; page?: number; limit?: number; is_export?: boolean;
-    payment_mode?: string; item_type?: string; service_id?: string;
+    start_date?: string; end_date?: string; staff_id?: string; staff_ids?: string[]; search?: string;
+    status?: string; category_id?: string; category_ids?: string[]; page?: number; limit?: number; is_export?: boolean;
+    payment_mode?: string; payment_modes?: string[];
+    item_type?: string; item_types?: string[];
+    service_id?: string; service_ids?: string[];
+    payment_status?: string; payment_statuses?: string[];
   }
 ): Promise<{
   items: SalesSummaryReportRow[];
