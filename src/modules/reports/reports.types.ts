@@ -1139,7 +1139,9 @@ export interface EwalletReportFilters {
 export interface ProductInventoryReportFilters {
     search?: string;
     category_id?: string;
+    category_ids?: string[];
     brand_id?: string;
+    brand_ids?: string[];
     stock_status?: "in_stock" | "low_stock" | "out_of_stock";
     date_from?: string;
     date_to?: string;
