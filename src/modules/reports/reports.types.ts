@@ -960,6 +960,8 @@ export interface GstReportFilters {
     start_date?: string;
     end_date?: string;
     staff_ids?: string[];
+    item_types?: string[];
+    payment_methods?: string[];
     search?: string;
     page?: number;
     limit?: number;
