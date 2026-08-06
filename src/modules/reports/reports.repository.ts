@@ -2553,7 +2553,9 @@ _buildProductRetailWhere(
     search?: string;
     staff_ids?: string[];
     brand_id?: string;
+    brand_ids?: string[];
     category_id?: string;
+    category_ids?: string[];
     min_price?: number;
     max_price?: number;
   }
@@ -2578,11 +2580,17 @@ _buildProductRetailWhere(
     where.push(`COALESCE(si.staff_id, s.staff_id) = ANY($${idx++}::uuid[])`);
     values.push(filters.staff_ids);
   }
-  if (filters.brand_id) {
+  if (filters.brand_ids && filters.brand_ids.length > 0) {
+    where.push(`p.brand_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.brand_ids);
+  } else if (filters.brand_id) {
     where.push(`p.brand_id = $${idx++}`);
     values.push(filters.brand_id);
   }
-  if (filters.category_id) {
+  if (filters.category_ids && filters.category_ids.length > 0) {
+    where.push(`p.category_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.category_ids);
+  } else if (filters.category_id) {
     where.push(`p.category_id = $${idx++}`);
     values.push(filters.category_id);
   }
@@ -2612,7 +2620,7 @@ async getProductRetailReportStats(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; product_id?: string; search?: string;
-    staff_ids?: string[]; brand_id?: string; category_id?: string; min_price?: number; max_price?: number;
+    staff_ids?: string[]; brand_id?: string; brand_ids?: string[]; category_id?: string; category_ids?: string[]; min_price?: number; max_price?: number;
   }
 ): Promise<ProductRetailReportStats> {
   const { where, values } = this._buildProductRetailWhere(salonId, filters);
@@ -2658,7 +2666,7 @@ async getProductRetailReportRows(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; product_id?: string; search?: string;
-    staff_ids?: string[]; brand_id?: string; category_id?: string; min_price?: number; max_price?: number;
+    staff_ids?: string[]; brand_id?: string; brand_ids?: string[]; category_id?: string; category_ids?: string[]; min_price?: number; max_price?: number;
     page?: number; limit?: number; is_export?: boolean;
   }
 ): Promise<{
