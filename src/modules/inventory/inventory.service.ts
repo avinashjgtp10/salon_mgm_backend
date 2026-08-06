@@ -297,7 +297,13 @@ export const appointmentConsumablesService = {
                 referenceType: "appointment_complete",
                 referenceId: params.bookingId,
                 userId: params.userId,
-                allowNegative: false,
+                // Billing must never be blocked by stock. The consumables were
+                // physically used regardless of what inventory claims, so record
+                // the usage and let products.amount floor at 0 (the UPDATE uses
+                // GREATEST(amount + delta, 0)). A stale/never-reconciled stock
+                // figure is an inventory-accuracy problem to fix in Stock
+                // Reconciliation — not a reason to refuse the customer's payment.
+                allowNegative: true,
             },
             txClient
         );
@@ -372,7 +378,9 @@ export const appointmentConsumablesService = {
             userId: params.userId,
         };
         if (params.toDeduct.length) {
-            await inventoryTransactionsRepository.deduct({ ...base, items: params.toDeduct, allowNegative: false });
+            // Same rationale as completeAppointment above — an edit to an
+            // already-paid appointment must not be refused over stock either.
+            await inventoryTransactionsRepository.deduct({ ...base, items: params.toDeduct, allowNegative: true });
         }
         if (params.toRestore.length) {
             await inventoryTransactionsRepository.restore({ ...base, items: params.toRestore });

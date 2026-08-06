@@ -160,6 +160,11 @@ export interface BillTotalsResult {
   taxable: number;
   gstAmount: number;
   taxBreakdown: TaxBreakdownEntry[];
+  // Taxable base + exclusive GST, i.e. the bill total at the moment tax has
+  // been added but BEFORE any post-tax deduction (Svc/Bill Discount, Extra
+  // Charges, Referral, wallets, points, round off). Shown as the "Total Bill"
+  // Sale Summary row directly under the GST rows.
+  billTotal: number;
   // The fully-reduced bill total — subtotal, GST, Svc Discount, Extra
   // Charges/Tip, Referral Discount, Membership Wallet, eWallet, and Reward
   // Points have ALL already been applied by the time this is produced.
@@ -522,7 +527,7 @@ export function computeBillTotals(input: ComputeBillTotalsInput): BillTotalsResu
 
   return {
     catalogTotal, itemDiscountTotal, subtotal: rawSubtotal, manualDiscount, totalDisc: manualDiscount + totalDisc,
-    taxable, gstAmount, taxBreakdown, grandTotal, roundOff, preRedemptionTotal, displaySubtotal,
+    taxable, gstAmount, taxBreakdown, billTotal, grandTotal, roundOff, preRedemptionTotal, displaySubtotal,
     rowTax, rowTaxableAmount,
   };
 }
