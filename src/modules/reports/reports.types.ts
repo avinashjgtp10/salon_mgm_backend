@@ -1829,8 +1829,11 @@ export interface AppointmentDetailReportRow {
     time: string;
     booked_date: string;
     client_name: string | null;
+    // Combined item names/types for the whole bill (STRING_AGG'd across
+    // every service/product/package/membership on the appointment), not a
+    // single item — a bill can span more than one type.
     item_name: string;
-    item_type: "service" | "product" | "package" | "membership";
+    item_type: string;
     staff_name: string | null;
     duration: number;
     amount: number;

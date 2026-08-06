@@ -6195,24 +6195,48 @@ async getAppointmentDetailReport(
         ORDER BY s.created_at DESC
         LIMIT 1
       ) s ON TRUE
+    ),
+    filtered AS (
+      SELECT e.*
+      FROM base e
+      ${outerWhereClause}
+    ),
+    -- One row per appointment/bill (not per line item) — a bill with
+    -- multiple services and/or multiple staff used to surface as one row
+    -- per exploded item, each showing the full appointment amount (see the
+    -- e.paid_amount fix above), which read as duplicate bills instead of a
+    -- single invoice with several items. Items and staff are combined into
+    -- one display string per appointment, same STRING_AGG grouping Daily
+    -- Sheet already uses, and the per-item price is summed back to the
+    -- invoice total.
+    grouped AS (
+      SELECT
+        e.id,
+        MIN(e.appointment_date) AS appointment_date,
+        MIN(e.time) AS time,
+        MIN(e.booked_date) AS booked_date,
+        MIN(e.client_name) AS client_name,
+        STRING_AGG(DISTINCT COALESCE(e.item_name, '—'), ', ' ORDER BY COALESCE(e.item_name, '—')) AS item_name,
+        STRING_AGG(DISTINCT e.item_type, ', ' ORDER BY e.item_type) AS item_type,
+        STRING_AGG(DISTINCT e.staff_name, ', ' ORDER BY e.staff_name) FILTER (WHERE e.staff_name IS NOT NULL) AS staff_name,
+        -- duration_minutes is the appointment's own field, identical on
+        -- every exploded item row — MAX is a no-op collapse, not a real
+        -- aggregation (summing would multiply it by the item count).
+        MAX(e.duration_minutes) AS duration,
+        SUM(COALESCE(e.item_price, e.paid_amount, 0)) AS amount,
+        MIN(e.payment_method) AS payment_method,
+        MIN(e.status) AS payment_status,
+        MIN(e.scheduled_at) AS scheduled_at
+      FROM filtered e
+      GROUP BY e.id
     )
     SELECT
-      e.id,
-      e.appointment_date,
-      e.time,
-      e.booked_date,
-      e.client_name,
-      COALESCE(e.item_name, '—') AS item_name,
-      e.item_type,
-      e.staff_name,
-      e.duration_minutes AS duration,
-      COALESCE(e.paid_amount, e.item_price, 0) AS amount,
-      e.payment_method,
-      e.status AS payment_status,
+      id, appointment_date, time, booked_date, client_name,
+      item_name, item_type, staff_name, duration, amount,
+      payment_method, payment_status,
       COUNT(*) OVER() AS total_count
-    FROM base e
-    ${outerWhereClause}
-    ORDER BY e.scheduled_at DESC
+    FROM grouped
+    ORDER BY scheduled_at DESC
     ${limitClause}
   `;
 
