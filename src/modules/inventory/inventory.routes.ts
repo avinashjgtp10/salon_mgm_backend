@@ -181,6 +181,18 @@ router.get(
     consumableInventoryController.kpis
 );
 
+// GET /inventory/consumables/dashboard?search=&category_id=&...&page=&limit=
+// Combined list + KPIs in one call — same filters as GET /consumables above.
+// Must be registered BEFORE /consumables/:id or Express would match
+// "dashboard" as the :id param.
+router.get(
+    "/consumables/dashboard",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    consumableInventoryController.dashboard
+);
+
 // GET /inventory/consumables/usage-history?product_id=&service_id=&direction=&from=&to=&page=&limit=
 // Must be registered BEFORE /consumables/:id or Express would match
 // "usage-history" as the :id param.
