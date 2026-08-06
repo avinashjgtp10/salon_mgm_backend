@@ -1244,6 +1244,8 @@ export interface ClientRevenueReportRow {
     total_spend: number;
     avg_ticket: number;
     last_visit: string;
+    avg_rating?: number | null;
+    review_count?: number;
 }
 
 export interface ClientRevenueReportStats {
@@ -1893,4 +1895,61 @@ export interface WaCampaignReportResponse {
     pagination: WaCampaignReportPagination;
     stats: WaCampaignReportStats;
     filters_available: WaCampaignFiltersAvailable;
+}
+
+// ===============================
+// Client Rating Report (independent report API — POST /api/report/client-rating)
+// Reads directly from the reviews table (JOIN clients/staff), one row per
+// review. Only is_visible = true reviews are included by default, matching
+// what the reviews module treats as client-facing/visible. Never calls into
+// the reviews module's service/repository, and never touches the
+// Appointment API/service.
+// ===============================
+
+export interface ClientRatingReportFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    min_rating?: number;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface ClientRatingReportRow {
+    client_id: string | null;
+    client_name: string;
+    contact: string;
+    staff_id: string | null;
+    staff_name: string;
+    rating: number;
+    staff_rating: number | null;
+    service_rating: number | null;
+    ambience_rating: number | null;
+    review_text: string | null;
+    review_date: string;
+    source: string;
+    total_spend?: number;
+    visits?: number;
+}
+
+export interface ClientRatingReportStats {
+    total_reviews: number;
+    average_rating: number;
+    positive_reviews: number;
+    negative_reviews: number;
+}
+
+export interface ClientRatingReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface ClientRatingReportResponse {
+    rows: ClientRatingReportRow[];
+    pagination: ClientRatingReportPagination;
+    stats: ClientRatingReportStats;
 }
