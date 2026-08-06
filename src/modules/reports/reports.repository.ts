@@ -55,6 +55,8 @@ import {
     SalesSummaryTableItemDetail,
     TopItemRow,
     TopStylistRow,
+    ClientRatingReportRow,
+    ClientRatingReportStats,
 } from "./reports.types";
 
 // ======================================================
@@ -4082,18 +4084,30 @@ _buildClientRevenueWhere(
 // aggregated MAX(created_at), so it can't live in the WHERE/saleJoin.
 _CLIENT_REVENUE_AGG(where: string, saleJoin: string, having: string): string {
   return `
-    WITH revenue_agg AS (
+    WITH review_stats AS (
+      SELECT
+        client_id,
+        ROUND(AVG(rating), 1) AS avg_rating,
+        COUNT(*)::int AS review_count
+      FROM reviews
+      WHERE salon_id = $1 AND is_visible = true
+      GROUP BY client_id
+    ),
+    revenue_agg AS (
       SELECT
         c.id AS client_id,
         COALESCE(NULLIF(TRIM(c.full_name), ''), 'Walk-in') AS client_name,
         COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS contact,
         COUNT(s.id) AS visits,
         COALESCE(SUM(s.total_amount::numeric), 0) AS total_spend,
-        MAX(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS last_visit
+        MAX(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS last_visit,
+        rs.avg_rating,
+        COALESCE(rs.review_count, 0) AS review_count
       FROM clients c
       LEFT JOIN sales s ON ${saleJoin}
+      LEFT JOIN review_stats rs ON rs.client_id = c.id
       WHERE ${where}
-      GROUP BY c.id, c.full_name, c.phone_number, c.phone_country_code
+      GROUP BY c.id, c.full_name, c.phone_number, c.phone_country_code, rs.avg_rating, rs.review_count
       ${having}
     )
   `;
@@ -4196,7 +4210,7 @@ async getClientRevenueReportRows(
   const query = `
     ${this._CLIENT_REVENUE_AGG(where, saleJoin, having)}
     SELECT
-      client_id, client_name, contact, visits, total_spend, last_visit,
+      client_id, client_name, contact, visits, total_spend, last_visit, avg_rating, review_count,
       COUNT(*) OVER() AS total_count
     FROM revenue_agg
     ${orderClause}
@@ -4216,6 +4230,8 @@ async getClientRevenueReportRows(
       total_spend: Math.round(total_spend),
       avg_ticket: visits > 0 ? Math.round(total_spend / visits) : 0,
       last_visit: row.last_visit,
+      avg_rating: row.avg_rating !== null && row.avg_rating !== undefined ? Number(row.avg_rating) : null,
+      review_count: Number(row.review_count ?? 0),
     };
   });
   const effectiveLimit = limit ?? Math.max(total, 1);
@@ -13864,6 +13880,166 @@ async getBalanceReceivedReport(
         total: totalTableRows,
         totalPages,
       },
+    },
+  };
+},
+
+// ======================================================
+// CLIENT RATING REPORT (independent report API)
+// POST /api/report/client-rating — reads the reviews table directly
+// (JOIN clients/staff for display names), one row per review. Only
+// is_visible = true reviews are included, matching what the reviews module
+// treats as client-facing/visible. Never calls into the reviews module's
+// service/repository, and never touches the Appointment API/service.
+// ======================================================
+
+_buildClientRatingWhere(
+  salonId: string,
+  filters: { search?: string; staff_ids?: string[]; min_rating?: number; start_date?: string; end_date?: string }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["r.salon_id = $1", "r.is_visible = true"];
+  let idx = 2;
+
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    where.push(`r.staff_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.staff_ids);
+  }
+  if (filters.min_rating !== undefined) {
+    where.push(`r.rating >= $${idx++}`);
+    values.push(filters.min_rating);
+  }
+  if (filters.start_date) {
+    where.push(`r.created_at >= $${idx++}::date`);
+    values.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    where.push(`r.created_at < ($${idx++}::date + interval '1 day')`);
+    values.push(filters.end_date);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+      OR COALESCE(TRIM(CONCAT(st.first_name, ' ', st.last_name)), '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+_CLIENT_RATING_JOIN: `
+    FROM reviews r
+    LEFT JOIN clients c ON c.id = r.client_id
+    LEFT JOIN staff st ON st.id = r.staff_id
+`,
+
+async getClientRatingReportStats(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; search?: string; staff_ids?: string[]; min_rating?: number }
+): Promise<ClientRatingReportStats> {
+  const { where, values } = this._buildClientRatingWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      COUNT(*)::int AS total_reviews,
+      COALESCE(AVG(r.rating), 0)::numeric(3,2) AS average_rating,
+      COUNT(*) FILTER (WHERE r.rating >= 4)::int AS positive_reviews,
+      COUNT(*) FILTER (WHERE r.rating <= 2)::int AS negative_reviews
+    ${this._CLIENT_RATING_JOIN}
+    WHERE ${where}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  return {
+    total_reviews: Number(r.total_reviews ?? 0),
+    average_rating: Number(r.average_rating ?? 0),
+    positive_reviews: Number(r.positive_reviews ?? 0),
+    negative_reviews: Number(r.negative_reviews ?? 0),
+  };
+},
+
+async getClientRatingReportRows(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string;
+    staff_ids?: string[]; min_rating?: number;
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: ClientRatingReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildClientRatingWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    SELECT
+      c.id AS client_id,
+      COALESCE(NULLIF(TRIM(c.full_name), ''), 'Walk-in') AS client_name,
+      COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS contact,
+      st.id AS staff_id,
+      NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
+      r.rating,
+      r.staff_rating,
+      r.service_rating,
+      r.ambience_rating,
+      r.review_text,
+      r.created_at AS review_date,
+      r.source,
+      COALESCE((
+        SELECT SUM(s.total_amount::numeric)
+        FROM sales s
+        WHERE s.client_id = c.id AND s.status = 'completed' AND s.salon_id = r.salon_id
+      ), 0) AS total_spend,
+      COALESCE((
+        SELECT COUNT(s.id)
+        FROM sales s
+        WHERE s.client_id = c.id AND s.status = 'completed' AND s.salon_id = r.salon_id
+      ), 0) AS visits,
+      COUNT(*) OVER() AS total_count
+    ${this._CLIENT_RATING_JOIN}
+    WHERE ${where}
+    ORDER BY r.created_at DESC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: ClientRatingReportRow[] = rows.map((row: any) => ({
+    client_id: row.client_id,
+    client_name: row.client_name,
+    contact: row.contact,
+    staff_id: row.staff_id,
+    staff_name: row.staff_name ?? "—",
+    rating: Number(row.rating ?? 0),
+    staff_rating: row.staff_rating !== null && row.staff_rating !== undefined ? Number(row.staff_rating) : null,
+    service_rating: row.service_rating !== null && row.service_rating !== undefined ? Number(row.service_rating) : null,
+    ambience_rating: row.ambience_rating !== null && row.ambience_rating !== undefined ? Number(row.ambience_rating) : null,
+    review_text: row.review_text,
+    review_date: row.review_date,
+    source: row.source,
+    total_spend: Math.round(Number(row.total_spend ?? 0)),
+    visits: Number(row.visits ?? 0),
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
     },
   };
 },

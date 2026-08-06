@@ -265,6 +265,8 @@ import {
     AppointmentDetailReportResponse,
     WaCampaignReportFilters,
     WaCampaignReportResponse,
+    ClientRatingReportFilters,
+    ClientRatingReportResponse,
 } from "./reports.types";
 
 // ======================================================
@@ -1654,6 +1656,26 @@ async getWaCampaignReport(
         pagination: rowsResult.pagination,
         stats,
         filters_available: filtersAvailable,
+    };
+},
+
+// ======================================================
+// CLIENT RATING REPORT (independent report API)
+// ======================================================
+
+async getClientRatingReport(
+    salonId: string,
+    filters: ClientRatingReportFilters
+): Promise<ClientRatingReportResponse> {
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getClientRatingReportStats(salonId, filters),
+        reportsRepository.getClientRatingReportRows(salonId, filters),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
     };
 },
 
