@@ -1286,6 +1286,9 @@ async getEwalletReport(
         const filters = {
             search: asString(body.search),
             as_of_date: asString(body.as_of_date),
+            status: asString(body.status),
+            balance_min: body.balance_min !== undefined ? Number(body.balance_min) : undefined,
+            balance_max: body.balance_max !== undefined ? Number(body.balance_max) : undefined,
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,

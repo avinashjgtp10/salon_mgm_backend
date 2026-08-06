@@ -3688,7 +3688,10 @@ async getRewardPointsReportRows(
 
 _buildEwalletWhere(
   salonId: string,
-  filters: { search?: string; as_of_date?: string }
+  filters: {
+    search?: string; as_of_date?: string; status?: string;
+    balance_min?: number; balance_max?: number;
+  }
 ): { where: string; values: any[]; nextIndex: number } {
   const values: any[] = [salonId];
   const where = ["c.salon_id = $1"];
@@ -3703,6 +3706,20 @@ _buildEwalletWhere(
   if (filters.as_of_date) {
     where.push(`c.created_at < ($${idx++}::date + interval '1 day')`);
     values.push(filters.as_of_date);
+  }
+  // Same has-balance/no-balance split as the stats card's with_balance count.
+  if (filters.status === "with_balance") {
+    where.push(`COALESCE(c.ewallet_balance, 0) > 0`);
+  } else if (filters.status === "no_balance") {
+    where.push(`COALESCE(c.ewallet_balance, 0) = 0`);
+  }
+  if (filters.balance_min != null) {
+    where.push(`COALESCE(c.ewallet_balance, 0) >= $${idx++}`);
+    values.push(filters.balance_min);
+  }
+  if (filters.balance_max != null) {
+    where.push(`COALESCE(c.ewallet_balance, 0) <= $${idx++}`);
+    values.push(filters.balance_max);
   }
   if (filters.search?.trim()) {
     where.push(`(
@@ -3719,7 +3736,7 @@ _buildEwalletWhere(
 
 async getEwalletReportStats(
   salonId: string,
-  filters: { search?: string; as_of_date?: string }
+  filters: { search?: string; as_of_date?: string; status?: string; balance_min?: number; balance_max?: number }
 ): Promise<EwalletReportStats> {
   const { where, values } = this._buildEwalletWhere(salonId, filters);
 
@@ -3746,7 +3763,11 @@ async getEwalletReportStats(
 
 async getEwalletReportRows(
   salonId: string,
-  filters: { search?: string; as_of_date?: string; page?: number; limit?: number; is_export?: boolean }
+  filters: {
+    search?: string; as_of_date?: string; status?: string;
+    balance_min?: number; balance_max?: number;
+    page?: number; limit?: number; is_export?: boolean;
+  }
 ): Promise<{
   items: EwalletReportRow[];
   pagination: { total: number; page: number; limit: number; total_pages: number };

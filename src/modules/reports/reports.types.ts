@@ -1120,6 +1120,9 @@ export interface RewardPointsReportResponse {
 export interface EwalletReportFilters {
     search?: string;
     as_of_date?: string;
+    status?: string;
+    balance_min?: number;
+    balance_max?: number;
     page?: number;
     limit?: number;
     is_export?: boolean;
