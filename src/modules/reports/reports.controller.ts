@@ -1573,6 +1573,7 @@ async getStaffItemSalesReport(
             item_type: (["service", "product", "membership", "package"].includes(itemType ?? "")
                 ? itemType : "service") as "service" | "product" | "membership" | "package",
             staff_id: asString(body.staff_id),
+            staff_ids: Array.isArray(body.staff_ids) ? body.staff_ids.map(String) : undefined,
             search: asString(body.search),
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
