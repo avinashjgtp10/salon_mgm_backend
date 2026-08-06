@@ -564,12 +564,21 @@ export interface SalesSummaryReportFilters {
     start_date?: string;
     end_date?: string;
     staff_id?: string;
+    staff_ids?: string[];
     search?: string;
     status?: string; // 'draft' | 'completed' | 'cancelled' | 'refunded'; default excludes 'draft'
     category_id?: string; // service_categories.id — only sales with a service line item in this category
+    category_ids?: string[];
     payment_mode?: string; // sales.payment_method
+    payment_modes?: string[];
     item_type?: string; // sale_items.item_type — 'service' | 'product' | 'membership' | 'gift_card' | 'quick' | 'package'
+    item_types?: string[];
     service_id?: string; // sale_items.item_id where item_type = 'service'
+    service_ids?: string[];
+    // Displayed-status vocabulary ('paid' | 'booked' | 'cancelled' | 'refunded'),
+    // not the raw sales.status the `status` field above filters on.
+    payment_status?: string;
+    payment_statuses?: string[];
     page?: number;
     limit?: number;
     is_export?: boolean; // bypasses the page-size cap for CSV export
