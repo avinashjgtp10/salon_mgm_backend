@@ -1015,6 +1015,9 @@ export interface GstReportResponse {
 export interface ProductMarginReportFilters {
     start_date?: string;
     end_date?: string;
+    search?: string;
+    brand_ids?: string[];
+    category_ids?: string[];
     page?: number;
     limit?: number;
     is_export?: boolean;
