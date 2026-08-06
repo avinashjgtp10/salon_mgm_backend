@@ -7,7 +7,6 @@ import { salesRepository } from "../sales/sales.repository";
 import type { SaleItem } from "../sales/sales.types";
 import { productsRepository } from "../products/products.repository";
 import { appointmentConsumablesService } from "../inventory/inventory.service";
-import { inventoryTransactionsRepository } from "../inventory/inventory-transactions.repository";
 import { commissionCalculationService } from "../commission/commissionCalculation.service";
 import { blockedTimesRepository } from "../blocked_times/blocked_times.repository";
 import { recordTransaction } from "../transactions/transaction-recorder.service";
@@ -273,11 +272,6 @@ function flattenServiceConsumables(
 function stripConsumables(services: IncomingAppointmentServiceItem[] | undefined) {
     if (!services) return services;
     return services.map(({ consumables, ...rest }) => rest);
-}
-
-function buildShortfallError(shortfalls: { product_name: string; available: number; required: number }[]): AppError {
-    const summary = shortfalls.map((s) => `${s.product_name} (need ${s.required}, have ${s.available})`).join("; ");
-    return new AppError(400, `Insufficient stock: ${summary}`, "INSUFFICIENT_STOCK", { shortfalls });
 }
 
 // Read-side counterpart to assignServiceRowIds/flattenServiceConsumables —
@@ -596,10 +590,10 @@ export const appointmentsService = {
         // Consumables never affect billing (stripped off before the merged
         // reprice above even sees them) and are only ever actually deducted
         // once the appointment has genuinely been paid — see the two cases
-        // below. Both are validated (hard-block on insufficient stock) BEFORE
-        // appointmentsRepository.update() runs, so a shortfall aborts the
-        // whole edit instead of leaving the appointment's other fields
-        // changed while consumables silently fail.
+        // below. Neither is stock-validated: an out-of-stock consumable must
+        // never block editing or billing an appointment. The deduction runs
+        // with allowNegative (see inventory.service.ts), recording the usage
+        // and flooring products.amount at 0 rather than refusing the edit.
         let newConsumableRows: AppointmentServiceConsumableRecord[] | null = null;
         let applyConsumableChange: (() => Promise<void>) | null = null;
         if (patch.services !== undefined) {
@@ -621,8 +615,6 @@ export const appointmentsService = {
             if (wasFirstTimePaid && branchId) {
                 const items = appointmentConsumablesService.collectServiceRowItems(newConsumableRows);
                 if (items.length) {
-                    const shortfalls = await inventoryTransactionsRepository.validateAvailability(items, existing.salon_id);
-                    if (shortfalls.length) throw buildShortfallError(shortfalls);
                     applyConsumableChange = () => appointmentConsumablesService.completeAppointment(
                         { rows: newConsumableRows!, salonId: existing.salon_id, branchId, bookingId: appointmentId, userId: params.requesterUserId }
                     );
@@ -630,10 +622,6 @@ export const appointmentsService = {
             } else if (hadPriorDeduction && branchId) {
                 const priorRows = await appointmentsRepository.getServiceConsumables(appointmentId);
                 const { toDeduct, toRestore } = appointmentConsumablesService.computeDelta(priorRows, newConsumableRows);
-                if (toDeduct.length) {
-                    const shortfalls = await inventoryTransactionsRepository.validateAvailability(toDeduct, existing.salon_id);
-                    if (shortfalls.length) throw buildShortfallError(shortfalls);
-                }
                 if (toDeduct.length || toRestore.length) {
                     applyConsumableChange = () => appointmentConsumablesService.applyDelta({
                         toDeduct, toRestore, salonId: existing.salon_id, branchId, bookingId: appointmentId, userId: params.requesterUserId,
