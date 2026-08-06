@@ -5,16 +5,22 @@
 // event ledger, service_consumables/appointment_service_consumables for the
 // service relationship) rather than introducing a parallel data model.
 
-export type ConsumableStatus = "healthy" | "low" | "out_of_stock";
+export type ConsumableStatus = "healthy" | "low" | "out_of_stock" | "deactivated";
 
+// Every filter below is multi-select (Jira-style filter panel on the
+// Consumable Inventory page) — an array of 1+ values ORed together, absent/
+// empty means "no restriction" for that field. Single-value equality is just
+// the length-1 case of the same array param, so there's no separate scalar
+// form left to support.
 export type ConsumableListFilters = {
   search?: string;
-  category_id?: string;
-  brand_id?: string;
-  supplier_id?: string;
-  status?: ConsumableStatus | "all";
-  unit?: string; // measure_unit
-  service_id?: string; // "assigned service" — reverse lookup via service_consumables
+  category_id?: string[];
+  brand_id?: string[];
+  supplier_id?: string[];
+  status?: ConsumableStatus[];
+  unit?: string[]; // measure_unit
+  service_id?: string[]; // "assigned service" — reverse lookup via service_consumables
+  product_type?: ("consumable" | "both")[];
   sort_by?: "newest" | "lowest_stock" | "most_used" | "a_z";
   page?: number;
   limit?: number;
@@ -50,6 +56,7 @@ export type ConsumableKpis = {
   total_consumables: number;
   total_available_stock: number; // naive sum of remaining_stock across all consumables — mixed units, see repository note
   low_stock_items: number;
+  out_of_stock_items: number;
   assigned_services: number; // COUNT(DISTINCT service_id) across service_consumables for this salon's consumables
 };
 

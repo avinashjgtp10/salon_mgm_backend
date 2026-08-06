@@ -13,23 +13,42 @@ const getSalonId = (req: AuthRequest): string => {
 };
 
 const VALID_SORTS = ["newest", "lowest_stock", "most_used", "a_z"] as const;
-const VALID_STATUSES: (ConsumableStatus | "all")[] = ["healthy", "low", "out_of_stock", "all"];
+const VALID_STATUSES: ConsumableStatus[] = ["healthy", "low", "out_of_stock", "deactivated"];
+const VALID_PRODUCT_TYPES = ["consumable", "both"] as const;
+
+// Multi-select filters arrive as a single comma-separated query param (e.g.
+// ?category_id=uuid1,uuid2) rather than repeated keys — simpler to build on
+// the frontend than relying on a particular array query-string convention,
+// and just as easy to split back apart here.
+function parseCsv(value: unknown): string[] | undefined {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  const list = value.split(",").map((v) => v.trim()).filter(Boolean);
+  return list.length ? list : undefined;
+}
+
+function parseCsvEnum<T extends string>(value: unknown, valid: readonly T[]): T[] | undefined {
+  const list = parseCsv(value);
+  if (!list) return undefined;
+  const filtered = list.filter((v): v is T => (valid as readonly string[]).includes(v));
+  return filtered.length ? filtered : undefined;
+}
 
 export const consumableInventoryController = {
   // GET /api/v1/inventory/consumables
   async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = getSalonId(req);
-      const { search, category_id, brand_id, supplier_id, status, unit, service_id, sort_by, page: pageQuery, limit: limitQuery } = req.query;
+      const { search, category_id, brand_id, supplier_id, status, unit, service_id, product_type, sort_by, page: pageQuery, limit: limitQuery } = req.query;
 
       const filters = {
         search: search as string | undefined,
-        category_id: category_id as string | undefined,
-        brand_id: brand_id as string | undefined,
-        supplier_id: supplier_id as string | undefined,
-        status: VALID_STATUSES.includes(status as any) ? (status as any) : undefined,
-        unit: unit as string | undefined,
-        service_id: service_id as string | undefined,
+        category_id: parseCsv(category_id),
+        brand_id: parseCsv(brand_id),
+        supplier_id: parseCsv(supplier_id),
+        status: parseCsvEnum(status, VALID_STATUSES),
+        unit: parseCsv(unit),
+        service_id: parseCsv(service_id),
+        product_type: parseCsvEnum(product_type, VALID_PRODUCT_TYPES),
         sort_by: VALID_SORTS.includes(sort_by as any) ? (sort_by as any) : undefined,
         page: pageQuery ? parseInt(pageQuery as string, 10) : undefined,
         limit: limitQuery ? parseInt(limitQuery as string, 10) : undefined,

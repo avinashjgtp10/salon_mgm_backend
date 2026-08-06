@@ -884,12 +884,31 @@ async getSalesSummaryReport(
             start_date: asString(body.start_date),
             end_date: asString(body.end_date),
             staff_id: asString(body.staff_id),
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
             search: asString(body.search),
             status: asString(body.status),
             category_id: asString(body.category_id),
+            category_ids: Array.isArray(body.category_ids)
+                ? body.category_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
             payment_mode: asString(body.payment_mode),
+            payment_modes: Array.isArray(body.payment_modes)
+                ? body.payment_modes.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             item_type: asString(body.item_type),
+            item_types: Array.isArray(body.item_types)
+                ? body.item_types.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             service_id: asString(body.service_id),
+            service_ids: Array.isArray(body.service_ids)
+                ? body.service_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+            payment_status: asString(body.payment_status),
+            payment_statuses: Array.isArray(body.payment_statuses)
+                ? body.payment_statuses.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,
@@ -949,13 +968,25 @@ async getDailySheetReport(
         const filters = {
             date: asString(body.date),
             service_id: asString(body.service_id),
+            service_ids: Array.isArray(body.service_ids)
+                ? body.service_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             staff_ids: Array.isArray(body.staff_ids)
                 ? body.staff_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
                 : undefined,
             search: asString(body.search),
             payment_mode: asString(body.payment_mode),
+            payment_modes: Array.isArray(body.payment_modes)
+                ? body.payment_modes.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             status: asString(body.status),
+            statuses: Array.isArray(body.statuses)
+                ? body.statuses.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             item_type: asString(body.item_type),
+            item_types: Array.isArray(body.item_types)
+                ? body.item_types.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             time_from: asString(body.time_from),
             time_to: asString(body.time_to),
             page: body.page !== undefined ? Number(body.page) : undefined,
@@ -999,7 +1030,13 @@ async getProductRetailReport(
                 ? body.staff_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
                 : undefined,
             brand_id: asString(body.brand_id),
+            brand_ids: Array.isArray(body.brand_ids)
+                ? body.brand_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             category_id: asString(body.category_id),
+            category_ids: Array.isArray(body.category_ids)
+                ? body.category_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             min_price: body.min_price !== undefined ? Number(body.min_price) : undefined,
             max_price: body.max_price !== undefined ? Number(body.max_price) : undefined,
             page: body.page !== undefined ? Number(body.page) : undefined,
@@ -1041,10 +1078,19 @@ async getServiceSaleReport(
                 ? body.staff_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
                 : undefined,
             category_id: asString(body.category_id),
+            category_ids: Array.isArray(body.category_ids)
+                ? body.category_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             service_id: asString(body.service_id),
+            service_ids: Array.isArray(body.service_ids)
+                ? body.service_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             min_price: body.min_price !== undefined ? Number(body.min_price) : undefined,
             max_price: body.max_price !== undefined ? Number(body.max_price) : undefined,
             payment_method: asString(body.payment_method),
+            payment_methods: Array.isArray(body.payment_methods)
+                ? body.payment_methods.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             search: asString(body.search),
             sort_by: asString(body.sort_by) as
                 | "date" | "invoice_no" | "service_name" | "staff_name" | "price" | "total"
@@ -1087,6 +1133,12 @@ async getGstReport(
             end_date: asString(body.end_date),
             staff_ids: Array.isArray(body.staff_ids)
                 ? body.staff_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+            item_types: Array.isArray(body.item_types)
+                ? body.item_types.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            payment_methods: Array.isArray(body.payment_methods)
+                ? body.payment_methods.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
                 : undefined,
             search: asString(body.search),
             page: body.page !== undefined ? Number(body.page) : undefined,
@@ -1150,6 +1202,13 @@ async getProductMarginReport(
         const filters = {
             start_date: asString(body.start_date),
             end_date: asString(body.end_date),
+            search: asString(body.search),
+            brand_ids: Array.isArray(body.brand_ids)
+                ? body.brand_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            category_ids: Array.isArray(body.category_ids)
+                ? body.category_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,
@@ -1227,6 +1286,9 @@ async getEwalletReport(
         const filters = {
             search: asString(body.search),
             as_of_date: asString(body.as_of_date),
+            status: asString(body.status),
+            balance_min: body.balance_min !== undefined ? Number(body.balance_min) : undefined,
+            balance_max: body.balance_max !== undefined ? Number(body.balance_max) : undefined,
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,
@@ -1262,7 +1324,9 @@ async getProductInventoryReport(
         const filters = {
             search: asString(body.search),
             category_id: asString(body.category_id),
+            category_ids: Array.isArray(body.category_ids) ? body.category_ids.map(String) : undefined,
             brand_id: asString(body.brand_id),
+            brand_ids: Array.isArray(body.brand_ids) ? body.brand_ids.map(String) : undefined,
             stock_status: (body.stock_status === "in_stock" || body.stock_status === "low_stock" || body.stock_status === "out_of_stock")
                 ? body.stock_status
                 : undefined,
@@ -1332,6 +1396,51 @@ async getClientRevenueReport(
 },
 
 // ======================================================
+// CUSTOMER FREQUENCY REPORT (independent report API)
+// POST /api/report/customer-frequency
+// ======================================================
+
+async getCustomerFrequencyReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const allowedCustomerTypes = ["most_frequent", "least_frequent", "most_spending", "least_spending", "new", "old", "lost"];
+        const customerType = asString(body.customer_type);
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            search: asString(body.search),
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+            customer_type: customerType && allowedCustomerTypes.includes(customerType)
+                ? customerType as "most_frequent" | "least_frequent" | "most_spending" | "least_spending" | "new" | "old" | "lost"
+                : undefined,
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getCustomerFrequencyReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Customer frequency report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
 // STAFF SALES REPORT (independent report API)
 // POST /api/report/staff-sales
 // ======================================================
@@ -1355,6 +1464,19 @@ async getStaffSalesReport(
             search: asString(body.search),
             page: body.page != null ? Number(body.page) : undefined,
             limit: body.limit != null ? Number(body.limit) : undefined,
+            payment_mode: asString(body.payment_mode),
+            payment_modes: Array.isArray(body.payment_modes)
+                ? body.payment_modes.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            item_type: asString(body.item_type),
+            item_types: Array.isArray(body.item_types)
+                ? body.item_types.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            payment_status: asString(body.payment_status),
+            payment_statuses: Array.isArray(body.payment_statuses)
+                ? body.payment_statuses.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            sort: body.sort === "sales_desc" || body.sort === "sales_asc" ? body.sort : undefined,
         };
 
         const data = await reportsService.getStaffSalesReport(salonId, filters);
@@ -1392,12 +1514,27 @@ async getStaffPerformanceReport(
                 : undefined,
             branch_id: asString(body.branch_id),
             payment_mode: asString(body.payment_mode),
+            payment_modes: Array.isArray(body.payment_modes)
+                ? body.payment_modes.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             payment_status: asString(body.payment_status),
+            payment_statuses: Array.isArray(body.payment_statuses)
+                ? body.payment_statuses.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             item_type: asString(body.item_type),
+            item_types: Array.isArray(body.item_types)
+                ? body.item_types.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             service_id: asString(body.service_id),
             product_id: asString(body.product_id),
             package_id: asString(body.package_id),
+            package_ids: Array.isArray(body.package_ids)
+                ? body.package_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             membership_id: asString(body.membership_id),
+            membership_ids: Array.isArray(body.membership_ids)
+                ? body.membership_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
             search: asString(body.search),
             page: body.page != null ? Number(body.page) : undefined,
             limit: body.limit != null ? Number(body.limit) : undefined,
@@ -1438,6 +1575,7 @@ async getStaffItemSalesReport(
             item_type: (["service", "product", "membership", "package"].includes(itemType ?? "")
                 ? itemType : "service") as "service" | "product" | "membership" | "package",
             staff_id: asString(body.staff_id),
+            staff_ids: Array.isArray(body.staff_ids) ? body.staff_ids.map(String) : undefined,
             search: asString(body.search),
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
@@ -1479,9 +1617,13 @@ async getPackageSaleReport(
                 ? body.staff_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
                 : undefined,
             package_name: asString(body.package_name),
+            package_names: Array.isArray(body.package_names) ? body.package_names.map(String) : undefined,
             package_status: asString(body.package_status),
+            package_statuses: Array.isArray(body.package_statuses) ? body.package_statuses.map(String) : undefined,
             payment_status: asString(body.payment_status),
+            payment_statuses: Array.isArray(body.payment_statuses) ? body.payment_statuses.map(String) : undefined,
             payment_method: asString(body.payment_method),
+            payment_methods: Array.isArray(body.payment_methods) ? body.payment_methods.map(String) : undefined,
             min_amount: body.min_amount !== undefined ? Number(body.min_amount) : undefined,
             max_amount: body.max_amount !== undefined ? Number(body.max_amount) : undefined,
             page: body.page !== undefined ? Number(body.page) : undefined,
@@ -1521,11 +1663,14 @@ async getPackageHistoryReport(
             end_date: asString(body.end_date),
             search: asString(body.search),
             package_name: asString(body.package_name),
+            package_names: Array.isArray(body.package_names) ? body.package_names.map(String) : undefined,
             service_name: asString(body.service_name),
+            service_names: Array.isArray(body.service_names) ? body.service_names.map(String) : undefined,
             staff_ids: Array.isArray(body.staff_ids)
                 ? body.staff_ids.map((v: unknown) => String(v)).filter(Boolean)
                 : undefined,
             status: asString(body.status) as any,
+            statuses: Array.isArray(body.statuses) ? body.statuses.map(String) : undefined,
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,
@@ -1563,11 +1708,14 @@ async getMemberSaleReport(
             end_date: asString(body.end_date),
             search: asString(body.search),
             status: asString(body.status) as any,
+            statuses: Array.isArray(body.statuses) ? body.statuses.map(String) : undefined,
             membership_id: asString(body.membership_id),
+            membership_ids: Array.isArray(body.membership_ids) ? body.membership_ids.map(String) : undefined,
             staff_ids: Array.isArray(body.staff_ids)
                 ? body.staff_ids.map((v: unknown) => String(v)).filter(Boolean)
                 : undefined,
             pricing_type: asString(body.pricing_type),
+            pricing_types: Array.isArray(body.pricing_types) ? body.pricing_types.map(String) : undefined,
             price_min: body.price_min !== undefined && body.price_min !== null && body.price_min !== ""
                 ? Number(body.price_min) : undefined,
             price_max: body.price_max !== undefined && body.price_max !== null && body.price_max !== ""
@@ -1675,6 +1823,51 @@ async getWaCampaignReport(
             200,
             data,
             "WA campaign report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// CLIENT RATING REPORT (independent report API)
+// POST /api/report/client-rating
+// ======================================================
+
+async getClientRatingReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const allowedMinRatings = [1, 2, 3, 4, 5];
+        const minRatingNum = body.min_rating !== undefined ? Number(body.min_rating) : undefined;
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            search: asString(body.search),
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+            min_rating: minRatingNum !== undefined && allowedMinRatings.includes(minRatingNum)
+                ? minRatingNum
+                : undefined,
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getClientRatingReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Client rating report fetched successfully"
         );
     } catch (error) {
         next(error);
