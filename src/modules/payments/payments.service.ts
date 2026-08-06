@@ -731,7 +731,7 @@ export const paymentsService = {
       isFirstPaymentForAppointment = !!appt && !['partial', 'paid'].includes(appt.status);
     }
 
-    // ── Consumables: pre-validate BEFORE the payment row is written ─────────
+    // ── Consumables: collect the rows to deduct at the status flip below ────
     // Products are physically used the moment the service is rendered, not
     // when the bill is finally settled — so deduction fires on the FIRST
     // payment ever recorded against this appointment (isFirstPaymentForAppointment,
@@ -744,21 +744,12 @@ export const paymentsService = {
     // existingPaid > 0 by then, so this only ever fires once.
     // Consumables never affect any of the money math above (they were never
     // part of it) — this is purely an inventory side-effect of completion.
-    // The actual deduction happens later, at the status-flip below, once
-    // this payment row is settled; validateAvailability's row-locked
-    // re-check inside deduct() there is what actually guards against a race
-    // in the (very rare) time between this check and that write.
+    // Deliberately NOT stock-validated: an out-of-stock consumable must never
+    // block taking the customer's money. The deduction below runs with
+    // allowNegative, recording the usage and flooring products.amount at 0.
     let pendingConsumableRows: AppointmentServiceConsumableRecord[] = [];
     if (isFirstPaymentForAppointment && !!appt && !!data.appointment_id) {
       pendingConsumableRows = await appointmentsRepository.getServiceConsumables(data.appointment_id!);
-      const items = appointmentConsumablesService.collectServiceRowItems(pendingConsumableRows);
-      if (items.length) {
-        const shortfalls = await inventoryTransactionsRepository.validateAvailability(items, data.salon_id);
-        if (shortfalls.length) {
-          const summary = shortfalls.map((s) => `${s.product_name} (need ${s.required}, have ${s.available})`).join('; ');
-          throw new AppError(400, `Insufficient stock: ${summary}`, 'INSUFFICIENT_STOCK', { shortfalls });
-        }
-      }
     }
 
     // Reports that read payments.payment_method directly (e.g. Sales Summary's
