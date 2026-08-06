@@ -3156,7 +3156,14 @@ async getServiceSaleFiltersAvailable(salonId: string): Promise<{
 
 _buildGstWhere(
   salonId: string,
-  filters: { start_date?: string; end_date?: string; staff_ids?: string[]; search?: string }
+  filters: {
+    start_date?: string; end_date?: string; staff_ids?: string[]; search?: string;
+    // Any invoice with at least one line item of the selected type(s) —
+    // matches what the report's own Service/Product/Package/Membership
+    // Amount columns already break the invoice down by.
+    item_types?: string[];
+    payment_methods?: string[];
+  }
 ): { where: string; values: any[]; nextIndex: number } {
   const values: any[] = [salonId];
   const where = ["s.salon_id = $1", "s.status <> 'draft'", "s.tax_amount::numeric > 0"];
@@ -3174,6 +3181,17 @@ _buildGstWhere(
     where.push(`s.staff_id = ANY($${idx++}::uuid[])`);
     values.push(filters.staff_ids);
   }
+  if (filters.item_types && filters.item_types.length > 0) {
+    where.push(`EXISTS (
+      SELECT 1 FROM sale_items si2
+      WHERE si2.sale_id = s.id AND si2.item_type = ANY($${idx++}::text[])
+    )`);
+    values.push(filters.item_types);
+  }
+  if (filters.payment_methods && filters.payment_methods.length > 0) {
+    where.push(`s.payment_method = ANY($${idx++}::text[])`);
+    values.push(filters.payment_methods);
+  }
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(s.invoice_number, '') ILIKE $${idx}
@@ -3188,7 +3206,10 @@ _buildGstWhere(
 
 async getGstReportStats(
   salonId: string,
-  filters: { start_date?: string; end_date?: string; staff_ids?: string[]; search?: string }
+  filters: {
+    start_date?: string; end_date?: string; staff_ids?: string[]; search?: string;
+    item_types?: string[]; payment_methods?: string[];
+  }
 ): Promise<GstReportStats> {
   const { where, values } = this._buildGstWhere(salonId, filters);
 
@@ -3215,6 +3236,7 @@ async getGstReportRows(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; staff_ids?: string[]; search?: string;
+    item_types?: string[]; payment_methods?: string[];
     page?: number; limit?: number; is_export?: boolean;
   }
 ): Promise<{
