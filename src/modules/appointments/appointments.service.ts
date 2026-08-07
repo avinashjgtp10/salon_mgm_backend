@@ -399,6 +399,7 @@ export const appointmentsService = {
             title:    "New Appointment Booked",
             body:     `${full?.client_name ?? "Walk-in"} — ${formatDate(appointment.scheduled_at)} at ${formatTime(appointment.scheduled_at)}`,
             event_key: "newAppointment",
+            scheduled_at: appointment.scheduled_at,
         }).catch((err: any) => {
             logger.error("New appointment notification failed", {
                 appointmentId: appointment.id,
@@ -713,6 +714,7 @@ export const appointmentsService = {
                 type:     "appointment",
                 title:    "Appointment Updated",
                 body:     `${existing.client_name ?? "Walk-in"} — ${formatDate(updated.scheduled_at)} at ${formatTime(updated.scheduled_at)}`,
+                scheduled_at: updated.scheduled_at,
             }).catch((err: any) => {
                 logger.error("Appointment update notification failed", {
                     appointmentId: updated.id,
@@ -790,6 +792,7 @@ export const appointmentsService = {
             title:    "Appointment Cancelled",
             body:     `${existing.client_name ?? "Walk-in"} — ${formatDate(existing.scheduled_at)} at ${formatTime(existing.scheduled_at)}`,
             event_key: "appointmentCancelled",
+            scheduled_at: existing.scheduled_at,
         }).catch((err: any) => {
             logger.error("Appointment cancellation notification failed", {
                 appointmentId: existing.id,

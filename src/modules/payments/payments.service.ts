@@ -1419,6 +1419,11 @@ export const paymentsService = {
       getIO().to(`salon:${data.salon_id}`).emit('payment_updated', {
         appointment_id: data.appointment_id,
         salon_id: data.salon_id,
+        // Not persisted anywhere new — carried only on this socket push so a
+        // listening Calendar session can skip refetching when this payment's
+        // appointment date isn't in its currently-visible range. Omitted
+        // (not null) when appt lookup failed, so listeners can fail open.
+        ...(appt?.scheduled_at ? { scheduled_at: appt.scheduled_at } : {}),
       });
     } catch {
       // socket not ready — ignore, client will see it on next manual refresh
