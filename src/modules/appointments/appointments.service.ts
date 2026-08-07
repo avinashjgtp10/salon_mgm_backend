@@ -7,7 +7,6 @@ import { salesRepository } from "../sales/sales.repository";
 import type { SaleItem } from "../sales/sales.types";
 import { productsRepository } from "../products/products.repository";
 import { appointmentConsumablesService } from "../inventory/inventory.service";
-import { inventoryTransactionsRepository } from "../inventory/inventory-transactions.repository";
 import { commissionCalculationService } from "../commission/commissionCalculation.service";
 import { blockedTimesRepository } from "../blocked_times/blocked_times.repository";
 import { recordTransaction } from "../transactions/transaction-recorder.service";
@@ -275,11 +274,6 @@ function stripConsumables(services: IncomingAppointmentServiceItem[] | undefined
     return services.map(({ consumables, ...rest }) => rest);
 }
 
-function buildShortfallError(shortfalls: { product_name: string; available: number; required: number }[]): AppError {
-    const summary = shortfalls.map((s) => `${s.product_name} (need ${s.required}, have ${s.available})`).join("; ");
-    return new AppError(400, `Insufficient stock: ${summary}`, "INSUFFICIENT_STOCK", { shortfalls });
-}
-
 // Read-side counterpart to assignServiceRowIds/flattenServiceConsumables —
 // joins appointment_service_consumables back onto each services[] item
 // (matched by service_row_id === s.id) so a single GET still returns
@@ -405,6 +399,7 @@ export const appointmentsService = {
             title:    "New Appointment Booked",
             body:     `${full?.client_name ?? "Walk-in"} — ${formatDate(appointment.scheduled_at)} at ${formatTime(appointment.scheduled_at)}`,
             event_key: "newAppointment",
+            scheduled_at: appointment.scheduled_at,
         }).catch((err: any) => {
             logger.error("New appointment notification failed", {
                 appointmentId: appointment.id,
@@ -596,10 +591,10 @@ export const appointmentsService = {
         // Consumables never affect billing (stripped off before the merged
         // reprice above even sees them) and are only ever actually deducted
         // once the appointment has genuinely been paid — see the two cases
-        // below. Both are validated (hard-block on insufficient stock) BEFORE
-        // appointmentsRepository.update() runs, so a shortfall aborts the
-        // whole edit instead of leaving the appointment's other fields
-        // changed while consumables silently fail.
+        // below. Neither is stock-validated: an out-of-stock consumable must
+        // never block editing or billing an appointment. The deduction runs
+        // with allowNegative (see inventory.service.ts), recording the usage
+        // and flooring products.amount at 0 rather than refusing the edit.
         let newConsumableRows: AppointmentServiceConsumableRecord[] | null = null;
         let applyConsumableChange: (() => Promise<void>) | null = null;
         if (patch.services !== undefined) {
@@ -621,8 +616,6 @@ export const appointmentsService = {
             if (wasFirstTimePaid && branchId) {
                 const items = appointmentConsumablesService.collectServiceRowItems(newConsumableRows);
                 if (items.length) {
-                    const shortfalls = await inventoryTransactionsRepository.validateAvailability(items, existing.salon_id);
-                    if (shortfalls.length) throw buildShortfallError(shortfalls);
                     applyConsumableChange = () => appointmentConsumablesService.completeAppointment(
                         { rows: newConsumableRows!, salonId: existing.salon_id, branchId, bookingId: appointmentId, userId: params.requesterUserId }
                     );
@@ -630,10 +623,6 @@ export const appointmentsService = {
             } else if (hadPriorDeduction && branchId) {
                 const priorRows = await appointmentsRepository.getServiceConsumables(appointmentId);
                 const { toDeduct, toRestore } = appointmentConsumablesService.computeDelta(priorRows, newConsumableRows);
-                if (toDeduct.length) {
-                    const shortfalls = await inventoryTransactionsRepository.validateAvailability(toDeduct, existing.salon_id);
-                    if (shortfalls.length) throw buildShortfallError(shortfalls);
-                }
                 if (toDeduct.length || toRestore.length) {
                     applyConsumableChange = () => appointmentConsumablesService.applyDelta({
                         toDeduct, toRestore, salonId: existing.salon_id, branchId, bookingId: appointmentId, userId: params.requesterUserId,
@@ -725,6 +714,7 @@ export const appointmentsService = {
                 type:     "appointment",
                 title:    "Appointment Updated",
                 body:     `${existing.client_name ?? "Walk-in"} — ${formatDate(updated.scheduled_at)} at ${formatTime(updated.scheduled_at)}`,
+                scheduled_at: updated.scheduled_at,
             }).catch((err: any) => {
                 logger.error("Appointment update notification failed", {
                     appointmentId: updated.id,
@@ -802,6 +792,7 @@ export const appointmentsService = {
             title:    "Appointment Cancelled",
             body:     `${existing.client_name ?? "Walk-in"} — ${formatDate(existing.scheduled_at)} at ${formatTime(existing.scheduled_at)}`,
             event_key: "appointmentCancelled",
+            scheduled_at: existing.scheduled_at,
         }).catch((err: any) => {
             logger.error("Appointment cancellation notification failed", {
                 appointmentId: existing.id,

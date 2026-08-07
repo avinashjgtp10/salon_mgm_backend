@@ -149,26 +149,28 @@ export async function resolveMembershipDiscount(
   // stack additively when both are on — see applyMembershipDiscountForBooking
   // (payments.service.ts) for the same contract at actual charge time. Each
   // source's % is computed off the SAME original line amount, not chained.
+  // Independent lookups (different tables, neither reads the other's result)
+  // — resolved in parallel when both are toggled on, instead of one after
+  // the other.
+  const [percentageMembership, loyalty] = await Promise.all([
+    applyPercentage ? clientMembershipsRepository.findActivePercentageForClient(clientId, salonId) : Promise.resolve(null),
+    applyLoyalty ? membershipsRepository.findLoyaltyEligibility(clientId, salonId) : Promise.resolve(null),
+  ]);
+
   const previews: MembershipDiscountPreview[] = [];
 
-  if (applyPercentage) {
-    const percentageMembership = await clientMembershipsRepository.findActivePercentageForClient(clientId, salonId);
-    if (percentageMembership) {
-      previews.push(allocate(
-        percentageMembership.discountPercent ?? 0,
-        percentageMembership.discountBalanceRemaining,
-        percentageMembership.appliesTo,
-        percentageMembership.categoryIds,
-      ));
-    }
+  if (percentageMembership) {
+    previews.push(allocate(
+      percentageMembership.discountPercent ?? 0,
+      percentageMembership.discountBalanceRemaining,
+      percentageMembership.appliesTo,
+      percentageMembership.categoryIds,
+    ));
   }
 
-  if (applyLoyalty) {
-    // Loyalty is uncapped once unlocked, so there is no balance to bound it.
-    const loyalty = await membershipsRepository.findLoyaltyEligibility(clientId, salonId);
-    if (loyalty?.eligible) {
-      previews.push(allocate(loyalty.discountPercent, Infinity, loyalty.appliesTo, loyalty.categoryIds));
-    }
+  // Loyalty is uncapped once unlocked, so there is no balance to bound it.
+  if (loyalty?.eligible) {
+    previews.push(allocate(loyalty.discountPercent, Infinity, loyalty.appliesTo, loyalty.categoryIds));
   }
 
   if (!previews.length) return empty();
@@ -222,51 +224,66 @@ export const pricingService = {
     // Unlike every benefit below, this is a PRE-TAX price reduction, so it has
     // to be resolved before the ceiling is computed — it changes the taxable
     // base and therefore the grand total the redemptions get capped against.
-    let appliedMembershipDiscount = 0;
-    let membershipServiceDiscounts: number[] = (body.serviceRows ?? []).map(() => 0);
-    let membershipProductDiscounts: number[] = (body.productRows ?? []).map(() => 0);
-    if ((body.applyMembershipDiscount || body.applyLoyaltyDiscount) && body.client_id) {
-      try {
-        const discountPreview = await resolveMembershipDiscount(
-          salonId, body.client_id, body.serviceRows ?? [], body.productRows ?? [],
-          !!body.applyMembershipDiscount, !!body.applyLoyaltyDiscount,
-        );
-        appliedMembershipDiscount = discountPreview.total;
-        membershipServiceDiscounts = discountPreview.serviceDiscounts;
-        membershipProductDiscounts = discountPreview.productDiscounts;
-      } catch { /* non-fatal — preview simply shows no discount */ }
-    }
+    // Membership discount and referral-eligibility below don't read each
+    // other's output — resolved via Promise.all instead of two sequential
+    // awaits, mirroring the reward-points block's existing Promise.all further
+    // down in this same function.
+    const zeroDiscountPreview = {
+      total: 0,
+      serviceDiscounts: (body.serviceRows ?? []).map(() => 0),
+      productDiscounts: (body.productRows ?? []).map(() => 0),
+    };
+    const [membershipDiscountResult, referralDiscountPreview] = await Promise.all([
+      (async () => {
+        if (!((body.applyMembershipDiscount || body.applyLoyaltyDiscount) && body.client_id)) return zeroDiscountPreview;
+        try {
+          return await resolveMembershipDiscount(
+            salonId, body.client_id, body.serviceRows ?? [], body.productRows ?? [],
+            !!body.applyMembershipDiscount, !!body.applyLoyaltyDiscount,
+          );
+        } catch {
+          return zeroDiscountPreview; // non-fatal — preview simply shows no discount
+        }
+      })(),
+      // ── Referral first-bill discount eligibility preview — mirrors
+      // payments.service.ts's charge-time logic exactly, but read-only (no
+      // ledger writes, no markRefereeRewarded — those only happen at actual
+      // payment time). Only applies on the first-ever payment for this
+      // appointment, so an appointment_id with prior payments is disqualified.
+      // Resolved here, before the preliminary ceiling call below, because it's
+      // now part of the same waterfall the ceiling needs to already reflect
+      // (Referral Discount is applied before Membership Wallet/eWallet/Reward
+      // Points, per pricing.engine.ts's computeBillTotals).
+      (async (): Promise<number> => {
+        if (!body.client_id) return 0;
+        try {
+          const existingPaid = body.appointment_id
+            ? await paymentsRepository.getTotalPaidForAppointment(body.appointment_id)
+            : 0;
+          if (existingPaid !== 0) return 0;
+          const client = await clientsRepository.findById(body.client_id, salonId);
+          if (!client?.referred_by_client_id || client.referral_referee_rewarded) return 0;
+          const refConfig = await referralRepository.getConfig(salonId);
+          if (refConfig.active && refConfig.referee_reward_amount > 0 && rawSubtotal >= refConfig.min_bill_amount) {
+            return Math.min(refConfig.referee_reward_amount, rawSubtotal);
+          }
+          return 0;
+        } catch {
+          return 0; // non-fatal — preview omits the hint rather than failing
+        }
+      })(),
+    ]);
+    const appliedMembershipDiscount = membershipDiscountResult.total;
+    const membershipServiceDiscounts = membershipDiscountResult.serviceDiscounts;
+    const membershipProductDiscounts = membershipDiscountResult.productDiscounts;
     const membershipServiceDiscountUsed = membershipServiceDiscounts.reduce((s, v) => s + v, 0);
     const membershipProductDiscountUsed = membershipProductDiscounts.reduce((s, v) => s + v, 0);
 
-    // ── Referral first-bill discount eligibility preview — mirrors
-    // payments.service.ts's charge-time logic exactly, but read-only (no
-    // ledger writes, no markRefereeRewarded — those only happen at actual
-    // payment time). Only applies on the first-ever payment for this
-    // appointment, so an appointment_id with prior payments is disqualified.
-    // Resolved here, before the preliminary ceiling call below, because it's
-    // now part of the same waterfall the ceiling needs to already reflect
-    // (Referral Discount is applied before Membership Wallet/eWallet/Reward
-    // Points, per pricing.engine.ts's computeBillTotals).
-    let referralDiscountPreview = 0;
-    if (body.client_id) {
-      try {
-        const existingPaid = body.appointment_id
-          ? await paymentsRepository.getTotalPaidForAppointment(body.appointment_id)
-          : 0;
-        if (existingPaid === 0) {
-          const client = await clientsRepository.findById(body.client_id, salonId);
-          if (client?.referred_by_client_id && !client.referral_referee_rewarded) {
-            const refConfig = await referralRepository.getConfig(salonId);
-            if (refConfig.active && refConfig.referee_reward_amount > 0 && rawSubtotal >= refConfig.min_bill_amount) {
-              referralDiscountPreview = Math.min(refConfig.referee_reward_amount, rawSubtotal);
-            }
-          }
-        }
-      } catch { /* non-fatal — preview omits the hint rather than failing */ }
-    }
-
-    const preliminaryTaxes = body.includeGst ? await getActiveTaxes(salonId).catch(() => []) : [];
+    // Fetched once and reused for both the preliminary and final
+    // computeBillTotals calls below — nothing in this request mutates tax
+    // config in between, so a second identical getActiveTaxes(salonId) call
+    // (previously right before the final computeBillTotals) was pure waste.
+    const taxes = body.includeGst ? await getActiveTaxes(salonId).catch(() => []) : [];
     const preliminaryTotals = computeBillTotals({
       actualAmounts,
       discountType: body.discountType,
@@ -276,7 +293,7 @@ export const pricingService = {
       membershipServiceDiscountUsed,
       membershipProductDiscountUsed,
       referralDiscount: referralDiscountPreview,
-      taxes: preliminaryTaxes,
+      taxes,
       exCharges: body.exCharges ?? 0,
       tip: body.tip ?? 0,
       roundSubtotalBeforeDiscount: false,
@@ -370,7 +387,7 @@ export const pricingService = {
     remaining = Math.max(0, remaining - appliedReferralCredit);
 
     // ── Tax ──────────────────────────────────────────────────────────────────
-    const taxes = body.includeGst ? await getActiveTaxes(salonId) : [];
+    // (already fetched once above, before the preliminary totals — reused here)
 
     // Per-row wallet coverage (same fill-in-order split as the aggregates
     // above) so each row's tax preview excludes the wallet-covered portion,

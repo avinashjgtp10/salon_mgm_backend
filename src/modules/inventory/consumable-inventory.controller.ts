@@ -33,27 +33,29 @@ function parseCsvEnum<T extends string>(value: unknown, valid: readonly T[]): T[
   return filtered.length ? filtered : undefined;
 }
 
+function parseListFilters(req: AuthRequest) {
+  const { search, category_id, brand_id, supplier_id, status, unit, service_id, product_type, sort_by, page: pageQuery, limit: limitQuery } = req.query;
+  return {
+    search: search as string | undefined,
+    category_id: parseCsv(category_id),
+    brand_id: parseCsv(brand_id),
+    supplier_id: parseCsv(supplier_id),
+    status: parseCsvEnum(status, VALID_STATUSES),
+    unit: parseCsv(unit),
+    service_id: parseCsv(service_id),
+    product_type: parseCsvEnum(product_type, VALID_PRODUCT_TYPES),
+    sort_by: VALID_SORTS.includes(sort_by as any) ? (sort_by as any) : undefined,
+    page: pageQuery ? parseInt(pageQuery as string, 10) : undefined,
+    limit: limitQuery ? parseInt(limitQuery as string, 10) : undefined,
+  };
+}
+
 export const consumableInventoryController = {
   // GET /api/v1/inventory/consumables
   async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = getSalonId(req);
-      const { search, category_id, brand_id, supplier_id, status, unit, service_id, product_type, sort_by, page: pageQuery, limit: limitQuery } = req.query;
-
-      const filters = {
-        search: search as string | undefined,
-        category_id: parseCsv(category_id),
-        brand_id: parseCsv(brand_id),
-        supplier_id: parseCsv(supplier_id),
-        status: parseCsvEnum(status, VALID_STATUSES),
-        unit: parseCsv(unit),
-        service_id: parseCsv(service_id),
-        product_type: parseCsvEnum(product_type, VALID_PRODUCT_TYPES),
-        sort_by: VALID_SORTS.includes(sort_by as any) ? (sort_by as any) : undefined,
-        page: pageQuery ? parseInt(pageQuery as string, 10) : undefined,
-        limit: limitQuery ? parseInt(limitQuery as string, 10) : undefined,
-      };
-
+      const filters = parseListFilters(req);
       const page = filters.page ?? 1;
       const pageSize = filters.limit ?? 20;
       const { data, total } = await consumableInventoryService.list(filters, salonId);
@@ -71,6 +73,26 @@ export const consumableInventoryController = {
       const salonId = getSalonId(req);
       const kpis = await consumableInventoryService.getKpis(salonId);
       return sendSuccess(res, 200, kpis, "Consumable KPIs fetched");
+    } catch (err) { return next(err); }
+  },
+
+  // GET /api/v1/inventory/consumables/dashboard — list + KPIs in one round
+  // trip, for the page's initial load and every filter/search/page change.
+  async dashboard(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = getSalonId(req);
+      const filters = parseListFilters(req);
+      const page = filters.page ?? 1;
+      const pageSize = filters.limit ?? 20;
+      const { kpis, list } = await consumableInventoryService.getDashboard(filters, salonId);
+      return sendSuccess(res, 200, {
+        kpis,
+        list: {
+          data: list.data, page, pageSize,
+          totalRecords: list.total,
+          totalPages: Math.ceil(list.total / pageSize),
+        },
+      }, "Consumable dashboard fetched");
     } catch (err) { return next(err); }
   },
 

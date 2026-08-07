@@ -15,21 +15,34 @@ import {
   UsageHistoryFilters,
   UsageHistoryResponse,
 } from "./consumable-inventory.types";
+import { FAMILY_MESSAGE, findCompatibleUnit } from "./unit-families";
 
 const VALID_UNIT_NAME_RE = /^[a-zA-Z0-9 _/-]{1,30}$/;
 
-function validateUnitConversions(conversions: unknown): UnitConversionInput[] {
+// `baseUnit` is the product's own measure_unit (products.measure_unit) —
+// every conversion unit must belong to the SAME measurement family (Volume:
+// ml/L, Weight: gm/kg, Count: pcs) or it's rejected outright. System-defined
+// units (L, kg) have a fixed, non-negotiable ratio — whatever the caller
+// sent for those is overwritten with the real one rather than trusted,
+// so a client bypassing the form's disabled input can't set "1 L = 500 ml".
+function validateUnitConversions(conversions: unknown, baseUnit: string): UnitConversionInput[] {
   if (!Array.isArray(conversions)) {
     throw new AppError(400, "unit_conversions must be an array", "VALIDATION_ERROR");
   }
   const seen = new Set<string>();
   return conversions.map((c: any) => {
     const unitName = String(c?.unit_name ?? "").trim();
-    const conversion = Number(c?.conversion_to_base);
+    let conversion = Number(c?.conversion_to_base);
     if (!VALID_UNIT_NAME_RE.test(unitName)) {
       throw new AppError(400, `Invalid unit name: "${unitName}"`, "VALIDATION_ERROR");
     }
-    if (!Number.isFinite(conversion) || conversion <= 0) {
+    const compatible = findCompatibleUnit(baseUnit, unitName);
+    if (!compatible) {
+      throw new AppError(400, FAMILY_MESSAGE, "INVALID_UNIT_CONVERSION", { unit_name: unitName, base_unit: baseUnit });
+    }
+    if (compatible.fixedRatio !== undefined) {
+      conversion = compatible.fixedRatio;
+    } else if (!Number.isFinite(conversion) || conversion <= 0) {
       throw new AppError(400, `${unitName}: conversion_to_base must be a positive number`, "VALIDATION_ERROR");
     }
     const key = unitName.toLowerCase();
@@ -37,7 +50,7 @@ function validateUnitConversions(conversions: unknown): UnitConversionInput[] {
       throw new AppError(400, `Duplicate unit name: "${unitName}"`, "VALIDATION_ERROR");
     }
     seen.add(key);
-    return { unit_name: unitName, conversion_to_base: conversion };
+    return { unit_name: compatible.name, conversion_to_base: conversion };
   });
 }
 
@@ -48,6 +61,19 @@ export const consumableInventoryService = {
 
   async getKpis(salonId: string): Promise<ConsumableKpis> {
     return consumableInventoryRepository.getKpis(salonId);
+  },
+
+  // Combined list + KPIs in one round trip — the Consumable Inventory page's
+  // initial load (and every filter/search/page change) previously fired
+  // these as two separate HTTP requests; they don't depend on each other, so
+  // running both queries concurrently server-side and returning them
+  // together costs nothing extra in latency but halves the request count.
+  async getDashboard(filters: ConsumableListFilters, salonId: string): Promise<{ kpis: ConsumableKpis; list: ConsumableListResponse }> {
+    const [kpis, list] = await Promise.all([
+      consumableInventoryRepository.getKpis(salonId),
+      consumableInventoryRepository.list(filters, salonId),
+    ]);
+    return { kpis, list };
   },
 
   async getById(productId: string, salonId: string): Promise<ConsumableDetail> {
@@ -118,7 +144,7 @@ export const consumableInventoryService = {
   async replaceUnitConversions(productId: string, salonId: string, conversions: unknown): Promise<UnitConversion[]> {
     const product = await productsRepository.findById(productId, salonId);
     if (!product) throw new AppError(404, "Consumable product not found", "NOT_FOUND");
-    const validated = validateUnitConversions(conversions);
+    const validated = validateUnitConversions(conversions, product.measure_unit);
     return consumableInventoryRepository.replaceUnitConversions(productId, validated);
   },
 };
