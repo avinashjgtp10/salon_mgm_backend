@@ -1,10 +1,12 @@
 import ExcelJS from "exceljs";
+import { randomUUID } from "crypto";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { appointmentsRepository } from "./appointments.repository";
 import { salesRepository } from "../sales/sales.repository";
 import type { SaleItem } from "../sales/sales.types";
 import { productsRepository } from "../products/products.repository";
+import { appointmentConsumablesService } from "../inventory/inventory.service";
 import { commissionCalculationService } from "../commission/commissionCalculation.service";
 import { blockedTimesRepository } from "../blocked_times/blocked_times.repository";
 import { recordTransaction } from "../transactions/transaction-recorder.service";
@@ -26,7 +28,9 @@ import { getActiveTaxes } from "../settings/tax.util";
 import { paymentsRepository } from "../payments/payments.repository";
 import {
     Appointment,
+    AppointmentServiceConsumableRecord,
     CreateAppointmentBody,
+    IncomingAppointmentServiceItem,
     UpdateAppointmentBody,
     CancelAppointmentBody,
 } from "./appointments.types";
@@ -214,6 +218,99 @@ function formatTime(dateStr: string): string {
     });
 }
 
+// ── Consumables helpers ──────────────────────────────────────────────────────
+// A new appointment/edit request carries consumables nested under each
+// service row (services[].consumables[]) — see IncomingAppointmentServiceItem.
+// That data is peeled off here and persisted separately into
+// appointment_service_consumables (relational, not JSON — see that table's
+// migration for why), so the `services` JSONB column never carries it.
+
+// Stamps a stable id onto any service row that doesn't already have one —
+// closes the gap where a row's id used to be a purely frontend convention
+// the backend never generated or relied on. Mutates in place; rows that
+// already have an id (round-tripped from a prior save) are left untouched.
+function assignServiceRowIds(services?: IncomingAppointmentServiceItem[]): void {
+    if (!services) return;
+    for (const s of services) {
+        if (!s.id) s.id = randomUUID();
+    }
+}
+
+// Flattens services[].consumables[] into one row per (service_row_id,
+// product_id), ready for appointment_service_consumables. Must run AFTER
+// assignServiceRowIds so every row has a stable id to key off. actual_qty
+// defaults to the configured qty when the caller hasn't touched it yet.
+function flattenServiceConsumables(
+    services: IncomingAppointmentServiceItem[] | undefined,
+    branchId: string | null
+): AppointmentServiceConsumableRecord[] {
+    if (!services) return [];
+    const rows: AppointmentServiceConsumableRecord[] = [];
+    for (const s of services) {
+        if (!s.id || !s.consumables?.length) continue;
+        for (const c of s.consumables) {
+            if (!c.product_id) continue;
+            const standardQty = Number(c.qty) || 0;
+            const actualQty = c.actual_qty !== undefined && c.actual_qty !== null ? Number(c.actual_qty) : standardQty;
+            rows.push({
+                service_row_id: s.id,
+                service_id: s.service_id ?? null,
+                product_id: c.product_id,
+                standard_qty: standardQty,
+                actual_qty: actualQty,
+                unit: c.unit ?? null,
+                branch_id: branchId,
+                staff_id: s.staff_id ?? null,
+            });
+        }
+    }
+    return rows;
+}
+
+// Strips the transient `consumables` field back off before the services
+// array is written to the `services` JSONB column.
+function stripConsumables(services: IncomingAppointmentServiceItem[] | undefined) {
+    if (!services) return services;
+    return services.map(({ consumables, ...rest }) => rest);
+}
+
+// Read-side counterpart to assignServiceRowIds/flattenServiceConsumables —
+// joins appointment_service_consumables back onto each services[] item
+// (matched by service_row_id === s.id) so a single GET still returns
+// consumables in the same services[].consumables[] shape the frontend
+// already sends, even though it's no longer stored inside that JSONB
+// column. Only used by getById() (the edit-modal fetch) — the calendar's
+// list/chip views don't display consumables, so skipping this there avoids
+// an N+1 query per appointment on every calendar load.
+async function attachConsumables(appt: Appointment): Promise<Appointment> {
+    if (!appt.services?.length) return appt;
+    const rows = await appointmentsRepository.getServiceConsumables(appt.id);
+    if (!rows.length) return appt;
+    const byRow = new Map<string, typeof rows>();
+    for (const r of rows) {
+        const list = byRow.get(r.service_row_id) ?? [];
+        list.push(r);
+        byRow.set(r.service_row_id, list);
+    }
+    return {
+        ...appt,
+        services: appt.services.map((s: any) => {
+            const consumableRows = s.id ? byRow.get(s.id) : undefined;
+            if (!consumableRows?.length) return s;
+            return {
+                ...s,
+                consumables: consumableRows.map((r) => ({
+                    product_id: r.product_id,
+                    product_name: r.product_name ?? undefined,
+                    qty: Number(r.standard_qty),
+                    unit: r.unit ?? undefined,
+                    actual_qty: Number(r.actual_qty),
+                })),
+            };
+        }),
+    };
+}
+
 // ── Service ───────────────────────────────────────────────────────────────────
 
 export const appointmentsService = {
@@ -255,8 +352,25 @@ export const appointmentsService = {
             body.staff_id = body.services[0].staff_id ?? undefined;
         }
 
+        // Consumables never affect billing and are never deducted at booking
+        // time (see appointment-consumables sequence in the feature docs) —
+        // this just peels the declared recipe/actual-qty data off the JSONB
+        // services array and stages it for a relational write once the
+        // appointment row (and therefore its id) exists.
+        assignServiceRowIds(body.services);
+        let consumableRows: AppointmentServiceConsumableRecord[] = [];
+        if (body.services?.some((s) => s.consumables?.length)) {
+            const branchId = await appointmentConsumablesService.resolveBranchId(body.salon_id, body.branch_id ?? null);
+            consumableRows = flattenServiceConsumables(body.services, branchId);
+        }
+        body.services = stripConsumables(body.services) as typeof body.services;
+
         const appointment = await appointmentsRepository.create(body, requesterUserId);
         logger.info("appointmentsService.create success", { appointmentId: appointment.id });
+
+        if (consumableRows.length) {
+            await appointmentsRepository.replaceServiceConsumables(appointment.id, consumableRows);
+        }
 
         // Deduct stock for products sold in this appointment (fire-and-forget)
         const soldProducts = (body.product_items ?? []).filter(p => p.product_id);
@@ -267,13 +381,25 @@ export const appointmentsService = {
             ).catch(err => logger.warn("Stock deduction failed (non-fatal)", { err: err?.message }));
         }
 
+        // `appointment` here is the raw `INSERT ... RETURNING *` row
+        // (appointments.repository.ts::create()), which has client_id but NOT
+        // client_name (that's only ever populated by a JOIN to clients — see
+        // findById() — appointments.types.ts marks it explicitly as a "joined
+        // field, not a stored column"). Using `appointment.client_name`
+        // directly always evaluated to undefined, so every "New Appointment
+        // Booked" notification showed "Walk-in" regardless of which client
+        // was actually picked. Re-fetched (with the join) once here and
+        // reused below for WhatsApp automation, rather than querying twice.
+        const full = appointment.client_id ? await appointmentsRepository.findById(appointment.id) : null;
+
         // Fire notification (fire-and-forget)
         notificationsService.create({
             salon_id: appointment.salon_id,
             type:     "appointment",
             title:    "New Appointment Booked",
-            body:     `${appointment.client_name ?? "Walk-in"} — ${formatDate(appointment.scheduled_at)} at ${formatTime(appointment.scheduled_at)}`,
+            body:     `${full?.client_name ?? "Walk-in"} — ${formatDate(appointment.scheduled_at)} at ${formatTime(appointment.scheduled_at)}`,
             event_key: "newAppointment",
+            scheduled_at: appointment.scheduled_at,
         }).catch((err: any) => {
             logger.error("New appointment notification failed", {
                 appointmentId: appointment.id,
@@ -288,7 +414,6 @@ export const appointmentsService = {
         // Dedup check — NEVER send confirmation twice for the same appointment
         if (appointment.client_id) {
             try {
-                const full = await appointmentsRepository.findById(appointment.id);
                 if (full && (full as any).client_phone) {
                     const alreadySent = await whatsappAutomationRepository.logExistsForReference(
                         full.id,
@@ -347,7 +472,8 @@ export const appointmentsService = {
     async getById(id: string): Promise<Appointment> {
         const found = await appointmentsRepository.findById(id);
         if (!found) throw new AppError(404, "Appointment not found", "NOT_FOUND");
-        const appointment = await enrichItemsWithTax(deriveDisplayStatus(found));
+        let appointment = await enrichItemsWithTax(deriveDisplayStatus(found));
+        appointment = await attachConsumables(appointment);
         if (!needsTaxBackfill(appointment)) return appointment;
         const activeTaxes = await getActiveTaxes(appointment.salon_id).catch(() => []);
         return backfillTaxBreakdown(appointment, activeTaxes);
@@ -462,10 +588,75 @@ export const appointmentsService = {
             }
         }
 
+        // Consumables never affect billing (stripped off before the merged
+        // reprice above even sees them) and are only ever actually deducted
+        // once the appointment has genuinely been paid — see the two cases
+        // below. Neither is stock-validated: an out-of-stock consumable must
+        // never block editing or billing an appointment. The deduction runs
+        // with allowNegative (see inventory.service.ts), recording the usage
+        // and flooring products.amount at 0 rather than refusing the edit.
+        let newConsumableRows: AppointmentServiceConsumableRecord[] | null = null;
+        let applyConsumableChange: (() => Promise<void>) | null = null;
+        if (patch.services !== undefined) {
+            assignServiceRowIds(patch.services as IncomingAppointmentServiceItem[]);
+            const hadPriorDeduction = existing.status === "paid" || existing.reopened_from_paid === true;
+            // patch.status was already finalized by the reprice block above
+            // (if it ran) — read it synchronously rather than waiting for
+            // appointmentsRepository.update()'s return value, since the
+            // validation below must happen BEFORE that write.
+            const intendedStatus = (patch.status as string | undefined) ?? existing.status;
+            const wasFirstTimePaid = !hadPriorDeduction && intendedStatus === "paid";
+
+            const branchId = wasFirstTimePaid || hadPriorDeduction
+                ? await appointmentConsumablesService.resolveBranchId(existing.salon_id, existing.branch_id)
+                : null;
+            newConsumableRows = flattenServiceConsumables(patch.services as IncomingAppointmentServiceItem[], branchId);
+            patch = { ...patch, services: stripConsumables(patch.services as IncomingAppointmentServiceItem[]) as typeof patch.services };
+
+            if (wasFirstTimePaid && branchId) {
+                const items = appointmentConsumablesService.collectServiceRowItems(newConsumableRows);
+                if (items.length) {
+                    applyConsumableChange = () => appointmentConsumablesService.completeAppointment(
+                        { rows: newConsumableRows!, salonId: existing.salon_id, branchId, bookingId: appointmentId, userId: params.requesterUserId }
+                    );
+                }
+            } else if (hadPriorDeduction && branchId) {
+                const priorRows = await appointmentsRepository.getServiceConsumables(appointmentId);
+                const { toDeduct, toRestore } = appointmentConsumablesService.computeDelta(priorRows, newConsumableRows);
+                if (toDeduct.length || toRestore.length) {
+                    applyConsumableChange = () => appointmentConsumablesService.applyDelta({
+                        toDeduct, toRestore, salonId: existing.salon_id, branchId, bookingId: appointmentId, userId: params.requesterUserId,
+                    });
+                }
+            }
+        }
+
         // Overlapping appointments for the same staff are allowed (e.g. hair color
         // processing time) — no conflict check on reschedule/staff/duration changes.
 
         const updated = await appointmentsRepository.update(appointmentId, patch);
+
+        // Apply the pre-validated consumable deduction/return now that the
+        // core appointment write has succeeded, then persist the new
+        // current-state rows. A failure here (only possible if a genuine
+        // race lost stock between the pre-check above and now) is logged
+        // loudly rather than silently swallowed — the appointment patch has
+        // already committed at this point, matching this function's existing
+        // "product_items stock adjustment is best-effort after the main
+        // write" convention below, just with an upfront hard-block instead
+        // of none at all.
+        if (newConsumableRows !== null) {
+            if (applyConsumableChange) {
+                try {
+                    await applyConsumableChange();
+                } catch (err: any) {
+                    logger.error("Consumable stock deduction/adjustment failed after appointment update committed", {
+                        appointmentId, message: err?.message,
+                    });
+                }
+            }
+            await appointmentsRepository.replaceServiceConsumables(appointmentId, newConsumableRows);
+        }
 
         // Reassigning a paid/partial appointment to a different staff member
         // (calendar drag-drop or manual edit) must also move the already-
@@ -523,6 +714,7 @@ export const appointmentsService = {
                 type:     "appointment",
                 title:    "Appointment Updated",
                 body:     `${existing.client_name ?? "Walk-in"} — ${formatDate(updated.scheduled_at)} at ${formatTime(updated.scheduled_at)}`,
+                scheduled_at: updated.scheduled_at,
             }).catch((err: any) => {
                 logger.error("Appointment update notification failed", {
                     appointmentId: updated.id,
@@ -600,6 +792,7 @@ export const appointmentsService = {
             title:    "Appointment Cancelled",
             body:     `${existing.client_name ?? "Walk-in"} — ${formatDate(existing.scheduled_at)} at ${formatTime(existing.scheduled_at)}`,
             event_key: "appointmentCancelled",
+            scheduled_at: existing.scheduled_at,
         }).catch((err: any) => {
             logger.error("Appointment cancellation notification failed", {
                 appointmentId: existing.id,

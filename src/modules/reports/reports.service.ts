@@ -247,6 +247,8 @@ import {
     ProductInventoryReportResponse,
     ClientRevenueReportFilters,
     ClientRevenueReportResponse,
+    CustomerFrequencyReportFilters,
+    CustomerFrequencyReportResponse,
     StaffSalesReportFilters,
     StaffSalesReportResponse,
     StaffPerformanceReportFilters,
@@ -263,6 +265,8 @@ import {
     AppointmentDetailReportResponse,
     WaCampaignReportFilters,
     WaCampaignReportResponse,
+    ClientRatingReportFilters,
+    ClientRatingReportResponse,
 } from "./reports.types";
 
 // ======================================================
@@ -1291,10 +1295,14 @@ async getDailySheetReport(
         rows: result.items,
         pagination: result.pagination,
         total_amount: result.total_amount,
+        total_paid: result.total_paid,
+        total_due: result.total_due,
         invoice_count: result.invoice_count,
         client_count: result.client_count,
         staff_count: result.staff_count,
         items_count: result.items_count,
+        pending_payment_count: result.pending_payment_count,
+        fully_paid_count: result.fully_paid_count,
         filters_available: filtersAvailable,
     };
 },
@@ -1471,6 +1479,26 @@ async getClientRevenueReport(
 },
 
 // ======================================================
+// CUSTOMER FREQUENCY REPORT (independent report API)
+// ======================================================
+
+async getCustomerFrequencyReport(
+    salonId: string,
+    filters: CustomerFrequencyReportFilters
+): Promise<CustomerFrequencyReportResponse> {
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getCustomerFrequencyReportStats(salonId, filters),
+        reportsRepository.getCustomerFrequencyReportRows(salonId, filters),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+    };
+},
+
+// ======================================================
 // STAFF SALES REPORT (independent report API)
 // ======================================================
 
@@ -1478,11 +1506,17 @@ async getStaffSalesReport(
     salonId: string,
     filters: StaffSalesReportFilters
 ): Promise<StaffSalesReportResponse> {
-    const [stats, rowsResult] = await Promise.all([
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
         reportsRepository.getStaffSalesReportStats(salonId, filters),
         reportsRepository.getStaffSalesReport(salonId, filters),
+        reportsRepository.getSalesSummaryFiltersAvailable(salonId),
     ]);
-    return { rows: rowsResult.items, pagination: rowsResult.pagination, stats };
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+        filters_available: { payment_modes: filtersAvailable.payment_modes },
+    };
 },
 
 // ======================================================
@@ -1622,6 +1656,26 @@ async getWaCampaignReport(
         pagination: rowsResult.pagination,
         stats,
         filters_available: filtersAvailable,
+    };
+},
+
+// ======================================================
+// CLIENT RATING REPORT (independent report API)
+// ======================================================
+
+async getClientRatingReport(
+    salonId: string,
+    filters: ClientRatingReportFilters
+): Promise<ClientRatingReportResponse> {
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getClientRatingReportStats(salonId, filters),
+        reportsRepository.getClientRatingReportRows(salonId, filters),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
     };
 },
 

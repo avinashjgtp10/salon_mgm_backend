@@ -22,6 +22,22 @@ const validateUuidArray = (v: unknown, field: string): void => {
     throw new AppError(400, `${field} must contain valid UUID strings`, "VALIDATION_ERROR");
 };
 
+const validateConsumablesUsed = (v: unknown, field: string): void => {
+  if (v === undefined) return;
+  if (!Array.isArray(v)) throw new AppError(400, `${field} must be an array`, "VALIDATION_ERROR");
+  for (const item of v as unknown[]) {
+    if (!item || typeof item !== "object")
+      throw new AppError(400, `${field} items must be objects`, "VALIDATION_ERROR");
+    const rec = item as Record<string, unknown>;
+    if (!isUUID(rec.product_id))
+      throw new AppError(400, `${field} items must have a valid product_id`, "VALIDATION_ERROR");
+    if (typeof rec.qty !== "number" || !Number.isFinite(rec.qty) || rec.qty < 0)
+      throw new AppError(400, `${field} items must have a non-negative qty`, "VALIDATION_ERROR");
+    if (rec.unit !== undefined && typeof rec.unit !== "string")
+      throw new AppError(400, `${field} items' unit must be a string`, "VALIDATION_ERROR");
+  }
+};
+
 // ─── Services ─────────────────────────────────────────────────────────────────
 
 export const validateCreateService = (req: Request, _res: Response, next: NextFunction) => {
@@ -38,6 +54,7 @@ export const validateCreateService = (req: Request, _res: Response, next: NextFu
     if (!isOptionalBool(b.commission_enabled)) throw new AppError(400, "commission_enabled must be a boolean", "VALIDATION_ERROR");
     if (!isOptionalBool(b.resource_required))  throw new AppError(400, "resource_required must be a boolean", "VALIDATION_ERROR");
     validateUuidArray(b.staff_ids, "staff_ids");
+    validateConsumablesUsed(b.consumables_used, "consumables_used");
     return next();
   } catch (err) { return next(err); }
 };
@@ -57,6 +74,7 @@ export const validateUpdateService = (req: Request, _res: Response, next: NextFu
     if (!isOptionalBool(b.resource_required))  throw new AppError(400, "resource_required must be a boolean", "VALIDATION_ERROR");
     if (!isOptionalBool(b.is_active))        throw new AppError(400, "is_active must be a boolean", "VALIDATION_ERROR");
     validateUuidArray(b.staff_ids, "staff_ids");
+    validateConsumablesUsed(b.consumables_used, "consumables_used");
     return next();
   } catch (err) { return next(err); }
 };

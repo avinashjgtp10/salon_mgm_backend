@@ -101,6 +101,11 @@ export const bookingsService = {
                 body.salon_id,
                 { code: referralCode, rewardStatus: null }
             );
+        } else if (client.is_blocked) {
+            // The actual point of "Block" (Clients page) — a blocked client can
+            // still be booked in-person by staff (that flow doesn't go through
+            // here), just not through public online booking.
+            throw new AppError(403, "This client is blocked from booking online. Please contact the salon directly.", "CLIENT_BLOCKED");
         }
 
         const durationMinutes = services.reduce((sum, s) => sum + (Number(s!.duration) || 30), 0);

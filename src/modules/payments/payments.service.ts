@@ -14,7 +14,8 @@ import { rewardPointsRepository } from '../reward-points/reward-points.repositor
 import { ewalletRepository } from '../ewallet/ewallet.repository';
 import { referralRepository } from '../referral/referral.repository';
 import { CreatePaymentBody, Payment } from './payments.types';
-import type { Appointment } from '../appointments/appointments.types';
+import type { Appointment, AppointmentServiceConsumableRecord } from '../appointments/appointments.types';
+import { appointmentConsumablesService } from '../inventory/inventory.service';
 import logger from '../../config/logger';
 import { whatsappAutomationService } from '../whatsapp-automation/whatsapp-automation.service';
 import { sendReceiptDocument } from '../sales/receipt-whatsapp.service';
@@ -126,7 +127,7 @@ async function applyMembershipDiscountForBooking(
 
 export const paymentsService = {
 
-  async create(data: CreatePaymentBody): Promise<Payment> {
+  async create(data: CreatePaymentBody, requesterUserId?: string): Promise<Payment> {
     // ── Recompute financial fields from real appointment data ─────────────────
     // This prevents bugs where the frontend sends a wrong gross_amount
     // (e.g., partial-payment amount instead of the full bill total).
@@ -690,11 +691,16 @@ export const paymentsService = {
           // silently records the full pre-discount catalog price as "paid" whenever a
           // coupon/wallet/points deduction legitimately brings paid_amount to ₹0 (e.g. a
           // 100%-off coupon), overcharging the customer's recorded payment by the full bill.
-          const thisPaid = Math.max(0, (
+          // Capped at what's actually still owed — there's no "change given back" concept
+          // in this system, so a frontend-sent amount above the remaining due (e.g. a POS
+          // cash/split entry typo) must never be persisted as-is, or reports/KPIs downstream
+          // silently show paid > billed for that transaction.
+          const requestedPaid = Math.max(0, (
             data.paid_amount != null ? Number(data.paid_amount)
             : data.net_amount  != null ? Number(data.net_amount)
             : Number(data.gross_amount) || 0
           ));
+          const thisPaid = Math.min(requestedPaid, Math.max(0, effectiveBill - existingPaid));
 
           data.gross_amount = actualBill;
           data.net_amount   = effectiveBill;
@@ -715,6 +721,33 @@ export const paymentsService = {
       data.paid_amount  = 0;
       data.due_amount   = 0;
       data.status       = 'completed';
+      // Package payments skip the existingPaid lookup above (no money changes
+      // hands), so derive the same "first payment" signal from appt.status
+      // directly — needed so the consumable deduction below still fires for
+      // ₹0 package-covered appointments, which never reach /checkout but do
+      // still need their consumables deducted on this, their one settling call.
+      isFirstPaymentForAppointment = !!appt && !['partial', 'paid'].includes(appt.status);
+    }
+
+    // ── Consumables: collect the rows to deduct at the status flip below ────
+    // Products are physically used the moment the service is rendered, not
+    // when the bill is finally settled — so deduction fires on the FIRST
+    // payment ever recorded against this appointment (isFirstPaymentForAppointment,
+    // computed above from existingPaid === 0), whether that first payment is
+    // itself partial or full. Previously this was gated on data.status ===
+    // 'completed', so a partially-paid appointment never deducted stock even
+    // though the consumables had already been used, causing an inventory
+    // mismatch. A second, later call that only tops up an already-partial
+    // payment (or finally clears it to 'paid') must NOT deduct again —
+    // existingPaid > 0 by then, so this only ever fires once.
+    // Consumables never affect any of the money math above (they were never
+    // part of it) — this is purely an inventory side-effect of completion.
+    // Deliberately NOT stock-validated: an out-of-stock consumable must never
+    // block taking the customer's money. The deduction below runs with
+    // allowNegative, recording the usage and flooring products.amount at 0.
+    let pendingConsumableRows: AppointmentServiceConsumableRecord[] = [];
+    if (isFirstPaymentForAppointment && !!appt && !!data.appointment_id) {
+      pendingConsumableRows = await appointmentsRepository.getServiceConsumables(data.appointment_id!);
     }
 
     // Reports that read payments.payment_method directly (e.g. Sales Summary's
@@ -894,7 +927,43 @@ export const paymentsService = {
       try {
         if (!appt || !['cancelled', 'deleted'].includes(appt.status)) {
           const apptStatus = (data.due_amount ?? 0) > 0 ? 'partial' : 'paid';
-          await appointmentsRepository.updateStatus(data.appointment_id, apptStatus);
+
+          if (isFirstPaymentForAppointment && pendingConsumableRows.length && requesterUserId) {
+            // The actual first-payment trigger the pre-check above validated
+            // against — deduct now, in the same small transaction as the
+            // status flip (to 'partial' or 'paid', whichever this call
+            // produces), so neither can commit without the other.
+            const branchId = await appointmentConsumablesService.resolveBranchId(data.salon_id, appt?.branch_id ?? null);
+            if (branchId) {
+              const txClient = await pool.connect();
+              try {
+                await txClient.query('BEGIN');
+                await appointmentsRepository.updateStatus(data.appointment_id, apptStatus, txClient);
+                await appointmentConsumablesService.completeAppointment({
+                  rows: pendingConsumableRows, salonId: data.salon_id, branchId,
+                  bookingId: data.appointment_id, userId: requesterUserId,
+                }, txClient);
+                await txClient.query('COMMIT');
+              } catch (err: any) {
+                await txClient.query('ROLLBACK');
+                // The pre-check above already validated stock moments ago —
+                // this only fires on a genuine race (stock moved in between).
+                // Logged loudly rather than silently swallowed: a payment
+                // already exists at this point, so the appointment must
+                // still reach its new status even though the deduction didn't land.
+                logger.error('[payments] consumable deduction failed after pre-check passed — status flip applied without it', {
+                  appointmentId: data.appointment_id, message: err?.message,
+                });
+                await appointmentsRepository.updateStatus(data.appointment_id, apptStatus);
+              } finally {
+                txClient.release();
+              }
+            } else {
+              await appointmentsRepository.updateStatus(data.appointment_id, apptStatus);
+            }
+          } else {
+            await appointmentsRepository.updateStatus(data.appointment_id, apptStatus);
+          }
         }
       } catch {
         // Non-fatal: payment is still recorded
@@ -907,9 +976,19 @@ export const paymentsService = {
     // row for Invoice No / Staff lookups.
     let checkoutSaleId: string | undefined;
 
-    // ── Auto-create sale record when calendar payment is fully completed ───────
+    // ── Auto-create sale record on any real calendar payment (partial or full) ──
+    // Previously gated on data.status === 'completed' only, so a deposit/
+    // partial payment (due_amount > 0, data.status = 'partial' — see the
+    // status assignment above) never reached this block at all: no sale row,
+    // no invoice_number, silently. Every 'partial' appointment across dev/QA/
+    // prod with a genuine partial payment had sale_id = NULL as a result.
+    // Now matches Quick Sale/POS checkout, which already generates an invoice
+    // regardless of amount paid. recordTransaction() is idempotent per
+    // appointment_id (updates the existing sale rather than duplicating), so
+    // the later payment that actually settles the balance reuses the same
+    // invoice number instead of minting a second one.
     // Skip for package payments — revenue was already counted when the package was purchased.
-    if (data.appointment_id && data.status === 'completed' && appt && !isPackagePayment) {
+    if (data.appointment_id && (data.status === 'completed' || data.status === 'partial') && appt && !isPackagePayment) {
       try {
         // Per-row "Disc %" (see ServiceRow.tsx calcTotal()) is baked into each
         // item's own `total`, but was never carried over into the sale-item's
@@ -1340,6 +1419,11 @@ export const paymentsService = {
       getIO().to(`salon:${data.salon_id}`).emit('payment_updated', {
         appointment_id: data.appointment_id,
         salon_id: data.salon_id,
+        // Not persisted anywhere new — carried only on this socket push so a
+        // listening Calendar session can skip refetching when this payment's
+        // appointment date isn't in its currently-visible range. Omitted
+        // (not null) when appt lookup failed, so listeners can fail open.
+        ...(appt?.scheduled_at ? { scheduled_at: appt.scheduled_at } : {}),
       });
     } catch {
       // socket not ready — ignore, client will see it on next manual refresh

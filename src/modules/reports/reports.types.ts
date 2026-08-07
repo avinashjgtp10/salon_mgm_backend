@@ -564,12 +564,21 @@ export interface SalesSummaryReportFilters {
     start_date?: string;
     end_date?: string;
     staff_id?: string;
+    staff_ids?: string[];
     search?: string;
     status?: string; // 'draft' | 'completed' | 'cancelled' | 'refunded'; default excludes 'draft'
     category_id?: string; // service_categories.id — only sales with a service line item in this category
+    category_ids?: string[];
     payment_mode?: string; // sales.payment_method
+    payment_modes?: string[];
     item_type?: string; // sale_items.item_type — 'service' | 'product' | 'membership' | 'gift_card' | 'quick' | 'package'
+    item_types?: string[];
     service_id?: string; // sale_items.item_id where item_type = 'service'
+    service_ids?: string[];
+    // Displayed-status vocabulary ('paid' | 'booked' | 'cancelled' | 'refunded'),
+    // not the raw sales.status the `status` field above filters on.
+    payment_status?: string;
+    payment_statuses?: string[];
     page?: number;
     limit?: number;
     is_export?: boolean; // bypasses the page-size cap for CSV export
@@ -704,11 +713,15 @@ export interface SaleDetailResponse {
 export interface DailySheetReportFilters {
     date?: string;
     service_id?: string;
+    service_ids?: string[];
     staff_ids?: string[];
     search?: string;
     payment_mode?: string;
+    payment_modes?: string[];
     status?: string;
+    statuses?: string[];
     item_type?: string;
+    item_types?: string[];
     time_from?: string;
     time_to?: string;
     page?: number;
@@ -729,6 +742,8 @@ export interface DailySheetReportRow {
     staff_id: string | null;
     staff: string | null;
     amount: number;
+    paid_amount: number;
+    due_amount: number;
     payment_method: string | null;
     payment_reference: string | null;
     status: string;
@@ -756,6 +771,8 @@ export interface DailySheetReportResponse {
     rows: DailySheetReportRow[];
     pagination: DailySheetReportPagination;
     total_amount: number;
+    total_paid: number;
+    total_due: number;
     // invoice_count = distinct invoices/appointments (NOT the same as
     // pagination.total, which counts line-item rows since Daily Sheet is
     // one-row-per-item); items_count === pagination.total, kept as an
@@ -764,6 +781,8 @@ export interface DailySheetReportResponse {
     client_count: number;
     staff_count: number;
     items_count: number;
+    pending_payment_count: number;
+    fully_paid_count: number;
     filters_available: DailySheetFiltersAvailable;
 }
 
@@ -780,7 +799,9 @@ export interface ProductRetailReportFilters {
     search?: string;
     staff_ids?: string[];
     brand_id?: string;
+    brand_ids?: string[];
     category_id?: string;
+    category_ids?: string[];
     min_price?: number;
     max_price?: number;
     page?: number;
@@ -807,6 +828,8 @@ export interface ProductRetailReportRow {
     total: number;
     tax_amount: number;
     taxable_amount: number;
+    paid_amount: number;
+    due_amount: number;
     payment_method: string | null;
     status: string;
 }
@@ -854,10 +877,13 @@ export interface ServiceSaleReportFilters {
     end_date?: string;
     staff_ids?: string[];
     category_id?: string;
+    category_ids?: string[];
     service_id?: string;
+    service_ids?: string[];
     min_price?: number;
     max_price?: number;
     payment_method?: string;
+    payment_methods?: string[];
     search?: string;
     sort_by?: "date" | "invoice_no" | "service_name" | "staff_name" | "price" | "total";
     sort_dir?: "asc" | "desc";
@@ -884,6 +910,8 @@ export interface ServiceSaleReportRow {
     // recorded before per-item tax existed.
     tax_amount: number;
     taxable_amount: number;
+    paid_amount: number;
+    due_amount: number;
     payment_method: string | null;
     status: string;
 }
@@ -932,6 +960,8 @@ export interface GstReportFilters {
     start_date?: string;
     end_date?: string;
     staff_ids?: string[];
+    item_types?: string[];
+    payment_methods?: string[];
     search?: string;
     page?: number;
     limit?: number;
@@ -940,6 +970,7 @@ export interface GstReportFilters {
 
 export interface GstReportRow {
     sale_id: string;
+    appointment_id: string | null;
     date: string;
     invoice_no: string;
     client_name: string | null;
@@ -984,6 +1015,9 @@ export interface GstReportResponse {
 export interface ProductMarginReportFilters {
     start_date?: string;
     end_date?: string;
+    search?: string;
+    brand_ids?: string[];
+    category_ids?: string[];
     page?: number;
     limit?: number;
     is_export?: boolean;
@@ -1086,6 +1120,9 @@ export interface RewardPointsReportResponse {
 export interface EwalletReportFilters {
     search?: string;
     as_of_date?: string;
+    status?: string;
+    balance_min?: number;
+    balance_max?: number;
     page?: number;
     limit?: number;
     is_export?: boolean;
@@ -1102,7 +1139,9 @@ export interface EwalletReportFilters {
 export interface ProductInventoryReportFilters {
     search?: string;
     category_id?: string;
+    category_ids?: string[];
     brand_id?: string;
+    brand_ids?: string[];
     stock_status?: "in_stock" | "low_stock" | "out_of_stock";
     date_from?: string;
     date_to?: string;
@@ -1207,6 +1246,8 @@ export interface ClientRevenueReportRow {
     total_spend: number;
     avg_ticket: number;
     last_visit: string;
+    avg_rating?: number | null;
+    review_count?: number;
 }
 
 export interface ClientRevenueReportStats {
@@ -1230,6 +1271,67 @@ export interface ClientRevenueReportResponse {
 }
 
 // ===============================
+// Customer Frequency Report (independent report API —
+// POST /api/report/customer-frequency)
+// Reads clients/sales directly, never the Appointment API. One row per
+// registered client, bucketed into New/Returning plus a customer_type
+// segment (new/old/lost) derived from first_visit/last_visit against the
+// selected date range — see _CUSTOMER_FREQUENCY_AGG for the exact rules.
+// ===============================
+
+export interface CustomerFrequencyReportFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    // Single-select segment/sort applied together, same convention as the
+    // Commission Report's Status filter: 'most_frequent'/'least_frequent'
+    // sort the table by visit count and 'most_spending'/'least_spending'
+    // sort it by total spend, instead of bucketing it; 'new'/'old'/
+    // 'lost' filter to that customer_type segment.
+    customer_type?: "most_frequent" | "least_frequent" | "most_spending" | "least_spending" | "new" | "old" | "lost";
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface CustomerFrequencyReportRow {
+    client_id: string | null;
+    client_name: string;
+    contact: string;
+    visits: number;
+    total_spend: number;
+    first_visit: string | null;
+    last_visit: string | null;
+    // 'new' = first visit falls inside the selected date range; 'returning'
+    // = client had at least one visit before the range started.
+    visitor_type: "new" | "returning";
+    // 'new'/'old'/'lost' per visitor_type + last_visit-vs-today, independent
+    // of whichever customer_type filter value (if any) was applied.
+    customer_type: "new" | "old" | "lost";
+}
+
+export interface CustomerFrequencyReportStats {
+    total_clients: number;
+    new_clients: number;
+    returning_clients: number;
+    lost_clients: number;
+}
+
+export interface CustomerFrequencyReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface CustomerFrequencyReportResponse {
+    rows: CustomerFrequencyReportRow[];
+    pagination: CustomerFrequencyReportPagination;
+    stats: CustomerFrequencyReportStats;
+}
+
+// ===============================
 // Staff Sales Report (independent report API — POST /api/report/staff-sales)
 // Reads directly from sales/sale_items/payments, one row per transaction,
 // optionally filtered to one staff member. Commission is joined from
@@ -1246,6 +1348,13 @@ export interface StaffSalesReportFilters {
     page?: number;
     limit?: number;
     is_export?: boolean;
+    payment_mode?: string;
+    payment_modes?: string[];
+    item_type?: string;
+    item_types?: string[];
+    payment_status?: string;
+    payment_statuses?: string[];
+    sort?: "sales_desc" | "sales_asc";
 }
 
 export interface StaffSalesReportRow {
@@ -1255,12 +1364,6 @@ export interface StaffSalesReportRow {
     // Sales report's staff-name click-through to that staff's history.
     staff_id: string | null;
     staff_name: string;
-    // How many distinct staff members are attributed across this sale's line
-    // items — a sale with mixed staff (e.g. one client's service by Staff A
-    // and a retail product by Staff B) still only shows staff_name (the
-    // first one found), so the UI uses this to signal "there's more, click
-    // through to see the full per-item breakdown".
-    staff_count: number;
     // True for synthetic rows sourced from a not-yet-billed appointment
     // (see _UNBILLED_APPOINTMENT_ROWS_CTE) — these have no real sales.id, so
     // the per-item drill-down (GET /api/report/sales-summary/:id) can't be
@@ -1302,6 +1405,7 @@ export interface StaffSalesReportResponse {
     rows: StaffSalesReportRow[];
     pagination: StaffSalesReportPagination;
     stats: StaffSalesReportStats;
+    filters_available: { payment_modes: string[] };
 }
 
 // ===============================
@@ -1320,13 +1424,18 @@ export interface StaffPerformanceReportFilters {
     staff_ids?: string[];
     branch_id?: string;
     payment_mode?: string;
+    payment_modes?: string[];
     // Maps onto sales.status: 'completed' | 'partial' | 'cancelled' | 'refunded'.
     payment_status?: string;
+    payment_statuses?: string[];
     item_type?: string;
+    item_types?: string[];
     service_id?: string;
     product_id?: string;
     package_id?: string;
+    package_ids?: string[];
     membership_id?: string;
+    membership_ids?: string[];
     page?: number;
     limit?: number;
     is_export?: boolean;
@@ -1408,6 +1517,7 @@ export interface StaffItemSalesReportFilters {
     end_date?: string;
     item_type?: StaffItemSalesType;
     staff_id?: string;
+    staff_ids?: string[];
     // Matches against staff name AND the current tab's item name (service/
     // product/membership/package) — scoped to whichever item_type is active,
     // not a cross-item-type search.
@@ -1458,9 +1568,13 @@ export interface PackageSaleReportFilters {
     search?: string;
     staff_ids?: string[];
     package_name?: string;
+    package_names?: string[];
     package_status?: string;
+    package_statuses?: string[];
     payment_status?: string;
+    payment_statuses?: string[];
     payment_method?: string;
+    payment_methods?: string[];
     min_amount?: number;
     max_amount?: number;
     page?: number;
@@ -1542,9 +1656,12 @@ export interface PackageHistoryReportFilters {
     end_date?: string;
     search?: string;
     package_name?: string;
+    package_names?: string[];
     service_name?: string;
+    service_names?: string[];
     staff_ids?: string[];
     status?: PackageHistoryStatus;
+    statuses?: string[];
     page?: number;
     limit?: number;
     is_export?: boolean;
@@ -1610,11 +1727,14 @@ export interface MemberSaleReportFilters {
     end_date?: string;
     search?: string;
     status?: MemberSaleStatus;
+    statuses?: string[];
     membership_id?: string;
+    membership_ids?: string[];
     staff_ids?: string[];
     // 'value' (Flat Value) | 'percentage' | 'loyalty' — mirrors
     // client_memberships.pricing_type as snapshotted at sale time.
     pricing_type?: string;
+    pricing_types?: string[];
     price_min?: number;
     price_max?: number;
     page?: number;
@@ -1703,8 +1823,11 @@ export interface AppointmentDetailReportRow {
     time: string;
     booked_date: string;
     client_name: string | null;
+    // Combined item names/types for the whole bill (STRING_AGG'd across
+    // every service/product/package/membership on the appointment), not a
+    // single item — a bill can span more than one type.
     item_name: string;
-    item_type: "service" | "product" | "package" | "membership";
+    item_type: string;
     staff_name: string | null;
     duration: number;
     amount: number;
@@ -1790,4 +1913,61 @@ export interface WaCampaignReportResponse {
     pagination: WaCampaignReportPagination;
     stats: WaCampaignReportStats;
     filters_available: WaCampaignFiltersAvailable;
+}
+
+// ===============================
+// Client Rating Report (independent report API — POST /api/report/client-rating)
+// Reads directly from the reviews table (JOIN clients/staff), one row per
+// review. Only is_visible = true reviews are included by default, matching
+// what the reviews module treats as client-facing/visible. Never calls into
+// the reviews module's service/repository, and never touches the
+// Appointment API/service.
+// ===============================
+
+export interface ClientRatingReportFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    min_rating?: number;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface ClientRatingReportRow {
+    client_id: string | null;
+    client_name: string;
+    contact: string;
+    staff_id: string | null;
+    staff_name: string;
+    rating: number;
+    staff_rating: number | null;
+    service_rating: number | null;
+    ambience_rating: number | null;
+    review_text: string | null;
+    review_date: string;
+    source: string;
+    total_spend?: number;
+    visits?: number;
+}
+
+export interface ClientRatingReportStats {
+    total_reviews: number;
+    average_rating: number;
+    positive_reviews: number;
+    negative_reviews: number;
+}
+
+export interface ClientRatingReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface ClientRatingReportResponse {
+    rows: ClientRatingReportRow[];
+    pagination: ClientRatingReportPagination;
+    stats: ClientRatingReportStats;
 }

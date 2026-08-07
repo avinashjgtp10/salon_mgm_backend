@@ -24,7 +24,7 @@ export const paymentsController = {
       if (!body.payment_method)
         throw new AppError(400, 'payment_method is required', 'VALIDATION_ERROR');
 
-      const payment = await paymentsService.create(body);
+      const payment = await paymentsService.create(body, userId);
       return sendSuccess(res, 201, payment, 'Payment recorded successfully');
     } catch (err) { return next(err); }
   },

@@ -10,6 +10,7 @@ import {
     stockReconciliationController,
     consumableUsageController,
 } from "./inventory.controller";
+import { consumableInventoryController } from "./consumable-inventory.controller";
 import {
     validateCreateSupplier,
     validateUpdateSupplier,
@@ -157,6 +158,96 @@ router.patch(
     authMiddleware,
     roleMiddleware("salon_owner", "admin"),
     stockReconciliationController.saveRow
+);
+
+// ─── Consumable Inventory (dedicated page — replaces Stock Reconciliation's
+// consumable-facing role) ───────────────────────────────────────────────────
+
+// GET /inventory/consumables?search=&category_id=&brand_id=&supplier_id=&status=&unit=&service_id=&sort_by=&page=&limit=
+router.get(
+    "/consumables",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    consumableInventoryController.list
+);
+
+// GET /inventory/consumables/kpis
+router.get(
+    "/consumables/kpis",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    consumableInventoryController.kpis
+);
+
+// GET /inventory/consumables/dashboard?search=&category_id=&...&page=&limit=
+// Combined list + KPIs in one call — same filters as GET /consumables above.
+// Must be registered BEFORE /consumables/:id or Express would match
+// "dashboard" as the :id param.
+router.get(
+    "/consumables/dashboard",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    consumableInventoryController.dashboard
+);
+
+// GET /inventory/consumables/usage-history?product_id=&service_id=&direction=&from=&to=&page=&limit=
+// Must be registered BEFORE /consumables/:id or Express would match
+// "usage-history" as the :id param.
+router.get(
+    "/consumables/usage-history",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    consumableInventoryController.usageHistory
+);
+
+// GET /inventory/consumables/:id
+router.get(
+    "/consumables/:id",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    consumableInventoryController.getById
+);
+
+// POST /inventory/consumables/:id/adjust
+router.post(
+    "/consumables/:id/adjust",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    stockAdjustment,
+    consumableInventoryController.adjustStock
+);
+
+// GET /inventory/consumables/:id/assigned-services — thin Service/Usage list
+// for the table's "Assigned Services" click-popup (see Consumable Inventory redesign).
+router.get(
+    "/consumables/:id/assigned-services",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    consumableInventoryController.assignedServices
+);
+
+// GET/PUT /inventory/consumables/:id/unit-conversions — named-unit conversion
+// factors (e.g. "Bottle" = 1000 ml) shown in the side panel and entered via
+// the Add/Edit Consumable form.
+router.get(
+    "/consumables/:id/unit-conversions",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    consumableInventoryController.getUnitConversions
+);
+router.put(
+    "/consumables/:id/unit-conversions",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    stockAdjustment,
+    consumableInventoryController.replaceUnitConversions
 );
 
 // ─── Consumable Usage (from Calendar appointments) ────────────────────────────
