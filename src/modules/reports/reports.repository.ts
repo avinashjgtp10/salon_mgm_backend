@@ -4483,23 +4483,62 @@ async getStaffSalesReportStats(
 ): Promise<StaffSalesReportStats> {
   const { where, values, nextIndex } = this._buildSalesSummaryWhere(salonId, filters);
   const unbilled = this._UNBILLED_APPOINTMENT_ROWS_CTE(filters, nextIndex);
+  let idx = unbilled.nextIndex;
+
+  // Staff Sales report only (mirrors getStaffSalesReport): _buildSalesSummaryWhere's
+  // EXISTS only gates which SALES qualify — it doesn't stop line items
+  // belonging to a different, non-matching staff/item-type on that same
+  // qualifying sale from being summed in. Re-apply the same filters directly
+  // against `sli` so every line item counted here is itself a match.
+  const sliConditions: string[] = [];
+  const sliValues: any[] = [];
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    sliConditions.push(`COALESCE(sli.staff_id, s.staff_id) = ANY($${idx}::uuid[])`);
+    sliValues.push(filters.staff_ids);
+    idx++;
+  } else if (filters.staff_id) {
+    sliConditions.push(`COALESCE(sli.staff_id, s.staff_id) = $${idx}`);
+    sliValues.push(filters.staff_id);
+    idx++;
+  }
+  if (filters.item_types && filters.item_types.length > 0) {
+    sliConditions.push(`sli.item_type = ANY($${idx}::text[])`);
+    sliValues.push(filters.item_types);
+    idx++;
+  } else if (filters.item_type) {
+    sliConditions.push(`sli.item_type = $${idx}`);
+    sliValues.push(filters.item_type);
+    idx++;
+  }
+  const sliWhere = sliConditions.length > 0 ? `AND ${sliConditions.join(" AND ")}` : "";
 
   const query = `
     WITH sales_side AS (
       SELECT
-        s.total_amount::numeric AS price,
+        s.id,
+        (sli.total_price + COALESCE(sli.tax_amount, 0)) AS price,
         CASE
-          WHEN s.appointment_id IS NOT NULL THEN pay.paid_from_payments
-          WHEN s.status = 'completed' THEN s.total_amount::numeric
+          WHEN COALESCE(s.subtotal, 0) > 0
+            THEN (CASE WHEN s.appointment_id IS NOT NULL THEN pay.paid_from_payments
+                       WHEN s.status = 'completed' THEN s.total_amount::numeric
+                       ELSE 0 END) * (sli.total_price / s.subtotal)
           ELSE 0
         END AS paid_amount,
-        COALESCE(pay.latest_due, 0) AS due_amount,
+        CASE
+          WHEN COALESCE(s.subtotal, 0) > 0
+            THEN COALESCE(pay.latest_due, 0) * (sli.total_price / s.subtotal)
+          ELSE 0
+        END AS due_amount,
+        -- commission_earned has no per-line-item link, only staff_id — see
+        -- the matching comment in getStaffSalesReport for why this can
+        -- repeat the same sale-level commission across that staff's rows.
         COALESCE(comm.commission_amount, 0) AS commission_amount,
-        COALESCE(itype.service_revenue, 0) AS service_revenue,
-        COALESCE(itype.product_revenue, 0) AS product_revenue,
-        COALESCE(itype.package_revenue, 0) AS package_revenue,
-        COALESCE(itype.membership_revenue, 0) AS membership_revenue
-      FROM sales s
+        CASE WHEN sli.item_type = 'service' THEN sli.total_price + COALESCE(sli.tax_amount, 0) ELSE 0 END AS service_revenue,
+        CASE WHEN sli.item_type = 'product' THEN sli.total_price + COALESCE(sli.tax_amount, 0) ELSE 0 END AS product_revenue,
+        CASE WHEN sli.item_type = 'package' THEN sli.total_price + COALESCE(sli.tax_amount, 0) ELSE 0 END AS package_revenue,
+        CASE WHEN sli.item_type = 'membership' THEN sli.total_price + COALESCE(sli.tax_amount, 0) ELSE 0 END AS membership_revenue
+      FROM sale_items sli
+      JOIN sales s ON s.id = sli.sale_id
       LEFT JOIN clients c ON s.client_id = c.id
       ${this._APPOINTMENT_STATUS_JOIN}
       ${this._PAYMENT_LATERAL}
@@ -4507,28 +4546,13 @@ async getStaffSalesReportStats(
         SELECT SUM(ce.commission_amount) AS commission_amount
         FROM commission_earned ce
         WHERE ce.sale_id = s.id
-          AND ce.staff_id = COALESCE(
-            s.staff_id,
-            (SELECT si.staff_id FROM sale_items si WHERE si.sale_id = s.id AND si.staff_id IS NOT NULL LIMIT 1)
-          )
+          AND ce.staff_id = COALESCE(sli.staff_id, s.staff_id)
       ) comm ON TRUE
-      -- Item-type revenue breakdown — sales only (not unbilled appointments,
-      -- see appt_side's zeroed columns below). Tax-inclusive (total_price +
-      -- tax_amount) so these four cards sum to the tax-inclusive total_sale
-      -- above instead of silently excluding GST.
-      LEFT JOIN LATERAL (
-        SELECT
-          SUM(si.total_price + COALESCE(si.tax_amount, 0)) FILTER (WHERE si.item_type = 'service') AS service_revenue,
-          SUM(si.total_price + COALESCE(si.tax_amount, 0)) FILTER (WHERE si.item_type = 'product') AS product_revenue,
-          SUM(si.total_price + COALESCE(si.tax_amount, 0)) FILTER (WHERE si.item_type = 'package') AS package_revenue,
-          SUM(si.total_price + COALESCE(si.tax_amount, 0)) FILTER (WHERE si.item_type = 'membership') AS membership_revenue
-        FROM sale_items si
-        WHERE si.sale_id = s.id
-      ) itype ON TRUE
-      WHERE ${where}
+      WHERE ${where} ${sliWhere}
     ),
     appt_side AS (
       SELECT
+        u.id,
         u.price, u.paid_amount, u.due_amount, 0::numeric AS commission_amount,
         0::numeric AS service_revenue, 0::numeric AS product_revenue,
         0::numeric AS package_revenue, 0::numeric AS membership_revenue
@@ -4540,7 +4564,7 @@ async getStaffSalesReportStats(
       SELECT * FROM appt_side
     )
     SELECT
-      COUNT(*)::int AS total_bill,
+      COUNT(DISTINCT id)::int AS total_bill,
       COALESCE(SUM(price), 0) AS total_sale,
       COALESCE(SUM(paid_amount), 0) AS total_paid,
       COALESCE(SUM(due_amount), 0) AS total_due,
@@ -4552,7 +4576,7 @@ async getStaffSalesReportStats(
     FROM unified
   `;
 
-  const { rows } = await safeQuery(() => pool.query(query, [...values, ...unbilled.values]));
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...unbilled.values, ...sliValues]));
   const r = rows[0] ?? {};
   return {
     total_bill: Number(r.total_bill ?? 0),
@@ -4593,6 +4617,35 @@ async getStaffSalesReport(
   const unbilled = this._UNBILLED_APPOINTMENT_ROWS_CTE(filters, nextIndex);
   let idx = unbilled.nextIndex;
 
+  // Staff Sales report only: _buildSalesSummaryWhere's EXISTS only gates
+  // which SALES qualify (does this invoice have >=1 matching line item) —
+  // it doesn't stop this query's own `sli` row from being a different,
+  // non-matching line item on that same qualifying sale. Re-apply the same
+  // staff/item-type filters directly against `sli` so every emitted row is
+  // itself a match, not just a sibling of one. Scoped to this function only
+  // — does not change _buildSalesSummaryWhere or any other report.
+  const sliConditions: string[] = [];
+  const sliValues: any[] = [];
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    sliConditions.push(`COALESCE(sli.staff_id, s.staff_id) = ANY($${idx}::uuid[])`);
+    sliValues.push(filters.staff_ids);
+    idx++;
+  } else if (filters.staff_id) {
+    sliConditions.push(`COALESCE(sli.staff_id, s.staff_id) = $${idx}`);
+    sliValues.push(filters.staff_id);
+    idx++;
+  }
+  if (filters.item_types && filters.item_types.length > 0) {
+    sliConditions.push(`sli.item_type = ANY($${idx}::text[])`);
+    sliValues.push(filters.item_types);
+    idx++;
+  } else if (filters.item_type) {
+    sliConditions.push(`sli.item_type = $${idx}`);
+    sliValues.push(filters.item_type);
+    idx++;
+  }
+  const sliWhere = sliConditions.length > 0 ? `AND ${sliConditions.join(" AND ")}` : "";
+
   const page = Math.max(1, Number(filters.page ?? 1));
   const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
   const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
@@ -4609,51 +4662,47 @@ async getStaffSalesReport(
         s.id, s.created_at,
         ${this._STATUS_EXPR} AS status,
         s.payment_method,
-        s.total_amount AS price,
+        -- One row per line item, scoped to that item's own staff/amount —
+        -- never the whole invoice's total_amount. See getProductRetailReport
+        -- for the same one-row-per-line-item + proration pattern.
+        (sli.total_price + COALESCE(sli.tax_amount, 0)) AS price,
         c.full_name AS client_name, c.phone_number AS client_phone,
         st.id AS staff_id,
         NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
-        COALESCE(items.item_description, '—') AS item_description,
-        COALESCE(items.item_types, '—') AS item_types,
+        sli.name AS item_description,
+        sli.item_type AS item_types,
         CASE
-          WHEN s.appointment_id IS NOT NULL THEN pay.paid_from_payments
-          WHEN s.status = 'completed' THEN s.total_amount::numeric
+          WHEN COALESCE(s.subtotal, 0) > 0
+            THEN (CASE WHEN s.appointment_id IS NOT NULL THEN pay.paid_from_payments
+                       WHEN s.status = 'completed' THEN s.total_amount::numeric
+                       ELSE 0 END) * (sli.total_price / s.subtotal)
           ELSE 0
         END AS paid_amount,
-        COALESCE(pay.latest_due, 0) AS due_amount,
+        CASE
+          WHEN COALESCE(s.subtotal, 0) > 0
+            THEN COALESCE(pay.latest_due, 0) * (sli.total_price / s.subtotal)
+          ELSE 0
+        END AS due_amount,
+        -- commission_earned has no per-line-item link, only staff_id — if the
+        -- same staff appears on multiple line items of one sale, each of that
+        -- staff's rows will show the same sale-level commission total (kept
+        -- as-is rather than double-counting/splitting it, since there is no
+        -- way to attribute commission to one line item over another).
         COALESCE(comm.commission_amount, 0) AS commission_amount,
-        COALESCE(NULLIF(items.staff_count, 0), 1) AS staff_count,
         FALSE AS is_unbilled
-      FROM sales s
+      FROM sale_items sli
+      JOIN sales s ON s.id = sli.sale_id
       LEFT JOIN clients c ON s.client_id = c.id
-      LEFT JOIN staff st ON st.id = COALESCE(
-        s.staff_id,
-        (SELECT si.staff_id FROM sale_items si WHERE si.sale_id = s.id AND si.staff_id IS NOT NULL LIMIT 1)
-      )
+      LEFT JOIN staff st ON st.id = COALESCE(sli.staff_id, s.staff_id)
       ${this._PAYMENT_LATERAL}
       ${this._APPOINTMENT_STATUS_JOIN}
-      LEFT JOIN LATERAL (
-        SELECT
-          STRING_AGG(DISTINCT si.name, ', ') AS item_description,
-          STRING_AGG(DISTINCT si.item_type, ', ') AS item_types,
-          -- Distinct staff attributed across this sale's line items (falling
-          -- back to the sale's own staff_id per item, same convention as the
-          -- staff_name join above) — >1 means this sale involved multiple
-          -- staff, which staff_name alone (just the first one found) hides.
-          COUNT(DISTINCT COALESCE(si.staff_id, s.staff_id)) AS staff_count
-        FROM sale_items si
-        WHERE si.sale_id = s.id
-      ) items ON TRUE
       LEFT JOIN LATERAL (
         SELECT SUM(ce.commission_amount) AS commission_amount
         FROM commission_earned ce
         WHERE ce.sale_id = s.id
-          AND ce.staff_id = COALESCE(
-            s.staff_id,
-            (SELECT si.staff_id FROM sale_items si WHERE si.sale_id = s.id AND si.staff_id IS NOT NULL LIMIT 1)
-          )
+          AND ce.staff_id = COALESCE(sli.staff_id, s.staff_id)
       ) comm ON TRUE
-      WHERE ${where}
+      WHERE ${where} ${sliWhere}
     ),
     appt_side AS (
       SELECT
@@ -4662,9 +4711,6 @@ async getStaffSalesReport(
         u.item_description, u.item_types,
         u.paid_amount, u.due_amount,
         0::numeric AS commission_amount,
-        -- Unbilled appointments carry one staff_id for the whole appointment
-        -- (no per-item assignment yet) — never a multi-staff sale.
-        1::bigint AS staff_count,
         TRUE AS is_unbilled
       FROM (${unbilled.sql}) u
     ),
@@ -4679,13 +4725,12 @@ async getStaffSalesReport(
     ${limitClause}
   `;
 
-  const { rows } = await safeQuery(() => pool.query(query, [...values, ...unbilled.values, ...limitValues]));
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...unbilled.values, ...sliValues, ...limitValues]));
   const total = rows.length ? Number(rows[0].total_count) : 0;
   const items: StaffSalesReportRow[] = rows.map((row: any) => ({
     id: row.id,
     staff_id: row.staff_id ?? null,
     staff_name: row.staff_name ?? "—",
-    staff_count: Number(row.staff_count ?? 1),
     is_unbilled: Boolean(row.is_unbilled),
     client_name: row.client_name ?? "Walk-in",
     client_phone: row.client_phone ?? "—",
