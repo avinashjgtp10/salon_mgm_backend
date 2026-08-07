@@ -1364,12 +1364,6 @@ export interface StaffSalesReportRow {
     // Sales report's staff-name click-through to that staff's history.
     staff_id: string | null;
     staff_name: string;
-    // How many distinct staff members are attributed across this sale's line
-    // items — a sale with mixed staff (e.g. one client's service by Staff A
-    // and a retail product by Staff B) still only shows staff_name (the
-    // first one found), so the UI uses this to signal "there's more, click
-    // through to see the full per-item breakdown".
-    staff_count: number;
     // True for synthetic rows sourced from a not-yet-billed appointment
     // (see _UNBILLED_APPOINTMENT_ROWS_CTE) — these have no real sales.id, so
     // the per-item drill-down (GET /api/report/sales-summary/:id) can't be
