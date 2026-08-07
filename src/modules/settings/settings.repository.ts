@@ -1,12 +1,36 @@
 import pool from "../../config/database";
 import { Setting, CreateSettingBody, UpdateSettingBody } from "./settings.types";
 
+// findAll() is hit repeatedly within a single request by unrelated callers
+// that each independently need the settings blob (getActiveTaxes calls it
+// twice on its own — see tax.util.ts — and rewardPointsRepository.getConfig/
+// referralRepository.getConfig each call it again), so a single
+// calculate-totals request could issue up to 6 identical
+// `SELECT * FROM salon_settings WHERE salon_id=$1` round trips. Settings
+// change rarely, so a short TTL cache here fixes every one of those call
+// sites transparently with no signature changes. Invalidated on every write
+// through this repository (upsert/update/delete); the TTL alone is the
+// staleness bound for writes made by other repositories that touch this same
+// table directly (e.g. super-admin's role/subscription permission writes —
+// confirmed those are read via their own separate, already-cached direct
+// queries, not through findAll(), so this cache never masks their writes).
+const SETTINGS_CACHE_TTL_MS = 10_000;
+const settingsCache = new Map<string, { data: Setting[]; expiresAt: number }>();
+
+function invalidateSettingsCache(salonId: string): void {
+  settingsCache.delete(salonId);
+}
+
 export const settingsRepository = {
   async findAll(salonId: string): Promise<Setting[]> {
+    const cached = settingsCache.get(salonId);
+    if (cached && cached.expiresAt > Date.now()) return cached.data;
+
     const { rows } = await pool.query(
       `SELECT * FROM salon_settings WHERE salon_id = $1 ORDER BY key ASC`,
       [salonId],
     );
+    settingsCache.set(salonId, { data: rows, expiresAt: Date.now() + SETTINGS_CACHE_TTL_MS });
     return rows;
   },
 
@@ -30,6 +54,7 @@ export const settingsRepository = {
        RETURNING *`,
       [salonId, body.key, body.value, body.description ?? null],
     );
+    invalidateSettingsCache(salonId);
     return rows[0];
   },
 
@@ -53,6 +78,7 @@ export const settingsRepository = {
        RETURNING *`,
       values,
     );
+    invalidateSettingsCache(salonId);
     return rows[0] || null;
   },
 
@@ -61,6 +87,7 @@ export const settingsRepository = {
       `DELETE FROM salon_settings WHERE id = $1 AND salon_id = $2`,
       [id, salonId],
     );
+    invalidateSettingsCache(salonId);
     return (rowCount ?? 0) > 0;
   },
 };

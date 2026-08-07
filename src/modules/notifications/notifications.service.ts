@@ -8,7 +8,15 @@ import { pushNotificationService } from "./pushNotification.service";
 const ANDROID_NOTIFICATION_CHANNEL_ID = "salonox";
 
 export const notificationsService = {
-  async create(data: { salon_id: string; type: string; title: string; body?: string; event_key?: string }) {
+  async create(data: {
+    salon_id: string; type: string; title: string; body?: string; event_key?: string;
+    // Not persisted (no `notifications` column for it) — carried only on the
+    // live socket push so listening Calendar sessions can skip refetching
+    // when this event's date isn't even in their currently-visible range.
+    // Omitted entirely (not just null) when the caller has no appointment
+    // context, so listeners can tell "no date info" apart from "no date".
+    scheduled_at?: string;
+  }) {
     // `event_key` matches Settings → Notifications' per-event keys (newAppointment,
     // newClient, ...). Omitted by call sites with no matching settings toggle —
     // those always fire, same as before. When present, this is the single choke
@@ -23,7 +31,8 @@ export const notificationsService = {
 
     // Push to all connected clients in this salon room in real-time
     try {
-      getIO().to(`salon:${data.salon_id}`).emit("notification", notification);
+      getIO().to(`salon:${data.salon_id}`).emit("notification",
+        data.scheduled_at ? { ...notification, scheduled_at: data.scheduled_at } : notification);
     } catch (err: any) {
       // socket not ready — ignore, client will fetch on next load
       logger.warn("Notification socket emit failed", {
