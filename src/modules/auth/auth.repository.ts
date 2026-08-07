@@ -50,9 +50,9 @@ export const authRepository = {
       pool.query(
         `INSERT INTO users (
             email, phone, password_hash, first_name, last_name, role,
-            business_name, address, country, country_code
+            business_name, address, country, country_code, is_onboarding_complete
          )
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,FALSE)
          RETURNING
            id, email, phone, first_name, last_name, role,
            business_name, address, country, country_code,
