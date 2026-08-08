@@ -10,6 +10,12 @@ export type ServiceConsumableItem = {
   product_name?: string;
   qty: number;
   unit?: string;
+  // Read-only enrichment — present on responses (see
+  // CONSUMABLES_USED_SUBQUERY), never accepted on write. `stock` is the
+  // product's current on-hand amount in BASE units at the time of the read.
+  stock?: number;
+  bottle_size?: number | null;
+  measure_unit?: string;
 };
 
 export type Service = {
