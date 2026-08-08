@@ -676,6 +676,36 @@ export const appointmentsService = {
                 }));
         }
 
+        // Same idea for the DATE: moving a paid/partial appointment must carry
+        // its already-recorded bill with it. Reports date every row off
+        // sales.created_at, which is stamped once when the sale is first
+        // written and was never revised afterwards — so editing a paid bill's
+        // date moved it on the calendar while every report kept reporting it
+        // under the original date.
+        //
+        // Deliberately AWAITED, unlike the staff reassignment above. That one
+        // only affects commission attribution nobody reads back in the same
+        // breath, but this changes what the reports show — and the client
+        // typically reloads them straight after saving. Fired-and-forgotten,
+        // the response returned before the re-dating landed, so that reload
+        // raced the write and still showed the old date until the user
+        // refreshed again. Awaiting makes the save mean "the bill has moved".
+        // Still non-fatal: a failure here must not reject an otherwise good
+        // appointment update.
+        if (
+            patch.scheduled_at &&
+            new Date(patch.scheduled_at).getTime() !== new Date(existing.scheduled_at).getTime() &&
+            (existing.status === "paid" || existing.status === "partial")
+        ) {
+            try {
+                await salesRepository.updateDateForAppointment(appointmentId, patch.scheduled_at);
+            } catch (err: any) {
+                logger.warn("Sale re-dating failed (non-fatal)", {
+                    appointmentId, newDate: patch.scheduled_at, err: err?.message,
+                });
+            }
+        }
+
         // Adjust stock when product_items list changes (fire-and-forget)
         if (patch.product_items !== undefined) {
             const oldItems = (existing.product_items ?? []).filter(p => p.product_id);
