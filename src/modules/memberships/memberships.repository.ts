@@ -43,23 +43,66 @@ function toMembership(row: MembershipRow): Membership {
   };
 }
 
+// Multi-select filter values arrive comma-joined in a single query param
+// (pricingType=value,percentage) — the same convention the Consumable
+// Inventory filters already use — so each expands to `= ANY(...)` rather than
+// a plain `=`. A single value still works unchanged through the same path.
+function splitMulti(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw.map(String).filter(Boolean);
+  if (typeof raw !== "string") return [];
+  return raw.split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+// Shared by list() and listAll() — the export must apply exactly the filters
+// the on-screen list did, and these two had the same block copied out twice.
+function buildMembershipWhere(q: MembershipsListQuery, salonId: string): { where: string; values: any[]; nextIdx: number } {
+  const conditions: string[] = [];
+  const values: any[] = [];
+  let idx = 1;
+
+  // Always scope to salon
+  conditions.push(`m.salon_id = $${idx++}`);
+  values.push(salonId);
+
+  if (q.search) { conditions.push(`m.name ILIKE $${idx++}`); values.push(`%${q.search}%`); }
+  if (q.sessionType && q.sessionType !== "any") { conditions.push(`m.session_type = $${idx++}`); values.push(q.sessionType); }
+  if (q.colour) { conditions.push(`m.colour = $${idx++}`); values.push(q.colour); }
+
+  // "Any period" is the legacy sentinel the old single-select drawer sent for
+  // "no restriction" — still filtered out so an older client can't turn it
+  // into a literal valid_for match.
+  const validFor = splitMulti(q.validFor).filter((v) => v !== "Any period");
+  if (validFor.length) { conditions.push(`m.valid_for = ANY($${idx++}::text[])`); values.push(validFor); }
+
+  const pricingType = splitMulti(q.pricingType);
+  if (pricingType.length) { conditions.push(`m.pricing_type = ANY($${idx++}::text[])`); values.push(pricingType); }
+
+  const appliesTo = splitMulti(q.appliesTo);
+  if (appliesTo.length) { conditions.push(`m.applies_to = ANY($${idx++}::text[])`); values.push(appliesTo); }
+
+  return { where: `WHERE ${conditions.join(" AND ")}`, values, nextIdx: idx };
+}
+
 export const membershipsRepository = {
 
+  // valid_for is free-form text — it stores whatever duration string the plan
+  // was saved with ("1 year", "365 days", "3 months", "lifetime", even
+  // "367 days"), so the Expiry filter's options can't be a hardcoded list on
+  // the client without silently matching nothing. Returns the values actually
+  // present for this salon.
+  async listFilterOptions(salonId: string): Promise<{ validFor: string[] }> {
+    const { rows } = await pool.query(
+      `SELECT DISTINCT valid_for FROM memberships
+       WHERE salon_id = $1 AND valid_for IS NOT NULL AND valid_for <> ''
+       ORDER BY valid_for ASC`,
+      [salonId]
+    );
+    return { validFor: rows.map((r: any) => String(r.valid_for)) };
+  },
+
   async list(q: MembershipsListQuery, salonId: string): Promise<{ items: Membership[]; total: number }> {
-    const conditions: string[] = [];
-    const values: any[] = [];
-    let idx = 1;
-
-    // Always scope to salon
-    conditions.push(`m.salon_id = $${idx++}`);
-    values.push(salonId);
-
-    if (q.search) { conditions.push(`m.name ILIKE $${idx++}`); values.push(`%${q.search}%`); }
-    if (q.sessionType && q.sessionType !== "any") { conditions.push(`m.session_type = $${idx++}`); values.push(q.sessionType); }
-    if (q.validFor && q.validFor !== "Any period") { conditions.push(`m.valid_for = $${idx++}`); values.push(q.validFor); }
-    if (q.colour) { conditions.push(`m.colour = $${idx++}`); values.push(q.colour); }
-
-    const where = `WHERE ${conditions.join(" AND ")}`;
+    const { where, values, nextIdx } = buildMembershipWhere(q, salonId);
+    let idx = nextIdx;
 
     const countRes = await pool.query(
       `SELECT COUNT(DISTINCT m.id) FROM memberships m ${where}`, values
@@ -79,19 +122,7 @@ export const membershipsRepository = {
   },
 
   async listAll(q: MembershipsListQuery, salonId: string): Promise<Membership[]> {
-    const conditions: string[] = [];
-    const values: any[] = [];
-    let idx = 1;
-
-    conditions.push(`m.salon_id = $${idx++}`);
-    values.push(salonId);
-
-    if (q.search) { conditions.push(`m.name ILIKE $${idx++}`); values.push(`%${q.search}%`); }
-    if (q.sessionType && q.sessionType !== "any") { conditions.push(`m.session_type = $${idx++}`); values.push(q.sessionType); }
-    if (q.validFor && q.validFor !== "Any period") { conditions.push(`m.valid_for = $${idx++}`); values.push(q.validFor); }
-    if (q.colour) { conditions.push(`m.colour = $${idx++}`); values.push(q.colour); }
-
-    const where = `WHERE ${conditions.join(" AND ")}`;
+    const { where, values } = buildMembershipWhere(q, salonId);
     const { rows } = await pool.query(
       `${SELECT_WITH_SERVICES} ${where} GROUP BY m.id ORDER BY m.created_at DESC`, values
     );
