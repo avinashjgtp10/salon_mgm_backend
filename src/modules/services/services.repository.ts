@@ -36,7 +36,16 @@ const CONSUMABLES_USED_SUBQUERY = `
         'product_id', sc.product_id,
         'product_name', p.name,
         'qty', sc.qty,
-        'unit', sc.unit
+        'unit', sc.unit,
+        -- Current on-hand stock in BASE units, carried on the recipe itself.
+        -- Without it the Consumable Usage panel had to look the product up in
+        -- the frontend's shared products cache, which is paged and partial —
+        -- so a consumable that simply wasn't in that page showed "—" and
+        -- "Stock Unknown" however carefully its stock had been set up. This
+        -- subquery already joins products, so it costs nothing extra.
+        'stock', COALESCE(p.amount, 0),
+        'bottle_size', p.bottle_size,
+        'measure_unit', p.measure_unit
       ) ORDER BY sc.sort_order)
      FROM service_consumables sc
      JOIN products p ON p.id = sc.product_id
