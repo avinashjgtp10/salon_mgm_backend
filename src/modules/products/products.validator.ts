@@ -122,8 +122,20 @@ const validateProductFields = (b: Record<string, unknown>, requireName = false) 
     // Both fields are always sent together by the Create/Edit Product forms
     // (a full-form submit, not a sparse patch) — safe to cross-validate here
     // without needing the existing DB row for whichever field is "missing".
-    if (typeof b.amount === "number" && typeof b.qty_alert === "number" && b.qty_alert >= b.amount) {
-        throw new AppError(400, "Low Stock Alert Quantity must be less than the Product Quantity.", "VALIDATION_ERROR");
+    //
+    // qty_alert is in PACKAGES ("Low Stock Alert (in bottles/units)" on the
+    // form), but amount is in BASE units — a 10-bottle consumable of 1000 ml
+    // stores amount = 10000. Comparing the two raw made this rule silently
+    // unenforceable for consumables (50 >= 10000 is false), so an alert of 50
+    // bottles against 10 bottles of stock saved happily while the identical
+    // mistake on a retail product was correctly rejected.
+    if (typeof b.amount === "number" && typeof b.qty_alert === "number") {
+        const stockInAlertUnits = (typeof b.bottle_size === "number" && b.bottle_size > 0)
+            ? Math.ceil(b.amount / b.bottle_size)
+            : b.amount;
+        if (b.qty_alert >= stockInAlertUnits) {
+            throw new AppError(400, "Low Stock Alert Quantity must be less than the Product Quantity.", "VALIDATION_ERROR");
+        }
     }
     if (!isOptionalString(b.short_description)) {
         throw new AppError(400, "short_description must be a string", "VALIDATION_ERROR");

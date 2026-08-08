@@ -122,7 +122,15 @@ export const productsRepository = {
         }
         if (filters.stock !== undefined && filters.stock !== "all") {
             if (filters.stock === "low") {
-                conditions.push(`(${prefix}amount > 0 AND ${prefix}amount <= ${prefix}qty_alert)`);
+                // qty_alert is a PACKAGE count ("Low Stock Alert (in bottles/
+                // units)") while amount is base units, so a consumable has to
+                // be compared as bottles or this filter never matches it —
+                // same CEIL the Consumable Inventory page uses.
+                conditions.push(`(${prefix}amount > 0 AND (
+                    CASE WHEN ${prefix}bottle_size IS NOT NULL AND ${prefix}bottle_size > 0
+                         THEN CEIL(COALESCE(${prefix}amount, 0) / ${prefix}bottle_size)
+                         ELSE COALESCE(${prefix}amount, 0)
+                    END) <= ${prefix}qty_alert)`);
             } else if (filters.stock === "out_of_stock") {
                 conditions.push(`${prefix}amount = 0`);
             }

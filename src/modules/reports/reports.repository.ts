@@ -1110,6 +1110,45 @@ const buildProductRevenueSourceQuery = (
   };
 };
 
+// Stock expressed in the same unit that supply_price/retail_price are quoted
+// in, for valuation only.
+//
+// products.amount is the canonical stock in BASE units (ml/g/pcs) — a 1000 ml
+// bottle with 1.4 bottles left stores amount = 1400. But supply_price and
+// retail_price are per PACKAGE (₹1000 for that 1000 ml bottle), not per ml.
+// Multiplying the two directly mixes units and overstates value by exactly
+// bottle_size — that's how a ₹1,400 shelf of shampoo reported as ₹14,00,000.
+//
+// Deliberately NOT the CEIL(...) bottle count used for the Consumable
+// Inventory "Product Quantity" column: that answers "how many bottles are on
+// the shelf" (1.4 → 2), whereas value wants the real fraction remaining
+// (1.4 bottles → ₹1,400). Products with no bottle_size are already counted in
+// the unit they're priced in, so they pass through untouched.
+const STOCK_IN_PRICING_UNITS_SQL = `
+  CASE WHEN p.bottle_size IS NOT NULL AND p.bottle_size > 0
+       THEN COALESCE(p.amount, 0) / p.bottle_size
+       ELSE COALESCE(p.amount, 0)
+  END`;
+
+const UNIT_COST_SQL = `COALESCE(NULLIF(p.supply_price, 0), p.retail_price, 0)`;
+
+// Stock counted in the same unit qty_alert is entered in.
+//
+// The form asks for "Low Stock Alert (in bottles/units)", so the threshold is a
+// PACKAGE count while p.amount is base units. Comparing them raw meant a
+// consumable only ever tripped its own alert once it was down to the last few
+// millilitres (495 bottles vs an alert of 2 needed amount <= 2 ml), so Low
+// Stock was effectively dead for every product with a bottle_size.
+//
+// CEIL here, matching consumable-inventory.repository.ts's PRODUCT_QTY_EXPR,
+// which already compared correctly — this brings the report in line with the
+// Consumable Inventory page rather than inventing a third convention.
+const STOCK_IN_ALERT_UNITS_SQL = `
+  CASE WHEN p.bottle_size IS NOT NULL AND p.bottle_size > 0
+       THEN CEIL(COALESCE(p.amount, 0) / p.bottle_size)
+       ELSE COALESCE(p.amount, 0)
+  END`;
+
 // ======================================================
 // SALES SUMMARY REPORT (independent report API)
 // POST /api/report/sales-summary — reads sales/sale_items/payments directly.
@@ -3865,11 +3904,11 @@ _buildProductInventoryWhere(
     values.push(filters.brand_id);
   }
   if (filters.stock_status === "low_stock") {
-    where.push(`(p.amount > 0 AND p.amount <= p.qty_alert)`);
+    where.push(`(p.amount > 0 AND (${STOCK_IN_ALERT_UNITS_SQL}) <= p.qty_alert)`);
   } else if (filters.stock_status === "out_of_stock") {
     where.push(`p.amount = 0`);
   } else if (filters.stock_status === "in_stock") {
-    where.push(`p.amount > p.qty_alert`);
+    where.push(`(${STOCK_IN_ALERT_UNITS_SQL}) > p.qty_alert`);
   }
   if (filters.date_from) {
     where.push(`p.created_at >= $${idx++}::date`);
@@ -3896,8 +3935,8 @@ async getProductInventoryReportStats(
   const query = `
     SELECT
       COUNT(*)::int AS total_products,
-      COALESCE(SUM(p.amount * COALESCE(NULLIF(p.supply_price, 0), p.retail_price, 0)), 0) AS total_stock_value,
-      COUNT(*) FILTER (WHERE p.amount > 0 AND p.amount <= p.qty_alert)::int AS low_stock_items,
+      COALESCE(SUM((${STOCK_IN_PRICING_UNITS_SQL}) * ${UNIT_COST_SQL}), 0) AS total_stock_value,
+      COUNT(*) FILTER (WHERE p.amount > 0 AND (${STOCK_IN_ALERT_UNITS_SQL}) <= p.qty_alert)::int AS low_stock_items,
       COUNT(*) FILTER (WHERE p.amount = 0)::int AS out_of_stock_items
     FROM products p
     WHERE ${where}
@@ -3948,13 +3987,16 @@ async getProductInventoryReportRows(
       p.created_at AS date_added,
       COALESCE(p.amount, 0) AS current_stock,
       COALESCE(p.qty_alert, 0) AS reorder_level,
-      COALESCE(NULLIF(p.supply_price, 0), p.retail_price, 0) AS unit_cost,
-      COALESCE(p.amount, 0) * COALESCE(NULLIF(p.supply_price, 0), p.retail_price, 0) AS total_value,
+      ${UNIT_COST_SQL} AS unit_cost,
+      -- Note current_stock is in base units while unit_cost is per package, so
+      -- for a consumable with a bottle_size these two columns deliberately do
+      -- NOT multiply out to total_value. See STOCK_IN_PRICING_UNITS_SQL.
+      (${STOCK_IN_PRICING_UNITS_SQL}) * ${UNIT_COST_SQL} AS total_value,
       COALESCE(sales_agg.quantity, 0) AS sales_qty,
       COALESCE(sales_agg.revenue, 0) AS sales_revenue,
       CASE
         WHEN COALESCE(p.amount, 0) = 0 THEN 'out_of_stock'
-        WHEN p.amount <= p.qty_alert THEN 'low_stock'
+        WHEN (${STOCK_IN_ALERT_UNITS_SQL}) <= p.qty_alert THEN 'low_stock'
         ELSE 'in_stock'
       END AS status,
       COUNT(*) OVER() AS total_count
