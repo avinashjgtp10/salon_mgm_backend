@@ -1441,6 +1441,46 @@ async getCustomerFrequencyReport(
 },
 
 // ======================================================
+// LOST CUSTOMERS REPORT (independent report API)
+// POST /api/report/lost-customers
+// ======================================================
+
+async getLostCustomersReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            search: asString(body.search),
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+            lost_days: body.lost_days !== undefined ? Number(body.lost_days) : undefined,
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getLostCustomersReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Lost customers report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
 // STAFF SALES REPORT (independent report API)
 // POST /api/report/staff-sales
 // ======================================================
