@@ -1,4 +1,4 @@
-import type { LineItem } from './pricing.engine';
+import type { DiscountScope, LineItem } from './pricing.engine';
 
 export interface CalculateTotalsBody {
   client_id?: string;
@@ -16,6 +16,9 @@ export interface CalculateTotalsBody {
 
   discountType: 'percentage' | 'flat';
   discountValue: number;
+  // Buckets (or "bill") the discount applies to. Omitted by older clients →
+  // legacy scope; see ComputeBillTotalsInput.discountAppliesTo.
+  discountAppliesTo?: DiscountScope[];
 
   couponCode?: string;
 
@@ -54,6 +57,10 @@ export interface CalculateTotalsResponse {
   itemDiscountTotal: number;
   subtotal: number;
   manualDiscount: number;
+  // Post-tax value the bill discount was computed against — see
+  // BillTotalsResult.discountBase. Drives the modal's flat-amount clamp and
+  // the "X% of ₹N eligible" hint.
+  discountBase: number;
   totalDisc: number;
   taxable: number;
   gstAmount: number;

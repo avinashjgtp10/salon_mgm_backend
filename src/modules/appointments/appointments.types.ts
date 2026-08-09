@@ -1,3 +1,5 @@
+import type { DiscountScope } from "../pricing/pricing.engine";
+
 export type AppointmentStatus =
     | "booked"
     | "paid"
@@ -157,6 +159,11 @@ export type Appointment = {
     // Charges & discount (estimate, captured pre-payment)
     discount_value: number;
     discount_type: 'percentage' | 'flat';
+    // Which item buckets the bill discount applies to (the staff "Apply to"
+    // checkboxes). NULL on every appointment created before this column
+    // existed — read as legacy scope, NOT as "all four". See
+    // ComputeBillTotalsInput.discountAppliesTo in pricing.engine.ts.
+    discount_applies_to: DiscountScope[] | null;
     ex_charges: number;
     tip_amount: number;
     gst_percent: number;
@@ -206,6 +213,7 @@ export type CreateAppointmentBody = {
     // Charges & discount (estimate, captured pre-payment)
     discount_value?: number;
     discount_type?: 'percentage' | 'flat';
+    discount_applies_to?: DiscountScope[] | null;
     ex_charges?: number;
     tip_amount?: number;
     gst_percent?: number;
