@@ -42,6 +42,8 @@ import {
     CustomerFrequencyReportStats,
     LostCustomersReportRow,
     LostCustomersReportStats,
+    ReferralReportRow,
+    ReferralReportStats,
     StaffSalesReportRow,
     StaffSalesReportStats,
     StaffPerformanceReportRow,
@@ -4816,6 +4818,259 @@ async getLostCustomersReportRows(
     first_visit: row.first_visit,
     last_visit: row.last_visit,
     days_since_last_visit: Number(row.days_since_last_visit ?? 0),
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// ======================================================
+// REFERRAL REPORT (independent report API)
+// POST /api/report/referral — one row per referred client (a clients row
+// carrying referred_by_client_id), joined back to the referrer. Reads
+// clients/sales/referral_ledger directly, never the Appointment API.
+//
+// Two money columns that are easy to conflate:
+//   revenue_generated — SUM of the REFERRED client's completed sales.
+//   reward_earned     — what the REFERRER was actually credited, read from
+//                       referral_ledger (source_type = 'referral_payout',
+//                       source_id = the referred client). Reading the ledger
+//                       rather than referral_config means a reward that never
+//                       fired shows ₹0 instead of the configured amount.
+// ======================================================
+
+_buildReferralWhere(
+  salonId: string,
+  filters: { search?: string; staff_ids?: string[]; reward_status?: string }
+): { where: string; values: any[]; nextIndex: number } {
+  // `c` = the referred client, `r` = the referrer.
+  const values: any[] = [salonId];
+  const where = ["c.salon_id = $1", "c.referred_by_client_id IS NOT NULL"];
+  let idx = 2;
+
+  if (filters.reward_status === "rewarded" || filters.reward_status === "pending") {
+    // referral_reward_status is NULL until a code is linked and 'pending'
+    // thereafter, so anything that isn't 'completed' counts as pending.
+    where.push(
+      filters.reward_status === "rewarded"
+        ? `c.referral_reward_status = 'completed'`
+        : `COALESCE(c.referral_reward_status, 'pending') <> 'completed'`
+    );
+  }
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    // Staff who served the REFERRED client on any completed sale.
+    where.push(`EXISTS (
+      SELECT 1 FROM sales s2
+      JOIN sale_items si2 ON si2.sale_id = s2.id
+      WHERE s2.client_id = c.id AND s2.status = 'completed'
+        AND COALESCE(si2.staff_id, s2.staff_id) = ANY($${idx++}::uuid[])
+    )`);
+    values.push(filters.staff_ids);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(r.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+      OR COALESCE(r.referral_code, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+// Shared aggregation CTE — one row per referral link. The date range filters
+// on the referral date (when the referred client was created), which is the
+// column the report is sorted and reported on.
+_REFERRAL_AGG(where: string, startDateIdx: number | null, endDateIdx: number | null): string {
+  const rangeClause = startDateIdx
+    ? `AND ((c.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata')::date >= $${startDateIdx}::date${
+        endDateIdx ? ` AND ((c.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata')::date <= $${endDateIdx}::date` : ""
+      }`
+    : "";
+
+  return `
+    WITH referral_base AS (
+      SELECT
+        c.id   AS referred_client_id,
+        r.id   AS referrer_client_id,
+        COALESCE(NULLIF(TRIM(r.full_name), ''), 'Walk-in') AS referrer_name,
+        COALESCE(NULLIF(TRIM(c.full_name), ''), 'Walk-in') AS referred_name,
+        -- clients.created_at is a naive timestamp (unlike sales.created_at,
+        -- which is timestamptz), and the session runs at UTC — so it must be
+        -- stamped AT TIME ZONE 'UTC' first to become an instant, then
+        -- converted to IST. Converting directly would reinterpret the UTC
+        -- wall-clock as IST and shift the date back by 5.5 hours.
+        -- Emitted as TEXT ('YYYY-MM-DD'), not date: the pg driver has no
+        -- parser registered for OID 1082, so a bare date value comes back as a JS
+        -- Date at IST-shifted UTC ("...T18:30:00Z") and the frontend's
+        -- new Date() would render it as the FOLLOWING day.
+        TO_CHAR((c.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS referral_date,
+        CASE WHEN c.referral_reward_status = 'completed' THEN 'rewarded' ELSE 'pending' END AS reward_status
+      FROM clients c
+      INNER JOIN clients r ON r.id = c.referred_by_client_id
+      WHERE ${where}
+      ${rangeClause}
+    ),
+    sale_agg AS (
+      SELECT
+        s.client_id,
+        COUNT(*)::int AS total_visits,
+        COALESCE(SUM(s.total_amount::numeric), 0) AS revenue_generated,
+        -- Kept as TEXT for the same reason as referral_date above.
+        MIN(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS first_visit
+      FROM sales s
+      WHERE s.status = 'completed'
+        AND s.client_id IN (SELECT referred_client_id FROM referral_base)
+      GROUP BY s.client_id
+    ),
+    reward_agg AS (
+      -- Sum rather than pick one row: an adjustment written against the same
+      -- referral must net off the original payout, not be ignored.
+      SELECT source_id::uuid AS referred_client_id,
+             COALESCE(SUM(amount::numeric), 0) AS reward_earned
+      FROM referral_ledger
+      WHERE source_type = 'referral_payout' AND source_id IS NOT NULL
+      GROUP BY source_id
+    ),
+    -- The staff member on the referred client's most recent completed sale —
+    -- "who is serving this referred customer", not every staff who ever did.
+    staff_pick AS (
+      SELECT DISTINCT ON (s.client_id)
+        s.client_id,
+        COALESCE(
+          NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), ''),
+          '—'
+        ) AS staff_name
+      FROM sales s
+      LEFT JOIN sale_items si ON si.sale_id = s.id
+      LEFT JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
+      WHERE s.status = 'completed'
+        AND s.client_id IN (SELECT referred_client_id FROM referral_base)
+      ORDER BY s.client_id, s.created_at DESC
+    ),
+    referrals AS (
+      SELECT
+        b.*,
+        COALESCE(sa.total_visits, 0)       AS total_visits,
+        COALESCE(sa.revenue_generated, 0)  AS revenue_generated,
+        sa.first_visit                     AS first_visit,
+        GREATEST(COALESCE(ra.reward_earned, 0), 0) AS reward_earned,
+        COALESCE(sp.staff_name, '—')       AS staff_name
+      FROM referral_base b
+      LEFT JOIN sale_agg   sa ON sa.client_id = b.referred_client_id
+      LEFT JOIN reward_agg ra ON ra.referred_client_id = b.referred_client_id
+      LEFT JOIN staff_pick sp ON sp.client_id = b.referred_client_id
+    )
+  `;
+},
+
+async getReferralReportStats(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; search?: string; staff_ids?: string[]; reward_status?: string }
+): Promise<ReferralReportStats> {
+  const { where, values, nextIndex } = this._buildReferralWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const dateValues: any[] = [];
+  let startDateIdx: number | null = null;
+  let endDateIdx: number | null = null;
+  if (filters.start_date) {
+    startDateIdx = idx++;
+    dateValues.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    endDateIdx = idx++;
+    dateValues.push(filters.end_date);
+  }
+
+  const query = `
+    ${this._REFERRAL_AGG(where, startDateIdx, endDateIdx)}
+    SELECT
+      COUNT(*)::int AS total_referrals,
+      COUNT(*) FILTER (WHERE reward_status = 'rewarded')::int AS rewarded_referrals,
+      COALESCE(SUM(revenue_generated), 0) AS total_revenue_generated,
+      COALESCE(SUM(reward_earned), 0) AS total_reward_earned
+    FROM referrals
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...dateValues]));
+  const r = rows[0] ?? {};
+  return {
+    total_referrals: Number(r.total_referrals ?? 0),
+    rewarded_referrals: Number(r.rewarded_referrals ?? 0),
+    total_revenue_generated: Math.round(Number(r.total_revenue_generated ?? 0)),
+    total_reward_earned: Math.round(Number(r.total_reward_earned ?? 0)),
+  };
+},
+
+async getReferralReportRows(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string; staff_ids?: string[];
+    reward_status?: string; page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: ReferralReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildReferralWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const dateValues: any[] = [];
+  let startDateIdx: number | null = null;
+  let endDateIdx: number | null = null;
+  if (filters.start_date) {
+    startDateIdx = idx++;
+    dateValues.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    endDateIdx = idx++;
+    dateValues.push(filters.end_date);
+  }
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    ${this._REFERRAL_AGG(where, startDateIdx, endDateIdx)}
+    SELECT
+      referred_client_id, referrer_client_id, referrer_name, referred_name,
+      referral_date, first_visit, total_visits, revenue_generated,
+      reward_earned, reward_status, staff_name,
+      COUNT(*) OVER() AS total_count
+    FROM referrals
+    ORDER BY referral_date DESC NULLS LAST, referrer_name ASC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...dateValues, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: ReferralReportRow[] = rows.map((row: any) => ({
+    referred_client_id: row.referred_client_id,
+    referrer_client_id: row.referrer_client_id,
+    referrer_name: row.referrer_name,
+    referred_name: row.referred_name,
+    referral_date: row.referral_date,
+    first_visit: row.first_visit,
+    total_visits: Number(row.total_visits ?? 0),
+    revenue_generated: Math.round(Number(row.revenue_generated ?? 0)),
+    reward_earned: Math.round(Number(row.reward_earned ?? 0)),
+    reward_status: row.reward_status === "rewarded" ? "rewarded" : "pending",
+    staff_name: row.staff_name,
   }));
   const effectiveLimit = limit ?? Math.max(total, 1);
   return {

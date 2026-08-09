@@ -1383,6 +1383,63 @@ export interface LostCustomersReportResponse {
 }
 
 // ===============================
+// Referral Report (independent report API — POST /api/report/referral)
+// One row per REFERRED client (i.e. per clients.referred_by_client_id link),
+// joined back to the referrer. Reads clients/sales/referral_ledger directly,
+// never the Appointment API. "Reward Earned" comes from the referral_ledger
+// payout row actually written for that referral (source_type =
+// 'referral_payout', source_id = the referred client), so an un-triggered
+// reward reads ₹0 rather than the configured amount.
+// ===============================
+
+export interface ReferralReportFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    // 'rewarded' | 'pending' — filters on the REFERRER's payout status
+    // (clients.referral_reward_status on the referred client's row).
+    reward_status?: string;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface ReferralReportRow {
+    referred_client_id: string | null;
+    referrer_client_id: string | null;
+    referrer_name: string;
+    referred_name: string;
+    referral_date: string | null;
+    first_visit: string | null;
+    total_visits: number;
+    revenue_generated: number;
+    reward_earned: number;
+    reward_status: "rewarded" | "pending";
+    staff_name: string;
+}
+
+export interface ReferralReportStats {
+    total_referrals: number;
+    rewarded_referrals: number;
+    total_revenue_generated: number;
+    total_reward_earned: number;
+}
+
+export interface ReferralReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface ReferralReportResponse {
+    rows: ReferralReportRow[];
+    pagination: ReferralReportPagination;
+    stats: ReferralReportStats;
+}
+
+// ===============================
 // Staff Sales Report (independent report API — POST /api/report/staff-sales)
 // Reads directly from sales/sale_items/payments, one row per transaction,
 // optionally filtered to one staff member. Commission is joined from

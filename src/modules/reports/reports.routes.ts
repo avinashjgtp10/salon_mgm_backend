@@ -170,6 +170,18 @@ router.post(
 );
 
 // ======================================================
+// REFERRAL REPORT (independent report API)
+// One row per referred client, joined back to the referrer. Reads
+// clients/sales/referral_ledger directly — never calls the Appointment API.
+// ======================================================
+
+router.post(
+    "/referral",
+    ...guard,
+    reportsController.getReferralReport
+);
+
+// ======================================================
 // CLIENT RATING REPORT (independent report API)
 // Reads the reviews table directly — never calls into the reviews module's
 // service/repository, and never calls the Appointment API/service.
