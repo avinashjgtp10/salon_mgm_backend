@@ -54,6 +54,19 @@ const CONSUMABLES_USED_SUBQUERY = `
   ) AS consumables_used
 `;
 
+// How many staff are explicitly assigned to a service. Spliced into the list
+// SELECTs so the Service menu can show "4 staff" per row without the caller
+// fetching each service by id (the LIST endpoint deliberately omits the full
+// `staff` relation).
+//
+// NOTE 0 does NOT mean "nobody can perform this". No service_staff rows is how
+// "every staff member, including future hires" is stored — see replaceStaff and
+// the buildPayload comment in the frontend's useServiceForm. Callers must render
+// 0 as "All staff", never as "0 staff".
+const STAFF_COUNT_SUBQUERY = `
+  (SELECT COUNT(*)::int FROM service_staff ss WHERE ss.service_id = s.id) AS staff_count
+`;
+
 // ─── Query builders ───────────────────────────────────────────────────────────
 
 const buildServiceWhere = (q: ListServicesQuery, salonId: string) => {
@@ -123,7 +136,8 @@ const buildBundleWhere = (q: ListBundlesQuery, salonId: string) => {
 export const servicesRepository = {
   async findById(id: string, salonId: string): Promise<Service | null> {
     const { rows } = await pool.query(
-      `SELECT s.*, s.duration_minutes AS duration, c.name AS category_name, ${CONSUMABLES_USED_SUBQUERY}
+      `SELECT s.*, s.duration_minutes AS duration, c.name AS category_name,
+              ${STAFF_COUNT_SUBQUERY}, ${CONSUMABLES_USED_SUBQUERY}
        FROM services s
        LEFT JOIN service_categories c ON c.id = s.category_id
        WHERE s.id = $1 AND s.salon_id = $2`,
@@ -145,7 +159,8 @@ export const servicesRepository = {
     const total: number = countRes.rows[0]?.total ?? 0;
 
     const dataRes = await pool.query(
-      `SELECT s.*, s.duration_minutes AS duration, c.name AS category_name, ${CONSUMABLES_USED_SUBQUERY}
+      `SELECT s.*, s.duration_minutes AS duration, c.name AS category_name,
+              ${STAFF_COUNT_SUBQUERY}, ${CONSUMABLES_USED_SUBQUERY}
        FROM services s
        LEFT JOIN service_categories c ON c.id = s.category_id
        ${whereSql}
@@ -163,7 +178,8 @@ export const servicesRepository = {
   async listAll(query: ListServicesQuery, salonId: string): Promise<Service[]> {
     const { whereSql, values } = buildServiceWhere(query, salonId);
     const { rows } = await pool.query(
-      `SELECT s.*, s.duration_minutes AS duration, c.name AS category_name, ${CONSUMABLES_USED_SUBQUERY}
+      `SELECT s.*, s.duration_minutes AS duration, c.name AS category_name,
+              ${STAFF_COUNT_SUBQUERY}, ${CONSUMABLES_USED_SUBQUERY}
        FROM services s
        LEFT JOIN service_categories c ON c.id = s.category_id
        ${whereSql}

@@ -43,6 +43,9 @@ export type Service = {
   resource_required: boolean;
   is_active: boolean;
   consumables_used: ServiceConsumableItem[];
+  // Read-only, from STAFF_COUNT_SUBQUERY. 0 means "all staff" (no
+  // service_staff rows), not "nobody" — render it accordingly.
+  staff_count?: number;
   created_at: string;
   updated_at: string;
 };
