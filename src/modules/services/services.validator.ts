@@ -40,9 +40,37 @@ const validateConsumablesUsed = (v: unknown, field: string): void => {
 
 // ─── Services ─────────────────────────────────────────────────────────────────
 
+// Everything the create/update endpoints can actually persist — the same set
+// the repository's INSERT and its update ALLOWLIST cover, plus the two
+// join-table inputs.
+//
+// The API used to accept any key and return 201, so a field the frontend sent
+// but the DB had no column for vanished with no error. That is how
+// consumables_used went unpersisted until a migration caught up, and how
+// discounted_price / padding_before / padding_after / gender_preference /
+// image_url survived for so long. Warning here means the next one surfaces
+// immediately instead of months later. Deliberately a warning, not a 400: an
+// older client sending a stale field should not have its save rejected.
+const KNOWN_SERVICE_KEYS = new Set([
+  "name", "category_id", "treatment_type", "description",
+  "price_type", "price", "duration", "is_active",
+  "online_booking", "commission_enabled", "resource_required",
+  "staff_ids", "consumables_used",
+]);
+
+function warnUnknownKeys(body: Record<string, unknown>, route: string): void {
+  const unknown = Object.keys(body ?? {}).filter((k) => !KNOWN_SERVICE_KEYS.has(k));
+  if (unknown.length > 0) {
+    console.warn(
+      `[services] ${route}: ignoring unknown field(s) that no column exists for: ${unknown.join(", ")}`,
+    );
+  }
+}
+
 export const validateCreateService = (req: Request, _res: Response, next: NextFunction) => {
   try {
     const b = req.body;
+    warnUnknownKeys(b, "POST /services");
     if (!isNonEmptyString(b.name))           throw new AppError(400, "name is required", "VALIDATION_ERROR");
     if (!isUUID(b.category_id))              throw new AppError(400, "category_id is required and must be a UUID", "VALIDATION_ERROR");
     if (!isOptionalString(b.treatment_type)) throw new AppError(400, "treatment_type must be a string", "VALIDATION_ERROR");
@@ -62,6 +90,7 @@ export const validateCreateService = (req: Request, _res: Response, next: NextFu
 export const validateUpdateService = (req: Request, _res: Response, next: NextFunction) => {
   try {
     const b = req.body;
+    warnUnknownKeys(b, "PATCH /services/:id");
     if (b.name !== undefined && !isNonEmptyString(b.name)) throw new AppError(400, "name must be a non-empty string", "VALIDATION_ERROR");
     if (!isOptionalUUID(b.category_id))      throw new AppError(400, "category_id must be a UUID", "VALIDATION_ERROR");
     if (!isOptionalString(b.treatment_type)) throw new AppError(400, "treatment_type must be a string", "VALIDATION_ERROR");

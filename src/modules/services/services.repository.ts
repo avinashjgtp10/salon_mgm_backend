@@ -175,11 +175,14 @@ export const servicesRepository = {
 
   async create(data: CreateServiceBody, salonId: string): Promise<Service> {
     const { rows } = await pool.query(
+      // is_active is written explicitly rather than left to the column
+      // default: the form has an Active checkbox, and relying on DEFAULT TRUE
+      // meant creating a service as inactive silently did nothing.
       `INSERT INTO services (
         salon_id, name, category_id, treatment_type, description,
         price_type, price, duration_minutes,
-        online_booking, commission_enabled, resource_required
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+        online_booking, commission_enabled, resource_required, is_active
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
       RETURNING *, duration_minutes AS duration`,
       [
         salonId,
@@ -193,6 +196,7 @@ export const servicesRepository = {
         data.online_booking ?? true,
         data.commission_enabled ?? false,
         data.resource_required ?? false,
+        data.is_active ?? true,
       ]
     );
     return rows[0];
