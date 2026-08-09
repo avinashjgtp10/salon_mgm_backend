@@ -405,6 +405,15 @@ export const paymentsService = {
           const activeTaxesForCeiling = data.include_gst === false ? [] : await getActiveTaxes(data.salon_id).catch(() => []);
           const preliminaryTotals = computeBillTotals({
             actualAmounts: { service: serviceTotal, packages: packageTotal, product: productTotal, membership: membershipTotal },
+            // Deliberately 'flat' with NO discountAppliesTo: what arrives here
+            // is an already-resolved ₹ amount that the preview engine computed
+            // (and already scoped/capped) from the staff's %-or-flat input and
+            // their Apply-to selection. Threading discountAppliesTo through
+            // here too would re-apply that cap to an amount it was already
+            // applied to, shrinking the discount a second time on bills whose
+            // selected base is smaller than the charge. Omitting it selects
+            // legacy/uncapped scope, which is exactly right for a pre-resolved
+            // amount. Do not "fix" this by passing the bill's selection.
             discountType: 'flat',
             discountValue: frontendManualDiscount,
             couponDiscount: frontendCouponDiscount,

@@ -59,6 +59,56 @@ import {
     ClientRatingReportStats,
 } from "./reports.types";
 
+// ─── Unbilled-appointment Bill Discount ──────────────────────────────────────
+// Appointments with no sales row yet have no stored total, so a few reports
+// estimate one from the raw appointment columns. These two snippets are the
+// discount half of that estimate, kept scope-aware so the estimate agrees with
+// what the bill will actually charge (pricing.engine.ts::computeBillTotals)
+// about WHICH items a Bill Discount reduces.
+//
+// Deliberately still a coarser grain than the engine in one respect: the
+// engine's percentage base is POST-tax (buckets + their exclusive GST), while
+// these run pre-tax, because this query only has the single blended
+// a.gst_percent to work with, not the per-bucket tax config. That
+// approximation predates this and is unchanged here — only the bucket scope is
+// being corrected.
+//
+// NULL discount_applies_to = legacy scope (percentage over everything except
+// product; flat uncapped), matching the engine's undefined case exactly so a
+// pre-feature appointment estimates the same way it was priced.
+// "bill" scope is exclusive and means the whole items total, not a sum of
+// ticked buckets — matched first so a stored ["bill"] never falls through to
+// the per-bucket arithmetic below (which would score it as 0, no buckets set).
+const _UNBILLED_DISCOUNTABLE_BASE = `(CASE WHEN a.discount_applies_to @> '"bill"'::jsonb THEN (
+    COALESCE(it.service_total, 0)
+  + COALESCE(it.package_total, 0)
+  + COALESCE(it.membership_total, 0)
+  + COALESCE(it.product_total, 0)
+) ELSE (
+    COALESCE(it.service_total, 0)
+      * (CASE WHEN a.discount_applies_to IS NULL
+                OR a.discount_applies_to @> '"service"'::jsonb THEN 1 ELSE 0 END)
+  + COALESCE(it.package_total, 0)
+      * (CASE WHEN a.discount_applies_to IS NULL
+                OR a.discount_applies_to @> '"packages"'::jsonb THEN 1 ELSE 0 END)
+  + COALESCE(it.membership_total, 0)
+      * (CASE WHEN a.discount_applies_to IS NULL
+                OR a.discount_applies_to @> '"membership"'::jsonb THEN 1 ELSE 0 END)
+  + COALESCE(it.product_total, 0)
+      * (CASE WHEN a.discount_applies_to IS NOT NULL
+                AND a.discount_applies_to @> '"product"'::jsonb THEN 1 ELSE 0 END)
+) END)`;
+
+const _UNBILLED_MANUAL_DISCOUNT = `(
+  CASE
+    WHEN a.discount_type = 'percentage'
+      THEN ${_UNBILLED_DISCOUNTABLE_BASE} * COALESCE(a.discount_value::numeric, 0) / 100
+    WHEN a.discount_applies_to IS NULL
+      THEN COALESCE(a.discount_value::numeric, 0)
+    ELSE LEAST(COALESCE(a.discount_value::numeric, 0), ${_UNBILLED_DISCOUNTABLE_BASE})
+  END
+)`;
+
 // ======================================================
 // LEGACY REPORTS (dev) — free-standing helpers/interfaces used by the
 // legacy reportsRepository methods below (mounted at /api/v1/reports).
@@ -267,18 +317,7 @@ const APPOINTMENT_BASE_CTES = `
                   + COALESCE(it.membership_total, 0)
                 )
                 -
-                CASE
-                  WHEN a.discount_type = 'percentage'
-                  THEN (
-                    (
-                      COALESCE(it.service_total, 0)
-                      + COALESCE(it.package_total, 0)
-                      + COALESCE(it.product_total, 0)
-                      + COALESCE(it.membership_total, 0)
-                    ) * COALESCE(a.discount_value::numeric, 0) / 100
-                  )
-                  ELSE COALESCE(a.discount_value::numeric, 0)
-                END
+                ${_UNBILLED_MANUAL_DISCOUNT}
                 + COALESCE(a.ex_charges::numeric, 0)
                 + (
                   (
@@ -289,18 +328,7 @@ const APPOINTMENT_BASE_CTES = `
                       + COALESCE(it.membership_total, 0)
                     )
                     -
-                    CASE
-                      WHEN a.discount_type = 'percentage'
-                      THEN (
-                        (
-                          COALESCE(it.service_total, 0)
-                          + COALESCE(it.package_total, 0)
-                          + COALESCE(it.product_total, 0)
-                          + COALESCE(it.membership_total, 0)
-                        ) * COALESCE(a.discount_value::numeric, 0) / 100
-                      )
-                      ELSE COALESCE(a.discount_value::numeric, 0)
-                    END
+                    ${_UNBILLED_MANUAL_DISCOUNT}
                     + COALESCE(a.ex_charges::numeric, 0)
                   ) * COALESCE(a.gst_percent::numeric, 0) / 100
                 )
@@ -1515,9 +1543,17 @@ _UNBILLED_APPOINTMENT_ROWS_CTE(
         -- rules, which isn't reproducible here without that config; gst_percent
         -- is the single stored number closest to "the rate that was actually
         -- applied to this specific bill".
-        (CASE WHEN a.discount_type = 'percentage'
-               THEN COALESCE(items.items_total, 0) * (COALESCE(a.discount_value, 0) / 100)
-               ELSE COALESCE(a.discount_value, 0) END) AS manual_discount,
+        -- Scoped to this bill's "Apply to" selection, so the estimate agrees
+        -- with the engine about WHICH items the discount reduces; flat is
+        -- capped at that same base unless this is a legacy (NULL) bill, which
+        -- keeps the uncapped subtraction it was priced under.
+        (CASE
+           WHEN a.discount_type = 'percentage'
+             THEN COALESCE(items.discountable_total, 0) * (COALESCE(a.discount_value, 0) / 100)
+           WHEN a.discount_applies_to IS NULL
+             THEN COALESCE(a.discount_value, 0)
+           ELSE LEAST(COALESCE(a.discount_value, 0), COALESCE(items.discountable_total, 0))
+         END) AS manual_discount,
         -- Pre-tax reduction from a Discount Balance/Loyalty membership — never
         -- factored into this CTE's price at all before, so a fully
         -- membership-covered unbilled appointment both under-reported its
@@ -1559,6 +1595,21 @@ _UNBILLED_APPOINTMENT_ROWS_CTE(
         STRING_AGG(DISTINCT src.name, ', ') AS item_description,
         STRING_AGG(DISTINCT src.item_type, ', ') AS item_types,
         SUM(src.price * src.quantity) AS items_total,
+        -- Same total, restricted to the buckets this bill's Bill Discount
+        -- actually applies to — see _UNBILLED_MANUAL_DISCOUNT. NULL
+        -- discount_applies_to = legacy scope (everything but product).
+        -- src.item_type is singular ('package'); the stored bucket name is
+        -- plural ('packages'), hence the remap.
+        SUM(src.price * src.quantity) FILTER (
+          WHERE CASE
+            WHEN a.discount_applies_to IS NULL THEN src.item_type <> 'product'
+            -- "bill" scope is exclusive: the whole total, every item type.
+            WHEN a.discount_applies_to @> '"bill"'::jsonb THEN TRUE
+            ELSE a.discount_applies_to @> to_jsonb(
+              CASE WHEN src.item_type = 'package' THEN 'packages' ELSE src.item_type END
+            )
+          END
+        ) AS discountable_total,
         NULLIF(STRING_AGG(DISTINCT NULLIF(TRIM(src.staff_name), ''), ', ' ORDER BY NULLIF(TRIM(src.staff_name), '')), '') AS staff_names
       FROM (
         SELECT svc.value->>'name' AS name, 'service' AS item_type,
