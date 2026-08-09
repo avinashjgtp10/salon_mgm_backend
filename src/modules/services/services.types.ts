@@ -109,13 +109,14 @@ export type CreateServiceBody = {
   online_booking?: boolean;
   commission_enabled?: boolean;
   resource_required?: boolean;
+  // Settable at creation now — the INSERT writes it explicitly rather than
+  // relying on the column default, so a service can be created inactive.
+  is_active?: boolean;
   staff_ids?: string[];
   consumables_used?: ServiceConsumableItem[];
 };
 
-export type UpdateServiceBody = Partial<CreateServiceBody> & {
-  is_active?: boolean;
-};
+export type UpdateServiceBody = Partial<CreateServiceBody>;
 
 export type CreateAddOnGroupBody = {
   name: string;
