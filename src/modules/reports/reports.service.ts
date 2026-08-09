@@ -265,6 +265,11 @@ import {
     AppointmentDetailReportResponse,
     WaCampaignReportFilters,
     WaCampaignReportResponse,
+    OpenRateReportFilters,
+    OpenRateReportResponse,
+    OpenRateCampaignDetail,
+    ReplyRateReportResponse,
+    ReplyRateCampaignDetail,
     ClientRatingReportFilters,
     ClientRatingReportResponse,
 } from "./reports.types";
@@ -1657,6 +1662,73 @@ async getWaCampaignReport(
         stats,
         filters_available: filtersAvailable,
     };
+},
+
+// ======================================================
+// OPEN RATE REPORT (independent report API)
+// Shares the WA state definitions with getWaCampaignReport above — see
+// reports.repository.ts's WA_*_COUNT constants.
+// ======================================================
+
+async getOpenRateReport(
+    salonId: string,
+    filters: OpenRateReportFilters
+): Promise<OpenRateReportResponse> {
+    // getOpenRateTrend is deliberately NOT called here. The report has no
+    // charts, so nothing consumes a trend series — running it would add a DB
+    // round-trip per request for data that gets thrown away. The repository
+    // method is kept for whenever a trend view is wanted again.
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
+        reportsRepository.getOpenRateReportStats(salonId, filters),
+        reportsRepository.getOpenRateReportRows(salonId, filters),
+        reportsRepository.getOpenRateFiltersAvailable(salonId),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+        filters_available: filtersAvailable,
+    };
+},
+
+async getOpenRateCampaignDetail(
+    salonId: string,
+    campaignId: string,
+    opts: { status?: string; page?: number; limit?: number; search?: string }
+): Promise<OpenRateCampaignDetail | null> {
+    return reportsRepository.getOpenRateCampaignDetail(salonId, campaignId, opts);
+},
+
+// ======================================================
+// REPLY RATE REPORT (independent report API)
+// Same filters and campaign set as the Open Rate report above.
+// ======================================================
+
+async getReplyRateReport(
+    salonId: string,
+    filters: OpenRateReportFilters
+): Promise<ReplyRateReportResponse> {
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
+        reportsRepository.getReplyRateReportStats(salonId, filters),
+        reportsRepository.getReplyRateReportRows(salonId, filters),
+        reportsRepository.getOpenRateFiltersAvailable(salonId),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+        filters_available: filtersAvailable,
+    };
+},
+
+async getReplyRateCampaignDetail(
+    salonId: string,
+    campaignId: string,
+    opts: { replied?: "yes" | "no"; page?: number; limit?: number; search?: string }
+): Promise<ReplyRateCampaignDetail | null> {
+    return reportsRepository.getReplyRateCampaignDetail(salonId, campaignId, opts);
 },
 
 // ======================================================

@@ -1916,6 +1916,215 @@ export interface WaCampaignReportResponse {
 }
 
 // ===============================
+// Open Rate Report (independent report API — POST /api/report/open-rate)
+// Campaign engagement, sharing the WA_*_COUNT state definitions in
+// reports.repository.ts with the WA Marketing Campaign report above.
+//
+// open_rate is opened / DELIVERED (never / sent): an undelivered message had
+// no chance of being opened, so including it would understate engagement.
+// Failed and blocked messages are therefore excluded from the denominator by
+// construction — they never reach a 'DELIVERED'/'READ' state.
+//
+// `channel` is always 'whatsapp' today. The generic campaigns /
+// campaign_recipients tables that would carry SMS/Email exist but hold no
+// rows and nothing writes to them.
+// ===============================
+
+export type OpenRateChannel = "whatsapp" | "sms" | "email";
+
+export interface OpenRateReportFilters {
+    search?: string;
+    campaign_ids?: string[];
+    /** Message-level states; used as an EXISTS filter on campaigns, never to
+     *  narrow the rows the rates are computed from. */
+    message_statuses?: string[];
+    campaign_statuses?: string[];
+    channels?: OpenRateChannel[];
+    date_from?: string;
+    date_to?: string;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+    sort_by?: string;
+    sort_dir?: "asc" | "desc";
+}
+
+export interface OpenRateReportRow {
+    id: string;
+    name: string;
+    template_name: string;
+    status: string;
+    channel: string;
+    created_at: string;
+    total_contacts: number;
+    sent: number;
+    delivered: number;
+    opened: number;
+    failed: number;
+    blocked: number;
+    /** Percentage 0-100, already guarded against a zero denominator. */
+    open_rate: number;
+}
+
+export interface OpenRateReportStats {
+    total_campaigns: number;
+    total_recipients: number;
+    total_sent: number;
+    total_delivered: number;
+    total_opened: number;
+    total_failed: number;
+    total_blocked: number;
+    open_rate: number;
+}
+
+export interface OpenRateTrendPoint {
+    /** YYYY-MM-DD, cohorted by send date — see getOpenRateTrend. */
+    day: string;
+    sent: number;
+    delivered: number;
+    opened: number;
+    open_rate: number;
+}
+
+export interface OpenRateCustomerRow {
+    id: string;
+    name: string;
+    phone: string;
+    status: string;
+    sent_at: string | null;
+    delivered_at: string | null;
+    read_at: string | null;
+    error_message: string | null;
+}
+
+export interface OpenRateCampaignDetail {
+    id: string;
+    name: string;
+    status: string;
+    channel: string;
+    created_at: string;
+    template_name: string;
+    message_body: string;
+    total_contacts: number;
+    sent: number;
+    delivered: number;
+    opened: number;
+    failed: number;
+    blocked: number;
+    open_rate: number;
+    customers: OpenRateCustomerRow[];
+    customers_pagination: WaCampaignReportPagination;
+}
+
+export interface OpenRateFilterOption { id: string; label: string; }
+
+export interface OpenRateFiltersAvailable {
+    campaigns: OpenRateFilterOption[];
+}
+
+// ===============================
+// Reply Rate Report (independent report API — POST /api/report/reply-rate)
+// Shares filters and state definitions with the Open Rate report.
+//
+// A reply is an INBOUND WhatsApp message from the recipient's number arriving
+// within 24h of the campaign reaching them (WA_REPLY_WINDOW in
+// reports.repository.ts) — nothing links a message to a campaign directly, so
+// phone + timing is the only available attribution.
+//
+// reply_rate is replied / SENT (not / delivered, unlike open_rate): it's the
+// figure staff asked for, and delivery receipts are often missing here, which
+// would otherwise let replies exceed the denominator.
+// ===============================
+
+export interface ReplyRateReportRow {
+    id: string;
+    name: string;
+    template_name: string;
+    status: string;
+    channel: string;
+    created_at: string;
+    total_contacts: number;
+    /** Every send ATTEMPT, including failed/blocked — matches the other
+     *  campaign reports' `sent` so the three agree per campaign. */
+    sent: number;
+    /** Attempts that actually went out (SENT/DELIVERED/READ). This, not
+     *  `sent`, is the reply-rate denominator — a failed message can't be
+     *  replied to. See WA_REACHED_COUNT. */
+    reached: number;
+    delivered: number;
+    opened: number;
+    failed: number;
+    replied: number;
+    reply_rate: number;
+}
+
+export interface ReplyRateReportStats {
+    total_campaigns: number;
+    total_sent: number;
+    /** Reply-rate denominator — see ReplyRateReportRow.reached. */
+    total_reached: number;
+    total_delivered: number;
+    total_opened: number;
+    total_replied: number;
+    total_failed: number;
+    reply_rate: number;
+}
+
+export interface ReplyRateCustomerRow {
+    id: string;
+    name: string;
+    phone: string;
+    status: string;
+    sent_at: string | null;
+    delivered_at: string | null;
+    read_at: string | null;
+    /** First in-window inbound message; null when they never replied. */
+    first_reply_at: string | null;
+}
+
+export interface ReplyRateCampaignDetail {
+    id: string;
+    name: string;
+    status: string;
+    channel: string;
+    created_at: string;
+    template_name: string;
+    message_body: string;
+    total_contacts: number;
+    /** Every send ATTEMPT, including failed/blocked — matches the other
+     *  campaign reports' `sent` so the three agree per campaign. */
+    sent: number;
+    /** Attempts that actually went out (SENT/DELIVERED/READ). This, not
+     *  `sent`, is the reply-rate denominator — a failed message can't be
+     *  replied to. See WA_REACHED_COUNT. */
+    reached: number;
+    delivered: number;
+    opened: number;
+    failed: number;
+    replied: number;
+    reply_rate: number;
+    customers: ReplyRateCustomerRow[];
+    customers_pagination: WaCampaignReportPagination;
+}
+
+export interface ReplyRateReportResponse {
+    rows: ReplyRateReportRow[];
+    pagination: WaCampaignReportPagination;
+    stats: ReplyRateReportStats;
+    filters_available: OpenRateFiltersAvailable;
+}
+
+export interface OpenRateReportResponse {
+    rows: OpenRateReportRow[];
+    pagination: WaCampaignReportPagination;
+    stats: OpenRateReportStats;
+    filters_available: OpenRateFiltersAvailable;
+    /** Only populated if a caller asks for it — the report itself has no
+     *  charts, so the service skips the trend query entirely. */
+    trend?: OpenRateTrendPoint[];
+}
+
+// ===============================
 // Client Rating Report (independent report API — POST /api/report/client-rating)
 // Reads directly from the reviews table (JOIN clients/staff), one row per
 // review. Only is_visible = true reviews are included by default, matching
