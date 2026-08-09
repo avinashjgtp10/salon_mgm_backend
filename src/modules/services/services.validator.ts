@@ -55,8 +55,40 @@ const KNOWN_SERVICE_KEYS = new Set([
   "name", "category_id", "treatment_type", "description",
   "price_type", "price", "duration", "is_active",
   "online_booking", "commission_enabled", "resource_required",
+  "commission_rate", "commission_kind",
   "staff_ids", "consumables_used",
 ]);
+
+// A per-service commission override is only meaningful as a (rate, kind) pair.
+// Both null clears it; one without the other is rejected rather than half-saved,
+// which would leave a rate the engine ignores or a kind that pays nothing.
+function validateCommissionOverride(b: Record<string, unknown>): void {
+  const rate = b.commission_rate;
+  const kind = b.commission_kind;
+  if (rate === undefined && kind === undefined) return;
+
+  const rateGiven = rate !== undefined && rate !== null;
+  const kindGiven = kind !== undefined && kind !== null;
+
+  if (rateGiven !== kindGiven) {
+    throw new AppError(
+      400,
+      "commission_rate and commission_kind must be set together (or both null to clear)",
+      "VALIDATION_ERROR",
+    );
+  }
+  if (!rateGiven) return;
+
+  if (typeof rate !== "number" || !Number.isFinite(rate) || rate < 0) {
+    throw new AppError(400, "commission_rate must be a non-negative number", "VALIDATION_ERROR");
+  }
+  if (kind !== "percentage" && kind !== "fixed") {
+    throw new AppError(400, "commission_kind must be: percentage | fixed", "VALIDATION_ERROR");
+  }
+  if (kind === "percentage" && (rate as number) > 100) {
+    throw new AppError(400, "commission_rate cannot exceed 100 for a percentage", "VALIDATION_ERROR");
+  }
+}
 
 function warnUnknownKeys(body: Record<string, unknown>, route: string): void {
   const unknown = Object.keys(body ?? {}).filter((k) => !KNOWN_SERVICE_KEYS.has(k));
@@ -81,6 +113,7 @@ export const validateCreateService = (req: Request, _res: Response, next: NextFu
     if (!isOptionalBool(b.online_booking))   throw new AppError(400, "online_booking must be a boolean", "VALIDATION_ERROR");
     if (!isOptionalBool(b.commission_enabled)) throw new AppError(400, "commission_enabled must be a boolean", "VALIDATION_ERROR");
     if (!isOptionalBool(b.resource_required))  throw new AppError(400, "resource_required must be a boolean", "VALIDATION_ERROR");
+    validateCommissionOverride(b);
     validateUuidArray(b.staff_ids, "staff_ids");
     validateConsumablesUsed(b.consumables_used, "consumables_used");
     return next();
@@ -102,6 +135,7 @@ export const validateUpdateService = (req: Request, _res: Response, next: NextFu
     if (!isOptionalBool(b.commission_enabled)) throw new AppError(400, "commission_enabled must be a boolean", "VALIDATION_ERROR");
     if (!isOptionalBool(b.resource_required))  throw new AppError(400, "resource_required must be a boolean", "VALIDATION_ERROR");
     if (!isOptionalBool(b.is_active))        throw new AppError(400, "is_active must be a boolean", "VALIDATION_ERROR");
+    validateCommissionOverride(b);
     validateUuidArray(b.staff_ids, "staff_ids");
     validateConsumablesUsed(b.consumables_used, "consumables_used");
     return next();

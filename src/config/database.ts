@@ -150,6 +150,20 @@ setImmediate(() => {
   `).catch((err: any) => console.warn('⚠️  demo_requests table migration:', err.message));
 });
 
+// Per-service commission override (safe, idempotent).
+// NULL commission_rate means "no override" — the service falls through to the
+// staff's commission_rules / staff_commission_settings exactly as before. That
+// nullable default is deliberate: if this migration ever fails to reach an
+// environment, every service keeps earning commission under the existing rules
+// instead of silently paying nothing.
+setImmediate(() => {
+  pool.query(`
+    ALTER TABLE services
+      ADD COLUMN IF NOT EXISTS commission_rate NUMERIC(10,2),
+      ADD COLUMN IF NOT EXISTS commission_kind TEXT
+  `).catch((err: any) => console.warn('⚠️  services commission override migration:', err.message));
+});
+
 /**
  * safeQuery — wraps any pool.query() call with auto-retry.
  *

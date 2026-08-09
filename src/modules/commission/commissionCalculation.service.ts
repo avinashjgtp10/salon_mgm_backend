@@ -455,6 +455,56 @@ export const commissionCalculationService = {
                 }
             }
 
+            // ── Per-service commission overrides ─────────────────────────────────
+            // A service can carry its own rate (services.commission_rate/_kind),
+            // which REPLACES the staff-level rule for that service's revenue —
+            // the staff member who performed it earns exactly that instead. Only
+            // real services are eligible: package line items are stored as
+            // item_type='service' too (see packageItemIds above) but are priced
+            // and commissioned as packages, so they're excluded here.
+            //
+            // A service with no override (commission_rate IS NULL) is untouched
+            // and still flows through the (staff, category) grouping below, so
+            // existing salons see no change until they set a rate.
+            let serviceOverrides = new Map<string, { rate: number; kind: "percentage" | "fixed" }>();
+            const overridableServiceIds = items
+                .filter((i) => i.item_type === "service" && i.item_id && !packageItemIds?.has(i.item_id))
+                .map((i) => String(i.item_id));
+            if (overridableServiceIds.length > 0) {
+                try {
+                    const { rows: ovRows } = await pool.query(
+                        `SELECT id, commission_rate, commission_kind
+                         FROM services
+                         WHERE id = ANY($1::uuid[])
+                           AND commission_rate IS NOT NULL
+                           AND commission_kind IS NOT NULL`,
+                        [overridableServiceIds]
+                    );
+                    serviceOverrides = new Map(
+                        ovRows.map((r: any) => [
+                            String(r.id),
+                            { rate: Number(r.commission_rate), kind: r.commission_kind as "percentage" | "fixed" },
+                        ])
+                    );
+                } catch (qErr) {
+                    // Most likely the column doesn't exist yet on this environment.
+                    // Falling back to "no overrides" means every service keeps
+                    // earning under the staff rules exactly as it did before this
+                    // feature — never a silent drop to zero commission.
+                    logger.warn("commissionCalculationService: per-service commission lookup failed, using staff rules only", { saleId, qErr });
+                }
+            }
+
+            // Commission from per-service overrides, computed per line item so
+            // two services at different rates on one bill each pay their own.
+            const overrideEarnings: {
+                staff_id: string;
+                revenue: number;
+                rate: number;
+                kind: "percentage" | "fixed";
+                commission: number;
+            }[] = [];
+
             // Step 1: Group items by (staff_id, category) and sum revenue.
             // originalRevenue (pre-coverage) is tracked alongside revenue
             // (post-coverage) so Step 2 can tell "reduced to ₹0 by membership/
@@ -487,6 +537,30 @@ export const commissionCalculationService = {
                     if (walletUsed > 0) revenue = Math.max(0, revenue - walletUsed);
                 }
 
+                // A service with its own rate is settled here and deliberately
+                // kept OUT of the category grouping below — otherwise its revenue
+                // would also be fed to the staff-level rule and the same money
+                // would earn commission twice.
+                const override = category === "services" && item.item_id
+                    ? serviceOverrides.get(String(item.item_id))
+                    : undefined;
+                if (override) {
+                    // Revenue already reflects membership-wallet and package
+                    // coverage, so a fully covered service pays 0 under a flat
+                    // rate too — consistent with how covered revenue is treated
+                    // everywhere else in this file.
+                    const commission = revenue <= 0
+                        ? 0
+                        : override.kind === "percentage"
+                            ? parseFloat((revenue * override.rate / 100).toFixed(2))
+                            : parseFloat((override.rate * (item.quantity ?? 1)).toFixed(2));
+                    overrideEarnings.push({
+                        staff_id: staffId, revenue, rate: override.rate,
+                        kind: override.kind, commission,
+                    });
+                    continue;
+                }
+
                 if (groups.has(key)) {
                     const g = groups.get(key)!;
                     g.revenue += revenue;
@@ -496,10 +570,38 @@ export const commissionCalculationService = {
                 }
             }
 
-            if (groups.size === 0) return;
+            if (groups.size === 0 && overrideEarnings.length === 0) return;
+
+            const inserts: Promise<any>[] = [];
+
+            // Step 1b: Per-service overrides settle on their own — they never
+            // consult commission_rules or staff_commission_settings, which is
+            // the whole point of setting a rate on the service. A ₹0 row is
+            // still written when coverage zeroed the revenue, matching the
+            // fullyCovered handling below so reports can trust the stored value.
+            for (const e of overrideEarnings) {
+                inserts.push(
+                    commissionEarnedRepository.insert({
+                        salon_id: salonId,
+                        staff_id: e.staff_id,
+                        sale_id: saleId,
+                        appointment_id: appointmentId ?? null,
+                        category: "services",
+                        revenue_amount: parseFloat(e.revenue.toFixed(2)),
+                        commission_kind: e.kind === "percentage" ? "percentage" : "fixed_rate",
+                        commission_rate: e.rate,
+                        commission_amount: e.commission,
+                    })
+                );
+            }
+            if (overrideEarnings.length > 0) {
+                logger.info("commissionCalculationService: per-service override commission", {
+                    saleId, count: overrideEarnings.length,
+                    total: overrideEarnings.reduce((sum, e) => sum + e.commission, 0),
+                });
+            }
 
             // Step 2: For each group, look up commission rule and calculate
-            const inserts: Promise<any>[] = [];
 
             for (const { staff_id, category, revenue, originalRevenue } of groups.values()) {
                 try {
