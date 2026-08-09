@@ -181,8 +181,9 @@ export const servicesRepository = {
       `INSERT INTO services (
         salon_id, name, category_id, treatment_type, description,
         price_type, price, duration_minutes,
-        online_booking, commission_enabled, resource_required, is_active
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+        online_booking, commission_enabled, resource_required, is_active,
+        commission_rate, commission_kind
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
       RETURNING *, duration_minutes AS duration`,
       [
         salonId,
@@ -197,6 +198,10 @@ export const servicesRepository = {
         data.commission_enabled ?? false,
         data.resource_required ?? false,
         data.is_active ?? true,
+        // NULL = no per-service override; the service earns under the staff's
+        // commission rules, which is the behaviour every existing service has.
+        data.commission_rate ?? null,
+        data.commission_kind ?? null,
       ]
     );
     return rows[0];
@@ -211,6 +216,9 @@ export const servicesRepository = {
       "name", "category_id", "treatment_type", "description",
       "price_type", "price", "duration_minutes", "is_active",
       "online_booking", "commission_enabled", "resource_required",
+      // Explicit null is copied through (the loop below only skips undefined),
+      // so sending both as null clears a per-service commission override.
+      "commission_rate", "commission_kind",
     ]);
 
     const raw = patch as Record<string, unknown>;
