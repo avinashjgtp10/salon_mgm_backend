@@ -1332,6 +1332,57 @@ export interface CustomerFrequencyReportResponse {
 }
 
 // ===============================
+// Lost Customers Report (independent report API — POST /api/report/lost-customers)
+// Standalone report, separate from Customer Frequency's fixed 90-day "lost"
+// bucket: the inactivity cutoff is user-configurable (lost_days), and
+// start_date/end_date filter directly on last_visit (which past window of
+// "went quiet" clients to show), not on first_visit like Customer Frequency's
+// date range does.
+// ===============================
+
+export interface LostCustomersReportFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    // Days since last visit before a client counts as "lost". Defaults to 90
+    // (same default Customer Frequency's fixed cutoff used) when omitted.
+    lost_days?: number;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface LostCustomersReportRow {
+    client_id: string | null;
+    client_name: string;
+    contact: string;
+    visits: number;
+    total_spend: number;
+    first_visit: string | null;
+    last_visit: string | null;
+    days_since_last_visit: number;
+}
+
+export interface LostCustomersReportStats {
+    total_lost_clients: number;
+    total_spend_when_active: number;
+}
+
+export interface LostCustomersReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface LostCustomersReportResponse {
+    rows: LostCustomersReportRow[];
+    pagination: LostCustomersReportPagination;
+    stats: LostCustomersReportStats;
+}
+
+// ===============================
 // Staff Sales Report (independent report API — POST /api/report/staff-sales)
 // Reads directly from sales/sale_items/payments, one row per transaction,
 // optionally filtered to one staff member. Commission is joined from

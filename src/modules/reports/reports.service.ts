@@ -249,6 +249,8 @@ import {
     ClientRevenueReportResponse,
     CustomerFrequencyReportFilters,
     CustomerFrequencyReportResponse,
+    LostCustomersReportFilters,
+    LostCustomersReportResponse,
     StaffSalesReportFilters,
     StaffSalesReportResponse,
     StaffPerformanceReportFilters,
@@ -1494,6 +1496,26 @@ async getCustomerFrequencyReport(
     const [stats, rowsResult] = await Promise.all([
         reportsRepository.getCustomerFrequencyReportStats(salonId, filters),
         reportsRepository.getCustomerFrequencyReportRows(salonId, filters),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+    };
+},
+
+// ======================================================
+// LOST CUSTOMERS REPORT (independent report API)
+// ======================================================
+
+async getLostCustomersReport(
+    salonId: string,
+    filters: LostCustomersReportFilters
+): Promise<LostCustomersReportResponse> {
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getLostCustomersReportStats(salonId, filters),
+        reportsRepository.getLostCustomersReportRows(salonId, filters),
     ]);
 
     return {

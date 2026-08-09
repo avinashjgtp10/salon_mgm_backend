@@ -40,6 +40,8 @@ import {
     ClientRevenueReportStats,
     CustomerFrequencyReportRow,
     CustomerFrequencyReportStats,
+    LostCustomersReportRow,
+    LostCustomersReportStats,
     StaffSalesReportRow,
     StaffSalesReportStats,
     StaffPerformanceReportRow,
@@ -4632,6 +4634,188 @@ async getCustomerFrequencyReportRows(
     last_visit: row.last_visit,
     visitor_type: row.visitor_type,
     customer_type: row.customer_type,
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// ======================================================
+// LOST CUSTOMERS REPORT (independent report API)
+// POST /api/report/lost-customers — standalone report, separate from
+// Customer Frequency's fixed 90-day "lost" bucket. The inactivity cutoff is
+// user-configurable (lost_days, default 90) and start_date/end_date filter
+// directly on last_visit (which past window of "went quiet" clients to
+// show), not on first_visit like Customer Frequency's range does. Reads
+// clients/sales directly, never the Appointment API.
+// ======================================================
+
+_buildLostCustomersWhere(
+  salonId: string,
+  filters: { search?: string; staff_ids?: string[] }
+): { where: string; saleJoin: string; values: any[]; nextIndex: number } {
+  // Same WHERE/JOIN builder as Customer Frequency's — kept as a separate
+  // copy (rather than shared) so the two reports' filter sets can diverge
+  // independently without one report's change silently affecting the other.
+  const values: any[] = [salonId];
+  const where = ["c.salon_id = $1"];
+  const saleJoin = ["s.client_id = c.id", "s.status = 'completed'"];
+  let idx = 2;
+
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    saleJoin.push(`EXISTS (
+      SELECT 1 FROM sale_items si2
+      WHERE si2.sale_id = s.id AND COALESCE(si2.staff_id, s.staff_id) = ANY($${idx++}::uuid[])
+    )`);
+    values.push(filters.staff_ids);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  return { where: where.join(" AND "), saleJoin: saleJoin.join(" AND "), values, nextIndex: idx };
+},
+
+// Shared aggregation CTE — one row per client that has at least one
+// completed sale (INNER, unlike Customer Frequency's LEFT JOIN: a client
+// with zero visits was never "active" in the first place, so they can't be
+// "lost"), filtered down to those inactive for >= lostDaysIdx days AND
+// (optionally) whose last visit falls inside the start/end date range.
+_LOST_CUSTOMERS_AGG(where: string, saleJoin: string, lostDaysIdx: number, startDateIdx: number | null, endDateIdx: number | null): string {
+  const rangeClause = startDateIdx
+    ? `AND last_visit >= $${startDateIdx}::date${endDateIdx ? ` AND last_visit < ($${endDateIdx}::date + interval '1 day')` : ""}`
+    : "";
+
+  return `
+    WITH visit_agg AS (
+      SELECT
+        c.id AS client_id,
+        COALESCE(NULLIF(TRIM(c.full_name), ''), 'Walk-in') AS client_name,
+        COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS contact,
+        COUNT(s.id) AS visits,
+        COALESCE(SUM(s.total_amount::numeric), 0) AS total_spend,
+        MIN(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD'))::date AS first_visit,
+        MAX(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD'))::date AS last_visit
+      FROM clients c
+      INNER JOIN sales s ON ${saleJoin}
+      WHERE ${where}
+      GROUP BY c.id, c.full_name, c.phone_number, c.phone_country_code
+    ),
+    lost AS (
+      SELECT *,
+        (CURRENT_DATE - last_visit)::int AS days_since_last_visit
+      FROM visit_agg
+      WHERE last_visit < (CURRENT_DATE - ($${lostDaysIdx}::int * INTERVAL '1 day'))
+      ${rangeClause}
+    )
+  `;
+},
+
+async getLostCustomersReportStats(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; search?: string; staff_ids?: string[]; lost_days?: number }
+): Promise<LostCustomersReportStats> {
+  const { where, saleJoin, values, nextIndex } = this._buildLostCustomersWhere(salonId, filters);
+  let idx = nextIndex;
+  const lostDaysIdx = idx++;
+  const lostDaysValue = Math.max(1, Number(filters.lost_days ?? 90));
+
+  const dateValues: any[] = [];
+  let startDateIdx: number | null = null;
+  let endDateIdx: number | null = null;
+  if (filters.start_date) {
+    startDateIdx = idx++;
+    dateValues.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    endDateIdx = idx++;
+    dateValues.push(filters.end_date);
+  }
+
+  const query = `
+    ${this._LOST_CUSTOMERS_AGG(where, saleJoin, lostDaysIdx, startDateIdx, endDateIdx)}
+    SELECT
+      COUNT(*)::int AS total_lost_clients,
+      COALESCE(SUM(total_spend), 0) AS total_spend_when_active
+    FROM lost
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, lostDaysValue, ...dateValues]));
+  const r = rows[0] ?? {};
+  return {
+    total_lost_clients: Number(r.total_lost_clients ?? 0),
+    total_spend_when_active: Math.round(Number(r.total_spend_when_active ?? 0)),
+  };
+},
+
+async getLostCustomersReportRows(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string; staff_ids?: string[];
+    lost_days?: number; page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: LostCustomersReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, saleJoin, values, nextIndex } = this._buildLostCustomersWhere(salonId, filters);
+  let idx = nextIndex;
+  const lostDaysIdx = idx++;
+  const lostDaysValue = Math.max(1, Number(filters.lost_days ?? 90));
+
+  const dateValues: any[] = [];
+  let startDateIdx: number | null = null;
+  let endDateIdx: number | null = null;
+  if (filters.start_date) {
+    startDateIdx = idx++;
+    dateValues.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    endDateIdx = idx++;
+    dateValues.push(filters.end_date);
+  }
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    ${this._LOST_CUSTOMERS_AGG(where, saleJoin, lostDaysIdx, startDateIdx, endDateIdx)}
+    SELECT
+      client_id, client_name, contact, visits, total_spend,
+      first_visit, last_visit, days_since_last_visit,
+      COUNT(*) OVER() AS total_count
+    FROM lost
+    ORDER BY last_visit ASC NULLS LAST, client_name ASC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, lostDaysValue, ...dateValues, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: LostCustomersReportRow[] = rows.map((row: any) => ({
+    client_id: row.client_id,
+    client_name: row.client_name,
+    contact: row.contact,
+    visits: Number(row.visits ?? 0),
+    total_spend: Math.round(Number(row.total_spend ?? 0)),
+    first_visit: row.first_visit,
+    last_visit: row.last_visit,
+    days_since_last_visit: Number(row.days_since_last_visit ?? 0),
   }));
   const effectiveLimit = limit ?? Math.max(total, 1);
   return {

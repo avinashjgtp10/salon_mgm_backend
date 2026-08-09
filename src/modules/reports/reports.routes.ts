@@ -158,6 +158,18 @@ router.post(
 );
 
 // ======================================================
+// LOST CUSTOMERS REPORT (independent report API)
+// Standalone report — separate from Customer Frequency's fixed 90-day
+// "lost" bucket, with a user-configurable lost_days cutoff.
+// ======================================================
+
+router.post(
+    "/lost-customers",
+    ...guard,
+    reportsController.getLostCustomersReport
+);
+
+// ======================================================
 // CLIENT RATING REPORT (independent report API)
 // Reads the reviews table directly — never calls into the reviews module's
 // service/repository, and never calls the Appointment API/service.
