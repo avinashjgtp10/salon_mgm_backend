@@ -251,6 +251,8 @@ import {
     CustomerFrequencyReportResponse,
     LostCustomersReportFilters,
     LostCustomersReportResponse,
+    ReferralReportFilters,
+    ReferralReportResponse,
     StaffSalesReportFilters,
     StaffSalesReportResponse,
     StaffPerformanceReportFilters,
@@ -1516,6 +1518,26 @@ async getLostCustomersReport(
     const [stats, rowsResult] = await Promise.all([
         reportsRepository.getLostCustomersReportStats(salonId, filters),
         reportsRepository.getLostCustomersReportRows(salonId, filters),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+    };
+},
+
+// ======================================================
+// REFERRAL REPORT (independent report API)
+// ======================================================
+
+async getReferralReport(
+    salonId: string,
+    filters: ReferralReportFilters
+): Promise<ReferralReportResponse> {
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getReferralReportStats(salonId, filters),
+        reportsRepository.getReferralReportRows(salonId, filters),
     ]);
 
     return {
