@@ -259,4 +259,40 @@ router.post(
     reportsController.getWaCampaignReport
 );
 
+// ======================================================
+// OPEN RATE REPORT (independent report API)
+// Same data source as /wa-campaign above, different question: engagement
+// (opened ÷ delivered) rather than delivery throughput.
+// ======================================================
+
+router.post(
+    "/open-rate",
+    ...guard,
+    reportsController.getOpenRateReport
+);
+
+router.post(
+    "/open-rate/campaign",
+    ...guard,
+    reportsController.getOpenRateCampaignDetail
+);
+
+// ======================================================
+// REPLY RATE REPORT (independent report API)
+// Replies are attributed by phone + a 24h window — see WA_REPLY_WINDOW in
+// reports.repository.ts, since nothing links a message to a campaign.
+// ======================================================
+
+router.post(
+    "/reply-rate",
+    ...guard,
+    reportsController.getReplyRateReport
+);
+
+router.post(
+    "/reply-rate/campaign",
+    ...guard,
+    reportsController.getReplyRateCampaignDetail
+);
+
 export default router;

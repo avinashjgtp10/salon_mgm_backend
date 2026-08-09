@@ -1830,6 +1830,162 @@ async getWaCampaignReport(
 },
 
 // ======================================================
+// OPEN RATE REPORT (independent report API)
+// POST /api/report/open-rate          — summary + campaign rows + trend
+// POST /api/report/open-rate/campaign — one campaign's drill-down
+// ======================================================
+
+async getOpenRateReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const asStringArray = (v: unknown): string[] | undefined =>
+            Array.isArray(v)
+                ? v.map((x) => String(x)).filter((x) => x.trim() !== "")
+                : undefined;
+
+        const VALID_CHANNELS = ["whatsapp", "sms", "email"];
+        const channels = asStringArray(body.channels)?.filter((c) => VALID_CHANNELS.includes(c));
+
+        const filters = {
+            search: asString(body.search),
+            campaign_ids: asStringArray(body.campaign_ids),
+            message_statuses: asStringArray(body.message_statuses),
+            campaign_statuses: asStringArray(body.campaign_statuses),
+            channels: channels as ("whatsapp" | "sms" | "email")[] | undefined,
+            date_from: asString(body.date_from),
+            date_to: asString(body.date_to),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+            sort_by: asString(body.sort_by),
+            sort_dir: body.sort_dir === "asc" ? ("asc" as const) : ("desc" as const),
+        };
+
+        const data = await reportsService.getOpenRateReport(salonId, filters);
+
+        sendSuccess(res, 200, data, "Open rate report fetched successfully");
+    } catch (error) {
+        next(error);
+    }
+},
+
+async getOpenRateCampaignDetail(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+        const campaignId = asString(body.campaign_id);
+        if (!campaignId) {
+            res.status(400).json({ success: false, message: "campaign_id is required" });
+            return;
+        }
+
+        const data = await reportsService.getOpenRateCampaignDetail(salonId, campaignId, {
+            status: asString(body.status),
+            search: asString(body.search),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+        });
+
+        if (!data) {
+            res.status(404).json({ success: false, message: "Campaign not found" });
+            return;
+        }
+
+        sendSuccess(res, 200, data, "Campaign detail fetched successfully");
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// REPLY RATE REPORT (independent report API)
+// POST /api/report/reply-rate          — summary + campaign rows
+// POST /api/report/reply-rate/campaign — one campaign's recipients
+// ======================================================
+
+async getReplyRateReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const asStringArray = (v: unknown): string[] | undefined =>
+            Array.isArray(v)
+                ? v.map((x) => String(x)).filter((x) => x.trim() !== "")
+                : undefined;
+
+        const VALID_CHANNELS = ["whatsapp", "sms", "email"];
+        const channels = asStringArray(body.channels)?.filter((c) => VALID_CHANNELS.includes(c));
+
+        const filters = {
+            search: asString(body.search),
+            campaign_ids: asStringArray(body.campaign_ids),
+            message_statuses: asStringArray(body.message_statuses),
+            campaign_statuses: asStringArray(body.campaign_statuses),
+            channels: channels as ("whatsapp" | "sms" | "email")[] | undefined,
+            date_from: asString(body.date_from),
+            date_to: asString(body.date_to),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+            sort_by: asString(body.sort_by),
+            sort_dir: body.sort_dir === "asc" ? ("asc" as const) : ("desc" as const),
+        };
+
+        const data = await reportsService.getReplyRateReport(salonId, filters);
+
+        sendSuccess(res, 200, data, "Reply rate report fetched successfully");
+    } catch (error) {
+        next(error);
+    }
+},
+
+async getReplyRateCampaignDetail(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+        const campaignId = asString(body.campaign_id);
+        if (!campaignId) {
+            res.status(400).json({ success: false, message: "campaign_id is required" });
+            return;
+        }
+
+        const data = await reportsService.getReplyRateCampaignDetail(salonId, campaignId, {
+            replied: body.replied === "yes" ? "yes" : body.replied === "no" ? "no" : undefined,
+            search: asString(body.search),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+        });
+
+        if (!data) {
+            res.status(404).json({ success: false, message: "Campaign not found" });
+            return;
+        }
+
+        sendSuccess(res, 200, data, "Campaign reply detail fetched successfully");
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
 // CLIENT RATING REPORT (independent report API)
 // POST /api/report/client-rating
 // ======================================================

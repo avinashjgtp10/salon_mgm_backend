@@ -27,6 +27,15 @@ import {
     WaCampaignReportRow,
     WaCampaignReportStats,
     WaCampaignFiltersAvailable,
+    OpenRateReportFilters,
+    OpenRateReportRow,
+    OpenRateReportStats,
+    OpenRateTrendPoint,
+    OpenRateCampaignDetail,
+    OpenRateFiltersAvailable,
+    ReplyRateReportRow,
+    ReplyRateReportStats,
+    ReplyRateCampaignDetail,
     ClientRevenueReportRow,
     ClientRevenueReportStats,
     CustomerFrequencyReportRow,
@@ -58,6 +67,87 @@ import {
     ClientRatingReportRow,
     ClientRatingReportStats,
 } from "./reports.types";
+
+// ─── WhatsApp message delivery states ────────────────────────────────────────
+// Single source of truth for what each state MEANS, shared by the WA Marketing
+// Campaign report and the Open Rate report so the two can never disagree about
+// the same campaign's numbers.
+//
+// The critical rule: wa_campaign_contacts.status is TERMINAL, not cumulative.
+// A message that was read carries status 'READ' and is NOT also counted under
+// 'DELIVERED'. So "delivered" must mean 'DELIVERED' OR 'READ' — reading it as
+// status = 'DELIVERED' alone produces an open rate above 100% the moment more
+// messages are read than are sitting un-read (on dev today: 23 read vs 18
+// literally 'DELIVERED', i.e. 127%).
+//
+// These count from wa_campaign_contacts, never from wa_campaigns' own
+// sent_count/delivered_count/read_count columns — those are written once at
+// insert and never updated, so they drift (dev has a campaign whose
+// sent_count says 42 against 51 real contact rows).
+const WA_SENT_COUNT      = `COUNT(cc.id) FILTER (WHERE cc.status IN ('SENT','DELIVERED','READ','FAILED','BLOCKED'))::int`;
+const WA_DELIVERED_COUNT = `COUNT(cc.id) FILTER (WHERE cc.status IN ('DELIVERED','READ'))::int`;
+const WA_READ_COUNT      = `COUNT(cc.id) FILTER (WHERE cc.status = 'READ')::int`;
+const WA_FAILED_COUNT    = `COUNT(cc.id) FILTER (WHERE cc.status = 'FAILED')::int`;
+const WA_BLOCKED_COUNT   = `COUNT(cc.id) FILTER (WHERE cc.status = 'BLOCKED')::int`;
+
+// ─── Campaign reply attribution ──────────────────────────────────────────────
+// Nothing links an inbound WhatsApp message back to a campaign: wa_messages
+// and wa_conversations carry no campaign_id, so the only join available is
+// phone + timing. A reply is therefore "an INBOUND message from this
+// recipient's number, arriving after the campaign reached them and within
+// WA_REPLY_WINDOW".
+//
+// The window is what stops a customer who messages the salon months later
+// about something unrelated being counted as a reply to whatever campaign
+// happened to be last. 24 hours matches WhatsApp's own customer-service
+// window. Change it here and both the rate and the drill-down move together.
+const WA_REPLY_WINDOW = `INTERVAL '24 hours'`;
+
+// Phone numbers are compared digits-only: campaign contacts store E.164
+// ('+919699409624') while conversation rows come from webhook payloads that
+// have been seen without the '+'. Matching raw strings silently under-counts
+// replies whenever the two disagree by a single character.
+const PHONE_NORM = (col: string) => `regexp_replace(${col}, '\\D', '', 'g')`;
+
+// Inbound messages for this salon, normalized ready to join against
+// wa_campaign_contacts. Expects the salon id as $1, which every
+// _build*Where in this file already puts there.
+const WA_INBOUND_CTE = `
+  inbound AS (
+    SELECT ${PHONE_NORM("conv.contact_phone")} AS phone_norm, m.sent_at
+    FROM wa_conversations conv
+    JOIN wa_messages m ON m.conversation_id = conv.id
+    WHERE conv.salon_id = $1 AND m.direction = 'INBOUND'
+  )
+`;
+
+// Messages that actually went out. WA_SENT_COUNT above counts every ATTEMPT
+// (it includes FAILED and BLOCKED, matching the WA Campaign report's notion of
+// "sent"), which is the wrong denominator for a reply rate: a message that
+// failed never reached a handset, so nobody could reply to it.
+//
+// This is not hypothetical — dev has a campaign whose 2 recipients both FAILED
+// yet both happened to message the salon within the next 24h about something
+// else. Counted naively that campaign reads "100% reply rate" off two messages
+// that were never delivered.
+const WA_REACHED_COUNT = `COUNT(cc.id) FILTER (WHERE cc.status IN ('SENT','DELIVERED','READ'))::int`;
+
+// True when this contact replied inside the window. Correlated on cc, so it
+// belongs inside an aggregate over wa_campaign_contacts. Gated on the same
+// "actually went out" states as WA_REACHED_COUNT so numerator and denominator
+// always describe the same set of messages.
+const WA_REPLIED_PREDICATE = `
+  cc.sent_at IS NOT NULL
+  AND cc.status IN ('SENT','DELIVERED','READ')
+  AND EXISTS (
+    SELECT 1 FROM inbound i
+    WHERE i.phone_norm = ${PHONE_NORM("cc.phone")}
+      AND i.sent_at >= cc.sent_at
+      AND i.sent_at < cc.sent_at + ${WA_REPLY_WINDOW}
+  )
+`;
+
+const WA_REPLIED_COUNT = `COUNT(DISTINCT cc.id) FILTER (WHERE ${WA_REPLIED_PREDICATE})::int`;
 
 // ─── Unbilled-appointment Bill Discount ──────────────────────────────────────
 // Appointments with no sales row yet have no stored total, so a few reports
@@ -6474,11 +6564,11 @@ _WA_CAMPAIGN_AGG(where: string): string {
         c.id, c.name, c.template_id, c.status, c.created_at,
         COALESCE(t.name, 'Deleted template') AS template_name,
         COALESCE(c.total_contacts, 0) AS total_contacts,
-        COUNT(cc.id) FILTER (WHERE cc.status IN ('SENT','DELIVERED','READ','FAILED','BLOCKED'))::int AS sent,
-        COUNT(cc.id) FILTER (WHERE cc.status IN ('DELIVERED','READ'))::int AS delivered,
-        COUNT(cc.id) FILTER (WHERE cc.status = 'READ')::int AS read,
-        COUNT(cc.id) FILTER (WHERE cc.status = 'FAILED')::int AS failed,
-        COUNT(cc.id) FILTER (WHERE cc.status = 'BLOCKED')::int AS blocked
+        ${WA_SENT_COUNT} AS sent,
+        ${WA_DELIVERED_COUNT} AS delivered,
+        ${WA_READ_COUNT} AS read,
+        ${WA_FAILED_COUNT} AS failed,
+        ${WA_BLOCKED_COUNT} AS blocked
       FROM wa_campaigns c
       LEFT JOIN wa_templates t ON t.id = c.template_id
       LEFT JOIN wa_campaign_contacts cc ON cc.campaign_id = c.id
@@ -6608,6 +6698,584 @@ async getWaCampaignFiltersAvailable(salonId: string): Promise<WaCampaignFiltersA
     [salonId]
   ));
   return { templates: rows.map((r: any) => ({ id: r.id, label: r.label })) };
+},
+
+// ======================================================
+// OPEN RATE REPORT (independent report API)
+// POST /api/report/open-rate — campaign engagement, built on the SAME
+// wa_campaign_contacts state definitions the WA Marketing Campaign report
+// uses (WA_*_COUNT above), so the two reports can never disagree.
+//
+// Where it deliberately differs from that report: Open Rate is
+// read / DELIVERED, not read / sent. A message that never reached the
+// handset had no chance of being opened, so counting it in the denominator
+// understates engagement — hence the spec's "do not count failed messages"
+// and "only from successfully delivered messages". The WA Campaign report's
+// avg_read_rate (read / sent) answers a different question and is left alone.
+//
+// Channel is currently always 'whatsapp': the generic campaigns /
+// campaign_recipients tables that would carry SMS/Email exist but are empty
+// and nothing writes to them, so there is no second channel to union in yet.
+// ======================================================
+
+_buildOpenRateWhere(
+  salonId: string,
+  filters: OpenRateReportFilters
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["c.salon_id = $1"];
+  let idx = 2;
+
+  if (filters.search?.trim()) {
+    where.push(`(c.name ILIKE $${idx} OR COALESCE(t.name, '') ILIKE $${idx})`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+  if (filters.campaign_ids && filters.campaign_ids.length > 0) {
+    where.push(`c.id = ANY($${idx++}::uuid[])`);
+    values.push(filters.campaign_ids);
+  }
+  if (filters.campaign_statuses && filters.campaign_statuses.length > 0) {
+    where.push(`c.status = ANY($${idx++}::text[])`);
+    values.push(filters.campaign_statuses);
+  }
+  // Message-level status as a campaign filter means "this campaign has at
+  // least one message in that state". It deliberately does NOT restrict which
+  // messages get counted — narrowing the rows themselves would drop delivered
+  // messages out of the denominator and inflate every open rate on screen.
+  if (filters.message_statuses && filters.message_statuses.length > 0) {
+    where.push(`EXISTS (
+      SELECT 1 FROM wa_campaign_contacts x
+      WHERE x.campaign_id = c.id AND x.status = ANY($${idx}::text[])
+    )`);
+    values.push(filters.message_statuses);
+    idx++;
+  }
+  // Only whatsapp exists today; an explicit request for anything else can
+  // never match, so it returns nothing rather than silently ignoring the filter.
+  if (filters.channels && filters.channels.length > 0 && !filters.channels.includes("whatsapp")) {
+    where.push("FALSE");
+  }
+  if (filters.date_from) {
+    where.push(`c.created_at >= $${idx++}::date`);
+    values.push(filters.date_from);
+  }
+  if (filters.date_to) {
+    where.push(`c.created_at < ($${idx++}::date + INTERVAL '1 day')`);
+    values.push(filters.date_to);
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+_OPEN_RATE_AGG(where: string): string {
+  return `
+    WITH agg AS (
+      SELECT
+        c.id, c.name, c.status, c.created_at,
+        'whatsapp'::text AS channel,
+        COALESCE(t.name, 'Deleted template') AS template_name,
+        COALESCE(c.total_contacts, 0) AS total_contacts,
+        ${WA_SENT_COUNT} AS sent,
+        ${WA_DELIVERED_COUNT} AS delivered,
+        ${WA_READ_COUNT} AS opened,
+        ${WA_FAILED_COUNT} AS failed,
+        ${WA_BLOCKED_COUNT} AS blocked
+      FROM wa_campaigns c
+      LEFT JOIN wa_templates t ON t.id = c.template_id
+      LEFT JOIN wa_campaign_contacts cc ON cc.campaign_id = c.id
+      WHERE ${where}
+      GROUP BY c.id, c.name, c.status, c.created_at, t.name, c.total_contacts
+    )
+  `;
+},
+
+async getOpenRateReportStats(
+  salonId: string,
+  filters: OpenRateReportFilters
+): Promise<OpenRateReportStats> {
+  const { where, values } = this._buildOpenRateWhere(salonId, filters);
+  const query = `
+    ${this._OPEN_RATE_AGG(where)}
+    SELECT
+      COUNT(*)::int AS total_campaigns,
+      COALESCE(SUM(total_contacts), 0)::int AS total_recipients,
+      COALESCE(SUM(sent), 0)::int      AS total_sent,
+      COALESCE(SUM(delivered), 0)::int AS total_delivered,
+      COALESCE(SUM(opened), 0)::int    AS total_opened,
+      COALESCE(SUM(failed), 0)::int    AS total_failed,
+      COALESCE(SUM(blocked), 0)::int   AS total_blocked
+    FROM agg
+  `;
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  const total_delivered = Number(r.total_delivered ?? 0);
+  const total_opened = Number(r.total_opened ?? 0);
+  return {
+    total_campaigns:  Number(r.total_campaigns ?? 0),
+    total_recipients: Number(r.total_recipients ?? 0),
+    total_sent:       Number(r.total_sent ?? 0),
+    total_delivered,
+    total_opened,
+    total_failed:     Number(r.total_failed ?? 0),
+    total_blocked:    Number(r.total_blocked ?? 0),
+    // Guarded: a campaign with no delivery receipts yet has 0 delivered, and
+    // 0/0 must read as 0%, not NaN.
+    open_rate: total_delivered > 0 ? (total_opened / total_delivered) * 100 : 0,
+  };
+},
+
+async getOpenRateReportRows(
+  salonId: string,
+  filters: OpenRateReportFilters
+): Promise<{
+  items: OpenRateReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values } = this._buildOpenRateWhere(salonId, filters);
+
+  // Whitelisted — these interpolate into the SQL, so they can never come
+  // straight from the request body.
+  const SORTABLE: Record<string, string> = {
+    name: "name", created_at: "created_at", sent: "sent", delivered: "delivered",
+    opened: "opened", failed: "failed",
+    open_rate: "(CASE WHEN delivered > 0 THEN opened::numeric / delivered ELSE 0 END)",
+  };
+  const sortCol = SORTABLE[filters.sort_by ?? ""] ?? "created_at";
+  const sortDir = filters.sort_dir === "asc" ? "ASC" : "DESC";
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${values.length + 1} OFFSET $${values.length + 2}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    ${this._OPEN_RATE_AGG(where)}
+    SELECT *, COUNT(*) OVER() AS total_count
+    FROM agg
+    ORDER BY ${sortCol} ${sortDir}, created_at DESC
+    ${limitClause}
+  `;
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: OpenRateReportRow[] = rows.map((row: any) => {
+    const delivered = Number(row.delivered ?? 0);
+    const opened = Number(row.opened ?? 0);
+    return {
+      id: row.id,
+      name: row.name,
+      template_name: row.template_name,
+      status: row.status,
+      channel: row.channel,
+      created_at: row.created_at,
+      total_contacts: Number(row.total_contacts ?? 0),
+      sent: Number(row.sent ?? 0),
+      delivered,
+      opened,
+      failed: Number(row.failed ?? 0),
+      blocked: Number(row.blocked ?? 0),
+      open_rate: delivered > 0 ? (opened / delivered) * 100 : 0,
+    };
+  });
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// Daily open-rate trend, cohorted by SEND date: a message read three days
+// after it was sent counts on the day it was sent, not the day it was read.
+// That keeps each day's opened/delivered describing the same batch of
+// messages — bucketing by read_at instead would put the numerator and
+// denominator on different days and produce rates over 100%.
+async getOpenRateTrend(
+  salonId: string,
+  filters: OpenRateReportFilters
+): Promise<OpenRateTrendPoint[]> {
+  const { where, values } = this._buildOpenRateWhere(salonId, filters);
+  const query = `
+    SELECT
+      cc.sent_at::date AS day,
+      ${WA_SENT_COUNT} AS sent,
+      ${WA_DELIVERED_COUNT} AS delivered,
+      ${WA_READ_COUNT} AS opened
+    FROM wa_campaigns c
+    LEFT JOIN wa_templates t ON t.id = c.template_id
+    JOIN wa_campaign_contacts cc ON cc.campaign_id = c.id
+    WHERE ${where} AND cc.sent_at IS NOT NULL
+    GROUP BY cc.sent_at::date
+    ORDER BY cc.sent_at::date ASC
+  `;
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => {
+    const delivered = Number(r.delivered ?? 0);
+    const opened = Number(r.opened ?? 0);
+    return {
+      day: r.day instanceof Date ? r.day.toISOString().slice(0, 10) : String(r.day).slice(0, 10),
+      sent: Number(r.sent ?? 0),
+      delivered,
+      opened,
+      open_rate: delivered > 0 ? (opened / delivered) * 100 : 0,
+    };
+  });
+},
+
+// Drill-down: one campaign's header figures + its message content, plus the
+// paginated customer list behind those numbers.
+async getOpenRateCampaignDetail(
+  salonId: string,
+  campaignId: string,
+  opts: { status?: string; page?: number; limit?: number; search?: string }
+): Promise<OpenRateCampaignDetail | null> {
+  const headerQuery = `
+    SELECT
+      c.id, c.name, c.status, c.created_at,
+      'whatsapp'::text AS channel,
+      COALESCE(t.name, 'Deleted template') AS template_name,
+      COALESCE(t.body_text, '') AS message_body,
+      COALESCE(c.total_contacts, 0) AS total_contacts,
+      ${WA_SENT_COUNT} AS sent,
+      ${WA_DELIVERED_COUNT} AS delivered,
+      ${WA_READ_COUNT} AS opened,
+      ${WA_FAILED_COUNT} AS failed,
+      ${WA_BLOCKED_COUNT} AS blocked
+    FROM wa_campaigns c
+    LEFT JOIN wa_templates t ON t.id = c.template_id
+    LEFT JOIN wa_campaign_contacts cc ON cc.campaign_id = c.id
+    WHERE c.salon_id = $1 AND c.id = $2
+    GROUP BY c.id, c.name, c.status, c.created_at, t.name, t.body_text, c.total_contacts
+  `;
+  const { rows: headerRows } = await safeQuery(() => pool.query(headerQuery, [salonId, campaignId]));
+  if (headerRows.length === 0) return null;
+  const h = headerRows[0];
+
+  const values: any[] = [campaignId];
+  const where = ["cc.campaign_id = $1"];
+  let idx = 2;
+  // Here the status filter DOES narrow rows — this is the customer list, not
+  // a rate calculation, so restricting it is exactly what staff want.
+  if (opts.status) {
+    where.push(`cc.status = $${idx++}`);
+    values.push(opts.status);
+  }
+  if (opts.search?.trim()) {
+    where.push(`(COALESCE(cc.name,'') ILIKE $${idx} OR cc.phone ILIKE $${idx})`);
+    values.push(`%${opts.search.trim()}%`);
+    idx++;
+  }
+  const page = Math.max(1, Number(opts.page ?? 1));
+  const limit = Math.min(Math.max(1, Number(opts.limit ?? 25)), 200);
+  const offset = (page - 1) * limit;
+
+  const custQuery = `
+    SELECT cc.id, cc.name, cc.phone, cc.status,
+           cc.sent_at, cc.delivered_at, cc.read_at,
+           cc.error_message,
+           COUNT(*) OVER() AS total_count
+    FROM wa_campaign_contacts cc
+    WHERE ${where.join(" AND ")}
+    ORDER BY cc.read_at DESC NULLS LAST, cc.delivered_at DESC NULLS LAST, cc.sent_at DESC NULLS LAST
+    LIMIT $${idx++} OFFSET $${idx++}
+  `;
+  const { rows: custRows } = await safeQuery(() => pool.query(custQuery, [...values, limit, offset]));
+  const custTotal = custRows.length ? Number(custRows[0].total_count) : 0;
+
+  const delivered = Number(h.delivered ?? 0);
+  const opened = Number(h.opened ?? 0);
+  return {
+    id: h.id,
+    name: h.name,
+    status: h.status,
+    channel: h.channel,
+    created_at: h.created_at,
+    template_name: h.template_name,
+    message_body: h.message_body,
+    total_contacts: Number(h.total_contacts ?? 0),
+    sent: Number(h.sent ?? 0),
+    delivered,
+    opened,
+    failed: Number(h.failed ?? 0),
+    blocked: Number(h.blocked ?? 0),
+    open_rate: delivered > 0 ? (opened / delivered) * 100 : 0,
+    customers: custRows.map((r: any) => ({
+      id: r.id,
+      name: r.name || "—",
+      phone: r.phone || "—",
+      status: r.status,
+      sent_at: r.sent_at,
+      delivered_at: r.delivered_at,
+      read_at: r.read_at,
+      error_message: r.error_message,
+    })),
+    customers_pagination: {
+      total: custTotal,
+      page,
+      limit,
+      total_pages: Math.max(1, Math.ceil(custTotal / limit)),
+    },
+  };
+},
+
+// ======================================================
+// REPLY RATE REPORT (independent report API)
+// POST /api/report/reply-rate — how many recipients wrote back.
+//
+// Reuses the Open Rate report's filter builder verbatim (same campaigns,
+// same filters) and the same WA_*_COUNT state definitions, so all three
+// campaign reports agree on sent/delivered/failed for any given campaign.
+//
+// Denominator note: reply_rate is replied / SENT, not replied / delivered —
+// deliberately different from Open Rate. Two reasons. First, it's the figure
+// staff actually asked for ("we sent 100, 30 replied"). Second, delivery
+// receipts are frequently missing on this system (most contacts sit at SENT
+// forever), so a delivered-based denominator can be smaller than the number
+// of replies — a reply proves delivery even when no receipt arrived — which
+// would produce rates above 100%. Sent is always well defined.
+// ======================================================
+
+_REPLY_RATE_AGG(where: string): string {
+  return `
+    WITH ${WA_INBOUND_CTE},
+    agg AS (
+      SELECT
+        c.id, c.name, c.status, c.created_at,
+        'whatsapp'::text AS channel,
+        COALESCE(t.name, 'Deleted template') AS template_name,
+        COALESCE(c.total_contacts, 0) AS total_contacts,
+        ${WA_SENT_COUNT} AS sent,
+        ${WA_DELIVERED_COUNT} AS delivered,
+        ${WA_READ_COUNT} AS opened,
+        ${WA_FAILED_COUNT} AS failed,
+        ${WA_REACHED_COUNT} AS reached,
+        ${WA_REPLIED_COUNT} AS replied
+      FROM wa_campaigns c
+      LEFT JOIN wa_templates t ON t.id = c.template_id
+      LEFT JOIN wa_campaign_contacts cc ON cc.campaign_id = c.id
+      WHERE ${where}
+      GROUP BY c.id, c.name, c.status, c.created_at, t.name, c.total_contacts
+    )
+  `;
+},
+
+async getReplyRateReportStats(
+  salonId: string,
+  filters: OpenRateReportFilters
+): Promise<ReplyRateReportStats> {
+  const { where, values } = this._buildOpenRateWhere(salonId, filters);
+  const query = `
+    ${this._REPLY_RATE_AGG(where)}
+    SELECT
+      COUNT(*)::int AS total_campaigns,
+      COALESCE(SUM(sent), 0)::int      AS total_sent,
+      COALESCE(SUM(reached), 0)::int   AS total_reached,
+      COALESCE(SUM(delivered), 0)::int AS total_delivered,
+      COALESCE(SUM(opened), 0)::int    AS total_opened,
+      COALESCE(SUM(replied), 0)::int   AS total_replied,
+      COALESCE(SUM(failed), 0)::int    AS total_failed
+    FROM agg
+  `;
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  const total_reached = Number(r.total_reached ?? 0);
+  const total_replied = Number(r.total_replied ?? 0);
+  return {
+    total_campaigns: Number(r.total_campaigns ?? 0),
+    total_sent: Number(r.total_sent ?? 0),
+    total_reached,
+    total_delivered: Number(r.total_delivered ?? 0),
+    total_opened: Number(r.total_opened ?? 0),
+    total_replied,
+    total_failed: Number(r.total_failed ?? 0),
+    // Over messages that actually went out — see WA_REACHED_COUNT.
+    reply_rate: total_reached > 0 ? (total_replied / total_reached) * 100 : 0,
+  };
+},
+
+async getReplyRateReportRows(
+  salonId: string,
+  filters: OpenRateReportFilters
+): Promise<{
+  items: ReplyRateReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values } = this._buildOpenRateWhere(salonId, filters);
+
+  const SORTABLE: Record<string, string> = {
+    name: "name", created_at: "created_at", sent: "sent", delivered: "delivered",
+    opened: "opened", replied: "replied",
+    reply_rate: "(CASE WHEN reached > 0 THEN replied::numeric / reached ELSE 0 END)",
+  };
+  const sortCol = SORTABLE[filters.sort_by ?? ""] ?? "created_at";
+  const sortDir = filters.sort_dir === "asc" ? "ASC" : "DESC";
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${values.length + 1} OFFSET $${values.length + 2}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    ${this._REPLY_RATE_AGG(where)}
+    SELECT *, COUNT(*) OVER() AS total_count
+    FROM agg
+    ORDER BY ${sortCol} ${sortDir}, created_at DESC
+    ${limitClause}
+  `;
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: ReplyRateReportRow[] = rows.map((row: any) => {
+    const reached = Number(row.reached ?? 0);
+    const replied = Number(row.replied ?? 0);
+    return {
+      id: row.id,
+      name: row.name,
+      template_name: row.template_name,
+      status: row.status,
+      channel: row.channel,
+      created_at: row.created_at,
+      total_contacts: Number(row.total_contacts ?? 0),
+      sent: Number(row.sent ?? 0),
+      reached,
+      delivered: Number(row.delivered ?? 0),
+      opened: Number(row.opened ?? 0),
+      failed: Number(row.failed ?? 0),
+      replied,
+      reply_rate: reached > 0 ? (replied / reached) * 100 : 0,
+    };
+  });
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// Drill-down: recipients of one campaign, each with the timestamp of their
+// first in-window reply (null when they never wrote back).
+async getReplyRateCampaignDetail(
+  salonId: string,
+  campaignId: string,
+  opts: { replied?: "yes" | "no"; page?: number; limit?: number; search?: string }
+): Promise<ReplyRateCampaignDetail | null> {
+  const headerQuery = `
+    WITH ${WA_INBOUND_CTE}
+    SELECT
+      c.id, c.name, c.status, c.created_at,
+      'whatsapp'::text AS channel,
+      COALESCE(t.name, 'Deleted template') AS template_name,
+      COALESCE(t.body_text, '') AS message_body,
+      COALESCE(c.total_contacts, 0) AS total_contacts,
+      ${WA_SENT_COUNT} AS sent,
+      ${WA_DELIVERED_COUNT} AS delivered,
+      ${WA_READ_COUNT} AS opened,
+      ${WA_FAILED_COUNT} AS failed,
+      ${WA_REPLIED_COUNT} AS replied
+    FROM wa_campaigns c
+    LEFT JOIN wa_templates t ON t.id = c.template_id
+    LEFT JOIN wa_campaign_contacts cc ON cc.campaign_id = c.id
+    WHERE c.salon_id = $1 AND c.id = $2
+    GROUP BY c.id, c.name, c.status, c.created_at, t.name, t.body_text, c.total_contacts
+  `;
+  const { rows: headerRows } = await safeQuery(() => pool.query(headerQuery, [salonId, campaignId]));
+  if (headerRows.length === 0) return null;
+  const h = headerRows[0];
+
+  const values: any[] = [salonId, campaignId];
+  let idx = 3;
+  const extra: string[] = [];
+  if (opts.replied === "yes") extra.push("r.first_reply_at IS NOT NULL");
+  if (opts.replied === "no")  extra.push("r.first_reply_at IS NULL");
+  if (opts.search?.trim()) {
+    extra.push(`(COALESCE(cc.name,'') ILIKE $${idx} OR cc.phone ILIKE $${idx})`);
+    values.push(`%${opts.search.trim()}%`);
+    idx++;
+  }
+  const page = Math.max(1, Number(opts.page ?? 1));
+  const limit = Math.min(Math.max(1, Number(opts.limit ?? 25)), 200);
+  const offset = (page - 1) * limit;
+
+  const custQuery = `
+    WITH ${WA_INBOUND_CTE}
+    SELECT cc.id, cc.name, cc.phone, cc.status,
+           cc.sent_at, cc.delivered_at, cc.read_at,
+           r.first_reply_at,
+           COUNT(*) OVER() AS total_count
+    FROM wa_campaign_contacts cc
+    LEFT JOIN LATERAL (
+      SELECT MIN(i.sent_at) AS first_reply_at
+      FROM inbound i
+      WHERE cc.sent_at IS NOT NULL
+        -- Same "actually went out" gate as WA_REPLIED_PREDICATE, so a
+        -- recipient can never show a reply time the header didn't count.
+        AND cc.status IN ('SENT','DELIVERED','READ')
+        AND i.phone_norm = ${PHONE_NORM("cc.phone")}
+        AND i.sent_at >= cc.sent_at
+        AND i.sent_at < cc.sent_at + ${WA_REPLY_WINDOW}
+    ) r ON TRUE
+    WHERE cc.campaign_id = $2${extra.length ? ` AND ${extra.join(" AND ")}` : ""}
+    ORDER BY r.first_reply_at DESC NULLS LAST, cc.sent_at DESC NULLS LAST
+    LIMIT $${idx++} OFFSET $${idx++}
+  `;
+  const { rows: custRows } = await safeQuery(() => pool.query(custQuery, [...values, limit, offset]));
+  const custTotal = custRows.length ? Number(custRows[0].total_count) : 0;
+
+  const reached = Number(h.reached ?? 0);
+  const replied = Number(h.replied ?? 0);
+  return {
+    id: h.id,
+    name: h.name,
+    status: h.status,
+    channel: h.channel,
+    created_at: h.created_at,
+    template_name: h.template_name,
+    message_body: h.message_body,
+    total_contacts: Number(h.total_contacts ?? 0),
+    sent: Number(h.sent ?? 0),
+    reached,
+    delivered: Number(h.delivered ?? 0),
+    opened: Number(h.opened ?? 0),
+    failed: Number(h.failed ?? 0),
+    replied,
+    reply_rate: reached > 0 ? (replied / reached) * 100 : 0,
+    customers: custRows.map((r: any) => ({
+      id: r.id,
+      name: r.name || "—",
+      phone: r.phone || "—",
+      status: r.status,
+      sent_at: r.sent_at,
+      delivered_at: r.delivered_at,
+      read_at: r.read_at,
+      first_reply_at: r.first_reply_at,
+    })),
+    customers_pagination: {
+      total: custTotal,
+      page,
+      limit,
+      total_pages: Math.max(1, Math.ceil(custTotal / limit)),
+    },
+  };
+},
+
+async getOpenRateFiltersAvailable(salonId: string): Promise<OpenRateFiltersAvailable> {
+  const { rows } = await safeQuery(() => pool.query(
+    `SELECT id, name AS label FROM wa_campaigns WHERE salon_id = $1 ORDER BY created_at DESC`,
+    [salonId]
+  ));
+  return { campaigns: rows.map((r: any) => ({ id: r.id, label: r.label })) };
 },
 
 // ======================================================
