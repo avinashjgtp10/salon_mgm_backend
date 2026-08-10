@@ -170,6 +170,19 @@ router.post(
 );
 
 // ======================================================
+// PAYMENT COLLECTION REPORT (independent report API)
+// Reads appointments + payments directly (never sales — an unpaid bill has
+// no sales row at all). Due is read from the latest payment row per
+// appointment, never summed.
+// ======================================================
+
+router.post(
+    "/payment-collection",
+    ...guard,
+    reportsController.getPaymentCollectionReport
+);
+
+// ======================================================
 // REFERRAL REPORT (independent report API)
 // One row per referred client, joined back to the referrer. Reads
 // clients/sales/referral_ledger directly — never calls the Appointment API.
