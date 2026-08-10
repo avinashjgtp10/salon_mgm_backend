@@ -150,6 +150,61 @@ setImmediate(() => {
   `).catch((err: any) => console.warn('⚠️  demo_requests table migration:', err.message));
 });
 
+// Create enquiries table (safe, idempotent)
+setImmediate(() => {
+  pool.query(`
+    CREATE TABLE IF NOT EXISTS enquiries (
+      id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+      salon_id    UUID        NOT NULL REFERENCES salons(id)    ON DELETE CASCADE,
+      name        TEXT        NOT NULL,
+      phone       TEXT        NOT NULL,
+      service_id  UUID        REFERENCES services(id) ON DELETE SET NULL,
+      staff_id    UUID        REFERENCES staff(id)    ON DELETE SET NULL,
+      status      TEXT        NOT NULL DEFAULT 'New' CHECK (status IN ('New', 'Follow-up', 'Converted', 'Closed')),
+      notes       TEXT,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `)
+    .then(() => pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_enquiries_salon_id ON enquiries (salon_id);
+      CREATE INDEX IF NOT EXISTS idx_enquiries_status    ON enquiries (salon_id, status);
+      CREATE INDEX IF NOT EXISTS idx_enquiries_created_at ON enquiries (salon_id, created_at DESC);
+    `))
+    // Per-salon sequential enquiry numbers, backfilled oldest-first for any
+    // rows that predate this column (mirrors sales.repository.ts's invoice
+    // number counter pattern).
+    .then(() => pool.query(`
+      ALTER TABLE salons ADD COLUMN IF NOT EXISTS next_enquiry_seq INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE enquiries ADD COLUMN IF NOT EXISTS enquiry_no INTEGER;
+
+      WITH numbered AS (
+        SELECT id, ROW_NUMBER() OVER (PARTITION BY salon_id ORDER BY created_at) AS rn
+        FROM enquiries
+        WHERE enquiry_no IS NULL
+      )
+      UPDATE enquiries e SET enquiry_no = numbered.rn
+      FROM numbered
+      WHERE numbered.id = e.id;
+
+      UPDATE salons s SET next_enquiry_seq = GREATEST(s.next_enquiry_seq, sub.max_no + 1)
+      FROM (SELECT salon_id, MAX(enquiry_no) AS max_no FROM enquiries GROUP BY salon_id) sub
+      WHERE sub.salon_id = s.id;
+
+      ALTER TABLE enquiries ALTER COLUMN enquiry_no SET NOT NULL;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS enquiries_salon_id_enquiry_no_key
+        ON enquiries (salon_id, enquiry_no);
+    `))
+    .then(() => pool.query(`
+      ALTER TABLE enquiries ADD COLUMN IF NOT EXISTS source TEXT;
+      ALTER TABLE enquiries ADD COLUMN IF NOT EXISTS follow_up_at TIMESTAMPTZ;
+
+      CREATE INDEX IF NOT EXISTS idx_enquiries_follow_up_at ON enquiries (salon_id, follow_up_at);
+    `))
+    .catch((err: any) => console.warn('⚠️  enquiries table migration:', err.message));
+});
+
 /**
  * safeQuery — wraps any pool.query() call with auto-retry.
  *
