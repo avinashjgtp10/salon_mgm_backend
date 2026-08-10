@@ -537,15 +537,45 @@ export const staffCommissionsController = {
     } catch (err) { return next(err); }
   },
 
-  // ── NEW: mark all pending commissions as paid for a staff member ───────────
+  // ── Settle commission for a staff member — full amount when no body is
+  // given (back-compat), or a specific full/partial amount when `amount` is
+  // provided in the body. Persists a commission_settlements audit row either way.
   async markStaffCommissionPaid(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = req.user?.salonId ?? String(req.query.salon_id ?? "");
       const staffId = String(req.params.staffId);
       if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
       if (!staffId) throw new AppError(400, "staffId is required", "VALIDATION_ERROR");
+
+      const bodyAmount = req.body?.amount;
+      if (bodyAmount !== undefined && bodyAmount !== null) {
+        const amount = Number(bodyAmount);
+        if (!Number.isFinite(amount) || amount <= 0) {
+          throw new AppError(400, "amount must be a positive number", "VALIDATION_ERROR");
+        }
+        const settledBy = req.user?.userId ?? null;
+        const result = await staffCommissionsService.settleStaffCommission(salonId, staffId, amount, settledBy);
+        return sendSuccess(res, 200, {
+          settled_amount: result.settledAmount,
+          remaining_balance: result.remainingBalance,
+          status: result.remainingBalance <= 0 ? "paid" : "partial",
+        }, "Commission settled successfully");
+      }
+
       const count = await staffCommissionsService.markStaffCommissionPaid(salonId, staffId);
       return sendSuccess(res, 200, { marked_paid: count }, `${count} commission(s) marked as paid`);
+    } catch (err) { return next(err); }
+  },
+
+  // ── Settlement history for a staff member (audit/reporting) ────────────────
+  async getSettlementHistory(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId ?? String(req.query.salon_id ?? "");
+      const staffId = String(req.params.staffId);
+      if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+      const limit = req.query.limit ? Number(req.query.limit) : undefined;
+      const data = await staffCommissionsService.getSettlementHistory(salonId, staffId, limit);
+      return sendSuccess(res, 200, data, "Settlement history fetched successfully");
     } catch (err) { return next(err); }
   },
 

@@ -1,5 +1,6 @@
 import pool from "../../config/database";
 import logger from "../../config/logger";
+import { AppError } from "../../middleware/error.middleware";
 import { staffCommissionsRepository, commissionSlabsRepository, commissionHistoryRepository } from "../staff/staffSettings.repository";
 import { commissionRulesRepository } from "../commissionRules/commissionRules.repository";
 import { clientMembershipsRepository } from "../client-memberships/client-memberships.repository";
@@ -231,11 +232,158 @@ const commissionEarnedRepository = {
         return rowCount ?? 0;
     },
 
+    // Settles `amount` against a staff member's pending commission_earned rows,
+    // oldest first. A row fully covered by the remaining amount is marked paid
+    // outright; a row only partially covered is split in two — the paid
+    // portion becomes a new 'paid' row (revenue/commission apportioned by the
+    // same ratio so salon-wide revenue totals aren't double-counted), and the
+    // original row keeps the leftover as still-pending. Locks the pending rows
+    // (FOR UPDATE) for the duration so two settlements can't race each other.
+    async settlePartial(
+        salonId: string,
+        staffId: string,
+        amount: number,
+        settledBy?: string | null
+    ): Promise<{ settledAmount: number; remainingBalance: number; totalPendingBefore: number }> {
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+
+            const { rows: pendingRows } = await client.query(
+                `SELECT * FROM commission_earned
+                 WHERE salon_id = $1 AND staff_id = $2 AND status = 'pending'
+                 ORDER BY earned_at ASC
+                 FOR UPDATE`,
+                [salonId, staffId]
+            );
+
+            const totalPending = pendingRows.reduce((sum: number, r: any) => sum + parseFloat(r.commission_amount), 0);
+
+            if (!Number.isFinite(amount) || amount <= 0) {
+                throw new AppError(400, "Settlement amount must be greater than 0", "VALIDATION_ERROR");
+            }
+            if (amount > totalPending) {
+                throw new AppError(400, "Settlement amount cannot exceed the unpaid commission", "VALIDATION_ERROR");
+            }
+
+            let remaining = amount;
+            for (const row of pendingRows) {
+                if (remaining <= 0) break;
+                const rowAmount = parseFloat(row.commission_amount);
+                const rowRevenue = parseFloat(row.revenue_amount);
+
+                if (rowAmount <= remaining) {
+                    await client.query(
+                        `UPDATE commission_earned SET status = 'paid', paid_at = NOW(), updated_at = NOW() WHERE id = $1`,
+                        [row.id]
+                    );
+                    remaining -= rowAmount;
+                } else {
+                    const ratio = remaining / rowAmount;
+                    const paidRevenue = Math.round(rowRevenue * ratio * 100) / 100;
+                    const remainingRevenue = rowRevenue - paidRevenue;
+                    const remainingCommission = rowAmount - remaining;
+
+                    await client.query(
+                        `UPDATE commission_earned
+                         SET commission_amount = $1, revenue_amount = $2, updated_at = NOW()
+                         WHERE id = $3`,
+                        [remainingCommission, remainingRevenue, row.id]
+                    );
+                    await client.query(
+                        `INSERT INTO commission_earned
+                            (salon_id, staff_id, sale_id, appointment_id, category,
+                             revenue_amount, commission_kind, commission_rate, commission_amount, status,
+                             earned_at, paid_at, rule_id, tier_id)
+                         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'paid',$10,NOW(),$11,$12)`,
+                        [
+                            row.salon_id, row.staff_id, row.sale_id, row.appointment_id, row.category,
+                            paidRevenue, row.commission_kind, row.commission_rate, remaining,
+                            row.earned_at, row.rule_id, row.tier_id,
+                        ]
+                    );
+                    remaining = 0;
+                }
+            }
+
+            const remainingBalance = Math.round((totalPending - amount) * 100) / 100;
+
+            await client.query(
+                `INSERT INTO commission_settlements
+                    (salon_id, staff_id, settled_amount, remaining_balance, status, settled_by)
+                 VALUES ($1,$2,$3,$4,$5,$6)`,
+                [salonId, staffId, amount, remainingBalance, remainingBalance <= 0 ? "paid" : "partial", settledBy ?? null]
+            );
+
+            await client.query("COMMIT");
+            return { settledAmount: amount, remainingBalance, totalPendingBefore: totalPending };
+        } catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        } finally {
+            client.release();
+        }
+    },
+
     async deleteBySaleId(saleId: string): Promise<void> {
         await pool.query(
             `DELETE FROM commission_earned WHERE sale_id = $1 AND status = 'pending'`,
             [saleId]
         );
+    },
+};
+
+// ─── Settlement history (audit trail) ────────────────────────────────────────
+
+const commissionSettlementsRepository = {
+    async listByStaff(salonId: string, staffId: string, limit = 50): Promise<{
+        id: string;
+        staff_id: string;
+        settled_amount: number;
+        remaining_balance: number;
+        status: string;
+        settled_at: string;
+    }[]> {
+        const { rows } = await pool.query(
+            `SELECT id, staff_id, settled_amount, remaining_balance, status, settled_at
+             FROM commission_settlements
+             WHERE salon_id = $1 AND staff_id = $2
+             ORDER BY settled_at DESC
+             LIMIT $3`,
+            [salonId, staffId, limit]
+        );
+        return rows.map((r: any) => ({
+            ...r,
+            settled_amount: parseFloat(r.settled_amount),
+            remaining_balance: parseFloat(r.remaining_balance),
+        }));
+    },
+
+    async listBySalon(salonId: string, limit = 200): Promise<{
+        id: string;
+        staff_id: string;
+        staff_first_name: string;
+        staff_last_name: string | null;
+        settled_amount: number;
+        remaining_balance: number;
+        status: string;
+        settled_at: string;
+    }[]> {
+        const { rows } = await pool.query(
+            `SELECT cs.id, cs.staff_id, s.first_name AS staff_first_name, s.last_name AS staff_last_name,
+                    cs.settled_amount, cs.remaining_balance, cs.status, cs.settled_at
+             FROM commission_settlements cs
+             JOIN staff s ON s.id = cs.staff_id
+             WHERE cs.salon_id = $1
+             ORDER BY cs.settled_at DESC
+             LIMIT $2`,
+            [salonId, limit]
+        );
+        return rows.map((r: any) => ({
+            ...r,
+            settled_amount: parseFloat(r.settled_amount),
+            remaining_balance: parseFloat(r.remaining_balance),
+        }));
     },
 };
 
@@ -823,6 +971,18 @@ export const commissionCalculationService = {
 
     async markStaffPaid(salonId: string, staffId: string) {
         return commissionEarnedRepository.markPaid(salonId, staffId);
+    },
+
+    async settleStaffCommission(salonId: string, staffId: string, amount: number, settledBy?: string | null) {
+        return commissionEarnedRepository.settlePartial(salonId, staffId, amount, settledBy);
+    },
+
+    async getSettlementHistory(salonId: string, staffId: string, limit?: number) {
+        return commissionSettlementsRepository.listByStaff(salonId, staffId, limit);
+    },
+
+    async getSalonSettlementHistory(salonId: string, limit?: number) {
+        return commissionSettlementsRepository.listBySalon(salonId, limit);
     },
 
     async getStaffHistory(staffId: string, filters: {
