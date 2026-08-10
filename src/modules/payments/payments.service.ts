@@ -186,19 +186,48 @@ export const paymentsService = {
             const t = Number(i.total);
             return (i.total !== undefined && i.total !== null && isFinite(t)) ? t : (Number(i.price) || 0) * qty(i);
           };
-          const serviceTotal    = (appt.services         || []).reduce((s, i) => s + lineTotal(i), 0);
+          // Package-covered rows are excluded from the billable service total:
+          // the customer already paid for those sessions when they bought the
+          // package, so the value must not be billed again NOR taxed. Doing it
+          // here (rather than subtracting a package term further down) keeps
+          // the exclusion pre-tax automatically and applies to both the
+          // computeBillTotals path and the fallback formula below — the same
+          // treatment membership_discount_used gets.
+          const serviceTotal    = (appt.services         || [])
+            .filter((i: any) => !i.is_package_service)
+            .reduce((s, i) => s + lineTotal(i), 0);
           const packageTotal    = (appt.package_items    || []).reduce((s, i) => s + lineTotal(i), 0);
           const productTotal    = (appt.product_items    || []).reduce((s, i) => s + lineTotal(i), 0);
           const membershipTotal = (appt.membership_items || []).reduce((s, i) => s + lineTotal(i), 0);
           const rawSubtotal     = serviceTotal + packageTotal + productTotal + membershipTotal;
           // ₹ of this bill covered by an already-purchased Package's included
-          // sessions (row.price/qty preserved at full catalog value even
-          // though row.total nets to 0 — see ServiceRow.tsx/useAppointment.ts).
-          // Hoisted onto `data` below so the recordTransaction call further
-          // down (outside this try block's scope) can read it.
+          // sessions. Hoisted onto `data` below so the recordTransaction call
+          // further down (outside this try block's scope) can read it.
+          //
+          // Uses price×qty, NOT lineTotal: row.total was assumed to net to 0
+          // on package rows, but real stored appointments have total = the
+          // full price (e.g. {"price":500,"total":500,"is_package_service":
+          // true}). Going through lineTotal here therefore computed the
+          // coverage correctly by luck, while rawSubtotal above ALSO counted
+          // that same ₹500 as billable — which is the bug this fixes. Reading
+          // price×qty directly is correct regardless of what `total` holds.
           data.package_covered_amount = (appt.services || [])
             .filter((i: any) => !!i.is_package_service)
-            .reduce((s, i) => s + lineTotal(i), 0);
+            .reduce((s, i) => s + (Number(i.price) || 0) * qty(i), 0);
+          // The same figure, but this one is the money: persisted to
+          // payments.package_used and removed from the taxable base below.
+          //
+          // Deliberately NOT cross-checked against client_package_session_history,
+          // even though a bill can reach here with the flag missing from the
+          // jsonb: that table cannot supply the billed amount. Its joinable
+          // price is client_package_services.price — the package's per-session
+          // price, not this bill's line total (INV-00157: history says ₹1000,
+          // the service was billed ₹500). It also carries genuine duplicate
+          // rows (INV-00156 has the same session_no twice), so any SUM over it
+          // double-counts. Using it would trade a known under-count for silent
+          // wrong money, which is worse. is_package_service on the appointment
+          // row is the only source that states what THIS bill covered.
+          data.package_used = data.package_covered_amount;
           // Rounded to the nearest whole rupee — matches computeTotals() on the
           // frontend (totalsUtils.ts), which is what the client actually sees/
           // pays. Rounding here (not after discount/wallet deductions) keeps

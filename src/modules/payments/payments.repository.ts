@@ -36,6 +36,18 @@ export async function ensureTable(): Promise<void> {
   await pool.query(
     `ALTER TABLE payments ADD COLUMN IF NOT EXISTS membership_discount_used NUMERIC(10,2) NOT NULL DEFAULT 0`,
   );
+  // ₹ of this bill covered by sessions from an already-purchased package.
+  // Like membership_discount_used (and unlike membership_wallet_used), this is
+  // a PRE-TAX reduction: the customer already paid for those sessions when
+  // they bought the package, so the covered value must be excluded from the
+  // taxable base — never taxed and then subtracted.
+  //
+  // Cumulative per appointment, matching membership_discount_used: every
+  // payment row for one appointment carries the same running total, so it is
+  // read with MAX and never SUMmed.
+  await pool.query(
+    `ALTER TABLE payments ADD COLUMN IF NOT EXISTS package_used NUMERIC(10,2) NOT NULL DEFAULT 0`,
+  );
 }
 
 export const paymentsRepository = {
@@ -51,6 +63,18 @@ export const paymentsRepository = {
     return parseFloat(rows[0]?.total ?? '0');
   },
 
+  // Cumulative (not additive) per appointment — same contract as
+  // getMembershipDiscountForAppointment above, so a completing payment can
+  // recover what a previous partial payment already recorded instead of
+  // re-deriving (or double-counting) the coverage.
+  async getPackageUsedForAppointment(appointmentId: string): Promise<number> {
+    const { rows } = await pool.query(
+      `SELECT COALESCE(MAX(package_used),0) AS total FROM payments WHERE appointment_id = $1`,
+      [appointmentId],
+    );
+    return parseFloat(rows[0]?.total ?? '0');
+  },
+
   async create(data: CreatePaymentBody): Promise<Payment> {
     const { rows } = await pool.query(
       `INSERT INTO payments (
@@ -61,13 +85,13 @@ export const paymentsRepository = {
         coupon_code, payment_method, split_details,
         status, paid_at, notes, membership_wallet_used, reward_points_value, tax_breakdown,
         referral_discount_applied, reward_points_used, referral_credit_used,
-        membership_discount_used
+        membership_discount_used, package_used
       ) VALUES (
         gen_random_uuid()::text, $13,
         $1,$2,$3,$4,$5,$6,$7,
         $14,$15,
         $8,$9,$10::jsonb,$11,NOW(),$12,$16,$17,$18::jsonb,
-        $19,$20,$21,$22
+        $19,$20,$21,$22,$23
       )
       RETURNING *`,
       [
@@ -93,6 +117,7 @@ export const paymentsRepository = {
         data.reward_points_used ?? 0,        // $20
         data.referral_credit_used ?? 0,      // $21
         data.membership_discount_used ?? 0,  // $22
+        data.package_used ?? 0,              // $23
       ]
     );
     return rows[0];

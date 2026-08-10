@@ -44,6 +44,9 @@ import {
     LostCustomersReportStats,
     ReferralReportRow,
     ReferralReportStats,
+    PaymentCollectionReportRow,
+    PaymentCollectionReportStats,
+    PaymentCollectionFiltersAvailable,
     StaffSalesReportRow,
     StaffSalesReportStats,
     StaffPerformanceReportRow,
@@ -1606,6 +1609,7 @@ _UNBILLED_APPOINTMENT_ROWS_CTE(
       base.tip_amount,
       base.paid_amount, base.due_amount, base.ewallet_used,
       (base.membership_wallet_used + base.membership_discount_used) AS membership_wallet_used,
+      base.package_used,
       base.reward_points_value, base.referral_credit_used
     FROM (
       SELECT
@@ -1661,6 +1665,7 @@ _UNBILLED_APPOINTMENT_ROWS_CTE(
         COALESCE(pay.latest_due, 0) AS due_amount,
         COALESCE(pay.ewallet_used, 0) AS ewallet_used,
         COALESCE(pay.membership_wallet_used, 0) AS membership_wallet_used,
+        COALESCE(pay.package_used, 0) AS package_used,
         COALESCE(pay.reward_points_value, 0) AS reward_points_value,
         COALESCE(pay.referral_credit_used, 0) AS referral_credit_used
     FROM appointments a
@@ -1677,6 +1682,8 @@ _UNBILLED_APPOINTMENT_ROWS_CTE(
         ) AS latest_method,
         COALESCE(SUM(p.ewallet_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS ewallet_used,
         COALESCE(SUM(p.membership_wallet_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS membership_wallet_used,
+        -- MAX not SUM — cumulative per appointment, see _PAYMENT_LATERAL.
+        COALESCE(MAX(p.package_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS package_used,
         COALESCE(SUM(p.reward_points_value) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS reward_points_value,
         COALESCE(SUM(p.referral_credit_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS referral_credit_used,
         -- MAX not SUM — see _PAYMENT_LATERAL's identical comment above.
@@ -1759,6 +1766,11 @@ _PAYMENT_LATERAL: `
       ), 0) AS latest_due,
       COALESCE(SUM(p.ewallet_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS ewallet_used,
       COALESCE(SUM(p.membership_wallet_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS membership_wallet_used,
+      -- MAX, not SUM — package_used is cumulative per appointment (every
+      -- payment row for one appointment carries the same running total), so
+      -- summing across a partial + completing payment would double-count it.
+      -- Same contract as membership_discount_used below.
+      COALESCE(MAX(p.package_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS package_used,
       COALESCE(SUM(p.reward_points_value) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS reward_points_value,
       COALESCE(SUM(p.referral_credit_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS referral_credit_used,
       -- Pre-tax price reduction from a Discount Balance/Loyalty membership —
@@ -1870,7 +1882,7 @@ async getSalesSummaryReportStats(
   }
 ): Promise<{
   total_bill: number; total_sale: number; received_amount: number; total_tip: number;
-  total_ewallet: number; total_membership: number; total_rewards: number; total_referral: number;
+  total_ewallet: number; total_membership: number; total_package: number; total_rewards: number; total_referral: number;
 }> {
   const { where, values, nextIndex } = this._buildSalesSummaryWhere(salonId, filters);
   const unbilled = this._UNBILLED_APPOINTMENT_ROWS_CTE(filters, nextIndex);
@@ -1885,7 +1897,7 @@ async getSalesSummaryReportStats(
           ELSE 0
         END AS paid_amount,
         s.tip_amount::numeric AS tip_amount,
-        pay.ewallet_used, pay.membership_wallet_used,
+        pay.ewallet_used, pay.membership_wallet_used, pay.package_used,
         pay.reward_points_value, pay.referral_credit_used
       FROM sales s
       LEFT JOIN clients c ON s.client_id = c.id
@@ -1896,7 +1908,7 @@ async getSalesSummaryReportStats(
     appt_side AS (
       SELECT
         u.price, u.paid_amount, u.tip_amount,
-        u.ewallet_used, u.membership_wallet_used,
+        u.ewallet_used, u.membership_wallet_used, u.package_used,
         u.reward_points_value, u.referral_credit_used
       FROM (${unbilled.sql}) u
     ),
@@ -1912,6 +1924,7 @@ async getSalesSummaryReportStats(
       COALESCE(SUM(tip_amount), 0) AS total_tip,
       COALESCE(SUM(ewallet_used), 0) AS total_ewallet,
       COALESCE(SUM(membership_wallet_used), 0) AS total_membership,
+      COALESCE(SUM(package_used), 0) AS total_package,
       COALESCE(SUM(reward_points_value), 0) AS total_rewards,
       COALESCE(SUM(referral_credit_used), 0) AS total_referral
     FROM unified
@@ -1926,6 +1939,7 @@ async getSalesSummaryReportStats(
     total_tip: Number(r.total_tip ?? 0),
     total_ewallet: Number(r.total_ewallet ?? 0),
     total_membership: Number(r.total_membership ?? 0),
+    total_package: Number(r.total_package ?? 0),
     total_rewards: Number(r.total_rewards ?? 0),
     total_referral: Number(r.total_referral ?? 0),
   };
@@ -1999,6 +2013,11 @@ async getSalesSummaryReportRows(
         -- are each "covered by their membership", one column, not split
         -- across "Membership" and "Discount".
         COALESCE(pay.membership_wallet_used, 0) + COALESCE(pay.membership_discount_used, 0) AS membership_wallet_used,
+        -- ₹ of this bill covered by an already-purchased package's sessions.
+        -- Its own column rather than folded into membership above: a package
+        -- session and a membership benefit are different things to a salon
+        -- owner reading this report.
+        COALESCE(pay.package_used, 0) AS package_used,
         COALESCE(pay.reward_points_value, 0) AS reward_points_value,
         COALESCE(pay.referral_credit_used, 0) AS referral_credit_used
       FROM sales s
@@ -2030,7 +2049,7 @@ async getSalesSummaryReportRows(
         u.client_name, u.client_phone, u.staff_name,
         u.item_description, u.item_types,
         u.paid_amount, u.due_amount,
-        u.ewallet_used, u.membership_wallet_used,
+        u.ewallet_used, u.membership_wallet_used, u.package_used,
         u.reward_points_value, u.referral_credit_used
       FROM (${unbilled.sql}) u
     ),
@@ -2067,6 +2086,7 @@ async getSalesSummaryReportRows(
     tip_amount: Number(row.tip_amount ?? 0),
     ewallet_used: Number(row.ewallet_used ?? 0),
     membership_wallet_used: Number(row.membership_wallet_used ?? 0),
+    package_used: Number(row.package_used ?? 0),
     reward_points_value: Number(row.reward_points_value ?? 0),
     referral_credit_used: Number(row.referral_credit_used ?? 0),
     payment_method: row.payment_method,
@@ -5081,6 +5101,408 @@ async getReferralReportRows(
       limit: effectiveLimit,
       total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
     },
+  };
+},
+
+// ======================================================
+// PAYMENT COLLECTION REPORT (independent report API)
+// POST /api/report/payment-collection — one row per billed appointment,
+// showing amount billed / collected / still due.
+//
+// Sourced from appointments + payments, NEVER from sales: `sales` has no
+// due/paid column and no sales row exists at all until a bill is fully
+// settled, so a sales-based query can structurally never see an unpaid
+// balance. payments links via appointment_id (there is no sale_id column).
+//
+// THE critical rule: payments.due_amount is a cumulative snapshot of the
+// balance remaining as of each row, so it is read from the LATEST row per
+// appointment. SUMming it adds up the same shrinking debt repeatedly — on
+// real data that overstated outstanding by 71% AND reported debt against 11
+// bills the customers had already paid off in full. paid_amount is a genuine
+// per-row delta, so that one IS SUMmed. Mixing the two up in either
+// direction produces wrong money.
+// ======================================================
+
+_buildPaymentCollectionWhere(
+  salonId: string,
+  filters: { search?: string; staff_ids?: string[]; payment_statuses?: string[]; payment_methods?: string[] }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = [
+    "a.salon_id = $1",
+    "a.deleted_at IS NULL",
+    // status is a PG enum, so cast to text before comparing against literals.
+    "a.status::text NOT IN ('cancelled', 'deleted', 'no-show')",
+  ];
+  let idx = 2;
+
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    where.push(`a.staff_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.staff_ids);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+      OR COALESCE(sl.invoice_number, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+// Shared aggregation CTE — one row per appointment that has at least one
+// payment row. Filters that depend on the LATERAL's output (payment status,
+// method, date) are applied in the outer SELECT, since they can't be
+// referenced from inside the FROM clause that produces them.
+_PAYMENT_COLLECTION_AGG(
+  where: string,
+  startDateIdx: number | null,
+  endDateIdx: number | null,
+  statusIdx: number | null,
+  methodIdx: number | null
+): string {
+  // These filter the `collection` CTE's already-projected output columns, so
+  // they reference payment_date/payment_status/payment_method — not the raw
+  // LATERAL columns, which are no longer in scope at this point.
+  //
+  // payment_date is already IST-normalised 'YYYY-MM-DD' TEXT (see the CTE
+  // below), and that format compares correctly against a date both
+  // lexicographically and after a ::date cast, so filtering and display can
+  // never disagree.
+  const outer: string[] = [];
+  if (startDateIdx) {
+    outer.push(`payment_date::date >= $${startDateIdx}::date`);
+    if (endDateIdx) outer.push(`payment_date::date <= $${endDateIdx}::date`);
+  }
+  // 'paid' vs 'partial' is derived from the latest row's remaining balance.
+  if (statusIdx) {
+    outer.push(`payment_status = ANY($${statusIdx}::text[])`);
+  }
+  // payment_method is free text with inconsistent casing in real data
+  // ('cash' and 'Cash' both occur), so match case-insensitively.
+  if (methodIdx) {
+    outer.push(`LOWER(payment_method) = ANY($${methodIdx}::text[])`);
+  }
+  const outerWhere = outer.length ? `WHERE ${outer.join(" AND ")}` : "";
+
+  return `
+    WITH collection AS (
+      SELECT
+        a.id AS appointment_id,
+        a.client_id,
+        TO_CHAR((latest.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS payment_date,
+        COALESCE(NULLIF(TRIM(c.full_name), ''), 'Walk-in') AS customer_name,
+        COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS contact,
+        COALESCE(NULLIF(TRIM(sl.invoice_number), ''), '—') AS invoice_number,
+        -- Bill total follows the Sales Summary report's convention exactly, so
+        -- the same bill can never show two different totals across the two
+        -- reports. Two cases, mirroring that report's two UNIONed sides:
+        --   1. A sales row exists -> its stored total_amount IS the invoice.
+        --   2. No sales row (every partially-paid bill, since a sale is only
+        --      written once the balance clears) -> reconstruct from the
+        --      appointment's line items using the same formula as
+        --      _UNBILLED_APPOINTMENT_ROWS_CTE: (items - manual discount -
+        --      membership discount), GST applied on that taxable base, plus
+        --      extra charges. Falls back to the payment's net_amount only if
+        --      the appointment has no items at all.
+        COALESCE(
+          sl.total_amount::numeric,
+          NULLIF(unb.price, 0),
+          latest.net_amount,
+          0
+        ) AS total_amount,
+        -- Same as Sales Summary: paid comes from the payment rows whenever the
+        -- bill is tied to an appointment (always true here).
+        COALESCE(agg.paid_amount, 0)   AS paid_amount,
+        GREATEST(COALESCE(latest.due_amount, 0), 0) AS due_amount,
+        COALESCE(NULLIF(TRIM(latest.payment_method), ''), '—') AS payment_method,
+        CASE WHEN latest.due_amount > 0 THEN 'partial' ELSE 'paid' END AS payment_status,
+        COALESCE(
+          NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), ''),
+          '—'
+        ) AS staff_name
+      FROM appointments a
+      LEFT JOIN clients c ON c.id = a.client_id
+      LEFT JOIN staff   st ON st.id = a.staff_id
+      LEFT JOIN sales   sl ON sl.appointment_id = a.id
+      -- INNER, not LEFT: an appointment with no payment row at all is a
+      -- never-paid "booked" appointment, which this report excludes by design.
+      INNER JOIN LATERAL (
+        SELECT p.net_amount, p.due_amount, p.payment_method, p.created_at,
+               COALESCE(p.membership_discount_used, 0) AS membership_discount_used
+        FROM payments p
+        WHERE p.appointment_id = a.id
+          AND p.status <> 'refunded'
+        -- Tie-break on status when two rows share a created_at timestamp (it
+        -- happens — a completing payment written in the same second as the
+        -- partial it settles). Without this the winner is arbitrary and a
+        -- fully-settled bill can surface the stale 'partial' row's balance,
+        -- reporting money as owed that the customer already paid.
+        ORDER BY p.created_at DESC, (p.status = 'completed') DESC, p.due_amount ASC
+        LIMIT 1
+      ) latest ON TRUE
+      LEFT JOIN LATERAL (
+        -- Additive, unlike due_amount above: each row's paid_amount is the
+        -- money taken in that transaction. 'refunded' excluded to match the
+        -- Appointment API's own FILTER predicates.
+        SELECT COALESCE(SUM(p.paid_amount) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS paid_amount
+        FROM payments p
+        WHERE p.appointment_id = a.id
+      ) agg ON TRUE
+      -- Reconstructed bill total for appointments with no sales row, using the
+      -- same formula as _UNBILLED_APPOINTMENT_ROWS_CTE so Sales Summary and
+      -- this report agree on those bills too. Only read when sl.total_amount
+      -- is NULL (see the COALESCE above).
+      LEFT JOIN LATERAL (
+        SELECT GREATEST(
+          GREATEST(
+            COALESCE(it.items_total, 0)
+              - (CASE
+                   WHEN a.discount_type = 'percentage'
+                     THEN COALESCE(it.discountable_total, 0) * (COALESCE(a.discount_value, 0) / 100)
+                   WHEN a.discount_applies_to IS NULL
+                     THEN COALESCE(a.discount_value, 0)
+                   ELSE LEAST(COALESCE(a.discount_value, 0), COALESCE(it.discountable_total, 0))
+                 END)
+              - COALESCE(latest.membership_discount_used, 0),
+            0
+          ) * (1 + COALESCE(a.gst_percent, 0) / 100)
+            + COALESCE(a.ex_charges, 0)
+            -- Tip is included here only because _UNBILLED_APPOINTMENT_ROWS_CTE
+            -- includes it in its price, and matching that report exactly is
+            -- the point. (Note the billed side differs: sales.total_amount
+            -- excludes tip — an inconsistency that predates this report.)
+            + COALESCE(a.tip_amount, 0),
+          0
+        ) AS price
+        FROM (
+          SELECT
+            SUM(src.price * src.quantity) AS items_total,
+            SUM(src.price * src.quantity) FILTER (
+              WHERE CASE
+                WHEN a.discount_applies_to IS NULL THEN src.item_type <> 'product'
+                WHEN a.discount_applies_to @> '"bill"'::jsonb THEN TRUE
+                ELSE a.discount_applies_to @> to_jsonb(
+                  CASE WHEN src.item_type = 'package' THEN 'packages' ELSE src.item_type END
+                )
+              END
+            ) AS discountable_total
+          FROM (
+            SELECT 'service' AS item_type,
+                   COALESCE(NULLIF(svc.value->>'price', '')::numeric, 0) AS price,
+                   COALESCE(NULLIF(svc.value->>'quantity', '')::numeric, 1) AS quantity
+            FROM jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) AS svc(value)
+            UNION ALL
+            SELECT 'package',
+                   COALESCE(NULLIF(pkg.value->>'price', '')::numeric, 0),
+                   COALESCE(NULLIF(pkg.value->>'quantity', '')::numeric, 1)
+            FROM jsonb_array_elements(COALESCE(a.package_items, '[]'::jsonb)) AS pkg(value)
+            UNION ALL
+            SELECT 'product',
+                   COALESCE(NULLIF(prod.value->>'price', '')::numeric, 0),
+                   COALESCE(NULLIF(prod.value->>'quantity', '')::numeric, 1)
+            FROM jsonb_array_elements(COALESCE(a.product_items, '[]'::jsonb)) AS prod(value)
+            UNION ALL
+            SELECT 'membership',
+                   COALESCE(NULLIF(mem.value->>'price', '')::numeric, 0),
+                   COALESCE(NULLIF(mem.value->>'quantity', '')::numeric, 1)
+            FROM jsonb_array_elements(COALESCE(a.membership_items, '[]'::jsonb)) AS mem(value)
+          ) src
+        ) it
+      ) unb ON TRUE
+      WHERE ${where}
+    ),
+    filtered AS (
+      SELECT * FROM collection
+      ${outerWhere}
+    )
+  `;
+},
+
+async getPaymentCollectionReportStats(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string; staff_ids?: string[];
+    payment_statuses?: string[]; payment_methods?: string[];
+  }
+): Promise<PaymentCollectionReportStats> {
+  const { where, values, nextIndex } = this._buildPaymentCollectionWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const extraValues: any[] = [];
+  let startDateIdx: number | null = null;
+  let endDateIdx: number | null = null;
+  let statusIdx: number | null = null;
+  let methodIdx: number | null = null;
+  if (filters.start_date) { startDateIdx = idx++; extraValues.push(filters.start_date); }
+  if (filters.end_date)   { endDateIdx   = idx++; extraValues.push(filters.end_date); }
+  if (filters.payment_statuses?.length) { statusIdx = idx++; extraValues.push(filters.payment_statuses); }
+  if (filters.payment_methods?.length)  { methodIdx = idx++; extraValues.push(filters.payment_methods.map(m => m.toLowerCase())); }
+
+  const query = `
+    ${this._PAYMENT_COLLECTION_AGG(where, startDateIdx, endDateIdx, statusIdx, methodIdx)}
+    SELECT
+      -- Every "pending" figure counts only rows that still owe money, which
+      -- is what each card's name promises, even though the table also lists
+      -- fully-paid rows.
+      COALESCE(SUM(due_amount) FILTER (WHERE due_amount > 0), 0) AS total_pending_amount,
+      COUNT(*) FILTER (WHERE due_amount > 0)::int               AS total_pending_transactions,
+      COUNT(DISTINCT client_id) FILTER (WHERE due_amount > 0 AND client_id IS NOT NULL)::int AS total_customers_with_due,
+      MIN(payment_date) FILTER (WHERE due_amount > 0)           AS oldest_pending_payment_date,
+      COALESCE(SUM(total_amount), 0)                            AS total_billed,
+      COALESCE(SUM(paid_amount), 0)                             AS total_collected
+    FROM filtered
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...extraValues]));
+  const r = rows[0] ?? {};
+  const totalPending = Math.round(Number(r.total_pending_amount ?? 0));
+  const pendingTxns = Number(r.total_pending_transactions ?? 0);
+  return {
+    total_pending_amount: totalPending,
+    total_pending_transactions: pendingTxns,
+    total_customers_with_due: Number(r.total_customers_with_due ?? 0),
+    // Guarded against divide-by-zero when nothing is outstanding.
+    average_pending_amount: pendingTxns > 0 ? Math.round(totalPending / pendingTxns) : 0,
+    oldest_pending_payment_date: r.oldest_pending_payment_date ?? null,
+    total_billed: Math.round(Number(r.total_billed ?? 0)),
+    total_collected: Math.round(Number(r.total_collected ?? 0)),
+  };
+},
+
+async getPaymentCollectionReportRows(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string; staff_ids?: string[];
+    payment_statuses?: string[]; payment_methods?: string[];
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: PaymentCollectionReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildPaymentCollectionWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const extraValues: any[] = [];
+  let startDateIdx: number | null = null;
+  let endDateIdx: number | null = null;
+  let statusIdx: number | null = null;
+  let methodIdx: number | null = null;
+  if (filters.start_date) { startDateIdx = idx++; extraValues.push(filters.start_date); }
+  if (filters.end_date)   { endDateIdx   = idx++; extraValues.push(filters.end_date); }
+  if (filters.payment_statuses?.length) { statusIdx = idx++; extraValues.push(filters.payment_statuses); }
+  if (filters.payment_methods?.length)  { methodIdx = idx++; extraValues.push(filters.payment_methods.map(m => m.toLowerCase())); }
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    ${this._PAYMENT_COLLECTION_AGG(where, startDateIdx, endDateIdx, statusIdx, methodIdx)}
+    SELECT
+      appointment_id, client_id, payment_date, customer_name, contact,
+      invoice_number, total_amount, paid_amount, due_amount,
+      payment_method, payment_status, staff_name,
+      COUNT(*) OVER() AS total_count
+    FROM filtered
+    -- Outstanding first within a date, so the rows that need chasing lead.
+    ORDER BY payment_date DESC NULLS LAST, due_amount DESC, customer_name ASC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...extraValues, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: PaymentCollectionReportRow[] = rows.map((row: any) => ({
+    appointment_id: row.appointment_id,
+    client_id: row.client_id,
+    payment_date: row.payment_date,
+    customer_name: row.customer_name,
+    contact: row.contact,
+    invoice_number: row.invoice_number,
+    total_amount: Math.round(Number(row.total_amount ?? 0)),
+    paid_amount: Math.round(Number(row.paid_amount ?? 0)),
+    due_amount: Math.round(Number(row.due_amount ?? 0)),
+    payment_method: row.payment_method,
+    payment_status: row.payment_status === "partial" ? "partial" : "paid",
+    staff_name: row.staff_name,
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// Filter dropdown options for the Payment Collection report. Built from the
+// salon's entire payment history, NOT from the rows currently on screen — a
+// method that only occurs on page 3 must still be selectable from page 1.
+// Payment method is free text with inconsistent casing in real data ('cash'
+// and 'Cash' both occur, alongside combos like 'Cash+UPI'), so values are
+// de-duplicated on their lowercased form — which is also what the report's
+// method filter matches on — while showing the nicest-cased label found.
+async getPaymentCollectionFiltersAvailable(salonId: string): Promise<PaymentCollectionFiltersAvailable> {
+  const { rows: methodRows } = await safeQuery(() => pool.query(
+    `WITH latest AS (
+       -- Same row set the report itself builds: the latest payment row per
+       -- non-cancelled appointment. Scoped this way so every option offered
+       -- actually matches rows — sourcing from all payments would list
+       -- methods that only occur on cancelled appointments and always
+       -- return an empty table when selected.
+       SELECT DISTINCT ON (a.id) TRIM(p.payment_method) AS method
+       FROM appointments a
+       JOIN payments p ON p.appointment_id = a.id AND p.status <> 'refunded'
+       WHERE a.salon_id = $1
+         AND a.deleted_at IS NULL
+         AND a.status::text NOT IN ('cancelled', 'deleted', 'no-show')
+       ORDER BY a.id, p.created_at DESC
+     )
+     SELECT DISTINCT ON (LOWER(method))
+       LOWER(method) AS id,
+       method        AS label
+     FROM latest
+     WHERE NULLIF(method, '') IS NOT NULL
+     -- Prefer the capitalised spelling ('Cash' over 'cash') for the label:
+     -- within one lowercased group, uppercase letters sort before lowercase
+     -- in C collation, but to be collation-independent pick the variant whose
+     -- first character is uppercase.
+     ORDER BY LOWER(method) ASC, (LEFT(method, 1) = UPPER(LEFT(method, 1))) DESC, method ASC`,
+    [salonId]
+  ));
+
+  // Staff scoped to those who actually appear on a billed appointment, not
+  // the whole roster — same convention as getSalesSummaryFiltersAvailable.
+  const { rows: staffRows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT st.id,
+       TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))) AS label
+     FROM appointments a
+     JOIN staff st ON st.id = a.staff_id
+     WHERE a.salon_id = $1
+       AND a.deleted_at IS NULL
+       AND a.status::text NOT IN ('cancelled', 'deleted', 'no-show')
+       AND EXISTS (SELECT 1 FROM payments p WHERE p.appointment_id = a.id AND p.status <> 'refunded')
+     ORDER BY label ASC`,
+    [salonId]
+  ));
+
+  return {
+    payment_methods: methodRows
+      .filter((r: any) => r.id && r.label)
+      .map((r: any) => ({ id: r.id, label: r.label })),
+    staff: staffRows
+      .filter((r: any) => r.label)
+      .map((r: any) => ({ id: String(r.id), label: r.label })),
   };
 },
 

@@ -611,6 +611,8 @@ export interface SalesSummaryReportRow {
     tip_amount: number;
     ewallet_used: number;
     membership_wallet_used: number;
+    // ₹ of this bill covered by an already-purchased package's sessions.
+    package_used: number;
     reward_points_value: number;
     referral_credit_used: number;
     payment_method: string | null;
@@ -628,6 +630,8 @@ export interface SalesSummaryReportStats {
     total_tip: number;
     total_ewallet: number;
     total_membership: number;
+    // ₹ across these bills covered by already-purchased package sessions.
+    total_package: number;
     total_rewards: number;
     total_referral: number;
 }
@@ -1437,6 +1441,94 @@ export interface ReferralReportResponse {
     rows: ReferralReportRow[];
     pagination: ReferralReportPagination;
     stats: ReferralReportStats;
+}
+
+// ===============================
+// Payment Collection Report (independent report API — POST /api/report/payment-collection)
+//
+// Reads appointments + payments directly, NOT sales. Two schema facts drive
+// this and are easy to get wrong:
+//
+//  1. `sales` carries no due/paid/payment_status column at all, and a sales
+//     row is only written once a bill is fully settled — a partially-paid
+//     bill structurally has NO sales row (see the comment above
+//     _UNBILLED_APPOINTMENT_ROWS_CTE). So dues can only come from payments.
+//  2. payments has no sale_id; it links to appointments via appointment_id.
+//
+// payments.due_amount is a CUMULATIVE SNAPSHOT — each row stores the balance
+// remaining as of that row, not an incremental charge. It must be read from
+// the LATEST row per appointment; SUMming it across rows double-counts one
+// debt (measured at 71% overstatement on real data, and it reports debt
+// against bills the customer has already settled in full). paid_amount, by
+// contrast, IS a per-row delta and is correctly SUMmed.
+//
+// Scope: only appointments that have at least one payment row appear, so
+// every row is 'paid' or 'partial'; never-paid ("booked") appointments are
+// excluded by the INNER JOIN LATERAL.
+// ===============================
+
+export interface PaymentCollectionReportFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    // 'paid' | 'partial' — derived from the latest payment row's due_amount,
+    // not from sales.status.
+    payment_statuses?: string[];
+    payment_methods?: string[];
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface PaymentCollectionReportRow {
+    appointment_id: string | null;
+    client_id: string | null;
+    payment_date: string | null;
+    customer_name: string;
+    contact: string;
+    invoice_number: string;
+    total_amount: number;
+    paid_amount: number;
+    due_amount: number;
+    payment_method: string;
+    payment_status: "paid" | "partial";
+    staff_name: string;
+}
+
+export interface PaymentCollectionReportStats {
+    total_pending_amount: number;
+    total_pending_transactions: number;
+    total_customers_with_due: number;
+    average_pending_amount: number;
+    oldest_pending_payment_date: string | null;
+    // Reconciliation context for the pending figures above — lets an owner
+    // see collection rate rather than only the outstanding balance.
+    total_billed: number;
+    total_collected: number;
+}
+
+export interface PaymentCollectionReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+// Filter dropdown options, built from the salon's whole payment history
+// rather than the current page of rows — otherwise a payment method that
+// only appears on page 3 would be missing from the filter that finds it.
+// Same convention as getSalesSummaryFiltersAvailable.
+export interface PaymentCollectionFiltersAvailable {
+    payment_methods: { id: string; label: string }[];
+    staff: { id: string; label: string }[];
+}
+
+export interface PaymentCollectionReportResponse {
+    rows: PaymentCollectionReportRow[];
+    pagination: PaymentCollectionReportPagination;
+    stats: PaymentCollectionReportStats;
+    filters_available: PaymentCollectionFiltersAvailable;
 }
 
 // ===============================
