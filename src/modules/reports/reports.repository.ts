@@ -47,6 +47,9 @@ import {
     PaymentCollectionReportRow,
     PaymentCollectionReportStats,
     PaymentCollectionFiltersAvailable,
+    MembershipHistoryReportRow,
+    MembershipHistoryReportStats,
+    MembershipHistoryFiltersAvailable,
     StaffSalesReportRow,
     StaffSalesReportStats,
     StaffPerformanceReportRow,
@@ -6589,10 +6592,23 @@ async getPackageSaleFiltersAvailable(salonId: string): Promise<{
 // example implies, since a freshly-sold, not-yet-started package still
 // needs to land in exactly one of these three buckets (Ongoing is that
 // default "still has sessions, hasn't expired" bucket).
+// Days before expiry_date that a still-active package starts reporting as
+// 'expiring_soon'. 30 gives a client a month's notice to book the sessions
+// they've already paid for.
+_PACKAGE_EXPIRING_SOON_DAYS: 30,
+
+// Derived package status, in priority order — a package that is both fully
+// used AND past its expiry date reads as 'complete', because the client got
+// everything they paid for; expiry only matters while sessions remain.
+//
+// expiry_date is a DATE column, so it is compared against CURRENT_DATE, not
+// NOW(): NOW() carries a time-of-day, which made a package expiring *today*
+// read as already expired for most of that day.
 _PACKAGE_STATUS_EXPR: `
   CASE
     WHEN cp.status = 'Completed' THEN 'complete'
-    WHEN cp.expiry_date < NOW() THEN 'expired'
+    WHEN cp.expiry_date < CURRENT_DATE THEN 'expired'
+    WHEN cp.expiry_date <= CURRENT_DATE + 30 THEN 'expiring_soon'
     ELSE 'ongoing'
   END
 `,
@@ -6720,9 +6736,14 @@ async getPackageHistoryReportStats(
     pkg_computed AS (
       SELECT
         dp.id,
+        -- Same four-way derivation as _PACKAGE_STATUS_EXPR (aliased to dp
+        -- here rather than cp, so it can't share the constant verbatim) —
+        -- kept in step deliberately: if these disagree, the cards and the
+        -- table below them report different totals for the same filter.
         CASE
           WHEN dp.raw_status = 'Completed' THEN 'complete'
-          WHEN dp.expiry_date < NOW() THEN 'expired'
+          WHEN dp.expiry_date < CURRENT_DATE THEN 'expired'
+          WHEN dp.expiry_date <= CURRENT_DATE + 30 THEN 'expiring_soon'
           ELSE 'ongoing'
         END AS status,
         COALESCE((
@@ -6744,6 +6765,7 @@ async getPackageHistoryReportStats(
       COALESCE((SELECT SUM(completed_sessions) FROM pkg_computed), 0)::int AS completed_sessions,
       COALESCE((SELECT SUM(remaining_sessions) FROM pkg_computed), 0)::int AS remaining_sessions,
       COALESCE((SELECT COUNT(*) FROM pkg_computed WHERE status = 'ongoing'), 0)::int AS ongoing_packages,
+      COALESCE((SELECT COUNT(*) FROM pkg_computed WHERE status = 'expiring_soon'), 0)::int AS expiring_soon_packages,
       COALESCE((SELECT COUNT(*) FROM pkg_computed WHERE status = 'complete'), 0)::int AS completed_packages,
       COALESCE((SELECT COUNT(*) FROM pkg_computed WHERE status = 'expired'), 0)::int AS expired_packages
   `;
@@ -6755,6 +6777,7 @@ async getPackageHistoryReportStats(
     completed_sessions: Number(r.completed_sessions ?? 0),
     remaining_sessions: Number(r.remaining_sessions ?? 0),
     ongoing_packages: Number(r.ongoing_packages ?? 0),
+    expiring_soon_packages: Number(r.expiring_soon_packages ?? 0),
     completed_packages: Number(r.completed_packages ?? 0),
     expired_packages: Number(r.expired_packages ?? 0),
   };
@@ -6792,6 +6815,11 @@ async getPackageHistoryReportRows(
       h.session_no,
       (cps.total_sessions - cps.completed_sessions) AS remaining_sessions,
       h.staff_name AS staff,
+      -- expiry_date is a DATE column and the pg driver has no parser for OID
+      -- 1082, so a bare date arrives as a JS Date at IST-shifted UTC and the
+      -- frontend new Date() renders it as the FOLLOWING day. Emitted as
+      -- YYYY-MM-DD TEXT, same convention as the date column above.
+      TO_CHAR(cp.expiry_date, 'YYYY-MM-DD') AS expiry_date,
       (${this._PACKAGE_STATUS_EXPR}) AS status,
       COUNT(*) OVER() AS total_count
     FROM client_package_session_history h
@@ -6813,6 +6841,7 @@ async getPackageHistoryReportRows(
     session_no: Number(row.session_no ?? 0),
     remaining_sessions: Number(row.remaining_sessions ?? 0),
     staff: row.staff,
+    expiry_date: row.expiry_date ?? null,
     status: row.status,
   }));
   const effectiveLimit = limit ?? Math.max(total, 1);
@@ -6848,6 +6877,405 @@ _MEMBER_STATUS_EXPR: `
     ELSE 'active'
   END
 `,
+
+// ======================================================
+// MEMBERSHIP HISTORY REPORT (independent report API)
+// POST /api/report/membership-history — one row per membership benefit
+// redemption, read from membership_usage_log. The membership counterpart to
+// Package History; Membership Sale covers the purchase side.
+//
+// membership_usage_log mixes row kinds, discriminated only by `notes`:
+//   NULL                    -> wallet spend  (₹ off a value balance)
+//   'membership_discount'   -> discount given (% off the bill)
+//   anything else           -> a consumed session
+// Wallet/discount rows carry amount_deducted with sessions_consumed = 0;
+// session rows are the reverse. They are never summed together — see the
+// separate stats below and the note in reports.types.ts.
+//
+// The table has NO salon_id — the INNER JOIN onto client_memberships is what
+// scopes the tenant.
+// ======================================================
+
+// Maps the `notes` discriminator to the report's benefit_type vocabulary.
+// The three membership pricing types are 'value' | 'percentage' | 'loyalty'
+// (MembershipPricingType) — there is no session-based membership; sessions
+// are a PACKAGE concept, not a membership one.
+//
+// Loyalty is visit-threshold based and writes NO ledger row at all (see
+// payments.service.ts — it has no balance to spend, so it is recomputed
+// deterministically each time). A 'loyalty' bucket here would therefore
+// always be empty and mislead; loyalty usage is genuinely unreportable from
+// this table. Anything that isn't a wallet spend or a percentage discount is
+// bucketed as 'other' rather than invented as a type.
+_MEMBERSHIP_BENEFIT_EXPR: `
+  CASE
+    WHEN ul.notes IS NULL THEN 'wallet'
+    WHEN ul.notes = 'membership_discount' THEN 'discount'
+    ELSE 'other'
+  END
+`,
+
+async _buildMembershipHistoryWhere(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string;
+    membership_names?: string[]; benefit_types?: string[]; pricing_types?: string[];
+    staff_ids?: string[]; statuses?: string[];
+  }
+): Promise<{ where: string; values: any[]; nextIndex: number }> {
+  const values: any[] = [salonId];
+  // The unioned source projects salon_id on both sides (the log side gets it
+  // from client_memberships, which is also what scopes the tenant there —
+  // membership_usage_log itself carries no salon column).
+  const where = ["ul.salon_id = $1"];
+  let idx = 2;
+
+  if (filters.start_date) {
+    where.push(`ul.used_at >= $${idx++}::date`);
+    values.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    where.push(`ul.used_at < ($${idx++}::date + interval '1 day')`);
+    values.push(filters.end_date);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(ul.client_name, '') ILIKE $${idx}
+      OR COALESCE(ul.membership_name, '') ILIKE $${idx}
+      OR COALESCE(ul.service_name, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+  if (filters.membership_names && filters.membership_names.length > 0) {
+    where.push(`ul.membership_name = ANY($${idx++}::text[])`);
+    values.push(filters.membership_names);
+  }
+  if (filters.benefit_types && filters.benefit_types.length > 0) {
+    where.push(`ul.benefit_type = ANY($${idx++}::text[])`);
+    values.push(filters.benefit_types);
+  }
+  // The membership's own pricing model — 'value' (wallet balance),
+  // 'percentage' (discount balance) or 'loyalty' (visit-threshold unlock).
+  if (filters.pricing_types && filters.pricing_types.length > 0) {
+    where.push(`COALESCE(ul.pricing_type, 'value') = ANY($${idx++}::text[])`);
+    values.push(filters.pricing_types);
+  }
+  if (filters.statuses && filters.statuses.length > 0) {
+    where.push(`(${this._MEMBERSHIP_HISTORY_STATUS_EXPR}) = ANY($${idx++}::text[])`);
+    values.push(filters.statuses);
+  }
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    // Staff isn't stored on the log row — it's recovered through the
+    // appointment that triggered the redemption (~127 of 129 rows resolve).
+    where.push(`a.staff_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.staff_ids);
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+// Shared FROM/JOIN chain for stats + rows, so both filter identically.
+//
+// UNION of two sources, because loyalty benefit is NOT in the usage log:
+//
+//  A) membership_usage_log — real rows for wallet spends and percentage
+//     discounts, written by deductWalletAcrossMemberships /
+//     deductDiscountBalanceForBooking.
+//
+//  B) Synthetic loyalty rows. A loyalty membership ("get 10% off once you've
+//     completed N visits") has no balance to spend and no client_memberships
+//     row to attach a ledger entry to, so payments.service.ts computes it in
+//     memory each time and writes NO log row (see the comment on
+//     applyMembershipDiscountForBooking). The money is real and lands in
+//     payments.membership_discount_used, so it is recovered here as the part
+//     of that figure the usage log does NOT account for. On live data that
+//     is ₹3,637.50 across 21 appointments — money that was silently missing
+//     from this report before.
+//
+//     membership_discount_used is CUMULATIVE per appointment (every payment
+//     row for one appointment carries the same running total), hence
+//     DISTINCT ON latest row, never SUM.
+_MEMBERSHIP_HISTORY_SOURCE: `
+  (
+    SELECT
+      ul.used_at,
+      cm.id            AS membership_row_id,
+      cm.salon_id,
+      cm.client_id,
+      cm.client_name,
+      cm.membership_name,
+      cm.pricing_type,
+      cm.expires_at,
+      cm.status        AS membership_status,
+      ul.service_name,
+      ul.amount_deducted,
+      ul.remaining_balance,
+      ul.sessions_consumed,
+      ul.appointment_id,
+      CASE
+        WHEN ul.notes IS NULL THEN 'wallet'
+        WHEN ul.notes = 'membership_discount' THEN 'discount'
+        ELSE 'other'
+      END AS benefit_type
+    FROM membership_usage_log ul
+    INNER JOIN client_memberships cm ON cm.id = ul.client_membership_id
+
+    UNION ALL
+
+    SELECT
+      pay.created_at   AS used_at,
+      NULL::uuid       AS membership_row_id,
+      pay.salon_id,
+      pay.client_id,
+      COALESCE(NULLIF(TRIM(c.full_name), ''), 'Walk-in') AS client_name,
+      COALESCE(lm.name, 'Loyalty')                       AS membership_name,
+      'loyalty'        AS pricing_type,
+      NULL::timestamptz AS expires_at,
+      'active'         AS membership_status,
+      NULL::varchar    AS service_name,
+      pay.loyalty_amount AS amount_deducted,
+      NULL::numeric    AS remaining_balance,
+      0                AS sessions_consumed,
+      pay.appointment_id,
+      'loyalty'        AS benefit_type
+    FROM (
+      SELECT
+        p.appointment_id, p.salon_id, p.client_id, p.created_at,
+        p.membership_discount_used - COALESCE((
+          SELECT SUM(ul2.amount_deducted)
+          FROM membership_usage_log ul2
+          WHERE ul2.appointment_id = p.appointment_id
+            AND ul2.notes = 'membership_discount'
+        ), 0) AS loyalty_amount
+      FROM (
+        SELECT DISTINCT ON (p2.appointment_id) p2.*
+        FROM payments p2
+        WHERE p2.membership_discount_used > 0
+          AND p2.status <> 'refunded'
+          AND p2.appointment_id IS NOT NULL
+        ORDER BY p2.appointment_id, p2.created_at DESC
+      ) p
+    ) pay
+    LEFT JOIN clients c ON c.id = pay.client_id
+    -- Whichever loyalty plan the salon has configured; only its name is used
+    -- for display, so picking one deterministically is enough.
+    LEFT JOIN LATERAL (
+      SELECT m.name FROM memberships m
+      WHERE m.salon_id = pay.salon_id AND m.pricing_type = 'loyalty'
+      ORDER BY m.name LIMIT 1
+    ) lm ON TRUE
+    -- Rounding guard: only surface a real residual, not float dust.
+    WHERE pay.loyalty_amount > 0.01
+  ) ul
+`,
+
+// Same derivation as _MEMBER_STATUS_EXPR (shared with Membership Sale), but
+// aliased to the unioned source's own columns rather than `cm`. Synthetic
+// loyalty rows carry membership_status='active' and a NULL expires_at, so
+// they fall through to 'active' — correct, since a loyalty benefit is a
+// standing entitlement that never expires or exhausts.
+_MEMBERSHIP_HISTORY_STATUS_EXPR: `
+  CASE
+    WHEN ul.membership_status = 'exhausted' THEN 'complete'
+    WHEN ul.expires_at IS NOT NULL AND ul.expires_at < NOW() THEN 'expired'
+    WHEN ul.expires_at IS NOT NULL AND ul.expires_at < NOW() + INTERVAL '7 days' THEN 'expiry_soon'
+    ELSE 'active'
+  END
+`,
+
+// Retained for the stats query's benefit split.
+_MEMBERSHIP_HISTORY_FROM: `
+  FROM membership_usage_log ul
+  INNER JOIN client_memberships cm ON cm.id = ul.client_membership_id
+  LEFT JOIN appointments a ON a.id = ul.appointment_id
+  LEFT JOIN staff st ON st.id = a.staff_id
+`,
+
+async getMembershipHistoryFiltersAvailable(salonId: string): Promise<MembershipHistoryFiltersAvailable> {
+  // Unfiltered by date on purpose — the dropdowns must stay complete
+  // regardless of the range currently selected.
+  const { rows: memRows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT name FROM (
+       SELECT cm.membership_name AS name
+       FROM membership_usage_log ul
+       JOIN client_memberships cm ON cm.id = ul.client_membership_id
+       WHERE cm.salon_id = $1
+       UNION
+       -- Loyalty plans never appear in the usage log (see the UNION in
+       -- _MEMBERSHIP_HISTORY_SOURCE), so their names are added here or the
+       -- Membership filter could never select the synthetic loyalty rows.
+       SELECT m.name
+       FROM memberships m
+       WHERE m.salon_id = $1 AND m.pricing_type = 'loyalty'
+     ) t
+     WHERE NULLIF(TRIM(name), '') IS NOT NULL
+     ORDER BY name ASC`,
+    [salonId]
+  ));
+  const { rows: svcRows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT ul.service_name
+     FROM membership_usage_log ul
+     JOIN client_memberships cm ON cm.id = ul.client_membership_id
+     WHERE cm.salon_id = $1 AND NULLIF(TRIM(ul.service_name), '') IS NOT NULL
+     ORDER BY ul.service_name ASC`,
+    [salonId]
+  ));
+  return {
+    // The UNION above projects the column as `name`, not `membership_name` —
+    // reading the wrong key here turned every option into the literal string
+    // "undefined" via String(undefined). Guarded so a null can never reach
+    // the dropdown as text either.
+    memberships: memRows
+      .map((r: any) => (r.name == null ? "" : String(r.name)))
+      .filter((n: string) => n.trim() !== ""),
+    services: svcRows
+      .map((r: any) => (r.service_name == null ? "" : String(r.service_name)))
+      .filter((n: string) => n.trim() !== ""),
+  };
+},
+
+async getMembershipHistoryReportStats(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string;
+    membership_names?: string[]; benefit_types?: string[]; pricing_types?: string[];
+    staff_ids?: string[]; statuses?: string[];
+  }
+): Promise<MembershipHistoryReportStats> {
+  const { where, values } = await this._buildMembershipHistoryWhere(salonId, filters);
+
+  const query = `
+    WITH matched AS (
+      SELECT
+        ul.amount_deducted,
+        ul.benefit_type,
+        ul.membership_row_id AS membership_id,
+        (${this._MEMBERSHIP_HISTORY_STATUS_EXPR}) AS membership_status
+      FROM ${this._MEMBERSHIP_HISTORY_SOURCE}
+      LEFT JOIN appointments a ON a.id = ul.appointment_id
+      WHERE ${where}
+    ),
+    -- Collapse to one row per membership so the membership-level counters
+    -- below count a membership once, not once per redemption. Synthetic
+    -- loyalty rows have a NULL membership_row_id (no client_memberships row
+    -- exists for them) and are excluded here — they'd otherwise collapse
+    -- into a single phantom "membership".
+    distinct_memberships AS (
+      SELECT DISTINCT membership_id, membership_status
+      FROM matched WHERE membership_id IS NOT NULL
+    )
+    SELECT
+      (SELECT COUNT(*) FROM matched)::int AS total_redemptions,
+      -- Wallet and discount are summed SEPARATELY: one is money spent from a
+      -- balance, the other money never charged. A combined total would be
+      -- meaningless.
+      COALESCE((SELECT SUM(amount_deducted) FROM matched WHERE benefit_type = 'wallet'), 0) AS total_wallet_used,
+      COALESCE((SELECT SUM(amount_deducted) FROM matched WHERE benefit_type = 'discount'), 0) AS total_discount_given,
+      -- Loyalty is reconstructed from payments, not the usage log — see the
+      -- UNION in _MEMBERSHIP_HISTORY_SOURCE.
+      COALESCE((SELECT SUM(amount_deducted) FROM matched WHERE benefit_type = 'loyalty'), 0) AS total_loyalty_given,
+      (SELECT COUNT(*) FROM distinct_memberships WHERE membership_status = 'active')::int AS active_memberships,
+      (SELECT COUNT(*) FROM distinct_memberships WHERE membership_status = 'expiry_soon')::int AS expiry_soon_memberships,
+      (SELECT COUNT(*) FROM distinct_memberships WHERE membership_status = 'complete')::int AS exhausted_memberships
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  return {
+    total_redemptions: Number(r.total_redemptions ?? 0),
+    total_wallet_used: Math.round(Number(r.total_wallet_used ?? 0)),
+    total_discount_given: Math.round(Number(r.total_discount_given ?? 0)),
+    total_loyalty_given: Math.round(Number(r.total_loyalty_given ?? 0)),
+    active_memberships: Number(r.active_memberships ?? 0),
+    expiry_soon_memberships: Number(r.expiry_soon_memberships ?? 0),
+    exhausted_memberships: Number(r.exhausted_memberships ?? 0),
+  };
+},
+
+async getMembershipHistoryReportRows(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string;
+    membership_names?: string[]; benefit_types?: string[]; pricing_types?: string[];
+    staff_ids?: string[]; statuses?: string[];
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: MembershipHistoryReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = await this._buildMembershipHistoryWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  // used_at and expires_at are both TIMESTAMPTZ, so a single AT TIME ZONE
+  // converts them to IST. Emitted via TO_CHAR as TEXT because the pg driver
+  // has no parser for OID 1082 — a bare date arrives as a JS Date at
+  // IST-shifted UTC and renders as the FOLLOWING day in the browser.
+  const query = `
+    SELECT
+      TO_CHAR(ul.used_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS date,
+      ul.client_id,
+      COALESCE(NULLIF(TRIM(ul.client_name), ''), 'Walk-in') AS client_name,
+      COALESCE(NULLIF(TRIM(ul.membership_name), ''), '—') AS membership_name,
+      COALESCE(NULLIF(TRIM(ul.pricing_type), ''), 'value') AS membership_type,
+      COALESCE(NULLIF(TRIM(ul.service_name), ''), '—') AS service_name,
+      ul.benefit_type,
+      COALESCE(ul.amount_deducted, 0) AS amount_deducted,
+      ul.remaining_balance,
+      COALESCE(ul.sessions_consumed, 0) AS sessions_consumed,
+      COALESCE(
+        NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), ''),
+        '—'
+      ) AS staff,
+      TO_CHAR(ul.expires_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS expiry_date,
+      (${this._MEMBERSHIP_HISTORY_STATUS_EXPR}) AS status,
+      COUNT(*) OVER() AS total_count
+    FROM ${this._MEMBERSHIP_HISTORY_SOURCE}
+    LEFT JOIN appointments a ON a.id = ul.appointment_id
+    LEFT JOIN staff st ON st.id = a.staff_id
+    WHERE ${where}
+    ORDER BY ul.used_at DESC NULLS LAST
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: MembershipHistoryReportRow[] = rows.map((row: any) => ({
+    date: row.date ?? null,
+    client_id: row.client_id ? String(row.client_id) : null,
+    client_name: row.client_name,
+    membership_name: row.membership_name,
+    membership_type: row.membership_type,
+    service_name: row.service_name,
+    benefit_type: row.benefit_type,
+    amount_deducted: Number(row.amount_deducted ?? 0),
+    remaining_balance: row.remaining_balance === null || row.remaining_balance === undefined
+      ? null
+      : Number(row.remaining_balance),
+    sessions_consumed: Number(row.sessions_consumed ?? 0),
+    staff: row.staff,
+    expiry_date: row.expiry_date ?? null,
+    status: row.status,
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
 
 _buildMemberSaleWhere(
   salonId: string,

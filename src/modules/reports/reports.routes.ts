@@ -170,6 +170,18 @@ router.post(
 );
 
 // ======================================================
+// MEMBERSHIP HISTORY REPORT (independent report API)
+// One row per membership benefit redemption, read from
+// membership_usage_log — the membership counterpart to Package History.
+// ======================================================
+
+router.post(
+    "/membership-history",
+    ...guard,
+    reportsController.getMembershipHistoryReport
+);
+
+// ======================================================
 // PAYMENT COLLECTION REPORT (independent report API)
 // Reads appointments + payments directly (never sales — an unpaid bill has
 // no sales row at all). Due is read from the latest payment row per
