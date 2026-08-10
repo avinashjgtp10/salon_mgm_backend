@@ -46,6 +46,7 @@ router.get("/commissions/summary",              auth, ownerAdmin, staffCommissio
 router.get("/commissions/earned",               auth, ownerAdmin, staffCommissionsController.getEarnedBySalon);
 router.get("/commissions/export",               auth, ownerAdmin, staffCommissionsController.exportCommissions);
 router.post("/commissions/:staffId/mark-paid",  auth, ownerAdmin, staffCommissionsController.markStaffCommissionPaid);
+router.get("/commissions/:staffId/settlements", auth, ownerAdmin, staffCommissionsController.getSettlementHistory);
 router.get("/commissions/all",                  auth, ownerAdmin, staffCommissionsController.listBySalon);
 router.post("/commissions/bulk-configure",      auth, ownerAdmin, staffCommissionsController.bulkConfigure);
 
