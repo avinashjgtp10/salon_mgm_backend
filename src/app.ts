@@ -72,6 +72,7 @@ import demoRequestsRoutes from "./modules/demo-requests/demo-requests.routes";
 import supportRoutes from "./modules/support/support.routes";
 import notificationsRoutes from "./modules/notifications/notifications.routes";
 import deploymentAnnouncementsRoutes from "./modules/deployment-announcements/deployment-announcements.routes";
+import enquiriesRoutes from "./modules/enquiries/enquiries.routes";
 import { emailService } from "./modules/utils/email.service";
 import swaggerUi from "swagger-ui-express";
 import path from "path";
@@ -275,6 +276,7 @@ app.use("/api/v1/demo-requests", demoRequestsRoutes);
 app.use("/api/v1/support", supportRoutes);
 app.use("/api/v1/notifications", notificationsRoutes);
 app.use("/api/v1/deployment-announcements", deploymentAnnouncementsRoutes);
+app.use("/api/v1/enquiries", enquiriesRoutes);
 
 // Swagger Documentation
 const swaggerDocument = require(path.join(__dirname, "../docs/api/swagger-gen.json"));
