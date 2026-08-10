@@ -267,14 +267,49 @@ export const staffService = {
             errors: [],
         };
 
+        // ── Required-column check ───────────────────────────────────────────────
+        // Run before touching any row — a row-by-row scan on a file that's
+        // missing a whole column just spams "field is required" once per row
+        // instead of naming the real problem.
+        const REQUIRED_COLUMN_ALIASES: Record<string, string[]> = {
+            Name: ["Name", "name"],
+            Contact: ["Contact", "contact"],
+            Email: ["Email", "email"],
+            Gender: ["Gender", "gender"],
+            "DOJ(dd-mm-YYYY)": ["DOJ(dd-mm-YYYY)", "DOJ", "doj"],
+        };
+        if (rows.length > 0) {
+            const headers = new Set(Object.keys(rows[0]));
+            const missingColumns = Object.entries(REQUIRED_COLUMN_ALIASES)
+                .filter(([, aliases]) => !aliases.some((a) => headers.has(a)))
+                .map(([label]) => label);
+            if (missingColumns.length > 0) {
+                result.skipped = result.total_rows;
+                result.errors.push({
+                    row: 0,
+                    field: "File",
+                    code: "MISSING_COLUMNS",
+                    message: `Missing required column(s): ${missingColumns.join(", ")}`,
+                });
+                return result;
+            }
+        }
+
         const parseDate = (val: string): string | null => {
             const s = String(val || "").trim();
             if (!s) return null;
             const parts = s.split("-");
             if (parts.length !== 3) return null;
             const [day, month, year] = parts;
-            if (!day || !month || !year) return null;
-            return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+            if (!/^\d{1,2}$/.test(day) || !/^\d{1,2}$/.test(month) || !/^\d{4}$/.test(year)) return null;
+            const d = parseInt(day, 10), m = parseInt(month, 10), y = parseInt(year, 10);
+            if (m < 1 || m > 12 || d < 1 || d > 31) return null;
+            // Reject e.g. 31-04-2024 (April has 30 days) — Date rolls over
+            // instead of throwing, so a round-trip check catches it.
+            const iso = `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+            const parsed = new Date(iso + "T00:00:00");
+            if (parsed.getUTCFullYear() !== y || parsed.getUTCMonth() + 1 !== m || parsed.getUTCDate() !== d) return null;
+            return iso;
         };
 
         const parseDOB = (val: string): { birthday_day: number | null; birthday_month: number | null } => {
@@ -289,15 +324,37 @@ export const staffService = {
             };
         };
 
-        const toNum = (val: any): number | null => {
-            const n = parseFloat(String(val || ""));
-            return isNaN(n) ? null : n;
+        // Accepts an explicit "not provided" sentinel (undefined) separately
+        // from "provided but not a number" (NaN) so callers can tell "optional
+        // field, skip it" from "optional field, but what's there is invalid".
+        const toNum = (val: any): number | undefined => {
+            const s = String(val ?? "").trim();
+            if (!s) return undefined;
+            return parseFloat(s);
         };
+
+        const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        // Digits only (after stripping common separators), 7–15 digits — wide
+        // enough to cover local and international formats without being a
+        // full E.164 validator.
+        const isValidPhone = (s: string) => /^\d{7,15}$/.test(s.replace(/[\s\-()+]/g, ""));
+        const VALID_GENDERS = new Set(["male", "female", "other"]);
+
+        // "Role" in the import file mirrors the Create Staff form's Role
+        // picker (Staff/Manager), which is really a shorthand for
+        // permission_level — not a full custom role. Empty defaults to
+        // Staff (permission_level "low", the same default staffRepository.create
+        // already applies); anything else must match one of the two options.
+        const ROLE_TO_PERMISSION_LEVEL: Record<string, string> = { staff: "low", manager: "manager" };
 
         const allEmails = rows
             .map(row => String(row["Email"] ?? row["email"] ?? "").trim().toLowerCase())
             .filter(Boolean);
         const existingMap = await staffRepository.findByEmails(salonId, allEmails);
+        // Tracks emails already consumed by an earlier row in *this* file —
+        // two rows importing the same new staff member is a duplicate, not
+        // two separate creates.
+        const seenEmails = new Map<string, number>();
 
         const BATCH_SIZE = 5;
         for (let i = 0; i < rows.length; i += BATCH_SIZE) {
@@ -307,30 +364,72 @@ export const staffService = {
                     const rowNum = i + batchIdx + 1;
                     const part = { imported: 0, updated: 0, skipped: 0, errors: [] as StaffImportResult["errors"] };
                     const email = String(row["Email"] ?? row["email"] ?? "").trim().toLowerCase();
+                    const fieldErrors: { field: string; message: string }[] = [];
 
                     try {
                         const fullName = String(row["Name"] ?? row["name"] ?? "").trim();
                         const phoneRaw = String(row["Contact"] ?? row["contact"] ?? "").trim();
                         const genderRaw = String(row["Gender"] ?? row["gender"] ?? "").trim();
                         const dojRaw = String(row["DOJ(dd-mm-YYYY)"] ?? row["DOJ"] ?? row["doj"] ?? "").trim();
+                        const dobRaw = String(row["DOB(dd-mm-YYYY)"] ?? row["DOB"] ?? row["dob"] ?? "").trim();
+                        const roleRaw = String(row["Role"] ?? row["role"] ?? "").trim();
 
-                        // Required fields for import: Name, Contact, Email, Gender, DOJ.
-                        // Every missing one is reported together so the user doesn't have
-                        // to re-upload and hit the errors one at a time.
-                        const missing: string[] = [];
-                        if (!fullName) missing.push("Name");
-                        if (!phoneRaw) missing.push("Contact");
-                        if (!email) missing.push("Email");
-                        if (!genderRaw) missing.push("Gender");
-                        if (!dojRaw) missing.push("DOJ");
-                        if (missing.length > 0) {
+                        if (!fullName) fieldErrors.push({ field: "Name", message: "Name is required" });
+                        if (!phoneRaw) fieldErrors.push({ field: "Contact", message: "Contact is required" });
+                        else if (!isValidPhone(phoneRaw)) fieldErrors.push({ field: "Contact", message: "Contact number is invalid" });
+                        if (!email) fieldErrors.push({ field: "Email", message: "Email is required" });
+                        else if (!EMAIL_RE.test(email)) fieldErrors.push({ field: "Email", message: "Invalid email format" });
+                        if (!genderRaw) fieldErrors.push({ field: "Gender", message: "Gender is required" });
+                        else if (!VALID_GENDERS.has(genderRaw.toLowerCase())) fieldErrors.push({ field: "Gender", message: "Invalid Gender — must be Male, Female, or Other" });
+
+                        let joined_date: string | null = null;
+                        if (!dojRaw) fieldErrors.push({ field: "DOJ", message: "DOJ is required" });
+                        else {
+                            joined_date = parseDate(dojRaw);
+                            if (!joined_date) fieldErrors.push({ field: "DOJ", message: "Invalid date format. Expected dd-mm-YYYY" });
+                        }
+
+                        if (dobRaw && !parseDate(dobRaw)) {
+                            fieldErrors.push({ field: "DOB", message: "Invalid date format. Expected dd-mm-YYYY" });
+                        }
+
+                        let permission_level: string | null = "low";
+                        if (roleRaw) {
+                            permission_level = ROLE_TO_PERMISSION_LEVEL[roleRaw.toLowerCase()] ?? null;
+                            if (!permission_level) fieldErrors.push({ field: "Role", message: "Role does not exist" });
+                        }
+
+                        const hourly_rate = toNum(row["Hourly Rate"] ?? row["hourly_rate"]);
+                        if (typeof hourly_rate === "number" && (isNaN(hourly_rate) || hourly_rate < 0)) {
+                            fieldErrors.push({ field: "Hourly Rate", message: "Invalid Hourly Rate" });
+                        }
+                        const salary_amount = toNum(row["Fixed Salary"] ?? row["fixed_salary"]);
+                        if (typeof salary_amount === "number" && (isNaN(salary_amount) || salary_amount < 0)) {
+                            fieldErrors.push({ field: "Fixed Salary", message: "Invalid Fixed Salary" });
+                        }
+                        const working_hours_per_day = toNum(row["Working Hours/Day"] ?? row["working_hours_per_day"]);
+                        if (typeof working_hours_per_day === "number" && (isNaN(working_hours_per_day) || working_hours_per_day < 0 || working_hours_per_day > 24)) {
+                            fieldErrors.push({ field: "Working Hours/Day", message: "Invalid Working Hours/Day" });
+                        }
+
+                        if (email && EMAIL_RE.test(email) && !existingMap.has(email)) {
+                            const firstSeenRow = seenEmails.get(email);
+                            if (firstSeenRow !== undefined) {
+                                fieldErrors.push({ field: "Email", message: `Duplicate staff record — already used in row ${firstSeenRow}` });
+                            } else {
+                                seenEmails.set(email, rowNum);
+                            }
+                        }
+
+                        if (fieldErrors.length > 0) {
                             part.skipped += 1;
-                            part.errors.push({
+                            part.errors.push(...fieldErrors.map((fe) => ({
                                 row: rowNum,
+                                field: fe.field,
                                 email: email || undefined,
                                 code: "VALIDATION_ERROR",
-                                message: `Missing required field(s): ${missing.join(", ")}`,
-                            });
+                                message: fe.message,
+                            })));
                             return part;
                         }
 
@@ -340,35 +439,32 @@ export const staffService = {
 
                         const phone = phoneRaw || undefined;
                         const gender = genderRaw || undefined;
-                        const country = String(row["Address"] ?? row["address"] ?? "").trim() || undefined;
+                        // The CSV's "Address" column is free text (street address),
+                        // which belongs in the `address` field — not `country`
+                        // (a short country code/name column, previously mismapped
+                        // here and prone to overflowing its VARCHAR length).
+                        const address = String(row["Address"] ?? row["address"] ?? "").trim() || undefined;
                         const job_title = String(row["Designation"] ?? row["designation"] ?? "").trim() || undefined;
 
-                        const dobRaw = String(row["DOB(dd-mm-YYYY)"] ?? row["DOB"] ?? row["dob"] ?? "").trim();
-                        const hourly_rate = toNum(row["Hourly Rate"] ?? row["hourly_rate"]);
-                        const salary_amount = toNum(row["Fixed Salary"] ?? row["fixed_salary"]);
-
-                        const joined_date = parseDate(dojRaw);
-                        if (!joined_date) {
-                            part.skipped += 1;
-                            part.errors.push({ row: rowNum, email, code: "VALIDATION_ERROR", message: "DOJ must be in dd-mm-YYYY format" });
-                            return part;
-                        }
                         const { birthday_day, birthday_month } = parseDOB(dobRaw);
+                        const hasWage = typeof hourly_rate === "number" || typeof salary_amount === "number";
 
                         const existing = existingMap.get(email);
 
                         if (existing) {
                             if (!dry_run) {
                                 await staffRepository.update(existing.id, salonId, {
-                                    first_name, last_name, phone, gender, country, job_title,
+                                    first_name, last_name, phone, gender, address, job_title,
+                                    permission_level: permission_level ?? undefined,
+                                    working_hours_per_day: typeof working_hours_per_day === "number" ? working_hours_per_day : undefined,
                                 });
                                 await staffRepository.updateDateFields(existing.id, salonId, { joined_date, birthday_day, birthday_month });
-                                if (hourly_rate !== null || salary_amount !== null) {
+                                if (hasWage) {
                                     await staffWagesRepository.upsert(existing.id, {
                                         wages_enabled: true,
-                                        compensation_type: hourly_rate !== null ? "hourly" : "salary",
-                                        hourly_rate: hourly_rate ?? undefined,
-                                        salary_amount: salary_amount ?? undefined,
+                                        compensation_type: typeof hourly_rate === "number" ? "hourly" : "salary",
+                                        hourly_rate: typeof hourly_rate === "number" ? hourly_rate : undefined,
+                                        salary_amount: typeof salary_amount === "number" ? salary_amount : undefined,
                                     });
                                 }
                             }
@@ -376,15 +472,17 @@ export const staffService = {
                         } else {
                             if (!dry_run) {
                                 const staff = await staffRepository.create(salonId, {
-                                    first_name, last_name, email, phone, gender, country, job_title,
+                                    first_name, last_name, email, phone, gender, address, job_title,
+                                    permission_level: permission_level ?? undefined,
+                                    working_hours_per_day: typeof working_hours_per_day === "number" ? working_hours_per_day : undefined,
                                 }, null, true); // activateImmediately = true: imported staff don't need email invites
                                 await staffRepository.updateDateFields(staff.id, salonId, { joined_date, birthday_day, birthday_month });
-                                if (hourly_rate !== null || salary_amount !== null) {
+                                if (hasWage) {
                                     await staffWagesRepository.upsert(staff.id, {
                                         wages_enabled: true,
-                                        compensation_type: hourly_rate !== null ? "hourly" : "salary",
-                                        hourly_rate: hourly_rate ?? undefined,
-                                        salary_amount: salary_amount ?? undefined,
+                                        compensation_type: typeof hourly_rate === "number" ? "hourly" : "salary",
+                                        hourly_rate: typeof hourly_rate === "number" ? hourly_rate : undefined,
+                                        salary_amount: typeof salary_amount === "number" ? salary_amount : undefined,
                                     });
                                 }
                             }
