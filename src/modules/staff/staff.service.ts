@@ -635,6 +635,15 @@ export const staffCommissionsService = {
         return commissionCalculationService.markStaffPaid(salonId, staffId);
     },
 
+    // ── Settle a specific amount (full or partial) against pending commission ──
+    async settleStaffCommission(salonId: string, staffId: string, amount: number, settledBy?: string | null) {
+        return commissionCalculationService.settleStaffCommission(salonId, staffId, amount, settledBy);
+    },
+
+    async getSettlementHistory(salonId: string, staffId: string, limit?: number) {
+        return commissionCalculationService.getSettlementHistory(salonId, staffId, limit);
+    },
+
     async upsertSlabs(staffId: string, salonId: string, category: string, slabs: any[]) {
         return commissionCalculationService.upsertSlabs(staffId, salonId, category, slabs);
     },

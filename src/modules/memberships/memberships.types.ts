@@ -2,7 +2,11 @@ export interface MembershipsListQuery {
   search?:      string;   // ← ADD
   sessionType?: string;
   colour?:      string;
+  // Multi-select filters — comma-joined in the query string
+  // ("value,percentage"); see splitMulti() in memberships.repository.ts.
   validFor?:    string;
+  pricingType?: string;
+  appliesTo?:   string;
   page?:        number;
   limit?:       number;
 }

@@ -28,6 +28,9 @@ export type Payment = {
   updated_at: string;
   membership_wallet_used: number;
   membership_discount_used: number;
+  // ₹ of this bill covered by an already-purchased package's sessions.
+  // Pre-tax, like membership_discount_used.
+  package_used: number;
   reward_points_value: number;
   referral_discount_applied: number;
   tax_breakdown: TaxBreakdownEntry[] | null;
@@ -99,6 +102,13 @@ export type CreatePaymentBody = {
   // 'package'/'split' correctly instead of the frontend's own (often wrong)
   // payment_method label. See payments.service.ts / payment-method.util.ts.
   package_covered_amount?: number;
+  // Server-computed only — the same figure as package_covered_amount above,
+  // but PERSISTED (payments.package_used) and subtracted from the taxable
+  // base, so a package-covered service is neither taxed nor left sitting in
+  // due_amount. package_covered_amount stays label-only (it only shapes the
+  // payment_method wording); this field is the money. Read back cumulatively
+  // via paymentsRepository.getPackageUsedForAppointment().
+  package_used?: number;
   // Server-computed only — never trust a value sent by the frontend for this
   // (see payments.service.ts's Refer & Earn block).
   referral_discount_applied?: number;

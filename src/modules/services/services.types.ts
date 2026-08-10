@@ -10,7 +10,17 @@ export type ServiceConsumableItem = {
   product_name?: string;
   qty: number;
   unit?: string;
+  // Read-only enrichment — present on responses (see
+  // CONSUMABLES_USED_SUBQUERY), never accepted on write. `stock` is the
+  // product's current on-hand amount in BASE units at the time of the read.
+  stock?: number;
+  bottle_size?: number | null;
+  measure_unit?: string;
 };
+
+// How a per-service commission override is applied to that service's revenue.
+// "percentage" → % of revenue; "fixed" → flat ₹ per unit sold.
+export type ServiceCommissionKind = "percentage" | "fixed";
 
 export type Service = {
   id: string;
@@ -23,10 +33,19 @@ export type Service = {
   price: string;
   duration: number;
   online_booking: boolean;
+  // Legacy and inert: false on every row, and the commission engine never
+  // reads it. Per-service commission is driven by commission_rate/_kind below.
   commission_enabled: boolean;
+  // NULL means "no override" — this service earns under the staff's
+  // commission_rules / staff_commission_settings, as it always has.
+  commission_rate: string | null;
+  commission_kind: ServiceCommissionKind | null;
   resource_required: boolean;
   is_active: boolean;
   consumables_used: ServiceConsumableItem[];
+  // Read-only, from STAFF_COUNT_SUBQUERY. 0 means "all staff" (no
+  // service_staff rows), not "nobody" — render it accordingly.
+  staff_count?: number;
   created_at: string;
   updated_at: string;
 };
@@ -103,13 +122,18 @@ export type CreateServiceBody = {
   online_booking?: boolean;
   commission_enabled?: boolean;
   resource_required?: boolean;
+  // Per-service commission override. Send both together, or send both as null
+  // to clear the override and fall back to the staff's commission rules.
+  commission_rate?: number | null;
+  commission_kind?: ServiceCommissionKind | null;
+  // Settable at creation now — the INSERT writes it explicitly rather than
+  // relying on the column default, so a service can be created inactive.
+  is_active?: boolean;
   staff_ids?: string[];
   consumables_used?: ServiceConsumableItem[];
 };
 
-export type UpdateServiceBody = Partial<CreateServiceBody> & {
-  is_active?: boolean;
-};
+export type UpdateServiceBody = Partial<CreateServiceBody>;
 
 export type CreateAddOnGroupBody = {
   name: string;

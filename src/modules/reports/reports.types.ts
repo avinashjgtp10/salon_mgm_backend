@@ -611,6 +611,8 @@ export interface SalesSummaryReportRow {
     tip_amount: number;
     ewallet_used: number;
     membership_wallet_used: number;
+    // ₹ of this bill covered by an already-purchased package's sessions.
+    package_used: number;
     reward_points_value: number;
     referral_credit_used: number;
     payment_method: string | null;
@@ -628,6 +630,8 @@ export interface SalesSummaryReportStats {
     total_tip: number;
     total_ewallet: number;
     total_membership: number;
+    // ₹ across these bills covered by already-purchased package sessions.
+    total_package: number;
     total_rewards: number;
     total_referral: number;
 }
@@ -1332,6 +1336,202 @@ export interface CustomerFrequencyReportResponse {
 }
 
 // ===============================
+// Lost Customers Report (independent report API — POST /api/report/lost-customers)
+// Standalone report, separate from Customer Frequency's fixed 90-day "lost"
+// bucket: the inactivity cutoff is user-configurable (lost_days), and
+// start_date/end_date filter directly on last_visit (which past window of
+// "went quiet" clients to show), not on first_visit like Customer Frequency's
+// date range does.
+// ===============================
+
+export interface LostCustomersReportFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    // Days since last visit before a client counts as "lost". Defaults to 90
+    // (same default Customer Frequency's fixed cutoff used) when omitted.
+    lost_days?: number;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface LostCustomersReportRow {
+    client_id: string | null;
+    client_name: string;
+    contact: string;
+    visits: number;
+    total_spend: number;
+    first_visit: string | null;
+    last_visit: string | null;
+    days_since_last_visit: number;
+}
+
+export interface LostCustomersReportStats {
+    total_lost_clients: number;
+    total_spend_when_active: number;
+}
+
+export interface LostCustomersReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface LostCustomersReportResponse {
+    rows: LostCustomersReportRow[];
+    pagination: LostCustomersReportPagination;
+    stats: LostCustomersReportStats;
+}
+
+// ===============================
+// Referral Report (independent report API — POST /api/report/referral)
+// One row per REFERRED client (i.e. per clients.referred_by_client_id link),
+// joined back to the referrer. Reads clients/sales/referral_ledger directly,
+// never the Appointment API. "Reward Earned" comes from the referral_ledger
+// payout row actually written for that referral (source_type =
+// 'referral_payout', source_id = the referred client), so an un-triggered
+// reward reads ₹0 rather than the configured amount.
+// ===============================
+
+export interface ReferralReportFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    // 'rewarded' | 'pending' — filters on the REFERRER's payout status
+    // (clients.referral_reward_status on the referred client's row).
+    reward_status?: string;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface ReferralReportRow {
+    referred_client_id: string | null;
+    referrer_client_id: string | null;
+    referrer_name: string;
+    referred_name: string;
+    referral_date: string | null;
+    first_visit: string | null;
+    total_visits: number;
+    revenue_generated: number;
+    reward_earned: number;
+    reward_status: "rewarded" | "pending";
+    staff_name: string;
+}
+
+export interface ReferralReportStats {
+    total_referrals: number;
+    rewarded_referrals: number;
+    total_revenue_generated: number;
+    total_reward_earned: number;
+}
+
+export interface ReferralReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface ReferralReportResponse {
+    rows: ReferralReportRow[];
+    pagination: ReferralReportPagination;
+    stats: ReferralReportStats;
+}
+
+// ===============================
+// Payment Collection Report (independent report API — POST /api/report/payment-collection)
+//
+// Reads appointments + payments directly, NOT sales. Two schema facts drive
+// this and are easy to get wrong:
+//
+//  1. `sales` carries no due/paid/payment_status column at all, and a sales
+//     row is only written once a bill is fully settled — a partially-paid
+//     bill structurally has NO sales row (see the comment above
+//     _UNBILLED_APPOINTMENT_ROWS_CTE). So dues can only come from payments.
+//  2. payments has no sale_id; it links to appointments via appointment_id.
+//
+// payments.due_amount is a CUMULATIVE SNAPSHOT — each row stores the balance
+// remaining as of that row, not an incremental charge. It must be read from
+// the LATEST row per appointment; SUMming it across rows double-counts one
+// debt (measured at 71% overstatement on real data, and it reports debt
+// against bills the customer has already settled in full). paid_amount, by
+// contrast, IS a per-row delta and is correctly SUMmed.
+//
+// Scope: only appointments that have at least one payment row appear, so
+// every row is 'paid' or 'partial'; never-paid ("booked") appointments are
+// excluded by the INNER JOIN LATERAL.
+// ===============================
+
+export interface PaymentCollectionReportFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    // 'paid' | 'partial' — derived from the latest payment row's due_amount,
+    // not from sales.status.
+    payment_statuses?: string[];
+    payment_methods?: string[];
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface PaymentCollectionReportRow {
+    appointment_id: string | null;
+    client_id: string | null;
+    payment_date: string | null;
+    customer_name: string;
+    contact: string;
+    invoice_number: string;
+    total_amount: number;
+    paid_amount: number;
+    due_amount: number;
+    payment_method: string;
+    payment_status: "paid" | "partial";
+    staff_name: string;
+}
+
+export interface PaymentCollectionReportStats {
+    total_pending_amount: number;
+    total_pending_transactions: number;
+    total_customers_with_due: number;
+    average_pending_amount: number;
+    oldest_pending_payment_date: string | null;
+    // Reconciliation context for the pending figures above — lets an owner
+    // see collection rate rather than only the outstanding balance.
+    total_billed: number;
+    total_collected: number;
+}
+
+export interface PaymentCollectionReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+// Filter dropdown options, built from the salon's whole payment history
+// rather than the current page of rows — otherwise a payment method that
+// only appears on page 3 would be missing from the filter that finds it.
+// Same convention as getSalesSummaryFiltersAvailable.
+export interface PaymentCollectionFiltersAvailable {
+    payment_methods: { id: string; label: string }[];
+    staff: { id: string; label: string }[];
+}
+
+export interface PaymentCollectionReportResponse {
+    rows: PaymentCollectionReportRow[];
+    pagination: PaymentCollectionReportPagination;
+    stats: PaymentCollectionReportStats;
+    filters_available: PaymentCollectionFiltersAvailable;
+}
+
+// ===============================
 // Staff Sales Report (independent report API — POST /api/report/staff-sales)
 // Reads directly from sales/sale_items/payments, one row per transaction,
 // optionally filtered to one staff member. Commission is joined from
@@ -1913,6 +2113,215 @@ export interface WaCampaignReportResponse {
     pagination: WaCampaignReportPagination;
     stats: WaCampaignReportStats;
     filters_available: WaCampaignFiltersAvailable;
+}
+
+// ===============================
+// Open Rate Report (independent report API — POST /api/report/open-rate)
+// Campaign engagement, sharing the WA_*_COUNT state definitions in
+// reports.repository.ts with the WA Marketing Campaign report above.
+//
+// open_rate is opened / DELIVERED (never / sent): an undelivered message had
+// no chance of being opened, so including it would understate engagement.
+// Failed and blocked messages are therefore excluded from the denominator by
+// construction — they never reach a 'DELIVERED'/'READ' state.
+//
+// `channel` is always 'whatsapp' today. The generic campaigns /
+// campaign_recipients tables that would carry SMS/Email exist but hold no
+// rows and nothing writes to them.
+// ===============================
+
+export type OpenRateChannel = "whatsapp" | "sms" | "email";
+
+export interface OpenRateReportFilters {
+    search?: string;
+    campaign_ids?: string[];
+    /** Message-level states; used as an EXISTS filter on campaigns, never to
+     *  narrow the rows the rates are computed from. */
+    message_statuses?: string[];
+    campaign_statuses?: string[];
+    channels?: OpenRateChannel[];
+    date_from?: string;
+    date_to?: string;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+    sort_by?: string;
+    sort_dir?: "asc" | "desc";
+}
+
+export interface OpenRateReportRow {
+    id: string;
+    name: string;
+    template_name: string;
+    status: string;
+    channel: string;
+    created_at: string;
+    total_contacts: number;
+    sent: number;
+    delivered: number;
+    opened: number;
+    failed: number;
+    blocked: number;
+    /** Percentage 0-100, already guarded against a zero denominator. */
+    open_rate: number;
+}
+
+export interface OpenRateReportStats {
+    total_campaigns: number;
+    total_recipients: number;
+    total_sent: number;
+    total_delivered: number;
+    total_opened: number;
+    total_failed: number;
+    total_blocked: number;
+    open_rate: number;
+}
+
+export interface OpenRateTrendPoint {
+    /** YYYY-MM-DD, cohorted by send date — see getOpenRateTrend. */
+    day: string;
+    sent: number;
+    delivered: number;
+    opened: number;
+    open_rate: number;
+}
+
+export interface OpenRateCustomerRow {
+    id: string;
+    name: string;
+    phone: string;
+    status: string;
+    sent_at: string | null;
+    delivered_at: string | null;
+    read_at: string | null;
+    error_message: string | null;
+}
+
+export interface OpenRateCampaignDetail {
+    id: string;
+    name: string;
+    status: string;
+    channel: string;
+    created_at: string;
+    template_name: string;
+    message_body: string;
+    total_contacts: number;
+    sent: number;
+    delivered: number;
+    opened: number;
+    failed: number;
+    blocked: number;
+    open_rate: number;
+    customers: OpenRateCustomerRow[];
+    customers_pagination: WaCampaignReportPagination;
+}
+
+export interface OpenRateFilterOption { id: string; label: string; }
+
+export interface OpenRateFiltersAvailable {
+    campaigns: OpenRateFilterOption[];
+}
+
+// ===============================
+// Reply Rate Report (independent report API — POST /api/report/reply-rate)
+// Shares filters and state definitions with the Open Rate report.
+//
+// A reply is an INBOUND WhatsApp message from the recipient's number arriving
+// within 24h of the campaign reaching them (WA_REPLY_WINDOW in
+// reports.repository.ts) — nothing links a message to a campaign directly, so
+// phone + timing is the only available attribution.
+//
+// reply_rate is replied / SENT (not / delivered, unlike open_rate): it's the
+// figure staff asked for, and delivery receipts are often missing here, which
+// would otherwise let replies exceed the denominator.
+// ===============================
+
+export interface ReplyRateReportRow {
+    id: string;
+    name: string;
+    template_name: string;
+    status: string;
+    channel: string;
+    created_at: string;
+    total_contacts: number;
+    /** Every send ATTEMPT, including failed/blocked — matches the other
+     *  campaign reports' `sent` so the three agree per campaign. */
+    sent: number;
+    /** Attempts that actually went out (SENT/DELIVERED/READ). This, not
+     *  `sent`, is the reply-rate denominator — a failed message can't be
+     *  replied to. See WA_REACHED_COUNT. */
+    reached: number;
+    delivered: number;
+    opened: number;
+    failed: number;
+    replied: number;
+    reply_rate: number;
+}
+
+export interface ReplyRateReportStats {
+    total_campaigns: number;
+    total_sent: number;
+    /** Reply-rate denominator — see ReplyRateReportRow.reached. */
+    total_reached: number;
+    total_delivered: number;
+    total_opened: number;
+    total_replied: number;
+    total_failed: number;
+    reply_rate: number;
+}
+
+export interface ReplyRateCustomerRow {
+    id: string;
+    name: string;
+    phone: string;
+    status: string;
+    sent_at: string | null;
+    delivered_at: string | null;
+    read_at: string | null;
+    /** First in-window inbound message; null when they never replied. */
+    first_reply_at: string | null;
+}
+
+export interface ReplyRateCampaignDetail {
+    id: string;
+    name: string;
+    status: string;
+    channel: string;
+    created_at: string;
+    template_name: string;
+    message_body: string;
+    total_contacts: number;
+    /** Every send ATTEMPT, including failed/blocked — matches the other
+     *  campaign reports' `sent` so the three agree per campaign. */
+    sent: number;
+    /** Attempts that actually went out (SENT/DELIVERED/READ). This, not
+     *  `sent`, is the reply-rate denominator — a failed message can't be
+     *  replied to. See WA_REACHED_COUNT. */
+    reached: number;
+    delivered: number;
+    opened: number;
+    failed: number;
+    replied: number;
+    reply_rate: number;
+    customers: ReplyRateCustomerRow[];
+    customers_pagination: WaCampaignReportPagination;
+}
+
+export interface ReplyRateReportResponse {
+    rows: ReplyRateReportRow[];
+    pagination: WaCampaignReportPagination;
+    stats: ReplyRateReportStats;
+    filters_available: OpenRateFiltersAvailable;
+}
+
+export interface OpenRateReportResponse {
+    rows: OpenRateReportRow[];
+    pagination: WaCampaignReportPagination;
+    stats: OpenRateReportStats;
+    filters_available: OpenRateFiltersAvailable;
+    /** Only populated if a caller asks for it — the report itself has no
+     *  charts, so the service skips the trend query entirely. */
+    trend?: OpenRateTrendPoint[];
 }
 
 // ===============================
