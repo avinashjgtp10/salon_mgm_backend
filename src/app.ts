@@ -40,6 +40,8 @@ import inboxRouter from './modules/marketing/whatsapp/inbox/inbox.routes';
 import salonDashboardRoutes from "./modules/salon-dashboard/salon-dashboard.routes";
 import paymentsRoutes from "./modules/payments/payments.routes";
 import couponsRoutes from "./modules/coupons/coupons.routes";
+import couponDesignsRoutes from "./modules/coupon-designs/coupon-designs.routes";
+import brandKitRoutes from "./modules/brand-kit/brand-kit.routes";
 import settingsRoutes from "./modules/settings/settings.routes";
 import reportsRoutes from "./modules/reports/reports.routes";
 import legacyReportsRoutes from "./modules/reports/legacyReports.routes";
@@ -254,6 +256,8 @@ app.use('/api/v1/reviews', reviewsRoutes)
 app.use('/api/v1/inbox', inboxRouter);
 app.use("/api/v1/dashboard", salonDashboardRoutes);
 app.use("/api/v1/coupons", couponsRoutes);
+app.use("/api/v1/coupon-designs", couponDesignsRoutes);
+app.use("/api/v1/brand-kit", brandKitRoutes);
 app.use("/api/v1/payments", paymentsRoutes);
 app.use("/api/v1/blocked-times", blockedTimesRoutes);
 app.use("/api/v1/settings", settingsRoutes);
