@@ -8,6 +8,7 @@
 
 import logger from '../../config/logger'
 import { appointmentsRepository } from './appointments.repository'
+import { clientPackagesService } from '../client-packages/client-packages.service'
 
 let schedulerInterval: NodeJS.Timeout | null = null
 
@@ -15,6 +16,20 @@ async function runNoShowSweep(): Promise<void> {
   const flipped = await appointmentsRepository.markNoShowBatch()
   if (flipped.length > 0) {
     logger.info(`[NO-SHOW-SCHEDULER] Marked ${flipped.length} appointment(s) as no-show`)
+  }
+
+  // Package linkage: apply the salon's configured no-show policy (default:
+  // do not deduct) to any of these appointments booked from a package
+  // sale's schedule-at-purchase flow. No-op per row for everything else.
+  // Sequential, not Promise.all — this batch is small (10-min cadence) and
+  // each call already does its own settings lookup + possible redemption
+  // write, no benefit to parallelizing against the same salon_settings cache.
+  for (const { id, salon_id } of flipped) {
+    try {
+      await clientPackagesService.handleNoShowForAppointment(salon_id, id)
+    } catch (err: any) {
+      logger.error('[NO-SHOW-SCHEDULER] package no-show handling failed', { appointmentId: id, message: err?.message })
+    }
   }
 }
 

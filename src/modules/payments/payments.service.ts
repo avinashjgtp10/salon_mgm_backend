@@ -1377,7 +1377,7 @@ export const paymentsService = {
             // breakdown) — fall back to a plain Catalog package (services
             // list only, no session counts), crediting 1 session per
             // included service since that's what was actually billed.
-            let services: Array<{ serviceId?: string; serviceName: string; totalSessions: number; price: number }> = [];
+            let services: Array<{ serviceId?: string; serviceName: string; totalSessions: number; price: number; schedule?: { scheduledAt: string; staffId?: string } }> = [];
             let basePrice      = Number(item.price ?? 0) * Number(item.quantity ?? 1);
             let discount       = 0;
             // Package Templates carry their own precise gst_percentage (set
@@ -1396,7 +1396,6 @@ export const paymentsService = {
               ? await packageTemplatesRepository.findById(item.package_id, data.salon_id)
               : null;
             if (template) {
-              services      = template.services.map(s => ({ serviceName: s.serviceName, totalSessions: s.totalSessions, price: s.price }));
               basePrice     = template.basePrice;
               discount      = template.discount;
               gstPercentage = template.gstPercentage;
@@ -1405,6 +1404,26 @@ export const paymentsService = {
                 d.setDate(d.getDate() + template.expiryDays);
                 expiryDate = d.toISOString().slice(0, 10);
               }
+            }
+
+            // Prefer the frontend's own per-service breakdown when present —
+            // it's resolved at package-pick time (see PackageRow.tsx) and is
+            // the ONLY place a per-service `schedule` (book a future
+            // appointment for this service now) can come from; re-deriving
+            // from the template/catalog below would silently drop it.
+            // Package-level fields (price/discount/GST/expiry) above still
+            // come from the template/catalog lookup regardless — the
+            // frontend breakdown only carries per-service name/price/sessions.
+            if (item.services?.length) {
+              services = item.services.map((s: any) => ({
+                serviceId:     s.serviceId || undefined,
+                serviceName:   s.serviceName,
+                totalSessions: Number(s.totalSessions) || 1,
+                price:         Number(s.price) || 0,
+                schedule:      s.schedule?.scheduledAt ? { scheduledAt: s.schedule.scheduledAt, staffId: s.schedule.staffId } : undefined,
+              }));
+            } else if (template) {
+              services = template.services.map(s => ({ serviceName: s.serviceName, totalSessions: s.totalSessions, price: s.price }));
             } else {
               const combo = item.package_id
                 ? await packagesRepository.findById(item.package_id, data.salon_id)
@@ -1438,6 +1457,7 @@ export const paymentsService = {
               data.appointment_id,
               item.staff_id || appt?.staff_id || undefined,
               checkoutSaleId,
+              requesterUserId,
             );
           } catch (err: any) {
             logger.warn('[payments] package auto-create failed:', err?.message ?? err);

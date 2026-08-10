@@ -38,6 +38,14 @@ export function validateCreateClientPackage(
                                           return badRequest(res, "Each service must have totalSessions >= 1");
     if (typeof svc.price !== "number" || svc.price < 0)
                                           return badRequest(res, "Each service must have a non-negative price");
+    if (svc.schedule !== undefined) {
+      if (typeof svc.schedule !== "object" || svc.schedule === null || Array.isArray(svc.schedule))
+                                          return badRequest(res, "Each service's schedule must be an object");
+      if (typeof svc.schedule.scheduledAt !== "string" || isNaN(new Date(svc.schedule.scheduledAt).getTime()))
+                                          return badRequest(res, "Each service's schedule.scheduledAt must be a valid ISO datetime");
+      if (svc.schedule.staffId !== undefined && typeof svc.schedule.staffId !== "string")
+                                          return badRequest(res, "Each service's schedule.staffId must be a string");
+    }
   }
 
   return next();

@@ -352,6 +352,50 @@ export const whatsappAutomationService = {
     }
   },
 
+  // Reminders for appointments booked out of a package sale. Runs from the
+  // 9AM IST daily block (not the hourly sweep) because these are date-offset
+  // reminders — "2 days before" / "1 day before" — rather than the
+  // hour-offset ones above. The generic 24h/1h sweeps deliberately skip
+  // these appointments so a client never gets two reminders for one visit.
+  async runPackageAppointmentReminders(daysBefore: 1 | 2): Promise<void> {
+    const eventType: AutomationEventType = daysBefore === 2
+      ? 'package_appointment_reminder_2d'
+      : 'package_appointment_reminder_1d'
+    logger.info(`[WA-AUTO] Running package appointment reminder job (${daysBefore}d)...`)
+    try {
+      const appointments = await whatsappAutomationRepository.getPackageAppointmentsForReminder(daysBefore)
+      logger.info(`[WA-AUTO] ${appointments.length} package appointments to remind (${daysBefore}d)`)
+
+      for (const appt of appointments) {
+        if (!appt.phone_number) continue
+
+        await this.trigger({
+          salonId:       appt.salon_id,
+          eventType,
+          clientId:      appt.client_id,
+          phone:         appt.phone_number,
+          countryCode:   appt.phone_country_code,
+          variables: {
+            '1': appt.client_name   ?? 'Valued Customer',
+            '2': appt.salon_name    ?? 'our salon',
+            '3': appt.service_name  ?? 'your service',
+            '4': formatDateIST(appt.scheduled_at),
+            '5': formatTimeIST(appt.scheduled_at),
+            '6': appt.staff_name    ?? 'our team',
+            '7': appt.package_name  ?? 'your',
+          },
+          // Date-scoped so a reschedule earns a fresh reminder — see
+          // getPackageAppointmentsForReminder()'s dedup clause, which must
+          // build this exact same key.
+          referenceId:   `${appt.appointment_id}:${appt.scheduled_date}`,
+          referenceType: 'appointment',
+        })
+      }
+    } catch (err: any) {
+      logger.error(`[WA-AUTO] runPackageAppointmentReminders(${daysBefore}) error:`, err?.message)
+    }
+  },
+
   async runPackageExpiringReminders(): Promise<void> {
     logger.info('[WA-AUTO] Running package expiring reminder job...')
     try {
