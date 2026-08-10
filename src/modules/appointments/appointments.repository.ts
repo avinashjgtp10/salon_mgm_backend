@@ -266,7 +266,7 @@ export const appointmentsRepository = {
                 ends_at,
                 colour, created_by,
                 services, package_items, product_items, membership_items,
-                discount_value, discount_type, ex_charges, tip_amount, gst_percent,
+                discount_value, discount_type, discount_applies_to, ex_charges, tip_amount, gst_percent,
                 apply_membership_wallet, include_gst
             )
             VALUES (
@@ -276,8 +276,8 @@ export const appointmentsRepository = {
                 ($10::timestamptz + ($11::integer * INTERVAL '1 minute')),
                 $12, $13,
                 $14::jsonb, $15::jsonb, $16::jsonb, $17::jsonb,
-                $18, $19, $20, $21, $22,
-                $23, $24
+                $18, $19, $20::jsonb, $21, $22, $23,
+                $24, $25
             )
             RETURNING *`,
             [
@@ -300,6 +300,11 @@ export const appointmentsRepository = {
                 JSON.stringify(data.membership_items ?? []),
                 data.discount_value     ?? 0,
                 data.discount_type      ?? "percentage",
+                // NULL (not an array) when the client didn't send a selection —
+                // that's the legacy-scope signal the engine keys off. An empty
+                // array is preserved as "[]" ("discount nothing"), which is a
+                // deliberately different thing; see normalizeDiscountAppliesTo.
+                data.discount_applies_to ? JSON.stringify(data.discount_applies_to) : null,
                 data.ex_charges         ?? 0,
                 data.tip_amount         ?? 0,
                 data.gst_percent        ?? 0,
@@ -311,7 +316,8 @@ export const appointmentsRepository = {
     },
 
     async update(id: string, patch: UpdateAppointmentBody): Promise<Appointment> {
-        const JSONB_FIELDS = new Set(["services", "package_items", "product_items", "membership_items"]);
+        const JSONB_FIELDS = new Set(["services", "package_items", "product_items", "membership_items",
+                                      "discount_applies_to"]);
 
         // Remove ends_at from the patch if auto-recalculation is triggered
         if ("scheduled_at" in patch || "duration_minutes" in patch) {

@@ -23,7 +23,7 @@ import { clientsRepository } from "../clients/clients.repository";
 import { sendReceiptDocument } from "../sales/receipt-whatsapp.service";
 import { sendPurchaseReceipt } from "../sales/receipt-send.helper";
 import { notifyAppointmentCompleted } from "./appointment-completed.helper";
-import { computeBillTotals, rowsTotal, ActiveTaxRow } from "../pricing/pricing.engine";
+import { computeBillTotals, rowsTotal, normalizeDiscountAppliesTo, ActiveTaxRow } from "../pricing/pricing.engine";
 import { getActiveTaxes } from "../settings/tax.util";
 import { paymentsRepository } from "../payments/payments.repository";
 import {
@@ -51,7 +51,8 @@ import {
 // this appointment's bill actually total, from its raw stored inputs."
 function computeAppointmentTotals(appt: {
     services?: any[]; package_items?: any[]; product_items?: any[]; membership_items?: any[];
-    discount_type?: string; discount_value?: number; ex_charges?: number; tip_amount?: number;
+    discount_type?: string; discount_value?: number; discount_applies_to?: unknown;
+    ex_charges?: number; tip_amount?: number;
     include_gst?: boolean; membership_discount_used?: number | string;
 }, activeTaxes: ActiveTaxRow[]) {
     const toRow = (items: any[] = []) => (items || []).map((i) => ({
@@ -68,6 +69,11 @@ function computeAppointmentTotals(appt: {
         },
         discountType: (appt.discount_type === "percentage" ? "percentage" : "flat"),
         discountValue: Number(appt.discount_value) || 0,
+        // This bill's own "Apply to" selection. NULL on any appointment
+        // predating the column, which normalizes to undefined = legacy scope,
+        // so a read-time backfill reproduces exactly what that bill was
+        // charged instead of re-pricing it under the new rule.
+        discountAppliesTo: normalizeDiscountAppliesTo(appt.discount_applies_to),
         // A percentage/loyalty membership discount is a genuine pre-tax price
         // cut, same as the manual discount above — already collected onto
         // this appointment via findById()/listBySalonId()'s payments
@@ -535,7 +541,8 @@ export const appointmentsService = {
         // inputs exactly so this decision and the recompute below can never
         // disagree about what "changed the bill" means.
         const isContentEdit = ["services", "package_items", "product_items", "membership_items",
-                                "discount_value", "discount_type", "ex_charges", "tip_amount", "include_gst"]
+                                "discount_value", "discount_type", "discount_applies_to",
+                                "ex_charges", "tip_amount", "include_gst"]
                                 .some((k) => k in patch);
 
         if (existing.status === "no-show" && isReschedule) {
@@ -555,6 +562,7 @@ export const appointmentsService = {
                 membership_items: patch.membership_items ?? existing.membership_items,
                 discount_type:    patch.discount_type     ?? existing.discount_type,
                 discount_value:   patch.discount_value    ?? existing.discount_value,
+                discount_applies_to: patch.discount_applies_to ?? existing.discount_applies_to,
                 ex_charges:       patch.ex_charges        ?? existing.ex_charges,
                 tip_amount:       patch.tip_amount         ?? existing.tip_amount,
                 include_gst:      patch.include_gst        ?? existing.include_gst,
@@ -674,6 +682,36 @@ export const appointmentsService = {
                 .catch(err => logger.warn("Sale staff reassignment failed (non-fatal)", {
                     appointmentId, newStaffId: patch.staff_id, err: err?.message,
                 }));
+        }
+
+        // Same idea for the DATE: moving a paid/partial appointment must carry
+        // its already-recorded bill with it. Reports date every row off
+        // sales.created_at, which is stamped once when the sale is first
+        // written and was never revised afterwards — so editing a paid bill's
+        // date moved it on the calendar while every report kept reporting it
+        // under the original date.
+        //
+        // Deliberately AWAITED, unlike the staff reassignment above. That one
+        // only affects commission attribution nobody reads back in the same
+        // breath, but this changes what the reports show — and the client
+        // typically reloads them straight after saving. Fired-and-forgotten,
+        // the response returned before the re-dating landed, so that reload
+        // raced the write and still showed the old date until the user
+        // refreshed again. Awaiting makes the save mean "the bill has moved".
+        // Still non-fatal: a failure here must not reject an otherwise good
+        // appointment update.
+        if (
+            patch.scheduled_at &&
+            new Date(patch.scheduled_at).getTime() !== new Date(existing.scheduled_at).getTime() &&
+            (existing.status === "paid" || existing.status === "partial")
+        ) {
+            try {
+                await salesRepository.updateDateForAppointment(appointmentId, patch.scheduled_at);
+            } catch (err: any) {
+                logger.warn("Sale re-dating failed (non-fatal)", {
+                    appointmentId, newDate: patch.scheduled_at, err: err?.message,
+                });
+            }
         }
 
         // Adjust stock when product_items list changes (fire-and-forget)

@@ -27,10 +27,23 @@ import {
     WaCampaignReportRow,
     WaCampaignReportStats,
     WaCampaignFiltersAvailable,
+    OpenRateReportFilters,
+    OpenRateReportRow,
+    OpenRateReportStats,
+    OpenRateTrendPoint,
+    OpenRateCampaignDetail,
+    OpenRateFiltersAvailable,
+    ReplyRateReportRow,
+    ReplyRateReportStats,
+    ReplyRateCampaignDetail,
     ClientRevenueReportRow,
     ClientRevenueReportStats,
     CustomerFrequencyReportRow,
     CustomerFrequencyReportStats,
+    LostCustomersReportRow,
+    LostCustomersReportStats,
+    ReferralReportRow,
+    ReferralReportStats,
     StaffSalesReportRow,
     StaffSalesReportStats,
     StaffPerformanceReportRow,
@@ -58,6 +71,137 @@ import {
     ClientRatingReportRow,
     ClientRatingReportStats,
 } from "./reports.types";
+
+// ─── WhatsApp message delivery states ────────────────────────────────────────
+// Single source of truth for what each state MEANS, shared by the WA Marketing
+// Campaign report and the Open Rate report so the two can never disagree about
+// the same campaign's numbers.
+//
+// The critical rule: wa_campaign_contacts.status is TERMINAL, not cumulative.
+// A message that was read carries status 'READ' and is NOT also counted under
+// 'DELIVERED'. So "delivered" must mean 'DELIVERED' OR 'READ' — reading it as
+// status = 'DELIVERED' alone produces an open rate above 100% the moment more
+// messages are read than are sitting un-read (on dev today: 23 read vs 18
+// literally 'DELIVERED', i.e. 127%).
+//
+// These count from wa_campaign_contacts, never from wa_campaigns' own
+// sent_count/delivered_count/read_count columns — those are written once at
+// insert and never updated, so they drift (dev has a campaign whose
+// sent_count says 42 against 51 real contact rows).
+const WA_SENT_COUNT      = `COUNT(cc.id) FILTER (WHERE cc.status IN ('SENT','DELIVERED','READ','FAILED','BLOCKED'))::int`;
+const WA_DELIVERED_COUNT = `COUNT(cc.id) FILTER (WHERE cc.status IN ('DELIVERED','READ'))::int`;
+const WA_READ_COUNT      = `COUNT(cc.id) FILTER (WHERE cc.status = 'READ')::int`;
+const WA_FAILED_COUNT    = `COUNT(cc.id) FILTER (WHERE cc.status = 'FAILED')::int`;
+const WA_BLOCKED_COUNT   = `COUNT(cc.id) FILTER (WHERE cc.status = 'BLOCKED')::int`;
+
+// ─── Campaign reply attribution ──────────────────────────────────────────────
+// Nothing links an inbound WhatsApp message back to a campaign: wa_messages
+// and wa_conversations carry no campaign_id, so the only join available is
+// phone + timing. A reply is therefore "an INBOUND message from this
+// recipient's number, arriving after the campaign reached them and within
+// WA_REPLY_WINDOW".
+//
+// The window is what stops a customer who messages the salon months later
+// about something unrelated being counted as a reply to whatever campaign
+// happened to be last. 24 hours matches WhatsApp's own customer-service
+// window. Change it here and both the rate and the drill-down move together.
+const WA_REPLY_WINDOW = `INTERVAL '24 hours'`;
+
+// Phone numbers are compared digits-only: campaign contacts store E.164
+// ('+919699409624') while conversation rows come from webhook payloads that
+// have been seen without the '+'. Matching raw strings silently under-counts
+// replies whenever the two disagree by a single character.
+const PHONE_NORM = (col: string) => `regexp_replace(${col}, '\\D', '', 'g')`;
+
+// Inbound messages for this salon, normalized ready to join against
+// wa_campaign_contacts. Expects the salon id as $1, which every
+// _build*Where in this file already puts there.
+const WA_INBOUND_CTE = `
+  inbound AS (
+    SELECT ${PHONE_NORM("conv.contact_phone")} AS phone_norm, m.sent_at
+    FROM wa_conversations conv
+    JOIN wa_messages m ON m.conversation_id = conv.id
+    WHERE conv.salon_id = $1 AND m.direction = 'INBOUND'
+  )
+`;
+
+// Messages that actually went out. WA_SENT_COUNT above counts every ATTEMPT
+// (it includes FAILED and BLOCKED, matching the WA Campaign report's notion of
+// "sent"), which is the wrong denominator for a reply rate: a message that
+// failed never reached a handset, so nobody could reply to it.
+//
+// This is not hypothetical — dev has a campaign whose 2 recipients both FAILED
+// yet both happened to message the salon within the next 24h about something
+// else. Counted naively that campaign reads "100% reply rate" off two messages
+// that were never delivered.
+const WA_REACHED_COUNT = `COUNT(cc.id) FILTER (WHERE cc.status IN ('SENT','DELIVERED','READ'))::int`;
+
+// True when this contact replied inside the window. Correlated on cc, so it
+// belongs inside an aggregate over wa_campaign_contacts. Gated on the same
+// "actually went out" states as WA_REACHED_COUNT so numerator and denominator
+// always describe the same set of messages.
+const WA_REPLIED_PREDICATE = `
+  cc.sent_at IS NOT NULL
+  AND cc.status IN ('SENT','DELIVERED','READ')
+  AND EXISTS (
+    SELECT 1 FROM inbound i
+    WHERE i.phone_norm = ${PHONE_NORM("cc.phone")}
+      AND i.sent_at >= cc.sent_at
+      AND i.sent_at < cc.sent_at + ${WA_REPLY_WINDOW}
+  )
+`;
+
+const WA_REPLIED_COUNT = `COUNT(DISTINCT cc.id) FILTER (WHERE ${WA_REPLIED_PREDICATE})::int`;
+
+// ─── Unbilled-appointment Bill Discount ──────────────────────────────────────
+// Appointments with no sales row yet have no stored total, so a few reports
+// estimate one from the raw appointment columns. These two snippets are the
+// discount half of that estimate, kept scope-aware so the estimate agrees with
+// what the bill will actually charge (pricing.engine.ts::computeBillTotals)
+// about WHICH items a Bill Discount reduces.
+//
+// Deliberately still a coarser grain than the engine in one respect: the
+// engine's percentage base is POST-tax (buckets + their exclusive GST), while
+// these run pre-tax, because this query only has the single blended
+// a.gst_percent to work with, not the per-bucket tax config. That
+// approximation predates this and is unchanged here — only the bucket scope is
+// being corrected.
+//
+// NULL discount_applies_to = legacy scope (percentage over everything except
+// product; flat uncapped), matching the engine's undefined case exactly so a
+// pre-feature appointment estimates the same way it was priced.
+// "bill" scope is exclusive and means the whole items total, not a sum of
+// ticked buckets — matched first so a stored ["bill"] never falls through to
+// the per-bucket arithmetic below (which would score it as 0, no buckets set).
+const _UNBILLED_DISCOUNTABLE_BASE = `(CASE WHEN a.discount_applies_to @> '"bill"'::jsonb THEN (
+    COALESCE(it.service_total, 0)
+  + COALESCE(it.package_total, 0)
+  + COALESCE(it.membership_total, 0)
+  + COALESCE(it.product_total, 0)
+) ELSE (
+    COALESCE(it.service_total, 0)
+      * (CASE WHEN a.discount_applies_to IS NULL
+                OR a.discount_applies_to @> '"service"'::jsonb THEN 1 ELSE 0 END)
+  + COALESCE(it.package_total, 0)
+      * (CASE WHEN a.discount_applies_to IS NULL
+                OR a.discount_applies_to @> '"packages"'::jsonb THEN 1 ELSE 0 END)
+  + COALESCE(it.membership_total, 0)
+      * (CASE WHEN a.discount_applies_to IS NULL
+                OR a.discount_applies_to @> '"membership"'::jsonb THEN 1 ELSE 0 END)
+  + COALESCE(it.product_total, 0)
+      * (CASE WHEN a.discount_applies_to IS NOT NULL
+                AND a.discount_applies_to @> '"product"'::jsonb THEN 1 ELSE 0 END)
+) END)`;
+
+const _UNBILLED_MANUAL_DISCOUNT = `(
+  CASE
+    WHEN a.discount_type = 'percentage'
+      THEN ${_UNBILLED_DISCOUNTABLE_BASE} * COALESCE(a.discount_value::numeric, 0) / 100
+    WHEN a.discount_applies_to IS NULL
+      THEN COALESCE(a.discount_value::numeric, 0)
+    ELSE LEAST(COALESCE(a.discount_value::numeric, 0), ${_UNBILLED_DISCOUNTABLE_BASE})
+  END
+)`;
 
 // ======================================================
 // LEGACY REPORTS (dev) — free-standing helpers/interfaces used by the
@@ -267,18 +411,7 @@ const APPOINTMENT_BASE_CTES = `
                   + COALESCE(it.membership_total, 0)
                 )
                 -
-                CASE
-                  WHEN a.discount_type = 'percentage'
-                  THEN (
-                    (
-                      COALESCE(it.service_total, 0)
-                      + COALESCE(it.package_total, 0)
-                      + COALESCE(it.product_total, 0)
-                      + COALESCE(it.membership_total, 0)
-                    ) * COALESCE(a.discount_value::numeric, 0) / 100
-                  )
-                  ELSE COALESCE(a.discount_value::numeric, 0)
-                END
+                ${_UNBILLED_MANUAL_DISCOUNT}
                 + COALESCE(a.ex_charges::numeric, 0)
                 + (
                   (
@@ -289,18 +422,7 @@ const APPOINTMENT_BASE_CTES = `
                       + COALESCE(it.membership_total, 0)
                     )
                     -
-                    CASE
-                      WHEN a.discount_type = 'percentage'
-                      THEN (
-                        (
-                          COALESCE(it.service_total, 0)
-                          + COALESCE(it.package_total, 0)
-                          + COALESCE(it.product_total, 0)
-                          + COALESCE(it.membership_total, 0)
-                        ) * COALESCE(a.discount_value::numeric, 0) / 100
-                      )
-                      ELSE COALESCE(a.discount_value::numeric, 0)
-                    END
+                    ${_UNBILLED_MANUAL_DISCOUNT}
                     + COALESCE(a.ex_charges::numeric, 0)
                   ) * COALESCE(a.gst_percent::numeric, 0) / 100
                 )
@@ -1110,6 +1232,45 @@ const buildProductRevenueSourceQuery = (
   };
 };
 
+// Stock expressed in the same unit that supply_price/retail_price are quoted
+// in, for valuation only.
+//
+// products.amount is the canonical stock in BASE units (ml/g/pcs) — a 1000 ml
+// bottle with 1.4 bottles left stores amount = 1400. But supply_price and
+// retail_price are per PACKAGE (₹1000 for that 1000 ml bottle), not per ml.
+// Multiplying the two directly mixes units and overstates value by exactly
+// bottle_size — that's how a ₹1,400 shelf of shampoo reported as ₹14,00,000.
+//
+// Deliberately NOT the CEIL(...) bottle count used for the Consumable
+// Inventory "Product Quantity" column: that answers "how many bottles are on
+// the shelf" (1.4 → 2), whereas value wants the real fraction remaining
+// (1.4 bottles → ₹1,400). Products with no bottle_size are already counted in
+// the unit they're priced in, so they pass through untouched.
+const STOCK_IN_PRICING_UNITS_SQL = `
+  CASE WHEN p.bottle_size IS NOT NULL AND p.bottle_size > 0
+       THEN COALESCE(p.amount, 0) / p.bottle_size
+       ELSE COALESCE(p.amount, 0)
+  END`;
+
+const UNIT_COST_SQL = `COALESCE(NULLIF(p.supply_price, 0), p.retail_price, 0)`;
+
+// Stock counted in the same unit qty_alert is entered in.
+//
+// The form asks for "Low Stock Alert (in bottles/units)", so the threshold is a
+// PACKAGE count while p.amount is base units. Comparing them raw meant a
+// consumable only ever tripped its own alert once it was down to the last few
+// millilitres (495 bottles vs an alert of 2 needed amount <= 2 ml), so Low
+// Stock was effectively dead for every product with a bottle_size.
+//
+// CEIL here, matching consumable-inventory.repository.ts's PRODUCT_QTY_EXPR,
+// which already compared correctly — this brings the report in line with the
+// Consumable Inventory page rather than inventing a third convention.
+const STOCK_IN_ALERT_UNITS_SQL = `
+  CASE WHEN p.bottle_size IS NOT NULL AND p.bottle_size > 0
+       THEN CEIL(COALESCE(p.amount, 0) / p.bottle_size)
+       ELSE COALESCE(p.amount, 0)
+  END`;
+
 // ======================================================
 // SALES SUMMARY REPORT (independent report API)
 // POST /api/report/sales-summary — reads sales/sale_items/payments directly.
@@ -1476,9 +1637,17 @@ _UNBILLED_APPOINTMENT_ROWS_CTE(
         -- rules, which isn't reproducible here without that config; gst_percent
         -- is the single stored number closest to "the rate that was actually
         -- applied to this specific bill".
-        (CASE WHEN a.discount_type = 'percentage'
-               THEN COALESCE(items.items_total, 0) * (COALESCE(a.discount_value, 0) / 100)
-               ELSE COALESCE(a.discount_value, 0) END) AS manual_discount,
+        -- Scoped to this bill's "Apply to" selection, so the estimate agrees
+        -- with the engine about WHICH items the discount reduces; flat is
+        -- capped at that same base unless this is a legacy (NULL) bill, which
+        -- keeps the uncapped subtraction it was priced under.
+        (CASE
+           WHEN a.discount_type = 'percentage'
+             THEN COALESCE(items.discountable_total, 0) * (COALESCE(a.discount_value, 0) / 100)
+           WHEN a.discount_applies_to IS NULL
+             THEN COALESCE(a.discount_value, 0)
+           ELSE LEAST(COALESCE(a.discount_value, 0), COALESCE(items.discountable_total, 0))
+         END) AS manual_discount,
         -- Pre-tax reduction from a Discount Balance/Loyalty membership — never
         -- factored into this CTE's price at all before, so a fully
         -- membership-covered unbilled appointment both under-reported its
@@ -1520,6 +1689,21 @@ _UNBILLED_APPOINTMENT_ROWS_CTE(
         STRING_AGG(DISTINCT src.name, ', ') AS item_description,
         STRING_AGG(DISTINCT src.item_type, ', ') AS item_types,
         SUM(src.price * src.quantity) AS items_total,
+        -- Same total, restricted to the buckets this bill's Bill Discount
+        -- actually applies to — see _UNBILLED_MANUAL_DISCOUNT. NULL
+        -- discount_applies_to = legacy scope (everything but product).
+        -- src.item_type is singular ('package'); the stored bucket name is
+        -- plural ('packages'), hence the remap.
+        SUM(src.price * src.quantity) FILTER (
+          WHERE CASE
+            WHEN a.discount_applies_to IS NULL THEN src.item_type <> 'product'
+            -- "bill" scope is exclusive: the whole total, every item type.
+            WHEN a.discount_applies_to @> '"bill"'::jsonb THEN TRUE
+            ELSE a.discount_applies_to @> to_jsonb(
+              CASE WHEN src.item_type = 'package' THEN 'packages' ELSE src.item_type END
+            )
+          END
+        ) AS discountable_total,
         NULLIF(STRING_AGG(DISTINCT NULLIF(TRIM(src.staff_name), ''), ', ' ORDER BY NULLIF(TRIM(src.staff_name), '')), '') AS staff_names
       FROM (
         SELECT svc.value->>'name' AS name, 'service' AS item_type,
@@ -3865,11 +4049,11 @@ _buildProductInventoryWhere(
     values.push(filters.brand_id);
   }
   if (filters.stock_status === "low_stock") {
-    where.push(`(p.amount > 0 AND p.amount <= p.qty_alert)`);
+    where.push(`(p.amount > 0 AND (${STOCK_IN_ALERT_UNITS_SQL}) <= p.qty_alert)`);
   } else if (filters.stock_status === "out_of_stock") {
     where.push(`p.amount = 0`);
   } else if (filters.stock_status === "in_stock") {
-    where.push(`p.amount > p.qty_alert`);
+    where.push(`(${STOCK_IN_ALERT_UNITS_SQL}) > p.qty_alert`);
   }
   if (filters.date_from) {
     where.push(`p.created_at >= $${idx++}::date`);
@@ -3896,8 +4080,8 @@ async getProductInventoryReportStats(
   const query = `
     SELECT
       COUNT(*)::int AS total_products,
-      COALESCE(SUM(p.amount * COALESCE(NULLIF(p.supply_price, 0), p.retail_price, 0)), 0) AS total_stock_value,
-      COUNT(*) FILTER (WHERE p.amount > 0 AND p.amount <= p.qty_alert)::int AS low_stock_items,
+      COALESCE(SUM((${STOCK_IN_PRICING_UNITS_SQL}) * ${UNIT_COST_SQL}), 0) AS total_stock_value,
+      COUNT(*) FILTER (WHERE p.amount > 0 AND (${STOCK_IN_ALERT_UNITS_SQL}) <= p.qty_alert)::int AS low_stock_items,
       COUNT(*) FILTER (WHERE p.amount = 0)::int AS out_of_stock_items
     FROM products p
     WHERE ${where}
@@ -3948,13 +4132,16 @@ async getProductInventoryReportRows(
       p.created_at AS date_added,
       COALESCE(p.amount, 0) AS current_stock,
       COALESCE(p.qty_alert, 0) AS reorder_level,
-      COALESCE(NULLIF(p.supply_price, 0), p.retail_price, 0) AS unit_cost,
-      COALESCE(p.amount, 0) * COALESCE(NULLIF(p.supply_price, 0), p.retail_price, 0) AS total_value,
+      ${UNIT_COST_SQL} AS unit_cost,
+      -- Note current_stock is in base units while unit_cost is per package, so
+      -- for a consumable with a bottle_size these two columns deliberately do
+      -- NOT multiply out to total_value. See STOCK_IN_PRICING_UNITS_SQL.
+      (${STOCK_IN_PRICING_UNITS_SQL}) * ${UNIT_COST_SQL} AS total_value,
       COALESCE(sales_agg.quantity, 0) AS sales_qty,
       COALESCE(sales_agg.revenue, 0) AS sales_revenue,
       CASE
         WHEN COALESCE(p.amount, 0) = 0 THEN 'out_of_stock'
-        WHEN p.amount <= p.qty_alert THEN 'low_stock'
+        WHEN (${STOCK_IN_ALERT_UNITS_SQL}) <= p.qty_alert THEN 'low_stock'
         ELSE 'in_stock'
       END AS status,
       COUNT(*) OVER() AS total_count
@@ -4463,6 +4650,441 @@ async getCustomerFrequencyReportRows(
 },
 
 // ======================================================
+// LOST CUSTOMERS REPORT (independent report API)
+// POST /api/report/lost-customers — standalone report, separate from
+// Customer Frequency's fixed 90-day "lost" bucket. The inactivity cutoff is
+// user-configurable (lost_days, default 90) and start_date/end_date filter
+// directly on last_visit (which past window of "went quiet" clients to
+// show), not on first_visit like Customer Frequency's range does. Reads
+// clients/sales directly, never the Appointment API.
+// ======================================================
+
+_buildLostCustomersWhere(
+  salonId: string,
+  filters: { search?: string; staff_ids?: string[] }
+): { where: string; saleJoin: string; values: any[]; nextIndex: number } {
+  // Same WHERE/JOIN builder as Customer Frequency's — kept as a separate
+  // copy (rather than shared) so the two reports' filter sets can diverge
+  // independently without one report's change silently affecting the other.
+  const values: any[] = [salonId];
+  const where = ["c.salon_id = $1"];
+  const saleJoin = ["s.client_id = c.id", "s.status = 'completed'"];
+  let idx = 2;
+
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    saleJoin.push(`EXISTS (
+      SELECT 1 FROM sale_items si2
+      WHERE si2.sale_id = s.id AND COALESCE(si2.staff_id, s.staff_id) = ANY($${idx++}::uuid[])
+    )`);
+    values.push(filters.staff_ids);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  return { where: where.join(" AND "), saleJoin: saleJoin.join(" AND "), values, nextIndex: idx };
+},
+
+// Shared aggregation CTE — one row per client that has at least one
+// completed sale (INNER, unlike Customer Frequency's LEFT JOIN: a client
+// with zero visits was never "active" in the first place, so they can't be
+// "lost"), filtered down to those inactive for >= lostDaysIdx days AND
+// (optionally) whose last visit falls inside the start/end date range.
+_LOST_CUSTOMERS_AGG(where: string, saleJoin: string, lostDaysIdx: number, startDateIdx: number | null, endDateIdx: number | null): string {
+  const rangeClause = startDateIdx
+    ? `AND last_visit >= $${startDateIdx}::date${endDateIdx ? ` AND last_visit < ($${endDateIdx}::date + interval '1 day')` : ""}`
+    : "";
+
+  return `
+    WITH visit_agg AS (
+      SELECT
+        c.id AS client_id,
+        COALESCE(NULLIF(TRIM(c.full_name), ''), 'Walk-in') AS client_name,
+        COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS contact,
+        COUNT(s.id) AS visits,
+        COALESCE(SUM(s.total_amount::numeric), 0) AS total_spend,
+        MIN(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD'))::date AS first_visit,
+        MAX(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD'))::date AS last_visit
+      FROM clients c
+      INNER JOIN sales s ON ${saleJoin}
+      WHERE ${where}
+      GROUP BY c.id, c.full_name, c.phone_number, c.phone_country_code
+    ),
+    lost AS (
+      SELECT *,
+        (CURRENT_DATE - last_visit)::int AS days_since_last_visit
+      FROM visit_agg
+      WHERE last_visit < (CURRENT_DATE - ($${lostDaysIdx}::int * INTERVAL '1 day'))
+      ${rangeClause}
+    )
+  `;
+},
+
+async getLostCustomersReportStats(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; search?: string; staff_ids?: string[]; lost_days?: number }
+): Promise<LostCustomersReportStats> {
+  const { where, saleJoin, values, nextIndex } = this._buildLostCustomersWhere(salonId, filters);
+  let idx = nextIndex;
+  const lostDaysIdx = idx++;
+  const lostDaysValue = Math.max(1, Number(filters.lost_days ?? 90));
+
+  const dateValues: any[] = [];
+  let startDateIdx: number | null = null;
+  let endDateIdx: number | null = null;
+  if (filters.start_date) {
+    startDateIdx = idx++;
+    dateValues.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    endDateIdx = idx++;
+    dateValues.push(filters.end_date);
+  }
+
+  const query = `
+    ${this._LOST_CUSTOMERS_AGG(where, saleJoin, lostDaysIdx, startDateIdx, endDateIdx)}
+    SELECT
+      COUNT(*)::int AS total_lost_clients,
+      COALESCE(SUM(total_spend), 0) AS total_spend_when_active
+    FROM lost
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, lostDaysValue, ...dateValues]));
+  const r = rows[0] ?? {};
+  return {
+    total_lost_clients: Number(r.total_lost_clients ?? 0),
+    total_spend_when_active: Math.round(Number(r.total_spend_when_active ?? 0)),
+  };
+},
+
+async getLostCustomersReportRows(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string; staff_ids?: string[];
+    lost_days?: number; page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: LostCustomersReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, saleJoin, values, nextIndex } = this._buildLostCustomersWhere(salonId, filters);
+  let idx = nextIndex;
+  const lostDaysIdx = idx++;
+  const lostDaysValue = Math.max(1, Number(filters.lost_days ?? 90));
+
+  const dateValues: any[] = [];
+  let startDateIdx: number | null = null;
+  let endDateIdx: number | null = null;
+  if (filters.start_date) {
+    startDateIdx = idx++;
+    dateValues.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    endDateIdx = idx++;
+    dateValues.push(filters.end_date);
+  }
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    ${this._LOST_CUSTOMERS_AGG(where, saleJoin, lostDaysIdx, startDateIdx, endDateIdx)}
+    SELECT
+      client_id, client_name, contact, visits, total_spend,
+      first_visit, last_visit, days_since_last_visit,
+      COUNT(*) OVER() AS total_count
+    FROM lost
+    ORDER BY last_visit ASC NULLS LAST, client_name ASC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, lostDaysValue, ...dateValues, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: LostCustomersReportRow[] = rows.map((row: any) => ({
+    client_id: row.client_id,
+    client_name: row.client_name,
+    contact: row.contact,
+    visits: Number(row.visits ?? 0),
+    total_spend: Math.round(Number(row.total_spend ?? 0)),
+    first_visit: row.first_visit,
+    last_visit: row.last_visit,
+    days_since_last_visit: Number(row.days_since_last_visit ?? 0),
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// ======================================================
+// REFERRAL REPORT (independent report API)
+// POST /api/report/referral — one row per referred client (a clients row
+// carrying referred_by_client_id), joined back to the referrer. Reads
+// clients/sales/referral_ledger directly, never the Appointment API.
+//
+// Two money columns that are easy to conflate:
+//   revenue_generated — SUM of the REFERRED client's completed sales.
+//   reward_earned     — what the REFERRER was actually credited, read from
+//                       referral_ledger (source_type = 'referral_payout',
+//                       source_id = the referred client). Reading the ledger
+//                       rather than referral_config means a reward that never
+//                       fired shows ₹0 instead of the configured amount.
+// ======================================================
+
+_buildReferralWhere(
+  salonId: string,
+  filters: { search?: string; staff_ids?: string[]; reward_status?: string }
+): { where: string; values: any[]; nextIndex: number } {
+  // `c` = the referred client, `r` = the referrer.
+  const values: any[] = [salonId];
+  const where = ["c.salon_id = $1", "c.referred_by_client_id IS NOT NULL"];
+  let idx = 2;
+
+  if (filters.reward_status === "rewarded" || filters.reward_status === "pending") {
+    // referral_reward_status is NULL until a code is linked and 'pending'
+    // thereafter, so anything that isn't 'completed' counts as pending.
+    where.push(
+      filters.reward_status === "rewarded"
+        ? `c.referral_reward_status = 'completed'`
+        : `COALESCE(c.referral_reward_status, 'pending') <> 'completed'`
+    );
+  }
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    // Staff who served the REFERRED client on any completed sale.
+    where.push(`EXISTS (
+      SELECT 1 FROM sales s2
+      JOIN sale_items si2 ON si2.sale_id = s2.id
+      WHERE s2.client_id = c.id AND s2.status = 'completed'
+        AND COALESCE(si2.staff_id, s2.staff_id) = ANY($${idx++}::uuid[])
+    )`);
+    values.push(filters.staff_ids);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(r.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+      OR COALESCE(r.referral_code, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+// Shared aggregation CTE — one row per referral link. The date range filters
+// on the referral date (when the referred client was created), which is the
+// column the report is sorted and reported on.
+_REFERRAL_AGG(where: string, startDateIdx: number | null, endDateIdx: number | null): string {
+  const rangeClause = startDateIdx
+    ? `AND ((c.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata')::date >= $${startDateIdx}::date${
+        endDateIdx ? ` AND ((c.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata')::date <= $${endDateIdx}::date` : ""
+      }`
+    : "";
+
+  return `
+    WITH referral_base AS (
+      SELECT
+        c.id   AS referred_client_id,
+        r.id   AS referrer_client_id,
+        COALESCE(NULLIF(TRIM(r.full_name), ''), 'Walk-in') AS referrer_name,
+        COALESCE(NULLIF(TRIM(c.full_name), ''), 'Walk-in') AS referred_name,
+        -- clients.created_at is a naive timestamp (unlike sales.created_at,
+        -- which is timestamptz), and the session runs at UTC — so it must be
+        -- stamped AT TIME ZONE 'UTC' first to become an instant, then
+        -- converted to IST. Converting directly would reinterpret the UTC
+        -- wall-clock as IST and shift the date back by 5.5 hours.
+        -- Emitted as TEXT ('YYYY-MM-DD'), not date: the pg driver has no
+        -- parser registered for OID 1082, so a bare date value comes back as a JS
+        -- Date at IST-shifted UTC ("...T18:30:00Z") and the frontend's
+        -- new Date() would render it as the FOLLOWING day.
+        TO_CHAR((c.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS referral_date,
+        CASE WHEN c.referral_reward_status = 'completed' THEN 'rewarded' ELSE 'pending' END AS reward_status
+      FROM clients c
+      INNER JOIN clients r ON r.id = c.referred_by_client_id
+      WHERE ${where}
+      ${rangeClause}
+    ),
+    sale_agg AS (
+      SELECT
+        s.client_id,
+        COUNT(*)::int AS total_visits,
+        COALESCE(SUM(s.total_amount::numeric), 0) AS revenue_generated,
+        -- Kept as TEXT for the same reason as referral_date above.
+        MIN(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS first_visit
+      FROM sales s
+      WHERE s.status = 'completed'
+        AND s.client_id IN (SELECT referred_client_id FROM referral_base)
+      GROUP BY s.client_id
+    ),
+    reward_agg AS (
+      -- Sum rather than pick one row: an adjustment written against the same
+      -- referral must net off the original payout, not be ignored.
+      SELECT source_id::uuid AS referred_client_id,
+             COALESCE(SUM(amount::numeric), 0) AS reward_earned
+      FROM referral_ledger
+      WHERE source_type = 'referral_payout' AND source_id IS NOT NULL
+      GROUP BY source_id
+    ),
+    -- The staff member on the referred client's most recent completed sale —
+    -- "who is serving this referred customer", not every staff who ever did.
+    staff_pick AS (
+      SELECT DISTINCT ON (s.client_id)
+        s.client_id,
+        COALESCE(
+          NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), ''),
+          '—'
+        ) AS staff_name
+      FROM sales s
+      LEFT JOIN sale_items si ON si.sale_id = s.id
+      LEFT JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
+      WHERE s.status = 'completed'
+        AND s.client_id IN (SELECT referred_client_id FROM referral_base)
+      ORDER BY s.client_id, s.created_at DESC
+    ),
+    referrals AS (
+      SELECT
+        b.*,
+        COALESCE(sa.total_visits, 0)       AS total_visits,
+        COALESCE(sa.revenue_generated, 0)  AS revenue_generated,
+        sa.first_visit                     AS first_visit,
+        GREATEST(COALESCE(ra.reward_earned, 0), 0) AS reward_earned,
+        COALESCE(sp.staff_name, '—')       AS staff_name
+      FROM referral_base b
+      LEFT JOIN sale_agg   sa ON sa.client_id = b.referred_client_id
+      LEFT JOIN reward_agg ra ON ra.referred_client_id = b.referred_client_id
+      LEFT JOIN staff_pick sp ON sp.client_id = b.referred_client_id
+    )
+  `;
+},
+
+async getReferralReportStats(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; search?: string; staff_ids?: string[]; reward_status?: string }
+): Promise<ReferralReportStats> {
+  const { where, values, nextIndex } = this._buildReferralWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const dateValues: any[] = [];
+  let startDateIdx: number | null = null;
+  let endDateIdx: number | null = null;
+  if (filters.start_date) {
+    startDateIdx = idx++;
+    dateValues.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    endDateIdx = idx++;
+    dateValues.push(filters.end_date);
+  }
+
+  const query = `
+    ${this._REFERRAL_AGG(where, startDateIdx, endDateIdx)}
+    SELECT
+      COUNT(*)::int AS total_referrals,
+      COUNT(*) FILTER (WHERE reward_status = 'rewarded')::int AS rewarded_referrals,
+      COALESCE(SUM(revenue_generated), 0) AS total_revenue_generated,
+      COALESCE(SUM(reward_earned), 0) AS total_reward_earned
+    FROM referrals
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...dateValues]));
+  const r = rows[0] ?? {};
+  return {
+    total_referrals: Number(r.total_referrals ?? 0),
+    rewarded_referrals: Number(r.rewarded_referrals ?? 0),
+    total_revenue_generated: Math.round(Number(r.total_revenue_generated ?? 0)),
+    total_reward_earned: Math.round(Number(r.total_reward_earned ?? 0)),
+  };
+},
+
+async getReferralReportRows(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string; staff_ids?: string[];
+    reward_status?: string; page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: ReferralReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildReferralWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const dateValues: any[] = [];
+  let startDateIdx: number | null = null;
+  let endDateIdx: number | null = null;
+  if (filters.start_date) {
+    startDateIdx = idx++;
+    dateValues.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    endDateIdx = idx++;
+    dateValues.push(filters.end_date);
+  }
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    ${this._REFERRAL_AGG(where, startDateIdx, endDateIdx)}
+    SELECT
+      referred_client_id, referrer_client_id, referrer_name, referred_name,
+      referral_date, first_visit, total_visits, revenue_generated,
+      reward_earned, reward_status, staff_name,
+      COUNT(*) OVER() AS total_count
+    FROM referrals
+    ORDER BY referral_date DESC NULLS LAST, referrer_name ASC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...dateValues, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: ReferralReportRow[] = rows.map((row: any) => ({
+    referred_client_id: row.referred_client_id,
+    referrer_client_id: row.referrer_client_id,
+    referrer_name: row.referrer_name,
+    referred_name: row.referred_name,
+    referral_date: row.referral_date,
+    first_visit: row.first_visit,
+    total_visits: Number(row.total_visits ?? 0),
+    revenue_generated: Math.round(Number(row.revenue_generated ?? 0)),
+    reward_earned: Math.round(Number(row.reward_earned ?? 0)),
+    reward_status: row.reward_status === "rewarded" ? "rewarded" : "pending",
+    staff_name: row.staff_name,
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// ======================================================
 // STAFF SALES REPORT (independent report API)
 // POST /api/report/staff-sales — reads sale_items/sales directly, bucketed
 // by period (daily/weekly/monthly/yearly) and optionally filtered to one
@@ -4483,23 +5105,62 @@ async getStaffSalesReportStats(
 ): Promise<StaffSalesReportStats> {
   const { where, values, nextIndex } = this._buildSalesSummaryWhere(salonId, filters);
   const unbilled = this._UNBILLED_APPOINTMENT_ROWS_CTE(filters, nextIndex);
+  let idx = unbilled.nextIndex;
+
+  // Staff Sales report only (mirrors getStaffSalesReport): _buildSalesSummaryWhere's
+  // EXISTS only gates which SALES qualify — it doesn't stop line items
+  // belonging to a different, non-matching staff/item-type on that same
+  // qualifying sale from being summed in. Re-apply the same filters directly
+  // against `sli` so every line item counted here is itself a match.
+  const sliConditions: string[] = [];
+  const sliValues: any[] = [];
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    sliConditions.push(`COALESCE(sli.staff_id, s.staff_id) = ANY($${idx}::uuid[])`);
+    sliValues.push(filters.staff_ids);
+    idx++;
+  } else if (filters.staff_id) {
+    sliConditions.push(`COALESCE(sli.staff_id, s.staff_id) = $${idx}`);
+    sliValues.push(filters.staff_id);
+    idx++;
+  }
+  if (filters.item_types && filters.item_types.length > 0) {
+    sliConditions.push(`sli.item_type = ANY($${idx}::text[])`);
+    sliValues.push(filters.item_types);
+    idx++;
+  } else if (filters.item_type) {
+    sliConditions.push(`sli.item_type = $${idx}`);
+    sliValues.push(filters.item_type);
+    idx++;
+  }
+  const sliWhere = sliConditions.length > 0 ? `AND ${sliConditions.join(" AND ")}` : "";
 
   const query = `
     WITH sales_side AS (
       SELECT
-        s.total_amount::numeric AS price,
+        s.id,
+        (sli.total_price + COALESCE(sli.tax_amount, 0)) AS price,
         CASE
-          WHEN s.appointment_id IS NOT NULL THEN pay.paid_from_payments
-          WHEN s.status = 'completed' THEN s.total_amount::numeric
+          WHEN COALESCE(s.subtotal, 0) > 0
+            THEN (CASE WHEN s.appointment_id IS NOT NULL THEN pay.paid_from_payments
+                       WHEN s.status = 'completed' THEN s.total_amount::numeric
+                       ELSE 0 END) * (sli.total_price / s.subtotal)
           ELSE 0
         END AS paid_amount,
-        COALESCE(pay.latest_due, 0) AS due_amount,
+        CASE
+          WHEN COALESCE(s.subtotal, 0) > 0
+            THEN COALESCE(pay.latest_due, 0) * (sli.total_price / s.subtotal)
+          ELSE 0
+        END AS due_amount,
+        -- commission_earned has no per-line-item link, only staff_id — see
+        -- the matching comment in getStaffSalesReport for why this can
+        -- repeat the same sale-level commission across that staff's rows.
         COALESCE(comm.commission_amount, 0) AS commission_amount,
-        COALESCE(itype.service_revenue, 0) AS service_revenue,
-        COALESCE(itype.product_revenue, 0) AS product_revenue,
-        COALESCE(itype.package_revenue, 0) AS package_revenue,
-        COALESCE(itype.membership_revenue, 0) AS membership_revenue
-      FROM sales s
+        CASE WHEN sli.item_type = 'service' THEN sli.total_price + COALESCE(sli.tax_amount, 0) ELSE 0 END AS service_revenue,
+        CASE WHEN sli.item_type = 'product' THEN sli.total_price + COALESCE(sli.tax_amount, 0) ELSE 0 END AS product_revenue,
+        CASE WHEN sli.item_type = 'package' THEN sli.total_price + COALESCE(sli.tax_amount, 0) ELSE 0 END AS package_revenue,
+        CASE WHEN sli.item_type = 'membership' THEN sli.total_price + COALESCE(sli.tax_amount, 0) ELSE 0 END AS membership_revenue
+      FROM sale_items sli
+      JOIN sales s ON s.id = sli.sale_id
       LEFT JOIN clients c ON s.client_id = c.id
       ${this._APPOINTMENT_STATUS_JOIN}
       ${this._PAYMENT_LATERAL}
@@ -4507,28 +5168,13 @@ async getStaffSalesReportStats(
         SELECT SUM(ce.commission_amount) AS commission_amount
         FROM commission_earned ce
         WHERE ce.sale_id = s.id
-          AND ce.staff_id = COALESCE(
-            s.staff_id,
-            (SELECT si.staff_id FROM sale_items si WHERE si.sale_id = s.id AND si.staff_id IS NOT NULL LIMIT 1)
-          )
+          AND ce.staff_id = COALESCE(sli.staff_id, s.staff_id)
       ) comm ON TRUE
-      -- Item-type revenue breakdown — sales only (not unbilled appointments,
-      -- see appt_side's zeroed columns below). Tax-inclusive (total_price +
-      -- tax_amount) so these four cards sum to the tax-inclusive total_sale
-      -- above instead of silently excluding GST.
-      LEFT JOIN LATERAL (
-        SELECT
-          SUM(si.total_price + COALESCE(si.tax_amount, 0)) FILTER (WHERE si.item_type = 'service') AS service_revenue,
-          SUM(si.total_price + COALESCE(si.tax_amount, 0)) FILTER (WHERE si.item_type = 'product') AS product_revenue,
-          SUM(si.total_price + COALESCE(si.tax_amount, 0)) FILTER (WHERE si.item_type = 'package') AS package_revenue,
-          SUM(si.total_price + COALESCE(si.tax_amount, 0)) FILTER (WHERE si.item_type = 'membership') AS membership_revenue
-        FROM sale_items si
-        WHERE si.sale_id = s.id
-      ) itype ON TRUE
-      WHERE ${where}
+      WHERE ${where} ${sliWhere}
     ),
     appt_side AS (
       SELECT
+        u.id,
         u.price, u.paid_amount, u.due_amount, 0::numeric AS commission_amount,
         0::numeric AS service_revenue, 0::numeric AS product_revenue,
         0::numeric AS package_revenue, 0::numeric AS membership_revenue
@@ -4540,7 +5186,7 @@ async getStaffSalesReportStats(
       SELECT * FROM appt_side
     )
     SELECT
-      COUNT(*)::int AS total_bill,
+      COUNT(DISTINCT id)::int AS total_bill,
       COALESCE(SUM(price), 0) AS total_sale,
       COALESCE(SUM(paid_amount), 0) AS total_paid,
       COALESCE(SUM(due_amount), 0) AS total_due,
@@ -4552,7 +5198,7 @@ async getStaffSalesReportStats(
     FROM unified
   `;
 
-  const { rows } = await safeQuery(() => pool.query(query, [...values, ...unbilled.values]));
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...unbilled.values, ...sliValues]));
   const r = rows[0] ?? {};
   return {
     total_bill: Number(r.total_bill ?? 0),
@@ -4593,6 +5239,35 @@ async getStaffSalesReport(
   const unbilled = this._UNBILLED_APPOINTMENT_ROWS_CTE(filters, nextIndex);
   let idx = unbilled.nextIndex;
 
+  // Staff Sales report only: _buildSalesSummaryWhere's EXISTS only gates
+  // which SALES qualify (does this invoice have >=1 matching line item) —
+  // it doesn't stop this query's own `sli` row from being a different,
+  // non-matching line item on that same qualifying sale. Re-apply the same
+  // staff/item-type filters directly against `sli` so every emitted row is
+  // itself a match, not just a sibling of one. Scoped to this function only
+  // — does not change _buildSalesSummaryWhere or any other report.
+  const sliConditions: string[] = [];
+  const sliValues: any[] = [];
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    sliConditions.push(`COALESCE(sli.staff_id, s.staff_id) = ANY($${idx}::uuid[])`);
+    sliValues.push(filters.staff_ids);
+    idx++;
+  } else if (filters.staff_id) {
+    sliConditions.push(`COALESCE(sli.staff_id, s.staff_id) = $${idx}`);
+    sliValues.push(filters.staff_id);
+    idx++;
+  }
+  if (filters.item_types && filters.item_types.length > 0) {
+    sliConditions.push(`sli.item_type = ANY($${idx}::text[])`);
+    sliValues.push(filters.item_types);
+    idx++;
+  } else if (filters.item_type) {
+    sliConditions.push(`sli.item_type = $${idx}`);
+    sliValues.push(filters.item_type);
+    idx++;
+  }
+  const sliWhere = sliConditions.length > 0 ? `AND ${sliConditions.join(" AND ")}` : "";
+
   const page = Math.max(1, Number(filters.page ?? 1));
   const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
   const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
@@ -4609,51 +5284,47 @@ async getStaffSalesReport(
         s.id, s.created_at,
         ${this._STATUS_EXPR} AS status,
         s.payment_method,
-        s.total_amount AS price,
+        -- One row per line item, scoped to that item's own staff/amount —
+        -- never the whole invoice's total_amount. See getProductRetailReport
+        -- for the same one-row-per-line-item + proration pattern.
+        (sli.total_price + COALESCE(sli.tax_amount, 0)) AS price,
         c.full_name AS client_name, c.phone_number AS client_phone,
         st.id AS staff_id,
         NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
-        COALESCE(items.item_description, '—') AS item_description,
-        COALESCE(items.item_types, '—') AS item_types,
+        sli.name AS item_description,
+        sli.item_type AS item_types,
         CASE
-          WHEN s.appointment_id IS NOT NULL THEN pay.paid_from_payments
-          WHEN s.status = 'completed' THEN s.total_amount::numeric
+          WHEN COALESCE(s.subtotal, 0) > 0
+            THEN (CASE WHEN s.appointment_id IS NOT NULL THEN pay.paid_from_payments
+                       WHEN s.status = 'completed' THEN s.total_amount::numeric
+                       ELSE 0 END) * (sli.total_price / s.subtotal)
           ELSE 0
         END AS paid_amount,
-        COALESCE(pay.latest_due, 0) AS due_amount,
+        CASE
+          WHEN COALESCE(s.subtotal, 0) > 0
+            THEN COALESCE(pay.latest_due, 0) * (sli.total_price / s.subtotal)
+          ELSE 0
+        END AS due_amount,
+        -- commission_earned has no per-line-item link, only staff_id — if the
+        -- same staff appears on multiple line items of one sale, each of that
+        -- staff's rows will show the same sale-level commission total (kept
+        -- as-is rather than double-counting/splitting it, since there is no
+        -- way to attribute commission to one line item over another).
         COALESCE(comm.commission_amount, 0) AS commission_amount,
-        COALESCE(NULLIF(items.staff_count, 0), 1) AS staff_count,
         FALSE AS is_unbilled
-      FROM sales s
+      FROM sale_items sli
+      JOIN sales s ON s.id = sli.sale_id
       LEFT JOIN clients c ON s.client_id = c.id
-      LEFT JOIN staff st ON st.id = COALESCE(
-        s.staff_id,
-        (SELECT si.staff_id FROM sale_items si WHERE si.sale_id = s.id AND si.staff_id IS NOT NULL LIMIT 1)
-      )
+      LEFT JOIN staff st ON st.id = COALESCE(sli.staff_id, s.staff_id)
       ${this._PAYMENT_LATERAL}
       ${this._APPOINTMENT_STATUS_JOIN}
-      LEFT JOIN LATERAL (
-        SELECT
-          STRING_AGG(DISTINCT si.name, ', ') AS item_description,
-          STRING_AGG(DISTINCT si.item_type, ', ') AS item_types,
-          -- Distinct staff attributed across this sale's line items (falling
-          -- back to the sale's own staff_id per item, same convention as the
-          -- staff_name join above) — >1 means this sale involved multiple
-          -- staff, which staff_name alone (just the first one found) hides.
-          COUNT(DISTINCT COALESCE(si.staff_id, s.staff_id)) AS staff_count
-        FROM sale_items si
-        WHERE si.sale_id = s.id
-      ) items ON TRUE
       LEFT JOIN LATERAL (
         SELECT SUM(ce.commission_amount) AS commission_amount
         FROM commission_earned ce
         WHERE ce.sale_id = s.id
-          AND ce.staff_id = COALESCE(
-            s.staff_id,
-            (SELECT si.staff_id FROM sale_items si WHERE si.sale_id = s.id AND si.staff_id IS NOT NULL LIMIT 1)
-          )
+          AND ce.staff_id = COALESCE(sli.staff_id, s.staff_id)
       ) comm ON TRUE
-      WHERE ${where}
+      WHERE ${where} ${sliWhere}
     ),
     appt_side AS (
       SELECT
@@ -4662,9 +5333,6 @@ async getStaffSalesReport(
         u.item_description, u.item_types,
         u.paid_amount, u.due_amount,
         0::numeric AS commission_amount,
-        -- Unbilled appointments carry one staff_id for the whole appointment
-        -- (no per-item assignment yet) — never a multi-staff sale.
-        1::bigint AS staff_count,
         TRUE AS is_unbilled
       FROM (${unbilled.sql}) u
     ),
@@ -4679,13 +5347,12 @@ async getStaffSalesReport(
     ${limitClause}
   `;
 
-  const { rows } = await safeQuery(() => pool.query(query, [...values, ...unbilled.values, ...limitValues]));
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...unbilled.values, ...sliValues, ...limitValues]));
   const total = rows.length ? Number(rows[0].total_count) : 0;
   const items: StaffSalesReportRow[] = rows.map((row: any) => ({
     id: row.id,
     staff_id: row.staff_id ?? null,
     staff_name: row.staff_name ?? "—",
-    staff_count: Number(row.staff_count ?? 1),
     is_unbilled: Boolean(row.is_unbilled),
     client_name: row.client_name ?? "Walk-in",
     client_phone: row.client_phone ?? "—",
@@ -6336,11 +7003,11 @@ _WA_CAMPAIGN_AGG(where: string): string {
         c.id, c.name, c.template_id, c.status, c.created_at,
         COALESCE(t.name, 'Deleted template') AS template_name,
         COALESCE(c.total_contacts, 0) AS total_contacts,
-        COUNT(cc.id) FILTER (WHERE cc.status IN ('SENT','DELIVERED','READ','FAILED','BLOCKED'))::int AS sent,
-        COUNT(cc.id) FILTER (WHERE cc.status IN ('DELIVERED','READ'))::int AS delivered,
-        COUNT(cc.id) FILTER (WHERE cc.status = 'READ')::int AS read,
-        COUNT(cc.id) FILTER (WHERE cc.status = 'FAILED')::int AS failed,
-        COUNT(cc.id) FILTER (WHERE cc.status = 'BLOCKED')::int AS blocked
+        ${WA_SENT_COUNT} AS sent,
+        ${WA_DELIVERED_COUNT} AS delivered,
+        ${WA_READ_COUNT} AS read,
+        ${WA_FAILED_COUNT} AS failed,
+        ${WA_BLOCKED_COUNT} AS blocked
       FROM wa_campaigns c
       LEFT JOIN wa_templates t ON t.id = c.template_id
       LEFT JOIN wa_campaign_contacts cc ON cc.campaign_id = c.id
@@ -6470,6 +7137,584 @@ async getWaCampaignFiltersAvailable(salonId: string): Promise<WaCampaignFiltersA
     [salonId]
   ));
   return { templates: rows.map((r: any) => ({ id: r.id, label: r.label })) };
+},
+
+// ======================================================
+// OPEN RATE REPORT (independent report API)
+// POST /api/report/open-rate — campaign engagement, built on the SAME
+// wa_campaign_contacts state definitions the WA Marketing Campaign report
+// uses (WA_*_COUNT above), so the two reports can never disagree.
+//
+// Where it deliberately differs from that report: Open Rate is
+// read / DELIVERED, not read / sent. A message that never reached the
+// handset had no chance of being opened, so counting it in the denominator
+// understates engagement — hence the spec's "do not count failed messages"
+// and "only from successfully delivered messages". The WA Campaign report's
+// avg_read_rate (read / sent) answers a different question and is left alone.
+//
+// Channel is currently always 'whatsapp': the generic campaigns /
+// campaign_recipients tables that would carry SMS/Email exist but are empty
+// and nothing writes to them, so there is no second channel to union in yet.
+// ======================================================
+
+_buildOpenRateWhere(
+  salonId: string,
+  filters: OpenRateReportFilters
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["c.salon_id = $1"];
+  let idx = 2;
+
+  if (filters.search?.trim()) {
+    where.push(`(c.name ILIKE $${idx} OR COALESCE(t.name, '') ILIKE $${idx})`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+  if (filters.campaign_ids && filters.campaign_ids.length > 0) {
+    where.push(`c.id = ANY($${idx++}::uuid[])`);
+    values.push(filters.campaign_ids);
+  }
+  if (filters.campaign_statuses && filters.campaign_statuses.length > 0) {
+    where.push(`c.status = ANY($${idx++}::text[])`);
+    values.push(filters.campaign_statuses);
+  }
+  // Message-level status as a campaign filter means "this campaign has at
+  // least one message in that state". It deliberately does NOT restrict which
+  // messages get counted — narrowing the rows themselves would drop delivered
+  // messages out of the denominator and inflate every open rate on screen.
+  if (filters.message_statuses && filters.message_statuses.length > 0) {
+    where.push(`EXISTS (
+      SELECT 1 FROM wa_campaign_contacts x
+      WHERE x.campaign_id = c.id AND x.status = ANY($${idx}::text[])
+    )`);
+    values.push(filters.message_statuses);
+    idx++;
+  }
+  // Only whatsapp exists today; an explicit request for anything else can
+  // never match, so it returns nothing rather than silently ignoring the filter.
+  if (filters.channels && filters.channels.length > 0 && !filters.channels.includes("whatsapp")) {
+    where.push("FALSE");
+  }
+  if (filters.date_from) {
+    where.push(`c.created_at >= $${idx++}::date`);
+    values.push(filters.date_from);
+  }
+  if (filters.date_to) {
+    where.push(`c.created_at < ($${idx++}::date + INTERVAL '1 day')`);
+    values.push(filters.date_to);
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+_OPEN_RATE_AGG(where: string): string {
+  return `
+    WITH agg AS (
+      SELECT
+        c.id, c.name, c.status, c.created_at,
+        'whatsapp'::text AS channel,
+        COALESCE(t.name, 'Deleted template') AS template_name,
+        COALESCE(c.total_contacts, 0) AS total_contacts,
+        ${WA_SENT_COUNT} AS sent,
+        ${WA_DELIVERED_COUNT} AS delivered,
+        ${WA_READ_COUNT} AS opened,
+        ${WA_FAILED_COUNT} AS failed,
+        ${WA_BLOCKED_COUNT} AS blocked
+      FROM wa_campaigns c
+      LEFT JOIN wa_templates t ON t.id = c.template_id
+      LEFT JOIN wa_campaign_contacts cc ON cc.campaign_id = c.id
+      WHERE ${where}
+      GROUP BY c.id, c.name, c.status, c.created_at, t.name, c.total_contacts
+    )
+  `;
+},
+
+async getOpenRateReportStats(
+  salonId: string,
+  filters: OpenRateReportFilters
+): Promise<OpenRateReportStats> {
+  const { where, values } = this._buildOpenRateWhere(salonId, filters);
+  const query = `
+    ${this._OPEN_RATE_AGG(where)}
+    SELECT
+      COUNT(*)::int AS total_campaigns,
+      COALESCE(SUM(total_contacts), 0)::int AS total_recipients,
+      COALESCE(SUM(sent), 0)::int      AS total_sent,
+      COALESCE(SUM(delivered), 0)::int AS total_delivered,
+      COALESCE(SUM(opened), 0)::int    AS total_opened,
+      COALESCE(SUM(failed), 0)::int    AS total_failed,
+      COALESCE(SUM(blocked), 0)::int   AS total_blocked
+    FROM agg
+  `;
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  const total_delivered = Number(r.total_delivered ?? 0);
+  const total_opened = Number(r.total_opened ?? 0);
+  return {
+    total_campaigns:  Number(r.total_campaigns ?? 0),
+    total_recipients: Number(r.total_recipients ?? 0),
+    total_sent:       Number(r.total_sent ?? 0),
+    total_delivered,
+    total_opened,
+    total_failed:     Number(r.total_failed ?? 0),
+    total_blocked:    Number(r.total_blocked ?? 0),
+    // Guarded: a campaign with no delivery receipts yet has 0 delivered, and
+    // 0/0 must read as 0%, not NaN.
+    open_rate: total_delivered > 0 ? (total_opened / total_delivered) * 100 : 0,
+  };
+},
+
+async getOpenRateReportRows(
+  salonId: string,
+  filters: OpenRateReportFilters
+): Promise<{
+  items: OpenRateReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values } = this._buildOpenRateWhere(salonId, filters);
+
+  // Whitelisted — these interpolate into the SQL, so they can never come
+  // straight from the request body.
+  const SORTABLE: Record<string, string> = {
+    name: "name", created_at: "created_at", sent: "sent", delivered: "delivered",
+    opened: "opened", failed: "failed",
+    open_rate: "(CASE WHEN delivered > 0 THEN opened::numeric / delivered ELSE 0 END)",
+  };
+  const sortCol = SORTABLE[filters.sort_by ?? ""] ?? "created_at";
+  const sortDir = filters.sort_dir === "asc" ? "ASC" : "DESC";
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${values.length + 1} OFFSET $${values.length + 2}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    ${this._OPEN_RATE_AGG(where)}
+    SELECT *, COUNT(*) OVER() AS total_count
+    FROM agg
+    ORDER BY ${sortCol} ${sortDir}, created_at DESC
+    ${limitClause}
+  `;
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: OpenRateReportRow[] = rows.map((row: any) => {
+    const delivered = Number(row.delivered ?? 0);
+    const opened = Number(row.opened ?? 0);
+    return {
+      id: row.id,
+      name: row.name,
+      template_name: row.template_name,
+      status: row.status,
+      channel: row.channel,
+      created_at: row.created_at,
+      total_contacts: Number(row.total_contacts ?? 0),
+      sent: Number(row.sent ?? 0),
+      delivered,
+      opened,
+      failed: Number(row.failed ?? 0),
+      blocked: Number(row.blocked ?? 0),
+      open_rate: delivered > 0 ? (opened / delivered) * 100 : 0,
+    };
+  });
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// Daily open-rate trend, cohorted by SEND date: a message read three days
+// after it was sent counts on the day it was sent, not the day it was read.
+// That keeps each day's opened/delivered describing the same batch of
+// messages — bucketing by read_at instead would put the numerator and
+// denominator on different days and produce rates over 100%.
+async getOpenRateTrend(
+  salonId: string,
+  filters: OpenRateReportFilters
+): Promise<OpenRateTrendPoint[]> {
+  const { where, values } = this._buildOpenRateWhere(salonId, filters);
+  const query = `
+    SELECT
+      cc.sent_at::date AS day,
+      ${WA_SENT_COUNT} AS sent,
+      ${WA_DELIVERED_COUNT} AS delivered,
+      ${WA_READ_COUNT} AS opened
+    FROM wa_campaigns c
+    LEFT JOIN wa_templates t ON t.id = c.template_id
+    JOIN wa_campaign_contacts cc ON cc.campaign_id = c.id
+    WHERE ${where} AND cc.sent_at IS NOT NULL
+    GROUP BY cc.sent_at::date
+    ORDER BY cc.sent_at::date ASC
+  `;
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => {
+    const delivered = Number(r.delivered ?? 0);
+    const opened = Number(r.opened ?? 0);
+    return {
+      day: r.day instanceof Date ? r.day.toISOString().slice(0, 10) : String(r.day).slice(0, 10),
+      sent: Number(r.sent ?? 0),
+      delivered,
+      opened,
+      open_rate: delivered > 0 ? (opened / delivered) * 100 : 0,
+    };
+  });
+},
+
+// Drill-down: one campaign's header figures + its message content, plus the
+// paginated customer list behind those numbers.
+async getOpenRateCampaignDetail(
+  salonId: string,
+  campaignId: string,
+  opts: { status?: string; page?: number; limit?: number; search?: string }
+): Promise<OpenRateCampaignDetail | null> {
+  const headerQuery = `
+    SELECT
+      c.id, c.name, c.status, c.created_at,
+      'whatsapp'::text AS channel,
+      COALESCE(t.name, 'Deleted template') AS template_name,
+      COALESCE(t.body_text, '') AS message_body,
+      COALESCE(c.total_contacts, 0) AS total_contacts,
+      ${WA_SENT_COUNT} AS sent,
+      ${WA_DELIVERED_COUNT} AS delivered,
+      ${WA_READ_COUNT} AS opened,
+      ${WA_FAILED_COUNT} AS failed,
+      ${WA_BLOCKED_COUNT} AS blocked
+    FROM wa_campaigns c
+    LEFT JOIN wa_templates t ON t.id = c.template_id
+    LEFT JOIN wa_campaign_contacts cc ON cc.campaign_id = c.id
+    WHERE c.salon_id = $1 AND c.id = $2
+    GROUP BY c.id, c.name, c.status, c.created_at, t.name, t.body_text, c.total_contacts
+  `;
+  const { rows: headerRows } = await safeQuery(() => pool.query(headerQuery, [salonId, campaignId]));
+  if (headerRows.length === 0) return null;
+  const h = headerRows[0];
+
+  const values: any[] = [campaignId];
+  const where = ["cc.campaign_id = $1"];
+  let idx = 2;
+  // Here the status filter DOES narrow rows — this is the customer list, not
+  // a rate calculation, so restricting it is exactly what staff want.
+  if (opts.status) {
+    where.push(`cc.status = $${idx++}`);
+    values.push(opts.status);
+  }
+  if (opts.search?.trim()) {
+    where.push(`(COALESCE(cc.name,'') ILIKE $${idx} OR cc.phone ILIKE $${idx})`);
+    values.push(`%${opts.search.trim()}%`);
+    idx++;
+  }
+  const page = Math.max(1, Number(opts.page ?? 1));
+  const limit = Math.min(Math.max(1, Number(opts.limit ?? 25)), 200);
+  const offset = (page - 1) * limit;
+
+  const custQuery = `
+    SELECT cc.id, cc.name, cc.phone, cc.status,
+           cc.sent_at, cc.delivered_at, cc.read_at,
+           cc.error_message,
+           COUNT(*) OVER() AS total_count
+    FROM wa_campaign_contacts cc
+    WHERE ${where.join(" AND ")}
+    ORDER BY cc.read_at DESC NULLS LAST, cc.delivered_at DESC NULLS LAST, cc.sent_at DESC NULLS LAST
+    LIMIT $${idx++} OFFSET $${idx++}
+  `;
+  const { rows: custRows } = await safeQuery(() => pool.query(custQuery, [...values, limit, offset]));
+  const custTotal = custRows.length ? Number(custRows[0].total_count) : 0;
+
+  const delivered = Number(h.delivered ?? 0);
+  const opened = Number(h.opened ?? 0);
+  return {
+    id: h.id,
+    name: h.name,
+    status: h.status,
+    channel: h.channel,
+    created_at: h.created_at,
+    template_name: h.template_name,
+    message_body: h.message_body,
+    total_contacts: Number(h.total_contacts ?? 0),
+    sent: Number(h.sent ?? 0),
+    delivered,
+    opened,
+    failed: Number(h.failed ?? 0),
+    blocked: Number(h.blocked ?? 0),
+    open_rate: delivered > 0 ? (opened / delivered) * 100 : 0,
+    customers: custRows.map((r: any) => ({
+      id: r.id,
+      name: r.name || "—",
+      phone: r.phone || "—",
+      status: r.status,
+      sent_at: r.sent_at,
+      delivered_at: r.delivered_at,
+      read_at: r.read_at,
+      error_message: r.error_message,
+    })),
+    customers_pagination: {
+      total: custTotal,
+      page,
+      limit,
+      total_pages: Math.max(1, Math.ceil(custTotal / limit)),
+    },
+  };
+},
+
+// ======================================================
+// REPLY RATE REPORT (independent report API)
+// POST /api/report/reply-rate — how many recipients wrote back.
+//
+// Reuses the Open Rate report's filter builder verbatim (same campaigns,
+// same filters) and the same WA_*_COUNT state definitions, so all three
+// campaign reports agree on sent/delivered/failed for any given campaign.
+//
+// Denominator note: reply_rate is replied / SENT, not replied / delivered —
+// deliberately different from Open Rate. Two reasons. First, it's the figure
+// staff actually asked for ("we sent 100, 30 replied"). Second, delivery
+// receipts are frequently missing on this system (most contacts sit at SENT
+// forever), so a delivered-based denominator can be smaller than the number
+// of replies — a reply proves delivery even when no receipt arrived — which
+// would produce rates above 100%. Sent is always well defined.
+// ======================================================
+
+_REPLY_RATE_AGG(where: string): string {
+  return `
+    WITH ${WA_INBOUND_CTE},
+    agg AS (
+      SELECT
+        c.id, c.name, c.status, c.created_at,
+        'whatsapp'::text AS channel,
+        COALESCE(t.name, 'Deleted template') AS template_name,
+        COALESCE(c.total_contacts, 0) AS total_contacts,
+        ${WA_SENT_COUNT} AS sent,
+        ${WA_DELIVERED_COUNT} AS delivered,
+        ${WA_READ_COUNT} AS opened,
+        ${WA_FAILED_COUNT} AS failed,
+        ${WA_REACHED_COUNT} AS reached,
+        ${WA_REPLIED_COUNT} AS replied
+      FROM wa_campaigns c
+      LEFT JOIN wa_templates t ON t.id = c.template_id
+      LEFT JOIN wa_campaign_contacts cc ON cc.campaign_id = c.id
+      WHERE ${where}
+      GROUP BY c.id, c.name, c.status, c.created_at, t.name, c.total_contacts
+    )
+  `;
+},
+
+async getReplyRateReportStats(
+  salonId: string,
+  filters: OpenRateReportFilters
+): Promise<ReplyRateReportStats> {
+  const { where, values } = this._buildOpenRateWhere(salonId, filters);
+  const query = `
+    ${this._REPLY_RATE_AGG(where)}
+    SELECT
+      COUNT(*)::int AS total_campaigns,
+      COALESCE(SUM(sent), 0)::int      AS total_sent,
+      COALESCE(SUM(reached), 0)::int   AS total_reached,
+      COALESCE(SUM(delivered), 0)::int AS total_delivered,
+      COALESCE(SUM(opened), 0)::int    AS total_opened,
+      COALESCE(SUM(replied), 0)::int   AS total_replied,
+      COALESCE(SUM(failed), 0)::int    AS total_failed
+    FROM agg
+  `;
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  const total_reached = Number(r.total_reached ?? 0);
+  const total_replied = Number(r.total_replied ?? 0);
+  return {
+    total_campaigns: Number(r.total_campaigns ?? 0),
+    total_sent: Number(r.total_sent ?? 0),
+    total_reached,
+    total_delivered: Number(r.total_delivered ?? 0),
+    total_opened: Number(r.total_opened ?? 0),
+    total_replied,
+    total_failed: Number(r.total_failed ?? 0),
+    // Over messages that actually went out — see WA_REACHED_COUNT.
+    reply_rate: total_reached > 0 ? (total_replied / total_reached) * 100 : 0,
+  };
+},
+
+async getReplyRateReportRows(
+  salonId: string,
+  filters: OpenRateReportFilters
+): Promise<{
+  items: ReplyRateReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values } = this._buildOpenRateWhere(salonId, filters);
+
+  const SORTABLE: Record<string, string> = {
+    name: "name", created_at: "created_at", sent: "sent", delivered: "delivered",
+    opened: "opened", replied: "replied",
+    reply_rate: "(CASE WHEN reached > 0 THEN replied::numeric / reached ELSE 0 END)",
+  };
+  const sortCol = SORTABLE[filters.sort_by ?? ""] ?? "created_at";
+  const sortDir = filters.sort_dir === "asc" ? "ASC" : "DESC";
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${values.length + 1} OFFSET $${values.length + 2}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    ${this._REPLY_RATE_AGG(where)}
+    SELECT *, COUNT(*) OVER() AS total_count
+    FROM agg
+    ORDER BY ${sortCol} ${sortDir}, created_at DESC
+    ${limitClause}
+  `;
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: ReplyRateReportRow[] = rows.map((row: any) => {
+    const reached = Number(row.reached ?? 0);
+    const replied = Number(row.replied ?? 0);
+    return {
+      id: row.id,
+      name: row.name,
+      template_name: row.template_name,
+      status: row.status,
+      channel: row.channel,
+      created_at: row.created_at,
+      total_contacts: Number(row.total_contacts ?? 0),
+      sent: Number(row.sent ?? 0),
+      reached,
+      delivered: Number(row.delivered ?? 0),
+      opened: Number(row.opened ?? 0),
+      failed: Number(row.failed ?? 0),
+      replied,
+      reply_rate: reached > 0 ? (replied / reached) * 100 : 0,
+    };
+  });
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// Drill-down: recipients of one campaign, each with the timestamp of their
+// first in-window reply (null when they never wrote back).
+async getReplyRateCampaignDetail(
+  salonId: string,
+  campaignId: string,
+  opts: { replied?: "yes" | "no"; page?: number; limit?: number; search?: string }
+): Promise<ReplyRateCampaignDetail | null> {
+  const headerQuery = `
+    WITH ${WA_INBOUND_CTE}
+    SELECT
+      c.id, c.name, c.status, c.created_at,
+      'whatsapp'::text AS channel,
+      COALESCE(t.name, 'Deleted template') AS template_name,
+      COALESCE(t.body_text, '') AS message_body,
+      COALESCE(c.total_contacts, 0) AS total_contacts,
+      ${WA_SENT_COUNT} AS sent,
+      ${WA_DELIVERED_COUNT} AS delivered,
+      ${WA_READ_COUNT} AS opened,
+      ${WA_FAILED_COUNT} AS failed,
+      ${WA_REPLIED_COUNT} AS replied
+    FROM wa_campaigns c
+    LEFT JOIN wa_templates t ON t.id = c.template_id
+    LEFT JOIN wa_campaign_contacts cc ON cc.campaign_id = c.id
+    WHERE c.salon_id = $1 AND c.id = $2
+    GROUP BY c.id, c.name, c.status, c.created_at, t.name, t.body_text, c.total_contacts
+  `;
+  const { rows: headerRows } = await safeQuery(() => pool.query(headerQuery, [salonId, campaignId]));
+  if (headerRows.length === 0) return null;
+  const h = headerRows[0];
+
+  const values: any[] = [salonId, campaignId];
+  let idx = 3;
+  const extra: string[] = [];
+  if (opts.replied === "yes") extra.push("r.first_reply_at IS NOT NULL");
+  if (opts.replied === "no")  extra.push("r.first_reply_at IS NULL");
+  if (opts.search?.trim()) {
+    extra.push(`(COALESCE(cc.name,'') ILIKE $${idx} OR cc.phone ILIKE $${idx})`);
+    values.push(`%${opts.search.trim()}%`);
+    idx++;
+  }
+  const page = Math.max(1, Number(opts.page ?? 1));
+  const limit = Math.min(Math.max(1, Number(opts.limit ?? 25)), 200);
+  const offset = (page - 1) * limit;
+
+  const custQuery = `
+    WITH ${WA_INBOUND_CTE}
+    SELECT cc.id, cc.name, cc.phone, cc.status,
+           cc.sent_at, cc.delivered_at, cc.read_at,
+           r.first_reply_at,
+           COUNT(*) OVER() AS total_count
+    FROM wa_campaign_contacts cc
+    LEFT JOIN LATERAL (
+      SELECT MIN(i.sent_at) AS first_reply_at
+      FROM inbound i
+      WHERE cc.sent_at IS NOT NULL
+        -- Same "actually went out" gate as WA_REPLIED_PREDICATE, so a
+        -- recipient can never show a reply time the header didn't count.
+        AND cc.status IN ('SENT','DELIVERED','READ')
+        AND i.phone_norm = ${PHONE_NORM("cc.phone")}
+        AND i.sent_at >= cc.sent_at
+        AND i.sent_at < cc.sent_at + ${WA_REPLY_WINDOW}
+    ) r ON TRUE
+    WHERE cc.campaign_id = $2${extra.length ? ` AND ${extra.join(" AND ")}` : ""}
+    ORDER BY r.first_reply_at DESC NULLS LAST, cc.sent_at DESC NULLS LAST
+    LIMIT $${idx++} OFFSET $${idx++}
+  `;
+  const { rows: custRows } = await safeQuery(() => pool.query(custQuery, [...values, limit, offset]));
+  const custTotal = custRows.length ? Number(custRows[0].total_count) : 0;
+
+  const reached = Number(h.reached ?? 0);
+  const replied = Number(h.replied ?? 0);
+  return {
+    id: h.id,
+    name: h.name,
+    status: h.status,
+    channel: h.channel,
+    created_at: h.created_at,
+    template_name: h.template_name,
+    message_body: h.message_body,
+    total_contacts: Number(h.total_contacts ?? 0),
+    sent: Number(h.sent ?? 0),
+    reached,
+    delivered: Number(h.delivered ?? 0),
+    opened: Number(h.opened ?? 0),
+    failed: Number(h.failed ?? 0),
+    replied,
+    reply_rate: reached > 0 ? (replied / reached) * 100 : 0,
+    customers: custRows.map((r: any) => ({
+      id: r.id,
+      name: r.name || "—",
+      phone: r.phone || "—",
+      status: r.status,
+      sent_at: r.sent_at,
+      delivered_at: r.delivered_at,
+      read_at: r.read_at,
+      first_reply_at: r.first_reply_at,
+    })),
+    customers_pagination: {
+      total: custTotal,
+      page,
+      limit,
+      total_pages: Math.max(1, Math.ceil(custTotal / limit)),
+    },
+  };
+},
+
+async getOpenRateFiltersAvailable(salonId: string): Promise<OpenRateFiltersAvailable> {
+  const { rows } = await safeQuery(() => pool.query(
+    `SELECT id, name AS label FROM wa_campaigns WHERE salon_id = $1 ORDER BY created_at DESC`,
+    [salonId]
+  ));
+  return { campaigns: rows.map((r: any) => ({ id: r.id, label: r.label })) };
 },
 
 // ======================================================

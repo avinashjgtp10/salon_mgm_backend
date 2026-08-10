@@ -3,6 +3,7 @@ import { pricingService } from "./pricing.service";
 import { sendSuccess } from "../utils/response.util";
 import { getSalonId } from "../utils/salon.util";
 import { CalculateTotalsBody } from "./pricing.types";
+import { normalizeDiscountAppliesTo } from "./pricing.engine";
 
 export const pricingController = {
   async calculateTotals(req: Request, res: Response, next: NextFunction) {
@@ -19,6 +20,10 @@ export const pricingController = {
         membershipRows: body.membershipRows ?? [],
         discountType: body.discountType === 'percentage' ? 'percentage' : 'flat',
         discountValue: Number(body.discountValue) || 0,
+        // undefined (older client, field absent) is meaningful here — it
+        // selects the legacy scope rather than a bucket set. See
+        // normalizeDiscountAppliesTo.
+        discountAppliesTo: normalizeDiscountAppliesTo(body.discountAppliesTo),
         couponCode: body.couponCode,
         exCharges: Number(body.exCharges) || 0,
         tip: Number(body.tip) || 0,

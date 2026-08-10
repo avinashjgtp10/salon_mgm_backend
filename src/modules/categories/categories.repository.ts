@@ -19,11 +19,15 @@ export const categoriesRepository = {
   },
 
   async listBySalonId(salonId: string): Promise<ServiceCategory[]> {
+    // service_count is the total across the whole salon, not just whatever page
+    // of services the client happens to have loaded — the Service menu's
+    // category chips show it, and a page-local count read as a wrong total.
     const { rows } = await pool.query(
-      `SELECT *
-       FROM service_categories
-       WHERE salon_id = $1
-       ORDER BY display_order ASC, created_at DESC`,
+      `SELECT c.*,
+              (SELECT COUNT(*)::int FROM services s WHERE s.category_id = c.id) AS service_count
+       FROM service_categories c
+       WHERE c.salon_id = $1
+       ORDER BY c.display_order ASC, c.created_at DESC`,
       [salonId]
     );
     return rows;
