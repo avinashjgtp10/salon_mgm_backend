@@ -255,6 +255,8 @@ import {
     ReferralReportResponse,
     PaymentCollectionReportFilters,
     PaymentCollectionReportResponse,
+    MembershipHistoryReportFilters,
+    MembershipHistoryReportResponse,
     StaffSalesReportFilters,
     StaffSalesReportResponse,
     StaffPerformanceReportFilters,
@@ -1546,6 +1548,28 @@ async getReferralReport(
         rows: rowsResult.items,
         pagination: rowsResult.pagination,
         stats,
+    };
+},
+
+// ======================================================
+// MEMBERSHIP HISTORY REPORT (independent report API)
+// ======================================================
+
+async getMembershipHistoryReport(
+    salonId: string,
+    filters: MembershipHistoryReportFilters
+): Promise<MembershipHistoryReportResponse> {
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
+        reportsRepository.getMembershipHistoryReportStats(salonId, filters),
+        reportsRepository.getMembershipHistoryReportRows(salonId, filters),
+        reportsRepository.getMembershipHistoryFiltersAvailable(salonId),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+        filters_available: filtersAvailable,
     };
 },
 

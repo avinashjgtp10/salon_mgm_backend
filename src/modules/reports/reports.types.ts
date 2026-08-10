@@ -1849,7 +1849,10 @@ export interface PackageSaleReportResponse {
 // auto-flips it to 'Completed' the moment every service's sessions are
 // used up) — "Expired" is derived here from expiry_date vs now(), same
 // convention as the Membership Sale report's status computation.
-export type PackageHistoryStatus = "ongoing" | "complete" | "expired";
+// 'expiring_soon' = still active, but within _PACKAGE_EXPIRING_SOON_DAYS of
+// its expiry_date. Sits between 'ongoing' and 'expired' so a salon can chase
+// clients to use sessions they've already paid for.
+export type PackageHistoryStatus = "ongoing" | "expiring_soon" | "complete" | "expired";
 
 export interface PackageHistoryReportFilters {
     start_date?: string;
@@ -1879,6 +1882,9 @@ export interface PackageHistoryReportRow {
     // particular session was logged.
     remaining_sessions: number;
     staff: string;
+    // The parent package's expiry date as 'YYYY-MM-DD' text (never a bare
+    // date — see the TO_CHAR note in the rows query).
+    expiry_date: string | null;
     status: PackageHistoryStatus;
 }
 
@@ -1887,6 +1893,7 @@ export interface PackageHistoryReportStats {
     completed_sessions: number;
     remaining_sessions: number;
     ongoing_packages: number;
+    expiring_soon_packages: number;
     completed_packages: number;
     expired_packages: number;
 }
@@ -1908,6 +1915,106 @@ export interface PackageHistoryReportResponse {
     pagination: PackageHistoryReportPagination;
     stats: PackageHistoryReportStats;
     filters_available: PackageHistoryFiltersAvailable;
+}
+
+// ===============================
+// Membership History Report (POST /api/report/membership-history)
+//
+// One row per membership benefit REDEMPTION, read from membership_usage_log —
+// the membership counterpart to Package History (which reads
+// client_package_session_history). Membership Sale answers "who bought what";
+// this answers "who used what, when, on which service, and what's left".
+//
+// THE trap: membership_usage_log stores structurally different kinds of row in
+// one table, discriminated only by `notes`:
+//   notes IS NULL              -> wallet spend  (₹ drawn from a value balance)
+//   notes = 'membership_discount' -> discount given (% off the bill)
+//   anything else              -> a consumed session (sessions_consumed > 0)
+// Wallet rows carry amount_deducted with sessions_consumed = 0; session rows
+// are the reverse. Summing amount_deducted across kinds adds money actually
+// spent to money never charged, so the two are always reported separately.
+// The rest of the codebase depends on the same discriminator — see
+// client-memberships.repository.ts::getWalletUsedForAppointment.
+//
+// Also note the table has NO salon_id: tenant scoping comes from the
+// INNER JOIN onto client_memberships.
+// ===============================
+
+// How the benefit was taken off this bill. NOT a membership type — the three
+// membership pricing models are 'value' | 'percentage' | 'loyalty'
+// (MembershipPricingType); there is no session-based membership, sessions
+// being a package concept. Loyalty writes no ledger row at all, so it can
+// never appear here; 'other' is the catch-all rather than an invented type.
+export type MembershipBenefitType = "wallet" | "discount" | "loyalty" | "other";
+
+export interface MembershipHistoryReportFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    membership_names?: string[];
+    benefit_types?: string[];
+    // 'value' | 'percentage' | 'loyalty' — the membership's pricing model.
+    pricing_types?: string[];
+    staff_ids?: string[];
+    statuses?: string[];
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface MembershipHistoryReportRow {
+    date: string | null;
+    client_id: string | null;
+    client_name: string;
+    membership_name: string;
+    // The membership's pricing model: 'value' | 'percentage' | 'loyalty'.
+    membership_type: string;
+    service_name: string;
+    benefit_type: MembershipBenefitType;
+    // ₹ taken off this bill by the membership. For a session-type row this is
+    // 0 and sessions_consumed carries the meaning instead.
+    amount_deducted: number;
+    // The membership's balance immediately AFTER this redemption — a
+    // point-in-time snapshot stored per row, not a live lookup.
+    remaining_balance: number | null;
+    sessions_consumed: number;
+    staff: string;
+    expiry_date: string | null;
+    // Reuses MemberSaleStatus's vocabulary via _MEMBER_STATUS_EXPR so this
+    // report and Membership Sale can never disagree about one membership.
+    status: string;
+}
+
+export interface MembershipHistoryReportStats {
+    total_redemptions: number;
+    // Kept apart deliberately — see the banner comment above.
+    total_wallet_used: number;
+    total_discount_given: number;
+    // Loyalty benefit, reconstructed from payments.membership_discount_used
+    // minus what the usage log explains — loyalty writes no ledger row.
+    total_loyalty_given: number;
+    active_memberships: number;
+    expiry_soon_memberships: number;
+    exhausted_memberships: number;
+}
+
+export interface MembershipHistoryReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface MembershipHistoryFiltersAvailable {
+    memberships: string[];
+    services: string[];
+}
+
+export interface MembershipHistoryReportResponse {
+    rows: MembershipHistoryReportRow[];
+    pagination: MembershipHistoryReportPagination;
+    stats: MembershipHistoryReportStats;
+    filters_available: MembershipHistoryFiltersAvailable;
 }
 
 // ===============================

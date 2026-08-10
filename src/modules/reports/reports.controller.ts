@@ -1521,6 +1521,52 @@ async getReferralReport(
 },
 
 // ======================================================
+// MEMBERSHIP HISTORY REPORT (independent report API)
+// POST /api/report/membership-history
+// ======================================================
+
+async getMembershipHistoryReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const asStringArray = (value: unknown): string[] | undefined =>
+            Array.isArray(value)
+                ? value.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined;
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            search: asString(body.search),
+            membership_names: asStringArray(body.membership_names),
+            benefit_types: asStringArray(body.benefit_types),
+            pricing_types: asStringArray(body.pricing_types),
+            staff_ids: asStringArray(body.staff_ids),
+            statuses: asStringArray(body.statuses),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getMembershipHistoryReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Membership history report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
 // PAYMENT COLLECTION REPORT (independent report API)
 // POST /api/report/payment-collection
 // ======================================================
