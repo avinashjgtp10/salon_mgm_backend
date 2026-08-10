@@ -426,12 +426,12 @@ export const appointmentsRepository = {
     // already paid) is left alone even once its time passes, so staff can
     // still resolve the remaining due manually instead of it silently
     // reclassifying as a no-show.
-    async markNoShowBatch(): Promise<{ id: string }[]> {
+    async markNoShowBatch(): Promise<{ id: string; salon_id: string }[]> {
         const { rows } = await pool.query(
             `UPDATE appointments
              SET status = 'no-show', updated_at = NOW()
              WHERE status = 'booked' AND ends_at < NOW() AND deleted_at IS NULL
-             RETURNING id`
+             RETURNING id, salon_id`
         );
         return rows;
     },

@@ -26,6 +26,7 @@ import { notifyAppointmentCompleted } from "./appointment-completed.helper";
 import { computeBillTotals, rowsTotal, normalizeDiscountAppliesTo, ActiveTaxRow } from "../pricing/pricing.engine";
 import { getActiveTaxes } from "../settings/tax.util";
 import { paymentsRepository } from "../payments/payments.repository";
+import { clientPackagesService } from "../client-packages/client-packages.service";
 import {
     Appointment,
     AppointmentServiceConsumableRecord,
@@ -764,6 +765,15 @@ export const appointmentsService = {
             });
         }
 
+        // ── Package linkage: keep the schedule row's denormalized date in sync ──
+        // Same appointment_id, same schedule row — a reschedule never creates a
+        // duplicate. No-op for any appointment not created by the package-sale
+        // scheduling flow.
+        if (patch.scheduled_at && new Date(patch.scheduled_at).getTime() !== new Date(existing.scheduled_at).getTime()) {
+            clientPackagesService.rescheduleForAppointment(appointmentId, patch.scheduled_at)
+                .catch((err: any) => logger.error("[client-packages] rescheduleForAppointment failed:", err?.message ?? err));
+        }
+
         // ── WhatsApp Automation: Appointment Rescheduled ──────────────────────
         // Only fire if scheduled_at actually changed
         if (patch.scheduled_at && existing.client_id) {
@@ -813,6 +823,12 @@ export const appointmentsService = {
             throw new AppError(400, `Appointment is already '${existing.status}'`, "BAD_REQUEST");
 
         const cancelled = await appointmentsRepository.updateStatus(params.appointmentId, "cancelled");
+
+        // ── Package linkage: cancel never deducts the reserved session — the
+        // service becomes reschedulable again. No-op for any appointment not
+        // created by the package-sale scheduling flow.
+        clientPackagesService.cancelScheduleForAppointment(params.appointmentId)
+            .catch((err: any) => logger.error("[client-packages] cancelScheduleForAppointment failed:", err?.message ?? err));
 
         // Restore stock for cancelled appointment products (fire-and-forget)
         const cancelledProducts = (existing.product_items ?? []).filter(p => p.product_id);
@@ -1011,6 +1027,14 @@ export const appointmentsService = {
 
             // Mark appointment as paid
             const completedAppt = await appointmentsRepository.updateStatus(appointmentId, "paid");
+
+            // ── Package redemption: this appointment was booked from a package
+            // sale's schedule-at-purchase flow — deduct the one session it was
+            // reserved for now that it's actually complete. No-op for any
+            // appointment not created that way. Never blocks checkout on failure.
+            await clientPackagesService
+                .redeemForAppointmentIfScheduled(existing.salon_id, appointmentId, existing.staff_name ?? "Staff")
+                .catch((err: any) => logger.error("[client-packages] redemption on checkout failed:", err?.message ?? err));
 
             // ── WhatsApp Automation: Thank You + Review Request (fire-and-forget) ──
             notifyAppointmentCompleted(appointmentId).catch(() => {});
@@ -1216,6 +1240,14 @@ export const appointmentsService = {
         });
 
         const appointment = await appointmentsRepository.linkSale(appointmentId, sale.id);
+
+        // ── Package redemption: this appointment was booked from a package
+        // sale's schedule-at-purchase flow — deduct the one session it was
+        // reserved for now that it's actually complete. No-op for any
+        // appointment not created that way. Never blocks checkout on failure.
+        await clientPackagesService
+            .redeemForAppointmentIfScheduled(existing.salon_id, appointmentId, existing.staff_name ?? "Staff")
+            .catch((err: any) => logger.error("[client-packages] redemption on checkout failed:", err?.message ?? err));
 
         // ── Fire commission on the new sale items (fire-and-forget) ──────────
         commissionCalculationService.calculateForSale({

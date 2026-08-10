@@ -9,6 +9,14 @@ export type AutomationEventType =
   | 'appointment_reminder_1h'
   | 'appointment_rescheduled'
   | 'appointment_cancelled'
+  // Reminders for an appointment booked out of a package sale (see
+  // client_package_service_schedules). Separate from the generic
+  // appointment_reminder_* events so the copy can name the package and
+  // reassure the client the visit is already paid for — those generic
+  // sweeps deliberately skip package-linked appointments so nobody gets
+  // both messages for one visit.
+  | 'package_appointment_reminder_2d'
+  | 'package_appointment_reminder_1d'
   | 'invoice_generated'
   | 'payment_received'
   | 'pending_payment_reminder'
@@ -51,6 +59,8 @@ export const PURCHASE_EVENTS: AutomationEventType[] = [
   'appointment_confirmation',
   'appointment_reminder_24h',
   'appointment_rescheduled',
+  'package_appointment_reminder_2d',
+  'package_appointment_reminder_1d',
 ]
 
 // Transactional events — controlled by client.whatsapp_notifications

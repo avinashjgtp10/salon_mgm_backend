@@ -26,6 +26,14 @@ export type AppointmentServiceItem = {
     quantity: number;
     time?: string | null; // "HH:MM" slot time
     is_package_service?: boolean;
+    // Set only on an appointment auto-created by the package-sale scheduling
+    // feature (client-packages.service.ts::create()) — an exact link back to
+    // the specific client_packages/client_package_services row this visit
+    // will redeem on completion, distinct from the fuzzy name/catalog-id
+    // coverage matching `is_package_service` alone triggers elsewhere. Mirrored
+    // in client_package_service_schedules.appointment_id (the reverse link).
+    client_package_id?: string | null;
+    client_package_service_id?: string | null;
     // service_categories id, copied from the booking row at save time — lets
     // a category-restricted membership benefit filter which rows it covers.
     category_id?: string | null;
@@ -77,6 +85,24 @@ export type AppointmentPackageItem = {
     staff_name?: string | null;
     start_time?: string | null;
     tax_amount?: number;
+    // Per-service breakdown resolved client-side when the package was picked
+    // (name/price per service, plus an optional schedule-at-purchase for
+    // one or more of them) — read at checkout by payments.service.ts
+    // instead of re-deriving from the template/catalog, so a service's
+    // `schedule` survives to auto-create its linked appointment (mirrors
+    // CreateClientPackageDTO.services[].schedule on the standalone Sell
+    // Package form). Absent on older/other callers, which still fall back
+    // to the old re-derivation path.
+    services?: Array<{
+        serviceId?:     string;
+        serviceName:    string;
+        totalSessions:  number;
+        price:          number;
+        schedule?: {
+            scheduledAt: string;
+            staffId?:    string;
+        };
+    }>;
 };
 
 export type AppointmentProductItem = {
