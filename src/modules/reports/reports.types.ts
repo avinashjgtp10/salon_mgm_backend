@@ -1275,6 +1275,85 @@ export interface ClientRevenueReportResponse {
 }
 
 // ===============================
+// Customer Spend Segments Report (POST /api/report/customer-spend)
+//
+// Classifies clients as VIP / Regular / Low by how much they have spent, and
+// reports how revenue is distributed across those bands. Distinct from the
+// existing spend SORTING (Client Revenue's "Highest Revenue", Customer
+// Frequency's "Most Spending"): sorting gives an ordering, this gives a
+// label, per-segment counts, and each band's share of revenue — none of
+// which exist anywhere else.
+//
+// Two owner-set thresholds drive the split; there is no sensible universal
+// default, so they are request-scoped inputs in the same spirit as Lost
+// Customers' lost_days.
+//
+// Zero-spend clients (registered, never purchased) ARE included and land in
+// 'low' by design — hence the LEFT JOIN onto sales, matching Client Revenue
+// and Customer Frequency rather than Lost Customers' INNER JOIN.
+//
+// Spend is SUM(sales.total_amount) WHERE status='completed', identical to
+// the three sibling client reports so all four agree. Note this differs from
+// clients.repository.ts's own spend figure, which additionally counts open
+// partial payments — a client can therefore sit in a different band on the
+// Clients page than in this report.
+// ===============================
+
+export type CustomerSpendSegment = "vip" | "regular" | "low";
+
+export interface CustomerSpendReportFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    segments?: string[];
+    // ₹ at or above which a client counts as VIP; ₹ below which they count as
+    // Low. Clamped so low_max can never exceed vip_min (overlapping bands
+    // would silently swallow the Regular segment).
+    vip_min_spend?: number;
+    low_max_spend?: number;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface CustomerSpendReportRow {
+    client_id: string | null;
+    client_name: string;
+    contact: string;
+    spend_segment: CustomerSpendSegment;
+    visits: number;
+    total_spend: number;
+    avg_ticket: number;
+    first_visit: string | null;
+    last_visit: string | null;
+    days_since_last_visit: number | null;
+}
+
+export interface CustomerSpendReportStats {
+    vip_clients: number;
+    regular_clients: number;
+    low_clients: number;
+    total_revenue: number;
+    // VIP revenue as a % of all revenue in the filtered set — the report's
+    // headline number (87.5% on current dev data).
+    vip_revenue_share: number;
+}
+
+export interface CustomerSpendReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface CustomerSpendReportResponse {
+    rows: CustomerSpendReportRow[];
+    pagination: CustomerSpendReportPagination;
+    stats: CustomerSpendReportStats;
+}
+
+// ===============================
 // Customer Frequency Report (independent report API —
 // POST /api/report/customer-frequency)
 // Reads clients/sales directly, never the Appointment API. One row per
@@ -1333,6 +1412,78 @@ export interface CustomerFrequencyReportResponse {
     rows: CustomerFrequencyReportRow[];
     pagination: CustomerFrequencyReportPagination;
     stats: CustomerFrequencyReportStats;
+}
+
+// ===============================
+// Service Frequency Report (POST /api/report/service-frequency)
+//
+// One row per CLIENT + SERVICE pair — "how often does this client come back
+// for this particular service". Sits between the two existing halves:
+// Service Sale is one row per sale line (flat, un-aggregated), while
+// Customer Frequency / Lost Customers aggregate per client but are blind to
+// which service was taken.
+//
+// Reads sale_items joined to sales/clients, never the Appointment API. Two
+// deliberate choices:
+//
+//  1. s.status = 'completed', matching Customer Frequency and Lost Customers
+//     rather than Service Sale's `<> 'draft'` — a "visit" in a frequency
+//     report should mean a completed one. Consequence: totals do NOT tie
+//     exactly to Service Sale (2 draft lines' worth on current data).
+//  2. Grouped on si.item_id but displayed via COALESCE(sv.name, si.name):
+//     si.name is a snapshot taken at sale time, so grouping on it would split
+//     a renamed service into two rows.
+//
+// Walk-ins (sales with no client_id) and unbilled appointments are excluded
+// by design — neither can be attributed to a client's service history.
+// ===============================
+
+export interface ServiceFrequencyReportFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    service_ids?: string[];
+    category_ids?: string[];
+    staff_ids?: string[];
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface ServiceFrequencyReportRow {
+    client_id: string | null;
+    client_name: string;
+    contact: string;
+    service_id: string | null;
+    service_name: string;
+    category_name: string;
+    visits: number;
+    total_qty: number;
+    total_spend: number;
+    first_visit: string | null;
+    last_visit: string | null;
+    days_since_last_visit: number;
+}
+
+export interface ServiceFrequencyReportStats {
+    total_pairs: number;
+    repeat_pairs: number;
+    total_visits: number;
+    total_revenue: number;
+    avg_visits_per_pair: number;
+}
+
+export interface ServiceFrequencyReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface ServiceFrequencyReportResponse {
+    rows: ServiceFrequencyReportRow[];
+    pagination: ServiceFrequencyReportPagination;
+    stats: ServiceFrequencyReportStats;
 }
 
 // ===============================
@@ -1849,7 +2000,10 @@ export interface PackageSaleReportResponse {
 // auto-flips it to 'Completed' the moment every service's sessions are
 // used up) — "Expired" is derived here from expiry_date vs now(), same
 // convention as the Membership Sale report's status computation.
-export type PackageHistoryStatus = "ongoing" | "complete" | "expired";
+// 'expiring_soon' = still active, but within _PACKAGE_EXPIRING_SOON_DAYS of
+// its expiry_date. Sits between 'ongoing' and 'expired' so a salon can chase
+// clients to use sessions they've already paid for.
+export type PackageHistoryStatus = "ongoing" | "expiring_soon" | "complete" | "expired";
 
 export interface PackageHistoryReportFilters {
     start_date?: string;
@@ -1879,6 +2033,9 @@ export interface PackageHistoryReportRow {
     // particular session was logged.
     remaining_sessions: number;
     staff: string;
+    // The parent package's expiry date as 'YYYY-MM-DD' text (never a bare
+    // date — see the TO_CHAR note in the rows query).
+    expiry_date: string | null;
     status: PackageHistoryStatus;
 }
 
@@ -1887,6 +2044,7 @@ export interface PackageHistoryReportStats {
     completed_sessions: number;
     remaining_sessions: number;
     ongoing_packages: number;
+    expiring_soon_packages: number;
     completed_packages: number;
     expired_packages: number;
 }
@@ -1908,6 +2066,106 @@ export interface PackageHistoryReportResponse {
     pagination: PackageHistoryReportPagination;
     stats: PackageHistoryReportStats;
     filters_available: PackageHistoryFiltersAvailable;
+}
+
+// ===============================
+// Membership History Report (POST /api/report/membership-history)
+//
+// One row per membership benefit REDEMPTION, read from membership_usage_log —
+// the membership counterpart to Package History (which reads
+// client_package_session_history). Membership Sale answers "who bought what";
+// this answers "who used what, when, on which service, and what's left".
+//
+// THE trap: membership_usage_log stores structurally different kinds of row in
+// one table, discriminated only by `notes`:
+//   notes IS NULL              -> wallet spend  (₹ drawn from a value balance)
+//   notes = 'membership_discount' -> discount given (% off the bill)
+//   anything else              -> a consumed session (sessions_consumed > 0)
+// Wallet rows carry amount_deducted with sessions_consumed = 0; session rows
+// are the reverse. Summing amount_deducted across kinds adds money actually
+// spent to money never charged, so the two are always reported separately.
+// The rest of the codebase depends on the same discriminator — see
+// client-memberships.repository.ts::getWalletUsedForAppointment.
+//
+// Also note the table has NO salon_id: tenant scoping comes from the
+// INNER JOIN onto client_memberships.
+// ===============================
+
+// How the benefit was taken off this bill. NOT a membership type — the three
+// membership pricing models are 'value' | 'percentage' | 'loyalty'
+// (MembershipPricingType); there is no session-based membership, sessions
+// being a package concept. Loyalty writes no ledger row at all, so it can
+// never appear here; 'other' is the catch-all rather than an invented type.
+export type MembershipBenefitType = "wallet" | "discount" | "loyalty" | "other";
+
+export interface MembershipHistoryReportFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    membership_names?: string[];
+    benefit_types?: string[];
+    // 'value' | 'percentage' | 'loyalty' — the membership's pricing model.
+    pricing_types?: string[];
+    staff_ids?: string[];
+    statuses?: string[];
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface MembershipHistoryReportRow {
+    date: string | null;
+    client_id: string | null;
+    client_name: string;
+    membership_name: string;
+    // The membership's pricing model: 'value' | 'percentage' | 'loyalty'.
+    membership_type: string;
+    service_name: string;
+    benefit_type: MembershipBenefitType;
+    // ₹ taken off this bill by the membership. For a session-type row this is
+    // 0 and sessions_consumed carries the meaning instead.
+    amount_deducted: number;
+    // The membership's balance immediately AFTER this redemption — a
+    // point-in-time snapshot stored per row, not a live lookup.
+    remaining_balance: number | null;
+    sessions_consumed: number;
+    staff: string;
+    expiry_date: string | null;
+    // Reuses MemberSaleStatus's vocabulary via _MEMBER_STATUS_EXPR so this
+    // report and Membership Sale can never disagree about one membership.
+    status: string;
+}
+
+export interface MembershipHistoryReportStats {
+    total_redemptions: number;
+    // Kept apart deliberately — see the banner comment above.
+    total_wallet_used: number;
+    total_discount_given: number;
+    // Loyalty benefit, reconstructed from payments.membership_discount_used
+    // minus what the usage log explains — loyalty writes no ledger row.
+    total_loyalty_given: number;
+    active_memberships: number;
+    expiry_soon_memberships: number;
+    exhausted_memberships: number;
+}
+
+export interface MembershipHistoryReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface MembershipHistoryFiltersAvailable {
+    memberships: string[];
+    services: string[];
+}
+
+export interface MembershipHistoryReportResponse {
+    rows: MembershipHistoryReportRow[];
+    pagination: MembershipHistoryReportPagination;
+    stats: MembershipHistoryReportStats;
+    filters_available: MembershipHistoryFiltersAvailable;
 }
 
 // ===============================
@@ -2045,6 +2303,80 @@ export interface AppointmentDetailReportPagination {
 export interface AppointmentDetailReportResponse {
     rows: AppointmentDetailReportRow[];
     pagination: AppointmentDetailReportPagination;
+}
+
+// ===============================
+// Upcoming Appointments Report (independent report API —
+// POST /api/report/upcoming-appointments)
+// Same appointments-table shape as Appointment Detail above, but scoped to
+// future bookings only (scheduled_at in the future, status still 'booked') —
+// front-desk view of what's coming up rather than a historical ledger.
+// Appointment "type" (Regular / Package Service / Membership Service) is
+// derived from package/membership coverage on the appointment — there is no
+// dedicated column. Package coverage can come from either package_items[]
+// (a new package sold on this same visit) or services[].client_package_id /
+// is_package_service (an existing package's session being redeemed) — see
+// the comment above getUpcomingAppointmentsReport in reports.repository.ts.
+// ===============================
+
+export interface UpcomingAppointmentsReportFilters {
+    from?: string;
+    to?: string;
+    search?: string;
+    client_ids?: string[];
+    staff_ids?: string[];
+    service_ids?: string[];
+    package_ids?: string[];
+    statuses?: string[];
+    appointment_types?: string[];
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface UpcomingAppointmentsReportRow {
+    id: string;
+    appointment_date: string;
+    time: string;
+    client_name: string | null;
+    mobile_number: string | null;
+    service_name: string;
+    package_name: string;
+    staff_name: string | null;
+    appointment_status: string;
+    appointment_type: string;
+    // Payment-source preview, same "Description" column Sales Summary shows
+    // (there payment_method/payment_reference-derived; here — since an
+    // upcoming appointment has no sale/payment row yet — derived from the
+    // same package/membership coverage appointment_type above already
+    // reads). "—" for a Regular appointment: how it'll actually be paid
+    // isn't known until checkout.
+    description: string;
+}
+
+export interface UpcomingAppointmentsReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface UpcomingAppointmentsFilterOption {
+    id: string;
+    label: string;
+}
+
+export interface UpcomingAppointmentsFiltersAvailable {
+    clients: UpcomingAppointmentsFilterOption[];
+    staff: UpcomingAppointmentsFilterOption[];
+    services: UpcomingAppointmentsFilterOption[];
+    packages: UpcomingAppointmentsFilterOption[];
+}
+
+export interface UpcomingAppointmentsReportResponse {
+    rows: UpcomingAppointmentsReportRow[];
+    pagination: UpcomingAppointmentsReportPagination;
+    filters_available: UpcomingAppointmentsFiltersAvailable;
 }
 
 // ===============================

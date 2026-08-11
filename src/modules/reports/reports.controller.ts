@@ -1521,6 +1521,146 @@ async getReferralReport(
 },
 
 // ======================================================
+// CUSTOMER SPEND SEGMENTS REPORT (independent report API)
+// POST /api/report/customer-spend
+// ======================================================
+
+async getCustomerSpendReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const asStringArray = (value: unknown): string[] | undefined =>
+            Array.isArray(value)
+                ? value.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined;
+
+        // Only the three real segment keys may reach the SQL — anything else
+        // would silently return an empty table.
+        const ALLOWED_SEGMENTS = ["vip", "regular", "low"];
+        const segments = asStringArray(body.segments)?.filter(s => ALLOWED_SEGMENTS.includes(s));
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            search: asString(body.search),
+            staff_ids: asStringArray(body.staff_ids),
+            segments: segments && segments.length > 0 ? segments : undefined,
+            vip_min_spend: body.vip_min_spend !== undefined ? Number(body.vip_min_spend) : undefined,
+            low_max_spend: body.low_max_spend !== undefined ? Number(body.low_max_spend) : undefined,
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getCustomerSpendReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Customer spend report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// SERVICE FREQUENCY REPORT (independent report API)
+// POST /api/report/service-frequency
+// ======================================================
+
+async getServiceFrequencyReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const asStringArray = (value: unknown): string[] | undefined =>
+            Array.isArray(value)
+                ? value.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined;
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            search: asString(body.search),
+            service_ids: asStringArray(body.service_ids),
+            category_ids: asStringArray(body.category_ids),
+            staff_ids: asStringArray(body.staff_ids),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getServiceFrequencyReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Service frequency report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// MEMBERSHIP HISTORY REPORT (independent report API)
+// POST /api/report/membership-history
+// ======================================================
+
+async getMembershipHistoryReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const asStringArray = (value: unknown): string[] | undefined =>
+            Array.isArray(value)
+                ? value.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined;
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            search: asString(body.search),
+            membership_names: asStringArray(body.membership_names),
+            benefit_types: asStringArray(body.benefit_types),
+            pricing_types: asStringArray(body.pricing_types),
+            staff_ids: asStringArray(body.staff_ids),
+            statuses: asStringArray(body.statuses),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getMembershipHistoryReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Membership history report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
 // PAYMENT COLLECTION REPORT (independent report API)
 // POST /api/report/payment-collection
 // ======================================================
@@ -1901,6 +2041,60 @@ async getAppointmentDetailReport(
             200,
             data,
             "Appointment detail report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// UPCOMING APPOINTMENTS REPORT (independent report API)
+// POST /api/report/upcoming-appointments
+// ======================================================
+
+async getUpcomingAppointmentsReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            from: asString(body.from),
+            to: asString(body.to),
+            search: asString(body.search),
+            client_ids: Array.isArray(body.client_ids)
+                ? body.client_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+            service_ids: Array.isArray(body.service_ids)
+                ? body.service_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+            package_ids: Array.isArray(body.package_ids)
+                ? body.package_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+            statuses: Array.isArray(body.statuses)
+                ? body.statuses.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            appointment_types: Array.isArray(body.appointment_types)
+                ? body.appointment_types.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getUpcomingAppointmentsReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Upcoming appointments report fetched successfully"
         );
     } catch (error) {
         next(error);

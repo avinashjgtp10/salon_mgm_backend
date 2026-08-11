@@ -7,34 +7,70 @@ import { pushNotificationService } from "./pushNotification.service";
 
 const ANDROID_NOTIFICATION_CHANNEL_ID = "salonox";
 
+type CreateNotificationData = {
+  salon_id: string;
+  type: string;
+  title: string;
+  body?: string;
+  event_key?: string;
+  scheduled_at?: string;
+};
+
+type CreateNotificationOptions = {
+  rejectOnPushFailure?: boolean;
+};
+
 export const notificationsService = {
-  async create(data: {
-    salon_id: string; type: string; title: string; body?: string; event_key?: string;
-    // Not persisted (no `notifications` column for it) — carried only on the
-    // live socket push so listening Calendar sessions can skip refetching
-    // when this event's date isn't even in their currently-visible range.
-    // Omitted entirely (not just null) when the caller has no appointment
-    // context, so listeners can tell "no date info" apart from "no date".
-    scheduled_at?: string;
-  }) {
-    // `event_key` matches Settings → Notifications' per-event keys (newAppointment,
-    // newClient, ...). Omitted by call sites with no matching settings toggle —
-    // those always fire, same as before. When present, this is the single choke
-    // point every notification-creating call site goes through, so gating here
-    // covers both the bell/DB row and the live push in one place instead of
-    // needing every caller to check for itself.
+  async create(data: CreateNotificationData, options: CreateNotificationOptions = {}) {
+    logger.info("Notification create started", {
+      salonId: data.salon_id,
+      type: data.type,
+      eventKey: data.event_key,
+    });
+
     if (data.event_key) {
       const allowed = await canSendPush(data.salon_id, data.event_key);
-      if (!allowed) return null;
-    }
-    const notification = await notificationsRepository.create(data);
+      logger.info("Notification push preference result", {
+        salonId: data.salon_id,
+        type: data.type,
+        eventKey: data.event_key,
+        allowed,
+      });
 
-    // Push to all connected clients in this salon room in real-time
+      if (!allowed) {
+        logger.info("Notification skipped by push preference", {
+          salonId: data.salon_id,
+          eventKey: data.event_key,
+          type: data.type,
+        });
+        return null;
+      }
+    } else {
+      logger.info("Notification push preference result", {
+        salonId: data.salon_id,
+        type: data.type,
+        allowed: true,
+        reason: "no_event_key",
+      });
+    }
+
+    const notification = await notificationsRepository.create(data);
+    logger.info("Notification DB row created", {
+      notificationId: notification.id,
+      salonId: notification.salon_id,
+      type: notification.type,
+    });
+
     try {
-      getIO().to(`salon:${data.salon_id}`).emit("notification",
-        data.scheduled_at ? { ...notification, scheduled_at: data.scheduled_at } : notification);
+      getIO().to(`salon:${data.salon_id}`).emit(
+        "notification",
+        data.scheduled_at ? { ...notification, scheduled_at: data.scheduled_at } : notification
+      );
+      logger.info("Socket notification emitted", {
+        notificationId: notification.id,
+        salonId: notification.salon_id,
+      });
     } catch (err: any) {
-      // socket not ready — ignore, client will fetch on next load
       logger.warn("Notification socket emit failed", {
         notificationId: notification.id,
         salonId: notification.salon_id,
@@ -42,17 +78,37 @@ export const notificationsService = {
       });
     }
 
-    // A persisted token is active in the current schema. Invalid and
-    // unregistered Expo tokens are removed by pushNotificationService.
+    let pushStage = "device_token_lookup";
     try {
-      const devices = await deviceTokensRepository.getSalonTokens(data.salon_id);
+      logger.info("Device-token lookup started", {
+        notificationId: notification.id,
+        salonId: notification.salon_id,
+      });
+
+      const devices = await deviceTokensRepository.findBySalon(data.salon_id);
       const tokens = Array.from(
         new Set(devices.map((device) => device.expo_push_token).filter(Boolean))
       );
 
+      logger.info("Device-token lookup completed", {
+        notificationId: notification.id,
+        salonId: data.salon_id,
+        deviceRows: devices.length,
+        selectedTokens: tokens.length,
+      });
+
       if (tokens.length > 0) {
+        pushStage = "expo_send";
+        logger.info("Expo send started", {
+          notificationId: notification.id,
+          salonId: notification.salon_id,
+          tokenCount: tokens.length,
+        });
+
         const result = await pushNotificationService.sendToTokens({
           tokens,
+          notificationId: notification.id,
+          salonId: notification.salon_id,
           title: data.title,
           body: data.body,
           data: {
@@ -65,16 +121,46 @@ export const notificationsService = {
           channelId: ANDROID_NOTIFICATION_CHANNEL_ID,
         });
 
+        pushStage = "expo_send_result";
+        logger.info("Expo send result", {
+          notificationId: notification.id,
+          salonId: notification.salon_id,
+          sentCount: result.sentCount,
+          failedCount: result.failedCount,
+          receiptCount: result.receiptReferences.length,
+          removedTokenCount: result.removedTokens.length,
+        });
+
+        pushStage = "receipt_schedule";
         pushNotificationService.scheduleReceiptCheck(result.receiptReferences);
+        logger.info("Receipt records created and scheduled", {
+          notificationId: notification.id,
+          salonId: notification.salon_id,
+          receiptCount: result.receiptReferences.length,
+        });
+      } else {
+        logger.info("Expo send skipped because no device tokens were selected", {
+          notificationId: notification.id,
+          salonId: notification.salon_id,
+        });
       }
-    } catch (err: any) {
-      // Push delivery is best-effort and must never roll back the DB notification.
-      logger.error("Expo push notification failed after notification creation", {
+
+      logger.info("Notification push flow completed", {
         notificationId: notification.id,
         salonId: notification.salon_id,
+      });
+    } catch (err: any) {
+      logger.error("Notification push flow failed after DB row creation", {
+        notificationId: notification.id,
+        salonId: notification.salon_id,
+        stage: pushStage,
         message: err?.message,
         stack: err?.stack,
       });
+
+      if (options.rejectOnPushFailure) {
+        throw err;
+      }
     }
 
     return notification;

@@ -255,6 +255,12 @@ import {
     ReferralReportResponse,
     PaymentCollectionReportFilters,
     PaymentCollectionReportResponse,
+    MembershipHistoryReportFilters,
+    MembershipHistoryReportResponse,
+    ServiceFrequencyReportFilters,
+    ServiceFrequencyReportResponse,
+    CustomerSpendReportFilters,
+    CustomerSpendReportResponse,
     StaffSalesReportFilters,
     StaffSalesReportResponse,
     StaffPerformanceReportFilters,
@@ -269,6 +275,8 @@ import {
     MemberSaleReportResponse,
     AppointmentDetailReportFilters,
     AppointmentDetailReportResponse,
+    UpcomingAppointmentsReportFilters,
+    UpcomingAppointmentsReportResponse,
     WaCampaignReportFilters,
     WaCampaignReportResponse,
     OpenRateReportFilters,
@@ -1550,6 +1558,68 @@ async getReferralReport(
 },
 
 // ======================================================
+// CUSTOMER SPEND SEGMENTS REPORT (independent report API)
+// ======================================================
+
+async getCustomerSpendReport(
+    salonId: string,
+    filters: CustomerSpendReportFilters
+): Promise<CustomerSpendReportResponse> {
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getCustomerSpendReportStats(salonId, filters),
+        reportsRepository.getCustomerSpendReportRows(salonId, filters),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+    };
+},
+
+// ======================================================
+// SERVICE FREQUENCY REPORT (independent report API)
+// ======================================================
+
+async getServiceFrequencyReport(
+    salonId: string,
+    filters: ServiceFrequencyReportFilters
+): Promise<ServiceFrequencyReportResponse> {
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getServiceFrequencyReportStats(salonId, filters),
+        reportsRepository.getServiceFrequencyReportRows(salonId, filters),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+    };
+},
+
+// ======================================================
+// MEMBERSHIP HISTORY REPORT (independent report API)
+// ======================================================
+
+async getMembershipHistoryReport(
+    salonId: string,
+    filters: MembershipHistoryReportFilters
+): Promise<MembershipHistoryReportResponse> {
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
+        reportsRepository.getMembershipHistoryReportStats(salonId, filters),
+        reportsRepository.getMembershipHistoryReportRows(salonId, filters),
+        reportsRepository.getMembershipHistoryFiltersAvailable(salonId),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+        filters_available: filtersAvailable,
+    };
+},
+
+// ======================================================
 // PAYMENT COLLECTION REPORT (independent report API)
 // ======================================================
 
@@ -1711,6 +1781,25 @@ async getAppointmentDetailReport(
     return {
         rows: result.items,
         pagination: result.pagination,
+    };
+},
+
+// ======================================================
+// UPCOMING APPOINTMENTS REPORT (independent report API)
+// ======================================================
+
+async getUpcomingAppointmentsReport(
+    salonId: string,
+    filters: UpcomingAppointmentsReportFilters
+): Promise<UpcomingAppointmentsReportResponse> {
+    const [result, filtersAvailable] = await Promise.all([
+        reportsRepository.getUpcomingAppointmentsReport(salonId, filters),
+        reportsRepository.getUpcomingAppointmentsFiltersAvailable(salonId),
+    ]);
+    return {
+        rows: result.items,
+        pagination: result.pagination,
+        filters_available: filtersAvailable,
     };
 },
 

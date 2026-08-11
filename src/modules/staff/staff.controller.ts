@@ -190,17 +190,31 @@ export const staffController = {
 
       let rows: any[] = [];
       const name = file.originalname.toLowerCase();
+      const isCsv = name.endsWith(".csv") || file.mimetype.includes("csv");
 
-      if (name.endsWith(".csv") || file.mimetype.includes("csv")) {
-        const text = file.buffer.toString("utf-8");
-        const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
-        if (parsed.errors && parsed.errors.length > 0) logger.warn("CSV parse warnings", { errors: parsed.errors });
-        rows = parsed.data as any[];
-      } else {
-        const wb = XLSX.read(file.buffer, { type: "buffer" });
-        const sheetName = wb.SheetNames[0];
-        if (!sheetName) throw new AppError(400, "Excel file has no sheets", "VALIDATION_ERROR");
-        rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" });
+      try {
+        if (isCsv) {
+          const text = file.buffer.toString("utf-8");
+          const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
+          if (parsed.errors && parsed.errors.length > 0) {
+            logger.warn("CSV parse warnings", { errors: parsed.errors });
+            // A handful of skipped/malformed lines is tolerable (still usable
+            // rows remain); wall-to-wall errors means the file itself isn't
+            // valid CSV rather than a few bad rows within an otherwise good one.
+            if (parsed.errors.length >= (parsed.data as any[]).length + 1) {
+              throw new AppError(400, "Invalid CSV file format", "INVALID_FILE_FORMAT");
+            }
+          }
+          rows = parsed.data as any[];
+        } else {
+          const wb = XLSX.read(file.buffer, { type: "buffer" });
+          const sheetName = wb.SheetNames[0];
+          if (!sheetName) throw new AppError(400, "Excel file has no sheets", "VALIDATION_ERROR");
+          rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" });
+        }
+      } catch (parseErr) {
+        if (parseErr instanceof AppError) throw parseErr;
+        throw new AppError(400, isCsv ? "Invalid CSV file format" : "Invalid Excel file format", "INVALID_FILE_FORMAT");
       }
 
       if (rows.length === 0) throw new AppError(400, "File is empty or has no valid rows", "VALIDATION_ERROR");

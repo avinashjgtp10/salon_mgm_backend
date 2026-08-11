@@ -170,6 +170,43 @@ router.post(
 );
 
 // ======================================================
+// CUSTOMER SPEND SEGMENTS REPORT (independent report API)
+// Classifies clients VIP / Regular / Low against owner-set ₹ thresholds.
+// Reads clients/sales directly, never the Appointment API.
+// ======================================================
+
+router.post(
+    "/customer-spend",
+    ...guard,
+    reportsController.getCustomerSpendReport
+);
+
+// ======================================================
+// SERVICE FREQUENCY REPORT (independent report API)
+// One row per client + service pair — how often each client returns for a
+// given service. Reads sale_items/sales/clients directly, never the
+// Appointment API.
+// ======================================================
+
+router.post(
+    "/service-frequency",
+    ...guard,
+    reportsController.getServiceFrequencyReport
+);
+
+// ======================================================
+// MEMBERSHIP HISTORY REPORT (independent report API)
+// One row per membership benefit redemption, read from
+// membership_usage_log — the membership counterpart to Package History.
+// ======================================================
+
+router.post(
+    "/membership-history",
+    ...guard,
+    reportsController.getMembershipHistoryReport
+);
+
+// ======================================================
 // PAYMENT COLLECTION REPORT (independent report API)
 // Reads appointments + payments directly (never sales — an unpaid bill has
 // no sales row at all). Due is read from the latest payment row per
@@ -283,6 +320,18 @@ router.post(
     "/appointment-detail",
     ...guard,
     reportsController.getAppointmentDetailReport
+);
+
+// ======================================================
+// UPCOMING APPOINTMENTS REPORT (independent report API)
+// Reads the appointments table directly via SQL — never calls the
+// Appointment HTTP API/service. Scoped to future, still-booked appointments.
+// ======================================================
+
+router.post(
+    "/upcoming-appointments",
+    ...guard,
+    reportsController.getUpcomingAppointmentsReport
 );
 
 // ======================================================

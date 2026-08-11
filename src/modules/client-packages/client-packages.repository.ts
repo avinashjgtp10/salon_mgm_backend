@@ -63,6 +63,15 @@ function toClientPackage(row: ClientPackageRow): ClientPackage {
         staff:  h.staff_name,
         status: h.status,
       })),
+      // schedule slots are keyed by service id in row.schedule_map
+      scheduleSlots: (row.schedule_map?.[s.service_id] ?? []).map(sc => ({
+        id:            sc.id,
+        appointmentId: sc.appointment_id,
+        staffId:       sc.staff_id ?? null,
+        staffName:     sc.staff_name ?? null,
+        status:        sc.status as any,
+        scheduledAt:   sc.scheduled_at ? new Date(sc.scheduled_at).toISOString() : null,
+      })),
     })),
   };
 }
@@ -114,7 +123,39 @@ const SELECT_FULL = `
         WHERE cps2.client_package_id = cp.id
         GROUP BY cps2.id
       ) sub
-    ) AS session_history_map
+    ) AS session_history_map,
+    (
+      SELECT COALESCE(
+        json_object_agg(
+          svc_id::text,
+          svc_schedules
+        ),
+        '{}'
+      )
+      FROM (
+        SELECT
+          cps3.id AS svc_id,
+          COALESCE(
+            json_agg(
+              json_build_object(
+                'id',             sch.id,
+                'appointment_id', sch.appointment_id,
+                'staff_id',       sch.staff_id,
+                'staff_name',     NULLIF(TRIM(CONCAT(st.first_name, ' ', COALESCE(st.last_name, ''))), ''),
+                'status',         sch.status,
+                'scheduled_at',   sch.scheduled_at
+              ) ORDER BY sch.scheduled_at ASC NULLS LAST
+            ) FILTER (WHERE sch.id IS NOT NULL),
+            '[]'
+          ) AS svc_schedules
+        FROM client_package_services cps3
+        LEFT JOIN client_package_service_schedules sch
+          ON sch.client_package_service_id = cps3.id
+        LEFT JOIN staff st ON st.id = sch.staff_id
+        WHERE cps3.client_package_id = cp.id
+        GROUP BY cps3.id
+      ) sub2
+    ) AS schedule_map
   FROM client_packages cp
   LEFT JOIN client_package_services cps ON cps.client_package_id = cp.id
 `;
@@ -214,12 +255,20 @@ export const clientPackagesRepository = {
         ],
       );
 
+      // Capture the generated ids in dto.services order — the SELECT_FULL
+      // below re-fetches services via json_agg with no ORDER BY guarantee,
+      // so relying on its output order to zip back against dto.services[i]
+      // (needed by the caller to match a `schedule` to the right created
+      // service) would be unreliable. Reordered below instead.
+      const serviceIds: string[] = [];
       for (const svc of dto.services) {
+        const svcId = uuidv4();
+        serviceIds.push(svcId);
         await client.query(
           `INSERT INTO client_package_services
             (id, client_package_id, service_name, catalog_service_id, total_sessions, completed_sessions, price)
            VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-          [uuidv4(), pkgId, svc.serviceName, svc.serviceId ?? null, svc.totalSessions, 0, svc.price],
+          [svcId, pkgId, svc.serviceName, svc.serviceId ?? null, svc.totalSessions, 0, svc.price],
         );
       }
 
@@ -229,7 +278,11 @@ export const clientPackagesRepository = {
       );
 
       await client.query("COMMIT");
-      return toClientPackage(rows[0]);
+
+      const pkg = toClientPackage(rows[0]);
+      const byId = new Map(pkg.services.map(s => [s.serviceId, s]));
+      pkg.services = serviceIds.map(id => byId.get(id)).filter((s): s is typeof pkg.services[number] => !!s);
+      return pkg;
     } catch (err) {
       await client.query("ROLLBACK");
       throw err;
@@ -443,5 +496,61 @@ export const clientPackagesRepository = {
     } finally {
       client.release();
     }
+  },
+
+  // ── Package-service scheduling (future appointment linkage) ────────────────
+
+  async createServiceSchedule(params: {
+    clientPackageId:        string;
+    clientPackageServiceId: string;
+    appointmentId:           string;
+    staffId?:                string | null;
+    scheduledAt:              string;
+  }): Promise<string> {
+    const id = uuidv4();
+    await pool.query(
+      `INSERT INTO client_package_service_schedules
+        (id, client_package_id, client_package_service_id, appointment_id, staff_id, status, scheduled_at)
+       VALUES ($1,$2,$3,$4,$5,'Scheduled',$6)`,
+      [id, params.clientPackageId, params.clientPackageServiceId, params.appointmentId, params.staffId ?? null, params.scheduledAt],
+    );
+    return id;
+  },
+
+  async findScheduleByAppointmentId(appointmentId: string): Promise<{
+    id: string;
+    clientPackageId: string;
+    clientPackageServiceId: string;
+    status: string;
+  } | null> {
+    const { rows } = await pool.query(
+      `SELECT id, client_package_id, client_package_service_id, status
+       FROM client_package_service_schedules WHERE appointment_id = $1`,
+      [appointmentId],
+    );
+    if (!rows.length) return null;
+    return {
+      id:                      rows[0].id,
+      clientPackageId:         rows[0].client_package_id,
+      clientPackageServiceId:  rows[0].client_package_service_id,
+      status:                  rows[0].status,
+    };
+  },
+
+  async updateScheduleStatusByAppointmentId(appointmentId: string, status: "Completed" | "Cancelled" | "No Show"): Promise<void> {
+    await pool.query(
+      `UPDATE client_package_service_schedules SET status = $1, updated_at = NOW() WHERE appointment_id = $2`,
+      [status, appointmentId],
+    );
+  },
+
+  // Reschedule keeps the same schedule row (same appointment_id) — only the
+  // denormalized scheduled_at copy moves, per "update the existing
+  // appointment, do not create a duplicate."
+  async updateScheduleTimeByAppointmentId(appointmentId: string, scheduledAt: string): Promise<void> {
+    await pool.query(
+      `UPDATE client_package_service_schedules SET scheduled_at = $1, updated_at = NOW() WHERE appointment_id = $2`,
+      [scheduledAt, appointmentId],
+    );
   },
 };

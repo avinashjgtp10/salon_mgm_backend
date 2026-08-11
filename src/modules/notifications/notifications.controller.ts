@@ -13,7 +13,14 @@ export const notificationsController = {
       if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
 
       const salonId = await getSalonId(req);
-      const { token, platform } = req.body ?? {};
+      const {
+        token,
+        platform,
+        installation_id,
+        installationId,
+        device_installation_id,
+        deviceInstallationId,
+      } = req.body ?? {};
 
       if (typeof token !== "string" || !token.trim()) {
         throw new AppError(400, "token is required", "VALIDATION_ERROR");
@@ -27,6 +34,12 @@ export const notificationsController = {
         salon_id: salonId,
         expo_push_token: token,
         platform,
+        installation_id:
+          installation_id ??
+          installationId ??
+          device_installation_id ??
+          deviceInstallationId ??
+          null,
       });
 
       return res.status(201).json({ success: true, data });

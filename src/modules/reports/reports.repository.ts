@@ -47,6 +47,13 @@ import {
     PaymentCollectionReportRow,
     PaymentCollectionReportStats,
     PaymentCollectionFiltersAvailable,
+    MembershipHistoryReportRow,
+    MembershipHistoryReportStats,
+    MembershipHistoryFiltersAvailable,
+    ServiceFrequencyReportRow,
+    ServiceFrequencyReportStats,
+    CustomerSpendReportRow,
+    CustomerSpendReportStats,
     StaffSalesReportRow,
     StaffSalesReportStats,
     StaffPerformanceReportRow,
@@ -64,6 +71,8 @@ import {
     MemberSaleReportStats,
     MemberSaleFiltersAvailable,
     AppointmentDetailReportRow,
+    UpcomingAppointmentsReportRow,
+    UpcomingAppointmentsFiltersAvailable,
     CategoryTotalsRow,
     FootfallRow,
     InvoiceAdjustmentsRow,
@@ -4326,6 +4335,241 @@ _CLIENT_REVENUE_AGG(where: string, saleJoin: string, having: string): string {
   `;
 },
 
+// ======================================================
+// CUSTOMER SPEND SEGMENTS REPORT (independent report API)
+// POST /api/report/customer-spend — classifies each client as VIP / Regular
+// / Low against two owner-set ₹ thresholds, and reports how revenue is
+// distributed across those bands.
+//
+// Reads clients/sales directly, never the Appointment API. Spend is
+// SUM(sales.total_amount) WHERE status='completed' — the same expression
+// Client Revenue, Customer Frequency and Lost Customers use, so all four
+// reports agree with each other.
+//
+// LEFT JOIN onto sales (like Client Revenue, unlike Lost Customers): clients
+// who have never purchased are kept and land in 'low', by design.
+// ======================================================
+
+// Defaults are starting points only — a ₹ threshold that suits one salon
+// suits no other, so these exist to make the report render before the owner
+// sets their own.
+_CUSTOMER_SPEND_DEFAULT_VIP_MIN: 25000,
+_CUSTOMER_SPEND_DEFAULT_LOW_MAX: 2000,
+
+// Clamped together so the bands can never overlap. If low_max were allowed
+// above vip_min, every client between them would match both arms of the CASE
+// and 'vip' would silently win, emptying Regular without explanation.
+_resolveSpendThresholds(filters: { vip_min_spend?: number; low_max_spend?: number }): { vipMin: number; lowMax: number } {
+  const vipMin = Math.max(0, Number(filters.vip_min_spend ?? this._CUSTOMER_SPEND_DEFAULT_VIP_MIN));
+  const rawLow = Math.max(0, Number(filters.low_max_spend ?? this._CUSTOMER_SPEND_DEFAULT_LOW_MAX));
+  return { vipMin, lowMax: Math.min(rawLow, vipMin) };
+},
+
+_buildCustomerSpendWhere(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; search?: string; staff_ids?: string[] }
+): { where: string; saleJoin: string; values: any[]; nextIndex: number } {
+  // Same WHERE/JOIN shape as _buildClientRevenueWhere — kept as its own copy
+  // (the local convention) so the two reports' filter sets can diverge
+  // without one silently changing the other.
+  const values: any[] = [salonId];
+  const where = ["c.salon_id = $1"];
+  const saleJoin = ["s.client_id = c.id", "s.status = 'completed'"];
+  let idx = 2;
+
+  // Date bounds belong on the JOIN, not the WHERE: on a LEFT JOIN a WHERE
+  // predicate against `s` would discard clients with no sale in range
+  // entirely, defeating the point of including zero-spend clients.
+  if (filters.start_date) {
+    saleJoin.push(`s.created_at >= $${idx++}::date`);
+    values.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    saleJoin.push(`s.created_at < ($${idx++}::date + interval '1 day')`);
+    values.push(filters.end_date);
+  }
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    saleJoin.push(`EXISTS (
+      SELECT 1 FROM sale_items si2
+      WHERE si2.sale_id = s.id AND COALESCE(si2.staff_id, s.staff_id) = ANY($${idx++}::uuid[])
+    )`);
+    values.push(filters.staff_ids);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  return { where: where.join(" AND "), saleJoin: saleJoin.join(" AND "), values, nextIndex: idx };
+},
+
+// Shared aggregation CTE — stats and rows both build on this so they can
+// never disagree about which band a client falls in.
+_CUSTOMER_SPEND_AGG(where: string, saleJoin: string, vipIdx: number, lowIdx: number): string {
+  return `
+    WITH revenue_agg AS (
+      SELECT
+        c.id AS client_id,
+        COALESCE(NULLIF(TRIM(c.full_name), ''), 'Walk-in') AS client_name,
+        COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS contact,
+        COUNT(s.id)::int AS visits,
+        COALESCE(SUM(s.total_amount::numeric), 0) AS total_spend,
+        MIN(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS first_visit,
+        MAX(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS last_visit
+      FROM clients c
+      -- LEFT, so a client with no completed sale still produces a row with
+      -- total_spend = 0 and is classified 'low'.
+      LEFT JOIN sales s ON ${saleJoin}
+      WHERE ${where}
+      GROUP BY c.id, c.full_name, c.phone_number, c.phone_country_code
+    ),
+    segmented AS (
+      SELECT *,
+        CASE
+          WHEN total_spend >= $${vipIdx}::numeric THEN 'vip'
+          WHEN total_spend <  $${lowIdx}::numeric THEN 'low'
+          ELSE 'regular'
+        END AS spend_segment,
+        -- NULL rather than a number for a client who has never visited —
+        -- "0 days since last visit" would read as "came in today".
+        CASE WHEN last_visit IS NULL THEN NULL
+             ELSE (CURRENT_DATE - last_visit::date)::int
+        END AS days_since_last_visit
+      FROM revenue_agg
+    )
+  `;
+},
+
+async getCustomerSpendReportStats(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string; staff_ids?: string[];
+    segments?: string[]; vip_min_spend?: number; low_max_spend?: number;
+  }
+): Promise<CustomerSpendReportStats> {
+  const { where, saleJoin, values, nextIndex } = this._buildCustomerSpendWhere(salonId, filters);
+  let idx = nextIndex;
+  const { vipMin, lowMax } = this._resolveSpendThresholds(filters);
+  const vipIdx = idx++;
+  const lowIdx = idx++;
+
+  const extra: any[] = [vipMin, lowMax];
+  let segmentClause = "";
+  if (filters.segments && filters.segments.length > 0) {
+    segmentClause = `WHERE spend_segment = ANY($${idx++}::text[])`;
+    extra.push(filters.segments);
+  }
+
+  const query = `
+    ${this._CUSTOMER_SPEND_AGG(where, saleJoin, vipIdx, lowIdx)}
+    , filtered AS (SELECT * FROM segmented ${segmentClause})
+    SELECT
+      COUNT(*) FILTER (WHERE spend_segment = 'vip')::int     AS vip_clients,
+      COUNT(*) FILTER (WHERE spend_segment = 'regular')::int AS regular_clients,
+      COUNT(*) FILTER (WHERE spend_segment = 'low')::int     AS low_clients,
+      COALESCE(SUM(total_spend), 0)                          AS total_revenue,
+      COALESCE(SUM(total_spend) FILTER (WHERE spend_segment = 'vip'), 0) AS vip_revenue
+    FROM filtered
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...extra]));
+  const r = rows[0] ?? {};
+  const totalRevenue = Number(r.total_revenue ?? 0);
+  const vipRevenue = Number(r.vip_revenue ?? 0);
+  return {
+    vip_clients: Number(r.vip_clients ?? 0),
+    regular_clients: Number(r.regular_clients ?? 0),
+    low_clients: Number(r.low_clients ?? 0),
+    total_revenue: Math.round(totalRevenue),
+    // Guarded: a filtered set with no revenue at all must read 0%, not NaN.
+    vip_revenue_share: totalRevenue > 0
+      ? Math.round((vipRevenue / totalRevenue) * 1000) / 10
+      : 0,
+  };
+},
+
+async getCustomerSpendReportRows(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string; staff_ids?: string[];
+    segments?: string[]; vip_min_spend?: number; low_max_spend?: number;
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: CustomerSpendReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, saleJoin, values, nextIndex } = this._buildCustomerSpendWhere(salonId, filters);
+  let idx = nextIndex;
+  const { vipMin, lowMax } = this._resolveSpendThresholds(filters);
+  const vipIdx = idx++;
+  const lowIdx = idx++;
+
+  const extra: any[] = [vipMin, lowMax];
+  let segmentClause = "";
+  if (filters.segments && filters.segments.length > 0) {
+    segmentClause = `WHERE spend_segment = ANY($${idx++}::text[])`;
+    extra.push(filters.segments);
+  }
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    ${this._CUSTOMER_SPEND_AGG(where, saleJoin, vipIdx, lowIdx)}
+    SELECT
+      client_id, client_name, contact, spend_segment,
+      visits, total_spend, first_visit, last_visit, days_since_last_visit,
+      COUNT(*) OVER() AS total_count
+    FROM segmented
+    ${segmentClause}
+    -- Biggest spenders first: the VIPs are the point of the report.
+    ORDER BY total_spend DESC, client_name ASC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...extra, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: CustomerSpendReportRow[] = rows.map((row: any) => {
+    const visits = Number(row.visits ?? 0);
+    const spend = Math.round(Number(row.total_spend ?? 0));
+    return {
+      client_id: row.client_id ? String(row.client_id) : null,
+      client_name: row.client_name,
+      contact: row.contact,
+      spend_segment: row.spend_segment,
+      visits,
+      total_spend: spend,
+      // Same derivation as Client Revenue's — a 1-visit and a 20-visit client
+      // can share a total but are very different businesses.
+      avg_ticket: visits > 0 ? Math.round(spend / visits) : 0,
+      first_visit: row.first_visit ?? null,
+      last_visit: row.last_visit ?? null,
+      days_since_last_visit: row.days_since_last_visit === null || row.days_since_last_visit === undefined
+        ? null
+        : Number(row.days_since_last_visit),
+    };
+  });
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
 // "Last visit" is a separate date range from the report's main start/end
 // date filter — it narrows to clients whose most recent completed sale
 // (already aggregated as MAX(created_at) above) falls in this window, so it
@@ -4656,6 +4900,217 @@ async getCustomerFrequencyReportRows(
     last_visit: row.last_visit,
     visitor_type: row.visitor_type,
     customer_type: row.customer_type,
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// ======================================================
+// SERVICE FREQUENCY REPORT (independent report API)
+// POST /api/report/service-frequency — one row per CLIENT + SERVICE pair,
+// answering "how often does this client come back for this service".
+//
+// Reads sale_items -> sales -> clients directly, never the Appointment API.
+// See the banner in reports.types.ts for the two judgement calls this
+// encodes (status = 'completed', and grouping on item_id while displaying
+// the current service name).
+// ======================================================
+
+_buildServiceFrequencyWhere(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string;
+    service_ids?: string[]; category_ids?: string[]; staff_ids?: string[];
+  }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = [
+    "s.salon_id = $1",
+    "si.item_type = 'service'",
+    // A frequency report counts completed visits, not drafts/pending — the
+    // Customer Frequency / Lost Customers convention, NOT Service Sale's
+    // `<> 'draft'`. This is why the two reports' totals differ slightly.
+    "s.status = 'completed'",
+    // Walk-ins can't be attributed to a client's history; without this every
+    // one of them would collapse into a single NULL-keyed pseudo-client.
+    "s.client_id IS NOT NULL",
+    // Ad-hoc/quick-sale lines carry no service FK. Excluding them keeps the
+    // grain honest (they'd otherwise all group into one NULL "service") and
+    // matches the universe the service dropdown offers.
+    "si.item_id IS NOT NULL",
+  ];
+  let idx = 2;
+
+  if (filters.start_date) {
+    where.push(`s.created_at >= $${idx++}::date`);
+    values.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    // Half-open upper bound, the house convention for timestamp ranges.
+    where.push(`s.created_at < ($${idx++}::date + interval '1 day')`);
+    values.push(filters.end_date);
+  }
+  if (filters.service_ids && filters.service_ids.length > 0) {
+    where.push(`si.item_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.service_ids);
+  }
+  if (filters.category_ids && filters.category_ids.length > 0) {
+    where.push(`sv.category_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.category_ids);
+  }
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    // EXISTS, not a predicate on the joined row: filtering the line itself
+    // would drop a client's other visits for the same service and understate
+    // their visit count. This asks "did any of these staff serve this sale".
+    where.push(`EXISTS (
+      SELECT 1 FROM sale_items si2
+      WHERE si2.sale_id = s.id
+        AND COALESCE(si2.staff_id, s.staff_id) = ANY($${idx++}::uuid[])
+    )`);
+    values.push(filters.staff_ids);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+      OR COALESCE(sv.name, si.name, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+// Shared aggregation CTE — stats and rows both build on this so they can
+// never disagree about what a "pair" is.
+_SERVICE_FREQUENCY_AGG(where: string): string {
+  return `
+    WITH pair_agg AS (
+      SELECT
+        c.id AS client_id,
+        COALESCE(NULLIF(TRIM(c.full_name), ''), 'Walk-in') AS client_name,
+        COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS contact,
+        si.item_id AS service_id,
+        -- Current catalog name, falling back to the sale-time snapshot for a
+        -- service that has since been deleted.
+        COALESCE(sv.name, si.name) AS service_name,
+        COALESCE(NULLIF(TRIM(sc.name), ''), '—') AS category_name,
+        COUNT(*)::int AS visits,
+        COALESCE(SUM(si.quantity), 0)::int AS total_qty,
+        COALESCE(SUM(si.total_price::numeric), 0) AS total_spend,
+        MIN(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS first_visit,
+        MAX(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS last_visit
+      FROM sale_items si
+      JOIN sales s ON s.id = si.sale_id
+      -- INNER on clients: a pair only exists if it belongs to someone.
+      JOIN clients c ON c.id = s.client_id
+      LEFT JOIN services sv ON sv.id = si.item_id
+      LEFT JOIN service_categories sc ON sc.id = sv.category_id
+      WHERE ${where}
+      GROUP BY c.id, c.full_name, c.phone_country_code, c.phone_number,
+               si.item_id, COALESCE(sv.name, si.name), sc.name
+    ),
+    scored AS (
+      SELECT *,
+        (CURRENT_DATE - last_visit::date)::int AS days_since_last_visit
+      FROM pair_agg
+    )
+  `;
+},
+
+async getServiceFrequencyReportStats(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string;
+    service_ids?: string[]; category_ids?: string[]; staff_ids?: string[];
+  }
+): Promise<ServiceFrequencyReportStats> {
+  const { where, values } = this._buildServiceFrequencyWhere(salonId, filters);
+
+  const query = `
+    ${this._SERVICE_FREQUENCY_AGG(where)}
+    SELECT
+      COUNT(*)::int AS total_pairs,
+      -- The point of the report: pairs the client came back for.
+      COUNT(*) FILTER (WHERE visits > 1)::int AS repeat_pairs,
+      COALESCE(SUM(visits), 0)::int AS total_visits,
+      COALESCE(SUM(total_spend), 0) AS total_revenue
+    FROM scored
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  const totalPairs = Number(r.total_pairs ?? 0);
+  const totalVisits = Number(r.total_visits ?? 0);
+  return {
+    total_pairs: totalPairs,
+    repeat_pairs: Number(r.repeat_pairs ?? 0),
+    total_visits: totalVisits,
+    total_revenue: Math.round(Number(r.total_revenue ?? 0)),
+    // Guarded against divide-by-zero when nothing matches the filters.
+    avg_visits_per_pair: totalPairs > 0 ? Math.round((totalVisits / totalPairs) * 10) / 10 : 0,
+  };
+},
+
+async getServiceFrequencyReportRows(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string;
+    service_ids?: string[]; category_ids?: string[]; staff_ids?: string[];
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: ServiceFrequencyReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildServiceFrequencyWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    ${this._SERVICE_FREQUENCY_AGG(where)}
+    SELECT
+      client_id, client_name, contact,
+      service_id, service_name, category_name,
+      visits, total_qty, total_spend,
+      first_visit, last_visit, days_since_last_visit,
+      COUNT(*) OVER() AS total_count
+    FROM scored
+    -- Most-frequent pairs first: the rows a salon can actually act on.
+    ORDER BY visits DESC, last_visit DESC NULLS LAST, client_name ASC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: ServiceFrequencyReportRow[] = rows.map((row: any) => ({
+    client_id: row.client_id ? String(row.client_id) : null,
+    client_name: row.client_name,
+    contact: row.contact,
+    service_id: row.service_id ? String(row.service_id) : null,
+    service_name: row.service_name,
+    category_name: row.category_name,
+    visits: Number(row.visits ?? 0),
+    total_qty: Number(row.total_qty ?? 0),
+    total_spend: Math.round(Number(row.total_spend ?? 0)),
+    first_visit: row.first_visit ?? null,
+    last_visit: row.last_visit ?? null,
+    days_since_last_visit: Number(row.days_since_last_visit ?? 0),
   }));
   const effectiveLimit = limit ?? Math.max(total, 1);
   return {
@@ -6589,10 +7044,23 @@ async getPackageSaleFiltersAvailable(salonId: string): Promise<{
 // example implies, since a freshly-sold, not-yet-started package still
 // needs to land in exactly one of these three buckets (Ongoing is that
 // default "still has sessions, hasn't expired" bucket).
+// Days before expiry_date that a still-active package starts reporting as
+// 'expiring_soon'. 30 gives a client a month's notice to book the sessions
+// they've already paid for.
+_PACKAGE_EXPIRING_SOON_DAYS: 30,
+
+// Derived package status, in priority order — a package that is both fully
+// used AND past its expiry date reads as 'complete', because the client got
+// everything they paid for; expiry only matters while sessions remain.
+//
+// expiry_date is a DATE column, so it is compared against CURRENT_DATE, not
+// NOW(): NOW() carries a time-of-day, which made a package expiring *today*
+// read as already expired for most of that day.
 _PACKAGE_STATUS_EXPR: `
   CASE
     WHEN cp.status = 'Completed' THEN 'complete'
-    WHEN cp.expiry_date < NOW() THEN 'expired'
+    WHEN cp.expiry_date < CURRENT_DATE THEN 'expired'
+    WHEN cp.expiry_date <= CURRENT_DATE + 30 THEN 'expiring_soon'
     ELSE 'ongoing'
   END
 `,
@@ -6720,9 +7188,14 @@ async getPackageHistoryReportStats(
     pkg_computed AS (
       SELECT
         dp.id,
+        -- Same four-way derivation as _PACKAGE_STATUS_EXPR (aliased to dp
+        -- here rather than cp, so it can't share the constant verbatim) —
+        -- kept in step deliberately: if these disagree, the cards and the
+        -- table below them report different totals for the same filter.
         CASE
           WHEN dp.raw_status = 'Completed' THEN 'complete'
-          WHEN dp.expiry_date < NOW() THEN 'expired'
+          WHEN dp.expiry_date < CURRENT_DATE THEN 'expired'
+          WHEN dp.expiry_date <= CURRENT_DATE + 30 THEN 'expiring_soon'
           ELSE 'ongoing'
         END AS status,
         COALESCE((
@@ -6744,6 +7217,7 @@ async getPackageHistoryReportStats(
       COALESCE((SELECT SUM(completed_sessions) FROM pkg_computed), 0)::int AS completed_sessions,
       COALESCE((SELECT SUM(remaining_sessions) FROM pkg_computed), 0)::int AS remaining_sessions,
       COALESCE((SELECT COUNT(*) FROM pkg_computed WHERE status = 'ongoing'), 0)::int AS ongoing_packages,
+      COALESCE((SELECT COUNT(*) FROM pkg_computed WHERE status = 'expiring_soon'), 0)::int AS expiring_soon_packages,
       COALESCE((SELECT COUNT(*) FROM pkg_computed WHERE status = 'complete'), 0)::int AS completed_packages,
       COALESCE((SELECT COUNT(*) FROM pkg_computed WHERE status = 'expired'), 0)::int AS expired_packages
   `;
@@ -6755,6 +7229,7 @@ async getPackageHistoryReportStats(
     completed_sessions: Number(r.completed_sessions ?? 0),
     remaining_sessions: Number(r.remaining_sessions ?? 0),
     ongoing_packages: Number(r.ongoing_packages ?? 0),
+    expiring_soon_packages: Number(r.expiring_soon_packages ?? 0),
     completed_packages: Number(r.completed_packages ?? 0),
     expired_packages: Number(r.expired_packages ?? 0),
   };
@@ -6792,6 +7267,11 @@ async getPackageHistoryReportRows(
       h.session_no,
       (cps.total_sessions - cps.completed_sessions) AS remaining_sessions,
       h.staff_name AS staff,
+      -- expiry_date is a DATE column and the pg driver has no parser for OID
+      -- 1082, so a bare date arrives as a JS Date at IST-shifted UTC and the
+      -- frontend new Date() renders it as the FOLLOWING day. Emitted as
+      -- YYYY-MM-DD TEXT, same convention as the date column above.
+      TO_CHAR(cp.expiry_date, 'YYYY-MM-DD') AS expiry_date,
       (${this._PACKAGE_STATUS_EXPR}) AS status,
       COUNT(*) OVER() AS total_count
     FROM client_package_session_history h
@@ -6813,6 +7293,7 @@ async getPackageHistoryReportRows(
     session_no: Number(row.session_no ?? 0),
     remaining_sessions: Number(row.remaining_sessions ?? 0),
     staff: row.staff,
+    expiry_date: row.expiry_date ?? null,
     status: row.status,
   }));
   const effectiveLimit = limit ?? Math.max(total, 1);
@@ -6848,6 +7329,405 @@ _MEMBER_STATUS_EXPR: `
     ELSE 'active'
   END
 `,
+
+// ======================================================
+// MEMBERSHIP HISTORY REPORT (independent report API)
+// POST /api/report/membership-history — one row per membership benefit
+// redemption, read from membership_usage_log. The membership counterpart to
+// Package History; Membership Sale covers the purchase side.
+//
+// membership_usage_log mixes row kinds, discriminated only by `notes`:
+//   NULL                    -> wallet spend  (₹ off a value balance)
+//   'membership_discount'   -> discount given (% off the bill)
+//   anything else           -> a consumed session
+// Wallet/discount rows carry amount_deducted with sessions_consumed = 0;
+// session rows are the reverse. They are never summed together — see the
+// separate stats below and the note in reports.types.ts.
+//
+// The table has NO salon_id — the INNER JOIN onto client_memberships is what
+// scopes the tenant.
+// ======================================================
+
+// Maps the `notes` discriminator to the report's benefit_type vocabulary.
+// The three membership pricing types are 'value' | 'percentage' | 'loyalty'
+// (MembershipPricingType) — there is no session-based membership; sessions
+// are a PACKAGE concept, not a membership one.
+//
+// Loyalty is visit-threshold based and writes NO ledger row at all (see
+// payments.service.ts — it has no balance to spend, so it is recomputed
+// deterministically each time). A 'loyalty' bucket here would therefore
+// always be empty and mislead; loyalty usage is genuinely unreportable from
+// this table. Anything that isn't a wallet spend or a percentage discount is
+// bucketed as 'other' rather than invented as a type.
+_MEMBERSHIP_BENEFIT_EXPR: `
+  CASE
+    WHEN ul.notes IS NULL THEN 'wallet'
+    WHEN ul.notes = 'membership_discount' THEN 'discount'
+    ELSE 'other'
+  END
+`,
+
+async _buildMembershipHistoryWhere(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string;
+    membership_names?: string[]; benefit_types?: string[]; pricing_types?: string[];
+    staff_ids?: string[]; statuses?: string[];
+  }
+): Promise<{ where: string; values: any[]; nextIndex: number }> {
+  const values: any[] = [salonId];
+  // The unioned source projects salon_id on both sides (the log side gets it
+  // from client_memberships, which is also what scopes the tenant there —
+  // membership_usage_log itself carries no salon column).
+  const where = ["ul.salon_id = $1"];
+  let idx = 2;
+
+  if (filters.start_date) {
+    where.push(`ul.used_at >= $${idx++}::date`);
+    values.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    where.push(`ul.used_at < ($${idx++}::date + interval '1 day')`);
+    values.push(filters.end_date);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(ul.client_name, '') ILIKE $${idx}
+      OR COALESCE(ul.membership_name, '') ILIKE $${idx}
+      OR COALESCE(ul.service_name, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+  if (filters.membership_names && filters.membership_names.length > 0) {
+    where.push(`ul.membership_name = ANY($${idx++}::text[])`);
+    values.push(filters.membership_names);
+  }
+  if (filters.benefit_types && filters.benefit_types.length > 0) {
+    where.push(`ul.benefit_type = ANY($${idx++}::text[])`);
+    values.push(filters.benefit_types);
+  }
+  // The membership's own pricing model — 'value' (wallet balance),
+  // 'percentage' (discount balance) or 'loyalty' (visit-threshold unlock).
+  if (filters.pricing_types && filters.pricing_types.length > 0) {
+    where.push(`COALESCE(ul.pricing_type, 'value') = ANY($${idx++}::text[])`);
+    values.push(filters.pricing_types);
+  }
+  if (filters.statuses && filters.statuses.length > 0) {
+    where.push(`(${this._MEMBERSHIP_HISTORY_STATUS_EXPR}) = ANY($${idx++}::text[])`);
+    values.push(filters.statuses);
+  }
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    // Staff isn't stored on the log row — it's recovered through the
+    // appointment that triggered the redemption (~127 of 129 rows resolve).
+    where.push(`a.staff_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.staff_ids);
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+// Shared FROM/JOIN chain for stats + rows, so both filter identically.
+//
+// UNION of two sources, because loyalty benefit is NOT in the usage log:
+//
+//  A) membership_usage_log — real rows for wallet spends and percentage
+//     discounts, written by deductWalletAcrossMemberships /
+//     deductDiscountBalanceForBooking.
+//
+//  B) Synthetic loyalty rows. A loyalty membership ("get 10% off once you've
+//     completed N visits") has no balance to spend and no client_memberships
+//     row to attach a ledger entry to, so payments.service.ts computes it in
+//     memory each time and writes NO log row (see the comment on
+//     applyMembershipDiscountForBooking). The money is real and lands in
+//     payments.membership_discount_used, so it is recovered here as the part
+//     of that figure the usage log does NOT account for. On live data that
+//     is ₹3,637.50 across 21 appointments — money that was silently missing
+//     from this report before.
+//
+//     membership_discount_used is CUMULATIVE per appointment (every payment
+//     row for one appointment carries the same running total), hence
+//     DISTINCT ON latest row, never SUM.
+_MEMBERSHIP_HISTORY_SOURCE: `
+  (
+    SELECT
+      ul.used_at,
+      cm.id            AS membership_row_id,
+      cm.salon_id,
+      cm.client_id,
+      cm.client_name,
+      cm.membership_name,
+      cm.pricing_type,
+      cm.expires_at,
+      cm.status        AS membership_status,
+      ul.service_name,
+      ul.amount_deducted,
+      ul.remaining_balance,
+      ul.sessions_consumed,
+      ul.appointment_id,
+      CASE
+        WHEN ul.notes IS NULL THEN 'wallet'
+        WHEN ul.notes = 'membership_discount' THEN 'discount'
+        ELSE 'other'
+      END AS benefit_type
+    FROM membership_usage_log ul
+    INNER JOIN client_memberships cm ON cm.id = ul.client_membership_id
+
+    UNION ALL
+
+    SELECT
+      pay.created_at   AS used_at,
+      NULL::uuid       AS membership_row_id,
+      pay.salon_id,
+      pay.client_id,
+      COALESCE(NULLIF(TRIM(c.full_name), ''), 'Walk-in') AS client_name,
+      COALESCE(lm.name, 'Loyalty')                       AS membership_name,
+      'loyalty'        AS pricing_type,
+      NULL::timestamptz AS expires_at,
+      'active'         AS membership_status,
+      NULL::varchar    AS service_name,
+      pay.loyalty_amount AS amount_deducted,
+      NULL::numeric    AS remaining_balance,
+      0                AS sessions_consumed,
+      pay.appointment_id,
+      'loyalty'        AS benefit_type
+    FROM (
+      SELECT
+        p.appointment_id, p.salon_id, p.client_id, p.created_at,
+        p.membership_discount_used - COALESCE((
+          SELECT SUM(ul2.amount_deducted)
+          FROM membership_usage_log ul2
+          WHERE ul2.appointment_id = p.appointment_id
+            AND ul2.notes = 'membership_discount'
+        ), 0) AS loyalty_amount
+      FROM (
+        SELECT DISTINCT ON (p2.appointment_id) p2.*
+        FROM payments p2
+        WHERE p2.membership_discount_used > 0
+          AND p2.status <> 'refunded'
+          AND p2.appointment_id IS NOT NULL
+        ORDER BY p2.appointment_id, p2.created_at DESC
+      ) p
+    ) pay
+    LEFT JOIN clients c ON c.id = pay.client_id
+    -- Whichever loyalty plan the salon has configured; only its name is used
+    -- for display, so picking one deterministically is enough.
+    LEFT JOIN LATERAL (
+      SELECT m.name FROM memberships m
+      WHERE m.salon_id = pay.salon_id AND m.pricing_type = 'loyalty'
+      ORDER BY m.name LIMIT 1
+    ) lm ON TRUE
+    -- Rounding guard: only surface a real residual, not float dust.
+    WHERE pay.loyalty_amount > 0.01
+  ) ul
+`,
+
+// Same derivation as _MEMBER_STATUS_EXPR (shared with Membership Sale), but
+// aliased to the unioned source's own columns rather than `cm`. Synthetic
+// loyalty rows carry membership_status='active' and a NULL expires_at, so
+// they fall through to 'active' — correct, since a loyalty benefit is a
+// standing entitlement that never expires or exhausts.
+_MEMBERSHIP_HISTORY_STATUS_EXPR: `
+  CASE
+    WHEN ul.membership_status = 'exhausted' THEN 'complete'
+    WHEN ul.expires_at IS NOT NULL AND ul.expires_at < NOW() THEN 'expired'
+    WHEN ul.expires_at IS NOT NULL AND ul.expires_at < NOW() + INTERVAL '7 days' THEN 'expiry_soon'
+    ELSE 'active'
+  END
+`,
+
+// Retained for the stats query's benefit split.
+_MEMBERSHIP_HISTORY_FROM: `
+  FROM membership_usage_log ul
+  INNER JOIN client_memberships cm ON cm.id = ul.client_membership_id
+  LEFT JOIN appointments a ON a.id = ul.appointment_id
+  LEFT JOIN staff st ON st.id = a.staff_id
+`,
+
+async getMembershipHistoryFiltersAvailable(salonId: string): Promise<MembershipHistoryFiltersAvailable> {
+  // Unfiltered by date on purpose — the dropdowns must stay complete
+  // regardless of the range currently selected.
+  const { rows: memRows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT name FROM (
+       SELECT cm.membership_name AS name
+       FROM membership_usage_log ul
+       JOIN client_memberships cm ON cm.id = ul.client_membership_id
+       WHERE cm.salon_id = $1
+       UNION
+       -- Loyalty plans never appear in the usage log (see the UNION in
+       -- _MEMBERSHIP_HISTORY_SOURCE), so their names are added here or the
+       -- Membership filter could never select the synthetic loyalty rows.
+       SELECT m.name
+       FROM memberships m
+       WHERE m.salon_id = $1 AND m.pricing_type = 'loyalty'
+     ) t
+     WHERE NULLIF(TRIM(name), '') IS NOT NULL
+     ORDER BY name ASC`,
+    [salonId]
+  ));
+  const { rows: svcRows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT ul.service_name
+     FROM membership_usage_log ul
+     JOIN client_memberships cm ON cm.id = ul.client_membership_id
+     WHERE cm.salon_id = $1 AND NULLIF(TRIM(ul.service_name), '') IS NOT NULL
+     ORDER BY ul.service_name ASC`,
+    [salonId]
+  ));
+  return {
+    // The UNION above projects the column as `name`, not `membership_name` —
+    // reading the wrong key here turned every option into the literal string
+    // "undefined" via String(undefined). Guarded so a null can never reach
+    // the dropdown as text either.
+    memberships: memRows
+      .map((r: any) => (r.name == null ? "" : String(r.name)))
+      .filter((n: string) => n.trim() !== ""),
+    services: svcRows
+      .map((r: any) => (r.service_name == null ? "" : String(r.service_name)))
+      .filter((n: string) => n.trim() !== ""),
+  };
+},
+
+async getMembershipHistoryReportStats(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string;
+    membership_names?: string[]; benefit_types?: string[]; pricing_types?: string[];
+    staff_ids?: string[]; statuses?: string[];
+  }
+): Promise<MembershipHistoryReportStats> {
+  const { where, values } = await this._buildMembershipHistoryWhere(salonId, filters);
+
+  const query = `
+    WITH matched AS (
+      SELECT
+        ul.amount_deducted,
+        ul.benefit_type,
+        ul.membership_row_id AS membership_id,
+        (${this._MEMBERSHIP_HISTORY_STATUS_EXPR}) AS membership_status
+      FROM ${this._MEMBERSHIP_HISTORY_SOURCE}
+      LEFT JOIN appointments a ON a.id = ul.appointment_id
+      WHERE ${where}
+    ),
+    -- Collapse to one row per membership so the membership-level counters
+    -- below count a membership once, not once per redemption. Synthetic
+    -- loyalty rows have a NULL membership_row_id (no client_memberships row
+    -- exists for them) and are excluded here — they'd otherwise collapse
+    -- into a single phantom "membership".
+    distinct_memberships AS (
+      SELECT DISTINCT membership_id, membership_status
+      FROM matched WHERE membership_id IS NOT NULL
+    )
+    SELECT
+      (SELECT COUNT(*) FROM matched)::int AS total_redemptions,
+      -- Wallet and discount are summed SEPARATELY: one is money spent from a
+      -- balance, the other money never charged. A combined total would be
+      -- meaningless.
+      COALESCE((SELECT SUM(amount_deducted) FROM matched WHERE benefit_type = 'wallet'), 0) AS total_wallet_used,
+      COALESCE((SELECT SUM(amount_deducted) FROM matched WHERE benefit_type = 'discount'), 0) AS total_discount_given,
+      -- Loyalty is reconstructed from payments, not the usage log — see the
+      -- UNION in _MEMBERSHIP_HISTORY_SOURCE.
+      COALESCE((SELECT SUM(amount_deducted) FROM matched WHERE benefit_type = 'loyalty'), 0) AS total_loyalty_given,
+      (SELECT COUNT(*) FROM distinct_memberships WHERE membership_status = 'active')::int AS active_memberships,
+      (SELECT COUNT(*) FROM distinct_memberships WHERE membership_status = 'expiry_soon')::int AS expiry_soon_memberships,
+      (SELECT COUNT(*) FROM distinct_memberships WHERE membership_status = 'complete')::int AS exhausted_memberships
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  return {
+    total_redemptions: Number(r.total_redemptions ?? 0),
+    total_wallet_used: Math.round(Number(r.total_wallet_used ?? 0)),
+    total_discount_given: Math.round(Number(r.total_discount_given ?? 0)),
+    total_loyalty_given: Math.round(Number(r.total_loyalty_given ?? 0)),
+    active_memberships: Number(r.active_memberships ?? 0),
+    expiry_soon_memberships: Number(r.expiry_soon_memberships ?? 0),
+    exhausted_memberships: Number(r.exhausted_memberships ?? 0),
+  };
+},
+
+async getMembershipHistoryReportRows(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string;
+    membership_names?: string[]; benefit_types?: string[]; pricing_types?: string[];
+    staff_ids?: string[]; statuses?: string[];
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: MembershipHistoryReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = await this._buildMembershipHistoryWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  // used_at and expires_at are both TIMESTAMPTZ, so a single AT TIME ZONE
+  // converts them to IST. Emitted via TO_CHAR as TEXT because the pg driver
+  // has no parser for OID 1082 — a bare date arrives as a JS Date at
+  // IST-shifted UTC and renders as the FOLLOWING day in the browser.
+  const query = `
+    SELECT
+      TO_CHAR(ul.used_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS date,
+      ul.client_id,
+      COALESCE(NULLIF(TRIM(ul.client_name), ''), 'Walk-in') AS client_name,
+      COALESCE(NULLIF(TRIM(ul.membership_name), ''), '—') AS membership_name,
+      COALESCE(NULLIF(TRIM(ul.pricing_type), ''), 'value') AS membership_type,
+      COALESCE(NULLIF(TRIM(ul.service_name), ''), '—') AS service_name,
+      ul.benefit_type,
+      COALESCE(ul.amount_deducted, 0) AS amount_deducted,
+      ul.remaining_balance,
+      COALESCE(ul.sessions_consumed, 0) AS sessions_consumed,
+      COALESCE(
+        NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), ''),
+        '—'
+      ) AS staff,
+      TO_CHAR(ul.expires_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS expiry_date,
+      (${this._MEMBERSHIP_HISTORY_STATUS_EXPR}) AS status,
+      COUNT(*) OVER() AS total_count
+    FROM ${this._MEMBERSHIP_HISTORY_SOURCE}
+    LEFT JOIN appointments a ON a.id = ul.appointment_id
+    LEFT JOIN staff st ON st.id = a.staff_id
+    WHERE ${where}
+    ORDER BY ul.used_at DESC NULLS LAST
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: MembershipHistoryReportRow[] = rows.map((row: any) => ({
+    date: row.date ?? null,
+    client_id: row.client_id ? String(row.client_id) : null,
+    client_name: row.client_name,
+    membership_name: row.membership_name,
+    membership_type: row.membership_type,
+    service_name: row.service_name,
+    benefit_type: row.benefit_type,
+    amount_deducted: Number(row.amount_deducted ?? 0),
+    remaining_balance: row.remaining_balance === null || row.remaining_balance === undefined
+      ? null
+      : Number(row.remaining_balance),
+    sessions_consumed: Number(row.sessions_consumed ?? 0),
+    staff: row.staff,
+    expiry_date: row.expiry_date ?? null,
+    status: row.status,
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
 
 _buildMemberSaleWhere(
   salonId: string,
@@ -7354,6 +8234,311 @@ async getAppointmentDetailReport(
       limit: effectiveLimit,
       total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
     },
+  };
+},
+
+// ======================================================
+// UPCOMING APPOINTMENTS REPORT (independent report API)
+// POST /api/report/upcoming-appointments — reads the appointments table
+// directly (JOIN clients/staff/client_packages), scoped to future,
+// still-booked appointments only (scheduled_at >= now, status = 'booked'),
+// ordered soonest-first. Appointment Type is derived from package/membership
+// coverage on the appointment — there is no dedicated column (see the
+// comment on UpcomingAppointmentsReportRow in reports.types.ts). Queries the
+// DB table directly, which is NOT the same as calling the Appointment HTTP
+// API/service (still off-limits).
+// ======================================================
+
+async getUpcomingAppointmentsReport(
+  salonId: string,
+  filters: {
+    from?: string; to?: string;
+    search?: string;
+    client_ids?: string[]; staff_ids?: string[]; service_ids?: string[]; package_ids?: string[];
+    statuses?: string[]; appointment_types?: string[];
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: UpcomingAppointmentsReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const values: any[] = [salonId];
+  // "Upcoming" always means future-dated; by default it also excludes
+  // cancelled/no-show/deleted (those aren't appointments staff still need to
+  // prepare for) — but the caller's own Appointment Status filter can widen
+  // that back out (e.g. explicitly reviewing cancelled upcoming bookings),
+  // same "empty selection ≠ narrower than explicit ANY" convention as
+  // getAppointmentDetailReport's statuses filter above.
+  const where = ["a.salon_id = $1", "a.scheduled_at >= NOW()"];
+  let idx = 2;
+  if (filters.statuses && filters.statuses.length > 0) {
+    where.push(`a.status::text = ANY($${idx++}::text[])`);
+    values.push(filters.statuses);
+  } else {
+    where.push(`a.status::text NOT IN ('cancelled', 'no-show', 'deleted')`);
+  }
+
+  // Same IST day-boundary anchoring as Appointment Detail — see the identical
+  // fix/comment in appointments.repository.ts::listBySalonId.
+  if (filters.from) {
+    where.push(`a.scheduled_at >= $${idx++}::timestamptz`);
+    values.push(`${filters.from}T00:00:00+05:30`);
+  }
+  if (filters.to) {
+    where.push(`a.scheduled_at < ($${idx++}::timestamptz + interval '1 day')`);
+    values.push(`${filters.to}T00:00:00+05:30`);
+  }
+  if (filters.client_ids && filters.client_ids.length > 0) {
+    where.push(`a.client_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.client_ids);
+  }
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    where.push(`a.staff_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.staff_ids);
+  }
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 10));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+
+  // Outer-query filters (search/service/package/type) run against columns
+  // only available after deriving service_name/package_name/appointment_type
+  // below, so — same convention as Appointment Detail's outerWhere — they're
+  // built as a second WHERE list applied after that CTE rather than folded
+  // into `where` above.
+  const outerWhere: string[] = [];
+  if (filters.search?.trim()) {
+    outerWhere.push(`(
+      COALESCE(b.client_name, '') ILIKE $${idx}
+      OR COALESCE(b.mobile_number, '') ILIKE $${idx}
+      OR COALESCE(b.service_name, '') ILIKE $${idx}
+      OR COALESCE(b.package_name, '') ILIKE $${idx}
+      OR COALESCE(b.staff_name, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+  if (filters.service_ids && filters.service_ids.length > 0) {
+    outerWhere.push(`b.service_ids && $${idx++}::uuid[]`);
+    values.push(filters.service_ids);
+  }
+  if (filters.package_ids && filters.package_ids.length > 0) {
+    outerWhere.push(`b.package_ids && $${idx++}::uuid[]`);
+    values.push(filters.package_ids);
+  }
+  if (filters.appointment_types && filters.appointment_types.length > 0) {
+    outerWhere.push(`b.appointment_type = ANY($${idx++}::text[])`);
+    values.push(filters.appointment_types);
+  }
+  const outerWhereClause = outerWhere.length ? `WHERE ${outerWhere.join(" AND ")}` : "";
+
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    WITH matched AS (
+      SELECT a.*
+      FROM appointments a
+      WHERE ${where.join(" AND ")}
+    ),
+    base AS (
+      SELECT
+        m.id,
+        m.scheduled_at,
+        -- DB session runs in UTC — convert explicitly to IST so this
+        -- report's Time/Date columns agree with the Booking Details page.
+        TO_CHAR(m.scheduled_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS appointment_date,
+        TO_CHAR(m.scheduled_at AT TIME ZONE 'Asia/Kolkata', 'HH12:MI AM') AS time,
+        c.full_name AS client_name,
+        c.phone_number AS mobile_number,
+        COALESCE(
+          NULLIF((
+            SELECT STRING_AGG(DISTINCT svc.value->>'name', ', ' ORDER BY svc.value->>'name')
+            FROM jsonb_array_elements(COALESCE(m.services, '[]'::jsonb)) AS svc(value)
+          ), ''),
+          '—'
+        ) AS service_name,
+        COALESCE((
+          SELECT ARRAY_AGG(DISTINCT (svc.value->>'service_id')::uuid)
+          FROM jsonb_array_elements(COALESCE(m.services, '[]'::jsonb)) AS svc(value)
+          WHERE svc.value->>'service_id' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+        ), ARRAY[]::uuid[]) AS service_ids,
+        -- Package name comes from two different places depending on how the
+        -- package got onto this appointment: package_items[] holds a NEW
+        -- package being sold on this same visit (name/package_id inline on
+        -- the item), while an existing package being *redeemed* is recorded
+        -- per-service — services[].client_package_id points at the client's
+        -- client_packages row and carries no name/id of its own, so it has
+        -- to be resolved via that join. Both are real "package appointments"
+        -- and neither alone covers every case, so both are unioned here.
+        COALESCE(
+          NULLIF((
+            SELECT STRING_AGG(DISTINCT name, ', ' ORDER BY name) FROM (
+              SELECT pkg.value->>'name' AS name
+              FROM jsonb_array_elements(COALESCE(m.package_items, '[]'::jsonb)) AS pkg(value)
+              UNION
+              SELECT cp.package_name AS name
+              FROM jsonb_array_elements(COALESCE(m.services, '[]'::jsonb)) AS svc(value)
+              JOIN client_packages cp
+                ON cp.id = NULLIF(svc.value->>'client_package_id', '')::uuid
+              WHERE svc.value->>'client_package_id' IS NOT NULL
+            ) names
+          ), ''),
+          '—'
+        ) AS package_name,
+        COALESCE((
+          SELECT ARRAY_AGG(DISTINCT id) FROM (
+            SELECT (pkg.value->>'package_id')::uuid AS id
+            FROM jsonb_array_elements(COALESCE(m.package_items, '[]'::jsonb)) AS pkg(value)
+            WHERE pkg.value->>'package_id' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+            UNION
+            SELECT NULLIF(svc.value->>'client_package_id', '')::uuid AS id
+            FROM jsonb_array_elements(COALESCE(m.services, '[]'::jsonb)) AS svc(value)
+            WHERE svc.value->>'client_package_id' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          ) ids
+        ), ARRAY[]::uuid[]) AS package_ids,
+        NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
+        m.status AS appointment_status,
+        -- Membership takes priority over package when an appointment somehow
+        -- carries both, same as it would be billed (membership wallet
+        -- deducted first) — otherwise "Regular" whenever it's plain services/
+        -- products with no package/membership coverage at all. Package
+        -- coverage includes both a package being sold this visit
+        -- (package_items non-empty) and a service redeeming an existing
+        -- package (services[].is_package_service / client_package_id).
+        CASE
+          WHEN jsonb_array_length(COALESCE(m.membership_items, '[]'::jsonb)) > 0 THEN 'Membership Service'
+          WHEN jsonb_array_length(COALESCE(m.package_items, '[]'::jsonb)) > 0 THEN 'Package Service'
+          WHEN EXISTS (
+            SELECT 1 FROM jsonb_array_elements(COALESCE(m.services, '[]'::jsonb)) AS svc(value)
+            WHERE (svc.value->>'is_package_service')::boolean IS TRUE
+               OR svc.value->>'client_package_id' IS NOT NULL
+          ) THEN 'Package Service'
+          WHEN EXISTS (
+            SELECT 1 FROM client_package_session_history h WHERE h.appointment_id = m.id
+          ) THEN 'Package Service'
+          ELSE 'Regular'
+        END AS appointment_type,
+        -- "Description" — same payment-source-preview column Sales Summary
+        -- shows (there derived from payment_method/payment_reference on a
+        -- real sale; here, since an upcoming appointment has no sale yet,
+        -- derived from the same package/membership coverage signals as
+        -- appointment_type above). "—" for Regular: how it'll actually be
+        -- paid isn't known until checkout.
+        CASE
+          WHEN jsonb_array_length(COALESCE(m.membership_items, '[]'::jsonb)) > 0 THEN 'Membership'
+          WHEN jsonb_array_length(COALESCE(m.package_items, '[]'::jsonb)) > 0 THEN 'Package'
+          WHEN EXISTS (
+            SELECT 1 FROM jsonb_array_elements(COALESCE(m.services, '[]'::jsonb)) AS svc(value)
+            WHERE (svc.value->>'is_package_service')::boolean IS TRUE
+               OR svc.value->>'client_package_id' IS NOT NULL
+          ) THEN 'Package'
+          WHEN EXISTS (
+            SELECT 1 FROM client_package_session_history h WHERE h.appointment_id = m.id
+          ) THEN 'Package'
+          ELSE '—'
+        END AS description
+      FROM matched m
+      LEFT JOIN clients c ON c.id = m.client_id
+      LEFT JOIN staff st ON st.id = m.staff_id
+    ),
+    filtered AS (
+      SELECT b.*
+      FROM base b
+      ${outerWhereClause}
+    )
+    SELECT
+      id, appointment_date, time, client_name, mobile_number,
+      service_name, package_name, staff_name, appointment_status,
+      appointment_type, description, scheduled_at,
+      COUNT(*) OVER() AS total_count
+    FROM filtered
+    ORDER BY scheduled_at ASC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+
+  const items: UpcomingAppointmentsReportRow[] = rows.map((row: any) => ({
+    id: row.id,
+    appointment_date: row.appointment_date,
+    time: row.time,
+    client_name: row.client_name,
+    mobile_number: row.mobile_number,
+    service_name: row.service_name,
+    package_name: row.package_name,
+    staff_name: row.staff_name,
+    appointment_status: row.appointment_status,
+    appointment_type: row.appointment_type,
+    description: row.description,
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// Distinct clients/staff/services/packages appearing on this salon's
+// currently-upcoming appointments (same "filters_available" convention as
+// Daily Sheet's getDailySheetFiltersAvailable) — scoped to the live upcoming
+// set, not the whole catalog, so a service nobody has booked yet doesn't
+// clutter the dropdown.
+async getUpcomingAppointmentsFiltersAvailable(salonId: string): Promise<UpcomingAppointmentsFiltersAvailable> {
+  const { rows: clientRows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT c.id, c.full_name AS label
+     FROM appointments a
+     JOIN clients c ON c.id = a.client_id
+     WHERE a.salon_id = $1 AND a.status = 'booked' AND a.scheduled_at >= NOW()
+     ORDER BY label ASC`,
+    [salonId]
+  ));
+
+  const { rows: staffRows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT st.id, TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))) AS label
+     FROM appointments a
+     JOIN staff st ON st.id = a.staff_id
+     WHERE a.salon_id = $1 AND a.status = 'booked' AND a.scheduled_at >= NOW()
+     ORDER BY label ASC`,
+    [salonId]
+  ));
+
+  const { rows: serviceRows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT
+       (svc.value->>'service_id')::uuid AS id,
+       svc.value->>'name' AS label
+     FROM appointments a
+     CROSS JOIN LATERAL jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) AS svc(value)
+     WHERE a.salon_id = $1 AND a.status = 'booked' AND a.scheduled_at >= NOW()
+       AND svc.value->>'service_id' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+     ORDER BY label ASC`,
+    [salonId]
+  ));
+
+  const { rows: packageRows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT
+       (pkg.value->>'package_id')::uuid AS id,
+       pkg.value->>'name' AS label
+     FROM appointments a
+     CROSS JOIN LATERAL jsonb_array_elements(COALESCE(a.package_items, '[]'::jsonb)) AS pkg(value)
+     WHERE a.salon_id = $1 AND a.status = 'booked' AND a.scheduled_at >= NOW()
+       AND pkg.value->>'package_id' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+     ORDER BY label ASC`,
+    [salonId]
+  ));
+
+  return {
+    clients: clientRows.map((r: any) => ({ id: r.id, label: r.label })),
+    staff: staffRows.map((r: any) => ({ id: r.id, label: r.label })),
+    services: serviceRows.map((r: any) => ({ id: r.id, label: r.label })),
+    packages: packageRows.map((r: any) => ({ id: r.id, label: r.label })),
   };
 },
 
