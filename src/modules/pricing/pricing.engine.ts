@@ -388,6 +388,13 @@ function allocateRowTax(
   inclusiveTotal: number
 ): { tax: number[]; taxableAmount: number[] } {
   const rawTaxable = rows.map((r) => {
+    // A package-covered row is already excluded from the BUCKET's own
+    // taxable base (actualAmounts.service is summed post-filter by every
+    // caller), so the bucket-level addOn here is already correct — but
+    // without this check, that same row still had a real price/total and so
+    // still soaked up a share of this addOn when split proportionally below,
+    // stealing tax away from the rows that were actually charged for it.
+    if (r.isPackageService) return 0;
     const base = r.total ?? r.price * (r.qty || 1);
     return Math.max(0, base - base * discRatio - (r.walletUsed ?? 0) - (r.membershipDiscountUsed ?? 0));
   });
