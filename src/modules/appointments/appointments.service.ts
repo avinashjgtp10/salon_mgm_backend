@@ -63,7 +63,14 @@ function computeAppointmentTotals(appt: {
     }));
     return computeBillTotals({
         actualAmounts: {
-            service:    rowsTotal(toRow(appt.services)),
+            // Package-covered rows are excluded from the taxable base — the
+            // customer already paid for those sessions when they bought the
+            // package, so this read-time recompute must not tax (or even
+            // count) that value again. Mirrors payments.service.ts's own
+            // `serviceTotal` filter; without it, this backfill silently
+            // taxed the full pre-coverage subtotal on every read where the
+            // cached tax_breakdown looked stale (see needsTaxBackfill).
+            service:    rowsTotal(toRow(appt.services).filter((r) => !r.isPackageService)),
             packages:   rowsTotal(toRow(appt.package_items)),
             product:    rowsTotal(toRow(appt.product_items)),
             membership: rowsTotal(toRow(appt.membership_items)),

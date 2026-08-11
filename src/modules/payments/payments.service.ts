@@ -671,6 +671,7 @@ export const paymentsService = {
               rows: {
                 service: (appt.services || []).map(s => ({
                   price: Number(s.price) || 0, qty: Number(s.quantity) || 1, total: rowTotal(s),
+                  isPackageService: !!s.is_package_service,
                   walletUsed: walletUsedByItem.get(String(s.service_id)) ?? 0,
                   membershipDiscountUsed: membershipDiscountByItem.get(String(s.service_id)) ?? 0,
                 })),
