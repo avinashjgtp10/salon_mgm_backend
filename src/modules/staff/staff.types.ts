@@ -162,7 +162,7 @@ export type StaffImportResult = {
     imported: number;
     updated: number;
     skipped: number;
-    errors: Array<{ row: number; email?: string; code: string; message: string }>;
+    errors: Array<{ row: number; field?: string; email?: string; code: string; message: string }>;
 };
 
 // ─── Address ──────────────────────────────────────────────────────────────────
