@@ -1275,6 +1275,85 @@ export interface ClientRevenueReportResponse {
 }
 
 // ===============================
+// Customer Spend Segments Report (POST /api/report/customer-spend)
+//
+// Classifies clients as VIP / Regular / Low by how much they have spent, and
+// reports how revenue is distributed across those bands. Distinct from the
+// existing spend SORTING (Client Revenue's "Highest Revenue", Customer
+// Frequency's "Most Spending"): sorting gives an ordering, this gives a
+// label, per-segment counts, and each band's share of revenue — none of
+// which exist anywhere else.
+//
+// Two owner-set thresholds drive the split; there is no sensible universal
+// default, so they are request-scoped inputs in the same spirit as Lost
+// Customers' lost_days.
+//
+// Zero-spend clients (registered, never purchased) ARE included and land in
+// 'low' by design — hence the LEFT JOIN onto sales, matching Client Revenue
+// and Customer Frequency rather than Lost Customers' INNER JOIN.
+//
+// Spend is SUM(sales.total_amount) WHERE status='completed', identical to
+// the three sibling client reports so all four agree. Note this differs from
+// clients.repository.ts's own spend figure, which additionally counts open
+// partial payments — a client can therefore sit in a different band on the
+// Clients page than in this report.
+// ===============================
+
+export type CustomerSpendSegment = "vip" | "regular" | "low";
+
+export interface CustomerSpendReportFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    segments?: string[];
+    // ₹ at or above which a client counts as VIP; ₹ below which they count as
+    // Low. Clamped so low_max can never exceed vip_min (overlapping bands
+    // would silently swallow the Regular segment).
+    vip_min_spend?: number;
+    low_max_spend?: number;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface CustomerSpendReportRow {
+    client_id: string | null;
+    client_name: string;
+    contact: string;
+    spend_segment: CustomerSpendSegment;
+    visits: number;
+    total_spend: number;
+    avg_ticket: number;
+    first_visit: string | null;
+    last_visit: string | null;
+    days_since_last_visit: number | null;
+}
+
+export interface CustomerSpendReportStats {
+    vip_clients: number;
+    regular_clients: number;
+    low_clients: number;
+    total_revenue: number;
+    // VIP revenue as a % of all revenue in the filtered set — the report's
+    // headline number (87.5% on current dev data).
+    vip_revenue_share: number;
+}
+
+export interface CustomerSpendReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface CustomerSpendReportResponse {
+    rows: CustomerSpendReportRow[];
+    pagination: CustomerSpendReportPagination;
+    stats: CustomerSpendReportStats;
+}
+
+// ===============================
 // Customer Frequency Report (independent report API —
 // POST /api/report/customer-frequency)
 // Reads clients/sales directly, never the Appointment API. One row per
