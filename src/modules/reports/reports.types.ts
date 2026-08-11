@@ -1336,6 +1336,78 @@ export interface CustomerFrequencyReportResponse {
 }
 
 // ===============================
+// Service Frequency Report (POST /api/report/service-frequency)
+//
+// One row per CLIENT + SERVICE pair — "how often does this client come back
+// for this particular service". Sits between the two existing halves:
+// Service Sale is one row per sale line (flat, un-aggregated), while
+// Customer Frequency / Lost Customers aggregate per client but are blind to
+// which service was taken.
+//
+// Reads sale_items joined to sales/clients, never the Appointment API. Two
+// deliberate choices:
+//
+//  1. s.status = 'completed', matching Customer Frequency and Lost Customers
+//     rather than Service Sale's `<> 'draft'` — a "visit" in a frequency
+//     report should mean a completed one. Consequence: totals do NOT tie
+//     exactly to Service Sale (2 draft lines' worth on current data).
+//  2. Grouped on si.item_id but displayed via COALESCE(sv.name, si.name):
+//     si.name is a snapshot taken at sale time, so grouping on it would split
+//     a renamed service into two rows.
+//
+// Walk-ins (sales with no client_id) and unbilled appointments are excluded
+// by design — neither can be attributed to a client's service history.
+// ===============================
+
+export interface ServiceFrequencyReportFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    service_ids?: string[];
+    category_ids?: string[];
+    staff_ids?: string[];
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface ServiceFrequencyReportRow {
+    client_id: string | null;
+    client_name: string;
+    contact: string;
+    service_id: string | null;
+    service_name: string;
+    category_name: string;
+    visits: number;
+    total_qty: number;
+    total_spend: number;
+    first_visit: string | null;
+    last_visit: string | null;
+    days_since_last_visit: number;
+}
+
+export interface ServiceFrequencyReportStats {
+    total_pairs: number;
+    repeat_pairs: number;
+    total_visits: number;
+    total_revenue: number;
+    avg_visits_per_pair: number;
+}
+
+export interface ServiceFrequencyReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface ServiceFrequencyReportResponse {
+    rows: ServiceFrequencyReportRow[];
+    pagination: ServiceFrequencyReportPagination;
+    stats: ServiceFrequencyReportStats;
+}
+
+// ===============================
 // Lost Customers Report (independent report API — POST /api/report/lost-customers)
 // Standalone report, separate from Customer Frequency's fixed 90-day "lost"
 // bucket: the inactivity cutoff is user-configurable (lost_days), and
