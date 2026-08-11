@@ -52,6 +52,8 @@ import {
     MembershipHistoryFiltersAvailable,
     ServiceFrequencyReportRow,
     ServiceFrequencyReportStats,
+    CustomerSpendReportRow,
+    CustomerSpendReportStats,
     StaffSalesReportRow,
     StaffSalesReportStats,
     StaffPerformanceReportRow,
@@ -4329,6 +4331,241 @@ _CLIENT_REVENUE_AGG(where: string, saleJoin: string, having: string): string {
       ${having}
     )
   `;
+},
+
+// ======================================================
+// CUSTOMER SPEND SEGMENTS REPORT (independent report API)
+// POST /api/report/customer-spend — classifies each client as VIP / Regular
+// / Low against two owner-set ₹ thresholds, and reports how revenue is
+// distributed across those bands.
+//
+// Reads clients/sales directly, never the Appointment API. Spend is
+// SUM(sales.total_amount) WHERE status='completed' — the same expression
+// Client Revenue, Customer Frequency and Lost Customers use, so all four
+// reports agree with each other.
+//
+// LEFT JOIN onto sales (like Client Revenue, unlike Lost Customers): clients
+// who have never purchased are kept and land in 'low', by design.
+// ======================================================
+
+// Defaults are starting points only — a ₹ threshold that suits one salon
+// suits no other, so these exist to make the report render before the owner
+// sets their own.
+_CUSTOMER_SPEND_DEFAULT_VIP_MIN: 25000,
+_CUSTOMER_SPEND_DEFAULT_LOW_MAX: 2000,
+
+// Clamped together so the bands can never overlap. If low_max were allowed
+// above vip_min, every client between them would match both arms of the CASE
+// and 'vip' would silently win, emptying Regular without explanation.
+_resolveSpendThresholds(filters: { vip_min_spend?: number; low_max_spend?: number }): { vipMin: number; lowMax: number } {
+  const vipMin = Math.max(0, Number(filters.vip_min_spend ?? this._CUSTOMER_SPEND_DEFAULT_VIP_MIN));
+  const rawLow = Math.max(0, Number(filters.low_max_spend ?? this._CUSTOMER_SPEND_DEFAULT_LOW_MAX));
+  return { vipMin, lowMax: Math.min(rawLow, vipMin) };
+},
+
+_buildCustomerSpendWhere(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; search?: string; staff_ids?: string[] }
+): { where: string; saleJoin: string; values: any[]; nextIndex: number } {
+  // Same WHERE/JOIN shape as _buildClientRevenueWhere — kept as its own copy
+  // (the local convention) so the two reports' filter sets can diverge
+  // without one silently changing the other.
+  const values: any[] = [salonId];
+  const where = ["c.salon_id = $1"];
+  const saleJoin = ["s.client_id = c.id", "s.status = 'completed'"];
+  let idx = 2;
+
+  // Date bounds belong on the JOIN, not the WHERE: on a LEFT JOIN a WHERE
+  // predicate against `s` would discard clients with no sale in range
+  // entirely, defeating the point of including zero-spend clients.
+  if (filters.start_date) {
+    saleJoin.push(`s.created_at >= $${idx++}::date`);
+    values.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    saleJoin.push(`s.created_at < ($${idx++}::date + interval '1 day')`);
+    values.push(filters.end_date);
+  }
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    saleJoin.push(`EXISTS (
+      SELECT 1 FROM sale_items si2
+      WHERE si2.sale_id = s.id AND COALESCE(si2.staff_id, s.staff_id) = ANY($${idx++}::uuid[])
+    )`);
+    values.push(filters.staff_ids);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  return { where: where.join(" AND "), saleJoin: saleJoin.join(" AND "), values, nextIndex: idx };
+},
+
+// Shared aggregation CTE — stats and rows both build on this so they can
+// never disagree about which band a client falls in.
+_CUSTOMER_SPEND_AGG(where: string, saleJoin: string, vipIdx: number, lowIdx: number): string {
+  return `
+    WITH revenue_agg AS (
+      SELECT
+        c.id AS client_id,
+        COALESCE(NULLIF(TRIM(c.full_name), ''), 'Walk-in') AS client_name,
+        COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS contact,
+        COUNT(s.id)::int AS visits,
+        COALESCE(SUM(s.total_amount::numeric), 0) AS total_spend,
+        MIN(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS first_visit,
+        MAX(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS last_visit
+      FROM clients c
+      -- LEFT, so a client with no completed sale still produces a row with
+      -- total_spend = 0 and is classified 'low'.
+      LEFT JOIN sales s ON ${saleJoin}
+      WHERE ${where}
+      GROUP BY c.id, c.full_name, c.phone_number, c.phone_country_code
+    ),
+    segmented AS (
+      SELECT *,
+        CASE
+          WHEN total_spend >= $${vipIdx}::numeric THEN 'vip'
+          WHEN total_spend <  $${lowIdx}::numeric THEN 'low'
+          ELSE 'regular'
+        END AS spend_segment,
+        -- NULL rather than a number for a client who has never visited —
+        -- "0 days since last visit" would read as "came in today".
+        CASE WHEN last_visit IS NULL THEN NULL
+             ELSE (CURRENT_DATE - last_visit::date)::int
+        END AS days_since_last_visit
+      FROM revenue_agg
+    )
+  `;
+},
+
+async getCustomerSpendReportStats(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string; staff_ids?: string[];
+    segments?: string[]; vip_min_spend?: number; low_max_spend?: number;
+  }
+): Promise<CustomerSpendReportStats> {
+  const { where, saleJoin, values, nextIndex } = this._buildCustomerSpendWhere(salonId, filters);
+  let idx = nextIndex;
+  const { vipMin, lowMax } = this._resolveSpendThresholds(filters);
+  const vipIdx = idx++;
+  const lowIdx = idx++;
+
+  const extra: any[] = [vipMin, lowMax];
+  let segmentClause = "";
+  if (filters.segments && filters.segments.length > 0) {
+    segmentClause = `WHERE spend_segment = ANY($${idx++}::text[])`;
+    extra.push(filters.segments);
+  }
+
+  const query = `
+    ${this._CUSTOMER_SPEND_AGG(where, saleJoin, vipIdx, lowIdx)}
+    , filtered AS (SELECT * FROM segmented ${segmentClause})
+    SELECT
+      COUNT(*) FILTER (WHERE spend_segment = 'vip')::int     AS vip_clients,
+      COUNT(*) FILTER (WHERE spend_segment = 'regular')::int AS regular_clients,
+      COUNT(*) FILTER (WHERE spend_segment = 'low')::int     AS low_clients,
+      COALESCE(SUM(total_spend), 0)                          AS total_revenue,
+      COALESCE(SUM(total_spend) FILTER (WHERE spend_segment = 'vip'), 0) AS vip_revenue
+    FROM filtered
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...extra]));
+  const r = rows[0] ?? {};
+  const totalRevenue = Number(r.total_revenue ?? 0);
+  const vipRevenue = Number(r.vip_revenue ?? 0);
+  return {
+    vip_clients: Number(r.vip_clients ?? 0),
+    regular_clients: Number(r.regular_clients ?? 0),
+    low_clients: Number(r.low_clients ?? 0),
+    total_revenue: Math.round(totalRevenue),
+    // Guarded: a filtered set with no revenue at all must read 0%, not NaN.
+    vip_revenue_share: totalRevenue > 0
+      ? Math.round((vipRevenue / totalRevenue) * 1000) / 10
+      : 0,
+  };
+},
+
+async getCustomerSpendReportRows(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string; staff_ids?: string[];
+    segments?: string[]; vip_min_spend?: number; low_max_spend?: number;
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: CustomerSpendReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, saleJoin, values, nextIndex } = this._buildCustomerSpendWhere(salonId, filters);
+  let idx = nextIndex;
+  const { vipMin, lowMax } = this._resolveSpendThresholds(filters);
+  const vipIdx = idx++;
+  const lowIdx = idx++;
+
+  const extra: any[] = [vipMin, lowMax];
+  let segmentClause = "";
+  if (filters.segments && filters.segments.length > 0) {
+    segmentClause = `WHERE spend_segment = ANY($${idx++}::text[])`;
+    extra.push(filters.segments);
+  }
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    ${this._CUSTOMER_SPEND_AGG(where, saleJoin, vipIdx, lowIdx)}
+    SELECT
+      client_id, client_name, contact, spend_segment,
+      visits, total_spend, first_visit, last_visit, days_since_last_visit,
+      COUNT(*) OVER() AS total_count
+    FROM segmented
+    ${segmentClause}
+    -- Biggest spenders first: the VIPs are the point of the report.
+    ORDER BY total_spend DESC, client_name ASC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...extra, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: CustomerSpendReportRow[] = rows.map((row: any) => {
+    const visits = Number(row.visits ?? 0);
+    const spend = Math.round(Number(row.total_spend ?? 0));
+    return {
+      client_id: row.client_id ? String(row.client_id) : null,
+      client_name: row.client_name,
+      contact: row.contact,
+      spend_segment: row.spend_segment,
+      visits,
+      total_spend: spend,
+      // Same derivation as Client Revenue's — a 1-visit and a 20-visit client
+      // can share a total but are very different businesses.
+      avg_ticket: visits > 0 ? Math.round(spend / visits) : 0,
+      first_visit: row.first_visit ?? null,
+      last_visit: row.last_visit ?? null,
+      days_since_last_visit: row.days_since_last_visit === null || row.days_since_last_visit === undefined
+        ? null
+        : Number(row.days_since_last_visit),
+    };
+  });
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
 },
 
 // "Last visit" is a separate date range from the report's main start/end

@@ -1521,6 +1521,56 @@ async getReferralReport(
 },
 
 // ======================================================
+// CUSTOMER SPEND SEGMENTS REPORT (independent report API)
+// POST /api/report/customer-spend
+// ======================================================
+
+async getCustomerSpendReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const asStringArray = (value: unknown): string[] | undefined =>
+            Array.isArray(value)
+                ? value.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined;
+
+        // Only the three real segment keys may reach the SQL — anything else
+        // would silently return an empty table.
+        const ALLOWED_SEGMENTS = ["vip", "regular", "low"];
+        const segments = asStringArray(body.segments)?.filter(s => ALLOWED_SEGMENTS.includes(s));
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            search: asString(body.search),
+            staff_ids: asStringArray(body.staff_ids),
+            segments: segments && segments.length > 0 ? segments : undefined,
+            vip_min_spend: body.vip_min_spend !== undefined ? Number(body.vip_min_spend) : undefined,
+            low_max_spend: body.low_max_spend !== undefined ? Number(body.low_max_spend) : undefined,
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getCustomerSpendReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Customer spend report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
 // SERVICE FREQUENCY REPORT (independent report API)
 // POST /api/report/service-frequency
 // ======================================================

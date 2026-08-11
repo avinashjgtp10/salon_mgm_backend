@@ -170,6 +170,18 @@ router.post(
 );
 
 // ======================================================
+// CUSTOMER SPEND SEGMENTS REPORT (independent report API)
+// Classifies clients VIP / Regular / Low against owner-set ₹ thresholds.
+// Reads clients/sales directly, never the Appointment API.
+// ======================================================
+
+router.post(
+    "/customer-spend",
+    ...guard,
+    reportsController.getCustomerSpendReport
+);
+
+// ======================================================
 // SERVICE FREQUENCY REPORT (independent report API)
 // One row per client + service pair — how often each client returns for a
 // given service. Reads sale_items/sales/clients directly, never the
