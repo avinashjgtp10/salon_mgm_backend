@@ -2048,6 +2048,60 @@ async getAppointmentDetailReport(
 },
 
 // ======================================================
+// UPCOMING APPOINTMENTS REPORT (independent report API)
+// POST /api/report/upcoming-appointments
+// ======================================================
+
+async getUpcomingAppointmentsReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            from: asString(body.from),
+            to: asString(body.to),
+            search: asString(body.search),
+            client_ids: Array.isArray(body.client_ids)
+                ? body.client_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+            service_ids: Array.isArray(body.service_ids)
+                ? body.service_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+            package_ids: Array.isArray(body.package_ids)
+                ? body.package_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+            statuses: Array.isArray(body.statuses)
+                ? body.statuses.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            appointment_types: Array.isArray(body.appointment_types)
+                ? body.appointment_types.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getUpcomingAppointmentsReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Upcoming appointments report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
 // WA MARKETING CAMPAIGN REPORT (independent report API)
 // POST /api/report/wa-campaign
 // ======================================================

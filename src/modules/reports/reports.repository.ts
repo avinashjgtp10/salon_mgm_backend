@@ -71,6 +71,8 @@ import {
     MemberSaleReportStats,
     MemberSaleFiltersAvailable,
     AppointmentDetailReportRow,
+    UpcomingAppointmentsReportRow,
+    UpcomingAppointmentsFiltersAvailable,
     CategoryTotalsRow,
     FootfallRow,
     InvoiceAdjustmentsRow,
@@ -8232,6 +8234,311 @@ async getAppointmentDetailReport(
       limit: effectiveLimit,
       total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
     },
+  };
+},
+
+// ======================================================
+// UPCOMING APPOINTMENTS REPORT (independent report API)
+// POST /api/report/upcoming-appointments — reads the appointments table
+// directly (JOIN clients/staff/client_packages), scoped to future,
+// still-booked appointments only (scheduled_at >= now, status = 'booked'),
+// ordered soonest-first. Appointment Type is derived from package/membership
+// coverage on the appointment — there is no dedicated column (see the
+// comment on UpcomingAppointmentsReportRow in reports.types.ts). Queries the
+// DB table directly, which is NOT the same as calling the Appointment HTTP
+// API/service (still off-limits).
+// ======================================================
+
+async getUpcomingAppointmentsReport(
+  salonId: string,
+  filters: {
+    from?: string; to?: string;
+    search?: string;
+    client_ids?: string[]; staff_ids?: string[]; service_ids?: string[]; package_ids?: string[];
+    statuses?: string[]; appointment_types?: string[];
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: UpcomingAppointmentsReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const values: any[] = [salonId];
+  // "Upcoming" always means future-dated; by default it also excludes
+  // cancelled/no-show/deleted (those aren't appointments staff still need to
+  // prepare for) — but the caller's own Appointment Status filter can widen
+  // that back out (e.g. explicitly reviewing cancelled upcoming bookings),
+  // same "empty selection ≠ narrower than explicit ANY" convention as
+  // getAppointmentDetailReport's statuses filter above.
+  const where = ["a.salon_id = $1", "a.scheduled_at >= NOW()"];
+  let idx = 2;
+  if (filters.statuses && filters.statuses.length > 0) {
+    where.push(`a.status::text = ANY($${idx++}::text[])`);
+    values.push(filters.statuses);
+  } else {
+    where.push(`a.status::text NOT IN ('cancelled', 'no-show', 'deleted')`);
+  }
+
+  // Same IST day-boundary anchoring as Appointment Detail — see the identical
+  // fix/comment in appointments.repository.ts::listBySalonId.
+  if (filters.from) {
+    where.push(`a.scheduled_at >= $${idx++}::timestamptz`);
+    values.push(`${filters.from}T00:00:00+05:30`);
+  }
+  if (filters.to) {
+    where.push(`a.scheduled_at < ($${idx++}::timestamptz + interval '1 day')`);
+    values.push(`${filters.to}T00:00:00+05:30`);
+  }
+  if (filters.client_ids && filters.client_ids.length > 0) {
+    where.push(`a.client_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.client_ids);
+  }
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    where.push(`a.staff_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.staff_ids);
+  }
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 10));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+
+  // Outer-query filters (search/service/package/type) run against columns
+  // only available after deriving service_name/package_name/appointment_type
+  // below, so — same convention as Appointment Detail's outerWhere — they're
+  // built as a second WHERE list applied after that CTE rather than folded
+  // into `where` above.
+  const outerWhere: string[] = [];
+  if (filters.search?.trim()) {
+    outerWhere.push(`(
+      COALESCE(b.client_name, '') ILIKE $${idx}
+      OR COALESCE(b.mobile_number, '') ILIKE $${idx}
+      OR COALESCE(b.service_name, '') ILIKE $${idx}
+      OR COALESCE(b.package_name, '') ILIKE $${idx}
+      OR COALESCE(b.staff_name, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+  if (filters.service_ids && filters.service_ids.length > 0) {
+    outerWhere.push(`b.service_ids && $${idx++}::uuid[]`);
+    values.push(filters.service_ids);
+  }
+  if (filters.package_ids && filters.package_ids.length > 0) {
+    outerWhere.push(`b.package_ids && $${idx++}::uuid[]`);
+    values.push(filters.package_ids);
+  }
+  if (filters.appointment_types && filters.appointment_types.length > 0) {
+    outerWhere.push(`b.appointment_type = ANY($${idx++}::text[])`);
+    values.push(filters.appointment_types);
+  }
+  const outerWhereClause = outerWhere.length ? `WHERE ${outerWhere.join(" AND ")}` : "";
+
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    WITH matched AS (
+      SELECT a.*
+      FROM appointments a
+      WHERE ${where.join(" AND ")}
+    ),
+    base AS (
+      SELECT
+        m.id,
+        m.scheduled_at,
+        -- DB session runs in UTC — convert explicitly to IST so this
+        -- report's Time/Date columns agree with the Booking Details page.
+        TO_CHAR(m.scheduled_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS appointment_date,
+        TO_CHAR(m.scheduled_at AT TIME ZONE 'Asia/Kolkata', 'HH12:MI AM') AS time,
+        c.full_name AS client_name,
+        c.phone_number AS mobile_number,
+        COALESCE(
+          NULLIF((
+            SELECT STRING_AGG(DISTINCT svc.value->>'name', ', ' ORDER BY svc.value->>'name')
+            FROM jsonb_array_elements(COALESCE(m.services, '[]'::jsonb)) AS svc(value)
+          ), ''),
+          '—'
+        ) AS service_name,
+        COALESCE((
+          SELECT ARRAY_AGG(DISTINCT (svc.value->>'service_id')::uuid)
+          FROM jsonb_array_elements(COALESCE(m.services, '[]'::jsonb)) AS svc(value)
+          WHERE svc.value->>'service_id' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+        ), ARRAY[]::uuid[]) AS service_ids,
+        -- Package name comes from two different places depending on how the
+        -- package got onto this appointment: package_items[] holds a NEW
+        -- package being sold on this same visit (name/package_id inline on
+        -- the item), while an existing package being *redeemed* is recorded
+        -- per-service — services[].client_package_id points at the client's
+        -- client_packages row and carries no name/id of its own, so it has
+        -- to be resolved via that join. Both are real "package appointments"
+        -- and neither alone covers every case, so both are unioned here.
+        COALESCE(
+          NULLIF((
+            SELECT STRING_AGG(DISTINCT name, ', ' ORDER BY name) FROM (
+              SELECT pkg.value->>'name' AS name
+              FROM jsonb_array_elements(COALESCE(m.package_items, '[]'::jsonb)) AS pkg(value)
+              UNION
+              SELECT cp.package_name AS name
+              FROM jsonb_array_elements(COALESCE(m.services, '[]'::jsonb)) AS svc(value)
+              JOIN client_packages cp
+                ON cp.id = NULLIF(svc.value->>'client_package_id', '')::uuid
+              WHERE svc.value->>'client_package_id' IS NOT NULL
+            ) names
+          ), ''),
+          '—'
+        ) AS package_name,
+        COALESCE((
+          SELECT ARRAY_AGG(DISTINCT id) FROM (
+            SELECT (pkg.value->>'package_id')::uuid AS id
+            FROM jsonb_array_elements(COALESCE(m.package_items, '[]'::jsonb)) AS pkg(value)
+            WHERE pkg.value->>'package_id' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+            UNION
+            SELECT NULLIF(svc.value->>'client_package_id', '')::uuid AS id
+            FROM jsonb_array_elements(COALESCE(m.services, '[]'::jsonb)) AS svc(value)
+            WHERE svc.value->>'client_package_id' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          ) ids
+        ), ARRAY[]::uuid[]) AS package_ids,
+        NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
+        m.status AS appointment_status,
+        -- Membership takes priority over package when an appointment somehow
+        -- carries both, same as it would be billed (membership wallet
+        -- deducted first) — otherwise "Regular" whenever it's plain services/
+        -- products with no package/membership coverage at all. Package
+        -- coverage includes both a package being sold this visit
+        -- (package_items non-empty) and a service redeeming an existing
+        -- package (services[].is_package_service / client_package_id).
+        CASE
+          WHEN jsonb_array_length(COALESCE(m.membership_items, '[]'::jsonb)) > 0 THEN 'Membership Service'
+          WHEN jsonb_array_length(COALESCE(m.package_items, '[]'::jsonb)) > 0 THEN 'Package Service'
+          WHEN EXISTS (
+            SELECT 1 FROM jsonb_array_elements(COALESCE(m.services, '[]'::jsonb)) AS svc(value)
+            WHERE (svc.value->>'is_package_service')::boolean IS TRUE
+               OR svc.value->>'client_package_id' IS NOT NULL
+          ) THEN 'Package Service'
+          WHEN EXISTS (
+            SELECT 1 FROM client_package_session_history h WHERE h.appointment_id = m.id
+          ) THEN 'Package Service'
+          ELSE 'Regular'
+        END AS appointment_type,
+        -- "Description" — same payment-source-preview column Sales Summary
+        -- shows (there derived from payment_method/payment_reference on a
+        -- real sale; here, since an upcoming appointment has no sale yet,
+        -- derived from the same package/membership coverage signals as
+        -- appointment_type above). "—" for Regular: how it'll actually be
+        -- paid isn't known until checkout.
+        CASE
+          WHEN jsonb_array_length(COALESCE(m.membership_items, '[]'::jsonb)) > 0 THEN 'Membership'
+          WHEN jsonb_array_length(COALESCE(m.package_items, '[]'::jsonb)) > 0 THEN 'Package'
+          WHEN EXISTS (
+            SELECT 1 FROM jsonb_array_elements(COALESCE(m.services, '[]'::jsonb)) AS svc(value)
+            WHERE (svc.value->>'is_package_service')::boolean IS TRUE
+               OR svc.value->>'client_package_id' IS NOT NULL
+          ) THEN 'Package'
+          WHEN EXISTS (
+            SELECT 1 FROM client_package_session_history h WHERE h.appointment_id = m.id
+          ) THEN 'Package'
+          ELSE '—'
+        END AS description
+      FROM matched m
+      LEFT JOIN clients c ON c.id = m.client_id
+      LEFT JOIN staff st ON st.id = m.staff_id
+    ),
+    filtered AS (
+      SELECT b.*
+      FROM base b
+      ${outerWhereClause}
+    )
+    SELECT
+      id, appointment_date, time, client_name, mobile_number,
+      service_name, package_name, staff_name, appointment_status,
+      appointment_type, description, scheduled_at,
+      COUNT(*) OVER() AS total_count
+    FROM filtered
+    ORDER BY scheduled_at ASC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+
+  const items: UpcomingAppointmentsReportRow[] = rows.map((row: any) => ({
+    id: row.id,
+    appointment_date: row.appointment_date,
+    time: row.time,
+    client_name: row.client_name,
+    mobile_number: row.mobile_number,
+    service_name: row.service_name,
+    package_name: row.package_name,
+    staff_name: row.staff_name,
+    appointment_status: row.appointment_status,
+    appointment_type: row.appointment_type,
+    description: row.description,
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// Distinct clients/staff/services/packages appearing on this salon's
+// currently-upcoming appointments (same "filters_available" convention as
+// Daily Sheet's getDailySheetFiltersAvailable) — scoped to the live upcoming
+// set, not the whole catalog, so a service nobody has booked yet doesn't
+// clutter the dropdown.
+async getUpcomingAppointmentsFiltersAvailable(salonId: string): Promise<UpcomingAppointmentsFiltersAvailable> {
+  const { rows: clientRows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT c.id, c.full_name AS label
+     FROM appointments a
+     JOIN clients c ON c.id = a.client_id
+     WHERE a.salon_id = $1 AND a.status = 'booked' AND a.scheduled_at >= NOW()
+     ORDER BY label ASC`,
+    [salonId]
+  ));
+
+  const { rows: staffRows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT st.id, TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))) AS label
+     FROM appointments a
+     JOIN staff st ON st.id = a.staff_id
+     WHERE a.salon_id = $1 AND a.status = 'booked' AND a.scheduled_at >= NOW()
+     ORDER BY label ASC`,
+    [salonId]
+  ));
+
+  const { rows: serviceRows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT
+       (svc.value->>'service_id')::uuid AS id,
+       svc.value->>'name' AS label
+     FROM appointments a
+     CROSS JOIN LATERAL jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) AS svc(value)
+     WHERE a.salon_id = $1 AND a.status = 'booked' AND a.scheduled_at >= NOW()
+       AND svc.value->>'service_id' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+     ORDER BY label ASC`,
+    [salonId]
+  ));
+
+  const { rows: packageRows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT
+       (pkg.value->>'package_id')::uuid AS id,
+       pkg.value->>'name' AS label
+     FROM appointments a
+     CROSS JOIN LATERAL jsonb_array_elements(COALESCE(a.package_items, '[]'::jsonb)) AS pkg(value)
+     WHERE a.salon_id = $1 AND a.status = 'booked' AND a.scheduled_at >= NOW()
+       AND pkg.value->>'package_id' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+     ORDER BY label ASC`,
+    [salonId]
+  ));
+
+  return {
+    clients: clientRows.map((r: any) => ({ id: r.id, label: r.label })),
+    staff: staffRows.map((r: any) => ({ id: r.id, label: r.label })),
+    services: serviceRows.map((r: any) => ({ id: r.id, label: r.label })),
+    packages: packageRows.map((r: any) => ({ id: r.id, label: r.label })),
   };
 },
 

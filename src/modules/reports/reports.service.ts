@@ -275,6 +275,8 @@ import {
     MemberSaleReportResponse,
     AppointmentDetailReportFilters,
     AppointmentDetailReportResponse,
+    UpcomingAppointmentsReportFilters,
+    UpcomingAppointmentsReportResponse,
     WaCampaignReportFilters,
     WaCampaignReportResponse,
     OpenRateReportFilters,
@@ -1779,6 +1781,25 @@ async getAppointmentDetailReport(
     return {
         rows: result.items,
         pagination: result.pagination,
+    };
+},
+
+// ======================================================
+// UPCOMING APPOINTMENTS REPORT (independent report API)
+// ======================================================
+
+async getUpcomingAppointmentsReport(
+    salonId: string,
+    filters: UpcomingAppointmentsReportFilters
+): Promise<UpcomingAppointmentsReportResponse> {
+    const [result, filtersAvailable] = await Promise.all([
+        reportsRepository.getUpcomingAppointmentsReport(salonId, filters),
+        reportsRepository.getUpcomingAppointmentsFiltersAvailable(salonId),
+    ]);
+    return {
+        rows: result.items,
+        pagination: result.pagination,
+        filters_available: filtersAvailable,
     };
 },
 

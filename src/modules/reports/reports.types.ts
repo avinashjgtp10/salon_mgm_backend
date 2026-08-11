@@ -2306,6 +2306,80 @@ export interface AppointmentDetailReportResponse {
 }
 
 // ===============================
+// Upcoming Appointments Report (independent report API —
+// POST /api/report/upcoming-appointments)
+// Same appointments-table shape as Appointment Detail above, but scoped to
+// future bookings only (scheduled_at in the future, status still 'booked') —
+// front-desk view of what's coming up rather than a historical ledger.
+// Appointment "type" (Regular / Package Service / Membership Service) is
+// derived from package/membership coverage on the appointment — there is no
+// dedicated column. Package coverage can come from either package_items[]
+// (a new package sold on this same visit) or services[].client_package_id /
+// is_package_service (an existing package's session being redeemed) — see
+// the comment above getUpcomingAppointmentsReport in reports.repository.ts.
+// ===============================
+
+export interface UpcomingAppointmentsReportFilters {
+    from?: string;
+    to?: string;
+    search?: string;
+    client_ids?: string[];
+    staff_ids?: string[];
+    service_ids?: string[];
+    package_ids?: string[];
+    statuses?: string[];
+    appointment_types?: string[];
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface UpcomingAppointmentsReportRow {
+    id: string;
+    appointment_date: string;
+    time: string;
+    client_name: string | null;
+    mobile_number: string | null;
+    service_name: string;
+    package_name: string;
+    staff_name: string | null;
+    appointment_status: string;
+    appointment_type: string;
+    // Payment-source preview, same "Description" column Sales Summary shows
+    // (there payment_method/payment_reference-derived; here — since an
+    // upcoming appointment has no sale/payment row yet — derived from the
+    // same package/membership coverage appointment_type above already
+    // reads). "—" for a Regular appointment: how it'll actually be paid
+    // isn't known until checkout.
+    description: string;
+}
+
+export interface UpcomingAppointmentsReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface UpcomingAppointmentsFilterOption {
+    id: string;
+    label: string;
+}
+
+export interface UpcomingAppointmentsFiltersAvailable {
+    clients: UpcomingAppointmentsFilterOption[];
+    staff: UpcomingAppointmentsFilterOption[];
+    services: UpcomingAppointmentsFilterOption[];
+    packages: UpcomingAppointmentsFilterOption[];
+}
+
+export interface UpcomingAppointmentsReportResponse {
+    rows: UpcomingAppointmentsReportRow[];
+    pagination: UpcomingAppointmentsReportPagination;
+    filters_available: UpcomingAppointmentsFiltersAvailable;
+}
+
+// ===============================
 // WA Marketing Campaign Report (independent report API — POST /api/report/wa-campaign)
 // Reads wa_campaigns directly (template joined by name, per-contact status
 // counts aggregated live from wa_campaign_contacts — the campaign's own

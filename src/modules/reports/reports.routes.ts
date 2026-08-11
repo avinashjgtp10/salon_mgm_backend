@@ -323,6 +323,18 @@ router.post(
 );
 
 // ======================================================
+// UPCOMING APPOINTMENTS REPORT (independent report API)
+// Reads the appointments table directly via SQL — never calls the
+// Appointment HTTP API/service. Scoped to future, still-booked appointments.
+// ======================================================
+
+router.post(
+    "/upcoming-appointments",
+    ...guard,
+    reportsController.getUpcomingAppointmentsReport
+);
+
+// ======================================================
 // WA MARKETING CAMPAIGN REPORT (independent report API)
 // Reads wa_campaigns directly — never calls the campaigns HTTP API/service.
 // ======================================================
