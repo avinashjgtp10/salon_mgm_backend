@@ -170,6 +170,19 @@ router.post(
 );
 
 // ======================================================
+// SERVICE FREQUENCY REPORT (independent report API)
+// One row per client + service pair — how often each client returns for a
+// given service. Reads sale_items/sales/clients directly, never the
+// Appointment API.
+// ======================================================
+
+router.post(
+    "/service-frequency",
+    ...guard,
+    reportsController.getServiceFrequencyReport
+);
+
+// ======================================================
 // MEMBERSHIP HISTORY REPORT (independent report API)
 // One row per membership benefit redemption, read from
 // membership_usage_log — the membership counterpart to Package History.

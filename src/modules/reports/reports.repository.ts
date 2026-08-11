@@ -50,6 +50,8 @@ import {
     MembershipHistoryReportRow,
     MembershipHistoryReportStats,
     MembershipHistoryFiltersAvailable,
+    ServiceFrequencyReportRow,
+    ServiceFrequencyReportStats,
     StaffSalesReportRow,
     StaffSalesReportStats,
     StaffPerformanceReportRow,
@@ -4659,6 +4661,217 @@ async getCustomerFrequencyReportRows(
     last_visit: row.last_visit,
     visitor_type: row.visitor_type,
     customer_type: row.customer_type,
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// ======================================================
+// SERVICE FREQUENCY REPORT (independent report API)
+// POST /api/report/service-frequency — one row per CLIENT + SERVICE pair,
+// answering "how often does this client come back for this service".
+//
+// Reads sale_items -> sales -> clients directly, never the Appointment API.
+// See the banner in reports.types.ts for the two judgement calls this
+// encodes (status = 'completed', and grouping on item_id while displaying
+// the current service name).
+// ======================================================
+
+_buildServiceFrequencyWhere(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string;
+    service_ids?: string[]; category_ids?: string[]; staff_ids?: string[];
+  }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = [
+    "s.salon_id = $1",
+    "si.item_type = 'service'",
+    // A frequency report counts completed visits, not drafts/pending — the
+    // Customer Frequency / Lost Customers convention, NOT Service Sale's
+    // `<> 'draft'`. This is why the two reports' totals differ slightly.
+    "s.status = 'completed'",
+    // Walk-ins can't be attributed to a client's history; without this every
+    // one of them would collapse into a single NULL-keyed pseudo-client.
+    "s.client_id IS NOT NULL",
+    // Ad-hoc/quick-sale lines carry no service FK. Excluding them keeps the
+    // grain honest (they'd otherwise all group into one NULL "service") and
+    // matches the universe the service dropdown offers.
+    "si.item_id IS NOT NULL",
+  ];
+  let idx = 2;
+
+  if (filters.start_date) {
+    where.push(`s.created_at >= $${idx++}::date`);
+    values.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    // Half-open upper bound, the house convention for timestamp ranges.
+    where.push(`s.created_at < ($${idx++}::date + interval '1 day')`);
+    values.push(filters.end_date);
+  }
+  if (filters.service_ids && filters.service_ids.length > 0) {
+    where.push(`si.item_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.service_ids);
+  }
+  if (filters.category_ids && filters.category_ids.length > 0) {
+    where.push(`sv.category_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.category_ids);
+  }
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    // EXISTS, not a predicate on the joined row: filtering the line itself
+    // would drop a client's other visits for the same service and understate
+    // their visit count. This asks "did any of these staff serve this sale".
+    where.push(`EXISTS (
+      SELECT 1 FROM sale_items si2
+      WHERE si2.sale_id = s.id
+        AND COALESCE(si2.staff_id, s.staff_id) = ANY($${idx++}::uuid[])
+    )`);
+    values.push(filters.staff_ids);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+      OR COALESCE(sv.name, si.name, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+// Shared aggregation CTE — stats and rows both build on this so they can
+// never disagree about what a "pair" is.
+_SERVICE_FREQUENCY_AGG(where: string): string {
+  return `
+    WITH pair_agg AS (
+      SELECT
+        c.id AS client_id,
+        COALESCE(NULLIF(TRIM(c.full_name), ''), 'Walk-in') AS client_name,
+        COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS contact,
+        si.item_id AS service_id,
+        -- Current catalog name, falling back to the sale-time snapshot for a
+        -- service that has since been deleted.
+        COALESCE(sv.name, si.name) AS service_name,
+        COALESCE(NULLIF(TRIM(sc.name), ''), '—') AS category_name,
+        COUNT(*)::int AS visits,
+        COALESCE(SUM(si.quantity), 0)::int AS total_qty,
+        COALESCE(SUM(si.total_price::numeric), 0) AS total_spend,
+        MIN(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS first_visit,
+        MAX(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS last_visit
+      FROM sale_items si
+      JOIN sales s ON s.id = si.sale_id
+      -- INNER on clients: a pair only exists if it belongs to someone.
+      JOIN clients c ON c.id = s.client_id
+      LEFT JOIN services sv ON sv.id = si.item_id
+      LEFT JOIN service_categories sc ON sc.id = sv.category_id
+      WHERE ${where}
+      GROUP BY c.id, c.full_name, c.phone_country_code, c.phone_number,
+               si.item_id, COALESCE(sv.name, si.name), sc.name
+    ),
+    scored AS (
+      SELECT *,
+        (CURRENT_DATE - last_visit::date)::int AS days_since_last_visit
+      FROM pair_agg
+    )
+  `;
+},
+
+async getServiceFrequencyReportStats(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string;
+    service_ids?: string[]; category_ids?: string[]; staff_ids?: string[];
+  }
+): Promise<ServiceFrequencyReportStats> {
+  const { where, values } = this._buildServiceFrequencyWhere(salonId, filters);
+
+  const query = `
+    ${this._SERVICE_FREQUENCY_AGG(where)}
+    SELECT
+      COUNT(*)::int AS total_pairs,
+      -- The point of the report: pairs the client came back for.
+      COUNT(*) FILTER (WHERE visits > 1)::int AS repeat_pairs,
+      COALESCE(SUM(visits), 0)::int AS total_visits,
+      COALESCE(SUM(total_spend), 0) AS total_revenue
+    FROM scored
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  const totalPairs = Number(r.total_pairs ?? 0);
+  const totalVisits = Number(r.total_visits ?? 0);
+  return {
+    total_pairs: totalPairs,
+    repeat_pairs: Number(r.repeat_pairs ?? 0),
+    total_visits: totalVisits,
+    total_revenue: Math.round(Number(r.total_revenue ?? 0)),
+    // Guarded against divide-by-zero when nothing matches the filters.
+    avg_visits_per_pair: totalPairs > 0 ? Math.round((totalVisits / totalPairs) * 10) / 10 : 0,
+  };
+},
+
+async getServiceFrequencyReportRows(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string;
+    service_ids?: string[]; category_ids?: string[]; staff_ids?: string[];
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: ServiceFrequencyReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildServiceFrequencyWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    ${this._SERVICE_FREQUENCY_AGG(where)}
+    SELECT
+      client_id, client_name, contact,
+      service_id, service_name, category_name,
+      visits, total_qty, total_spend,
+      first_visit, last_visit, days_since_last_visit,
+      COUNT(*) OVER() AS total_count
+    FROM scored
+    -- Most-frequent pairs first: the rows a salon can actually act on.
+    ORDER BY visits DESC, last_visit DESC NULLS LAST, client_name ASC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: ServiceFrequencyReportRow[] = rows.map((row: any) => ({
+    client_id: row.client_id ? String(row.client_id) : null,
+    client_name: row.client_name,
+    contact: row.contact,
+    service_id: row.service_id ? String(row.service_id) : null,
+    service_name: row.service_name,
+    category_name: row.category_name,
+    visits: Number(row.visits ?? 0),
+    total_qty: Number(row.total_qty ?? 0),
+    total_spend: Math.round(Number(row.total_spend ?? 0)),
+    first_visit: row.first_visit ?? null,
+    last_visit: row.last_visit ?? null,
+    days_since_last_visit: Number(row.days_since_last_visit ?? 0),
   }));
   const effectiveLimit = limit ?? Math.max(total, 1);
   return {

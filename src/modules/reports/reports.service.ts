@@ -257,6 +257,8 @@ import {
     PaymentCollectionReportResponse,
     MembershipHistoryReportFilters,
     MembershipHistoryReportResponse,
+    ServiceFrequencyReportFilters,
+    ServiceFrequencyReportResponse,
     StaffSalesReportFilters,
     StaffSalesReportResponse,
     StaffPerformanceReportFilters,
@@ -1542,6 +1544,26 @@ async getReferralReport(
     const [stats, rowsResult] = await Promise.all([
         reportsRepository.getReferralReportStats(salonId, filters),
         reportsRepository.getReferralReportRows(salonId, filters),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+    };
+},
+
+// ======================================================
+// SERVICE FREQUENCY REPORT (independent report API)
+// ======================================================
+
+async getServiceFrequencyReport(
+    salonId: string,
+    filters: ServiceFrequencyReportFilters
+): Promise<ServiceFrequencyReportResponse> {
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getServiceFrequencyReportStats(salonId, filters),
+        reportsRepository.getServiceFrequencyReportRows(salonId, filters),
     ]);
 
     return {

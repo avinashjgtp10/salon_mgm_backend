@@ -1521,6 +1521,50 @@ async getReferralReport(
 },
 
 // ======================================================
+// SERVICE FREQUENCY REPORT (independent report API)
+// POST /api/report/service-frequency
+// ======================================================
+
+async getServiceFrequencyReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const asStringArray = (value: unknown): string[] | undefined =>
+            Array.isArray(value)
+                ? value.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined;
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            search: asString(body.search),
+            service_ids: asStringArray(body.service_ids),
+            category_ids: asStringArray(body.category_ids),
+            staff_ids: asStringArray(body.staff_ids),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getServiceFrequencyReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Service frequency report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
 // MEMBERSHIP HISTORY REPORT (independent report API)
 // POST /api/report/membership-history
 // ======================================================
