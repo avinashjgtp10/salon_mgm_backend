@@ -1,5 +1,5 @@
 import pool from "../../config/database"
-import { Review, ReviewStats, ListReviewsFilters, WaReviewPrompt } from "./reviews.types"
+import { Review, ReviewStats, ListReviewsFilters, ReviewServiceRating } from "./reviews.types"
 
 export const reviewsRepository = {
 
@@ -47,92 +47,81 @@ export const reviewsRepository = {
     return { averageRating: Number(row?.avg_rating ?? 0), totalReviews: row?.total ?? 0 }
   },
 
-  async insertRating(params: {
-    salonId:    string
-    clientId:   string | null
-    phone:      string
-    staffId:    string | null
-    rating:     number
-    waMessageId: string
+  // Public feedback-form submission — keyed by appointment (booking_id), not
+  // a wa_message_id, since this path has no WhatsApp message to anchor to.
+  // Idempotent: re-opening/double-tapping the same link updates the same row
+  // instead of inserting a duplicate (see idx_reviews_booking_id_uq).
+  // `rating`/`review_text` mirror `overall_rating`/`additional_comments` so
+  // existing reporting that reads `rating` directly keeps working unchanged.
+  async upsertRatingForAppointment(params: {
+    salonId:            string
+    clientId:           string | null
+    phone:              string | null
+    staffId:            string | null
+    appointmentId:      string
+    overallRating:      number
+    improvementTags:    string[]
+    additionalComments: string | null
   }): Promise<Review> {
     const { rows } = await pool.query(
-      `INSERT INTO reviews (salon_id, client_id, phone, staff_id, rating, source, wa_message_id)
-       VALUES ($1, $2, $3, $4, $5, 'whatsapp', $6)
-       RETURNING *`,
-      [params.salonId, params.clientId, params.phone, params.staffId, params.rating, params.waMessageId]
-    )
-    return rows[0]
-  },
-
-  // ── In-flight prompt tracking (wa_review_prompts table) ─────────────────
-
-  async createPrompt(params: {
-    salonId:             string
-    clientId:            string | null
-    phone:               string
-    appointmentId:       string | null
-    staffId:             string | null
-    reviewRequestWamid:  string | null
-    optInWamid:          string | null
-    listPromptWamid:     string | null
-  }): Promise<WaReviewPrompt> {
-    const { rows } = await pool.query(
-      `INSERT INTO wa_review_prompts
-         (salon_id, client_id, phone, appointment_id, staff_id,
-          review_request_wamid, opt_in_wamid, list_prompt_wamid, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'PENDING_REPLY')
+      `INSERT INTO reviews
+         (salon_id, client_id, phone, staff_id, booking_id, rating, review_text, source,
+          overall_rating, improvement_tags, additional_comments)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'whatsapp', $6, $8, $7)
+       ON CONFLICT (booking_id) WHERE booking_id IS NOT NULL
+       DO UPDATE SET rating = EXCLUDED.rating, review_text = EXCLUDED.review_text, staff_id = EXCLUDED.staff_id,
+                      overall_rating = EXCLUDED.overall_rating, improvement_tags = EXCLUDED.improvement_tags,
+                      additional_comments = EXCLUDED.additional_comments
        RETURNING *`,
       [
-        params.salonId, params.clientId, params.phone, params.appointmentId, params.staffId,
-        params.reviewRequestWamid, params.optInWamid, params.listPromptWamid,
+        params.salonId, params.clientId, params.phone, params.staffId, params.appointmentId,
+        params.overallRating, params.additionalComments, params.improvementTags,
       ]
     )
     return rows[0]
   },
 
-  async findPromptByListWamid(wamid: string): Promise<WaReviewPrompt | null> {
-    const { rows } = await pool.query(
-      `SELECT * FROM wa_review_prompts WHERE list_prompt_wamid = $1 AND status = 'PENDING_REPLY'`,
-      [wamid]
-    )
-    return rows[0] ?? null
-  },
+  // Per-service ratings for one appointment's feedback submission. Replaces
+  // the full set on every call (delete-then-insert) rather than a per-row
+  // upsert — simplest correct idempotency for a re-submit, same "current
+  // state, not an append-only log" semantics as appointment_service_consumables.
+  async upsertServiceRatings(
+    reviewId: string,
+    appointmentId: string,
+    ratings: Array<{
+      serviceRowId: string
+      serviceId:    string | null
+      serviceName:  string
+      staffId:      string | null
+      staffName:    string | null
+      rating:       number
+      comment:      string | null
+    }>
+  ): Promise<ReviewServiceRating[]> {
+    const client = await pool.connect()
+    try {
+      await client.query("BEGIN")
+      await client.query(`DELETE FROM review_service_ratings WHERE appointment_id = $1`, [appointmentId])
 
-  async findMostRecentPendingPrompt(salonId: string, phone: string): Promise<WaReviewPrompt | null> {
-    const { rows } = await pool.query(
-      `SELECT * FROM wa_review_prompts
-       WHERE salon_id = $1 AND phone = $2 AND status = 'PENDING_REPLY'
-       ORDER BY created_at DESC LIMIT 1`,
-      [salonId, phone]
-    )
-    return rows[0] ?? null
-  },
+      const inserted: ReviewServiceRating[] = []
+      for (const r of ratings) {
+        const { rows } = await client.query(
+          `INSERT INTO review_service_ratings
+             (review_id, appointment_id, service_row_id, service_id, service_name, staff_id, staff_name, rating, comment)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           RETURNING *`,
+          [reviewId, appointmentId, r.serviceRowId, r.serviceId, r.serviceName, r.staffId, r.staffName, r.rating, r.comment]
+        )
+        inserted.push(rows[0])
+      }
 
-  // Atomic conditional transition — 0 rows back means it was already rated
-  // (double-tap or a redelivered webhook), caller must not insert a second review.
-  async markRated(promptId: string, rating: number): Promise<WaReviewPrompt | null> {
-    const { rows } = await pool.query(
-      `UPDATE wa_review_prompts
-       SET status = 'RATED', rating = $1, rated_at = NOW(), updated_at = NOW()
-       WHERE id = $2 AND status = 'PENDING_REPLY'
-       RETURNING *`,
-      [rating, promptId]
-    )
-    return rows[0] ?? null
-  },
-
-  async setReviewId(promptId: string, reviewId: string): Promise<void> {
-    await pool.query(
-      `UPDATE wa_review_prompts SET review_id = $1, updated_at = NOW() WHERE id = $2`,
-      [reviewId, promptId]
-    )
-  },
-
-  async findAppointmentStaffId(appointmentId: string): Promise<string | null> {
-    const { rows } = await pool.query(
-      `SELECT staff_id FROM appointments WHERE id = $1`,
-      [appointmentId]
-    )
-    return rows[0]?.staff_id ?? null
+      await client.query("COMMIT")
+      return inserted
+    } catch (err) {
+      await client.query("ROLLBACK")
+      throw err
+    } finally {
+      client.release()
+    }
   },
 }

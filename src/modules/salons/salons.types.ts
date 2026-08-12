@@ -10,6 +10,7 @@ export type Salon = {
     email: string | null;
     phone: string | null;
     website_url: string | null;
+    google_review_url: string | null;
     gst_number: string | null;
     pan_number: string | null;
     is_verified: boolean;
@@ -37,6 +38,7 @@ export type CreateSalonBody = {
     email?: string;
     phone?: string;
     website_url?: string;
+    google_review_url?: string;
     gst_number?: string;
     pan_number?: string;
     address?: string;

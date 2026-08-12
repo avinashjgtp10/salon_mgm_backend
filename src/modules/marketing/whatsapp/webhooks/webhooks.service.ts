@@ -5,7 +5,6 @@ import { whatsappAutomationService } from '../../../whatsapp-automation/whatsapp
 import { notificationsService } from '../../../notifications/notifications.service'
 import { aiEngineService } from '../../../ai-engine/ai-engine.service'
 import { aiEngineRepository } from '../../../ai-engine/ai-engine.repository'
-import { reviewsService } from '../../../reviews/reviews.service'
 import pool from '../../../../config/database'
 import logger from '../../../../config/logger'
 
@@ -140,15 +139,6 @@ export const webhooksService = {
   },
 
   async processInboundMessage(salonId: string, msg: any, contact: any) {
-    // Star-rating capture — a tap on the interactive list we send after a
-    // review_request reply. Not an inbox text message, handled separately.
-    if (msg.type === 'interactive' && msg.interactive?.type === 'list_reply') {
-      await reviewsService.handleListReply(salonId, msg).catch((err: any) =>
-        logger.warn('[REVIEWS] handleListReply error:', err?.message)
-      )
-      return
-    }
-
     if (msg.type !== 'text') return
     const senderName = contact?.profile?.name ?? msg.from
     const messageBody = msg.text?.body ?? ''
@@ -160,11 +150,6 @@ export const webhooksService = {
       wamid: msg.id,
     })
 
-    // Additive, fire-and-forget: if this text is a reply following a recent
-    // review_request, sends the star-rating list — never blocks the inbox path.
-    reviewsService.handleTextReply(salonId, msg.from, messageBody).catch((err: any) =>
-      logger.warn('[REVIEWS] handleTextReply error:', err?.message)
-    )
     // Fire notification for incoming WhatsApp message (fire-and-forget)
     notificationsService.create({
       salon_id: salonId,

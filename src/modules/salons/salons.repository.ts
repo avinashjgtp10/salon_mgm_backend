@@ -6,7 +6,7 @@ import { CreateSalonBody, UpdateSalonBody, Salon } from "./salons.types";
 // so every read joins to the owner and overrides those two columns.
 const SALON_SELECT_WITH_OWNER_CONTACT = `
     SELECT s.id, s.owner_id, s.business_name, s.business_type, s.slug, s.description,
-           s.logo_url, s.banner_url, s.email, u.phone AS phone, s.website_url,
+           s.logo_url, s.banner_url, s.email, u.phone AS phone, s.website_url, s.google_review_url,
            s.gst_number, s.pan_number, s.is_verified, s.is_active, s.onboarding_completed,
            u.address AS address, s.city, s.state, s.country, s.pincode, s.timezone,
            s.currency, s.business_category, s.created_at, s.updated_at
