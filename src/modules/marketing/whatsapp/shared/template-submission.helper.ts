@@ -17,15 +17,19 @@ function extractExamples(text: string): string[] {
         .map((n) => `Example${n}`);
 }
 
-// Purchase-automation templates are body-only (no header/footer/buttons) —
-// matches "predefined wording, edit the wording" and keeps the salon-owner
-// UI simple, unlike the full-featured marketing campaign template builder.
+// Purchase-automation templates are body-only by default (no header/footer) —
+// matches "predefined wording, edit the wording" and keeps the salon-owner UI
+// simple, unlike the full-featured marketing campaign template builder. The
+// one exception is an optional single CTA-URL button (e.g. review_request's
+// "Rate Your Visit" link) — still far short of the campaign builder's full
+// header/footer/multi-button support, so the name stays accurate in spirit.
 export async function submitBodyOnlyTemplate(params: {
     salonId: string;
     name: string;
     category: "UTILITY" | "MARKETING";
     language: string;
     bodyText: string;
+    button?: { text: string; urlBase: string };
 }): Promise<{ metaTemplateId?: string; status: string }> {
     const config = await configRepository.findBySalonId(params.salonId);
     if (!config) throw new AppError(400, "WhatsApp not configured for this salon", "WA_NOT_CONFIGURED");
@@ -34,13 +38,31 @@ export async function submitBodyOnlyTemplate(params: {
     const bodyComponent: any = { type: "BODY", text: params.bodyText };
     if (bodyExamples.length > 0) bodyComponent.example = { body_text: [bodyExamples] };
 
+    const components: any[] = [bodyComponent];
+
+    // Meta requires the create-time URL to end in a {{1}} placeholder (with an
+    // example suffix) whenever the send-time payload will supply a
+    // per-recipient dynamic suffix via a button/url component (see
+    // whatsapp-automation.service.ts's buildComponents()).
+    if (params.button) {
+        components.push({
+            type: "BUTTONS",
+            buttons: [{
+                type: "URL",
+                text: params.button.text,
+                url: `${params.button.urlBase}/{{1}}`,
+                example: [`${params.button.urlBase}/sample-token`],
+            }],
+        });
+    }
+
     const meta = await whatsappMetaApi.submitTemplate({
         wabaId: config.waba_id,
         accessToken: config.access_token,
         name: params.name,
         category: params.category,
         language: params.language,
-        components: [bodyComponent],
+        components,
     });
 
     return { metaTemplateId: meta.id, status: meta.status ?? "PENDING" };

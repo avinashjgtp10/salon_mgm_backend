@@ -49,6 +49,7 @@ import legacyReportsRoutes from "./modules/reports/legacyReports.routes";
 import blockedTimesRoutes from "./modules/blocked_times/blocked_times.routes";
 import analyticsRoutes from './modules/marketing/whatsapp/analytics/analytics.routes'
 import reviewsRoutes from './modules/reviews/reviews.routes'
+import reviewsPublicRoutes from './modules/reviews/reviews.public.routes'
 import botRoutes from "./modules/bot/bot.routes";
 import aiEngineRoutes from "./modules/ai-engine/ai-engine.routes";
 import { ensureTable as ensureAiEngineTables } from "./modules/ai-engine/ai-engine.repository";
@@ -255,6 +256,9 @@ app.use('/api/v1/templates', marketingTemplatesRoutes)
 app.use('/api/v1/campaigns', marketingCampaignsRoutes)
 app.use('/api/v1/wa-config', marketingConfigRoutes)
 app.use('/api/v1/reviews', reviewsRoutes)
+// PUBLIC — client-facing feedback form, deep-linked from the review_request
+// WhatsApp button, no login.
+app.use('/api/v1/feedback', reviewsPublicRoutes)
 app.use('/api/v1/inbox', inboxRouter);
 app.use("/api/v1/dashboard", salonDashboardRoutes);
 app.use("/api/v1/coupons", couponsRoutes);

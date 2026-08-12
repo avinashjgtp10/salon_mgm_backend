@@ -144,6 +144,11 @@ export type AutomationTemplate = {
   approved_at:       string | null
   created_at:        string
   updated_at:        string
+  // Optional single CTA-URL button — currently only review_request uses this,
+  // but kept generic on the row so any future event can opt in the same way.
+  has_button:        boolean
+  button_text:       string | null
+  button_url_base:   string | null
 }
 
 // ── Trigger Payload ───────────────────────────────────────────────────────────
@@ -163,6 +168,10 @@ export type AutomationTriggerPayload = {
   // scheduler events (reminders, birthday) leave it off; they do their own
   // date-keyed guarding and intentionally re-send over time.
   dedupeByReference?: boolean
+  // Per-recipient suffix appended to the template's stored button_url_base at
+  // send time (Meta's dynamic URL button mechanism). Only meaningful when the
+  // resolved template has has_button = true; ignored otherwise.
+  buttonSuffix?: string | null
 }
 
 // ── API Bodies ────────────────────────────────────────────────────────────────

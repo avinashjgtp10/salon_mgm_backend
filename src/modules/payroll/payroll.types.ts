@@ -37,6 +37,11 @@ export type CreatePayrollEntryBody = {
     deductions?: number;
 };
 
+export type UpdatePayrollEntryBody = Partial<Pick<
+    CreatePayrollEntryBody,
+    "base_salary" | "commission" | "tips" | "bonus" | "salary_advance" | "deductions"
+>>;
+
 export type PayPayrollEntryBody = {
     amount: number;
     payment_method: string;
@@ -47,3 +52,35 @@ export type PayrollEntryListQuery = {
     period_start: string;
     period_end: string;
 };
+
+export type SalaryAdvanceTransaction = {
+    id: string;
+    salon_id: string;
+    staff_id: string;
+    staff_first_name: string;
+    staff_last_name: string | null;
+    amount: number;
+    advance_date: string;
+    payroll_period_start: string;
+    payroll_period_end: string;
+    note: string | null;
+    created_at: string;
+    updated_at: string;
+};
+
+export type SalaryAdvanceListQuery = {
+    period_start: string;
+    period_end: string;
+    staff_id?: string;
+};
+
+export type CreateSalaryAdvanceBody = {
+    staff_id: string;
+    amount: number;
+    advance_date: string;
+    payroll_period_start: string;
+    payroll_period_end: string;
+    note?: string;
+};
+
+export type UpdateSalaryAdvanceBody = Partial<Pick<CreateSalaryAdvanceBody, "amount" | "advance_date" | "note">>;

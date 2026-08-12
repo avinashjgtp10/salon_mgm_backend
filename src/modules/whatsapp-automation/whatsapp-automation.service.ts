@@ -29,11 +29,21 @@ export function formatPhone(phone: string, countryCode?: string | null): string 
   return digits
 }
 
-// Build Meta API body components from variables
-function buildComponents(variables: Record<string, string>): any[] {
+// Build Meta API components from variables, plus an optional per-recipient
+// URL button suffix (e.g. a feedback link token) when the template has one.
+function buildComponents(variables: Record<string, string>, buttonSuffix?: string | null): any[] {
   const params = Object.values(variables).map(val => ({ type: 'text', text: String(val) }))
-  if (params.length === 0) return []
-  return [{ type: 'body', parameters: params }]
+  const components: any[] = []
+  if (params.length > 0) components.push({ type: 'body', parameters: params })
+  if (buttonSuffix) {
+    components.push({
+      type: 'button',
+      sub_type: 'url',
+      index: '0',
+      parameters: [{ type: 'text', text: buttonSuffix }],
+    })
+  }
+  return components
 }
 
 // Calculate next retry time based on attempt number
@@ -170,6 +180,7 @@ export const whatsappAutomationService = {
         templateName:  template.template_name,
         language:      template.language,
         variables,
+        buttonSuffix:  template.has_button ? payload.buttonSuffix ?? undefined : undefined,
       })
 
     } catch (err: any) {
@@ -190,12 +201,13 @@ export const whatsappAutomationService = {
     templateName:  string
     language:      string
     variables:     Record<string, string>
+    buttonSuffix?: string | null
   }): Promise<void> {
     const MAX_ATTEMPTS = 4
     const DELAYS_MS    = [0, 60_000, 300_000, 900_000] // 0, 1min, 5min, 15min
 
-    const { logId, phoneNumberId, accessToken, to, templateName, language, variables } = params
-    const components = buildComponents(variables)
+    const { logId, phoneNumberId, accessToken, to, templateName, language, variables, buttonSuffix } = params
+    const components = buildComponents(variables, buttonSuffix)
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       // Wait before retry (first attempt delay is 0)
