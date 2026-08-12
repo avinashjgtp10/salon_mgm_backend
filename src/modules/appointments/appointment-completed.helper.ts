@@ -11,6 +11,7 @@ import logger from "../../config/logger";
 import { appointmentsRepository } from "./appointments.repository";
 import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
 import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
+import { generateFeedbackToken } from "../reviews/feedback-token.util";
 
 export async function notifyAppointmentCompleted(appointmentId: string): Promise<void> {
     try {
@@ -50,6 +51,7 @@ export async function notifyAppointmentCompleted(appointmentId: string): Promise
             referenceId:   appointmentId,
             referenceType: "appointment",
             dedupeByReference: true,
+            buttonSuffix:  `${appointmentId}.${generateFeedbackToken(appointmentId)}`,
         }).catch(() => {});
     } catch (err: any) {
         logger.error("[WA-AUTO] notifyAppointmentCompleted error:", err?.message);

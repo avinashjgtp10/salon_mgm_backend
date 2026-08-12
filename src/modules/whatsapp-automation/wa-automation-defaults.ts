@@ -8,12 +8,22 @@ import { AutomationEventType } from "./whatsapp-automation.types";
 // positions the rest of whatsapp-automation.service.ts already uses
 // (1 = client name, 2 = salon name / item name, 3 = item name / date / count,
 // varies slightly per event — see each trigger call site for the exact mapping).
+const FEEDBACK_FORM_BASE_URL =
+    process.env.APP_BASE_URL || process.env.FRONTEND_URL || "http://localhost:5173";
+
 export const DEFAULT_PURCHASE_TEMPLATES: Record<
     | "service_purchased" | "product_purchased" | "membership_purchased" | "package_purchased"
     | "appointment_reminder_1h" | "thank_you" | "review_request" | "package_expiring_soon" | "sessions_remaining"
     | "appointment_confirmation" | "appointment_reminder_24h" | "appointment_rescheduled"
     | "package_appointment_reminder_2d" | "package_appointment_reminder_1d",
-    { label: string; category: "UTILITY"; language: string; bodyText: string }
+    {
+        label: string;
+        category: "UTILITY";
+        language: string;
+        bodyText: string;
+        // Optional single CTA-URL button — only review_request uses this today.
+        button?: { text: string; urlBase: string };
+    }
 > = {
     service_purchased: {
         label: "Service Purchased",
@@ -55,7 +65,11 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         label: "Review Request",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{1}}, we'd love your feedback on your recent visit to {{2}}! Please take a moment to leave us a review.",
+        bodyText: "Hi {{1}},\n\nIt was a pleasure serving you at {{2}}.\n\nWe would love to know how your visit went. Your honest feedback helps us improve and provide an even better experience on your next visit.\n\nPlease click the button below to rate your recent visit.\n\nThank you for choosing {{2}}.",
+        button: {
+            text:    "Rate Your Visit",
+            urlBase: `${FEEDBACK_FORM_BASE_URL}/feedback`,
+        },
     },
     package_expiring_soon: {
         label: "Package Expiring (7 Days)",

@@ -1,14 +1,9 @@
-import logger from "../../config/logger"
 import { reviewsRepository } from "./reviews.repository"
-import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository"
-import { configRepository } from "../marketing/whatsapp/config/config.repository"
-import { whatsappMetaApi } from "../marketing/whatsapp/shared/whatsapp.api"
-import { Review, ReviewStats, ListReviewsFilters } from "./reviews.types"
-
-const RATING_ROWS = [1, 2, 3, 4, 5].map((n) => ({
-  id:    `rating_${n}`,
-  title: "⭐".repeat(n) + ` ${n} star${n > 1 ? "s" : ""}`,
-}))
+import { appointmentsRepository } from "../appointments/appointments.repository"
+import { salonsRepository } from "../salons/salons.repository"
+import { AppError } from "../../middleware/error.middleware"
+import { parseFeedbackSlug, assertFeedbackToken } from "./feedback-token.util"
+import { Review, ReviewStats, ListReviewsFilters, IMPROVEMENT_TAGS } from "./reviews.types"
 
 export const reviewsService = {
 
@@ -20,86 +15,108 @@ export const reviewsService = {
     return reviewsRepository.getStats(salonId, staffId)
   },
 
-  // Called for every plain-text inbound message — fire-and-forget from
-  // webhooks.service.ts, must never throw uncaught or block the Inbox path.
-  async handleTextReply(salonId: string, phone: string, _text: string): Promise<void> {
-    const log = await whatsappAutomationRepository.findRecentReviewRequestLog(phone, salonId)
-    if (!log) return // not a review-flow reply
+  // ── Public feedback form (no login) — deep-linked from the review_request
+  // WhatsApp button, replaces the old WA-native star-rating list flow below.
 
-    const referenceId = log.reference_id
-    if (!referenceId) return
+  async getPublicFeedbackContext(slug: string): Promise<{
+    salonName:        string
+    clientName:       string
+    appointmentId:    string
+    services:         Array<{ serviceRowId: string; name: string; staffName: string | null }>
+    googleReviewUrl:  string | null
+  }> {
+    const { appointmentId, token } = parseFeedbackSlug(slug)
+    assertFeedbackToken(appointmentId, token)
 
-    // Atomic guard — a second reply for the same appointment loses the race,
-    // the star-rating list is only ever sent once per appointment.
-    const won = await whatsappAutomationRepository.guardInsertIfNotExists(`review-list-sent:${referenceId}`)
-    if (!won) return
+    const appt = await appointmentsRepository.findById(appointmentId)
+    if (!appt) throw new AppError(404, "Appointment not found", "NOT_FOUND")
 
-    const salonConfig = await configRepository.findBySalonId(salonId)
-    if (!salonConfig?.phone_number_id || !salonConfig?.access_token) {
-      logger.info(`[REVIEWS] SKIP list send — salon ${salonId} has no WhatsApp config`)
-      return
-    }
+    const salon = await salonsRepository.findById(appt.salon_id).catch(() => null)
+    const services = Array.isArray(appt.services) ? appt.services : []
 
-    const staffId = await reviewsRepository.findAppointmentStaffId(referenceId).catch(() => null)
-
-    try {
-      const result = await whatsappMetaApi.sendInteractiveListMessage({
-        phoneNumberId: salonConfig.phone_number_id,
-        accessToken:   salonConfig.access_token,
-        to:            phone,
-        bodyText:      "Thanks for getting back to us! How would you rate your visit?",
-        buttonText:    "Rate visit",
-        sectionTitle:  "Your rating",
-        rows:          RATING_ROWS,
-      })
-      const listPromptWamid = result?.messages?.[0]?.id ?? null
-
-      await reviewsRepository.createPrompt({
-        salonId,
-        clientId:           log.client_id,
-        phone,
-        appointmentId:      referenceId,
-        staffId,
-        reviewRequestWamid: log.meta_message_id,
-        optInWamid:         null,
-        listPromptWamid,
-      })
-      logger.info(`[REVIEWS] Star-rating list sent to ${phone} for appointment ${referenceId}`)
-    } catch (err: any) {
-      logger.warn(`[REVIEWS] Failed to send star-rating list to ${phone}: ${err?.message}`)
+    return {
+      salonName:     (appt as any).salon_name ?? "our salon",
+      clientName:    (appt as any).client_name ?? "there",
+      appointmentId: appt.id,
+      services: services
+        .filter((s) => s.id)
+        .map((s) => ({
+          serviceRowId: s.id as string,
+          name:         s.name,
+          staffName:    s.staff_name ?? null,
+        })),
+      googleReviewUrl: salon?.google_review_url ?? null,
     }
   },
 
-  // Called for inbound interactive list_reply messages.
-  async handleListReply(salonId: string, msg: any): Promise<void> {
-    const listReplyId = msg?.interactive?.list_reply?.id as string | undefined
-    const match = listReplyId?.match(/^rating_([1-5])$/)
-    if (!match) {
-      logger.warn(`[REVIEWS] Unparseable list_reply id: ${listReplyId}`)
-      return
+  async submitPublicFeedback(
+    slug: string,
+    body: {
+      overallRating:       number
+      serviceRatings:      Array<{ serviceRowId: string; rating: number; comment?: string }>
+      improvementTags?:    string[]
+      additionalComments?: string
     }
-    const rating = parseInt(match[1], 10)
+  ): Promise<{ id: string }> {
+    const { appointmentId, token } = parseFeedbackSlug(slug)
+    assertFeedbackToken(appointmentId, token)
 
-    const contextWamid = msg?.context?.id as string | undefined
-    let prompt = contextWamid ? await reviewsRepository.findPromptByListWamid(contextWamid) : null
-    if (!prompt) prompt = await reviewsRepository.findMostRecentPendingPrompt(salonId, msg.from)
-    if (!prompt) {
-      logger.warn(`[REVIEWS] No pending prompt found for rating reply from ${msg.from}`)
-      return
+    const overallRating = Number(body.overallRating)
+    if (!Number.isInteger(overallRating) || overallRating < 1 || overallRating > 5) {
+      throw new AppError(400, "Overall rating must be an integer between 1 and 5", "VALIDATION_ERROR")
     }
 
-    const updated = await reviewsRepository.markRated(prompt.id, rating)
-    if (!updated) return // already rated — double-tap or redelivered webhook, skip
+    const improvementTags = Array.isArray(body.improvementTags) ? body.improvementTags : []
+    for (const tag of improvementTags) {
+      if (!(IMPROVEMENT_TAGS as readonly string[]).includes(tag)) {
+        throw new AppError(400, `Unknown improvement tag: ${tag}`, "VALIDATION_ERROR")
+      }
+    }
+    const additionalComments = body.additionalComments ? String(body.additionalComments).slice(0, 1000) : null
 
-    const review = await reviewsRepository.insertRating({
-      salonId:     updated.salon_id,
-      clientId:    updated.client_id,
-      phone:       updated.phone,
-      staffId:     updated.staff_id,
-      rating,
-      waMessageId: msg.id,
+    const appt = await appointmentsRepository.findById(appointmentId)
+    if (!appt) throw new AppError(404, "Appointment not found", "NOT_FOUND")
+
+    const services = Array.isArray(appt.services) ? appt.services : []
+    const serviceById = new Map(services.filter((s) => s.id).map((s) => [s.id as string, s]))
+
+    if (!Array.isArray(body.serviceRatings) || body.serviceRatings.length !== serviceById.size) {
+      throw new AppError(400, "A rating is required for every service on this appointment", "VALIDATION_ERROR")
+    }
+
+    const serviceRatings = body.serviceRatings.map((r) => {
+      const service = serviceById.get(r.serviceRowId)
+      if (!service) throw new AppError(400, `Unknown service: ${r.serviceRowId}`, "VALIDATION_ERROR")
+
+      const rating = Number(r.rating)
+      if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+        throw new AppError(400, `Rating for "${service.name}" must be an integer between 1 and 5`, "VALIDATION_ERROR")
+      }
+
+      return {
+        serviceRowId: r.serviceRowId,
+        serviceId:    service.service_id ?? null,
+        serviceName:  service.name,
+        staffId:      service.staff_id ?? null,
+        staffName:    service.staff_name ?? null,
+        rating,
+        comment:      r.comment ? String(r.comment).slice(0, 1000) : null,
+      }
     })
-    await reviewsRepository.setReviewId(updated.id, review.id)
-    logger.info(`[REVIEWS] Captured ${rating}-star rating from ${msg.from} (review ${review.id})`)
+
+    const review = await reviewsRepository.upsertRatingForAppointment({
+      salonId:            appt.salon_id,
+      clientId:           appt.client_id ?? null,
+      phone:              (appt as any).client_phone ?? null,
+      staffId:            appt.staff_id ?? null,
+      appointmentId,
+      overallRating,
+      improvementTags,
+      additionalComments,
+    })
+
+    await reviewsRepository.upsertServiceRatings(review.id, appointmentId, serviceRatings)
+
+    return { id: review.id }
   },
 }

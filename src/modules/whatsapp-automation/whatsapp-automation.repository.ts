@@ -88,11 +88,15 @@ export const whatsappAutomationRepository = {
     const defaults = DEFAULT_PURCHASE_TEMPLATES[eventType]
     const { rows: inserted } = await pool.query(
       `INSERT INTO wa_automation_templates
-         (salon_id, event_type, template_name, language, is_active, status, category, body_text)
-       VALUES ($1, $2, $3, $4, TRUE, 'DRAFT', $5, $6)
+         (salon_id, event_type, template_name, language, is_active, status, category, body_text,
+          has_button, button_text, button_url_base)
+       VALUES ($1, $2, $3, $4, TRUE, 'DRAFT', $5, $6, $7, $8, $9)
        ON CONFLICT (salon_id, event_type) WHERE salon_id IS NOT NULL DO NOTHING
        RETURNING *`,
-      [salonId, eventType, `${eventType}_draft`, defaults.language, defaults.category, defaults.bodyText]
+      [
+        salonId, eventType, `${eventType}_draft`, defaults.language, defaults.category, defaults.bodyText,
+        !!defaults.button, defaults.button?.text ?? null, defaults.button?.urlBase ?? null,
+      ]
     )
     if (inserted[0]) return inserted[0]
 
@@ -354,26 +358,6 @@ export const whatsappAutomationRepository = {
       [referenceId, eventType]
     )
     return rows.length > 0
-  },
-
-  // Used by the reviews module to detect "was a review_request recently sent
-  // to this phone" when a plain-text reply comes in — phone_number here is
-  // digits-only via formatPhone(), matching Meta's inbound msg.from as-is.
-  async findRecentReviewRequestLog(
-    phone: string,
-    salonId: string,
-    withinHours = 72
-  ): Promise<{ reference_id: string | null; meta_message_id: string | null; client_id: string | null } | null> {
-    const { rows } = await pool.query(
-      `SELECT reference_id, meta_message_id, client_id
-       FROM wa_automation_logs
-       WHERE phone_number = $1 AND salon_id = $2 AND event_type = 'review_request'
-         AND status IN ('SENT', 'DELIVERED', 'READ')
-         AND sent_at > NOW() - ($3 || ' hours')::INTERVAL
-       ORDER BY sent_at DESC LIMIT 1`,
-      [phone, salonId, withinHours]
-    )
-    return rows[0] ?? null
   },
 
   async listLogs(filters: ListAutomationLogsFilters): Promise<{ data: AutomationLog[]; total: number }> {
