@@ -1405,6 +1405,15 @@ export const paymentsService = {
                 d.setDate(d.getDate() + template.expiryDays);
                 expiryDate = d.toISOString().slice(0, 10);
               }
+            } else if (item.never_expires === false && item.expiry_date) {
+              // A custom package built on the spot via "+ Sell Package"
+              // (ServicesPanel.tsx's PackageRow, isCustom rows) — no
+              // template to resolve an expiry from, but the frontend already
+              // carries the real date the staff picked in the builder.
+              // "2099-12-31" (the default above) already IS this codebase's
+              // established never-expires sentinel, so nothing extra is
+              // needed when never_expires is true/absent.
+              expiryDate = item.expiry_date;
             }
 
             // Prefer the frontend's own per-service breakdown when present —
