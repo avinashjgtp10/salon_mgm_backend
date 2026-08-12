@@ -53,6 +53,11 @@ export interface CreateClientPackageDTO {
   appointmentId?: string | null;
   /** Staff member who sold this package — feeds client_packages.staff_id and the sales/sale_items rows recordTransaction() creates. */
   staffId?:       string;
+  /** Copied from the template's own expireAfterServices at sale time (see
+   *  package-templates.types.ts) — set only when sold from a template that
+   *  defines this cap. NULL/undefined for custom/combo packages and
+   *  templates with no cap. */
+  expireAfterServices?: number | null;
   services: Array<{
     /** Real catalog services.id, when the frontend picked one from the catalog search. */
     serviceId?:     string;
@@ -108,6 +113,8 @@ export interface ClientPackage {
   branch:         string;
   createdDate:    string;
   expiryDate:     string;
+  /** See CreateClientPackageDTO.expireAfterServices. NULL means no early cap. */
+  expireAfterServices: number | null;
   status:         string;
   basePrice:      number;
   gstPercentage:  number;
@@ -160,6 +167,7 @@ export interface ClientPackageRow {
   branch:         string;
   created_date:   Date;
   expiry_date:    string;
+  expire_after_services: number | null;
   status:         string;
   base_price:     string;
   gst_percentage: string;

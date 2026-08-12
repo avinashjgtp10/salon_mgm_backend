@@ -27,12 +27,20 @@ function validateExpiry(b: Record<string, any>): void {
     throw new AppError(400, "expiryMonths must be greater than 0 (or set neverExpires to true)", "VALIDATION_ERROR");
 }
 
+function validateExpireAfterServices(b: Record<string, any>): void {
+  const v = b.expireAfterServices;
+  if (v === undefined || v === null) return;
+  if (typeof v !== "number" || !Number.isInteger(v) || v <= 0)
+    throw new AppError(400, "expireAfterServices must be a positive whole number (or left blank)", "VALIDATION_ERROR");
+}
+
 export const validateCreatePackageTemplate = (req: Request, _res: Response, next: NextFunction) => {
   try {
     if (typeof req.body?.basePrice !== "number" || !isNonNeg(req.body.basePrice))
       throw new AppError(400, "basePrice is required and must be a non-negative number", "VALIDATION_ERROR");
     validatePricing(req.body ?? {});
     validateExpiry(req.body ?? {});
+    validateExpireAfterServices(req.body ?? {});
     return next();
   } catch (e) { return next(e); }
 };
@@ -41,6 +49,7 @@ export const validateUpdatePackageTemplate = (req: Request, _res: Response, next
   try {
     validatePricing(req.body ?? {});
     validateExpiry(req.body ?? {});
+    validateExpireAfterServices(req.body ?? {});
     return next();
   } catch (e) { return next(e); }
 };

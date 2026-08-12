@@ -18,6 +18,11 @@ export interface PackageTemplate {
    *  expiryMonths is kept only as a rounded, human-friendly label. */
   expiryDays:     number | null;
   neverExpires:   boolean;
+  /** Optional aggregate cap: once a sold instance of this template has this
+   *  many TOTAL completed sessions across ALL its services combined, the
+   *  client's package closes early — regardless of individual services'
+   *  remaining sessions. NULL means no early cap. */
+  expireAfterServices: number | null;
   basePrice:      number;
   gstPercentage:  number;
   discount:       number;
@@ -32,6 +37,7 @@ export interface CreatePackageTemplateDTO {
   expiryMonths?:  number | null;
   expiryDays?:    number | null;
   neverExpires?:  boolean;
+  expireAfterServices?: number | null;
   basePrice:      number;
   gstPercentage?: number;
   discount?:      number;
