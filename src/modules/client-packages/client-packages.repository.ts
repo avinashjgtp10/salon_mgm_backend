@@ -32,6 +32,7 @@ function toClientPackage(row: ClientPackageRow): ClientPackage {
     branch:        row.branch,
     createdDate:   new Date(row.created_date).toISOString(),
     expiryDate:    row.expiry_date,
+    expireAfterServices: row.expire_after_services ?? null,
     status:        row.status,
     basePrice:     base,
     gstPercentage: gstPct,
@@ -237,8 +238,8 @@ export const clientPackagesRepository = {
           (id, salon_id, client_id, client_name, mobile, email,
            package_name, category, branch, expiry_date,
            base_price, gst_percentage, gst_amount, discount, total_amount,
-           payment_method, split_details, paid_amount, pending_amount, payment_status, status, appointment_id, staff_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
+           payment_method, split_details, paid_amount, pending_amount, payment_status, status, appointment_id, staff_id, expire_after_services)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)`,
         [
           pkgId, salonId, dto.clientId, clientName,
           c.phone_number ?? null, c.email ?? null,
@@ -252,6 +253,7 @@ export const clientPackagesRepository = {
           "Active",
           dto.appointmentId ?? null,
           dto.staffId ?? null,
+          dto.expireAfterServices ?? null,
         ],
       );
 
@@ -441,12 +443,31 @@ export const clientPackagesRepository = {
     try {
       await client.query("BEGIN");
 
+      // Lock the package row FIRST. Quick Sale/Calendar checkout fires one
+      // completeSession call per covered service CONCURRENTLY (see
+      // markPackageSessions in AppointmentModal.tsx — Promise.allSettled, not
+      // a sequential loop), so without this lock, several calls for the same
+      // package could each read a stale "not yet Completed" snapshot and all
+      // succeed even after the aggregate cap below was already reached by
+      // one of them. FOR UPDATE serializes them — each waits for the
+      // previous one's COMMIT, so the status/cap check every call performs
+      // is always against up-to-date state.
+      const pkgRes = await client.query(
+        `SELECT status, expire_after_services FROM client_packages
+         WHERE id = $1 AND salon_id = $2 FOR UPDATE`,
+        [packageId, salonId],
+      );
+      if (!pkgRes.rows.length) throw new Error("Client package not found");
+      if (pkgRes.rows[0].status === "Completed") {
+        throw new Error("This package has already been fully used.");
+      }
+      const cap = pkgRes.rows[0].expire_after_services;
+
       const svcRes = await client.query(
-        `SELECT cps.id, cps.total_sessions, cps.completed_sessions
-         FROM client_package_services cps
-         JOIN client_packages cp ON cp.id = cps.client_package_id
-         WHERE cps.id = $1 AND cp.id = $2 AND cp.salon_id = $3`,
-        [dto.serviceId, packageId, salonId],
+        `SELECT id, total_sessions, completed_sessions
+         FROM client_package_services
+         WHERE id = $1 AND client_package_id = $2`,
+        [dto.serviceId, packageId],
       );
 
       if (!svcRes.rows.length) throw new Error("Service not found in this package");
@@ -476,7 +497,23 @@ export const clientPackagesRepository = {
          WHERE client_package_id = $1 AND completed_sessions < total_sessions`,
         [packageId],
       );
-      if (parseInt(remaining.rows[0].count, 10) === 0) {
+      let allServicesDone = parseInt(remaining.rows[0].count, 10) === 0;
+
+      // Aggregate-session cap ("Expires after this many services", see
+      // package_templates.expire_after_services): once this package's TOTAL
+      // completed sessions across ALL its services combined reach the cap it
+      // was sold with, it closes early — even if individual services still
+      // have sessions left unused.
+      if (!allServicesDone && cap != null) {
+        const totalRes = await client.query(
+          `SELECT COALESCE(SUM(completed_sessions), 0) AS total
+           FROM client_package_services WHERE client_package_id = $1`,
+          [packageId],
+        );
+        if (parseInt(totalRes.rows[0].total, 10) >= cap) allServicesDone = true;
+      }
+
+      if (allServicesDone) {
         await client.query(
           `UPDATE client_packages SET status = 'Completed' WHERE id = $1`,
           [packageId],

@@ -1392,6 +1392,10 @@ export const paymentsService = {
             // rather than silently leaving this package's own record at 0 GST.
             let gstPercentage  = appt?.gst_percent ?? 0;
             let expiryDate     = "2099-12-31";
+            // Set only when a real template resolves and defines an
+            // aggregate-session cap ("Expires after this many services") —
+            // custom/combo packages have no template to carry this from.
+            let expireAfterServices: number | null = null;
 
             const template = item.package_id
               ? await packageTemplatesRepository.findById(item.package_id, data.salon_id)
@@ -1400,6 +1404,7 @@ export const paymentsService = {
               basePrice     = template.basePrice;
               discount      = template.discount;
               gstPercentage = template.gstPercentage;
+              expireAfterServices = template.expireAfterServices ?? null;
               if (!template.neverExpires && template.expiryDays != null) {
                 const d = new Date();
                 d.setDate(d.getDate() + template.expiryDays);
@@ -1464,6 +1469,7 @@ export const paymentsService = {
               discount,
               gstPercentage,
               expiryDate,
+              expireAfterServices,
               data.appointment_id,
               item.staff_id || appt?.staff_id || undefined,
               checkoutSaleId,
