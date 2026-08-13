@@ -62,6 +62,19 @@ export interface CreateClientPackageDTO {
    *  convention as client_memberships.description. NULL/undefined when the
    *  source has none, or for a custom package built with no template. */
   description?: string | null;
+  /** Share of this package's total that has actually been collected, 0..1.
+   *  Omit for the normal paid-in-full case — create() then records the full
+   *  computed total, which is what every non-partial caller (standalone Sell
+   *  Package form, a settled bill) means. Expressed as a fraction rather than
+   *  an amount because only create() knows the final total_amount (base −
+   *  discount + GST); the caller would otherwise have to duplicate that
+   *  formula and could drift from it. Set by autoCreateFromPayment when the
+   *  bill is still partially paid, so the package reaches the client
+   *  immediately without the row claiming money that hasn't arrived. */
+  paidFraction?:  number;
+  /** "Paid" (default) or "Partial" — mirrors the state of the bill this
+   *  package was sold on. See paidAmount above. */
+  paymentStatus?: "Paid" | "Partial";
   services: Array<{
     /** Real catalog services.id, when the frontend picked one from the catalog search. */
     serviceId?:     string;

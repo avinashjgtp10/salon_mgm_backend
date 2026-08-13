@@ -233,6 +233,9 @@ export const clientPackagesRepository = {
       const gstAmount   = parseFloat(((dto.basePrice - dto.discount) * dto.gstPercentage / 100).toFixed(2));
       const totalAmount = parseFloat((dto.basePrice - dto.discount + gstAmount).toFixed(2));
       const pkgId       = uuidv4();
+      const paidSoFar   = parseFloat(
+        (totalAmount * Math.min(1, Math.max(0, dto.paidFraction ?? 1))).toFixed(2),
+      );
 
       await client.query(
         `INSERT INTO client_packages
@@ -248,9 +251,14 @@ export const clientPackagesRepository = {
           dto.basePrice, dto.gstPercentage, gstAmount, dto.discount, totalAmount,
           dto.paymentMethod,
           dto.splitDetails ? JSON.stringify(dto.splitDetails) : null,
-          totalAmount,  // paid_amount = full amount on creation
-          0,            // pending_amount
-          "Paid",
+          // Defaults to the full amount (every paid-in-full caller), but a
+          // package credited off a still-partially-paid bill records what has
+          // actually been received so the Package Sale report and receipts
+          // don't show money that hasn't arrived. Clamped to 0..total so a
+          // malformed fraction can't over- or negatively-credit the row.
+          paidSoFar,
+          parseFloat((totalAmount - paidSoFar).toFixed(2)),
+          dto.paymentStatus ?? "Paid",
           "Active",
           dto.appointmentId ?? null,
           dto.staffId ?? null,
@@ -535,6 +543,53 @@ export const clientPackagesRepository = {
     } finally {
       client.release();
     }
+  },
+
+  // ── Auto-create idempotency (partial → full payment on the same bill) ─────
+  // A package line item is now credited to the client as soon as the bill is
+  // partially paid, which means autoCreateFromPayment runs again on the later
+  // payment that settles the balance. Matching on (appointment, package name)
+  // rather than appointment alone so a bill carrying two different packages
+  // still creates both, while the same one can't be created twice.
+  async findIdByAppointmentAndName(
+    salonId: string,
+    appointmentId: string,
+    packageName: string,
+  ): Promise<string | null> {
+    const res = await pool.query(
+      `SELECT id FROM client_packages
+        WHERE salon_id = $1 AND appointment_id = $2 AND package_name = $3
+        LIMIT 1`,
+      [salonId, appointmentId, packageName],
+    );
+    return res.rows[0]?.id ?? null;
+  },
+
+  // Re-states how much of an already-created package has been collected, as a
+  // 0..1 share of its own total_amount (which never changes here). Called on
+  // every payment after the one that created the row, so a bill settled in
+  // three instalments keeps this row's paid/pending accurate throughout
+  // rather than only flipping at the end. fraction >= 1 settles it to Paid.
+  async updatePaymentProgress(id: string, salonId: string, fraction: number): Promise<void> {
+    const f = Math.min(1, Math.max(0, fraction));
+    if (f >= 1) {
+      await pool.query(
+        `UPDATE client_packages
+            SET paid_amount = total_amount, pending_amount = 0,
+                payment_status = 'Paid', updated_at = NOW()
+          WHERE id = $1 AND salon_id = $2`,
+        [id, salonId],
+      );
+      return;
+    }
+    await pool.query(
+      `UPDATE client_packages
+          SET paid_amount    = ROUND(total_amount * $3, 2),
+              pending_amount = ROUND(total_amount * (1 - $3), 2),
+              payment_status = 'Partial', updated_at = NOW()
+        WHERE id = $1 AND salon_id = $2`,
+      [id, salonId, f],
+    );
   },
 
   // ── Package-service scheduling (future appointment linkage) ────────────────
