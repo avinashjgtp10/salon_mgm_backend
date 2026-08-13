@@ -255,6 +255,8 @@ import {
     ReferralReportResponse,
     PaymentCollectionReportFilters,
     PaymentCollectionReportResponse,
+    CashManagementReportFilters,
+    CashManagementReportResponse,
     MembershipHistoryReportFilters,
     MembershipHistoryReportResponse,
     ServiceFrequencyReportFilters,
@@ -1635,6 +1637,28 @@ async getPaymentCollectionReport(
         reportsRepository.getPaymentCollectionReportStats(salonId, filters),
         reportsRepository.getPaymentCollectionReportRows(salonId, filters),
         reportsRepository.getPaymentCollectionFiltersAvailable(salonId),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+        filters_available: filtersAvailable,
+    };
+},
+
+// ======================================================
+// CASH MANAGEMENT REPORT (independent report API)
+// ======================================================
+
+async getCashManagementReport(
+    salonId: string,
+    filters: CashManagementReportFilters
+): Promise<CashManagementReportResponse> {
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
+        reportsRepository.getCashManagementReportStats(salonId, filters),
+        reportsRepository.getCashManagementReportRows(salonId, filters),
+        reportsRepository.getCashManagementFiltersAvailable(),
     ]);
 
     return {
