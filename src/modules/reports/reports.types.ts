@@ -1944,6 +1944,7 @@ export interface PackageSaleReportRow {
     client_id: string | null;
     client_name: string;
     package_name: string;
+    expiry_date: string | null;
     total_amount: number;
     paid_amount: number;
     pending_amount: number;
