@@ -737,6 +737,10 @@ export interface DailySheetReportRow {
     appointment_id: string | null;
     sale_id: string;
     time: string;
+    // When the invoice/bill was actually created (sales.created_at). Distinct
+    // from `time` (the appointment/booking slot) — null for an appointment
+    // row that hasn't been billed yet.
+    bill_time: string | null;
     ticket_no: string;
     client_id: string | null;
     client_name: string | null;
