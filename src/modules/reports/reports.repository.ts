@@ -64,6 +64,10 @@ import {
     PackageSaleReportRow,
     PackageSaleReportStats,
     PackageSaleFilterOption,
+    PayrollHistoryReportFilters,
+    PayrollHistoryReportRow,
+    PayrollHistoryReportStats,
+    PayrollHistoryFilterOption,
     PackageHistoryReportRow,
     PackageHistoryReportStats,
     PackageHistoryFiltersAvailable,
@@ -17237,6 +17241,213 @@ async getRebookingRateReportRows(
       limit: effectiveLimit,
       total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
     },
+  };
+},
+
+// ======================================================
+// PAYROLL HISTORY REPORT (independent report API)
+// POST /api/report/payroll-history — reads payroll_entries directly, one
+// row per payroll entry (staff x period). Never calls the Appointment API.
+// ======================================================
+
+_buildPayrollHistoryWhere(
+  salonId: string,
+  filters: PayrollHistoryReportFilters
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["pe.salon_id = $1"];
+  let idx = 2;
+
+  if (filters.start_date) {
+    where.push(`pe.period_end >= $${idx++}::date`);
+    values.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    where.push(`pe.period_start <= $${idx++}::date`);
+    values.push(filters.end_date);
+  }
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    where.push(`pe.staff_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.staff_ids);
+  }
+  if (filters.payment_methods && filters.payment_methods.length > 0) {
+    where.push(`pe.payment_method = ANY($${idx++}::text[])`);
+    values.push(filters.payment_methods);
+  } else if (filters.payment_method) {
+    where.push(`pe.payment_method = $${idx++}`);
+    values.push(filters.payment_method);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(s.first_name, '') ILIKE $${idx}
+      OR COALESCE(s.last_name, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+// payment_status (Paid/Partial/Unpaid) is derived from paid_amount vs the
+// stored net pay, matching PayrollPage.tsx's paymentStatus() — never stored
+// on payroll_entries itself, so it can't be pushed into
+// _buildPayrollHistoryWhere and is built separately here.
+_PAYROLL_NET_PAY_EXPR: `
+  (pe.base_salary + pe.commission + pe.tips + pe.bonus - pe.salary_advance - pe.deductions)
+`,
+
+_buildPayrollStatusFilter(
+  filters: PayrollHistoryReportFilters
+): string {
+  const netPayExpr = this._PAYROLL_NET_PAY_EXPR;
+  const statuses = filters.payment_statuses && filters.payment_statuses.length > 0
+    ? filters.payment_statuses
+    : filters.payment_status ? [filters.payment_status] : [];
+  if (statuses.length === 0) return "";
+  const clauses = statuses.map((s) => {
+    const v = s.toLowerCase();
+    if (v === "paid") return `(${netPayExpr} - pe.paid_amount::numeric) <= 0`;
+    if (v === "unpaid") return `pe.paid_amount::numeric <= 0`;
+    return `pe.paid_amount::numeric > 0 AND (${netPayExpr} - pe.paid_amount::numeric) > 0`;
+  });
+  return `AND (${clauses.join(" OR ")})`;
+},
+
+async getPayrollHistoryReportStats(
+  salonId: string,
+  filters: PayrollHistoryReportFilters
+): Promise<PayrollHistoryReportStats> {
+  const { where, values } = this._buildPayrollHistoryWhere(salonId, filters);
+  const netPayExpr = this._PAYROLL_NET_PAY_EXPR;
+  const statusFilter = this._buildPayrollStatusFilter(filters);
+
+  const query = `
+    SELECT
+      COUNT(*)::int AS total_entries,
+      COALESCE(SUM(${netPayExpr}), 0) AS total_net_payroll,
+      COALESCE(SUM(pe.paid_amount::numeric), 0) AS total_paid,
+      COALESCE(SUM(GREATEST(${netPayExpr} - pe.paid_amount::numeric, 0)), 0) AS total_pending
+    FROM payroll_entries pe
+    JOIN staff s ON s.id = pe.staff_id
+    WHERE ${where} ${statusFilter}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  return {
+    total_entries: Number(r.total_entries ?? 0),
+    total_net_payroll: Number(r.total_net_payroll ?? 0),
+    total_paid: Number(r.total_paid ?? 0),
+    total_pending: Number(r.total_pending ?? 0),
+  };
+},
+
+async getPayrollHistoryReportRows(
+  salonId: string,
+  filters: PayrollHistoryReportFilters
+): Promise<{
+  items: PayrollHistoryReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildPayrollHistoryWhere(salonId, filters);
+  const netPayExpr = this._PAYROLL_NET_PAY_EXPR;
+  const statusFilter = this._buildPayrollStatusFilter(filters);
+  let idx = nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    SELECT
+      pe.id,
+      pe.staff_id,
+      NULLIF(TRIM(CONCAT(COALESCE(s.first_name, ''), ' ', COALESCE(s.last_name, ''))), '') AS staff_name,
+      s.designation AS staff_designation,
+      pe.period_type,
+      TO_CHAR(pe.period_start, 'YYYY-MM-DD') AS period_start,
+      TO_CHAR(pe.period_end, 'YYYY-MM-DD') AS period_end,
+      pe.base_salary,
+      pe.commission,
+      pe.tips,
+      pe.bonus,
+      pe.salary_advance,
+      pe.deductions,
+      ${netPayExpr} AS net_pay,
+      pe.paid_amount,
+      GREATEST(${netPayExpr} - pe.paid_amount::numeric, 0) AS pending_amount,
+      pe.payment_method,
+      TO_CHAR(pe.payment_date, 'YYYY-MM-DD') AS payment_date,
+      COUNT(*) OVER() AS total_count
+    FROM payroll_entries pe
+    JOIN staff s ON s.id = pe.staff_id
+    WHERE ${where} ${statusFilter}
+    ORDER BY pe.period_start DESC, staff_name ASC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: PayrollHistoryReportRow[] = rows.map((row: any) => {
+    const netPay = Number(row.net_pay ?? 0);
+    const paidAmount = Number(row.paid_amount ?? 0);
+    const pendingAmount = Number(row.pending_amount ?? 0);
+    const payment_status = paidAmount <= 0 ? "unpaid" : pendingAmount <= 0 ? "paid" : "partial";
+    return {
+      id: row.id,
+      staff_id: row.staff_id,
+      staff_name: row.staff_name || "—",
+      staff_designation: row.staff_designation ?? null,
+      period_type: row.period_type,
+      period_start: row.period_start,
+      period_end: row.period_end,
+      base_salary: Number(row.base_salary ?? 0),
+      commission: Number(row.commission ?? 0),
+      tips: Number(row.tips ?? 0),
+      bonus: Number(row.bonus ?? 0),
+      salary_advance: Number(row.salary_advance ?? 0),
+      deductions: Number(row.deductions ?? 0),
+      net_pay: netPay,
+      paid_amount: paidAmount,
+      pending_amount: pendingAmount,
+      payment_status,
+      payment_method: row.payment_method ?? null,
+      payment_date: row.payment_date ?? null,
+    };
+  });
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// Distinct staff who have EVER had a payroll entry in this salon — scoped
+// only to salon_id, not the current date/filters, so the dropdown stays
+// complete.
+async getPayrollHistoryFiltersAvailable(salonId: string): Promise<{
+  staff: PayrollHistoryFilterOption[];
+}> {
+  const { rows: staffRows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT s.id, TRIM(CONCAT(COALESCE(s.first_name, ''), ' ', COALESCE(s.last_name, ''))) AS label
+     FROM payroll_entries pe
+     JOIN staff s ON s.id = pe.staff_id
+     WHERE pe.salon_id = $1
+     ORDER BY label ASC`,
+    [salonId]
+  ));
+
+  return {
+    staff: staffRows.map((r: any) => ({ id: r.id, label: r.label })),
   };
 },
 

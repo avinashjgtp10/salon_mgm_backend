@@ -290,6 +290,17 @@ router.post(
 );
 
 // ======================================================
+// PAYROLL HISTORY REPORT (independent report API)
+// Reads payroll_entries directly — never calls the Appointment API.
+// ======================================================
+
+router.post(
+    "/payroll-history",
+    ...guard,
+    reportsController.getPayrollHistoryReport
+);
+
+// ======================================================
 // PACKAGE SALE REPORT (independent report API)
 // Reads client_packages directly — never calls the Appointment API.
 // ======================================================
