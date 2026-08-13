@@ -1396,6 +1396,11 @@ export const paymentsService = {
             // aggregate-session cap ("Expires after this many services") —
             // custom/combo packages have no template to carry this from.
             let expireAfterServices: number | null = null;
+            // Denormalized onto client_packages at sale time, same reasoning
+            // as client_memberships.description — resolved from whichever of
+            // template/combo actually matches below, so it's declared here
+            // and filled in by either branch.
+            let description: string | null = null;
 
             const template = item.package_id
               ? await packageTemplatesRepository.findById(item.package_id, data.salon_id)
@@ -1405,6 +1410,7 @@ export const paymentsService = {
               discount      = template.discount;
               gstPercentage = template.gstPercentage;
               expireAfterServices = template.expireAfterServices ?? null;
+              description   = template.description ?? null;
               if (!template.neverExpires && template.expiryDays != null) {
                 const d = new Date();
                 d.setDate(d.getDate() + template.expiryDays);
@@ -1443,6 +1449,7 @@ export const paymentsService = {
               const combo = item.package_id
                 ? await packagesRepository.findById(item.package_id, data.salon_id)
                 : null;
+              if (combo) description = combo.description ?? null;
               if (combo && combo.serviceIds.length > 0) {
                 const perServicePrice = parseFloat((basePrice / combo.serviceIds.length).toFixed(2));
                 for (const svcId of combo.serviceIds) {
@@ -1470,6 +1477,7 @@ export const paymentsService = {
               gstPercentage,
               expiryDate,
               expireAfterServices,
+              description,
               data.appointment_id,
               item.staff_id || appt?.staff_id || undefined,
               checkoutSaleId,
