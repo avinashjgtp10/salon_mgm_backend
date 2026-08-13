@@ -58,6 +58,10 @@ export interface CreateClientPackageDTO {
    *  defines this cap. NULL/undefined for custom/combo packages and
    *  templates with no cap. */
   expireAfterServices?: number | null;
+  /** Copied from the template/bundle's own description at sale time, same
+   *  convention as client_memberships.description. NULL/undefined when the
+   *  source has none, or for a custom package built with no template. */
+  description?: string | null;
   services: Array<{
     /** Real catalog services.id, when the frontend picked one from the catalog search. */
     serviceId?:     string;
@@ -115,6 +119,8 @@ export interface ClientPackage {
   expiryDate:     string;
   /** See CreateClientPackageDTO.expireAfterServices. NULL means no early cap. */
   expireAfterServices: number | null;
+  /** See CreateClientPackageDTO.description. NULL for packages sold before this column existed, or with no source description. */
+  description:    string | null;
   status:         string;
   basePrice:      number;
   gstPercentage:  number;
@@ -168,6 +174,7 @@ export interface ClientPackageRow {
   created_date:   Date;
   expiry_date:    string;
   expire_after_services: number | null;
+  description:    string | null;
   status:         string;
   base_price:     string;
   gst_percentage: string;

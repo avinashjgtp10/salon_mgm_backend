@@ -33,6 +33,7 @@ function toClientPackage(row: ClientPackageRow): ClientPackage {
     createdDate:   new Date(row.created_date).toISOString(),
     expiryDate:    row.expiry_date,
     expireAfterServices: row.expire_after_services ?? null,
+    description:   row.description ?? null,
     status:        row.status,
     basePrice:     base,
     gstPercentage: gstPct,
@@ -238,8 +239,8 @@ export const clientPackagesRepository = {
           (id, salon_id, client_id, client_name, mobile, email,
            package_name, category, branch, expiry_date,
            base_price, gst_percentage, gst_amount, discount, total_amount,
-           payment_method, split_details, paid_amount, pending_amount, payment_status, status, appointment_id, staff_id, expire_after_services)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)`,
+           payment_method, split_details, paid_amount, pending_amount, payment_status, status, appointment_id, staff_id, expire_after_services, description)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)`,
         [
           pkgId, salonId, dto.clientId, clientName,
           c.phone_number ?? null, c.email ?? null,
@@ -254,6 +255,7 @@ export const clientPackagesRepository = {
           dto.appointmentId ?? null,
           dto.staffId ?? null,
           dto.expireAfterServices ?? null,
+          dto.description ?? null,
         ],
       );
 
