@@ -1,13 +1,14 @@
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
+import { requirePermission } from "../../middleware/permission.middleware";
 import { enquiriesController } from "./enquiries.controller";
 
 const router = Router();
-// Open to every authenticated salon user (owner/admin/staff) — no fine-grained
-// permission gate, matching the frontend sidebar entry which isn't gated by
-// usePermissions() either.
-const authBase = [authMiddleware, roleMiddleware("salon_owner", "admin", "staff")];
+// Gated by view_enquiries — see permissionMatrix.ts on the frontend and
+// DEFAULT_STAFF_PERMS in permission.middleware.ts, both of which must stay
+// in sync with this key.
+const authBase = [authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), requirePermission("view_enquiries")];
 
 router.get("/", ...authBase, enquiriesController.list);
 router.post("/", ...authBase, enquiriesController.create);

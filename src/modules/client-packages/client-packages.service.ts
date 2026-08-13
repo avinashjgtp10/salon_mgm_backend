@@ -420,6 +420,9 @@ export const clientPackagesService = {
     // was found (see payments.service.ts's template lookup) — undefined/null
     // for custom/combo packages, which have no template to carry this from.
     expireAfterServices: number | null | undefined,
+    // Copied from the resolved template/combo's own description, same
+    // resolution point as expireAfterServices above.
+    description: string | null | undefined,
     appointmentId?: string,
     // Staff on the checkout appointment, and the sales row the checkout's own
     // recordTransaction() call already created for this bill — passed through
@@ -444,6 +447,7 @@ export const clientPackagesService = {
         packageName,
         expiryDate,
         expireAfterServices: expireAfterServices ?? null,
+        description: description ?? null,
         basePrice,
         gstPercentage,
         discount,

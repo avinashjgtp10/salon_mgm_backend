@@ -82,6 +82,8 @@ import {
     TopStylistRow,
     ClientRatingReportRow,
     ClientRatingReportStats,
+    RebookingRateReportRow,
+    RebookingRateReportStats,
 } from "./reports.types";
 
 // ─── WhatsApp message delivery states ────────────────────────────────────────
@@ -1330,12 +1332,34 @@ _buildSalesSummaryWhere(
     where.push(`s.status <> 'draft'`);
   }
 
+  // Dates by the appointment's actual scheduled visit (falling back to
+  // s.created_at for walk-in sales with no linked appointment) — NOT by
+  // when the sale/invoice row happened to be created. Checkout can lag the
+  // visit by a day or more (pre-payment, delayed checkout, balance settled
+  // later), so s.created_at alone silently misdated appointment-linked
+  // sales. This also brings the billed side back in line with the unbilled
+  // side (_UNBILLED_APPOINTMENT_ROWS_CTE), which has always filtered by
+  // a.scheduled_at — previously the same "date" filter meant two different
+  // things depending on whether a row happened to be billed yet. Every call
+  // site of this WHERE-builder already joins _APPOINTMENT_STATUS_JOIN
+  // (`LEFT JOIN appointments a ON a.id = s.appointment_id`), so `a` is
+  // always in scope here.
+  //
+  // start_date/end_date are IST calendar dates (what the date picker and
+  // every displayed date/time column mean) — casting a bare date literal to
+  // timestamptz interprets midnight in the DB SESSION timezone (UTC), not
+  // IST, silently dropping any booking/sale between 12:00 AM-5:29 AM IST
+  // into the previous day's bucket. `date AT TIME ZONE zone` alone is NOT
+  // the fix — that overload returns a plain (unshifted) timestamp, not a
+  // converted instant; casting to ::timestamp FIRST, then AT TIME ZONE, is
+  // what actually reinterprets the literal as IST wall-clock time and
+  // converts it to the correct UTC instant.
   if (filters.start_date) {
-    where.push(`s.created_at >= $${idx++}::date`);
+    where.push(`COALESCE(a.scheduled_at, s.created_at) >= ($${idx++}::date::timestamp AT TIME ZONE 'Asia/Kolkata')`);
     values.push(filters.start_date);
   }
   if (filters.end_date) {
-    where.push(`s.created_at < ($${idx++}::date + interval '1 day')`);
+    where.push(`COALESCE(a.scheduled_at, s.created_at) < (($${idx++}::date + interval '1 day')::timestamp AT TIME ZONE 'Asia/Kolkata')`);
     values.push(filters.end_date);
   }
   if (filters.payment_modes && filters.payment_modes.length > 0) {
@@ -1496,12 +1520,22 @@ _UNBILLED_APPOINTMENT_ROWS_CTE(
   ];
   let idx = startIdx;
 
+  // start_date/end_date are IST calendar dates (what the report's date
+  // picker and every other display column mean) — casting a bare date
+  // literal to timestamptz interprets midnight in the DB SESSION timezone
+  // (UTC), not IST, so a plain `a.scheduled_at >= $::date` silently dropped
+  // any booking between 12:00 AM-5:29 AM IST into the previous day's
+  // bucket. `date AT TIME ZONE zone` alone is NOT the fix — that overload
+  // returns a plain (unshifted) timestamp, not a converted instant; casting
+  // to ::timestamp FIRST, then AT TIME ZONE, is what actually reinterprets
+  // the literal as IST wall-clock time and converts it to the correct UTC
+  // instant.
   if (filters.start_date) {
-    where.push(`a.scheduled_at >= $${idx++}::date`);
+    where.push(`a.scheduled_at >= ($${idx++}::date::timestamp AT TIME ZONE 'Asia/Kolkata')`);
     values.push(filters.start_date);
   }
   if (filters.end_date) {
-    where.push(`a.scheduled_at < ($${idx++}::date + interval '1 day')`);
+    where.push(`a.scheduled_at < (($${idx++}::date + interval '1 day')::timestamp AT TIME ZONE 'Asia/Kolkata')`);
     values.push(filters.end_date);
   }
   if (filters.staff_ids && filters.staff_ids.length > 0) {
@@ -2264,8 +2298,17 @@ _buildDailySheetWhere(
   const saleItemsJoin = ["si.sale_id = s.id"];
   let idx = 2;
 
+  // Dates by the appointment's actual scheduled visit (falling back to
+  // s.created_at for walk-in sales with no linked appointment), matching
+  // _buildSalesSummaryWhere's same fix and bringing the billed side back in
+  // line with the unbilled side (_UNBILLED_APPOINTMENT_DAILY_ROWS_CTE),
+  // which has always filtered by scheduled_at. Both converted to IST before
+  // taking DATE() — a bare `DATE(timestamptz)` reads midnight in the DB
+  // SESSION timezone (UTC), not IST, so a booking between 12:00 AM-5:29 AM
+  // IST would otherwise silently bucket into the previous day. Requires
+  // _APPOINTMENT_STATUS_JOIN's `a` alias, already joined at every call site.
   if (filters.date) {
-    where.push(`DATE(s.created_at) = $${idx++}::date`);
+    where.push(`DATE(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata') = $${idx++}::date`);
     values.push(filters.date);
   }
   if (filters.time_from) {
@@ -2377,8 +2420,10 @@ _UNBILLED_APPOINTMENT_DAILY_ROWS_CTE(
   ];
   let idx = startIdx;
 
+  // IST calendar date, not the DB session's UTC — see the matching comment
+  // in _buildDailySheetWhere.
   if (filters.date) {
-    where.push(`DATE(a.scheduled_at) = $${idx++}::date`);
+    where.push(`DATE(a.scheduled_at AT TIME ZONE 'Asia/Kolkata') = $${idx++}::date`);
     values.push(filters.date);
   }
   if (filters.time_from) {
@@ -2436,7 +2481,10 @@ _UNBILLED_APPOINTMENT_DAILY_ROWS_CTE(
     SELECT
       a.appointment_id,
       NULL::uuid AS sale_id,
-      a.time,
+      a.date,
+      a.booking_time,
+      -- Not yet invoiced — there is no bill time until checkout creates a sale.
+      NULL::text AS bill_time,
       a.ticket_no,
       a.client_id,
       c.full_name AS client_name,
@@ -2454,7 +2502,8 @@ _UNBILLED_APPOINTMENT_DAILY_ROWS_CTE(
       SELECT a.id, a.id AS appointment_id, a.salon_id, a.client_id, a.staff_id, a.status,
              a.created_at, a.scheduled_at, a.deleted_at, a.services,
              a.package_items, a.product_items, a.membership_items,
-             TO_CHAR(a.created_at AT TIME ZONE 'Asia/Kolkata', 'HH12:MI AM') AS time,
+             TO_CHAR(a.scheduled_at AT TIME ZONE 'Asia/Kolkata', 'DD-MM-YYYY') AS date,
+             TO_CHAR(a.scheduled_at AT TIME ZONE 'Asia/Kolkata', 'HH12:MI AM') AS booking_time,
              NULL::text AS ticket_no
       FROM appointments a
     ) a
@@ -2551,7 +2600,14 @@ async getDailySheetReport(
       SELECT
         s.appointment_id,
         s.id AS sale_id,
-        TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'HH12:MI AM') AS time,
+        TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'DD-MM-YYYY') AS date,
+        -- Booking Time: the appointment's actual scheduled slot, not when it
+        -- was billed. Walk-in sales (no linked appointment) have no slot to
+        -- show, so this falls back to the bill time itself.
+        TO_CHAR(COALESCE(bk.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata', 'HH12:MI AM') AS booking_time,
+        -- Bill Time: when the invoice was actually created — always present
+        -- for this side (every sales_side row has a sale).
+        TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'HH12:MI AM') AS bill_time,
         s.invoice_number AS ticket_no,
         s.client_id,
         c.full_name AS client_name,
@@ -2582,13 +2638,14 @@ async getDailySheetReport(
       LEFT JOIN sale_items si ON ${saleItemsJoin}
       LEFT JOIN clients c ON s.client_id = c.id
       LEFT JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
+      LEFT JOIN appointments bk ON bk.id = s.appointment_id
       ${this._PAYMENT_LATERAL}
       ${this._APPOINTMENT_STATUS_JOIN}
       WHERE ${where}
     ),
     appt_side AS (
       SELECT
-        u.appointment_id, u.sale_id, u.time, u.ticket_no, u.client_id, u.client_name,
+        u.appointment_id, u.sale_id, u.date, u.booking_time, u.bill_time, u.ticket_no, u.client_id, u.client_name,
         u.service_id, u.service, u.item_type, u.staff_id, u.staff, u.amount,
         -- Real payments can exist on an appointment before it's ever invoiced
         -- (a "partial" checkout) — same source as Sales Summary's own
@@ -2617,7 +2674,9 @@ async getDailySheetReport(
         COALESCE(sale_id::text, appointment_id::text) AS group_key,
         MIN(appointment_id::text)::uuid AS appointment_id,
         MIN(sale_id::text)::uuid AS sale_id,
-        MIN(time) AS time,
+        MIN(date) AS date,
+        MIN(booking_time) AS booking_time,
+        MIN(bill_time) AS bill_time,
         MIN(ticket_no) AS ticket_no,
         MIN(client_id::text)::uuid AS client_id,
         MIN(client_name) AS client_name,
@@ -2675,7 +2734,9 @@ async getDailySheetReport(
   const items: DailySheetReportRow[] = rows.map((row: any) => ({
     appointment_id: row.appointment_id,
     sale_id: row.sale_id,
-    time: row.time,
+    date: row.date,
+    booking_time: row.booking_time,
+    bill_time: row.bill_time,
     ticket_no: row.ticket_no,
     client_id: row.client_id,
     client_name: row.client_name,
@@ -5324,11 +5385,12 @@ async getLostCustomersReportRows(
 _buildReferralWhere(
   salonId: string,
   filters: { search?: string; staff_ids?: string[]; reward_status?: string }
-): { where: string; values: any[]; nextIndex: number } {
+): { where: string; values: any[]; nextIndex: number; staffIdsIdx: number | null } {
   // `c` = the referred client, `r` = the referrer.
   const values: any[] = [salonId];
   const where = ["c.salon_id = $1", "c.referred_by_client_id IS NOT NULL"];
   let idx = 2;
+  let staffIdsIdx: number | null = null;
 
   if (filters.reward_status === "rewarded" || filters.reward_status === "pending") {
     // referral_reward_status is NULL until a code is linked and 'pending'
@@ -5341,11 +5403,12 @@ _buildReferralWhere(
   }
   if (filters.staff_ids && filters.staff_ids.length > 0) {
     // Staff who served the REFERRED client on any completed sale.
+    staffIdsIdx = idx++;
     where.push(`EXISTS (
       SELECT 1 FROM sales s2
       JOIN sale_items si2 ON si2.sale_id = s2.id
       WHERE s2.client_id = c.id AND s2.status = 'completed'
-        AND COALESCE(si2.staff_id, s2.staff_id) = ANY($${idx++}::uuid[])
+        AND COALESCE(si2.staff_id, s2.staff_id) = ANY($${staffIdsIdx}::uuid[])
     )`);
     values.push(filters.staff_ids);
   }
@@ -5360,13 +5423,13 @@ _buildReferralWhere(
     idx++;
   }
 
-  return { where: where.join(" AND "), values, nextIndex: idx };
+  return { where: where.join(" AND "), values, nextIndex: idx, staffIdsIdx };
 },
 
 // Shared aggregation CTE — one row per referral link. The date range filters
 // on the referral date (when the referred client was created), which is the
 // column the report is sorted and reported on.
-_REFERRAL_AGG(where: string, startDateIdx: number | null, endDateIdx: number | null): string {
+_REFERRAL_AGG(where: string, startDateIdx: number | null, endDateIdx: number | null, staffIdsIdx: number | null = null): string {
   const rangeClause = startDateIdx
     ? `AND ((c.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata')::date >= $${startDateIdx}::date${
         endDateIdx ? ` AND ((c.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata')::date <= $${endDateIdx}::date` : ""
@@ -5419,6 +5482,11 @@ _REFERRAL_AGG(where: string, startDateIdx: number | null, endDateIdx: number | n
     ),
     -- The staff member on the referred client's most recent completed sale —
     -- "who is serving this referred customer", not every staff who ever did.
+    -- When a staff filter is active, a row was only included because SOME
+    -- sale matched that staff (see _buildReferralWhere's EXISTS check) — so
+    -- the displayed name must come from that same matching sale, not just
+    -- whichever sale happens to be most recent overall (which could be a
+    -- different, unrelated staff member and contradict the filter).
     staff_pick AS (
       SELECT DISTINCT ON (s.client_id)
         s.client_id,
@@ -5431,6 +5499,7 @@ _REFERRAL_AGG(where: string, startDateIdx: number | null, endDateIdx: number | n
       LEFT JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
       WHERE s.status = 'completed'
         AND s.client_id IN (SELECT referred_client_id FROM referral_base)
+        ${staffIdsIdx ? `AND COALESCE(si.staff_id, s.staff_id) = ANY($${staffIdsIdx}::uuid[])` : ""}
       ORDER BY s.client_id, s.created_at DESC
     ),
     referrals AS (
@@ -5453,7 +5522,7 @@ async getReferralReportStats(
   salonId: string,
   filters: { start_date?: string; end_date?: string; search?: string; staff_ids?: string[]; reward_status?: string }
 ): Promise<ReferralReportStats> {
-  const { where, values, nextIndex } = this._buildReferralWhere(salonId, filters);
+  const { where, values, nextIndex, staffIdsIdx } = this._buildReferralWhere(salonId, filters);
   let idx = nextIndex;
 
   const dateValues: any[] = [];
@@ -5469,7 +5538,7 @@ async getReferralReportStats(
   }
 
   const query = `
-    ${this._REFERRAL_AGG(where, startDateIdx, endDateIdx)}
+    ${this._REFERRAL_AGG(where, startDateIdx, endDateIdx, staffIdsIdx)}
     SELECT
       COUNT(*)::int AS total_referrals,
       COUNT(*) FILTER (WHERE reward_status = 'rewarded')::int AS rewarded_referrals,
@@ -5498,7 +5567,7 @@ async getReferralReportRows(
   items: ReferralReportRow[];
   pagination: { total: number; page: number; limit: number; total_pages: number };
 }> {
-  const { where, values, nextIndex } = this._buildReferralWhere(salonId, filters);
+  const { where, values, nextIndex, staffIdsIdx } = this._buildReferralWhere(salonId, filters);
   let idx = nextIndex;
 
   const dateValues: any[] = [];
@@ -5521,7 +5590,7 @@ async getReferralReportRows(
   const limitValues = limit ? [limit, offset] : [];
 
   const query = `
-    ${this._REFERRAL_AGG(where, startDateIdx, endDateIdx)}
+    ${this._REFERRAL_AGG(where, startDateIdx, endDateIdx, staffIdsIdx)}
     SELECT
       referred_client_id, referrer_client_id, referrer_name, referred_name,
       referral_date, first_visit, total_visits, revenue_generated,
@@ -6948,6 +7017,7 @@ async getPackageSaleReportRows(
       cp.client_id,
       cp.client_name,
       cp.package_name,
+      TO_CHAR(cp.expiry_date, 'YYYY-MM-DD') AS expiry_date,
       cp.total_amount,
       cp.paid_amount,
       cp.pending_amount,
@@ -6975,6 +7045,7 @@ async getPackageSaleReportRows(
     client_id: row.client_id,
     client_name: row.client_name,
     package_name: row.package_name,
+    expiry_date: row.expiry_date ?? null,
     total_amount: Number(row.total_amount ?? 0),
     paid_amount: Number(row.paid_amount ?? 0),
     pending_amount: Number(row.pending_amount ?? 0),
@@ -16949,6 +17020,213 @@ async getClientRatingReportRows(
     source: row.source,
     total_spend: Math.round(Number(row.total_spend ?? 0)),
     visits: Number(row.visits ?? 0),
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// ======================================================
+// REBOOKING RATE REPORT (independent report API)
+// Reads sales/sale_items/clients directly — never calls the Appointment
+// API/service.
+// ======================================================
+
+_buildRebookingRateWhere(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; search?: string }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  // Same "completed visit" convention as Service Frequency / Lost
+  // Customers — draft/cancelled/pending sales never count as a real visit.
+  const where = ["s.salon_id = $1", "s.status = 'completed'", "s.client_id IS NOT NULL"];
+  let idx = 2;
+
+  if (filters.start_date) {
+    where.push(`s.created_at >= $${idx++}::date`);
+    values.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    where.push(`s.created_at < ($${idx++}::date + interval '1 day')`);
+    values.push(filters.end_date);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+// Shared aggregation CTE — stats and rows both build on this so they can
+// never disagree about what "rebooked" means.
+//
+// `visits` looks at EVERY completed sale for a client (LEAD ordered by
+// created_at, not scoped to the date/staff filters below) so the rebooking
+// window always sees the client's real next visit, even if it falls
+// outside the selected date range or was served by a different staff.
+// `attributed` then explodes each visit to one row per distinct staff who
+// served it (COALESCE(sli.staff_id, s.staff_id), the house convention),
+// and the date/search/staff filters are applied only at that layer — a
+// filtered-out visit still keeps its rebooking outcome, it just doesn't
+// count toward these particular staff's stats.
+_REBOOKING_RATE_AGG(where: string, rebookingDaysIdx: number, staffIdsIdx: number | null): string {
+  const staffClause = staffIdsIdx ? `AND st.id = ANY($${staffIdsIdx}::uuid[])` : "";
+  return `
+    WITH visits AS (
+      SELECT
+        s.id AS sale_id,
+        s.client_id,
+        s.created_at,
+        LEAD(s.created_at) OVER (PARTITION BY s.client_id ORDER BY s.created_at) AS next_visit_at
+      FROM sales s
+      WHERE s.salon_id = $1 AND s.status = 'completed' AND s.client_id IS NOT NULL
+    ),
+    scored AS (
+      SELECT
+        sale_id,
+        (next_visit_at IS NOT NULL
+          AND next_visit_at <= created_at + ($${rebookingDaysIdx}::int * INTERVAL '1 day')
+        ) AS rebooked
+      FROM visits
+    ),
+    attributed AS (
+      SELECT DISTINCT
+        s.id AS sale_id,
+        COALESCE(sli.staff_id, s.staff_id) AS staff_id,
+        scored.rebooked
+      FROM sales s
+      JOIN clients c ON c.id = s.client_id
+      LEFT JOIN sale_items sli ON sli.sale_id = s.id
+      JOIN scored ON scored.sale_id = s.id
+      -- LEFT, not inner: a staff member who has since been removed from the
+      -- roster still has real historical sales attributed to them (their id
+      -- lives on in sales/sale_items) -- an inner join here silently dropped
+      -- every one of their visits from both total_visits and
+      -- rebooked_visits, which read as the rebooking window doing nothing.
+      LEFT JOIN staff st ON st.id = COALESCE(sli.staff_id, s.staff_id)
+      WHERE ${where} ${staffClause}
+        AND COALESCE(sli.staff_id, s.staff_id) IS NOT NULL
+    ),
+    per_staff AS (
+      SELECT
+        attributed.staff_id,
+        COALESCE(NULLIF(TRIM(CONCAT(COALESCE(stf.first_name, ''), ' ', COALESCE(stf.last_name, ''))), ''), 'Deleted Staff') AS staff_name,
+        COUNT(*)::int AS total_visits,
+        COUNT(*) FILTER (WHERE attributed.rebooked)::int AS rebooked_visits
+      FROM attributed
+      LEFT JOIN staff stf ON stf.id = attributed.staff_id
+      GROUP BY attributed.staff_id, stf.first_name, stf.last_name
+    )
+  `;
+},
+
+async getRebookingRateReportStats(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; search?: string; staff_ids?: string[]; rebooking_days?: number }
+): Promise<RebookingRateReportStats> {
+  const { where, values, nextIndex } = this._buildRebookingRateWhere(salonId, filters);
+  let idx = nextIndex;
+  const rebookingDaysIdx = idx++;
+  const rebookingDaysValue = Math.max(1, Number(filters.rebooking_days ?? 45));
+
+  let staffIdsIdx: number | null = null;
+  const staffValues: any[] = [];
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    staffIdsIdx = idx++;
+    staffValues.push(filters.staff_ids);
+  }
+
+  const query = `
+    ${this._REBOOKING_RATE_AGG(where, rebookingDaysIdx, staffIdsIdx)}
+    SELECT
+      COALESCE(SUM(total_visits), 0)::int AS total_visits,
+      COALESCE(SUM(rebooked_visits), 0)::int AS rebooked_visits,
+      COUNT(*)::int AS staff_count
+    FROM per_staff
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, rebookingDaysValue, ...staffValues]));
+  const r = rows[0] ?? {};
+  const totalVisits = Number(r.total_visits ?? 0);
+  const rebookedVisits = Number(r.rebooked_visits ?? 0);
+  return {
+    total_visits: totalVisits,
+    rebooked_visits: rebookedVisits,
+    overall_rebooking_rate: totalVisits > 0 ? Math.round((rebookedVisits / totalVisits) * 10000) / 100 : 0,
+    staff_count: Number(r.staff_count ?? 0),
+  };
+},
+
+async getRebookingRateReportRows(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string; staff_ids?: string[];
+    rebooking_days?: number; page?: number; limit?: number; is_export?: boolean;
+    sort?: "rate_desc" | "rate_asc";
+  }
+): Promise<{
+  items: RebookingRateReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildRebookingRateWhere(salonId, filters);
+  let idx = nextIndex;
+  const rebookingDaysIdx = idx++;
+  const rebookingDaysValue = Math.max(1, Number(filters.rebooking_days ?? 45));
+
+  let staffIdsIdx: number | null = null;
+  const staffValues: any[] = [];
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    staffIdsIdx = idx++;
+    staffValues.push(filters.staff_ids);
+  }
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const orderClause = filters.sort === "rate_asc"
+    ? "ORDER BY rebooking_rate ASC, staff_name ASC"
+    : filters.sort === "rate_desc"
+    ? "ORDER BY rebooking_rate DESC, staff_name ASC"
+    : "ORDER BY staff_name ASC";
+
+  const query = `
+    ${this._REBOOKING_RATE_AGG(where, rebookingDaysIdx, staffIdsIdx)}
+    SELECT
+      staff_id, staff_name, total_visits, rebooked_visits,
+      CASE WHEN total_visits > 0
+        THEN ROUND((rebooked_visits::numeric / total_visits) * 100, 2)
+        ELSE 0
+      END AS rebooking_rate,
+      COUNT(*) OVER() AS total_count
+    FROM per_staff
+    ${orderClause}
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, rebookingDaysValue, ...staffValues, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: RebookingRateReportRow[] = rows.map((row: any) => ({
+    staff_id: row.staff_id,
+    staff_name: row.staff_name ?? "—",
+    total_visits: Number(row.total_visits ?? 0),
+    rebooked_visits: Number(row.rebooked_visits ?? 0),
+    rebooking_rate: Number(row.rebooking_rate ?? 0),
   }));
   const effectiveLimit = limit ?? Math.max(total, 1);
   return {
