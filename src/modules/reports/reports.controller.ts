@@ -2348,4 +2348,45 @@ async getClientRatingReport(
     }
 },
 
+// ======================================================
+// REBOOKING RATE REPORT (independent report API)
+// POST /api/report/rebooking-rate
+// ======================================================
+
+async getRebookingRateReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            search: asString(body.search),
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+            rebooking_days: body.rebooking_days !== undefined ? Number(body.rebooking_days) : undefined,
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+            sort: body.sort === "rate_asc" || body.sort === "rate_desc" ? body.sort : undefined,
+        };
+
+        const data = await reportsService.getRebookingRateReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Rebooking rate report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
 };
