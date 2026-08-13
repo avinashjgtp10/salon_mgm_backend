@@ -1369,10 +1369,35 @@ export const paymentsService = {
     // membership_items there's no payment-body fallback, since the frontend
     // never sends these directly on a payment.
     const packageItemsSrc: Array<any> = appt?.package_items ?? [];
-    if (data.status === 'completed' && data.client_id && packageItemsSrc.length > 0) {
+    // Deliberately NOT gated on 'completed' (unlike memberships/reward points
+    // below/above): a client gets their package the moment they put money
+    // down, even a part payment, so they can start using it immediately.
+    // The package row itself records the real paid/pending split rather than
+    // claiming to be settled — and autoCreateFromPayment is idempotent per
+    // (appointment, package name), so the later payment that clears the
+    // balance settles this same row instead of creating a second package.
+    const isBillFullyPaid = data.status === 'completed';
+    // Proportional allocation: on a bill that also carries services/products,
+    // a part payment isn't earmarked to any one line, so each package is
+    // credited the same share of its own total that the bill as a whole has
+    // collected. Falls back to fully-paid if the totals aren't usable.
+    const billTotalForPkg = Number(data.net_amount) || 0;
+    const billPaidFraction = isBillFullyPaid || billTotalForPkg <= 0
+      ? 1
+      : Math.min(1, Math.max(0, (billTotalForPkg - (Number(data.due_amount) || 0)) / billTotalForPkg));
+    if ((data.status === 'completed' || data.status === 'partial') && data.client_id && packageItemsSrc.length > 0) {
+      // Awaited (see the Promise.allSettled below), unlike the membership
+      // block above which is still fire-and-forget. The client_packages row
+      // has to exist before this request returns: the UI refetches
+      // /client-packages the moment checkout responds, and when creation ran
+      // detached that refetch consistently won the race and came back empty,
+      // so a client who had just paid appeared to own no package at all.
+      // Only the row insert is awaited — autoCreateFromPayment detaches its
+      // own slow tail (auto-scheduling appointments, WhatsApp), so this adds
+      // very little to the checkout response time.
+      const packageCreations: Array<Promise<void>> = [];
       for (const item of packageItemsSrc) {
-        // Fire-and-forget — does not block payment return
-        (async () => {
+        packageCreations.push((async () => {
           try {
             // Prefer a Package Template (has a real per-service session
             // breakdown) — fall back to a plain Catalog package (services
@@ -1482,12 +1507,17 @@ export const paymentsService = {
               item.staff_id || appt?.staff_id || undefined,
               checkoutSaleId,
               requesterUserId,
+              billPaidFraction,
+              isBillFullyPaid,
             );
           } catch (err: any) {
             logger.warn('[payments] package auto-create failed:', err?.message ?? err);
           }
-        })();
+        })());
       }
+      // allSettled, not all — each entry already swallows its own errors, and
+      // one package failing must never fail the payment that was collected.
+      await Promise.allSettled(packageCreations);
     }
 
     // Live calendar sync — appointments.service.ts already does this for
