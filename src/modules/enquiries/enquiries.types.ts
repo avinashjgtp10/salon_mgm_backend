@@ -36,6 +36,12 @@ export type UpdateEnquiryBody = Partial<CreateEnquiryBody>;
 export type ListEnquiriesQuery = {
     search?: string;
     status?: EnquiryStatus;
+    start_date?: string;
+    end_date?: string;
+    startDate?: string;
+    endDate?: string;
+    from?: string;
+    to?: string;
     page?: number;
     limit?: number;
 };

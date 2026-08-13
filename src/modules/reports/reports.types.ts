@@ -736,10 +736,11 @@ export interface DailySheetReportFilters {
 export interface DailySheetReportRow {
     appointment_id: string | null;
     sale_id: string;
-    time: string;
+    date: string;
+    booking_time: string;
     // When the invoice/bill was actually created (sales.created_at). Distinct
-    // from `time` (the appointment/booking slot) — null for an appointment
-    // row that hasn't been billed yet.
+    // from `booking_time` (the appointment/booking slot) — null for an
+    // appointment row that hasn't been billed yet.
     bill_time: string | null;
     ticket_no: string;
     client_id: string | null;
@@ -2709,6 +2710,56 @@ export interface ClientRatingReportPagination {
     page: number;
     limit: number;
     total_pages: number;
+}
+
+// ===============================
+// Rebooking Rate Report (independent report API — POST /api/report/rebooking-rate)
+// Per staff member: of the completed visits they served, what share of
+// clients came back for another completed visit (with any staff) within a
+// user-entered day window. Reads sales/sale_items/clients directly, never
+// the Appointment API.
+// ===============================
+
+export interface RebookingRateReportFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    // Rebooking window in days — manually entered by the user, no preset
+    // default in the UI, but the backend still falls back to 45 if omitted.
+    rebooking_days?: number;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+    sort?: "rate_desc" | "rate_asc";
+}
+
+export interface RebookingRateReportRow {
+    staff_id: string;
+    staff_name: string;
+    total_visits: number;
+    rebooked_visits: number;
+    rebooking_rate: number;
+}
+
+export interface RebookingRateReportStats {
+    total_visits: number;
+    rebooked_visits: number;
+    overall_rebooking_rate: number;
+    staff_count: number;
+}
+
+export interface RebookingRateReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface RebookingRateReportResponse {
+    rows: RebookingRateReportRow[];
+    pagination: RebookingRateReportPagination;
+    stats: RebookingRateReportStats;
 }
 
 export interface ClientRatingReportResponse {

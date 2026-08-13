@@ -286,6 +286,8 @@ import {
     ReplyRateCampaignDetail,
     ClientRatingReportFilters,
     ClientRatingReportResponse,
+    RebookingRateReportFilters,
+    RebookingRateReportResponse,
 } from "./reports.types";
 
 // ======================================================
@@ -1899,6 +1901,26 @@ async getClientRatingReport(
     const [stats, rowsResult] = await Promise.all([
         reportsRepository.getClientRatingReportStats(salonId, filters),
         reportsRepository.getClientRatingReportRows(salonId, filters),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+    };
+},
+
+// ======================================================
+// REBOOKING RATE REPORT (independent report API)
+// ======================================================
+
+async getRebookingRateReport(
+    salonId: string,
+    filters: RebookingRateReportFilters
+): Promise<RebookingRateReportResponse> {
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getRebookingRateReportStats(salonId, filters),
+        reportsRepository.getRebookingRateReportRows(salonId, filters),
     ]);
 
     return {

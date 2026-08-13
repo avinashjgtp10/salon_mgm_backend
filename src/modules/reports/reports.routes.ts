@@ -277,6 +277,19 @@ router.post(
 );
 
 // ======================================================
+// REBOOKING RATE REPORT (independent report API)
+// Reads sales/sale_items/clients directly — never calls the Appointment
+// API/service. Per staff, what share of their served visits led to the
+// client returning within a user-entered day window.
+// ======================================================
+
+router.post(
+    "/rebooking-rate",
+    ...guard,
+    reportsController.getRebookingRateReport
+);
+
+// ======================================================
 // PACKAGE SALE REPORT (independent report API)
 // Reads client_packages directly — never calls the Appointment API.
 // ======================================================
