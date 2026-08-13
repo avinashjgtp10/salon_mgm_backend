@@ -42,6 +42,10 @@ export type Service = {
   commission_kind: ServiceCommissionKind | null;
   resource_required: boolean;
   is_active: boolean;
+  // Days after which this service should be redone (e.g. a color touch-up
+  // due in 30 days). NULL = no reminder configured. Not yet consumed by any
+  // automation — sits alongside client visit history for whenever that's built.
+  reminder_after_days: number | null;
   consumables_used: ServiceConsumableItem[];
   // Read-only, from STAFF_COUNT_SUBQUERY. 0 means "all staff" (no
   // service_staff rows), not "nobody" — render it accordingly.
@@ -129,6 +133,7 @@ export type CreateServiceBody = {
   // Settable at creation now — the INSERT writes it explicitly rather than
   // relying on the column default, so a service can be created inactive.
   is_active?: boolean;
+  reminder_after_days?: number | null;
   staff_ids?: string[];
   consumables_used?: ServiceConsumableItem[];
 };

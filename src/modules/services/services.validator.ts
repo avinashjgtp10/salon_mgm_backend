@@ -7,6 +7,8 @@ const isOptionalString      = (v: unknown) => v === undefined || typeof v === "s
 const isOptionalBool        = (v: unknown) => v === undefined || typeof v === "boolean";
 const isOptionalInt         = (v: unknown) => v === undefined || (typeof v === "number" && Number.isInteger(v));
 const isOptionalNonNeg      = (v: unknown) => v === undefined || (typeof v === "number" && Number.isFinite(v) && v >= 0);
+const isOptionalPositiveIntOrNull = (v: unknown) =>
+  v === undefined || v === null || (typeof v === "number" && Number.isInteger(v) && v > 0);
 const isOptionalStringArray = (v: unknown): v is string[] | undefined =>
   v === undefined || (Array.isArray(v) && v.every((x) => typeof x === "string"));
 
@@ -55,7 +57,7 @@ const KNOWN_SERVICE_KEYS = new Set([
   "name", "category_id", "treatment_type", "description",
   "price_type", "price", "duration", "is_active",
   "online_booking", "commission_enabled", "resource_required",
-  "commission_rate", "commission_kind",
+  "commission_rate", "commission_kind", "reminder_after_days",
   "staff_ids", "consumables_used",
 ]);
 
@@ -113,6 +115,7 @@ export const validateCreateService = (req: Request, _res: Response, next: NextFu
     if (!isOptionalBool(b.online_booking))   throw new AppError(400, "online_booking must be a boolean", "VALIDATION_ERROR");
     if (!isOptionalBool(b.commission_enabled)) throw new AppError(400, "commission_enabled must be a boolean", "VALIDATION_ERROR");
     if (!isOptionalBool(b.resource_required))  throw new AppError(400, "resource_required must be a boolean", "VALIDATION_ERROR");
+    if (!isOptionalPositiveIntOrNull(b.reminder_after_days)) throw new AppError(400, "reminder_after_days must be a positive integer or null", "VALIDATION_ERROR");
     validateCommissionOverride(b);
     validateUuidArray(b.staff_ids, "staff_ids");
     validateConsumablesUsed(b.consumables_used, "consumables_used");
@@ -135,6 +138,7 @@ export const validateUpdateService = (req: Request, _res: Response, next: NextFu
     if (!isOptionalBool(b.commission_enabled)) throw new AppError(400, "commission_enabled must be a boolean", "VALIDATION_ERROR");
     if (!isOptionalBool(b.resource_required))  throw new AppError(400, "resource_required must be a boolean", "VALIDATION_ERROR");
     if (!isOptionalBool(b.is_active))        throw new AppError(400, "is_active must be a boolean", "VALIDATION_ERROR");
+    if (!isOptionalPositiveIntOrNull(b.reminder_after_days)) throw new AppError(400, "reminder_after_days must be a positive integer or null", "VALIDATION_ERROR");
     validateCommissionOverride(b);
     validateUuidArray(b.staff_ids, "staff_ids");
     validateConsumablesUsed(b.consumables_used, "consumables_used");

@@ -198,8 +198,8 @@ export const servicesRepository = {
         salon_id, name, category_id, treatment_type, description,
         price_type, price, duration_minutes,
         online_booking, commission_enabled, resource_required, is_active,
-        commission_rate, commission_kind
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+        commission_rate, commission_kind, reminder_after_days
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
       RETURNING *, duration_minutes AS duration`,
       [
         salonId,
@@ -218,6 +218,7 @@ export const servicesRepository = {
         // commission rules, which is the behaviour every existing service has.
         data.commission_rate ?? null,
         data.commission_kind ?? null,
+        data.reminder_after_days ?? null,
       ]
     );
     return rows[0];
@@ -235,6 +236,8 @@ export const servicesRepository = {
       // Explicit null is copied through (the loop below only skips undefined),
       // so sending both as null clears a per-service commission override.
       "commission_rate", "commission_kind",
+      // Explicit null clears a configured reminder the same way.
+      "reminder_after_days",
     ]);
 
     const raw = patch as Record<string, unknown>;
