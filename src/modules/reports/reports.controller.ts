@@ -2389,4 +2389,47 @@ async getRebookingRateReport(
     }
 },
 
+// ======================================================
+// PAYROLL HISTORY REPORT (independent report API)
+// POST /api/report/payroll-history
+// ======================================================
+
+async getPayrollHistoryReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            search: asString(body.search),
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            payment_status: asString(body.payment_status),
+            payment_statuses: Array.isArray(body.payment_statuses) ? body.payment_statuses.map(String) : undefined,
+            payment_method: asString(body.payment_method),
+            payment_methods: Array.isArray(body.payment_methods) ? body.payment_methods.map(String) : undefined,
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getPayrollHistoryReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Payroll history report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
 };

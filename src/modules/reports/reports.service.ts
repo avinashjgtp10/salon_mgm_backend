@@ -269,6 +269,8 @@ import {
     StaffItemSalesReportResponse,
     PackageSaleReportFilters,
     PackageSaleReportResponse,
+    PayrollHistoryReportFilters,
+    PayrollHistoryReportResponse,
     PackageHistoryReportFilters,
     PackageHistoryReportResponse,
     MemberSaleReportFilters,
@@ -1927,6 +1929,28 @@ async getRebookingRateReport(
         rows: rowsResult.items,
         pagination: rowsResult.pagination,
         stats,
+    };
+},
+
+// ======================================================
+// PAYROLL HISTORY REPORT (independent report API)
+// ======================================================
+
+async getPayrollHistoryReport(
+    salonId: string,
+    filters: PayrollHistoryReportFilters
+): Promise<PayrollHistoryReportResponse> {
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
+        reportsRepository.getPayrollHistoryReportStats(salonId, filters),
+        reportsRepository.getPayrollHistoryReportRows(salonId, filters),
+        reportsRepository.getPayrollHistoryFiltersAvailable(salonId),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+        filters_available: filtersAvailable,
     };
 },
 

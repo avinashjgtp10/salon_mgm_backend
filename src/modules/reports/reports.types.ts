@@ -2763,6 +2763,77 @@ export interface RebookingRateReportResponse {
     stats: RebookingRateReportStats;
 }
 
+// ===============================
+// Payroll History Report (independent report API —
+// POST /api/report/payroll-history)
+// Reads directly from payroll_entries joined to staff, one row per payroll
+// entry (staff x period). Never touches the Appointment API.
+// ===============================
+
+export interface PayrollHistoryReportFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    payment_status?: string;
+    payment_statuses?: string[];
+    payment_method?: string;
+    payment_methods?: string[];
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface PayrollHistoryReportRow {
+    id: string;
+    staff_id: string;
+    staff_name: string;
+    staff_designation: string | null;
+    period_type: string;
+    period_start: string;
+    period_end: string;
+    base_salary: number;
+    commission: number;
+    tips: number;
+    bonus: number;
+    salary_advance: number;
+    deductions: number;
+    net_pay: number;
+    paid_amount: number;
+    pending_amount: number;
+    payment_status: string;
+    payment_method: string | null;
+    payment_date: string | null;
+}
+
+export interface PayrollHistoryReportStats {
+    total_entries: number;
+    total_net_payroll: number;
+    total_paid: number;
+    total_pending: number;
+}
+
+export interface PayrollHistoryReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface PayrollHistoryFilterOption {
+    id: string;
+    label: string;
+}
+
+export interface PayrollHistoryReportResponse {
+    rows: PayrollHistoryReportRow[];
+    pagination: PayrollHistoryReportPagination;
+    stats: PayrollHistoryReportStats;
+    filters_available: {
+        staff: PayrollHistoryFilterOption[];
+    };
+}
+
 export interface ClientRatingReportResponse {
     rows: ClientRatingReportRow[];
     pagination: ClientRatingReportPagination;
