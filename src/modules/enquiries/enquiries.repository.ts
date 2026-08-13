@@ -23,6 +23,27 @@ const buildWhere = (query: ListEnquiriesQuery, salonId: string) => {
         where.push(`e.status = $${values.length}`);
     }
 
+    const startDate = query.start_date || query.startDate || query.from;
+    const endDate = query.end_date || query.endDate || query.to;
+
+    if (startDate && endDate) {
+        values.push(`${startDate} 00:00:00`);
+        const p1 = values.length;
+        values.push(`${endDate} 23:59:59.999`);
+        const p2 = values.length;
+        where.push(
+            `((e.created_at >= $${p1}::timestamp AND e.created_at <= $${p2}::timestamp) OR (e.follow_up_at IS NOT NULL AND e.follow_up_at >= $${p1}::timestamp AND e.follow_up_at <= $${p2}::timestamp))`
+        );
+    } else if (startDate) {
+        values.push(`${startDate} 00:00:00`);
+        const p = values.length;
+        where.push(`(e.created_at >= $${p}::timestamp OR (e.follow_up_at IS NOT NULL AND e.follow_up_at >= $${p}::timestamp))`);
+    } else if (endDate) {
+        values.push(`${endDate} 23:59:59.999`);
+        const p = values.length;
+        where.push(`(e.created_at <= $${p}::timestamp OR (e.follow_up_at IS NOT NULL AND e.follow_up_at <= $${p}::timestamp))`);
+    }
+
     return { whereSql: `WHERE ${where.join(" AND ")}`, values };
 };
 
