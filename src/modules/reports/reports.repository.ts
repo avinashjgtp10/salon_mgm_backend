@@ -5385,11 +5385,12 @@ async getLostCustomersReportRows(
 _buildReferralWhere(
   salonId: string,
   filters: { search?: string; staff_ids?: string[]; reward_status?: string }
-): { where: string; values: any[]; nextIndex: number } {
+): { where: string; values: any[]; nextIndex: number; staffIdsIdx: number | null } {
   // `c` = the referred client, `r` = the referrer.
   const values: any[] = [salonId];
   const where = ["c.salon_id = $1", "c.referred_by_client_id IS NOT NULL"];
   let idx = 2;
+  let staffIdsIdx: number | null = null;
 
   if (filters.reward_status === "rewarded" || filters.reward_status === "pending") {
     // referral_reward_status is NULL until a code is linked and 'pending'
@@ -5402,11 +5403,12 @@ _buildReferralWhere(
   }
   if (filters.staff_ids && filters.staff_ids.length > 0) {
     // Staff who served the REFERRED client on any completed sale.
+    staffIdsIdx = idx++;
     where.push(`EXISTS (
       SELECT 1 FROM sales s2
       JOIN sale_items si2 ON si2.sale_id = s2.id
       WHERE s2.client_id = c.id AND s2.status = 'completed'
-        AND COALESCE(si2.staff_id, s2.staff_id) = ANY($${idx++}::uuid[])
+        AND COALESCE(si2.staff_id, s2.staff_id) = ANY($${staffIdsIdx}::uuid[])
     )`);
     values.push(filters.staff_ids);
   }
@@ -5421,13 +5423,13 @@ _buildReferralWhere(
     idx++;
   }
 
-  return { where: where.join(" AND "), values, nextIndex: idx };
+  return { where: where.join(" AND "), values, nextIndex: idx, staffIdsIdx };
 },
 
 // Shared aggregation CTE — one row per referral link. The date range filters
 // on the referral date (when the referred client was created), which is the
 // column the report is sorted and reported on.
-_REFERRAL_AGG(where: string, startDateIdx: number | null, endDateIdx: number | null): string {
+_REFERRAL_AGG(where: string, startDateIdx: number | null, endDateIdx: number | null, staffIdsIdx: number | null = null): string {
   const rangeClause = startDateIdx
     ? `AND ((c.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata')::date >= $${startDateIdx}::date${
         endDateIdx ? ` AND ((c.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata')::date <= $${endDateIdx}::date` : ""
@@ -5480,6 +5482,11 @@ _REFERRAL_AGG(where: string, startDateIdx: number | null, endDateIdx: number | n
     ),
     -- The staff member on the referred client's most recent completed sale —
     -- "who is serving this referred customer", not every staff who ever did.
+    -- When a staff filter is active, a row was only included because SOME
+    -- sale matched that staff (see _buildReferralWhere's EXISTS check) — so
+    -- the displayed name must come from that same matching sale, not just
+    -- whichever sale happens to be most recent overall (which could be a
+    -- different, unrelated staff member and contradict the filter).
     staff_pick AS (
       SELECT DISTINCT ON (s.client_id)
         s.client_id,
@@ -5492,6 +5499,7 @@ _REFERRAL_AGG(where: string, startDateIdx: number | null, endDateIdx: number | n
       LEFT JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
       WHERE s.status = 'completed'
         AND s.client_id IN (SELECT referred_client_id FROM referral_base)
+        ${staffIdsIdx ? `AND COALESCE(si.staff_id, s.staff_id) = ANY($${staffIdsIdx}::uuid[])` : ""}
       ORDER BY s.client_id, s.created_at DESC
     ),
     referrals AS (
@@ -5514,7 +5522,7 @@ async getReferralReportStats(
   salonId: string,
   filters: { start_date?: string; end_date?: string; search?: string; staff_ids?: string[]; reward_status?: string }
 ): Promise<ReferralReportStats> {
-  const { where, values, nextIndex } = this._buildReferralWhere(salonId, filters);
+  const { where, values, nextIndex, staffIdsIdx } = this._buildReferralWhere(salonId, filters);
   let idx = nextIndex;
 
   const dateValues: any[] = [];
@@ -5530,7 +5538,7 @@ async getReferralReportStats(
   }
 
   const query = `
-    ${this._REFERRAL_AGG(where, startDateIdx, endDateIdx)}
+    ${this._REFERRAL_AGG(where, startDateIdx, endDateIdx, staffIdsIdx)}
     SELECT
       COUNT(*)::int AS total_referrals,
       COUNT(*) FILTER (WHERE reward_status = 'rewarded')::int AS rewarded_referrals,
@@ -5559,7 +5567,7 @@ async getReferralReportRows(
   items: ReferralReportRow[];
   pagination: { total: number; page: number; limit: number; total_pages: number };
 }> {
-  const { where, values, nextIndex } = this._buildReferralWhere(salonId, filters);
+  const { where, values, nextIndex, staffIdsIdx } = this._buildReferralWhere(salonId, filters);
   let idx = nextIndex;
 
   const dateValues: any[] = [];
@@ -5582,7 +5590,7 @@ async getReferralReportRows(
   const limitValues = limit ? [limit, offset] : [];
 
   const query = `
-    ${this._REFERRAL_AGG(where, startDateIdx, endDateIdx)}
+    ${this._REFERRAL_AGG(where, startDateIdx, endDateIdx, staffIdsIdx)}
     SELECT
       referred_client_id, referrer_client_id, referrer_name, referred_name,
       referral_date, first_visit, total_visits, revenue_generated,
