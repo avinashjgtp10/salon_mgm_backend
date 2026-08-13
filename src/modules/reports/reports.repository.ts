@@ -1332,12 +1332,34 @@ _buildSalesSummaryWhere(
     where.push(`s.status <> 'draft'`);
   }
 
+  // Dates by the appointment's actual scheduled visit (falling back to
+  // s.created_at for walk-in sales with no linked appointment) — NOT by
+  // when the sale/invoice row happened to be created. Checkout can lag the
+  // visit by a day or more (pre-payment, delayed checkout, balance settled
+  // later), so s.created_at alone silently misdated appointment-linked
+  // sales. This also brings the billed side back in line with the unbilled
+  // side (_UNBILLED_APPOINTMENT_ROWS_CTE), which has always filtered by
+  // a.scheduled_at — previously the same "date" filter meant two different
+  // things depending on whether a row happened to be billed yet. Every call
+  // site of this WHERE-builder already joins _APPOINTMENT_STATUS_JOIN
+  // (`LEFT JOIN appointments a ON a.id = s.appointment_id`), so `a` is
+  // always in scope here.
+  //
+  // start_date/end_date are IST calendar dates (what the date picker and
+  // every displayed date/time column mean) — casting a bare date literal to
+  // timestamptz interprets midnight in the DB SESSION timezone (UTC), not
+  // IST, silently dropping any booking/sale between 12:00 AM-5:29 AM IST
+  // into the previous day's bucket. `date AT TIME ZONE zone` alone is NOT
+  // the fix — that overload returns a plain (unshifted) timestamp, not a
+  // converted instant; casting to ::timestamp FIRST, then AT TIME ZONE, is
+  // what actually reinterprets the literal as IST wall-clock time and
+  // converts it to the correct UTC instant.
   if (filters.start_date) {
-    where.push(`s.created_at >= $${idx++}::date`);
+    where.push(`COALESCE(a.scheduled_at, s.created_at) >= ($${idx++}::date::timestamp AT TIME ZONE 'Asia/Kolkata')`);
     values.push(filters.start_date);
   }
   if (filters.end_date) {
-    where.push(`s.created_at < ($${idx++}::date + interval '1 day')`);
+    where.push(`COALESCE(a.scheduled_at, s.created_at) < (($${idx++}::date + interval '1 day')::timestamp AT TIME ZONE 'Asia/Kolkata')`);
     values.push(filters.end_date);
   }
   if (filters.payment_modes && filters.payment_modes.length > 0) {
@@ -1498,12 +1520,22 @@ _UNBILLED_APPOINTMENT_ROWS_CTE(
   ];
   let idx = startIdx;
 
+  // start_date/end_date are IST calendar dates (what the report's date
+  // picker and every other display column mean) — casting a bare date
+  // literal to timestamptz interprets midnight in the DB SESSION timezone
+  // (UTC), not IST, so a plain `a.scheduled_at >= $::date` silently dropped
+  // any booking between 12:00 AM-5:29 AM IST into the previous day's
+  // bucket. `date AT TIME ZONE zone` alone is NOT the fix — that overload
+  // returns a plain (unshifted) timestamp, not a converted instant; casting
+  // to ::timestamp FIRST, then AT TIME ZONE, is what actually reinterprets
+  // the literal as IST wall-clock time and converts it to the correct UTC
+  // instant.
   if (filters.start_date) {
-    where.push(`a.scheduled_at >= $${idx++}::date`);
+    where.push(`a.scheduled_at >= ($${idx++}::date::timestamp AT TIME ZONE 'Asia/Kolkata')`);
     values.push(filters.start_date);
   }
   if (filters.end_date) {
-    where.push(`a.scheduled_at < ($${idx++}::date + interval '1 day')`);
+    where.push(`a.scheduled_at < (($${idx++}::date + interval '1 day')::timestamp AT TIME ZONE 'Asia/Kolkata')`);
     values.push(filters.end_date);
   }
   if (filters.staff_ids && filters.staff_ids.length > 0) {
@@ -2266,8 +2298,17 @@ _buildDailySheetWhere(
   const saleItemsJoin = ["si.sale_id = s.id"];
   let idx = 2;
 
+  // Dates by the appointment's actual scheduled visit (falling back to
+  // s.created_at for walk-in sales with no linked appointment), matching
+  // _buildSalesSummaryWhere's same fix and bringing the billed side back in
+  // line with the unbilled side (_UNBILLED_APPOINTMENT_DAILY_ROWS_CTE),
+  // which has always filtered by scheduled_at. Both converted to IST before
+  // taking DATE() — a bare `DATE(timestamptz)` reads midnight in the DB
+  // SESSION timezone (UTC), not IST, so a booking between 12:00 AM-5:29 AM
+  // IST would otherwise silently bucket into the previous day. Requires
+  // _APPOINTMENT_STATUS_JOIN's `a` alias, already joined at every call site.
   if (filters.date) {
-    where.push(`DATE(s.created_at) = $${idx++}::date`);
+    where.push(`DATE(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata') = $${idx++}::date`);
     values.push(filters.date);
   }
   if (filters.time_from) {
@@ -2379,8 +2420,10 @@ _UNBILLED_APPOINTMENT_DAILY_ROWS_CTE(
   ];
   let idx = startIdx;
 
+  // IST calendar date, not the DB session's UTC — see the matching comment
+  // in _buildDailySheetWhere.
   if (filters.date) {
-    where.push(`DATE(a.scheduled_at) = $${idx++}::date`);
+    where.push(`DATE(a.scheduled_at AT TIME ZONE 'Asia/Kolkata') = $${idx++}::date`);
     values.push(filters.date);
   }
   if (filters.time_from) {
