@@ -395,4 +395,32 @@ export const attendanceRepository = {
         );
         return rows.length > 0;
     },
+
+    // Every (staff_id, date) pair covered by an approved leave that overlaps
+    // the range — expanded via generate_series so a single multi-day leave
+    // row still marks each individual day, matching how attendance rows are
+    // one-per-day. Used by getRange to exclude leave days from hour totals
+    // without a per-row query per staff member.
+    async findApprovedLeaveDatesInRange(
+        salonId: string,
+        startDate: string,
+        endDate: string
+    ): Promise<{ staff_id: string; date: string }[]> {
+        const { rows } = await pool.query(
+            `SELECT sl.staff_id,
+                    TO_CHAR(d.day, 'YYYY-MM-DD') AS date
+             FROM staff_leaves sl
+             JOIN staff st ON st.id = sl.staff_id AND st.salon_id = $1
+             CROSS JOIN LATERAL generate_series(
+               GREATEST(sl.start_date::date, $2::date),
+               LEAST(sl.end_date::date, $3::date),
+               interval '1 day'
+             ) AS d(day)
+             WHERE sl.status = 'approved'
+               AND sl.start_date::date <= $3::date
+               AND sl.end_date::date   >= $2::date`,
+            [salonId, startDate, endDate]
+        );
+        return rows;
+    },
 };

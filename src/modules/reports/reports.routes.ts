@@ -220,6 +220,18 @@ router.post(
 );
 
 // ======================================================
+// CASH MANAGEMENT REPORT (independent report API)
+// Reads cash_management directly — never calls the cash-management module's
+// own service/repository, and never calls the Appointment API/service.
+// ======================================================
+
+router.post(
+    "/cash-management",
+    ...guard,
+    reportsController.getCashManagementReport
+);
+
+// ======================================================
 // REFERRAL REPORT (independent report API)
 // One row per referred client, joined back to the referrer. Reads
 // clients/sales/referral_ledger directly — never calls the Appointment API.

@@ -88,6 +88,10 @@ import {
     ClientRatingReportStats,
     RebookingRateReportRow,
     RebookingRateReportStats,
+    CashManagementReportFilters,
+    CashManagementReportRow,
+    CashManagementReportStats,
+    CashManagementFiltersAvailable,
 } from "./reports.types";
 
 // ─── WhatsApp message delivery states ────────────────────────────────────────
@@ -4513,7 +4517,7 @@ async getCustomerSpendReportStats(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; search?: string; staff_ids?: string[];
-    segments?: string[]; vip_min_spend?: number; low_max_spend?: number;
+    segments?: string[]; vip_min_spend?: number; low_max_spend?: number; min_visits?: number;
   }
 ): Promise<CustomerSpendReportStats> {
   const { where, saleJoin, values, nextIndex } = this._buildCustomerSpendWhere(salonId, filters);
@@ -4523,11 +4527,16 @@ async getCustomerSpendReportStats(
   const lowIdx = idx++;
 
   const extra: any[] = [vipMin, lowMax];
-  let segmentClause = "";
+  const postClauses: string[] = [];
   if (filters.segments && filters.segments.length > 0) {
-    segmentClause = `WHERE spend_segment = ANY($${idx++}::text[])`;
+    postClauses.push(`spend_segment = ANY($${idx++}::text[])`);
     extra.push(filters.segments);
   }
+  if (filters.min_visits !== undefined) {
+    postClauses.push(`visits >= $${idx++}::int`);
+    extra.push(filters.min_visits);
+  }
+  const segmentClause = postClauses.length ? `WHERE ${postClauses.join(" AND ")}` : "";
 
   const query = `
     ${this._CUSTOMER_SPEND_AGG(where, saleJoin, vipIdx, lowIdx)}
@@ -4561,7 +4570,7 @@ async getCustomerSpendReportRows(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; search?: string; staff_ids?: string[];
-    segments?: string[]; vip_min_spend?: number; low_max_spend?: number;
+    segments?: string[]; vip_min_spend?: number; low_max_spend?: number; min_visits?: number;
     page?: number; limit?: number; is_export?: boolean;
   }
 ): Promise<{
@@ -4575,11 +4584,16 @@ async getCustomerSpendReportRows(
   const lowIdx = idx++;
 
   const extra: any[] = [vipMin, lowMax];
-  let segmentClause = "";
+  const postClauses: string[] = [];
   if (filters.segments && filters.segments.length > 0) {
-    segmentClause = `WHERE spend_segment = ANY($${idx++}::text[])`;
+    postClauses.push(`spend_segment = ANY($${idx++}::text[])`);
     extra.push(filters.segments);
   }
+  if (filters.min_visits !== undefined) {
+    postClauses.push(`visits >= $${idx++}::int`);
+    extra.push(filters.min_visits);
+  }
+  const segmentClause = postClauses.length ? `WHERE ${postClauses.join(" AND ")}` : "";
 
   const page = Math.max(1, Number(filters.page ?? 1));
   const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
@@ -6031,6 +6045,163 @@ async getPaymentCollectionFiltersAvailable(salonId: string): Promise<PaymentColl
     staff: staffRows
       .filter((r: any) => r.label)
       .map((r: any) => ({ id: String(r.id), label: r.label })),
+  };
+},
+
+// ======================================================
+// CASH MANAGEMENT REPORT (independent report API)
+// POST /api/report/cash-management — one row per cash counter session.
+// Reads cash_management directly (never the cash-management module's own
+// service/repository) joined to users for opener/closer names, same
+// independence convention every other report in this file follows.
+// ======================================================
+
+// Shared WHERE clause builder — date range is on opened_at (matches the
+// cash-management module's own listCounters filter, so "This Month" means
+// the same thing here as it does on the operational Cash Management page).
+_buildCashManagementWhere(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; search?: string; statuses?: string[] }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where: string[] = ["cm.salon_id = $1"];
+  let idx = 2;
+
+  if (filters.start_date) {
+    where.push(`DATE(cm.opened_at) >= $${idx++}::date`);
+    values.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    where.push(`DATE(cm.opened_at) <= $${idx++}::date`);
+    values.push(filters.end_date);
+  }
+  if (filters.statuses?.length) {
+    where.push(`cm.status = ANY($${idx++})`);
+    values.push(filters.statuses);
+  }
+  if (filters.search) {
+    where.push(`(
+      COALESCE(ou.full_name, TRIM(COALESCE(ou.first_name, '') || ' ' || COALESCE(ou.last_name, ''))) ILIKE $${idx}
+      OR COALESCE(cu.full_name, TRIM(COALESCE(cu.first_name, '') || ' ' || COALESCE(cu.last_name, ''))) ILIKE $${idx}
+      OR COALESCE(cm.remarks, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search}%`);
+    idx += 1;
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+_CASH_MANAGEMENT_JOIN(): string {
+  return `
+    FROM cash_management cm
+    LEFT JOIN users ou ON ou.id = cm.created_by
+    LEFT JOIN users cu ON cu.id = cm.closed_by
+  `;
+},
+
+async getCashManagementReportStats(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; search?: string; statuses?: string[] }
+): Promise<CashManagementReportStats> {
+  const { where, values } = this._buildCashManagementWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      COALESCE(SUM(cm.opening_balance), 0)         AS total_opening_balance,
+      COALESCE(SUM(cm.cash_revenue), 0)             AS total_cash_revenue,
+      COALESCE(SUM(cm.cash_expense), 0)             AS total_cash_expense,
+      COALESCE(SUM(cm.closing_balance), 0)          AS total_closing_balance,
+      COALESCE(SUM(cm.reconciliation_amount), 0)    AS total_reconciliation_amount,
+      COUNT(*)::int                                 AS total_sessions,
+      COUNT(*) FILTER (WHERE cm.status = 'open')::int   AS open_sessions,
+      COUNT(*) FILTER (WHERE cm.status = 'closed')::int AS closed_sessions
+    ${this._CASH_MANAGEMENT_JOIN()}
+    WHERE ${where}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  return {
+    total_opening_balance: Math.round(Number(r.total_opening_balance ?? 0)),
+    total_cash_revenue: Math.round(Number(r.total_cash_revenue ?? 0)),
+    total_cash_expense: Math.round(Number(r.total_cash_expense ?? 0)),
+    total_closing_balance: Math.round(Number(r.total_closing_balance ?? 0)),
+    total_reconciliation_amount: Math.round(Number(r.total_reconciliation_amount ?? 0)),
+    total_sessions: Number(r.total_sessions ?? 0),
+    open_sessions: Number(r.open_sessions ?? 0),
+    closed_sessions: Number(r.closed_sessions ?? 0),
+  };
+},
+
+async getCashManagementReportRows(
+  salonId: string,
+  filters: CashManagementReportFilters
+): Promise<{
+  items: CashManagementReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildCashManagementWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    SELECT
+      cm.id, cm.status, cm.opening_balance, cm.cash_revenue, cm.cash_expense,
+      cm.closing_balance, cm.in_store_cash, cm.reconciliation_amount, cm.remarks,
+      cm.opened_at, cm.closed_at,
+      COALESCE(ou.full_name, TRIM(COALESCE(ou.first_name, '') || ' ' || COALESCE(ou.last_name, ''))) AS opened_by,
+      COALESCE(cu.full_name, TRIM(COALESCE(cu.first_name, '') || ' ' || COALESCE(cu.last_name, ''))) AS closed_by,
+      COUNT(*) OVER() AS total_count
+    ${this._CASH_MANAGEMENT_JOIN()}
+    WHERE ${where}
+    ORDER BY cm.opened_at DESC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: CashManagementReportRow[] = rows.map((row: any) => ({
+    id: row.id,
+    status: row.status === "open" ? "open" : "closed",
+    opening_balance: Math.round(Number(row.opening_balance ?? 0)),
+    cash_revenue: Math.round(Number(row.cash_revenue ?? 0)),
+    cash_expense: Math.round(Number(row.cash_expense ?? 0)),
+    closing_balance: Math.round(Number(row.closing_balance ?? 0)),
+    in_store_cash: row.in_store_cash === null ? null : Math.round(Number(row.in_store_cash)),
+    reconciliation_amount: row.reconciliation_amount === null ? null : Math.round(Number(row.reconciliation_amount)),
+    remarks: row.remarks,
+    opened_at: row.opened_at,
+    closed_at: row.closed_at,
+    opened_by: row.opened_by || "System",
+    closed_by: row.closed_by,
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+async getCashManagementFiltersAvailable(): Promise<CashManagementFiltersAvailable> {
+  // Fixed two-value vocabulary (cash_management.status is open/closed) — no
+  // DB lookup needed, unlike Payment Collection's free-text payment_method.
+  return {
+    status: [
+      { id: "open", label: "Open" },
+      { id: "closed", label: "Closed" },
+    ],
   };
 },
 
