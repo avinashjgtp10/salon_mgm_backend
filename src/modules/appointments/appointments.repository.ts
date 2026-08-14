@@ -42,10 +42,10 @@ export async function ensureTable(): Promise<void> {
     await pool.query(
         `ALTER TABLE appointments ADD COLUMN IF NOT EXISTS include_gst BOOLEAN NOT NULL DEFAULT TRUE`,
     );
-    // "Delete Appointment" used to be a real SQL DELETE — switched to soft
-    // delete so a removed booking can still show on the calendar (greyed out,
-    // "Deleted" on the tooltip) instead of vanishing without a trace. NULL
-    // (the default for every pre-existing row) means "not deleted".
+    // Column kept for backward compatibility with any historical rows/reports
+    // that still reference it — "Delete Appointment" now performs a true hard
+    // delete (see deleteById below), so no row written going forward ever has
+    // this set.
     await pool.query(
         `ALTER TABLE appointments ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ NULL`,
     );
@@ -436,12 +436,50 @@ export const appointmentsRepository = {
         return rows;
     },
 
+    // True hard delete — permanently removes the appointment and every
+    // financial record tied to it (commissions earned, payments, the linked
+    // sale and its line items) in one transaction, so nothing is left behind
+    // that could still be counted in revenue/commission totals. Runs before
+    // the appointments row itself so FK lookups via sale_id still resolve.
     async deleteById(id: string): Promise<Appointment | null> {
-        const { rows } = await pool.query(
-            `UPDATE appointments SET status = 'deleted', deleted_at = NOW() WHERE id = $1 RETURNING *`,
-            [id]
-        );
-        return rows[0] || null;
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            const { rows: apptRows } = await client.query(
+                `SELECT * FROM appointments WHERE id = $1 FOR UPDATE`,
+                [id]
+            );
+            const appointment = apptRows[0];
+            if (!appointment) {
+                await client.query('ROLLBACK');
+                return null;
+            }
+            const saleId: string | null = appointment.sale_id ?? null;
+
+            await client.query(
+                `DELETE FROM commission_earned WHERE appointment_id = $1 OR ($2::uuid IS NOT NULL AND sale_id = $2)`,
+                [id, saleId]
+            );
+            await client.query(`DELETE FROM payments WHERE appointment_id = $1`, [id]);
+            if (saleId) {
+                await client.query(`DELETE FROM sale_items WHERE sale_id = $1`, [saleId]);
+                await client.query(`DELETE FROM sales WHERE id = $1`, [saleId]);
+            } else {
+                await client.query(`DELETE FROM sale_items WHERE sale_id IN (SELECT id FROM sales WHERE appointment_id = $1)`, [id]);
+                await client.query(`DELETE FROM sales WHERE appointment_id = $1`, [id]);
+            }
+            const { rows } = await client.query(
+                `DELETE FROM appointments WHERE id = $1 RETURNING *`,
+                [id]
+            );
+            await client.query('COMMIT');
+            return rows[0] || null;
+        } catch (e) {
+            await client.query('ROLLBACK');
+            throw e;
+        } finally {
+            client.release();
+        }
     },
 
     async linkSale(id: string, saleId: string): Promise<Appointment> {

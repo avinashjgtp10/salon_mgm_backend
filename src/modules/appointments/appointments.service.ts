@@ -946,7 +946,7 @@ export const appointmentsService = {
     },
 
     // Bulk delete for the reports multi-select UI. Reuses the same per-appointment
-    // delete() logic (soft delete + stock restore) so behavior stays identical to
+    // delete() logic (hard delete + stock restore) so behavior stays identical to
     // deleting one at a time — just looped, with per-id failures collected instead
     // of aborting the whole batch.
     async bulkDelete(appointmentIds: string[]): Promise<{ deleted: string[]; failed: { id: string; reason: string }[] }> {
