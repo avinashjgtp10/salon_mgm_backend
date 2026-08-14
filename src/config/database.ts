@@ -310,6 +310,36 @@ setImmediate(() => {
     .catch((err: any) => console.warn('payroll_salary_advances table migration:', err.message));
 });
 
+// Split service_categories into service / product / both (safe, idempotent).
+// The table was always shared — products.category_id and services.category_id
+// both point at it with no way to tell which a given category was meant for,
+// so the Product form's category picker showed every service category too
+// (and vice versa). Backfilled from ACTUAL usage rather than defaulted to one
+// side: a category already assigned to both services and products keeps
+// showing in both pickers ('both'), one used by only one side is tagged to
+// that side, and a category nobody has assigned yet defaults to 'both' since
+// there's no usage evidence to narrow it. The `WHERE type IS NULL` guard means
+// this backfill runs once per row — a category an owner later retypes by hand
+// is never overwritten by a subsequent boot.
+setImmediate(() => {
+  pool.query(`ALTER TABLE service_categories ADD COLUMN IF NOT EXISTS type TEXT`)
+    .then(() => pool.query(`
+      UPDATE service_categories c SET type = CASE
+        WHEN EXISTS (SELECT 1 FROM services s WHERE s.category_id = c.id)
+         AND EXISTS (SELECT 1 FROM products p WHERE p.category_id = c.id) THEN 'both'
+        WHEN EXISTS (SELECT 1 FROM products p WHERE p.category_id = c.id) THEN 'product'
+        WHEN EXISTS (SELECT 1 FROM services s WHERE s.category_id = c.id) THEN 'service'
+        ELSE 'both'
+      END
+      WHERE c.type IS NULL
+    `))
+    .then(() => pool.query(`
+      ALTER TABLE service_categories ALTER COLUMN type SET DEFAULT 'both';
+      ALTER TABLE service_categories ALTER COLUMN type SET NOT NULL;
+    `))
+    .catch((err: any) => console.warn('⚠️  service_categories type migration:', err.message));
+});
+
 /**
  * safeQuery — wraps any pool.query() call with auto-retry.
  *

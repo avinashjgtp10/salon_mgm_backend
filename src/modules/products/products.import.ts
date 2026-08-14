@@ -481,6 +481,7 @@ async function getOrCreateCategory(
 
         const newCategory = await categoriesRepository.create(salonId, {
             name: trimmedName,
+            type: "product",
         });
 
         cache?.set(cacheKey, newCategory.id);
