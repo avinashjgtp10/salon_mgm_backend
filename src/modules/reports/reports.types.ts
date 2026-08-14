@@ -1665,6 +1665,9 @@ export interface PaymentCollectionReportStats {
     // see collection rate rather than only the outstanding balance.
     total_billed: number;
     total_collected: number;
+    // total_collected split by how it was paid, summed from each individual
+    // payment transaction (not the row-level latest-method field).
+    collected_by_method: { method: string; amount: number }[];
 }
 
 export interface PaymentCollectionReportPagination {

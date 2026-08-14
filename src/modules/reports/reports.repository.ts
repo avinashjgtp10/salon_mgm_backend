@@ -5918,10 +5918,50 @@ async getPaymentCollectionReportStats(
     FROM filtered
   `;
 
-  const { rows } = await safeQuery(() => pool.query(query, [...values, ...extraValues]));
+  // Collected-by-method breakdown: filtered's own paid_amount/payment_method
+  // are the LATEST payment row's method against the appointment's whole
+  // cumulative paid total, so grouping that directly would misattribute
+  // money paid via an earlier, different method. Instead sum each actual
+  // payment transaction by its own method, scoped to the same filtered
+  // appointment set — but the method/date filters must be re-applied here
+  // directly against the transaction (not inherited from `filtered`, whose
+  // method/date columns reflect only the LATEST row). Without this, choosing
+  // "Cash" in the Payment Method filter would keep every appointment whose
+  // latest transaction happened to be cash, then sum ALL of that
+  // appointment's transactions (including any earlier, non-cash ones),
+  // leaving the "Total Paid" card unchanged by the filter.
+  const methodExtra: string[] = [];
+  if (startDateIdx) {
+    methodExtra.push(`TO_CHAR((p.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')::date >= $${startDateIdx}::date`);
+    if (endDateIdx) methodExtra.push(`TO_CHAR((p.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')::date <= $${endDateIdx}::date`);
+  }
+  if (methodIdx) methodExtra.push(`LOWER(TRIM(p.payment_method)) = ANY($${methodIdx}::text[])`);
+  const methodExtraWhere = methodExtra.length ? `AND ${methodExtra.join(" AND ")}` : "";
+
+  const methodQuery = `
+    ${this._PAYMENT_COLLECTION_AGG(where, startDateIdx, endDateIdx, statusIdx, methodIdx)}
+    SELECT
+      COALESCE(NULLIF(TRIM(p.payment_method), ''), '—') AS payment_method,
+      COALESCE(SUM(p.paid_amount) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS amount
+    FROM filtered f
+    JOIN payments p ON p.appointment_id = f.appointment_id AND p.status <> 'refunded'
+    WHERE TRUE ${methodExtraWhere}
+    GROUP BY 1
+    HAVING COALESCE(SUM(p.paid_amount) FILTER (WHERE p.status IN ('completed', 'partial')), 0) > 0
+    ORDER BY amount DESC
+  `;
+
+  const [{ rows }, { rows: methodRows }] = await Promise.all([
+    safeQuery(() => pool.query(query, [...values, ...extraValues])),
+    safeQuery(() => pool.query(methodQuery, [...values, ...extraValues])),
+  ]);
   const r = rows[0] ?? {};
   const totalPending = Math.round(Number(r.total_pending_amount ?? 0));
   const pendingTxns = Number(r.total_pending_transactions ?? 0);
+  const collectedByMethod = methodRows.map((m: any) => ({
+    method: m.payment_method,
+    amount: Math.round(Number(m.amount ?? 0)),
+  }));
   return {
     total_pending_amount: totalPending,
     total_pending_transactions: pendingTxns,
@@ -5930,7 +5970,11 @@ async getPaymentCollectionReportStats(
     average_pending_amount: pendingTxns > 0 ? Math.round(totalPending / pendingTxns) : 0,
     oldest_pending_payment_date: r.oldest_pending_payment_date ?? null,
     total_billed: Math.round(Number(r.total_billed ?? 0)),
-    total_collected: Math.round(Number(r.total_collected ?? 0)),
+    // Kept consistent with collected_by_method (both transaction-level and
+    // both honoring the method filter), rather than filtered.paid_amount
+    // which is the appointment's whole cumulative total regardless of method.
+    total_collected: collectedByMethod.reduce((sum, m) => sum + m.amount, 0),
+    collected_by_method: collectedByMethod,
   };
 },
 
