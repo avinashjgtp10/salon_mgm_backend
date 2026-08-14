@@ -29,6 +29,16 @@ export const cashManagementService = {
     );
   },
 
+  async listCashIncomeEntries(salonId: string, cashManagementId: string) {
+    if (!cashManagementId?.trim()) {
+      throw new AppError(400, "cash_management_id is required", "VALIDATION_ERROR");
+    }
+    return cashManagementRepository.listCashIncomeEntries({
+      salonId,
+      cashManagementId: cashManagementId.trim(),
+    });
+  },
+
   async listCounters(filters: CounterListFilters) {
     if (filters.status && !["open", "closed"].includes(filters.status)) {
       throw new AppError(400, "status must be open or closed", "VALIDATION_ERROR");
