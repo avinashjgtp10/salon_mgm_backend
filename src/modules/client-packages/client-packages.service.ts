@@ -4,6 +4,8 @@ import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-autom
 import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
 import { salonsRepository } from "../salons/salons.repository";
 import { sendPurchaseReceipt } from "../sales/receipt-send.helper";
+import { appointmentsService } from "../appointments/appointments.service";
+import { getPackageNoShowPolicy } from "./package-settings.util";
 import type { Sale, SaleItem } from "../sales/sales.types";
 import logger from "../../config/logger";
 import type {
@@ -122,6 +124,86 @@ async function notifySessionsRemainingIfLow(pkg: ClientPackage): Promise<void> {
   }).catch(() => {});
 }
 
+// Shared by create() and autoCreateFromPayment() — both end up with a
+// just-created client_packages row plus a set of its services that carry an
+// optional `schedule`, and need to turn each into a real future appointment
+// exactly the same way. An appointment's services[].service_id must
+// reference a real catalog services row (commission calc, consumable
+// recipes, and reports all join on it), so a service with no
+// catalogServiceId (custom-named line / unresolvable at pick time) is
+// reported as a scheduling error instead of booked with a nonsensical id.
+// Package creation/sale itself has already committed by the time this runs —
+// one failed auto-schedule must never undo it, hence Promise.allSettled and
+// a returned error list instead of throwing.
+async function scheduleServicesForPackage(params: {
+  salonId: string;
+  clientId: string;
+  packageId: string;
+  requesterUserId?: string;
+  items: Array<{
+    createdService: { serviceId: string; serviceName: string; catalogServiceId: string | null };
+    schedule: { scheduledAt: string; staffId?: string; durationMinutes?: number };
+  }>;
+}): Promise<Array<{ serviceName: string; error: string }>> {
+  const schedulingErrors: Array<{ serviceName: string; error: string }> = [];
+
+  const uncatalogued = params.items.filter((x) => !x.createdService.catalogServiceId);
+  for (const x of uncatalogued) {
+    schedulingErrors.push({
+      serviceName: x.createdService.serviceName,
+      error: "This service isn't linked to a catalog service, so it can't be auto-scheduled — book it manually.",
+    });
+  }
+
+  const schedulable = params.items.filter((x) => !!x.createdService.catalogServiceId);
+  if (schedulable.length > 0) {
+    const results = await Promise.allSettled(
+      schedulable.map(async ({ createdService, schedule }) => {
+        const appointment = await appointmentsService.create({
+          requesterUserId: params.requesterUserId ?? "system",
+          body: {
+            salon_id:         params.salonId,
+            client_id:        params.clientId,
+            staff_id:         schedule.staffId,
+            scheduled_at:     schedule.scheduledAt,
+            duration_minutes: schedule.durationMinutes ?? 30,
+            status:           "booked",
+            services: [{
+              service_id:                 createdService.catalogServiceId!,
+              staff_id:                   schedule.staffId,
+              name:                       createdService.serviceName,
+              // Already paid for as part of the package total — this
+              // appointment must never generate its own charge.
+              price:                      0,
+              quantity:                   1,
+              is_package_service:         true,
+              client_package_id:          params.packageId,
+              client_package_service_id:  createdService.serviceId,
+            }],
+          },
+        });
+        await clientPackagesRepository.createServiceSchedule({
+          clientPackageId:        params.packageId,
+          clientPackageServiceId: createdService.serviceId,
+          appointmentId:          appointment.id,
+          staffId:                schedule.staffId ?? null,
+          scheduledAt:            schedule.scheduledAt,
+        });
+      }),
+    );
+    results.forEach((result, i) => {
+      if (result.status === "rejected") {
+        const name = schedulable[i].createdService.serviceName;
+        const err  = result.reason as any;
+        logger.error("[client-packages] auto-schedule failed", { packageId: params.packageId, serviceName: name, error: err?.message ?? err });
+        schedulingErrors.push({ serviceName: name, error: err?.message ?? "Failed to schedule appointment" });
+      }
+    });
+  }
+
+  return schedulingErrors;
+}
+
 export const clientPackagesService = {
 
   async list(
@@ -137,8 +219,24 @@ export const clientPackagesService = {
     return pkg;
   },
 
-  async create(salonId: string, dto: CreateClientPackageDTO): Promise<ClientPackage> {
+  async create(salonId: string, dto: CreateClientPackageDTO, requesterUserId?: string): Promise<ClientPackage> {
     const pkg = await clientPackagesRepository.create(salonId, dto);
+
+    // ── Auto-schedule future appointments for services that carried a `schedule` ──
+    // dto.services and pkg.services are index-aligned (repository.create()
+    // reorders its result to guarantee this).
+    const toSchedule = dto.services
+      .map((svc, idx) => ({ svc, created: pkg.services[idx] }))
+      .filter((x): x is { svc: typeof dto.services[number] & { schedule: NonNullable<typeof x.svc.schedule> }; created: typeof x.created } =>
+        !!x.svc.schedule && !!x.created)
+      .map((x) => ({ createdService: x.created, schedule: x.svc.schedule }));
+
+    if (toSchedule.length > 0) {
+      const schedulingErrors = await scheduleServicesForPackage({
+        salonId, clientId: dto.clientId, packageId: pkg.id, requesterUserId, items: toSchedule,
+      });
+      if (schedulingErrors.length > 0) pkg.schedulingErrors = schedulingErrors;
+    }
 
     // ── Auto-create sale record so package revenue appears in dashboard ────────
     try {
@@ -241,6 +339,61 @@ export const clientPackagesService = {
     return updated;
   },
 
+  // ── Future-appointment linkage side effects (called from appointments.service.ts) ──
+  // These four are the exact-match counterpart to the fuzzy, checkout-time
+  // markPackageSessions() coverage-matching the frontend already does for
+  // walk-in/Quick Sale package usage — that path is untouched; these only
+  // fire for appointments auto-created by client-packages.service.ts::create().
+
+  // Redeems the one session this appointment was booked for, but only if
+  // it's still 'Scheduled' — a retried/duplicate checkout call on an
+  // already-completed appointment is a silent no-op instead of burning a
+  // second session for one real visit. No-op (not an error) when the
+  // appointment isn't package-linked at all.
+  async redeemForAppointmentIfScheduled(salonId: string, appointmentId: string, staffName: string): Promise<void> {
+    const schedule = await clientPackagesRepository.findScheduleByAppointmentId(appointmentId);
+    if (!schedule || schedule.status !== "Scheduled") return;
+    await clientPackagesService.completeSession(schedule.clientPackageId, salonId, {
+      serviceId: schedule.clientPackageServiceId,
+      staffName,
+      appointmentId,
+    });
+    await clientPackagesRepository.updateScheduleStatusByAppointmentId(appointmentId, "Completed");
+  },
+
+  // Cancelling never deducts the session — the service becomes reschedulable
+  // again (derived as "Not Scheduled" once its only schedule row is
+  // Cancelled). Safe to call on any appointment id; a no-op if unlinked.
+  async cancelScheduleForAppointment(appointmentId: string): Promise<void> {
+    await clientPackagesRepository.updateScheduleStatusByAppointmentId(appointmentId, "Cancelled");
+  },
+
+  // Reschedule reuses the same schedule row/appointment — only the
+  // denormalized scheduled_at copy moves. Safe to call on any appointment
+  // id; a no-op if unlinked.
+  async rescheduleForAppointment(appointmentId: string, scheduledAt: string): Promise<void> {
+    await clientPackagesRepository.updateScheduleTimeByAppointmentId(appointmentId, scheduledAt);
+  },
+
+  // No-show follows the salon's configured policy (default: do not deduct,
+  // same reschedulable end state as cancel) — see package-settings.util.ts.
+  async handleNoShowForAppointment(salonId: string, appointmentId: string): Promise<void> {
+    const schedule = await clientPackagesRepository.findScheduleByAppointmentId(appointmentId);
+    if (!schedule || schedule.status !== "Scheduled") return;
+
+    const policy = await getPackageNoShowPolicy(salonId);
+    if (policy === "deduct_package") {
+      await clientPackagesService.completeSession(schedule.clientPackageId, salonId, {
+        serviceId: schedule.clientPackageServiceId,
+        staffName: "No-show (auto)",
+        appointmentId,
+      });
+      await clientPackagesRepository.updateScheduleStatusByAppointmentId(appointmentId, "Completed");
+    } else {
+      await clientPackagesRepository.updateScheduleStatusByAppointmentId(appointmentId, "No Show");
+    }
+  },
+
   // Called from payments.service.ts when a bill containing package_items is
   // fully settled — creates the client's actual, redeemable package record.
   // Goes straight to the repository (not this module's own create()), since
@@ -251,11 +404,25 @@ export const clientPackagesService = {
     salonId:      string,
     clientId:     string,
     packageName:  string,
-    services:     Array<{ serviceId?: string; serviceName: string; totalSessions: number; price: number }>,
+    services:     Array<{
+      serviceId?: string; serviceName: string; totalSessions: number; price: number;
+      // Set only when the frontend already resolved this service's
+      // schedule-at-purchase (Quick Sale's "+ Package" row — see
+      // ServicesPanel.tsx's PackageRow) — mirrors CreateClientPackageDTO's
+      // per-service schedule on the standalone Sell Package form.
+      schedule?: { scheduledAt: string; staffId?: string; durationMinutes?: number };
+    }>,
     basePrice:    number,
     discount:     number,
     gstPercentage: number,
     expiryDate:   string,
+    // Copied from the resolved template's own expireAfterServices, when one
+    // was found (see payments.service.ts's template lookup) — undefined/null
+    // for custom/combo packages, which have no template to carry this from.
+    expireAfterServices: number | null | undefined,
+    // Copied from the resolved template/combo's own description, same
+    // resolution point as expireAfterServices above.
+    description: string | null | undefined,
     appointmentId?: string,
     // Staff on the checkout appointment, and the sales row the checkout's own
     // recordTransaction() call already created for this bill — passed through
@@ -263,9 +430,36 @@ export const clientPackagesService = {
     // as a line item on a bill, not just via the standalone Create Package form.
     staffId?:     string,
     saleId?:      string,
+    requesterUserId?: string,
+    // Share of the bill collected so far (0..1), applied to this package's own
+    // total. Defaults to fully paid — every caller before packages became
+    // creditable on a partially-paid bill. See the idempotency block below:
+    // this same function runs again when the balance is later settled.
+    paidFraction: number = 1,
+    isFullyPaid:  boolean = true,
   ): Promise<void> {
     logger.info(`[client-packages/auto-create] salon=${salonId} client=${clientId} name="${packageName}" services=${services.length} price=${basePrice}`);
     try {
+      // A package is credited as soon as its bill is partially paid, so this
+      // runs a second time on the payment that clears the balance. Without
+      // this guard that second run would insert a duplicate package (there is
+      // no unique constraint covering it) — instead, settle the existing row
+      // and stop. Also covers any other repeat payment call on the same bill.
+      if (appointmentId) {
+        const existingId = await clientPackagesRepository.findIdByAppointmentAndName(
+          salonId, appointmentId, packageName,
+        );
+        if (existingId) {
+          // Every later payment on the same bill re-states this row's
+          // paid/pending — an instalment in the middle keeps it accurate, and
+          // the one that clears the balance settles it to Paid.
+          await clientPackagesRepository.updatePaymentProgress(
+            existingId, salonId, isFullyPaid ? 1 : paidFraction,
+          );
+          return;
+        }
+      }
+
       // Resolve the real method the client paid with off the linked sale —
       // this flow has no payment method of its own at creation time (see
       // the comment above), and "included_in_sale" as a stored value used to
@@ -278,6 +472,8 @@ export const clientPackagesService = {
         clientId,
         packageName,
         expiryDate,
+        expireAfterServices: expireAfterServices ?? null,
+        description: description ?? null,
         basePrice,
         gstPercentage,
         discount,
@@ -285,31 +481,73 @@ export const clientPackagesService = {
         services,
         appointmentId,
         staffId,
+        ...(isFullyPaid ? {} : { paidFraction, paymentStatus: "Partial" as const }),
       });
+
       if (saleId) {
         await clientPackagesRepository.setSaleId(created.id, salonId, saleId);
       }
+      // Logged here, not after the scheduling/WhatsApp work below: by this
+      // point the client_packages row exists and is queryable, which is the
+      // only part the caller waits on.
       logger.info(`[client-packages/auto-create] SUCCESS — client=${clientId}, package=${packageName}`);
-      // Text only, no PDF here — the calling checkout flow (payments) already
-      // sent one PDF covering this whole sale, package line included.
-      if (created.mobile) {
-        const salon = await salonsRepository.findById(salonId);
-        whatsappAutomationService.trigger({
-          salonId,
-          eventType:   "package_purchased",
-          clientId:    created.clientId,
-          phone:       created.mobile,
-          countryCode: null,
-          variables: {
-            "1": created.clientName ?? "Valued Customer",
-            "2": salon?.business_name ?? "our salon",
-            "3": created.packageName,
-          },
-          referenceId:   created.id,
-          referenceType: "package",
-          dedupeByReference: true,
-        }).catch(() => {});
-      }
+
+      // ── Everything past this point is deliberately NOT awaited ────────────
+      // Booking the scheduled appointments took ~7s in practice (it creates a
+      // real appointment per service, each with its own notification/WhatsApp
+      // fan-out). Awaiting it inside the caller's request would push the
+      // checkout response out by that much; leaving the WHOLE function
+      // detached instead meant the payment returned before the package row
+      // existed, so the UI's immediate post-checkout refetch of
+      // /client-packages came back empty and the client appeared to have no
+      // package. Splitting it is what satisfies both: the row is committed
+      // before the caller returns, the slow fan-out continues in background.
+      void (async () => {
+        try {
+          // Auto-schedule any services that carried a schedule-at-purchase —
+          // same mechanism create() uses for the standalone Sell Package form.
+          // created.services is index-aligned with `services`
+          // (repository.create() guarantees this). Logged only — this checkout
+          // has already fully succeeded (payment collected, package created),
+          // so a scheduling failure must never surface as a payment error.
+          const toSchedule = services
+            .map((svc, idx) => ({ svc, created: created.services[idx] }))
+            .filter((x): x is { svc: typeof services[number] & { schedule: NonNullable<typeof x.svc.schedule> }; created: typeof x.created } =>
+              !!x.svc.schedule && !!x.created)
+            .map((x) => ({ createdService: x.created, schedule: x.svc.schedule }));
+          if (toSchedule.length > 0) {
+            const schedulingErrors = await scheduleServicesForPackage({
+              salonId, clientId, packageId: created.id, requesterUserId, items: toSchedule,
+            });
+            if (schedulingErrors.length > 0) {
+              logger.warn('[client-packages/auto-create] scheduling errors', { packageId: created.id, schedulingErrors });
+            }
+          }
+
+          // Text only, no PDF here — the calling checkout flow (payments)
+          // already sent one PDF covering this whole sale, package line included.
+          if (created.mobile) {
+            const salon = await salonsRepository.findById(salonId);
+            whatsappAutomationService.trigger({
+              salonId,
+              eventType:   "package_purchased",
+              clientId:    created.clientId,
+              phone:       created.mobile,
+              countryCode: null,
+              variables: {
+                "1": created.clientName ?? "Valued Customer",
+                "2": salon?.business_name ?? "our salon",
+                "3": created.packageName,
+              },
+              referenceId:   created.id,
+              referenceType: "package",
+              dedupeByReference: true,
+            }).catch(() => {});
+          }
+        } catch (err: any) {
+          logger.warn('[client-packages/auto-create] post-create work failed:', err?.message ?? err);
+        }
+      })();
     } catch (err: any) {
       logger.warn('[client-packages/auto-create] FAILED:', err?.message ?? err);
     }

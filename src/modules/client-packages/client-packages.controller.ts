@@ -34,7 +34,7 @@ export const clientPackagesController = {
   async create(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = getSalonId(req);
-      const data = await clientPackagesService.create(salonId, req.body);
+      const data = await clientPackagesService.create(salonId, req.body, req.user?.userId);
       return sendSuccess(res, 201, data, "Client package created successfully");
     } catch (e) { return next(e); }
   },

@@ -88,11 +88,15 @@ export const whatsappAutomationRepository = {
     const defaults = DEFAULT_PURCHASE_TEMPLATES[eventType]
     const { rows: inserted } = await pool.query(
       `INSERT INTO wa_automation_templates
-         (salon_id, event_type, template_name, language, is_active, status, category, body_text)
-       VALUES ($1, $2, $3, $4, TRUE, 'DRAFT', $5, $6)
+         (salon_id, event_type, template_name, language, is_active, status, category, body_text,
+          has_button, button_text, button_url_base)
+       VALUES ($1, $2, $3, $4, TRUE, 'DRAFT', $5, $6, $7, $8, $9)
        ON CONFLICT (salon_id, event_type) WHERE salon_id IS NOT NULL DO NOTHING
        RETURNING *`,
-      [salonId, eventType, `${eventType}_draft`, defaults.language, defaults.category, defaults.bodyText]
+      [
+        salonId, eventType, `${eventType}_draft`, defaults.language, defaults.category, defaults.bodyText,
+        !!defaults.button, defaults.button?.text ?? null, defaults.button?.urlBase ?? null,
+      ]
     )
     if (inserted[0]) return inserted[0]
 
@@ -356,26 +360,6 @@ export const whatsappAutomationRepository = {
     return rows.length > 0
   },
 
-  // Used by the reviews module to detect "was a review_request recently sent
-  // to this phone" when a plain-text reply comes in — phone_number here is
-  // digits-only via formatPhone(), matching Meta's inbound msg.from as-is.
-  async findRecentReviewRequestLog(
-    phone: string,
-    salonId: string,
-    withinHours = 72
-  ): Promise<{ reference_id: string | null; meta_message_id: string | null; client_id: string | null } | null> {
-    const { rows } = await pool.query(
-      `SELECT reference_id, meta_message_id, client_id
-       FROM wa_automation_logs
-       WHERE phone_number = $1 AND salon_id = $2 AND event_type = 'review_request'
-         AND status IN ('SENT', 'DELIVERED', 'READ')
-         AND sent_at > NOW() - ($3 || ' hours')::INTERVAL
-       ORDER BY sent_at DESC LIMIT 1`,
-      [phone, salonId, withinHours]
-    )
-    return rows[0] ?? null
-  },
-
   async listLogs(filters: ListAutomationLogsFilters): Promise<{ data: AutomationLog[]; total: number }> {
     const page   = Math.max(1, parseInt(String(filters.page  ?? 1))  || 1)
     const limit  = Math.min(100, Math.max(1, parseInt(String(filters.limit ?? 20)) || 20))
@@ -470,6 +454,16 @@ export const whatsappAutomationRepository = {
            WHERE l.reference_id = a.id::text
              AND l.event_type   = 'appointment_reminder_24h'
              AND l.status NOT IN ('FAILED','SKIPPED')
+         )
+         -- Appointments booked out of a package sale get their own
+         -- package-aware reminders (package_appointment_reminder_2d/_1d),
+         -- which name the package and say it's already paid for. Without
+         -- this the client would get BOTH that and this generic one for the
+         -- same visit.
+         AND NOT EXISTS (
+           SELECT 1 FROM client_package_service_schedules ps
+           WHERE ps.appointment_id = a.id
+             AND ps.status = 'Scheduled'
          )`
     )
     return rows
@@ -514,7 +508,80 @@ export const whatsappAutomationRepository = {
            WHERE l.reference_id = a.id::text
              AND l.event_type   = 'appointment_reminder_1h'
              AND l.status NOT IN ('FAILED','SKIPPED')
+         )
+         -- See getAppointmentsForReminder() — package-linked appointments
+         -- are reminded by their own package-aware jobs instead.
+         AND NOT EXISTS (
+           SELECT 1 FROM client_package_service_schedules ps
+           WHERE ps.appointment_id = a.id
+             AND ps.status = 'Scheduled'
          )`
+    )
+    return rows
+  },
+
+  // Appointments booked out of a package sale, landing exactly `daysBefore`
+  // days from today (IST). Date-based rather than the hour-window form the
+  // generic 24h/1h sweeps use, because these are "2 days before"/"1 day
+  // before" reminders — they're fired once from the 9AM IST daily block, not
+  // relative to the appointment's own time of day.
+  //
+  // The dedup key is `<appointmentId>:<scheduled date>`, NOT the bare
+  // appointment id every other sweep uses. That's deliberate: rescheduling
+  // keeps the same appointment id, so a bare-id guard would treat the new
+  // date as "already reminded" and the client would silently never hear
+  // about the moved appointment. Keying on the date means a reschedule
+  // legitimately earns a fresh reminder.
+  async getPackageAppointmentsForReminder(daysBefore: number): Promise<Array<{
+    appointment_id:         string
+    salon_id:               string
+    client_id:              string | null
+    phone_number:           string | null
+    phone_country_code:     string | null
+    client_name:            string | null
+    salon_name:             string | null
+    scheduled_at:           string
+    scheduled_date:         string
+    service_name:           string | null
+    staff_name:             string | null
+    package_name:           string | null
+  }>> {
+    const { rows } = await pool.query(
+      `SELECT
+         a.id                     AS appointment_id,
+         a.salon_id,
+         a.client_id,
+         c.phone_number,
+         c.phone_country_code,
+         c.full_name              AS client_name,
+         s.business_name          AS salon_name,
+         a.scheduled_at,
+         to_char((a.scheduled_at AT TIME ZONE 'Asia/Kolkata')::date, 'YYYY-MM-DD') AS scheduled_date,
+         cps.service_name,
+         NULLIF(TRIM(CONCAT(st.first_name, ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
+         cp.package_name
+       FROM client_package_service_schedules ps
+       JOIN appointments a            ON a.id  = ps.appointment_id
+       JOIN client_package_services cps ON cps.id = ps.client_package_service_id
+       JOIN client_packages cp        ON cp.id  = ps.client_package_id
+       LEFT JOIN clients c            ON c.id   = a.client_id
+       LEFT JOIN salons  s            ON s.id   = a.salon_id
+       LEFT JOIN staff   st           ON st.id  = ps.staff_id
+       WHERE ps.status = 'Scheduled'
+         AND a.status IN ('booked','partial')
+         AND a.deleted_at IS NULL
+         AND (a.scheduled_at AT TIME ZONE 'Asia/Kolkata')::date
+             = ((NOW() AT TIME ZONE 'Asia/Kolkata')::date + ($1::int))
+         AND c.phone_number           IS NOT NULL
+         AND c.whatsapp_notifications = TRUE
+         AND NOT EXISTS (
+           SELECT 1 FROM wa_automation_logs l
+           WHERE l.reference_id = a.id::text || ':' ||
+                 to_char((a.scheduled_at AT TIME ZONE 'Asia/Kolkata')::date, 'YYYY-MM-DD')
+             AND l.event_type   = $2
+             AND l.status NOT IN ('FAILED','SKIPPED')
+         )`,
+      [daysBefore, daysBefore === 2 ? 'package_appointment_reminder_2d' : 'package_appointment_reminder_1d']
     )
     return rows
   },

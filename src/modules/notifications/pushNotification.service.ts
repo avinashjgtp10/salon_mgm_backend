@@ -8,9 +8,17 @@ import type Expo from "expo-server-sdk" with { "resolution-mode": "import" };
 import { expoPushConfig } from "../../config/expoPush";
 import logger from "../../config/logger";
 import { deviceTokensRepository } from "./deviceTokens.repository";
+import {
+  isCredentialOrProjectMismatchError,
+  normalizeExpoErrorCode,
+  shouldRemoveTokenForExpoError,
+} from "./expoPushErrors";
+import { pushReceiptsRepository, PushReceiptRecord } from "./pushReceipts.repository";
 
 export interface PushNotificationPayload {
   tokens: string[];
+  notificationId?: string;
+  salonId?: string;
   title?: string;
   body?: string;
   data?: Record<string, unknown>;
@@ -36,8 +44,10 @@ export interface ExpoPushReceiptReference {
 }
 
 const RECEIPT_CHECK_DELAY_MS = 15 * 60 * 1000;
+const RECEIPT_PROCESS_INTERVAL_MS = 5 * 60 * 1000;
 
 let expoInstance: Expo | undefined;
+let receiptSchedulerInterval: NodeJS.Timeout | null = null;
 
 async function getExpoInstance(): Promise<Expo> {
   if (!expoInstance) {
@@ -90,7 +100,7 @@ export const pushNotificationService = {
       });
     }
 
-    const removedTokens = await removeInvalidTokens(invalidTokens);
+    const removedTokens = await removeInvalidTokens(invalidTokens, "InvalidPushToken");
 
     if (messages.length === 0) {
       return {
@@ -108,12 +118,23 @@ export const pushNotificationService = {
     const receiptReferences: ExpoPushReceiptReference[] = [];
     const failedTickets: ExpoPushTicket[] = [];
     const deviceNotRegisteredTokens: string[] = [];
-    const chunks = expo.chunkPushNotifications(messages);
+    const chunks = messageTokens.map((_, index) => [messages[index]]);
     let ticketOffset = 0;
 
     for (const chunk of chunks) {
       try {
+        logger.info("Sending Expo push notification chunk", {
+          notificationId: payload.notificationId,
+          salonId: payload.salonId,
+          tokenCount: chunk.length,
+        });
         const ticketChunk = await expo.sendPushNotificationsAsync(chunk);
+        logger.info("Expo push notification tickets received", {
+          notificationId: payload.notificationId,
+          salonId: payload.salonId,
+          okCount: ticketChunk.filter((ticket) => ticket.status === "ok").length,
+          errorCount: ticketChunk.filter((ticket) => ticket.status === "error").length,
+        });
         tickets.push(...ticketChunk);
         for (let i = 0; i < ticketChunk.length; i++) {
           const ticket = ticketChunk[i];
@@ -125,33 +146,60 @@ export const pushNotificationService = {
 
           if (ticket.status === "error") {
             failedTickets.push(ticket);
+            const errorCode = String(ticket.details?.error ?? "UnknownExpoTicketError");
             const logData = {
-              error: ticket.details?.error,
+              error: errorCode,
               message: ticket.message,
             };
 
-            if (ticket.details?.error === "InvalidCredentials") {
-              logger.error("Expo push ticket InvalidCredentials", logData);
+            await markTokenFailure(token, errorCode, ticket.message);
+
+            if (isCredentialOrProjectMismatchError(errorCode)) {
+              logger.error("Expo push ticket credential/project mismatch", logData);
             } else {
               logger.warn("Expo push ticket failed", logData);
             }
 
-            if (ticket.details?.error === "DeviceNotRegistered") {
+            if (shouldRemoveTokenForExpoError(errorCode)) {
               if (token) deviceNotRegisteredTokens.push(token);
             }
           }
         }
         ticketOffset += chunk.length;
       } catch (err: any) {
+        const token = messageTokens[ticketOffset];
+        const errorCode = normalizeExpoErrorCode(err);
+        await markTokenFailure(token, errorCode, err?.message);
+        if (shouldRemoveTokenForExpoError(errorCode) && token) {
+          deviceNotRegisteredTokens.push(token);
+        }
+
         logger.error("Expo push notification chunk failed", {
           message: err?.message,
           stack: err?.stack,
+          errorCode,
+          tokenCount: chunk.length,
         });
-        throw err;
+        failedTickets.push({
+          status: "error",
+          message: err?.message ?? "Expo push request failed",
+          details: { error: errorCode },
+        } as ExpoPushTicket);
+        ticketOffset += chunk.length;
       }
     }
 
-    removedTokens.push(...await removeInvalidTokens(deviceNotRegisteredTokens));
+    removedTokens.push(...await removeInvalidTokens(deviceNotRegisteredTokens, "ExpoProviderInvalidToken"));
+    await deviceTokensRepository.markTokensSent(receiptReferences.map((reference) => reference.token));
+    await pushReceiptsRepository.createPending(
+      receiptReferences.map((reference) => ({
+        receipt_id: reference.receiptId,
+        notification_id: payload.notificationId ?? null,
+        salon_id: payload.salonId ?? null,
+        expo_push_token: reference.token,
+        next_attempt_at: new Date(Date.now() + RECEIPT_CHECK_DELAY_MS),
+      }))
+    );
 
     return {
       tickets,
@@ -183,12 +231,25 @@ export const pushNotificationService = {
   ): void {
     if (references.length === 0) return;
 
+    logger.info("Scheduling Expo receipt check", {
+      receiptCount: references.length,
+      delayMs,
+    });
+
     const timer = setTimeout(() => {
       void processReceiptReferences(references);
     }, delayMs);
 
     // Receipt processing must not keep an otherwise idle Node process alive.
     timer.unref();
+  },
+
+  async processDueReceipts(limit = 100): Promise<void> {
+    const records = await pushReceiptsRepository.findDuePending(limit);
+    if (records.length === 0) return;
+
+    logger.info("Processing due Expo push receipts", { receiptCount: records.length });
+    await processReceiptRecords(records);
   },
 };
 
@@ -206,10 +267,12 @@ async function processReceiptReferences(references: ExpoPushReceiptReference[]):
 
       if (!receipt) {
         logger.warn("Expo push receipt not available", { receiptId: reference.receiptId });
+        await pushReceiptsRepository.markUnavailable(reference.receiptId);
         continue;
       }
 
       if (receipt.status === "ok") {
+        await pushReceiptsRepository.markOk(reference.receiptId);
         continue;
       }
 
@@ -223,14 +286,14 @@ async function processReceiptReferences(references: ExpoPushReceiptReference[]):
         message: receipt.message,
       };
 
-      if (errorCode === "DeviceNotRegistered") {
-        await removeInvalidTokens([reference.token]);
+      await pushReceiptsRepository.markError(reference.receiptId, errorCode, receipt.message);
+      await markTokenFailure(reference.token, errorCode ?? "UnknownExpoReceiptError", receipt.message);
+
+      if (errorCode && shouldRemoveTokenForExpoError(errorCode)) {
+        await removeInvalidTokens([reference.token], `${errorCode} (receipt)`);
         logger.warn("Expo device token removed from receipt", logData);
-      } else if (errorCode === "InvalidCredentials") {
-        logger.error("Expo push receipt InvalidCredentials", logData);
-      } else if (errorCode === "InvalidPushToken") {
-        await removeInvalidTokens([reference.token]);
-        logger.warn("Expo push receipt InvalidPushToken", logData);
+      } else if (errorCode && isCredentialOrProjectMismatchError(errorCode)) {
+        logger.error("Expo push receipt credential/project mismatch", logData);
       } else if (errorCode === "MessageTooBig") {
         logger.warn("Expo push receipt MessageTooBig", logData);
       } else if (errorCode === "MessageRateExceeded") {
@@ -248,11 +311,41 @@ async function processReceiptReferences(references: ExpoPushReceiptReference[]):
   }
 }
 
-async function removeInvalidTokens(tokens: string[]): Promise<string[]> {
+async function processReceiptRecords(records: PushReceiptRecord[]): Promise<void> {
+  await processReceiptReferences(
+    records.map((record) => ({
+      receiptId: record.receipt_id,
+      token: record.expo_push_token,
+    }))
+  );
+}
+
+async function markTokenFailure(
+  token: string | undefined,
+  errorCode: string,
+  errorMessage?: string | null
+): Promise<void> {
+  if (!token) return;
+
+  try {
+    await deviceTokensRepository.markTokenFailure(token, errorCode, errorMessage);
+  } catch (err: any) {
+    logger.warn("Failed to mark Expo token failure", {
+      errorCode,
+      message: err?.message,
+    });
+  }
+}
+
+async function removeInvalidTokens(tokens: string[], reason = "unknown"): Promise<string[]> {
   const uniqueTokens = Array.from(new Set(tokens.filter(Boolean)));
 
   for (const token of uniqueTokens) {
     try {
+      logger.info("Removing invalid Expo push token", {
+        tokenPrefix: token.slice(0, 20),
+        reason,
+      });
       await deviceTokensRepository.removeToken(token);
     } catch (err: any) {
       logger.warn("Failed to remove invalid Expo push token", {
@@ -263,4 +356,27 @@ async function removeInvalidTokens(tokens: string[]): Promise<string[]> {
   }
 
   return uniqueTokens;
+}
+
+export function startPushReceiptScheduler(): void {
+  if (receiptSchedulerInterval) return;
+
+  logger.info("Expo push receipt scheduler started");
+  pushNotificationService.processDueReceipts().catch((err: any) =>
+    logger.error("Expo push receipt scheduler initial run failed", { message: err?.message })
+  );
+
+  receiptSchedulerInterval = setInterval(() => {
+    pushNotificationService.processDueReceipts().catch((err: any) =>
+      logger.error("Expo push receipt scheduler run failed", { message: err?.message })
+    );
+  }, RECEIPT_PROCESS_INTERVAL_MS);
+}
+
+export function stopPushReceiptScheduler(): void {
+  if (!receiptSchedulerInterval) return;
+
+  clearInterval(receiptSchedulerInterval);
+  receiptSchedulerInterval = null;
+  logger.info("Expo push receipt scheduler stopped");
 }

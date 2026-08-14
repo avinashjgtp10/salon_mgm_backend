@@ -36,13 +36,35 @@ const CONSUMABLES_USED_SUBQUERY = `
         'product_id', sc.product_id,
         'product_name', p.name,
         'qty', sc.qty,
-        'unit', sc.unit
+        'unit', sc.unit,
+        -- Current on-hand stock in BASE units, carried on the recipe itself.
+        -- Without it the Consumable Usage panel had to look the product up in
+        -- the frontend's shared products cache, which is paged and partial —
+        -- so a consumable that simply wasn't in that page showed "—" and
+        -- "Stock Unknown" however carefully its stock had been set up. This
+        -- subquery already joins products, so it costs nothing extra.
+        'stock', COALESCE(p.amount, 0),
+        'bottle_size', p.bottle_size,
+        'measure_unit', p.measure_unit
       ) ORDER BY sc.sort_order)
      FROM service_consumables sc
      JOIN products p ON p.id = sc.product_id
      WHERE sc.service_id = s.id),
     '[]'::json
   ) AS consumables_used
+`;
+
+// How many staff are explicitly assigned to a service. Spliced into the list
+// SELECTs so the Service menu can show "4 staff" per row without the caller
+// fetching each service by id (the LIST endpoint deliberately omits the full
+// `staff` relation).
+//
+// NOTE 0 does NOT mean "nobody can perform this". No service_staff rows is how
+// "every staff member, including future hires" is stored — see replaceStaff and
+// the buildPayload comment in the frontend's useServiceForm. Callers must render
+// 0 as "All staff", never as "0 staff".
+const STAFF_COUNT_SUBQUERY = `
+  (SELECT COUNT(*)::int FROM service_staff ss WHERE ss.service_id = s.id) AS staff_count
 `;
 
 // ─── Query builders ───────────────────────────────────────────────────────────
@@ -114,7 +136,8 @@ const buildBundleWhere = (q: ListBundlesQuery, salonId: string) => {
 export const servicesRepository = {
   async findById(id: string, salonId: string): Promise<Service | null> {
     const { rows } = await pool.query(
-      `SELECT s.*, s.duration_minutes AS duration, c.name AS category_name, ${CONSUMABLES_USED_SUBQUERY}
+      `SELECT s.*, s.duration_minutes AS duration, c.name AS category_name,
+              ${STAFF_COUNT_SUBQUERY}, ${CONSUMABLES_USED_SUBQUERY}
        FROM services s
        LEFT JOIN service_categories c ON c.id = s.category_id
        WHERE s.id = $1 AND s.salon_id = $2`,
@@ -136,7 +159,8 @@ export const servicesRepository = {
     const total: number = countRes.rows[0]?.total ?? 0;
 
     const dataRes = await pool.query(
-      `SELECT s.*, s.duration_minutes AS duration, c.name AS category_name, ${CONSUMABLES_USED_SUBQUERY}
+      `SELECT s.*, s.duration_minutes AS duration, c.name AS category_name,
+              ${STAFF_COUNT_SUBQUERY}, ${CONSUMABLES_USED_SUBQUERY}
        FROM services s
        LEFT JOIN service_categories c ON c.id = s.category_id
        ${whereSql}
@@ -154,7 +178,8 @@ export const servicesRepository = {
   async listAll(query: ListServicesQuery, salonId: string): Promise<Service[]> {
     const { whereSql, values } = buildServiceWhere(query, salonId);
     const { rows } = await pool.query(
-      `SELECT s.*, s.duration_minutes AS duration, c.name AS category_name, ${CONSUMABLES_USED_SUBQUERY}
+      `SELECT s.*, s.duration_minutes AS duration, c.name AS category_name,
+              ${STAFF_COUNT_SUBQUERY}, ${CONSUMABLES_USED_SUBQUERY}
        FROM services s
        LEFT JOIN service_categories c ON c.id = s.category_id
        ${whereSql}
@@ -166,11 +191,15 @@ export const servicesRepository = {
 
   async create(data: CreateServiceBody, salonId: string): Promise<Service> {
     const { rows } = await pool.query(
+      // is_active is written explicitly rather than left to the column
+      // default: the form has an Active checkbox, and relying on DEFAULT TRUE
+      // meant creating a service as inactive silently did nothing.
       `INSERT INTO services (
         salon_id, name, category_id, treatment_type, description,
         price_type, price, duration_minutes,
-        online_booking, commission_enabled, resource_required
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+        online_booking, commission_enabled, resource_required, is_active,
+        commission_rate, commission_kind, reminder_after_days
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
       RETURNING *, duration_minutes AS duration`,
       [
         salonId,
@@ -184,6 +213,12 @@ export const servicesRepository = {
         data.online_booking ?? true,
         data.commission_enabled ?? false,
         data.resource_required ?? false,
+        data.is_active ?? true,
+        // NULL = no per-service override; the service earns under the staff's
+        // commission rules, which is the behaviour every existing service has.
+        data.commission_rate ?? null,
+        data.commission_kind ?? null,
+        data.reminder_after_days ?? null,
       ]
     );
     return rows[0];
@@ -198,6 +233,11 @@ export const servicesRepository = {
       "name", "category_id", "treatment_type", "description",
       "price_type", "price", "duration_minutes", "is_active",
       "online_booking", "commission_enabled", "resource_required",
+      // Explicit null is copied through (the loop below only skips undefined),
+      // so sending both as null clears a per-service commission override.
+      "commission_rate", "commission_kind",
+      // Explicit null clears a configured reminder the same way.
+      "reminder_after_days",
     ]);
 
     const raw = patch as Record<string, unknown>;

@@ -13,6 +13,7 @@ import salonsRoutes from "./modules/salons/salons.routes";
 import branchesRoutes from "./modules/branches/branches.routes";
 import staffRoutes from "./modules/staff/staff.routes";
 import commissionRulesRoutes from "./modules/commissionRules/commissionRules.routes";
+import payrollRoutes from "./modules/payroll/payroll.routes";
 import clientsRoutes from "./modules/clients/clients.routes";
 import servicesRoutes from "./modules/services/services.routes";
 import { corsMiddleware } from "./middleware/cors.middleware";
@@ -40,12 +41,15 @@ import inboxRouter from './modules/marketing/whatsapp/inbox/inbox.routes';
 import salonDashboardRoutes from "./modules/salon-dashboard/salon-dashboard.routes";
 import paymentsRoutes from "./modules/payments/payments.routes";
 import couponsRoutes from "./modules/coupons/coupons.routes";
+import couponDesignsRoutes from "./modules/coupon-designs/coupon-designs.routes";
+import brandKitRoutes from "./modules/brand-kit/brand-kit.routes";
 import settingsRoutes from "./modules/settings/settings.routes";
 import reportsRoutes from "./modules/reports/reports.routes";
 import legacyReportsRoutes from "./modules/reports/legacyReports.routes";
 import blockedTimesRoutes from "./modules/blocked_times/blocked_times.routes";
 import analyticsRoutes from './modules/marketing/whatsapp/analytics/analytics.routes'
 import reviewsRoutes from './modules/reviews/reviews.routes'
+import reviewsPublicRoutes from './modules/reviews/reviews.public.routes'
 import botRoutes from "./modules/bot/bot.routes";
 import aiEngineRoutes from "./modules/ai-engine/ai-engine.routes";
 import { ensureTable as ensureAiEngineTables } from "./modules/ai-engine/ai-engine.repository";
@@ -72,6 +76,7 @@ import demoRequestsRoutes from "./modules/demo-requests/demo-requests.routes";
 import supportRoutes from "./modules/support/support.routes";
 import notificationsRoutes from "./modules/notifications/notifications.routes";
 import deploymentAnnouncementsRoutes from "./modules/deployment-announcements/deployment-announcements.routes";
+import enquiriesRoutes from "./modules/enquiries/enquiries.routes";
 import { emailService } from "./modules/utils/email.service";
 import swaggerUi from "swagger-ui-express";
 import path from "path";
@@ -228,6 +233,7 @@ app.use("/api/v1/salons", salonsRoutes);
 app.use("/api/v1/branches", branchesRoutes);
 app.use("/api/v1/staff", staffRoutes);
 app.use("/api/v1/commission-rules", commissionRulesRoutes);
+app.use("/api/v1/payroll", payrollRoutes);
 app.use("/api/v1/clients", clientsRoutes);
 app.use("/api/v1/clients", clientNotesRoutes);
 app.use("/api/v1/clients", clientCommunicationRoutes);
@@ -250,9 +256,14 @@ app.use('/api/v1/templates', marketingTemplatesRoutes)
 app.use('/api/v1/campaigns', marketingCampaignsRoutes)
 app.use('/api/v1/wa-config', marketingConfigRoutes)
 app.use('/api/v1/reviews', reviewsRoutes)
+// PUBLIC — client-facing feedback form, deep-linked from the review_request
+// WhatsApp button, no login.
+app.use('/api/v1/feedback', reviewsPublicRoutes)
 app.use('/api/v1/inbox', inboxRouter);
 app.use("/api/v1/dashboard", salonDashboardRoutes);
 app.use("/api/v1/coupons", couponsRoutes);
+app.use("/api/v1/coupon-designs", couponDesignsRoutes);
+app.use("/api/v1/brand-kit", brandKitRoutes);
 app.use("/api/v1/payments", paymentsRoutes);
 app.use("/api/v1/blocked-times", blockedTimesRoutes);
 app.use("/api/v1/settings", settingsRoutes);
@@ -275,6 +286,7 @@ app.use("/api/v1/demo-requests", demoRequestsRoutes);
 app.use("/api/v1/support", supportRoutes);
 app.use("/api/v1/notifications", notificationsRoutes);
 app.use("/api/v1/deployment-announcements", deploymentAnnouncementsRoutes);
+app.use("/api/v1/enquiries", enquiriesRoutes);
 
 // Swagger Documentation
 const swaggerDocument = require(path.join(__dirname, "../docs/api/swagger-gen.json"));

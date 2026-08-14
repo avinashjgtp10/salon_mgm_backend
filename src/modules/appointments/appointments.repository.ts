@@ -42,10 +42,10 @@ export async function ensureTable(): Promise<void> {
     await pool.query(
         `ALTER TABLE appointments ADD COLUMN IF NOT EXISTS include_gst BOOLEAN NOT NULL DEFAULT TRUE`,
     );
-    // "Delete Appointment" used to be a real SQL DELETE — switched to soft
-    // delete so a removed booking can still show on the calendar (greyed out,
-    // "Deleted" on the tooltip) instead of vanishing without a trace. NULL
-    // (the default for every pre-existing row) means "not deleted".
+    // Column kept for backward compatibility with any historical rows/reports
+    // that still reference it — "Delete Appointment" now performs a true hard
+    // delete (see deleteById below), so no row written going forward ever has
+    // this set.
     await pool.query(
         `ALTER TABLE appointments ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ NULL`,
     );
@@ -266,7 +266,7 @@ export const appointmentsRepository = {
                 ends_at,
                 colour, created_by,
                 services, package_items, product_items, membership_items,
-                discount_value, discount_type, ex_charges, tip_amount, gst_percent,
+                discount_value, discount_type, discount_applies_to, ex_charges, tip_amount, gst_percent,
                 apply_membership_wallet, include_gst
             )
             VALUES (
@@ -276,8 +276,8 @@ export const appointmentsRepository = {
                 ($10::timestamptz + ($11::integer * INTERVAL '1 minute')),
                 $12, $13,
                 $14::jsonb, $15::jsonb, $16::jsonb, $17::jsonb,
-                $18, $19, $20, $21, $22,
-                $23, $24
+                $18, $19, $20::jsonb, $21, $22, $23,
+                $24, $25
             )
             RETURNING *`,
             [
@@ -300,6 +300,11 @@ export const appointmentsRepository = {
                 JSON.stringify(data.membership_items ?? []),
                 data.discount_value     ?? 0,
                 data.discount_type      ?? "percentage",
+                // NULL (not an array) when the client didn't send a selection —
+                // that's the legacy-scope signal the engine keys off. An empty
+                // array is preserved as "[]" ("discount nothing"), which is a
+                // deliberately different thing; see normalizeDiscountAppliesTo.
+                data.discount_applies_to ? JSON.stringify(data.discount_applies_to) : null,
                 data.ex_charges         ?? 0,
                 data.tip_amount         ?? 0,
                 data.gst_percent        ?? 0,
@@ -311,7 +316,8 @@ export const appointmentsRepository = {
     },
 
     async update(id: string, patch: UpdateAppointmentBody): Promise<Appointment> {
-        const JSONB_FIELDS = new Set(["services", "package_items", "product_items", "membership_items"]);
+        const JSONB_FIELDS = new Set(["services", "package_items", "product_items", "membership_items",
+                                      "discount_applies_to"]);
 
         // Remove ends_at from the patch if auto-recalculation is triggered
         if ("scheduled_at" in patch || "duration_minutes" in patch) {
@@ -360,10 +366,22 @@ export const appointmentsRepository = {
         return rows[0];
     },
 
+    // Deliberately does NOT bump updated_at — this is a pure status
+    // transition (mark paid/partial/cancelled), never combined with an
+    // actual content edit at any call site (see grep across
+    // payments.service.ts/appointments.service.ts). needsTaxBackfill()
+    // (appointments.service.ts) uses updated_at vs. the last payment's
+    // created_at to decide whether a real edit happened AFTER that payment
+    // and invalidated its frozen tax snapshot — recording the payment itself
+    // always calls this right after, so if this touched updated_at too,
+    // every single paid appointment would look "edited after payment" from
+    // the moment it was paid, permanently defeating that check (this was a
+    // real, shipped bug: an appointment paid with GST off would silently
+    // pick up newly-enabled GST the next time it was merely viewed).
     async updateStatus(id: string, status: string, client?: import("pg").PoolClient): Promise<Appointment> {
         const db = client ?? pool;
         const { rows } = await db.query(
-            `UPDATE appointments SET status = $2, updated_at = NOW() WHERE id = $1 RETURNING *`,
+            `UPDATE appointments SET status = $2 WHERE id = $1 RETURNING *`,
             [id, status]
         );
         return rows[0];
@@ -420,28 +438,68 @@ export const appointmentsRepository = {
     // already paid) is left alone even once its time passes, so staff can
     // still resolve the remaining due manually instead of it silently
     // reclassifying as a no-show.
-    async markNoShowBatch(): Promise<{ id: string }[]> {
+    async markNoShowBatch(): Promise<{ id: string; salon_id: string }[]> {
         const { rows } = await pool.query(
             `UPDATE appointments
              SET status = 'no-show', updated_at = NOW()
              WHERE status = 'booked' AND ends_at < NOW() AND deleted_at IS NULL
-             RETURNING id`
+             RETURNING id, salon_id`
         );
         return rows;
     },
 
+    // True hard delete — permanently removes the appointment and every
+    // financial record tied to it (commissions earned, payments, the linked
+    // sale and its line items) in one transaction, so nothing is left behind
+    // that could still be counted in revenue/commission totals. Runs before
+    // the appointments row itself so FK lookups via sale_id still resolve.
     async deleteById(id: string): Promise<Appointment | null> {
-        const { rows } = await pool.query(
-            `UPDATE appointments SET status = 'deleted', deleted_at = NOW() WHERE id = $1 RETURNING *`,
-            [id]
-        );
-        return rows[0] || null;
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            const { rows: apptRows } = await client.query(
+                `SELECT * FROM appointments WHERE id = $1 FOR UPDATE`,
+                [id]
+            );
+            const appointment = apptRows[0];
+            if (!appointment) {
+                await client.query('ROLLBACK');
+                return null;
+            }
+            const saleId: string | null = appointment.sale_id ?? null;
+
+            await client.query(
+                `DELETE FROM commission_earned WHERE appointment_id = $1 OR ($2::uuid IS NOT NULL AND sale_id = $2)`,
+                [id, saleId]
+            );
+            await client.query(`DELETE FROM payments WHERE appointment_id = $1`, [id]);
+            if (saleId) {
+                await client.query(`DELETE FROM sale_items WHERE sale_id = $1`, [saleId]);
+                await client.query(`DELETE FROM sales WHERE id = $1`, [saleId]);
+            } else {
+                await client.query(`DELETE FROM sale_items WHERE sale_id IN (SELECT id FROM sales WHERE appointment_id = $1)`, [id]);
+                await client.query(`DELETE FROM sales WHERE appointment_id = $1`, [id]);
+            }
+            const { rows } = await client.query(
+                `DELETE FROM appointments WHERE id = $1 RETURNING *`,
+                [id]
+            );
+            await client.query('COMMIT');
+            return rows[0] || null;
+        } catch (e) {
+            await client.query('ROLLBACK');
+            throw e;
+        } finally {
+            client.release();
+        }
     },
 
+    // Same reasoning as updateStatus() above for not touching updated_at —
+    // this is the checkout-time status flip, not a content edit.
     async linkSale(id: string, saleId: string): Promise<Appointment> {
         const { rows } = await pool.query(
             `UPDATE appointments
-             SET sale_id = $2, status = 'paid', updated_at = NOW()
+             SET sale_id = $2, status = 'paid'
              WHERE id = $1 RETURNING *`,
             [id, saleId]
         );

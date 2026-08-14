@@ -83,6 +83,17 @@ export const cashManagementController = {
     }
   },
 
+  async listCashIncomeEntries(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = getSalonId(req);
+      const cashManagementId = String(req.query.cash_management_id || "").trim();
+      const data = await cashManagementService.listCashIncomeEntries(salonId, cashManagementId);
+      return sendSuccess(res, 200, data, "Cash income entries fetched successfully");
+    } catch (error) {
+      return next(error);
+    }
+  },
+
   async listCounters(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = getSalonId(req);

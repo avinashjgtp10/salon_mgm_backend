@@ -10,6 +10,7 @@ import { startCampaignScheduler, stopCampaignScheduler } from './modules/marketi
 import { startAutomationScheduler, stopAutomationScheduler } from './modules/whatsapp-automation/whatsapp-automation.scheduler'
 import { startWaLimitSyncScheduler, stopWaLimitSyncScheduler } from './modules/marketing/whatsapp/config/wa-limit-sync.scheduler'
 import { startNoShowScheduler, stopNoShowScheduler } from './modules/appointments/appointments.scheduler'
+import { startPushReceiptScheduler, stopPushReceiptScheduler } from './modules/notifications/pushNotification.service'
 
 const PORT = config.port
 
@@ -46,6 +47,9 @@ httpServer.listen(PORT, () => {
 
   // Auto-flip overdue unpaid appointments to no-show
   startNoShowScheduler()
+
+  // Retry Expo push receipt processing after restarts.
+  startPushReceiptScheduler()
 })
 
 // Graceful shutdown
@@ -55,6 +59,7 @@ process.on('SIGTERM', () => {
   stopAutomationScheduler()
   stopWaLimitSyncScheduler()
   stopNoShowScheduler()
+  stopPushReceiptScheduler()
   httpServer.close(() => {
     logger.info('HTTP server closed')
     db.end()

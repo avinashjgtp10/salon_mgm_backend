@@ -80,6 +80,9 @@ export const waPurchaseTemplatesService = {
                 category: existing.category,
                 language: existing.language || "en",
                 bodyText: existing.body_text,
+                button: existing.has_button && existing.button_text && existing.button_url_base
+                    ? { text: existing.button_text, urlBase: existing.button_url_base }
+                    : undefined,
             });
             logger.info(`[WA-TRACE] template SUBMIT OK ${eventType} — metaId=${result.metaTemplateId ?? "none"} status=${result.status}`);
 

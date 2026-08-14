@@ -2,9 +2,30 @@ import pool, { safeQuery } from "../../config/database";
 import { Sale, SaleItem, CreateSaleBody, UpdateSaleBody } from "./sales.types";
 import { getTaxModuleConfig } from "../settings/tax.util";
 
+// Accepts either a plain calendar date ("2026-08-14", no time component —
+// treated as midnight UTC) or a full timestamp. Timestamps can arrive in two
+// shapes: ISO with a literal "T" separator (what a JS Date.toISOString() or
+// an API client sends), or Postgres's own space-separated wire format
+// ("2026-08-14 10:30:00+00", e.g. straight off appointments.scheduled_at —
+// this DB's pg driver returns timestamp columns as raw strings, see
+// config/database.ts's type parsers). The space-separated shape has no "T"
+// but DOES have a time component, so it must never fall into the date-only
+// branch below — appending 'T00:00:00.000Z' to it produces a string like
+// "2026-08-14 10:30:00+00T00:00:00.000Z", which Date() parses as Invalid
+// Date, which then fails the INSERT (silently, if the caller's try/catch
+// swallows it) instead of ever creating the sale row.
 function parseCreatedAt(input: string | undefined | null): Date {
     if (!input) return new Date();
-    if (input.includes('T') || /\d{4}-\d{2}-\d{2}T/.test(input)) return new Date(input);
+    const hasTimeComponent = /\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(input);
+    if (hasTimeComponent) {
+        // Swap the date/time separator, then normalize a bare 2-digit
+        // timezone offset ("+00", "-05") to the "+00:00"/"-05:00" form
+        // Date() actually accepts — Postgres's wire format can omit the
+        // minutes/colon entirely, which Date() otherwise rejects outright
+        // (Invalid Date), not just misparses.
+        const iso = input.replace(' ', 'T').replace(/([+-]\d{2})$/, '$1:00');
+        return new Date(iso);
+    }
     return new Date(input + 'T00:00:00.000Z');
 }
 
@@ -477,6 +498,58 @@ export const salesRepository = {
              WHERE si.sale_id = s.id AND s.appointment_id = $1`,
             [appointmentId, newStaffId]
         ));
+    },
+
+    // Re-dates the whole recorded bill for whichever sale is linked to this
+    // appointment — called when a paid/partial appointment's date is changed.
+    //
+    // Every sales report dates its rows off sales.created_at (128 references in
+    // reports.repository.ts — Sales Summary, Daily Sheet, Product Retail,
+    // Service Sale, GST, Product Margin, Client Revenue, Staff Performance,
+    // Staff Item Sales, Package/Member Sale, ...), each with its own inline
+    // date filter rather than a shared helper. So there is nothing to fix on
+    // the read side: correcting the stored timestamp here is what moves the
+    // bill in all of them at once.
+    //
+    // sale_items and payments carry their own created_at that several of those
+    // reports filter on independently, so they move together with the sale —
+    // leaving either behind would re-date the bill in most reports but not all,
+    // which is worse than not moving it at all.
+    //
+    // A no-op for booked/unpaid appointments, which have no linked sale yet.
+    async updateDateForAppointment(appointmentId: string, newDate: string | Date): Promise<void> {
+        const when = newDate instanceof Date ? newDate : parseCreatedAt(newDate);
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            await client.query(
+                `UPDATE sales SET created_at = $2, updated_at = NOW() WHERE appointment_id = $1`,
+                [appointmentId, when]
+            );
+            await client.query(
+                `UPDATE sale_items si SET created_at = $2
+                 FROM sales s WHERE si.sale_id = s.id AND s.appointment_id = $1`,
+                [appointmentId, when]
+            );
+            // payments.created_at is `timestamp WITHOUT time zone` (unlike
+            // sales/sale_items, which are WITH) and its existing rows hold UTC
+            // wall time. Binding the Date directly let the driver serialize it
+            // with this machine's local offset, and Postgres then keeps the
+            // wall-clock part while discarding that offset — silently landing
+            // the payment 5:30 ahead of its own sale on an IST machine.
+            // Converting explicitly pins it to UTC wall time regardless of
+            // where the server runs.
+            await client.query(
+                `UPDATE payments SET created_at = ($2::timestamptz AT TIME ZONE 'UTC') WHERE appointment_id = $1`,
+                [appointmentId, when]
+            );
+            await client.query('COMMIT');
+        } catch (e) {
+            await client.query('ROLLBACK');
+            throw e;
+        } finally {
+            client.release();
+        }
     },
 
     async exportList(filters: { salon_id?: string; status?: string; date?: string }): Promise<Sale[]> {

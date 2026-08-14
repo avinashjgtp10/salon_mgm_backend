@@ -19,11 +19,15 @@ export const categoriesRepository = {
   },
 
   async listBySalonId(salonId: string): Promise<ServiceCategory[]> {
+    // service_count is the total across the whole salon, not just whatever page
+    // of services the client happens to have loaded — the Service menu's
+    // category chips show it, and a page-local count read as a wrong total.
     const { rows } = await pool.query(
-      `SELECT *
-       FROM service_categories
-       WHERE salon_id = $1
-       ORDER BY display_order ASC, created_at DESC`,
+      `SELECT c.*,
+              (SELECT COUNT(*)::int FROM services s WHERE s.category_id = c.id) AS service_count
+       FROM service_categories c
+       WHERE c.salon_id = $1
+       ORDER BY c.display_order ASC, c.created_at DESC`,
       [salonId]
     );
     return rows;
@@ -31,8 +35,8 @@ export const categoriesRepository = {
 
   async create(salonId: string, data: CreateCategoryBody): Promise<ServiceCategory> {
     const { rows } = await pool.query(
-      `INSERT INTO service_categories (salon_id, name, description, display_order, is_active)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO service_categories (salon_id, name, description, display_order, is_active, type)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
       [
         salonId,
@@ -40,13 +44,14 @@ export const categoriesRepository = {
         data.description ?? null,
         data.display_order ?? 0,
         data.is_active ?? true,
+        data.type ?? "both",
       ]
     );
     return rows[0];
   },
 
   async update(id: string, salonId: string, patch: UpdateCategoryBody): Promise<ServiceCategory | null> {
-    const allowed: (keyof UpdateCategoryBody)[] = ["name", "description", "display_order", "is_active"];
+    const allowed: (keyof UpdateCategoryBody)[] = ["name", "description", "display_order", "is_active", "type"];
 
     const entries = allowed
       .filter((k) => patch[k] !== undefined)

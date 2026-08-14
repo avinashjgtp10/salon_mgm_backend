@@ -249,6 +249,20 @@ import {
     ClientRevenueReportResponse,
     CustomerFrequencyReportFilters,
     CustomerFrequencyReportResponse,
+    LostCustomersReportFilters,
+    LostCustomersReportResponse,
+    ReferralReportFilters,
+    ReferralReportResponse,
+    PaymentCollectionReportFilters,
+    PaymentCollectionReportResponse,
+    CashManagementReportFilters,
+    CashManagementReportResponse,
+    MembershipHistoryReportFilters,
+    MembershipHistoryReportResponse,
+    ServiceFrequencyReportFilters,
+    ServiceFrequencyReportResponse,
+    CustomerSpendReportFilters,
+    CustomerSpendReportResponse,
     StaffSalesReportFilters,
     StaffSalesReportResponse,
     StaffPerformanceReportFilters,
@@ -257,16 +271,27 @@ import {
     StaffItemSalesReportResponse,
     PackageSaleReportFilters,
     PackageSaleReportResponse,
+    PayrollHistoryReportFilters,
+    PayrollHistoryReportResponse,
     PackageHistoryReportFilters,
     PackageHistoryReportResponse,
     MemberSaleReportFilters,
     MemberSaleReportResponse,
     AppointmentDetailReportFilters,
     AppointmentDetailReportResponse,
+    UpcomingAppointmentsReportFilters,
+    UpcomingAppointmentsReportResponse,
     WaCampaignReportFilters,
     WaCampaignReportResponse,
+    OpenRateReportFilters,
+    OpenRateReportResponse,
+    OpenRateCampaignDetail,
+    ReplyRateReportResponse,
+    ReplyRateCampaignDetail,
     ClientRatingReportFilters,
     ClientRatingReportResponse,
+    RebookingRateReportFilters,
+    RebookingRateReportResponse,
 } from "./reports.types";
 
 // ======================================================
@@ -1499,6 +1524,152 @@ async getCustomerFrequencyReport(
 },
 
 // ======================================================
+// LOST CUSTOMERS REPORT (independent report API)
+// ======================================================
+
+async getLostCustomersReport(
+    salonId: string,
+    filters: LostCustomersReportFilters
+): Promise<LostCustomersReportResponse> {
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getLostCustomersReportStats(salonId, filters),
+        reportsRepository.getLostCustomersReportRows(salonId, filters),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+    };
+},
+
+// ======================================================
+// REFERRAL REPORT (independent report API)
+// ======================================================
+
+async getReferralReport(
+    salonId: string,
+    filters: ReferralReportFilters
+): Promise<ReferralReportResponse> {
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getReferralReportStats(salonId, filters),
+        reportsRepository.getReferralReportRows(salonId, filters),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+    };
+},
+
+// ======================================================
+// CUSTOMER SPEND SEGMENTS REPORT (independent report API)
+// ======================================================
+
+async getCustomerSpendReport(
+    salonId: string,
+    filters: CustomerSpendReportFilters
+): Promise<CustomerSpendReportResponse> {
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getCustomerSpendReportStats(salonId, filters),
+        reportsRepository.getCustomerSpendReportRows(salonId, filters),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+    };
+},
+
+// ======================================================
+// SERVICE FREQUENCY REPORT (independent report API)
+// ======================================================
+
+async getServiceFrequencyReport(
+    salonId: string,
+    filters: ServiceFrequencyReportFilters
+): Promise<ServiceFrequencyReportResponse> {
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getServiceFrequencyReportStats(salonId, filters),
+        reportsRepository.getServiceFrequencyReportRows(salonId, filters),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+    };
+},
+
+// ======================================================
+// MEMBERSHIP HISTORY REPORT (independent report API)
+// ======================================================
+
+async getMembershipHistoryReport(
+    salonId: string,
+    filters: MembershipHistoryReportFilters
+): Promise<MembershipHistoryReportResponse> {
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
+        reportsRepository.getMembershipHistoryReportStats(salonId, filters),
+        reportsRepository.getMembershipHistoryReportRows(salonId, filters),
+        reportsRepository.getMembershipHistoryFiltersAvailable(salonId),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+        filters_available: filtersAvailable,
+    };
+},
+
+// ======================================================
+// PAYMENT COLLECTION REPORT (independent report API)
+// ======================================================
+
+async getPaymentCollectionReport(
+    salonId: string,
+    filters: PaymentCollectionReportFilters
+): Promise<PaymentCollectionReportResponse> {
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
+        reportsRepository.getPaymentCollectionReportStats(salonId, filters),
+        reportsRepository.getPaymentCollectionReportRows(salonId, filters),
+        reportsRepository.getPaymentCollectionFiltersAvailable(salonId),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+        filters_available: filtersAvailable,
+    };
+},
+
+// ======================================================
+// CASH MANAGEMENT REPORT (independent report API)
+// ======================================================
+
+async getCashManagementReport(
+    salonId: string,
+    filters: CashManagementReportFilters
+): Promise<CashManagementReportResponse> {
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
+        reportsRepository.getCashManagementReportStats(salonId, filters),
+        reportsRepository.getCashManagementReportRows(salonId, filters),
+        reportsRepository.getCashManagementFiltersAvailable(),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+        filters_available: filtersAvailable,
+    };
+},
+
+// ======================================================
 // STAFF SALES REPORT (independent report API)
 // ======================================================
 
@@ -1641,6 +1812,25 @@ async getAppointmentDetailReport(
     };
 },
 
+// ======================================================
+// UPCOMING APPOINTMENTS REPORT (independent report API)
+// ======================================================
+
+async getUpcomingAppointmentsReport(
+    salonId: string,
+    filters: UpcomingAppointmentsReportFilters
+): Promise<UpcomingAppointmentsReportResponse> {
+    const [result, filtersAvailable] = await Promise.all([
+        reportsRepository.getUpcomingAppointmentsReport(salonId, filters),
+        reportsRepository.getUpcomingAppointmentsFiltersAvailable(salonId),
+    ]);
+    return {
+        rows: result.items,
+        pagination: result.pagination,
+        filters_available: filtersAvailable,
+    };
+},
+
 async getWaCampaignReport(
     salonId: string,
     filters: WaCampaignReportFilters
@@ -1660,6 +1850,73 @@ async getWaCampaignReport(
 },
 
 // ======================================================
+// OPEN RATE REPORT (independent report API)
+// Shares the WA state definitions with getWaCampaignReport above — see
+// reports.repository.ts's WA_*_COUNT constants.
+// ======================================================
+
+async getOpenRateReport(
+    salonId: string,
+    filters: OpenRateReportFilters
+): Promise<OpenRateReportResponse> {
+    // getOpenRateTrend is deliberately NOT called here. The report has no
+    // charts, so nothing consumes a trend series — running it would add a DB
+    // round-trip per request for data that gets thrown away. The repository
+    // method is kept for whenever a trend view is wanted again.
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
+        reportsRepository.getOpenRateReportStats(salonId, filters),
+        reportsRepository.getOpenRateReportRows(salonId, filters),
+        reportsRepository.getOpenRateFiltersAvailable(salonId),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+        filters_available: filtersAvailable,
+    };
+},
+
+async getOpenRateCampaignDetail(
+    salonId: string,
+    campaignId: string,
+    opts: { status?: string; page?: number; limit?: number; search?: string }
+): Promise<OpenRateCampaignDetail | null> {
+    return reportsRepository.getOpenRateCampaignDetail(salonId, campaignId, opts);
+},
+
+// ======================================================
+// REPLY RATE REPORT (independent report API)
+// Same filters and campaign set as the Open Rate report above.
+// ======================================================
+
+async getReplyRateReport(
+    salonId: string,
+    filters: OpenRateReportFilters
+): Promise<ReplyRateReportResponse> {
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
+        reportsRepository.getReplyRateReportStats(salonId, filters),
+        reportsRepository.getReplyRateReportRows(salonId, filters),
+        reportsRepository.getOpenRateFiltersAvailable(salonId),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+        filters_available: filtersAvailable,
+    };
+},
+
+async getReplyRateCampaignDetail(
+    salonId: string,
+    campaignId: string,
+    opts: { replied?: "yes" | "no"; page?: number; limit?: number; search?: string }
+): Promise<ReplyRateCampaignDetail | null> {
+    return reportsRepository.getReplyRateCampaignDetail(salonId, campaignId, opts);
+},
+
+// ======================================================
 // CLIENT RATING REPORT (independent report API)
 // ======================================================
 
@@ -1676,6 +1933,48 @@ async getClientRatingReport(
         rows: rowsResult.items,
         pagination: rowsResult.pagination,
         stats,
+    };
+},
+
+// ======================================================
+// REBOOKING RATE REPORT (independent report API)
+// ======================================================
+
+async getRebookingRateReport(
+    salonId: string,
+    filters: RebookingRateReportFilters
+): Promise<RebookingRateReportResponse> {
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getRebookingRateReportStats(salonId, filters),
+        reportsRepository.getRebookingRateReportRows(salonId, filters),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+    };
+},
+
+// ======================================================
+// PAYROLL HISTORY REPORT (independent report API)
+// ======================================================
+
+async getPayrollHistoryReport(
+    salonId: string,
+    filters: PayrollHistoryReportFilters
+): Promise<PayrollHistoryReportResponse> {
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
+        reportsRepository.getPayrollHistoryReportStats(salonId, filters),
+        reportsRepository.getPayrollHistoryReportRows(salonId, filters),
+        reportsRepository.getPayrollHistoryFiltersAvailable(salonId),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+        filters_available: filtersAvailable,
     };
 },
 

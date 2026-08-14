@@ -23,9 +23,10 @@ import { clientsRepository } from "../clients/clients.repository";
 import { sendReceiptDocument } from "../sales/receipt-whatsapp.service";
 import { sendPurchaseReceipt } from "../sales/receipt-send.helper";
 import { notifyAppointmentCompleted } from "./appointment-completed.helper";
-import { computeBillTotals, rowsTotal, ActiveTaxRow } from "../pricing/pricing.engine";
+import { computeBillTotals, rowsTotal, normalizeDiscountAppliesTo, ActiveTaxRow } from "../pricing/pricing.engine";
 import { getActiveTaxes } from "../settings/tax.util";
 import { paymentsRepository } from "../payments/payments.repository";
+import { clientPackagesService } from "../client-packages/client-packages.service";
 import {
     Appointment,
     AppointmentServiceConsumableRecord,
@@ -51,7 +52,8 @@ import {
 // this appointment's bill actually total, from its raw stored inputs."
 function computeAppointmentTotals(appt: {
     services?: any[]; package_items?: any[]; product_items?: any[]; membership_items?: any[];
-    discount_type?: string; discount_value?: number; ex_charges?: number; tip_amount?: number;
+    discount_type?: string; discount_value?: number; discount_applies_to?: unknown;
+    ex_charges?: number; tip_amount?: number;
     include_gst?: boolean; membership_discount_used?: number | string;
 }, activeTaxes: ActiveTaxRow[]) {
     const toRow = (items: any[] = []) => (items || []).map((i) => ({
@@ -61,13 +63,25 @@ function computeAppointmentTotals(appt: {
     }));
     return computeBillTotals({
         actualAmounts: {
-            service:    rowsTotal(toRow(appt.services)),
+            // Package-covered rows are excluded from the taxable base — the
+            // customer already paid for those sessions when they bought the
+            // package, so this read-time recompute must not tax (or even
+            // count) that value again. Mirrors payments.service.ts's own
+            // `serviceTotal` filter; without it, this backfill silently
+            // taxed the full pre-coverage subtotal on every read where the
+            // cached tax_breakdown looked stale (see needsTaxBackfill).
+            service:    rowsTotal(toRow(appt.services).filter((r) => !r.isPackageService)),
             packages:   rowsTotal(toRow(appt.package_items)),
             product:    rowsTotal(toRow(appt.product_items)),
             membership: rowsTotal(toRow(appt.membership_items)),
         },
         discountType: (appt.discount_type === "percentage" ? "percentage" : "flat"),
         discountValue: Number(appt.discount_value) || 0,
+        // This bill's own "Apply to" selection. NULL on any appointment
+        // predating the column, which normalizes to undefined = legacy scope,
+        // so a read-time backfill reproduces exactly what that bill was
+        // charged instead of re-pricing it under the new rule.
+        discountAppliesTo: normalizeDiscountAppliesTo(appt.discount_applies_to),
         // A percentage/loyalty membership discount is a genuine pre-tax price
         // cut, same as the manual discount above — already collected onto
         // this appointment via findById()/listBySalonId()'s payments
@@ -95,9 +109,43 @@ function computeAppointmentTotals(appt: {
 // exists. Every caller below MUST use this (not its own "is tax_breakdown
 // empty?" shortcut) — a caller that only checks emptiness will short-circuit
 // past a stale-but-non-empty snapshot and keep showing pre-edit GST forever.
+//
+// !Array.isArray, NOT `|| ...length === 0` — the repository's tax_breakdown
+// subquery (appointments.repository.ts) only ever returns null when NO
+// payment row exists yet (genuinely never computed, backfill is correct).
+// A real payment that legitimately charged zero GST (tax module was off, or
+// this specific bill had "Include GST" unchecked) stores an actual `[]`,
+// which IS an array — that's a frozen, trustworthy zero, not a gap. The
+// length===0 version couldn't tell these apart, so re-enabling GST later
+// made every old GST-free paid bill recompute with TODAY's tax rates the
+// next time it was opened or reprinted.
+// appointments.updated_at is TIMESTAMPTZ (comes back with an explicit +00),
+// but payments.created_at (last_payment_at, via the repository subquery) is
+// TIMESTAMP WITHOUT TIME ZONE — config/database.ts's custom type parser
+// deliberately returns it as a raw string with NO offset, and the DB session
+// is forced to UTC on every connect, so the value IS UTC, it just isn't
+// labelled. `new Date(...)` on a string with no offset falls back to
+// interpreting it in the SERVER's LOCAL timezone instead of UTC — so
+// comparing it directly against updated_at's +00 string silently compares
+// two different clocks. On a server not already running in UTC, that made
+// this comparison little better than random: a payment recorded 4 seconds
+// before the true edit could easily come out "later" once local-time drift
+// was added to only one side. Pin any offset-less string to UTC explicitly
+// before comparing, so both sides are on the same clock.
+function toUtcMs(value: string | Date): number {
+    if (value instanceof Date) return value.getTime();
+    // Postgres/pg can render a UTC offset as short as +00 (no minutes, no
+    // colon) — the minutes half must be optional or a bare "+00" silently
+    // fails to match, falls through to the "no offset" branch below, and
+    // gets a literal Z appended after it (e.g. "...+00Z"), which is not a
+    // parseable date and produces NaN.
+    const hasOffset = /[zZ]|[+-]\d{2}(:?\d{2})?$/.test(value.trim());
+    return new Date(hasOffset ? value : `${value.replace(" ", "T")}Z`).getTime();
+}
+
 function needsTaxBackfill(appt: Appointment): boolean {
-    if (!Array.isArray(appt.tax_breakdown) || appt.tax_breakdown.length === 0) return true;
-    return !!appt.last_payment_at && new Date(appt.updated_at) > new Date(appt.last_payment_at);
+    if (!Array.isArray(appt.tax_breakdown)) return true;
+    return !!appt.last_payment_at && toUtcMs(appt.updated_at) > toUtcMs(appt.last_payment_at);
 }
 
 function backfillTaxBreakdown(appt: Appointment, activeTaxes: ActiveTaxRow[]): Appointment {
@@ -535,7 +583,8 @@ export const appointmentsService = {
         // inputs exactly so this decision and the recompute below can never
         // disagree about what "changed the bill" means.
         const isContentEdit = ["services", "package_items", "product_items", "membership_items",
-                                "discount_value", "discount_type", "ex_charges", "tip_amount", "include_gst"]
+                                "discount_value", "discount_type", "discount_applies_to",
+                                "ex_charges", "tip_amount", "include_gst"]
                                 .some((k) => k in patch);
 
         if (existing.status === "no-show" && isReschedule) {
@@ -555,6 +604,7 @@ export const appointmentsService = {
                 membership_items: patch.membership_items ?? existing.membership_items,
                 discount_type:    patch.discount_type     ?? existing.discount_type,
                 discount_value:   patch.discount_value    ?? existing.discount_value,
+                discount_applies_to: patch.discount_applies_to ?? existing.discount_applies_to,
                 ex_charges:       patch.ex_charges        ?? existing.ex_charges,
                 tip_amount:       patch.tip_amount         ?? existing.tip_amount,
                 include_gst:      patch.include_gst        ?? existing.include_gst,
@@ -676,6 +726,36 @@ export const appointmentsService = {
                 }));
         }
 
+        // Same idea for the DATE: moving a paid/partial appointment must carry
+        // its already-recorded bill with it. Reports date every row off
+        // sales.created_at, which is stamped once when the sale is first
+        // written and was never revised afterwards — so editing a paid bill's
+        // date moved it on the calendar while every report kept reporting it
+        // under the original date.
+        //
+        // Deliberately AWAITED, unlike the staff reassignment above. That one
+        // only affects commission attribution nobody reads back in the same
+        // breath, but this changes what the reports show — and the client
+        // typically reloads them straight after saving. Fired-and-forgotten,
+        // the response returned before the re-dating landed, so that reload
+        // raced the write and still showed the old date until the user
+        // refreshed again. Awaiting makes the save mean "the bill has moved".
+        // Still non-fatal: a failure here must not reject an otherwise good
+        // appointment update.
+        if (
+            patch.scheduled_at &&
+            new Date(patch.scheduled_at).getTime() !== new Date(existing.scheduled_at).getTime() &&
+            (existing.status === "paid" || existing.status === "partial")
+        ) {
+            try {
+                await salesRepository.updateDateForAppointment(appointmentId, patch.scheduled_at);
+            } catch (err: any) {
+                logger.warn("Sale re-dating failed (non-fatal)", {
+                    appointmentId, newDate: patch.scheduled_at, err: err?.message,
+                });
+            }
+        }
+
         // Adjust stock when product_items list changes (fire-and-forget)
         if (patch.product_items !== undefined) {
             const oldItems = (existing.product_items ?? []).filter(p => p.product_id);
@@ -724,6 +804,15 @@ export const appointmentsService = {
                     error: err,
                 });
             });
+        }
+
+        // ── Package linkage: keep the schedule row's denormalized date in sync ──
+        // Same appointment_id, same schedule row — a reschedule never creates a
+        // duplicate. No-op for any appointment not created by the package-sale
+        // scheduling flow.
+        if (patch.scheduled_at && new Date(patch.scheduled_at).getTime() !== new Date(existing.scheduled_at).getTime()) {
+            clientPackagesService.rescheduleForAppointment(appointmentId, patch.scheduled_at)
+                .catch((err: any) => logger.error("[client-packages] rescheduleForAppointment failed:", err?.message ?? err));
         }
 
         // ── WhatsApp Automation: Appointment Rescheduled ──────────────────────
@@ -775,6 +864,12 @@ export const appointmentsService = {
             throw new AppError(400, `Appointment is already '${existing.status}'`, "BAD_REQUEST");
 
         const cancelled = await appointmentsRepository.updateStatus(params.appointmentId, "cancelled");
+
+        // ── Package linkage: cancel never deducts the reserved session — the
+        // service becomes reschedulable again. No-op for any appointment not
+        // created by the package-sale scheduling flow.
+        clientPackagesService.cancelScheduleForAppointment(params.appointmentId)
+            .catch((err: any) => logger.error("[client-packages] cancelScheduleForAppointment failed:", err?.message ?? err));
 
         // Restore stock for cancelled appointment products (fire-and-forget)
         const cancelledProducts = (existing.product_items ?? []).filter(p => p.product_id);
@@ -885,7 +980,7 @@ export const appointmentsService = {
     },
 
     // Bulk delete for the reports multi-select UI. Reuses the same per-appointment
-    // delete() logic (soft delete + stock restore) so behavior stays identical to
+    // delete() logic (hard delete + stock restore) so behavior stays identical to
     // deleting one at a time — just looped, with per-id failures collected instead
     // of aborting the whole batch.
     async bulkDelete(appointmentIds: string[]): Promise<{ deleted: string[]; failed: { id: string; reason: string }[] }> {
@@ -973,6 +1068,14 @@ export const appointmentsService = {
 
             // Mark appointment as paid
             const completedAppt = await appointmentsRepository.updateStatus(appointmentId, "paid");
+
+            // ── Package redemption: this appointment was booked from a package
+            // sale's schedule-at-purchase flow — deduct the one session it was
+            // reserved for now that it's actually complete. No-op for any
+            // appointment not created that way. Never blocks checkout on failure.
+            await clientPackagesService
+                .redeemForAppointmentIfScheduled(existing.salon_id, appointmentId, existing.staff_name ?? "Staff")
+                .catch((err: any) => logger.error("[client-packages] redemption on checkout failed:", err?.message ?? err));
 
             // ── WhatsApp Automation: Thank You + Review Request (fire-and-forget) ──
             notifyAppointmentCompleted(appointmentId).catch(() => {});
@@ -1165,6 +1268,10 @@ export const appointmentsService = {
             staff_id:        existing.staff_id   ?? undefined,
             origin:          "quick_sell",
             payment_label:   saleExtras.payment_method || "",
+            // Date the sale to the appointment's real scheduled time, not
+            // whenever checkout happened to run — see the matching comment
+            // on payments.service.ts's recordTransaction() calls.
+            created_at:      existing.scheduled_at,
             discount_amount: saleExtras.discount_amount,
             tax_amount:      saleExtras.tax_amount,
             // ex_charges counts as revenue, tip_amount does not (passes through
@@ -1178,6 +1285,14 @@ export const appointmentsService = {
         });
 
         const appointment = await appointmentsRepository.linkSale(appointmentId, sale.id);
+
+        // ── Package redemption: this appointment was booked from a package
+        // sale's schedule-at-purchase flow — deduct the one session it was
+        // reserved for now that it's actually complete. No-op for any
+        // appointment not created that way. Never blocks checkout on failure.
+        await clientPackagesService
+            .redeemForAppointmentIfScheduled(existing.salon_id, appointmentId, existing.staff_name ?? "Staff")
+            .catch((err: any) => logger.error("[client-packages] redemption on checkout failed:", err?.message ?? err));
 
         // ── Fire commission on the new sale items (fire-and-forget) ──────────
         commissionCalculationService.calculateForSale({

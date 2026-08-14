@@ -9,6 +9,14 @@ export type AutomationEventType =
   | 'appointment_reminder_1h'
   | 'appointment_rescheduled'
   | 'appointment_cancelled'
+  // Reminders for an appointment booked out of a package sale (see
+  // client_package_service_schedules). Separate from the generic
+  // appointment_reminder_* events so the copy can name the package and
+  // reassure the client the visit is already paid for — those generic
+  // sweeps deliberately skip package-linked appointments so nobody gets
+  // both messages for one visit.
+  | 'package_appointment_reminder_2d'
+  | 'package_appointment_reminder_1d'
   | 'invoice_generated'
   | 'payment_received'
   | 'pending_payment_reminder'
@@ -51,6 +59,8 @@ export const PURCHASE_EVENTS: AutomationEventType[] = [
   'appointment_confirmation',
   'appointment_reminder_24h',
   'appointment_rescheduled',
+  'package_appointment_reminder_2d',
+  'package_appointment_reminder_1d',
 ]
 
 // Transactional events — controlled by client.whatsapp_notifications
@@ -134,6 +144,11 @@ export type AutomationTemplate = {
   approved_at:       string | null
   created_at:        string
   updated_at:        string
+  // Optional single CTA-URL button — currently only review_request uses this,
+  // but kept generic on the row so any future event can opt in the same way.
+  has_button:        boolean
+  button_text:       string | null
+  button_url_base:   string | null
 }
 
 // ── Trigger Payload ───────────────────────────────────────────────────────────
@@ -153,6 +168,10 @@ export type AutomationTriggerPayload = {
   // scheduler events (reminders, birthday) leave it off; they do their own
   // date-keyed guarding and intentionally re-send over time.
   dedupeByReference?: boolean
+  // Per-recipient suffix appended to the template's stored button_url_base at
+  // send time (Meta's dynamic URL button mechanism). Only meaningful when the
+  // resolved template has has_button = true; ignored otherwise.
+  buttonSuffix?: string | null
 }
 
 // ── API Bodies ────────────────────────────────────────────────────────────────

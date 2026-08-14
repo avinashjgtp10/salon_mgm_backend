@@ -32,6 +32,8 @@ function toClientPackage(row: ClientPackageRow): ClientPackage {
     branch:        row.branch,
     createdDate:   new Date(row.created_date).toISOString(),
     expiryDate:    row.expiry_date,
+    expireAfterServices: row.expire_after_services ?? null,
+    description:   row.description ?? null,
     status:        row.status,
     basePrice:     base,
     gstPercentage: gstPct,
@@ -62,6 +64,15 @@ function toClientPackage(row: ClientPackageRow): ClientPackage {
         }),
         staff:  h.staff_name,
         status: h.status,
+      })),
+      // schedule slots are keyed by service id in row.schedule_map
+      scheduleSlots: (row.schedule_map?.[s.service_id] ?? []).map(sc => ({
+        id:            sc.id,
+        appointmentId: sc.appointment_id,
+        staffId:       sc.staff_id ?? null,
+        staffName:     sc.staff_name ?? null,
+        status:        sc.status as any,
+        scheduledAt:   sc.scheduled_at ? new Date(sc.scheduled_at).toISOString() : null,
       })),
     })),
   };
@@ -114,7 +125,39 @@ const SELECT_FULL = `
         WHERE cps2.client_package_id = cp.id
         GROUP BY cps2.id
       ) sub
-    ) AS session_history_map
+    ) AS session_history_map,
+    (
+      SELECT COALESCE(
+        json_object_agg(
+          svc_id::text,
+          svc_schedules
+        ),
+        '{}'
+      )
+      FROM (
+        SELECT
+          cps3.id AS svc_id,
+          COALESCE(
+            json_agg(
+              json_build_object(
+                'id',             sch.id,
+                'appointment_id', sch.appointment_id,
+                'staff_id',       sch.staff_id,
+                'staff_name',     NULLIF(TRIM(CONCAT(st.first_name, ' ', COALESCE(st.last_name, ''))), ''),
+                'status',         sch.status,
+                'scheduled_at',   sch.scheduled_at
+              ) ORDER BY sch.scheduled_at ASC NULLS LAST
+            ) FILTER (WHERE sch.id IS NOT NULL),
+            '[]'
+          ) AS svc_schedules
+        FROM client_package_services cps3
+        LEFT JOIN client_package_service_schedules sch
+          ON sch.client_package_service_id = cps3.id
+        LEFT JOIN staff st ON st.id = sch.staff_id
+        WHERE cps3.client_package_id = cp.id
+        GROUP BY cps3.id
+      ) sub2
+    ) AS schedule_map
   FROM client_packages cp
   LEFT JOIN client_package_services cps ON cps.client_package_id = cp.id
 `;
@@ -190,14 +233,17 @@ export const clientPackagesRepository = {
       const gstAmount   = parseFloat(((dto.basePrice - dto.discount) * dto.gstPercentage / 100).toFixed(2));
       const totalAmount = parseFloat((dto.basePrice - dto.discount + gstAmount).toFixed(2));
       const pkgId       = uuidv4();
+      const paidSoFar   = parseFloat(
+        (totalAmount * Math.min(1, Math.max(0, dto.paidFraction ?? 1))).toFixed(2),
+      );
 
       await client.query(
         `INSERT INTO client_packages
           (id, salon_id, client_id, client_name, mobile, email,
            package_name, category, branch, expiry_date,
            base_price, gst_percentage, gst_amount, discount, total_amount,
-           payment_method, split_details, paid_amount, pending_amount, payment_status, status, appointment_id, staff_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
+           payment_method, split_details, paid_amount, pending_amount, payment_status, status, appointment_id, staff_id, expire_after_services, description)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)`,
         [
           pkgId, salonId, dto.clientId, clientName,
           c.phone_number ?? null, c.email ?? null,
@@ -205,21 +251,36 @@ export const clientPackagesRepository = {
           dto.basePrice, dto.gstPercentage, gstAmount, dto.discount, totalAmount,
           dto.paymentMethod,
           dto.splitDetails ? JSON.stringify(dto.splitDetails) : null,
-          totalAmount,  // paid_amount = full amount on creation
-          0,            // pending_amount
-          "Paid",
+          // Defaults to the full amount (every paid-in-full caller), but a
+          // package credited off a still-partially-paid bill records what has
+          // actually been received so the Package Sale report and receipts
+          // don't show money that hasn't arrived. Clamped to 0..total so a
+          // malformed fraction can't over- or negatively-credit the row.
+          paidSoFar,
+          parseFloat((totalAmount - paidSoFar).toFixed(2)),
+          dto.paymentStatus ?? "Paid",
           "Active",
           dto.appointmentId ?? null,
           dto.staffId ?? null,
+          dto.expireAfterServices ?? null,
+          dto.description ?? null,
         ],
       );
 
+      // Capture the generated ids in dto.services order — the SELECT_FULL
+      // below re-fetches services via json_agg with no ORDER BY guarantee,
+      // so relying on its output order to zip back against dto.services[i]
+      // (needed by the caller to match a `schedule` to the right created
+      // service) would be unreliable. Reordered below instead.
+      const serviceIds: string[] = [];
       for (const svc of dto.services) {
+        const svcId = uuidv4();
+        serviceIds.push(svcId);
         await client.query(
           `INSERT INTO client_package_services
             (id, client_package_id, service_name, catalog_service_id, total_sessions, completed_sessions, price)
            VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-          [uuidv4(), pkgId, svc.serviceName, svc.serviceId ?? null, svc.totalSessions, 0, svc.price],
+          [svcId, pkgId, svc.serviceName, svc.serviceId ?? null, svc.totalSessions, 0, svc.price],
         );
       }
 
@@ -229,7 +290,11 @@ export const clientPackagesRepository = {
       );
 
       await client.query("COMMIT");
-      return toClientPackage(rows[0]);
+
+      const pkg = toClientPackage(rows[0]);
+      const byId = new Map(pkg.services.map(s => [s.serviceId, s]));
+      pkg.services = serviceIds.map(id => byId.get(id)).filter((s): s is typeof pkg.services[number] => !!s);
+      return pkg;
     } catch (err) {
       await client.query("ROLLBACK");
       throw err;
@@ -388,12 +453,31 @@ export const clientPackagesRepository = {
     try {
       await client.query("BEGIN");
 
+      // Lock the package row FIRST. Quick Sale/Calendar checkout fires one
+      // completeSession call per covered service CONCURRENTLY (see
+      // markPackageSessions in AppointmentModal.tsx — Promise.allSettled, not
+      // a sequential loop), so without this lock, several calls for the same
+      // package could each read a stale "not yet Completed" snapshot and all
+      // succeed even after the aggregate cap below was already reached by
+      // one of them. FOR UPDATE serializes them — each waits for the
+      // previous one's COMMIT, so the status/cap check every call performs
+      // is always against up-to-date state.
+      const pkgRes = await client.query(
+        `SELECT status, expire_after_services FROM client_packages
+         WHERE id = $1 AND salon_id = $2 FOR UPDATE`,
+        [packageId, salonId],
+      );
+      if (!pkgRes.rows.length) throw new Error("Client package not found");
+      if (pkgRes.rows[0].status === "Completed") {
+        throw new Error("This package has already been fully used.");
+      }
+      const cap = pkgRes.rows[0].expire_after_services;
+
       const svcRes = await client.query(
-        `SELECT cps.id, cps.total_sessions, cps.completed_sessions
-         FROM client_package_services cps
-         JOIN client_packages cp ON cp.id = cps.client_package_id
-         WHERE cps.id = $1 AND cp.id = $2 AND cp.salon_id = $3`,
-        [dto.serviceId, packageId, salonId],
+        `SELECT id, total_sessions, completed_sessions
+         FROM client_package_services
+         WHERE id = $1 AND client_package_id = $2`,
+        [dto.serviceId, packageId],
       );
 
       if (!svcRes.rows.length) throw new Error("Service not found in this package");
@@ -423,7 +507,23 @@ export const clientPackagesRepository = {
          WHERE client_package_id = $1 AND completed_sessions < total_sessions`,
         [packageId],
       );
-      if (parseInt(remaining.rows[0].count, 10) === 0) {
+      let allServicesDone = parseInt(remaining.rows[0].count, 10) === 0;
+
+      // Aggregate-session cap ("Expires after this many services", see
+      // package_templates.expire_after_services): once this package's TOTAL
+      // completed sessions across ALL its services combined reach the cap it
+      // was sold with, it closes early — even if individual services still
+      // have sessions left unused.
+      if (!allServicesDone && cap != null) {
+        const totalRes = await client.query(
+          `SELECT COALESCE(SUM(completed_sessions), 0) AS total
+           FROM client_package_services WHERE client_package_id = $1`,
+          [packageId],
+        );
+        if (parseInt(totalRes.rows[0].total, 10) >= cap) allServicesDone = true;
+      }
+
+      if (allServicesDone) {
         await client.query(
           `UPDATE client_packages SET status = 'Completed' WHERE id = $1`,
           [packageId],
@@ -443,5 +543,108 @@ export const clientPackagesRepository = {
     } finally {
       client.release();
     }
+  },
+
+  // ── Auto-create idempotency (partial → full payment on the same bill) ─────
+  // A package line item is now credited to the client as soon as the bill is
+  // partially paid, which means autoCreateFromPayment runs again on the later
+  // payment that settles the balance. Matching on (appointment, package name)
+  // rather than appointment alone so a bill carrying two different packages
+  // still creates both, while the same one can't be created twice.
+  async findIdByAppointmentAndName(
+    salonId: string,
+    appointmentId: string,
+    packageName: string,
+  ): Promise<string | null> {
+    const res = await pool.query(
+      `SELECT id FROM client_packages
+        WHERE salon_id = $1 AND appointment_id = $2 AND package_name = $3
+        LIMIT 1`,
+      [salonId, appointmentId, packageName],
+    );
+    return res.rows[0]?.id ?? null;
+  },
+
+  // Re-states how much of an already-created package has been collected, as a
+  // 0..1 share of its own total_amount (which never changes here). Called on
+  // every payment after the one that created the row, so a bill settled in
+  // three instalments keeps this row's paid/pending accurate throughout
+  // rather than only flipping at the end. fraction >= 1 settles it to Paid.
+  async updatePaymentProgress(id: string, salonId: string, fraction: number): Promise<void> {
+    const f = Math.min(1, Math.max(0, fraction));
+    if (f >= 1) {
+      await pool.query(
+        `UPDATE client_packages
+            SET paid_amount = total_amount, pending_amount = 0,
+                payment_status = 'Paid', updated_at = NOW()
+          WHERE id = $1 AND salon_id = $2`,
+        [id, salonId],
+      );
+      return;
+    }
+    await pool.query(
+      `UPDATE client_packages
+          SET paid_amount    = ROUND(total_amount * $3, 2),
+              pending_amount = ROUND(total_amount * (1 - $3), 2),
+              payment_status = 'Partial', updated_at = NOW()
+        WHERE id = $1 AND salon_id = $2`,
+      [id, salonId, f],
+    );
+  },
+
+  // ── Package-service scheduling (future appointment linkage) ────────────────
+
+  async createServiceSchedule(params: {
+    clientPackageId:        string;
+    clientPackageServiceId: string;
+    appointmentId:           string;
+    staffId?:                string | null;
+    scheduledAt:              string;
+  }): Promise<string> {
+    const id = uuidv4();
+    await pool.query(
+      `INSERT INTO client_package_service_schedules
+        (id, client_package_id, client_package_service_id, appointment_id, staff_id, status, scheduled_at)
+       VALUES ($1,$2,$3,$4,$5,'Scheduled',$6)`,
+      [id, params.clientPackageId, params.clientPackageServiceId, params.appointmentId, params.staffId ?? null, params.scheduledAt],
+    );
+    return id;
+  },
+
+  async findScheduleByAppointmentId(appointmentId: string): Promise<{
+    id: string;
+    clientPackageId: string;
+    clientPackageServiceId: string;
+    status: string;
+  } | null> {
+    const { rows } = await pool.query(
+      `SELECT id, client_package_id, client_package_service_id, status
+       FROM client_package_service_schedules WHERE appointment_id = $1`,
+      [appointmentId],
+    );
+    if (!rows.length) return null;
+    return {
+      id:                      rows[0].id,
+      clientPackageId:         rows[0].client_package_id,
+      clientPackageServiceId:  rows[0].client_package_service_id,
+      status:                  rows[0].status,
+    };
+  },
+
+  async updateScheduleStatusByAppointmentId(appointmentId: string, status: "Completed" | "Cancelled" | "No Show"): Promise<void> {
+    await pool.query(
+      `UPDATE client_package_service_schedules SET status = $1, updated_at = NOW() WHERE appointment_id = $2`,
+      [status, appointmentId],
+    );
+  },
+
+  // Reschedule keeps the same schedule row (same appointment_id) — only the
+  // denormalized scheduled_at copy moves, per "update the existing
+  // appointment, do not create a duplicate."
+  async updateScheduleTimeByAppointmentId(appointmentId: string, scheduledAt: string): Promise<void> {
+    await pool.query(
+      `UPDATE client_package_service_schedules SET scheduled_at = $1, updated_at = NOW() WHERE appointment_id = $2`,
+      [scheduledAt, appointmentId],
+    );
   },
 };

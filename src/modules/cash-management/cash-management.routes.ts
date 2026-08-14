@@ -10,6 +10,7 @@ const guard = [authMiddleware, requireSalon, roleMiddleware("salon_owner", "admi
 router.post("/open", ...guard, cashManagementController.openCounter);
 router.get("/cashdashboard", ...guard, cashManagementController.getDashboard);
 router.get("/", ...guard, cashManagementController.listCounters);
+router.get("/income", ...guard, cashManagementController.listCashIncomeEntries);
 router.get("/expenses", ...guard, cashManagementController.listExpenses);
 router.post("/expenses", ...guard, cashManagementController.createExpense);
 router.put("/expenses/:id", ...guard, cashManagementController.updateExpense);

@@ -79,6 +79,13 @@ export function invalidateStaffPermCache(userId: string) {
 // Mirrors the "staff" column defaults in src/features/settings/data/permissionMatrix.ts
 // on the frontend — keep the two in sync when adding a new requirePermission() key.
 const DEFAULT_STAFF_PERMS: Record<string, boolean> = {
+    // Marketing keys were missing from this map entirely, so any
+    // requirePermission("view_campaigns") check fell through to `?? false` and
+    // denied staff even when the frontend matrix said otherwise. Listed here
+    // so the two sides actually agree.
+    view_campaigns: false,
+    create_campaigns: false,
+    design_coupons: false,
     view_calendar: true,
     manage_calendar: false,
     view_clients: true,
@@ -109,6 +116,7 @@ const DEFAULT_STAFF_PERMS: Record<string, boolean> = {
     view_reports: false,
     export_reports: false,
     general_settings: false,
+    view_enquiries: true,
 };
 
 // ── Core resolver ──────────────────────────────────────────────────────────────

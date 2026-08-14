@@ -39,6 +39,24 @@ export async function ensurePackageTemplateTables(): Promise<void> {
     ALTER TABLE package_templates
       ADD COLUMN IF NOT EXISTS expiry_days INTEGER DEFAULT NULL
   `);
+  // Free-text "what's included / terms" blurb, shown on the "+ Package" row's
+  // info button in Calendar and Quick Sale. Nullable with no backfill —
+  // templates created before this column simply have nothing to show, and the
+  // info panel already falls back to the included-services list.
+  await pool.query(`
+    ALTER TABLE package_templates
+      ADD COLUMN IF NOT EXISTS description TEXT
+  `);
+  // Optional aggregate-session cap: once a sold instance of this template has
+  // this many TOTAL completed sessions across ALL its services combined (not
+  // per-service), the client's package closes early — same status='Completed'
+  // mechanism the existing "every service's sessions used up" path already
+  // triggers, just at an earlier count the salon chooses. NULL (the default)
+  // means no early cap — behaves exactly as before.
+  await pool.query(`
+    ALTER TABLE package_templates
+      ADD COLUMN IF NOT EXISTS expire_after_services INTEGER DEFAULT NULL
+  `);
 }
 
 // ── Mapper ────────────────────────────────────────────────────────────────────
@@ -48,9 +66,11 @@ function toTemplate(row: any, services: any[]): PackageTemplate {
     id:            row.id,
     salonId:       row.salon_id,
     name:          row.name,
+    description:   row.description ?? null,
     expiryMonths:  row.expiry_months,
     expiryDays:    row.expiry_days,
     neverExpires:  row.never_expires,
+    expireAfterServices: row.expire_after_services ?? null,
     basePrice:     parseFloat(row.base_price),
     gstPercentage: parseFloat(row.gst_percentage),
     discount:      parseFloat(row.discount),
@@ -107,10 +127,13 @@ export const packageTemplatesRepository = {
 
       await client.query(
         `INSERT INTO package_templates
-          (id, salon_id, name, expiry_months, expiry_days, never_expires, base_price, gst_percentage, discount, payment_method)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+          (id, salon_id, name, description, expiry_months, expiry_days, never_expires, base_price, gst_percentage, discount, payment_method, expire_after_services)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
         [
           id, salonId, dto.name,
+          // Blank input stores NULL rather than "", so "has a description" is
+          // a single check downstream instead of null-or-empty everywhere.
+          dto.description?.trim() ? dto.description.trim() : null,
           dto.neverExpires ? null : (dto.expiryMonths ?? null),
           dto.neverExpires ? null : (dto.expiryDays ?? null),
           dto.neverExpires ?? false,
@@ -118,6 +141,7 @@ export const packageTemplatesRepository = {
           dto.gstPercentage ?? 0,
           dto.discount ?? 0,
           dto.paymentMethod ?? "cash",
+          dto.expireAfterServices ?? null,
         ],
       );
 
@@ -151,6 +175,7 @@ export const packageTemplatesRepository = {
       let   idx = 1;
 
       if (dto.name           !== undefined) { sets.push(`name = $${idx++}`);           vals.push(dto.name); }
+      if (dto.description    !== undefined) { sets.push(`description = $${idx++}`);    vals.push(dto.description?.trim() ? dto.description.trim() : null); }
       if (dto.neverExpires   !== undefined) { sets.push(`never_expires = $${idx++}`);  vals.push(dto.neverExpires); }
       if (dto.expiryMonths   !== undefined) { sets.push(`expiry_months = $${idx++}`);  vals.push(dto.neverExpires ? null : dto.expiryMonths); }
       if (dto.expiryDays     !== undefined) { sets.push(`expiry_days = $${idx++}`);    vals.push(dto.neverExpires ? null : dto.expiryDays); }
@@ -158,6 +183,7 @@ export const packageTemplatesRepository = {
       if (dto.gstPercentage  !== undefined) { sets.push(`gst_percentage = $${idx++}`); vals.push(dto.gstPercentage); }
       if (dto.discount       !== undefined) { sets.push(`discount = $${idx++}`);       vals.push(dto.discount); }
       if (dto.paymentMethod  !== undefined) { sets.push(`payment_method = $${idx++}`); vals.push(dto.paymentMethod); }
+      if (dto.expireAfterServices !== undefined) { sets.push(`expire_after_services = $${idx++}`); vals.push(dto.expireAfterServices); }
 
       if (sets.length > 0) {
         vals.push(id, salonId);

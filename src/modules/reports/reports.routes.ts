@@ -158,6 +158,92 @@ router.post(
 );
 
 // ======================================================
+// LOST CUSTOMERS REPORT (independent report API)
+// Standalone report — separate from Customer Frequency's fixed 90-day
+// "lost" bucket, with a user-configurable lost_days cutoff.
+// ======================================================
+
+router.post(
+    "/lost-customers",
+    ...guard,
+    reportsController.getLostCustomersReport
+);
+
+// ======================================================
+// CUSTOMER SPEND SEGMENTS REPORT (independent report API)
+// Classifies clients VIP / Regular / Low against owner-set ₹ thresholds.
+// Reads clients/sales directly, never the Appointment API.
+// ======================================================
+
+router.post(
+    "/customer-spend",
+    ...guard,
+    reportsController.getCustomerSpendReport
+);
+
+// ======================================================
+// SERVICE FREQUENCY REPORT (independent report API)
+// One row per client + service pair — how often each client returns for a
+// given service. Reads sale_items/sales/clients directly, never the
+// Appointment API.
+// ======================================================
+
+router.post(
+    "/service-frequency",
+    ...guard,
+    reportsController.getServiceFrequencyReport
+);
+
+// ======================================================
+// MEMBERSHIP HISTORY REPORT (independent report API)
+// One row per membership benefit redemption, read from
+// membership_usage_log — the membership counterpart to Package History.
+// ======================================================
+
+router.post(
+    "/membership-history",
+    ...guard,
+    reportsController.getMembershipHistoryReport
+);
+
+// ======================================================
+// PAYMENT COLLECTION REPORT (independent report API)
+// Reads appointments + payments directly (never sales — an unpaid bill has
+// no sales row at all). Due is read from the latest payment row per
+// appointment, never summed.
+// ======================================================
+
+router.post(
+    "/payment-collection",
+    ...guard,
+    reportsController.getPaymentCollectionReport
+);
+
+// ======================================================
+// CASH MANAGEMENT REPORT (independent report API)
+// Reads cash_management directly — never calls the cash-management module's
+// own service/repository, and never calls the Appointment API/service.
+// ======================================================
+
+router.post(
+    "/cash-management",
+    ...guard,
+    reportsController.getCashManagementReport
+);
+
+// ======================================================
+// REFERRAL REPORT (independent report API)
+// One row per referred client, joined back to the referrer. Reads
+// clients/sales/referral_ledger directly — never calls the Appointment API.
+// ======================================================
+
+router.post(
+    "/referral",
+    ...guard,
+    reportsController.getReferralReport
+);
+
+// ======================================================
 // CLIENT RATING REPORT (independent report API)
 // Reads the reviews table directly — never calls into the reviews module's
 // service/repository, and never calls the Appointment API/service.
@@ -200,6 +286,30 @@ router.post(
     "/staff-item-sales",
     ...guard,
     reportsController.getStaffItemSalesReport
+);
+
+// ======================================================
+// REBOOKING RATE REPORT (independent report API)
+// Reads sales/sale_items/clients directly — never calls the Appointment
+// API/service. Per staff, what share of their served visits led to the
+// client returning within a user-entered day window.
+// ======================================================
+
+router.post(
+    "/rebooking-rate",
+    ...guard,
+    reportsController.getRebookingRateReport
+);
+
+// ======================================================
+// PAYROLL HISTORY REPORT (independent report API)
+// Reads payroll_entries directly — never calls the Appointment API.
+// ======================================================
+
+router.post(
+    "/payroll-history",
+    ...guard,
+    reportsController.getPayrollHistoryReport
 );
 
 // ======================================================
@@ -249,6 +359,18 @@ router.post(
 );
 
 // ======================================================
+// UPCOMING APPOINTMENTS REPORT (independent report API)
+// Reads the appointments table directly via SQL — never calls the
+// Appointment HTTP API/service. Scoped to future, still-booked appointments.
+// ======================================================
+
+router.post(
+    "/upcoming-appointments",
+    ...guard,
+    reportsController.getUpcomingAppointmentsReport
+);
+
+// ======================================================
 // WA MARKETING CAMPAIGN REPORT (independent report API)
 // Reads wa_campaigns directly — never calls the campaigns HTTP API/service.
 // ======================================================
@@ -257,6 +379,42 @@ router.post(
     "/wa-campaign",
     ...guard,
     reportsController.getWaCampaignReport
+);
+
+// ======================================================
+// OPEN RATE REPORT (independent report API)
+// Same data source as /wa-campaign above, different question: engagement
+// (opened ÷ delivered) rather than delivery throughput.
+// ======================================================
+
+router.post(
+    "/open-rate",
+    ...guard,
+    reportsController.getOpenRateReport
+);
+
+router.post(
+    "/open-rate/campaign",
+    ...guard,
+    reportsController.getOpenRateCampaignDetail
+);
+
+// ======================================================
+// REPLY RATE REPORT (independent report API)
+// Replies are attributed by phone + a 24h window — see WA_REPLY_WINDOW in
+// reports.repository.ts, since nothing links a message to a campaign.
+// ======================================================
+
+router.post(
+    "/reply-rate",
+    ...guard,
+    reportsController.getReplyRateReport
+);
+
+router.post(
+    "/reply-rate/campaign",
+    ...guard,
+    reportsController.getReplyRateCampaignDetail
 );
 
 export default router;

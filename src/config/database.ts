@@ -150,6 +150,196 @@ setImmediate(() => {
   `).catch((err: any) => console.warn('⚠️  demo_requests table migration:', err.message));
 });
 
+// Create enquiries table (safe, idempotent)
+setImmediate(() => {
+  pool.query(`
+    CREATE TABLE IF NOT EXISTS enquiries (
+      id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+      salon_id    UUID        NOT NULL REFERENCES salons(id)    ON DELETE CASCADE,
+      name        TEXT        NOT NULL,
+      phone       TEXT        NOT NULL,
+      service_id  UUID        REFERENCES services(id) ON DELETE SET NULL,
+      staff_id    UUID        REFERENCES staff(id)    ON DELETE SET NULL,
+      status      TEXT        NOT NULL DEFAULT 'New' CHECK (status IN ('New', 'Follow-up', 'Converted', 'Closed')),
+      notes       TEXT,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `)
+    .then(() => pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_enquiries_salon_id ON enquiries (salon_id);
+      CREATE INDEX IF NOT EXISTS idx_enquiries_status    ON enquiries (salon_id, status);
+      CREATE INDEX IF NOT EXISTS idx_enquiries_created_at ON enquiries (salon_id, created_at DESC);
+    `))
+    // Per-salon sequential enquiry numbers, backfilled oldest-first for any
+    // rows that predate this column (mirrors sales.repository.ts's invoice
+    // number counter pattern).
+    .then(() => pool.query(`
+      ALTER TABLE salons ADD COLUMN IF NOT EXISTS next_enquiry_seq INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE enquiries ADD COLUMN IF NOT EXISTS enquiry_no INTEGER;
+
+      WITH numbered AS (
+        SELECT id, ROW_NUMBER() OVER (PARTITION BY salon_id ORDER BY created_at) AS rn
+        FROM enquiries
+        WHERE enquiry_no IS NULL
+      )
+      UPDATE enquiries e SET enquiry_no = numbered.rn
+      FROM numbered
+      WHERE numbered.id = e.id;
+
+      UPDATE salons s SET next_enquiry_seq = GREATEST(s.next_enquiry_seq, sub.max_no + 1)
+      FROM (SELECT salon_id, MAX(enquiry_no) AS max_no FROM enquiries GROUP BY salon_id) sub
+      WHERE sub.salon_id = s.id;
+
+      ALTER TABLE enquiries ALTER COLUMN enquiry_no SET NOT NULL;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS enquiries_salon_id_enquiry_no_key
+        ON enquiries (salon_id, enquiry_no);
+    `))
+    .then(() => pool.query(`
+      ALTER TABLE enquiries ADD COLUMN IF NOT EXISTS source TEXT;
+      ALTER TABLE enquiries ADD COLUMN IF NOT EXISTS follow_up_at TIMESTAMPTZ;
+
+      CREATE INDEX IF NOT EXISTS idx_enquiries_follow_up_at ON enquiries (salon_id, follow_up_at);
+    `))
+    .catch((err: any) => console.warn('⚠️  enquiries table migration:', err.message));
+});
+
+// Per-service commission override (safe, idempotent).
+// NULL commission_rate means "no override" — the service falls through to the
+// staff's commission_rules / staff_commission_settings exactly as before. That
+// nullable default is deliberate: if this migration ever fails to reach an
+// environment, every service keeps earning commission under the existing rules
+// instead of silently paying nothing.
+setImmediate(() => {
+  pool.query(`
+    ALTER TABLE services
+      ADD COLUMN IF NOT EXISTS commission_rate NUMERIC(10,2),
+      ADD COLUMN IF NOT EXISTS commission_kind TEXT
+  `).catch((err: any) => console.warn('⚠️  services commission override migration:', err.message));
+});
+
+// Create commission_settlements table — audit trail of every commission
+// settlement transaction (full or partial), separate from commission_earned
+// (which tracks per-sale commission rows) (safe, idempotent).
+setImmediate(() => {
+  pool.query(`DO $$ BEGIN
+    CREATE TYPE commission_settlement_status AS ENUM ('partial', 'paid');
+  EXCEPTION WHEN duplicate_object THEN NULL; END $$;`)
+    .then(() => pool.query(`
+      CREATE TABLE IF NOT EXISTS commission_settlements (
+          id                 UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+          salon_id           UUID          NOT NULL,
+          staff_id           UUID          NOT NULL REFERENCES staff(id) ON DELETE CASCADE,
+          settled_amount     NUMERIC(12,2) NOT NULL,
+          remaining_balance  NUMERIC(12,2) NOT NULL,
+          status             commission_settlement_status NOT NULL,
+          settled_at         TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+          settled_by         UUID,
+          created_at         TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_commission_settlements_staff_id  ON commission_settlements(staff_id);
+      CREATE INDEX IF NOT EXISTS idx_commission_settlements_salon_id  ON commission_settlements(salon_id);
+      CREATE INDEX IF NOT EXISTS idx_commission_settlements_settled_at ON commission_settlements(settled_at);
+    `))
+    .catch((err: any) => console.warn('⚠️  commission_settlements table migration:', err.message));
+});
+
+// Create payroll_entries table — one row per staff member per payroll period
+// (weekly/bi-weekly/monthly/custom). Net pay and pending amount are derived
+// (base+commission+tips+bonus-salary_advance-deductions, and net_pay-paid_amount)
+// rather than stored, so they never drift from the source amounts (safe, idempotent).
+setImmediate(() => {
+  pool.query(`DO $$ BEGIN
+    CREATE TYPE payroll_period_type AS ENUM ('weekly', 'biweekly', 'monthly', 'custom');
+  EXCEPTION WHEN duplicate_object THEN NULL; END $$;`)
+    .then(() => pool.query(`
+      CREATE TABLE IF NOT EXISTS payroll_entries (
+          id               UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+          salon_id         UUID          NOT NULL,
+          staff_id         UUID          NOT NULL REFERENCES staff(id) ON DELETE CASCADE,
+          period_type      payroll_period_type NOT NULL,
+          period_start     DATE          NOT NULL,
+          period_end       DATE          NOT NULL,
+          base_salary      NUMERIC(12,2) NOT NULL DEFAULT 0,
+          commission       NUMERIC(12,2) NOT NULL DEFAULT 0,
+          tips             NUMERIC(12,2) NOT NULL DEFAULT 0,
+          bonus            NUMERIC(12,2) NOT NULL DEFAULT 0,
+          salary_advance   NUMERIC(12,2) NOT NULL DEFAULT 0,
+          deductions       NUMERIC(12,2) NOT NULL DEFAULT 0,
+          paid_amount      NUMERIC(12,2) NOT NULL DEFAULT 0,
+          payment_method   TEXT,
+          payment_date     DATE,
+          created_at       TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+          updated_at       TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+          UNIQUE (staff_id, period_start, period_end)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_payroll_entries_salon_id ON payroll_entries(salon_id);
+      CREATE INDEX IF NOT EXISTS idx_payroll_entries_staff_id ON payroll_entries(staff_id);
+      CREATE INDEX IF NOT EXISTS idx_payroll_entries_period   ON payroll_entries(period_start, period_end);
+    `))
+    .catch((err: any) => console.warn('⚠️  payroll_entries table migration:', err.message));
+});
+
+// Salary advances are stored as individual transactions so multiple advances
+// within one payroll period can be tracked, edited, and summed safely.
+setImmediate(() => {
+  pool.query(`
+    CREATE TABLE IF NOT EXISTS payroll_salary_advances (
+        id                   UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+        salon_id             UUID          NOT NULL,
+        staff_id             UUID          NOT NULL REFERENCES staff(id) ON DELETE CASCADE,
+        amount               NUMERIC(12,2) NOT NULL CHECK (amount >= 0),
+        advance_date         DATE          NOT NULL,
+        payroll_period_start DATE          NOT NULL,
+        payroll_period_end   DATE          NOT NULL,
+        note                 TEXT,
+        created_at           TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+        updated_at           TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_payroll_salary_advances_salon_period
+      ON payroll_salary_advances(salon_id, payroll_period_start, payroll_period_end);
+    CREATE INDEX IF NOT EXISTS idx_payroll_salary_advances_staff
+      ON payroll_salary_advances(staff_id);
+    CREATE INDEX IF NOT EXISTS idx_payroll_salary_advances_date
+      ON payroll_salary_advances(advance_date);
+  `)
+    .catch((err: any) => console.warn('payroll_salary_advances table migration:', err.message));
+});
+
+// Split service_categories into service / product / both (safe, idempotent).
+// The table was always shared — products.category_id and services.category_id
+// both point at it with no way to tell which a given category was meant for,
+// so the Product form's category picker showed every service category too
+// (and vice versa). Backfilled from ACTUAL usage rather than defaulted to one
+// side: a category already assigned to both services and products keeps
+// showing in both pickers ('both'), one used by only one side is tagged to
+// that side, and a category nobody has assigned yet defaults to 'both' since
+// there's no usage evidence to narrow it. The `WHERE type IS NULL` guard means
+// this backfill runs once per row — a category an owner later retypes by hand
+// is never overwritten by a subsequent boot.
+setImmediate(() => {
+  pool.query(`ALTER TABLE service_categories ADD COLUMN IF NOT EXISTS type TEXT`)
+    .then(() => pool.query(`
+      UPDATE service_categories c SET type = CASE
+        WHEN EXISTS (SELECT 1 FROM services s WHERE s.category_id = c.id)
+         AND EXISTS (SELECT 1 FROM products p WHERE p.category_id = c.id) THEN 'both'
+        WHEN EXISTS (SELECT 1 FROM products p WHERE p.category_id = c.id) THEN 'product'
+        WHEN EXISTS (SELECT 1 FROM services s WHERE s.category_id = c.id) THEN 'service'
+        ELSE 'both'
+      END
+      WHERE c.type IS NULL
+    `))
+    .then(() => pool.query(`
+      ALTER TABLE service_categories ALTER COLUMN type SET DEFAULT 'both';
+      ALTER TABLE service_categories ALTER COLUMN type SET NOT NULL;
+    `))
+    .catch((err: any) => console.warn('⚠️  service_categories type migration:', err.message));
+});
+
 /**
  * safeQuery — wraps any pool.query() call with auto-retry.
  *

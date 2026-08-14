@@ -190,17 +190,31 @@ export const staffController = {
 
       let rows: any[] = [];
       const name = file.originalname.toLowerCase();
+      const isCsv = name.endsWith(".csv") || file.mimetype.includes("csv");
 
-      if (name.endsWith(".csv") || file.mimetype.includes("csv")) {
-        const text = file.buffer.toString("utf-8");
-        const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
-        if (parsed.errors && parsed.errors.length > 0) logger.warn("CSV parse warnings", { errors: parsed.errors });
-        rows = parsed.data as any[];
-      } else {
-        const wb = XLSX.read(file.buffer, { type: "buffer" });
-        const sheetName = wb.SheetNames[0];
-        if (!sheetName) throw new AppError(400, "Excel file has no sheets", "VALIDATION_ERROR");
-        rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" });
+      try {
+        if (isCsv) {
+          const text = file.buffer.toString("utf-8");
+          const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
+          if (parsed.errors && parsed.errors.length > 0) {
+            logger.warn("CSV parse warnings", { errors: parsed.errors });
+            // A handful of skipped/malformed lines is tolerable (still usable
+            // rows remain); wall-to-wall errors means the file itself isn't
+            // valid CSV rather than a few bad rows within an otherwise good one.
+            if (parsed.errors.length >= (parsed.data as any[]).length + 1) {
+              throw new AppError(400, "Invalid CSV file format", "INVALID_FILE_FORMAT");
+            }
+          }
+          rows = parsed.data as any[];
+        } else {
+          const wb = XLSX.read(file.buffer, { type: "buffer" });
+          const sheetName = wb.SheetNames[0];
+          if (!sheetName) throw new AppError(400, "Excel file has no sheets", "VALIDATION_ERROR");
+          rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" });
+        }
+      } catch (parseErr) {
+        if (parseErr instanceof AppError) throw parseErr;
+        throw new AppError(400, isCsv ? "Invalid CSV file format" : "Invalid Excel file format", "INVALID_FILE_FORMAT");
       }
 
       if (rows.length === 0) throw new AppError(400, "File is empty or has no valid rows", "VALIDATION_ERROR");
@@ -537,15 +551,45 @@ export const staffCommissionsController = {
     } catch (err) { return next(err); }
   },
 
-  // ── NEW: mark all pending commissions as paid for a staff member ───────────
+  // ── Settle commission for a staff member — full amount when no body is
+  // given (back-compat), or a specific full/partial amount when `amount` is
+  // provided in the body. Persists a commission_settlements audit row either way.
   async markStaffCommissionPaid(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = req.user?.salonId ?? String(req.query.salon_id ?? "");
       const staffId = String(req.params.staffId);
       if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
       if (!staffId) throw new AppError(400, "staffId is required", "VALIDATION_ERROR");
+
+      const bodyAmount = req.body?.amount;
+      if (bodyAmount !== undefined && bodyAmount !== null) {
+        const amount = Number(bodyAmount);
+        if (!Number.isFinite(amount) || amount <= 0) {
+          throw new AppError(400, "amount must be a positive number", "VALIDATION_ERROR");
+        }
+        const settledBy = req.user?.userId ?? null;
+        const result = await staffCommissionsService.settleStaffCommission(salonId, staffId, amount, settledBy);
+        return sendSuccess(res, 200, {
+          settled_amount: result.settledAmount,
+          remaining_balance: result.remainingBalance,
+          status: result.remainingBalance <= 0 ? "paid" : "partial",
+        }, "Commission settled successfully");
+      }
+
       const count = await staffCommissionsService.markStaffCommissionPaid(salonId, staffId);
       return sendSuccess(res, 200, { marked_paid: count }, `${count} commission(s) marked as paid`);
+    } catch (err) { return next(err); }
+  },
+
+  // ── Settlement history for a staff member (audit/reporting) ────────────────
+  async getSettlementHistory(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId ?? String(req.query.salon_id ?? "");
+      const staffId = String(req.params.staffId);
+      if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+      const limit = req.query.limit ? Number(req.query.limit) : undefined;
+      const data = await staffCommissionsService.getSettlementHistory(salonId, staffId, limit);
+      return sendSuccess(res, 200, data, "Settlement history fetched successfully");
     } catch (err) { return next(err); }
   },
 

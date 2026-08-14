@@ -611,6 +611,8 @@ export interface SalesSummaryReportRow {
     tip_amount: number;
     ewallet_used: number;
     membership_wallet_used: number;
+    // ₹ of this bill covered by an already-purchased package's sessions.
+    package_used: number;
     reward_points_value: number;
     referral_credit_used: number;
     payment_method: string | null;
@@ -628,6 +630,8 @@ export interface SalesSummaryReportStats {
     total_tip: number;
     total_ewallet: number;
     total_membership: number;
+    // ₹ across these bills covered by already-purchased package sessions.
+    total_package: number;
     total_rewards: number;
     total_referral: number;
 }
@@ -732,7 +736,12 @@ export interface DailySheetReportFilters {
 export interface DailySheetReportRow {
     appointment_id: string | null;
     sale_id: string;
-    time: string;
+    date: string;
+    booking_time: string;
+    // When the invoice/bill was actually created (sales.created_at). Distinct
+    // from `booking_time` (the appointment/booking slot) — null for an
+    // appointment row that hasn't been billed yet.
+    bill_time: string | null;
     ticket_no: string;
     client_id: string | null;
     client_name: string | null;
@@ -1271,6 +1280,88 @@ export interface ClientRevenueReportResponse {
 }
 
 // ===============================
+// Customer Spend Segments Report (POST /api/report/customer-spend)
+//
+// Classifies clients as VIP / Regular / Low by how much they have spent, and
+// reports how revenue is distributed across those bands. Distinct from the
+// existing spend SORTING (Client Revenue's "Highest Revenue", Customer
+// Frequency's "Most Spending"): sorting gives an ordering, this gives a
+// label, per-segment counts, and each band's share of revenue — none of
+// which exist anywhere else.
+//
+// Two owner-set thresholds drive the split; there is no sensible universal
+// default, so they are request-scoped inputs in the same spirit as Lost
+// Customers' lost_days.
+//
+// Zero-spend clients (registered, never purchased) ARE included and land in
+// 'low' by design — hence the LEFT JOIN onto sales, matching Client Revenue
+// and Customer Frequency rather than Lost Customers' INNER JOIN.
+//
+// Spend is SUM(sales.total_amount) WHERE status='completed', identical to
+// the three sibling client reports so all four agree. Note this differs from
+// clients.repository.ts's own spend figure, which additionally counts open
+// partial payments — a client can therefore sit in a different band on the
+// Clients page than in this report.
+// ===============================
+
+export type CustomerSpendSegment = "vip" | "regular" | "low";
+
+export interface CustomerSpendReportFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    segments?: string[];
+    // ₹ at or above which a client counts as VIP; ₹ below which they count as
+    // Low. Clamped so low_max can never exceed vip_min (overlapping bands
+    // would silently swallow the Regular segment).
+    vip_min_spend?: number;
+    low_max_spend?: number;
+    // Row-level filter — clients with at least this many visits in the
+    // filtered date range. Combines with every other filter (AND).
+    min_visits?: number;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface CustomerSpendReportRow {
+    client_id: string | null;
+    client_name: string;
+    contact: string;
+    spend_segment: CustomerSpendSegment;
+    visits: number;
+    total_spend: number;
+    avg_ticket: number;
+    first_visit: string | null;
+    last_visit: string | null;
+    days_since_last_visit: number | null;
+}
+
+export interface CustomerSpendReportStats {
+    vip_clients: number;
+    regular_clients: number;
+    low_clients: number;
+    total_revenue: number;
+    // VIP revenue as a % of all revenue in the filtered set — the report's
+    // headline number (87.5% on current dev data).
+    vip_revenue_share: number;
+}
+
+export interface CustomerSpendReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface CustomerSpendReportResponse {
+    rows: CustomerSpendReportRow[];
+    pagination: CustomerSpendReportPagination;
+    stats: CustomerSpendReportStats;
+}
+
+// ===============================
 // Customer Frequency Report (independent report API —
 // POST /api/report/customer-frequency)
 // Reads clients/sales directly, never the Appointment API. One row per
@@ -1329,6 +1420,339 @@ export interface CustomerFrequencyReportResponse {
     rows: CustomerFrequencyReportRow[];
     pagination: CustomerFrequencyReportPagination;
     stats: CustomerFrequencyReportStats;
+}
+
+// ===============================
+// Service Frequency Report (POST /api/report/service-frequency)
+//
+// One row per CLIENT + SERVICE pair — "how often does this client come back
+// for this particular service". Sits between the two existing halves:
+// Service Sale is one row per sale line (flat, un-aggregated), while
+// Customer Frequency / Lost Customers aggregate per client but are blind to
+// which service was taken.
+//
+// Reads sale_items joined to sales/clients, never the Appointment API. Two
+// deliberate choices:
+//
+//  1. s.status = 'completed', matching Customer Frequency and Lost Customers
+//     rather than Service Sale's `<> 'draft'` — a "visit" in a frequency
+//     report should mean a completed one. Consequence: totals do NOT tie
+//     exactly to Service Sale (2 draft lines' worth on current data).
+//  2. Grouped on si.item_id but displayed via COALESCE(sv.name, si.name):
+//     si.name is a snapshot taken at sale time, so grouping on it would split
+//     a renamed service into two rows.
+//
+// Walk-ins (sales with no client_id) and unbilled appointments are excluded
+// by design — neither can be attributed to a client's service history.
+// ===============================
+
+export interface ServiceFrequencyReportFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    service_ids?: string[];
+    category_ids?: string[];
+    staff_ids?: string[];
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface ServiceFrequencyReportRow {
+    client_id: string | null;
+    client_name: string;
+    contact: string;
+    service_id: string | null;
+    service_name: string;
+    category_name: string;
+    visits: number;
+    total_qty: number;
+    total_spend: number;
+    first_visit: string | null;
+    last_visit: string | null;
+    days_since_last_visit: number;
+}
+
+export interface ServiceFrequencyReportStats {
+    total_pairs: number;
+    repeat_pairs: number;
+    total_visits: number;
+    total_revenue: number;
+    avg_visits_per_pair: number;
+}
+
+export interface ServiceFrequencyReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface ServiceFrequencyReportResponse {
+    rows: ServiceFrequencyReportRow[];
+    pagination: ServiceFrequencyReportPagination;
+    stats: ServiceFrequencyReportStats;
+}
+
+// ===============================
+// Lost Customers Report (independent report API — POST /api/report/lost-customers)
+// Standalone report, separate from Customer Frequency's fixed 90-day "lost"
+// bucket: the inactivity cutoff is user-configurable (lost_days), and
+// start_date/end_date filter directly on last_visit (which past window of
+// "went quiet" clients to show), not on first_visit like Customer Frequency's
+// date range does.
+// ===============================
+
+export interface LostCustomersReportFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    // Days since last visit before a client counts as "lost". Defaults to 90
+    // (same default Customer Frequency's fixed cutoff used) when omitted.
+    lost_days?: number;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface LostCustomersReportRow {
+    client_id: string | null;
+    client_name: string;
+    contact: string;
+    visits: number;
+    total_spend: number;
+    first_visit: string | null;
+    last_visit: string | null;
+    days_since_last_visit: number;
+}
+
+export interface LostCustomersReportStats {
+    total_lost_clients: number;
+    total_spend_when_active: number;
+}
+
+export interface LostCustomersReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface LostCustomersReportResponse {
+    rows: LostCustomersReportRow[];
+    pagination: LostCustomersReportPagination;
+    stats: LostCustomersReportStats;
+}
+
+// ===============================
+// Referral Report (independent report API — POST /api/report/referral)
+// One row per REFERRED client (i.e. per clients.referred_by_client_id link),
+// joined back to the referrer. Reads clients/sales/referral_ledger directly,
+// never the Appointment API. "Reward Earned" comes from the referral_ledger
+// payout row actually written for that referral (source_type =
+// 'referral_payout', source_id = the referred client), so an un-triggered
+// reward reads ₹0 rather than the configured amount.
+// ===============================
+
+export interface ReferralReportFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    // 'rewarded' | 'pending' — filters on the REFERRER's payout status
+    // (clients.referral_reward_status on the referred client's row).
+    reward_status?: string;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface ReferralReportRow {
+    referred_client_id: string | null;
+    referrer_client_id: string | null;
+    referrer_name: string;
+    referred_name: string;
+    referral_date: string | null;
+    first_visit: string | null;
+    total_visits: number;
+    revenue_generated: number;
+    reward_earned: number;
+    reward_status: "rewarded" | "pending";
+    staff_name: string;
+}
+
+export interface ReferralReportStats {
+    total_referrals: number;
+    rewarded_referrals: number;
+    total_revenue_generated: number;
+    total_reward_earned: number;
+}
+
+export interface ReferralReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface ReferralReportResponse {
+    rows: ReferralReportRow[];
+    pagination: ReferralReportPagination;
+    stats: ReferralReportStats;
+}
+
+// ===============================
+// Payment Collection Report (independent report API — POST /api/report/payment-collection)
+//
+// Reads appointments + payments directly, NOT sales. Two schema facts drive
+// this and are easy to get wrong:
+//
+//  1. `sales` carries no due/paid/payment_status column at all, and a sales
+//     row is only written once a bill is fully settled — a partially-paid
+//     bill structurally has NO sales row (see the comment above
+//     _UNBILLED_APPOINTMENT_ROWS_CTE). So dues can only come from payments.
+//  2. payments has no sale_id; it links to appointments via appointment_id.
+//
+// payments.due_amount is a CUMULATIVE SNAPSHOT — each row stores the balance
+// remaining as of that row, not an incremental charge. It must be read from
+// the LATEST row per appointment; SUMming it across rows double-counts one
+// debt (measured at 71% overstatement on real data, and it reports debt
+// against bills the customer has already settled in full). paid_amount, by
+// contrast, IS a per-row delta and is correctly SUMmed.
+//
+// Scope: only appointments that have at least one payment row appear, so
+// every row is 'paid' or 'partial'; never-paid ("booked") appointments are
+// excluded by the INNER JOIN LATERAL.
+// ===============================
+
+export interface PaymentCollectionReportFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    // 'paid' | 'partial' — derived from the latest payment row's due_amount,
+    // not from sales.status.
+    payment_statuses?: string[];
+    payment_methods?: string[];
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface PaymentCollectionReportRow {
+    appointment_id: string | null;
+    client_id: string | null;
+    payment_date: string | null;
+    customer_name: string;
+    contact: string;
+    invoice_number: string;
+    total_amount: number;
+    paid_amount: number;
+    due_amount: number;
+    payment_method: string;
+    payment_status: "paid" | "partial";
+    staff_name: string;
+}
+
+export interface PaymentCollectionReportStats {
+    total_pending_amount: number;
+    total_pending_transactions: number;
+    total_customers_with_due: number;
+    average_pending_amount: number;
+    oldest_pending_payment_date: string | null;
+    // Reconciliation context for the pending figures above — lets an owner
+    // see collection rate rather than only the outstanding balance.
+    total_billed: number;
+    total_collected: number;
+    // total_collected split by how it was paid, summed from each individual
+    // payment transaction (not the row-level latest-method field).
+    collected_by_method: { method: string; amount: number }[];
+}
+
+export interface PaymentCollectionReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+// Filter dropdown options, built from the salon's whole payment history
+// rather than the current page of rows — otherwise a payment method that
+// only appears on page 3 would be missing from the filter that finds it.
+// Same convention as getSalesSummaryFiltersAvailable.
+export interface PaymentCollectionFiltersAvailable {
+    payment_methods: { id: string; label: string }[];
+    staff: { id: string; label: string }[];
+}
+
+export interface PaymentCollectionReportResponse {
+    rows: PaymentCollectionReportRow[];
+    pagination: PaymentCollectionReportPagination;
+    stats: PaymentCollectionReportStats;
+    filters_available: PaymentCollectionFiltersAvailable;
+}
+
+// ===============================
+// CASH MANAGEMENT REPORT
+// One row per cash counter session (cash_management table) — opening/
+// closing balance, cash revenue/expense collected while the counter was
+// open, in-store cash counted at close, and the reconciliation difference.
+// ===============================
+
+export interface CashManagementReportFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    statuses?: string[];
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface CashManagementReportRow {
+    id: string;
+    status: "open" | "closed";
+    opening_balance: number;
+    cash_revenue: number;
+    cash_expense: number;
+    closing_balance: number;
+    in_store_cash: number | null;
+    reconciliation_amount: number | null;
+    remarks: string | null;
+    opened_at: string | null;
+    closed_at: string | null;
+    opened_by: string;
+    closed_by: string | null;
+}
+
+export interface CashManagementReportStats {
+    total_opening_balance: number;
+    total_cash_revenue: number;
+    total_cash_expense: number;
+    total_closing_balance: number;
+    total_reconciliation_amount: number;
+    total_sessions: number;
+    open_sessions: number;
+    closed_sessions: number;
+}
+
+export interface CashManagementReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface CashManagementFiltersAvailable {
+    status: { id: string; label: string }[];
+}
+
+export interface CashManagementReportResponse {
+    rows: CashManagementReportRow[];
+    pagination: CashManagementReportPagination;
+    stats: CashManagementReportStats;
+    filters_available: CashManagementFiltersAvailable;
 }
 
 // ===============================
@@ -1588,6 +2012,7 @@ export interface PackageSaleReportRow {
     client_id: string | null;
     client_name: string;
     package_name: string;
+    expiry_date: string | null;
     total_amount: number;
     paid_amount: number;
     pending_amount: number;
@@ -1649,7 +2074,10 @@ export interface PackageSaleReportResponse {
 // auto-flips it to 'Completed' the moment every service's sessions are
 // used up) — "Expired" is derived here from expiry_date vs now(), same
 // convention as the Membership Sale report's status computation.
-export type PackageHistoryStatus = "ongoing" | "complete" | "expired";
+// 'expiring_soon' = still active, but within _PACKAGE_EXPIRING_SOON_DAYS of
+// its expiry_date. Sits between 'ongoing' and 'expired' so a salon can chase
+// clients to use sessions they've already paid for.
+export type PackageHistoryStatus = "ongoing" | "expiring_soon" | "complete" | "expired";
 
 export interface PackageHistoryReportFilters {
     start_date?: string;
@@ -1679,6 +2107,9 @@ export interface PackageHistoryReportRow {
     // particular session was logged.
     remaining_sessions: number;
     staff: string;
+    // The parent package's expiry date as 'YYYY-MM-DD' text (never a bare
+    // date — see the TO_CHAR note in the rows query).
+    expiry_date: string | null;
     status: PackageHistoryStatus;
 }
 
@@ -1687,6 +2118,7 @@ export interface PackageHistoryReportStats {
     completed_sessions: number;
     remaining_sessions: number;
     ongoing_packages: number;
+    expiring_soon_packages: number;
     completed_packages: number;
     expired_packages: number;
 }
@@ -1708,6 +2140,106 @@ export interface PackageHistoryReportResponse {
     pagination: PackageHistoryReportPagination;
     stats: PackageHistoryReportStats;
     filters_available: PackageHistoryFiltersAvailable;
+}
+
+// ===============================
+// Membership History Report (POST /api/report/membership-history)
+//
+// One row per membership benefit REDEMPTION, read from membership_usage_log —
+// the membership counterpart to Package History (which reads
+// client_package_session_history). Membership Sale answers "who bought what";
+// this answers "who used what, when, on which service, and what's left".
+//
+// THE trap: membership_usage_log stores structurally different kinds of row in
+// one table, discriminated only by `notes`:
+//   notes IS NULL              -> wallet spend  (₹ drawn from a value balance)
+//   notes = 'membership_discount' -> discount given (% off the bill)
+//   anything else              -> a consumed session (sessions_consumed > 0)
+// Wallet rows carry amount_deducted with sessions_consumed = 0; session rows
+// are the reverse. Summing amount_deducted across kinds adds money actually
+// spent to money never charged, so the two are always reported separately.
+// The rest of the codebase depends on the same discriminator — see
+// client-memberships.repository.ts::getWalletUsedForAppointment.
+//
+// Also note the table has NO salon_id: tenant scoping comes from the
+// INNER JOIN onto client_memberships.
+// ===============================
+
+// How the benefit was taken off this bill. NOT a membership type — the three
+// membership pricing models are 'value' | 'percentage' | 'loyalty'
+// (MembershipPricingType); there is no session-based membership, sessions
+// being a package concept. Loyalty writes no ledger row at all, so it can
+// never appear here; 'other' is the catch-all rather than an invented type.
+export type MembershipBenefitType = "wallet" | "discount" | "loyalty" | "other";
+
+export interface MembershipHistoryReportFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    membership_names?: string[];
+    benefit_types?: string[];
+    // 'value' | 'percentage' | 'loyalty' — the membership's pricing model.
+    pricing_types?: string[];
+    staff_ids?: string[];
+    statuses?: string[];
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface MembershipHistoryReportRow {
+    date: string | null;
+    client_id: string | null;
+    client_name: string;
+    membership_name: string;
+    // The membership's pricing model: 'value' | 'percentage' | 'loyalty'.
+    membership_type: string;
+    service_name: string;
+    benefit_type: MembershipBenefitType;
+    // ₹ taken off this bill by the membership. For a session-type row this is
+    // 0 and sessions_consumed carries the meaning instead.
+    amount_deducted: number;
+    // The membership's balance immediately AFTER this redemption — a
+    // point-in-time snapshot stored per row, not a live lookup.
+    remaining_balance: number | null;
+    sessions_consumed: number;
+    staff: string;
+    expiry_date: string | null;
+    // Reuses MemberSaleStatus's vocabulary via _MEMBER_STATUS_EXPR so this
+    // report and Membership Sale can never disagree about one membership.
+    status: string;
+}
+
+export interface MembershipHistoryReportStats {
+    total_redemptions: number;
+    // Kept apart deliberately — see the banner comment above.
+    total_wallet_used: number;
+    total_discount_given: number;
+    // Loyalty benefit, reconstructed from payments.membership_discount_used
+    // minus what the usage log explains — loyalty writes no ledger row.
+    total_loyalty_given: number;
+    active_memberships: number;
+    expiry_soon_memberships: number;
+    exhausted_memberships: number;
+}
+
+export interface MembershipHistoryReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface MembershipHistoryFiltersAvailable {
+    memberships: string[];
+    services: string[];
+}
+
+export interface MembershipHistoryReportResponse {
+    rows: MembershipHistoryReportRow[];
+    pagination: MembershipHistoryReportPagination;
+    stats: MembershipHistoryReportStats;
+    filters_available: MembershipHistoryFiltersAvailable;
 }
 
 // ===============================
@@ -1848,6 +2380,80 @@ export interface AppointmentDetailReportResponse {
 }
 
 // ===============================
+// Upcoming Appointments Report (independent report API —
+// POST /api/report/upcoming-appointments)
+// Same appointments-table shape as Appointment Detail above, but scoped to
+// future bookings only (scheduled_at in the future, status still 'booked') —
+// front-desk view of what's coming up rather than a historical ledger.
+// Appointment "type" (Regular / Package Service / Membership Service) is
+// derived from package/membership coverage on the appointment — there is no
+// dedicated column. Package coverage can come from either package_items[]
+// (a new package sold on this same visit) or services[].client_package_id /
+// is_package_service (an existing package's session being redeemed) — see
+// the comment above getUpcomingAppointmentsReport in reports.repository.ts.
+// ===============================
+
+export interface UpcomingAppointmentsReportFilters {
+    from?: string;
+    to?: string;
+    search?: string;
+    client_ids?: string[];
+    staff_ids?: string[];
+    service_ids?: string[];
+    package_ids?: string[];
+    statuses?: string[];
+    appointment_types?: string[];
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface UpcomingAppointmentsReportRow {
+    id: string;
+    appointment_date: string;
+    time: string;
+    client_name: string | null;
+    mobile_number: string | null;
+    service_name: string;
+    package_name: string;
+    staff_name: string | null;
+    appointment_status: string;
+    appointment_type: string;
+    // Payment-source preview, same "Description" column Sales Summary shows
+    // (there payment_method/payment_reference-derived; here — since an
+    // upcoming appointment has no sale/payment row yet — derived from the
+    // same package/membership coverage appointment_type above already
+    // reads). "—" for a Regular appointment: how it'll actually be paid
+    // isn't known until checkout.
+    description: string;
+}
+
+export interface UpcomingAppointmentsReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface UpcomingAppointmentsFilterOption {
+    id: string;
+    label: string;
+}
+
+export interface UpcomingAppointmentsFiltersAvailable {
+    clients: UpcomingAppointmentsFilterOption[];
+    staff: UpcomingAppointmentsFilterOption[];
+    services: UpcomingAppointmentsFilterOption[];
+    packages: UpcomingAppointmentsFilterOption[];
+}
+
+export interface UpcomingAppointmentsReportResponse {
+    rows: UpcomingAppointmentsReportRow[];
+    pagination: UpcomingAppointmentsReportPagination;
+    filters_available: UpcomingAppointmentsFiltersAvailable;
+}
+
+// ===============================
 // WA Marketing Campaign Report (independent report API — POST /api/report/wa-campaign)
 // Reads wa_campaigns directly (template joined by name, per-contact status
 // counts aggregated live from wa_campaign_contacts — the campaign's own
@@ -1916,6 +2522,215 @@ export interface WaCampaignReportResponse {
 }
 
 // ===============================
+// Open Rate Report (independent report API — POST /api/report/open-rate)
+// Campaign engagement, sharing the WA_*_COUNT state definitions in
+// reports.repository.ts with the WA Marketing Campaign report above.
+//
+// open_rate is opened / DELIVERED (never / sent): an undelivered message had
+// no chance of being opened, so including it would understate engagement.
+// Failed and blocked messages are therefore excluded from the denominator by
+// construction — they never reach a 'DELIVERED'/'READ' state.
+//
+// `channel` is always 'whatsapp' today. The generic campaigns /
+// campaign_recipients tables that would carry SMS/Email exist but hold no
+// rows and nothing writes to them.
+// ===============================
+
+export type OpenRateChannel = "whatsapp" | "sms" | "email";
+
+export interface OpenRateReportFilters {
+    search?: string;
+    campaign_ids?: string[];
+    /** Message-level states; used as an EXISTS filter on campaigns, never to
+     *  narrow the rows the rates are computed from. */
+    message_statuses?: string[];
+    campaign_statuses?: string[];
+    channels?: OpenRateChannel[];
+    date_from?: string;
+    date_to?: string;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+    sort_by?: string;
+    sort_dir?: "asc" | "desc";
+}
+
+export interface OpenRateReportRow {
+    id: string;
+    name: string;
+    template_name: string;
+    status: string;
+    channel: string;
+    created_at: string;
+    total_contacts: number;
+    sent: number;
+    delivered: number;
+    opened: number;
+    failed: number;
+    blocked: number;
+    /** Percentage 0-100, already guarded against a zero denominator. */
+    open_rate: number;
+}
+
+export interface OpenRateReportStats {
+    total_campaigns: number;
+    total_recipients: number;
+    total_sent: number;
+    total_delivered: number;
+    total_opened: number;
+    total_failed: number;
+    total_blocked: number;
+    open_rate: number;
+}
+
+export interface OpenRateTrendPoint {
+    /** YYYY-MM-DD, cohorted by send date — see getOpenRateTrend. */
+    day: string;
+    sent: number;
+    delivered: number;
+    opened: number;
+    open_rate: number;
+}
+
+export interface OpenRateCustomerRow {
+    id: string;
+    name: string;
+    phone: string;
+    status: string;
+    sent_at: string | null;
+    delivered_at: string | null;
+    read_at: string | null;
+    error_message: string | null;
+}
+
+export interface OpenRateCampaignDetail {
+    id: string;
+    name: string;
+    status: string;
+    channel: string;
+    created_at: string;
+    template_name: string;
+    message_body: string;
+    total_contacts: number;
+    sent: number;
+    delivered: number;
+    opened: number;
+    failed: number;
+    blocked: number;
+    open_rate: number;
+    customers: OpenRateCustomerRow[];
+    customers_pagination: WaCampaignReportPagination;
+}
+
+export interface OpenRateFilterOption { id: string; label: string; }
+
+export interface OpenRateFiltersAvailable {
+    campaigns: OpenRateFilterOption[];
+}
+
+// ===============================
+// Reply Rate Report (independent report API — POST /api/report/reply-rate)
+// Shares filters and state definitions with the Open Rate report.
+//
+// A reply is an INBOUND WhatsApp message from the recipient's number arriving
+// within 24h of the campaign reaching them (WA_REPLY_WINDOW in
+// reports.repository.ts) — nothing links a message to a campaign directly, so
+// phone + timing is the only available attribution.
+//
+// reply_rate is replied / SENT (not / delivered, unlike open_rate): it's the
+// figure staff asked for, and delivery receipts are often missing here, which
+// would otherwise let replies exceed the denominator.
+// ===============================
+
+export interface ReplyRateReportRow {
+    id: string;
+    name: string;
+    template_name: string;
+    status: string;
+    channel: string;
+    created_at: string;
+    total_contacts: number;
+    /** Every send ATTEMPT, including failed/blocked — matches the other
+     *  campaign reports' `sent` so the three agree per campaign. */
+    sent: number;
+    /** Attempts that actually went out (SENT/DELIVERED/READ). This, not
+     *  `sent`, is the reply-rate denominator — a failed message can't be
+     *  replied to. See WA_REACHED_COUNT. */
+    reached: number;
+    delivered: number;
+    opened: number;
+    failed: number;
+    replied: number;
+    reply_rate: number;
+}
+
+export interface ReplyRateReportStats {
+    total_campaigns: number;
+    total_sent: number;
+    /** Reply-rate denominator — see ReplyRateReportRow.reached. */
+    total_reached: number;
+    total_delivered: number;
+    total_opened: number;
+    total_replied: number;
+    total_failed: number;
+    reply_rate: number;
+}
+
+export interface ReplyRateCustomerRow {
+    id: string;
+    name: string;
+    phone: string;
+    status: string;
+    sent_at: string | null;
+    delivered_at: string | null;
+    read_at: string | null;
+    /** First in-window inbound message; null when they never replied. */
+    first_reply_at: string | null;
+}
+
+export interface ReplyRateCampaignDetail {
+    id: string;
+    name: string;
+    status: string;
+    channel: string;
+    created_at: string;
+    template_name: string;
+    message_body: string;
+    total_contacts: number;
+    /** Every send ATTEMPT, including failed/blocked — matches the other
+     *  campaign reports' `sent` so the three agree per campaign. */
+    sent: number;
+    /** Attempts that actually went out (SENT/DELIVERED/READ). This, not
+     *  `sent`, is the reply-rate denominator — a failed message can't be
+     *  replied to. See WA_REACHED_COUNT. */
+    reached: number;
+    delivered: number;
+    opened: number;
+    failed: number;
+    replied: number;
+    reply_rate: number;
+    customers: ReplyRateCustomerRow[];
+    customers_pagination: WaCampaignReportPagination;
+}
+
+export interface ReplyRateReportResponse {
+    rows: ReplyRateReportRow[];
+    pagination: WaCampaignReportPagination;
+    stats: ReplyRateReportStats;
+    filters_available: OpenRateFiltersAvailable;
+}
+
+export interface OpenRateReportResponse {
+    rows: OpenRateReportRow[];
+    pagination: WaCampaignReportPagination;
+    stats: OpenRateReportStats;
+    filters_available: OpenRateFiltersAvailable;
+    /** Only populated if a caller asks for it — the report itself has no
+     *  charts, so the service skips the trend query entirely. */
+    trend?: OpenRateTrendPoint[];
+}
+
+// ===============================
 // Client Rating Report (independent report API — POST /api/report/client-rating)
 // Reads directly from the reviews table (JOIN clients/staff), one row per
 // review. Only is_visible = true reviews are included by default, matching
@@ -1964,6 +2779,127 @@ export interface ClientRatingReportPagination {
     page: number;
     limit: number;
     total_pages: number;
+}
+
+// ===============================
+// Rebooking Rate Report (independent report API — POST /api/report/rebooking-rate)
+// Per staff member: of the completed visits they served, what share of
+// clients came back for another completed visit (with any staff) within a
+// user-entered day window. Reads sales/sale_items/clients directly, never
+// the Appointment API.
+// ===============================
+
+export interface RebookingRateReportFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    // Rebooking window in days — manually entered by the user, no preset
+    // default in the UI, but the backend still falls back to 45 if omitted.
+    rebooking_days?: number;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+    sort?: "rate_desc" | "rate_asc";
+}
+
+export interface RebookingRateReportRow {
+    staff_id: string;
+    staff_name: string;
+    total_visits: number;
+    rebooked_visits: number;
+    rebooking_rate: number;
+}
+
+export interface RebookingRateReportStats {
+    total_visits: number;
+    rebooked_visits: number;
+    overall_rebooking_rate: number;
+    staff_count: number;
+}
+
+export interface RebookingRateReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface RebookingRateReportResponse {
+    rows: RebookingRateReportRow[];
+    pagination: RebookingRateReportPagination;
+    stats: RebookingRateReportStats;
+}
+
+// ===============================
+// Payroll History Report (independent report API —
+// POST /api/report/payroll-history)
+// Reads directly from payroll_entries joined to staff, one row per payroll
+// entry (staff x period). Never touches the Appointment API.
+// ===============================
+
+export interface PayrollHistoryReportFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    payment_status?: string;
+    payment_statuses?: string[];
+    payment_method?: string;
+    payment_methods?: string[];
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface PayrollHistoryReportRow {
+    id: string;
+    staff_id: string;
+    staff_name: string;
+    staff_designation: string | null;
+    period_type: string;
+    period_start: string;
+    period_end: string;
+    base_salary: number;
+    commission: number;
+    tips: number;
+    bonus: number;
+    salary_advance: number;
+    deductions: number;
+    net_pay: number;
+    paid_amount: number;
+    pending_amount: number;
+    payment_status: string;
+    payment_method: string | null;
+    payment_date: string | null;
+}
+
+export interface PayrollHistoryReportStats {
+    total_entries: number;
+    total_net_payroll: number;
+    total_paid: number;
+    total_pending: number;
+}
+
+export interface PayrollHistoryReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface PayrollHistoryFilterOption {
+    id: string;
+    label: string;
+}
+
+export interface PayrollHistoryReportResponse {
+    rows: PayrollHistoryReportRow[];
+    pagination: PayrollHistoryReportPagination;
+    stats: PayrollHistoryReportStats;
+    filters_available: {
+        staff: PayrollHistoryFilterOption[];
+    };
 }
 
 export interface ClientRatingReportResponse {

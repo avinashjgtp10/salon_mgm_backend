@@ -186,19 +186,48 @@ export const paymentsService = {
             const t = Number(i.total);
             return (i.total !== undefined && i.total !== null && isFinite(t)) ? t : (Number(i.price) || 0) * qty(i);
           };
-          const serviceTotal    = (appt.services         || []).reduce((s, i) => s + lineTotal(i), 0);
+          // Package-covered rows are excluded from the billable service total:
+          // the customer already paid for those sessions when they bought the
+          // package, so the value must not be billed again NOR taxed. Doing it
+          // here (rather than subtracting a package term further down) keeps
+          // the exclusion pre-tax automatically and applies to both the
+          // computeBillTotals path and the fallback formula below — the same
+          // treatment membership_discount_used gets.
+          const serviceTotal    = (appt.services         || [])
+            .filter((i: any) => !i.is_package_service)
+            .reduce((s, i) => s + lineTotal(i), 0);
           const packageTotal    = (appt.package_items    || []).reduce((s, i) => s + lineTotal(i), 0);
           const productTotal    = (appt.product_items    || []).reduce((s, i) => s + lineTotal(i), 0);
           const membershipTotal = (appt.membership_items || []).reduce((s, i) => s + lineTotal(i), 0);
           const rawSubtotal     = serviceTotal + packageTotal + productTotal + membershipTotal;
           // ₹ of this bill covered by an already-purchased Package's included
-          // sessions (row.price/qty preserved at full catalog value even
-          // though row.total nets to 0 — see ServiceRow.tsx/useAppointment.ts).
-          // Hoisted onto `data` below so the recordTransaction call further
-          // down (outside this try block's scope) can read it.
+          // sessions. Hoisted onto `data` below so the recordTransaction call
+          // further down (outside this try block's scope) can read it.
+          //
+          // Uses price×qty, NOT lineTotal: row.total was assumed to net to 0
+          // on package rows, but real stored appointments have total = the
+          // full price (e.g. {"price":500,"total":500,"is_package_service":
+          // true}). Going through lineTotal here therefore computed the
+          // coverage correctly by luck, while rawSubtotal above ALSO counted
+          // that same ₹500 as billable — which is the bug this fixes. Reading
+          // price×qty directly is correct regardless of what `total` holds.
           data.package_covered_amount = (appt.services || [])
             .filter((i: any) => !!i.is_package_service)
-            .reduce((s, i) => s + lineTotal(i), 0);
+            .reduce((s, i) => s + (Number(i.price) || 0) * qty(i), 0);
+          // The same figure, but this one is the money: persisted to
+          // payments.package_used and removed from the taxable base below.
+          //
+          // Deliberately NOT cross-checked against client_package_session_history,
+          // even though a bill can reach here with the flag missing from the
+          // jsonb: that table cannot supply the billed amount. Its joinable
+          // price is client_package_services.price — the package's per-session
+          // price, not this bill's line total (INV-00157: history says ₹1000,
+          // the service was billed ₹500). It also carries genuine duplicate
+          // rows (INV-00156 has the same session_no twice), so any SUM over it
+          // double-counts. Using it would trade a known under-count for silent
+          // wrong money, which is worse. is_package_service on the appointment
+          // row is the only source that states what THIS bill covered.
+          data.package_used = data.package_covered_amount;
           // Rounded to the nearest whole rupee — matches computeTotals() on the
           // frontend (totalsUtils.ts), which is what the client actually sees/
           // pays. Rounding here (not after discount/wallet deductions) keeps
@@ -405,6 +434,15 @@ export const paymentsService = {
           const activeTaxesForCeiling = data.include_gst === false ? [] : await getActiveTaxes(data.salon_id).catch(() => []);
           const preliminaryTotals = computeBillTotals({
             actualAmounts: { service: serviceTotal, packages: packageTotal, product: productTotal, membership: membershipTotal },
+            // Deliberately 'flat' with NO discountAppliesTo: what arrives here
+            // is an already-resolved ₹ amount that the preview engine computed
+            // (and already scoped/capped) from the staff's %-or-flat input and
+            // their Apply-to selection. Threading discountAppliesTo through
+            // here too would re-apply that cap to an amount it was already
+            // applied to, shrinking the discount a second time on bills whose
+            // selected base is smaller than the charge. Omitting it selects
+            // legacy/uncapped scope, which is exactly right for a pre-resolved
+            // amount. Do not "fix" this by passing the bill's selection.
             discountType: 'flat',
             discountValue: frontendManualDiscount,
             couponDiscount: frontendCouponDiscount,
@@ -633,6 +671,7 @@ export const paymentsService = {
               rows: {
                 service: (appt.services || []).map(s => ({
                   price: Number(s.price) || 0, qty: Number(s.quantity) || 1, total: rowTotal(s),
+                  isPackageService: !!s.is_package_service,
                   walletUsed: walletUsedByItem.get(String(s.service_id)) ?? 0,
                   membershipDiscountUsed: membershipDiscountByItem.get(String(s.service_id)) ?? 0,
                 })),
@@ -1072,6 +1111,14 @@ export const paymentsService = {
           appointment_id: data.appointment_id,
           staff_id: appt.staff_id || undefined,
           origin: 'calendar_checkout',
+          // The sale must be dated to when the appointment actually happened,
+          // not left to default to "now" (the checkout/payment moment) —
+          // otherwise a booking paid days after the visit (e.g. a settled
+          // partial/deposit) shows up as having occurred on the payment date
+          // everywhere sales.created_at is read as "visit date" (Reports'
+          // Lost Customers/Customer Frequency/Client Revenue last_visit,
+          // revenue-by-day charts, etc).
+          created_at: appt.scheduled_at,
           // Membership wallet usage must reduce recognized revenue here — that
           // money was already counted as revenue when the membership itself was
           // purchased. Without this, every visit that draws down the wallet
@@ -1254,6 +1301,10 @@ export const paymentsService = {
             appointment_id: data.appointment_id,
             staff_id: appt.staff_id || undefined,
             origin: 'calendar_checkout',
+            // See the matching comment on the recordTransaction call above —
+            // date this sale to the appointment's real scheduled time, not
+            // whenever the package-covered checkout happened to run.
+            created_at: appt.scheduled_at,
             // Every item's unit_price is exactly matched by its own
             // discount_amount above, so subtotal (and therefore
             // total_amount) is always 0 here — no revenue recorded twice.
@@ -1330,16 +1381,41 @@ export const paymentsService = {
     // membership_items there's no payment-body fallback, since the frontend
     // never sends these directly on a payment.
     const packageItemsSrc: Array<any> = appt?.package_items ?? [];
-    if (data.status === 'completed' && data.client_id && packageItemsSrc.length > 0) {
+    // Deliberately NOT gated on 'completed' (unlike memberships/reward points
+    // below/above): a client gets their package the moment they put money
+    // down, even a part payment, so they can start using it immediately.
+    // The package row itself records the real paid/pending split rather than
+    // claiming to be settled — and autoCreateFromPayment is idempotent per
+    // (appointment, package name), so the later payment that clears the
+    // balance settles this same row instead of creating a second package.
+    const isBillFullyPaid = data.status === 'completed';
+    // Proportional allocation: on a bill that also carries services/products,
+    // a part payment isn't earmarked to any one line, so each package is
+    // credited the same share of its own total that the bill as a whole has
+    // collected. Falls back to fully-paid if the totals aren't usable.
+    const billTotalForPkg = Number(data.net_amount) || 0;
+    const billPaidFraction = isBillFullyPaid || billTotalForPkg <= 0
+      ? 1
+      : Math.min(1, Math.max(0, (billTotalForPkg - (Number(data.due_amount) || 0)) / billTotalForPkg));
+    if ((data.status === 'completed' || data.status === 'partial') && data.client_id && packageItemsSrc.length > 0) {
+      // Awaited (see the Promise.allSettled below), unlike the membership
+      // block above which is still fire-and-forget. The client_packages row
+      // has to exist before this request returns: the UI refetches
+      // /client-packages the moment checkout responds, and when creation ran
+      // detached that refetch consistently won the race and came back empty,
+      // so a client who had just paid appeared to own no package at all.
+      // Only the row insert is awaited — autoCreateFromPayment detaches its
+      // own slow tail (auto-scheduling appointments, WhatsApp), so this adds
+      // very little to the checkout response time.
+      const packageCreations: Array<Promise<void>> = [];
       for (const item of packageItemsSrc) {
-        // Fire-and-forget — does not block payment return
-        (async () => {
+        packageCreations.push((async () => {
           try {
             // Prefer a Package Template (has a real per-service session
             // breakdown) — fall back to a plain Catalog package (services
             // list only, no session counts), crediting 1 session per
             // included service since that's what was actually billed.
-            let services: Array<{ serviceId?: string; serviceName: string; totalSessions: number; price: number }> = [];
+            let services: Array<{ serviceId?: string; serviceName: string; totalSessions: number; price: number; schedule?: { scheduledAt: string; staffId?: string } }> = [];
             let basePrice      = Number(item.price ?? 0) * Number(item.quantity ?? 1);
             let discount       = 0;
             // Package Templates carry their own precise gst_percentage (set
@@ -1353,24 +1429,64 @@ export const paymentsService = {
             // rather than silently leaving this package's own record at 0 GST.
             let gstPercentage  = appt?.gst_percent ?? 0;
             let expiryDate     = "2099-12-31";
+            // Set only when a real template resolves and defines an
+            // aggregate-session cap ("Expires after this many services") —
+            // custom/combo packages have no template to carry this from.
+            let expireAfterServices: number | null = null;
+            // Denormalized onto client_packages at sale time, same reasoning
+            // as client_memberships.description — resolved from whichever of
+            // template/combo actually matches below, so it's declared here
+            // and filled in by either branch.
+            let description: string | null = null;
 
             const template = item.package_id
               ? await packageTemplatesRepository.findById(item.package_id, data.salon_id)
               : null;
             if (template) {
-              services      = template.services.map(s => ({ serviceName: s.serviceName, totalSessions: s.totalSessions, price: s.price }));
               basePrice     = template.basePrice;
               discount      = template.discount;
               gstPercentage = template.gstPercentage;
+              expireAfterServices = template.expireAfterServices ?? null;
+              description   = template.description ?? null;
               if (!template.neverExpires && template.expiryDays != null) {
                 const d = new Date();
                 d.setDate(d.getDate() + template.expiryDays);
                 expiryDate = d.toISOString().slice(0, 10);
               }
+            } else if (item.never_expires === false && item.expiry_date) {
+              // A custom package built on the spot via "+ Sell Package"
+              // (ServicesPanel.tsx's PackageRow, isCustom rows) — no
+              // template to resolve an expiry from, but the frontend already
+              // carries the real date the staff picked in the builder.
+              // "2099-12-31" (the default above) already IS this codebase's
+              // established never-expires sentinel, so nothing extra is
+              // needed when never_expires is true/absent.
+              expiryDate = item.expiry_date;
+            }
+
+            // Prefer the frontend's own per-service breakdown when present —
+            // it's resolved at package-pick time (see PackageRow.tsx) and is
+            // the ONLY place a per-service `schedule` (book a future
+            // appointment for this service now) can come from; re-deriving
+            // from the template/catalog below would silently drop it.
+            // Package-level fields (price/discount/GST/expiry) above still
+            // come from the template/catalog lookup regardless — the
+            // frontend breakdown only carries per-service name/price/sessions.
+            if (item.services?.length) {
+              services = item.services.map((s: any) => ({
+                serviceId:     s.serviceId || undefined,
+                serviceName:   s.serviceName,
+                totalSessions: Number(s.totalSessions) || 1,
+                price:         Number(s.price) || 0,
+                schedule:      s.schedule?.scheduledAt ? { scheduledAt: s.schedule.scheduledAt, staffId: s.schedule.staffId } : undefined,
+              }));
+            } else if (template) {
+              services = template.services.map(s => ({ serviceName: s.serviceName, totalSessions: s.totalSessions, price: s.price }));
             } else {
               const combo = item.package_id
                 ? await packagesRepository.findById(item.package_id, data.salon_id)
                 : null;
+              if (combo) description = combo.description ?? null;
               if (combo && combo.serviceIds.length > 0) {
                 const perServicePrice = parseFloat((basePrice / combo.serviceIds.length).toFixed(2));
                 for (const svcId of combo.serviceIds) {
@@ -1397,15 +1513,23 @@ export const paymentsService = {
               discount,
               gstPercentage,
               expiryDate,
+              expireAfterServices,
+              description,
               data.appointment_id,
               item.staff_id || appt?.staff_id || undefined,
               checkoutSaleId,
+              requesterUserId,
+              billPaidFraction,
+              isBillFullyPaid,
             );
           } catch (err: any) {
             logger.warn('[payments] package auto-create failed:', err?.message ?? err);
           }
-        })();
+        })());
       }
+      // allSettled, not all — each entry already swallows its own errors, and
+      // one package failing must never fail the payment that was collected.
+      await Promise.allSettled(packageCreations);
     }
 
     // Live calendar sync — appointments.service.ts already does this for

@@ -29,11 +29,21 @@ export function formatPhone(phone: string, countryCode?: string | null): string 
   return digits
 }
 
-// Build Meta API body components from variables
-function buildComponents(variables: Record<string, string>): any[] {
+// Build Meta API components from variables, plus an optional per-recipient
+// URL button suffix (e.g. a feedback link token) when the template has one.
+function buildComponents(variables: Record<string, string>, buttonSuffix?: string | null): any[] {
   const params = Object.values(variables).map(val => ({ type: 'text', text: String(val) }))
-  if (params.length === 0) return []
-  return [{ type: 'body', parameters: params }]
+  const components: any[] = []
+  if (params.length > 0) components.push({ type: 'body', parameters: params })
+  if (buttonSuffix) {
+    components.push({
+      type: 'button',
+      sub_type: 'url',
+      index: '0',
+      parameters: [{ type: 'text', text: buttonSuffix }],
+    })
+  }
+  return components
 }
 
 // Calculate next retry time based on attempt number
@@ -170,6 +180,7 @@ export const whatsappAutomationService = {
         templateName:  template.template_name,
         language:      template.language,
         variables,
+        buttonSuffix:  template.has_button ? payload.buttonSuffix ?? undefined : undefined,
       })
 
     } catch (err: any) {
@@ -190,12 +201,13 @@ export const whatsappAutomationService = {
     templateName:  string
     language:      string
     variables:     Record<string, string>
+    buttonSuffix?: string | null
   }): Promise<void> {
     const MAX_ATTEMPTS = 4
     const DELAYS_MS    = [0, 60_000, 300_000, 900_000] // 0, 1min, 5min, 15min
 
-    const { logId, phoneNumberId, accessToken, to, templateName, language, variables } = params
-    const components = buildComponents(variables)
+    const { logId, phoneNumberId, accessToken, to, templateName, language, variables, buttonSuffix } = params
+    const components = buildComponents(variables, buttonSuffix)
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       // Wait before retry (first attempt delay is 0)
@@ -349,6 +361,50 @@ export const whatsappAutomationService = {
       }
     } catch (err: any) {
       logger.error('[WA-AUTO] runAppointmentReminders1h error:', err?.message)
+    }
+  },
+
+  // Reminders for appointments booked out of a package sale. Runs from the
+  // 9AM IST daily block (not the hourly sweep) because these are date-offset
+  // reminders — "2 days before" / "1 day before" — rather than the
+  // hour-offset ones above. The generic 24h/1h sweeps deliberately skip
+  // these appointments so a client never gets two reminders for one visit.
+  async runPackageAppointmentReminders(daysBefore: 1 | 2): Promise<void> {
+    const eventType: AutomationEventType = daysBefore === 2
+      ? 'package_appointment_reminder_2d'
+      : 'package_appointment_reminder_1d'
+    logger.info(`[WA-AUTO] Running package appointment reminder job (${daysBefore}d)...`)
+    try {
+      const appointments = await whatsappAutomationRepository.getPackageAppointmentsForReminder(daysBefore)
+      logger.info(`[WA-AUTO] ${appointments.length} package appointments to remind (${daysBefore}d)`)
+
+      for (const appt of appointments) {
+        if (!appt.phone_number) continue
+
+        await this.trigger({
+          salonId:       appt.salon_id,
+          eventType,
+          clientId:      appt.client_id,
+          phone:         appt.phone_number,
+          countryCode:   appt.phone_country_code,
+          variables: {
+            '1': appt.client_name   ?? 'Valued Customer',
+            '2': appt.salon_name    ?? 'our salon',
+            '3': appt.service_name  ?? 'your service',
+            '4': formatDateIST(appt.scheduled_at),
+            '5': formatTimeIST(appt.scheduled_at),
+            '6': appt.staff_name    ?? 'our team',
+            '7': appt.package_name  ?? 'your',
+          },
+          // Date-scoped so a reschedule earns a fresh reminder — see
+          // getPackageAppointmentsForReminder()'s dedup clause, which must
+          // build this exact same key.
+          referenceId:   `${appt.appointment_id}:${appt.scheduled_date}`,
+          referenceType: 'appointment',
+        })
+      }
+    } catch (err: any) {
+      logger.error(`[WA-AUTO] runPackageAppointmentReminders(${daysBefore}) error:`, err?.message)
     }
   },
 

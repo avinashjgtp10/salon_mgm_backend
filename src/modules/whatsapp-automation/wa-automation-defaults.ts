@@ -8,11 +8,22 @@ import { AutomationEventType } from "./whatsapp-automation.types";
 // positions the rest of whatsapp-automation.service.ts already uses
 // (1 = client name, 2 = salon name / item name, 3 = item name / date / count,
 // varies slightly per event — see each trigger call site for the exact mapping).
+const FEEDBACK_FORM_BASE_URL =
+    process.env.APP_BASE_URL || process.env.FRONTEND_URL || "http://localhost:5173";
+
 export const DEFAULT_PURCHASE_TEMPLATES: Record<
     | "service_purchased" | "product_purchased" | "membership_purchased" | "package_purchased"
     | "appointment_reminder_1h" | "thank_you" | "review_request" | "package_expiring_soon" | "sessions_remaining"
-    | "appointment_confirmation" | "appointment_reminder_24h" | "appointment_rescheduled",
-    { label: string; category: "UTILITY"; language: string; bodyText: string }
+    | "appointment_confirmation" | "appointment_reminder_24h" | "appointment_rescheduled"
+    | "package_appointment_reminder_2d" | "package_appointment_reminder_1d",
+    {
+        label: string;
+        category: "UTILITY";
+        language: string;
+        bodyText: string;
+        // Optional single CTA-URL button — only review_request uses this today.
+        button?: { text: string; urlBase: string };
+    }
 > = {
     service_purchased: {
         label: "Service Purchased",
@@ -54,7 +65,11 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         label: "Review Request",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{1}}, we'd love your feedback on your recent visit to {{2}}! Please take a moment to leave us a review.",
+        bodyText: "Hi {{1}},\n\nIt was a pleasure serving you at {{2}}.\n\nWe would love to know how your visit went. Your honest feedback helps us improve and provide an even better experience on your next visit.\n\nPlease click the button below to rate your recent visit.\n\nThank you for choosing {{2}}.",
+        button: {
+            text:    "Rate Your Visit",
+            urlBase: `${FEEDBACK_FORM_BASE_URL}/feedback`,
+        },
     },
     package_expiring_soon: {
         label: "Package Expiring (7 Days)",
@@ -85,6 +100,23 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         category: "UTILITY",
         language: "en",
         bodyText: "Hi {{1}}, your appointment at {{2}} has been rescheduled to {{3}} at {{4}}. See you then!",
+    },
+    // Package-service reminders carry more variables than the generic
+    // appointment ones (service, staff and package name on top of date/time)
+    // so the copy can reassure the client the visit is already paid for.
+    // Mapping is fixed by runPackageAppointmentReminders() in
+    // whatsapp-automation.service.ts — keep the two in step.
+    package_appointment_reminder_2d: {
+        label: "Package Appointment Reminder (2 Days Before)",
+        category: "UTILITY",
+        language: "en",
+        bodyText: "Hi {{1}}, this is a reminder from {{2}}. Your {{3}} appointment is scheduled for {{4}} at {{5}} with {{6}}. Your service is included in your {{7}} package. We look forward to seeing you!",
+    },
+    package_appointment_reminder_1d: {
+        label: "Package Appointment Reminder (1 Day Before)",
+        category: "UTILITY",
+        language: "en",
+        bodyText: "Reminder from {{2}}: Hi {{1}}, your {{3}} appointment is tomorrow, {{4}} at {{5}}, with {{6}}. It's included in your {{7}} package. We look forward to seeing you!",
     },
 };
 

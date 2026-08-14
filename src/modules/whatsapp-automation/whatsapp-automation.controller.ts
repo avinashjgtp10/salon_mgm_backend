@@ -147,6 +147,10 @@ export const whatsappAutomationController = {
           await whatsappAutomationService.runAppointmentReminders(); break
         case 'appointment-reminder-1h':
           await whatsappAutomationService.runAppointmentReminders1h(); break
+        case 'package-appointment-reminder-2d':
+          await whatsappAutomationService.runPackageAppointmentReminders(2); break
+        case 'package-appointment-reminder-1d':
+          await whatsappAutomationService.runPackageAppointmentReminders(1); break
         default:
           return next(new AppError(400, `Unknown job: ${job}`, 'VALIDATION_ERROR'))
       }

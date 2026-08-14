@@ -220,6 +220,64 @@ export const servicesService = {
     const { rows, salonId } = params;
     const result = { total_rows: rows.length, imported: 0, skipped: 0, errors: [] as string[] };
 
+    // ── Column validation ─────────────────────────────────────────────────────
+    // Checked against the header row before touching any data row — a file
+    // with the wrong columns entirely shouldn't produce a pile of per-row
+    // "missing X" errors, it should fail fast with one clear reason.
+    const REQUIRED_COLUMNS = ["Name", "Category", "Description", "Price / Retail Price", "Duration (min)"];
+    // Extra columns the importer already knows how to use beyond the
+    // required template — allowed without tripping an "unexpected column" error.
+    const OPTIONAL_KNOWN_COLUMNS = ["Price Type", "Online Booking", "Commission", "Resource Required"];
+    const ALLOWED_COLUMNS = new Set([...REQUIRED_COLUMNS, ...OPTIONAL_KNOWN_COLUMNS]);
+    // Common near-miss headers → the exact column name they were probably
+    // meant to be, so a rename typo gets a precise fix instead of a vague
+    // "extra column" complaint.
+    const COLUMN_ALIASES: Record<string, string> = {
+      "service name": "Name",
+      "retail price": "Price / Retail Price",
+      "price": "Price / Retail Price",
+      "duration": "Duration (min)",
+      "service category": "Category",
+      "service description": "Description",
+    };
+
+    if (rows.length > 0) {
+      const headers = Object.keys(rows[0]);
+      const headerSet = new Set(headers);
+      const missingColumns = REQUIRED_COLUMNS.filter((c) => !headerSet.has(c));
+
+      const misnamedColumn = headers.find((h) => {
+        if (ALLOWED_COLUMNS.has(h)) return false;
+        const canonical = COLUMN_ALIASES[h.trim().toLowerCase()];
+        return canonical && missingColumns.includes(canonical);
+      });
+      if (misnamedColumn) {
+        const canonical = COLUMN_ALIASES[misnamedColumn.trim().toLowerCase()];
+        throw new AppError(
+          400,
+          `Invalid column found: "${misnamedColumn}". Expected column: "${canonical}".`,
+          "INVALID_IMPORT_COLUMNS"
+        );
+      }
+
+      if (missingColumns.length > 0) {
+        throw new AppError(
+          400,
+          `Invalid import file format. The following required columns are missing: ${missingColumns.join(", ")}`,
+          "INVALID_IMPORT_COLUMNS"
+        );
+      }
+
+      const unexpectedColumns = headers.filter((h) => !ALLOWED_COLUMNS.has(h));
+      if (unexpectedColumns.length > 0) {
+        throw new AppError(
+          400,
+          `Invalid import file format. Unexpected column(s) found: ${unexpectedColumns.join(", ")}`,
+          "INVALID_IMPORT_COLUMNS"
+        );
+      }
+    }
+
     // Get existing categories to match by name
     const db = pool;
     const catRows = await db.query(

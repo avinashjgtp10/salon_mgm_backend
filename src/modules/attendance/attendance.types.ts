@@ -17,6 +17,12 @@ export type Attendance = {
     // joined
     staff_name?: string | null;
     staff_role?: string | null;
+    // Set by getRange only — true when this date falls inside an approved
+    // staff_leaves entry for this staff member. hours_worked is zeroed out
+    // for these rows so leave days never inflate worked-hours totals, even
+    // if the row also happens to carry a stray check-in/check-out (e.g. a
+    // half-day leave with a partial clock-in before it was approved).
+    on_approved_leave?: boolean;
 };
 
 export type AttendanceSettings = {

@@ -11,6 +11,7 @@ export interface RegisterExpoPushTokenParams {
   salon_id: string;
   expo_push_token: string;
   platform: DevicePlatform;
+  installation_id?: string | null;
 }
 
 export const deviceTokensService = {
@@ -26,7 +27,7 @@ export const deviceTokensService = {
     if (!expoPushToken) {
       throw new AppError(400, "expo_push_token is required", "VALIDATION_ERROR");
     }
-    if (!pushNotificationService.isValidExpoPushToken(expoPushToken)) {
+    if (!(await pushNotificationService.isValidExpoPushToken(expoPushToken))) {
       throw new AppError(400, "Invalid Expo push token", "VALIDATION_ERROR");
     }
     if (!isDevicePlatform(data.platform)) {
@@ -38,6 +39,7 @@ export const deviceTokensService = {
       salon_id: data.salon_id,
       expo_push_token: expoPushToken,
       platform: data.platform,
+      installation_id: normalizeInstallationId(data.installation_id),
     });
   },
 
@@ -57,7 +59,7 @@ export const deviceTokensService = {
     if (!salonId) {
       throw new AppError(400, "salon_id is required", "VALIDATION_ERROR");
     }
-    return deviceTokensRepository.getSalonTokens(salonId);
+    return deviceTokensRepository.findBySalon(salonId);
   },
 
   async getUserTokens(userId: string): Promise<DeviceToken[]> {
@@ -70,4 +72,10 @@ export const deviceTokensService = {
 
 function isDevicePlatform(platform: string): platform is DevicePlatform {
   return platform === "android" || platform === "ios";
+}
+
+function normalizeInstallationId(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
