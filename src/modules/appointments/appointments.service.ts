@@ -1234,6 +1234,10 @@ export const appointmentsService = {
             staff_id:        existing.staff_id   ?? undefined,
             origin:          "quick_sell",
             payment_label:   saleExtras.payment_method || "",
+            // Date the sale to the appointment's real scheduled time, not
+            // whenever checkout happened to run — see the matching comment
+            // on payments.service.ts's recordTransaction() calls.
+            created_at:      existing.scheduled_at,
             discount_amount: saleExtras.discount_amount,
             tax_amount:      saleExtras.tax_amount,
             // ex_charges counts as revenue, tip_amount does not (passes through

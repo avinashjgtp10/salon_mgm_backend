@@ -75,8 +75,9 @@ export const paymentsRepository = {
     return parseFloat(rows[0]?.total ?? '0');
   },
 
-  async create(data: CreatePaymentBody): Promise<Payment> {
-    const { rows } = await pool.query(
+  async create(data: CreatePaymentBody, client?: import("pg").PoolClient): Promise<Payment> {
+    const db = client ?? pool;
+    const { rows } = await db.query(
       `INSERT INTO payments (
         payment_id, amount,
         appointment_id, salon_id, client_id,
