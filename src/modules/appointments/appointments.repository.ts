@@ -366,10 +366,22 @@ export const appointmentsRepository = {
         return rows[0];
     },
 
+    // Deliberately does NOT bump updated_at — this is a pure status
+    // transition (mark paid/partial/cancelled), never combined with an
+    // actual content edit at any call site (see grep across
+    // payments.service.ts/appointments.service.ts). needsTaxBackfill()
+    // (appointments.service.ts) uses updated_at vs. the last payment's
+    // created_at to decide whether a real edit happened AFTER that payment
+    // and invalidated its frozen tax snapshot — recording the payment itself
+    // always calls this right after, so if this touched updated_at too,
+    // every single paid appointment would look "edited after payment" from
+    // the moment it was paid, permanently defeating that check (this was a
+    // real, shipped bug: an appointment paid with GST off would silently
+    // pick up newly-enabled GST the next time it was merely viewed).
     async updateStatus(id: string, status: string, client?: import("pg").PoolClient): Promise<Appointment> {
         const db = client ?? pool;
         const { rows } = await db.query(
-            `UPDATE appointments SET status = $2, updated_at = NOW() WHERE id = $1 RETURNING *`,
+            `UPDATE appointments SET status = $2 WHERE id = $1 RETURNING *`,
             [id, status]
         );
         return rows[0];
@@ -444,10 +456,12 @@ export const appointmentsRepository = {
         return rows[0] || null;
     },
 
+    // Same reasoning as updateStatus() above for not touching updated_at —
+    // this is the checkout-time status flip, not a content edit.
     async linkSale(id: string, saleId: string): Promise<Appointment> {
         const { rows } = await pool.query(
             `UPDATE appointments
-             SET sale_id = $2, status = 'paid', updated_at = NOW()
+             SET sale_id = $2, status = 'paid'
              WHERE id = $1 RETURNING *`,
             [id, saleId]
         );

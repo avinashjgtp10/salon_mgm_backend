@@ -109,9 +109,43 @@ function computeAppointmentTotals(appt: {
 // exists. Every caller below MUST use this (not its own "is tax_breakdown
 // empty?" shortcut) — a caller that only checks emptiness will short-circuit
 // past a stale-but-non-empty snapshot and keep showing pre-edit GST forever.
+//
+// !Array.isArray, NOT `|| ...length === 0` — the repository's tax_breakdown
+// subquery (appointments.repository.ts) only ever returns null when NO
+// payment row exists yet (genuinely never computed, backfill is correct).
+// A real payment that legitimately charged zero GST (tax module was off, or
+// this specific bill had "Include GST" unchecked) stores an actual `[]`,
+// which IS an array — that's a frozen, trustworthy zero, not a gap. The
+// length===0 version couldn't tell these apart, so re-enabling GST later
+// made every old GST-free paid bill recompute with TODAY's tax rates the
+// next time it was opened or reprinted.
+// appointments.updated_at is TIMESTAMPTZ (comes back with an explicit +00),
+// but payments.created_at (last_payment_at, via the repository subquery) is
+// TIMESTAMP WITHOUT TIME ZONE — config/database.ts's custom type parser
+// deliberately returns it as a raw string with NO offset, and the DB session
+// is forced to UTC on every connect, so the value IS UTC, it just isn't
+// labelled. `new Date(...)` on a string with no offset falls back to
+// interpreting it in the SERVER's LOCAL timezone instead of UTC — so
+// comparing it directly against updated_at's +00 string silently compares
+// two different clocks. On a server not already running in UTC, that made
+// this comparison little better than random: a payment recorded 4 seconds
+// before the true edit could easily come out "later" once local-time drift
+// was added to only one side. Pin any offset-less string to UTC explicitly
+// before comparing, so both sides are on the same clock.
+function toUtcMs(value: string | Date): number {
+    if (value instanceof Date) return value.getTime();
+    // Postgres/pg can render a UTC offset as short as +00 (no minutes, no
+    // colon) — the minutes half must be optional or a bare "+00" silently
+    // fails to match, falls through to the "no offset" branch below, and
+    // gets a literal Z appended after it (e.g. "...+00Z"), which is not a
+    // parseable date and produces NaN.
+    const hasOffset = /[zZ]|[+-]\d{2}(:?\d{2})?$/.test(value.trim());
+    return new Date(hasOffset ? value : `${value.replace(" ", "T")}Z`).getTime();
+}
+
 function needsTaxBackfill(appt: Appointment): boolean {
-    if (!Array.isArray(appt.tax_breakdown) || appt.tax_breakdown.length === 0) return true;
-    return !!appt.last_payment_at && new Date(appt.updated_at) > new Date(appt.last_payment_at);
+    if (!Array.isArray(appt.tax_breakdown)) return true;
+    return !!appt.last_payment_at && toUtcMs(appt.updated_at) > toUtcMs(appt.last_payment_at);
 }
 
 function backfillTaxBreakdown(appt: Appointment, activeTaxes: ActiveTaxRow[]): Appointment {
