@@ -142,6 +142,8 @@ export type CreateStaffBody = {
     avatar_url?: string;
     working_hours_per_day?: number;
     holidays?: number;
+    /** Set by the frontend once the staff member's email OTP has been verified during creation. */
+    email_verified?: boolean;
 };
 
 export type BlockedTimeInput = {

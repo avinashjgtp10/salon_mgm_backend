@@ -1,4 +1,5 @@
 import pool from "../../config/database";
+import logger from "../../config/logger";
 import { notificationsRepository } from "../notifications/notifications.repository";
 import type {
   DashboardSummary,
@@ -797,8 +798,17 @@ export const salonDashboardRepository = {
   // Each sub-query is isolated — a DB timeout or slow query on one section
   // returns a safe empty/zero default instead of crashing the entire response.
   async getAll(salonId: string, period: string = "monthly", date?: string): Promise<DashboardAll> {
-    const safe = <T>(p: Promise<T>, fallback: T): Promise<T> =>
-      p.catch(() => fallback);
+    // Each sub-query is isolated — a DB timeout or slow/broken query on one
+    // section falls back to a safe empty/zero default instead of crashing the
+    // entire response, but the failure itself is logged so a section
+    // silently going to its fallback (e.g. Pending Payments always showing
+    // {count:0, amount:0}) is visible in the logs instead of looking like a
+    // legitimate "nothing pending" result.
+    const safe = <T>(p: Promise<T>, fallback: T, label: string): Promise<T> =>
+      p.catch((err) => {
+        logger.error(`[dashboard.getAll] ${label} failed, using fallback`, { salonId, error: err?.message ?? err });
+        return fallback;
+      });
 
     const defaultSummary: DashboardSummary = {
       totalRevenue: 0, allTimeRevenue: 0, totalAppointments: 0, totalClients: 0,
@@ -816,18 +826,18 @@ export const salonDashboardRepository = {
       summary, todayAppointments, revenueChart, topStaff, serviceMix, services,
       todayOverview, todayTimeline, pendingPayments, todaysBirthdays, inactiveClients, recentActivity,
     ] = await Promise.all([
-      safe(this.getSummary(salonId),           defaultSummary),
-      safe(this.getTodayAppointments(salonId, date), []),
-      safe(this.getRevenueChart(salonId, period),    []),
-      safe(this.getTopStaff(salonId),          []),
-      safe(this.getServiceMix(salonId),         []),
-      safe(this.getServices(salonId),           []),
-      safe(this.getTodayOverview(salonId),      defaultOverview),
-      safe(this.getTodayTimeline(salonId),      []),
-      safe(this.getPendingPayments(salonId),    defaultPending),
-      safe(this.getTodaysBirthdays(salonId),    defaultBirthdays),
-      safe(this.getInactiveClients(salonId),    defaultInactive),
-      safe(this.getRecentActivity(salonId),     []),
+      safe(this.getSummary(salonId),           defaultSummary,  "getSummary"),
+      safe(this.getTodayAppointments(salonId, date), [],          "getTodayAppointments"),
+      safe(this.getRevenueChart(salonId, period),    [],          "getRevenueChart"),
+      safe(this.getTopStaff(salonId),          [],                "getTopStaff"),
+      safe(this.getServiceMix(salonId),         [],               "getServiceMix"),
+      safe(this.getServices(salonId),           [],               "getServices"),
+      safe(this.getTodayOverview(salonId),      defaultOverview,  "getTodayOverview"),
+      safe(this.getTodayTimeline(salonId),      [],               "getTodayTimeline"),
+      safe(this.getPendingPayments(salonId),    defaultPending,   "getPendingPayments"),
+      safe(this.getTodaysBirthdays(salonId),    defaultBirthdays, "getTodaysBirthdays"),
+      safe(this.getInactiveClients(salonId),    defaultInactive,  "getInactiveClients"),
+      safe(this.getRecentActivity(salonId),     [],               "getRecentActivity"),
     ]);
 
     return {

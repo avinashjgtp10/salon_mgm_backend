@@ -11,6 +11,7 @@ import {
     consumableUsageController,
 } from "./inventory.controller";
 import { consumableInventoryController } from "./consumable-inventory.controller";
+import { productInventoryController } from "./product-inventory.controller";
 import {
     validateCreateSupplier,
     validateUpdateSupplier,
@@ -62,6 +63,44 @@ router.delete(
     authMiddleware,
     roleMiddleware("salon_owner", "admin"),
     suppliersController.delete
+);
+
+// ─── Product Inventory (retail stock) ─────────────────────────────────────────
+// Registered ahead of the generic /stock-movements routes so these more
+// specific paths are matched first.
+
+router.get(
+    "/product-inventory",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    productInventoryController.list
+);
+
+router.get(
+    "/product-inventory/filter-options",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    productInventoryController.filterOptions
+);
+
+router.get(
+    "/product-inventory/history",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    productInventoryController.history
+);
+
+// Adding stock is a stock adjustment, so it sits behind that permission
+// rather than plain view access.
+router.post(
+    "/product-inventory/:id/stock-in",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    stockAdjustment,
+    productInventoryController.stockIn
 );
 
 // ─── Stock Movements ──────────────────────────────────────────────────────────

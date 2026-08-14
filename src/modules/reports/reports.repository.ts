@@ -64,6 +64,10 @@ import {
     PackageSaleReportRow,
     PackageSaleReportStats,
     PackageSaleFilterOption,
+    PayrollHistoryReportFilters,
+    PayrollHistoryReportRow,
+    PayrollHistoryReportStats,
+    PayrollHistoryFilterOption,
     PackageHistoryReportRow,
     PackageHistoryReportStats,
     PackageHistoryFiltersAvailable,
@@ -84,6 +88,10 @@ import {
     ClientRatingReportStats,
     RebookingRateReportRow,
     RebookingRateReportStats,
+    CashManagementReportFilters,
+    CashManagementReportRow,
+    CashManagementReportStats,
+    CashManagementFiltersAvailable,
 } from "./reports.types";
 
 // ─── WhatsApp message delivery states ────────────────────────────────────────
@@ -4383,11 +4391,16 @@ _CLIENT_REVENUE_AGG(where: string, saleJoin: string, having: string): string {
         COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS contact,
         COUNT(s.id) AS visits,
         COALESCE(SUM(s.total_amount::numeric), 0) AS total_spend,
-        MAX(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS last_visit,
+        -- The actual appointment date/time, not when the sale/invoice record
+        -- was created (checkout can happen well after the visit) — falls
+        -- back to sales.created_at only for walk-in sales with no linked
+        -- appointment, which have no other timestamp to use.
+        MAX(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS last_visit,
         rs.avg_rating,
         COALESCE(rs.review_count, 0) AS review_count
       FROM clients c
       LEFT JOIN sales s ON ${saleJoin}
+      LEFT JOIN appointments a ON a.id = s.appointment_id
       LEFT JOIN review_stats rs ON rs.client_id = c.id
       WHERE ${where}
       GROUP BY c.id, c.full_name, c.phone_number, c.phone_country_code, rs.avg_rating, rs.review_count
@@ -4479,12 +4492,15 @@ _CUSTOMER_SPEND_AGG(where: string, saleJoin: string, vipIdx: number, lowIdx: num
         COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS contact,
         COUNT(s.id)::int AS visits,
         COALESCE(SUM(s.total_amount::numeric), 0) AS total_spend,
-        MIN(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS first_visit,
-        MAX(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS last_visit
+        -- Appointment date/time, not sale/checkout time — see the matching
+        -- comment on _CLIENT_REVENUE_AGG.
+        MIN(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS first_visit,
+        MAX(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS last_visit
       FROM clients c
       -- LEFT, so a client with no completed sale still produces a row with
       -- total_spend = 0 and is classified 'low'.
       LEFT JOIN sales s ON ${saleJoin}
+      LEFT JOIN appointments a ON a.id = s.appointment_id
       WHERE ${where}
       GROUP BY c.id, c.full_name, c.phone_number, c.phone_country_code
     ),
@@ -4509,7 +4525,7 @@ async getCustomerSpendReportStats(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; search?: string; staff_ids?: string[];
-    segments?: string[]; vip_min_spend?: number; low_max_spend?: number;
+    segments?: string[]; vip_min_spend?: number; low_max_spend?: number; min_visits?: number;
   }
 ): Promise<CustomerSpendReportStats> {
   const { where, saleJoin, values, nextIndex } = this._buildCustomerSpendWhere(salonId, filters);
@@ -4519,11 +4535,16 @@ async getCustomerSpendReportStats(
   const lowIdx = idx++;
 
   const extra: any[] = [vipMin, lowMax];
-  let segmentClause = "";
+  const postClauses: string[] = [];
   if (filters.segments && filters.segments.length > 0) {
-    segmentClause = `WHERE spend_segment = ANY($${idx++}::text[])`;
+    postClauses.push(`spend_segment = ANY($${idx++}::text[])`);
     extra.push(filters.segments);
   }
+  if (filters.min_visits !== undefined) {
+    postClauses.push(`visits >= $${idx++}::int`);
+    extra.push(filters.min_visits);
+  }
+  const segmentClause = postClauses.length ? `WHERE ${postClauses.join(" AND ")}` : "";
 
   const query = `
     ${this._CUSTOMER_SPEND_AGG(where, saleJoin, vipIdx, lowIdx)}
@@ -4557,7 +4578,7 @@ async getCustomerSpendReportRows(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; search?: string; staff_ids?: string[];
-    segments?: string[]; vip_min_spend?: number; low_max_spend?: number;
+    segments?: string[]; vip_min_spend?: number; low_max_spend?: number; min_visits?: number;
     page?: number; limit?: number; is_export?: boolean;
   }
 ): Promise<{
@@ -4571,11 +4592,16 @@ async getCustomerSpendReportRows(
   const lowIdx = idx++;
 
   const extra: any[] = [vipMin, lowMax];
-  let segmentClause = "";
+  const postClauses: string[] = [];
   if (filters.segments && filters.segments.length > 0) {
-    segmentClause = `WHERE spend_segment = ANY($${idx++}::text[])`;
+    postClauses.push(`spend_segment = ANY($${idx++}::text[])`);
     extra.push(filters.segments);
   }
+  if (filters.min_visits !== undefined) {
+    postClauses.push(`visits >= $${idx++}::int`);
+    extra.push(filters.min_visits);
+  }
+  const segmentClause = postClauses.length ? `WHERE ${postClauses.join(" AND ")}` : "";
 
   const page = Math.max(1, Number(filters.page ?? 1));
   const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
@@ -4824,12 +4850,15 @@ _CUSTOMER_FREQUENCY_AGG(where: string, saleJoin: string, startDateIdx: number | 
         COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS contact,
         COUNT(s.id) AS visits,
         COALESCE(SUM(s.total_amount::numeric), 0) AS total_spend,
-        MIN(s.created_at AT TIME ZONE 'Asia/Kolkata') AS first_visit_ts,
-        MAX(s.created_at AT TIME ZONE 'Asia/Kolkata') AS last_visit_ts,
-        MIN(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD'))::date AS first_visit,
-        MAX(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD'))::date AS last_visit
+        -- Appointment date/time, not sale/checkout time — see the matching
+        -- comment on _CLIENT_REVENUE_AGG.
+        MIN(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata') AS first_visit_ts,
+        MAX(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata') AS last_visit_ts,
+        MIN(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD'))::date AS first_visit,
+        MAX(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD'))::date AS last_visit
       FROM clients c
       LEFT JOIN sales s ON ${saleJoin}
+      LEFT JOIN appointments a ON a.id = s.appointment_id
       WHERE ${where}
       GROUP BY c.id, c.full_name, c.phone_number, c.phone_country_code
     ),
@@ -5068,12 +5097,15 @@ _SERVICE_FREQUENCY_AGG(where: string): string {
         COUNT(*)::int AS visits,
         COALESCE(SUM(si.quantity), 0)::int AS total_qty,
         COALESCE(SUM(si.total_price::numeric), 0) AS total_spend,
-        MIN(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS first_visit,
-        MAX(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS last_visit
+        -- Appointment date/time, not sale/checkout time — see the matching
+        -- comment on _CLIENT_REVENUE_AGG.
+        MIN(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS first_visit,
+        MAX(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS last_visit
       FROM sale_items si
       JOIN sales s ON s.id = si.sale_id
       -- INNER on clients: a pair only exists if it belongs to someone.
       JOIN clients c ON c.id = s.client_id
+      LEFT JOIN appointments a ON a.id = s.appointment_id
       LEFT JOIN services sv ON sv.id = si.item_id
       LEFT JOIN service_categories sc ON sc.id = sv.category_id
       WHERE ${where}
@@ -5244,10 +5276,15 @@ _LOST_CUSTOMERS_AGG(where: string, saleJoin: string, lostDaysIdx: number, startD
         COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS contact,
         COUNT(s.id) AS visits,
         COALESCE(SUM(s.total_amount::numeric), 0) AS total_spend,
-        MIN(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD'))::date AS first_visit,
-        MAX(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD'))::date AS last_visit
+        -- Appointment date/time, not sale/checkout time — a booking made
+        -- weeks ago that only gets paid/checked-out today must still count
+        -- as a visit back then, not "just visited today". Falls back to
+        -- sales.created_at only for walk-in sales with no linked appointment.
+        MIN(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD'))::date AS first_visit,
+        MAX(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD'))::date AS last_visit
       FROM clients c
       INNER JOIN sales s ON ${saleJoin}
+      LEFT JOIN appointments a ON a.id = s.appointment_id
       WHERE ${where}
       GROUP BY c.id, c.full_name, c.phone_number, c.phone_country_code
     ),
@@ -5881,10 +5918,50 @@ async getPaymentCollectionReportStats(
     FROM filtered
   `;
 
-  const { rows } = await safeQuery(() => pool.query(query, [...values, ...extraValues]));
+  // Collected-by-method breakdown: filtered's own paid_amount/payment_method
+  // are the LATEST payment row's method against the appointment's whole
+  // cumulative paid total, so grouping that directly would misattribute
+  // money paid via an earlier, different method. Instead sum each actual
+  // payment transaction by its own method, scoped to the same filtered
+  // appointment set — but the method/date filters must be re-applied here
+  // directly against the transaction (not inherited from `filtered`, whose
+  // method/date columns reflect only the LATEST row). Without this, choosing
+  // "Cash" in the Payment Method filter would keep every appointment whose
+  // latest transaction happened to be cash, then sum ALL of that
+  // appointment's transactions (including any earlier, non-cash ones),
+  // leaving the "Total Paid" card unchanged by the filter.
+  const methodExtra: string[] = [];
+  if (startDateIdx) {
+    methodExtra.push(`TO_CHAR((p.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')::date >= $${startDateIdx}::date`);
+    if (endDateIdx) methodExtra.push(`TO_CHAR((p.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')::date <= $${endDateIdx}::date`);
+  }
+  if (methodIdx) methodExtra.push(`LOWER(TRIM(p.payment_method)) = ANY($${methodIdx}::text[])`);
+  const methodExtraWhere = methodExtra.length ? `AND ${methodExtra.join(" AND ")}` : "";
+
+  const methodQuery = `
+    ${this._PAYMENT_COLLECTION_AGG(where, startDateIdx, endDateIdx, statusIdx, methodIdx)}
+    SELECT
+      COALESCE(NULLIF(TRIM(p.payment_method), ''), '—') AS payment_method,
+      COALESCE(SUM(p.paid_amount) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS amount
+    FROM filtered f
+    JOIN payments p ON p.appointment_id = f.appointment_id AND p.status <> 'refunded'
+    WHERE TRUE ${methodExtraWhere}
+    GROUP BY 1
+    HAVING COALESCE(SUM(p.paid_amount) FILTER (WHERE p.status IN ('completed', 'partial')), 0) > 0
+    ORDER BY amount DESC
+  `;
+
+  const [{ rows }, { rows: methodRows }] = await Promise.all([
+    safeQuery(() => pool.query(query, [...values, ...extraValues])),
+    safeQuery(() => pool.query(methodQuery, [...values, ...extraValues])),
+  ]);
   const r = rows[0] ?? {};
   const totalPending = Math.round(Number(r.total_pending_amount ?? 0));
   const pendingTxns = Number(r.total_pending_transactions ?? 0);
+  const collectedByMethod = methodRows.map((m: any) => ({
+    method: m.payment_method,
+    amount: Math.round(Number(m.amount ?? 0)),
+  }));
   return {
     total_pending_amount: totalPending,
     total_pending_transactions: pendingTxns,
@@ -5893,7 +5970,11 @@ async getPaymentCollectionReportStats(
     average_pending_amount: pendingTxns > 0 ? Math.round(totalPending / pendingTxns) : 0,
     oldest_pending_payment_date: r.oldest_pending_payment_date ?? null,
     total_billed: Math.round(Number(r.total_billed ?? 0)),
-    total_collected: Math.round(Number(r.total_collected ?? 0)),
+    // Kept consistent with collected_by_method (both transaction-level and
+    // both honoring the method filter), rather than filtered.paid_amount
+    // which is the appointment's whole cumulative total regardless of method.
+    total_collected: collectedByMethod.reduce((sum, m) => sum + m.amount, 0),
+    collected_by_method: collectedByMethod,
   };
 },
 
@@ -5936,8 +6017,8 @@ async getPaymentCollectionReportRows(
       payment_method, payment_status, staff_name,
       COUNT(*) OVER() AS total_count
     FROM filtered
-    -- Outstanding first within a date, so the rows that need chasing lead.
-    ORDER BY payment_date DESC NULLS LAST, due_amount DESC, customer_name ASC
+    -- Invoice-wise descending, so the newest invoices lead.
+    ORDER BY invoice_number DESC NULLS LAST, payment_date DESC NULLS LAST, due_amount DESC, customer_name ASC
     ${limitClause}
   `;
 
@@ -6027,6 +6108,163 @@ async getPaymentCollectionFiltersAvailable(salonId: string): Promise<PaymentColl
     staff: staffRows
       .filter((r: any) => r.label)
       .map((r: any) => ({ id: String(r.id), label: r.label })),
+  };
+},
+
+// ======================================================
+// CASH MANAGEMENT REPORT (independent report API)
+// POST /api/report/cash-management — one row per cash counter session.
+// Reads cash_management directly (never the cash-management module's own
+// service/repository) joined to users for opener/closer names, same
+// independence convention every other report in this file follows.
+// ======================================================
+
+// Shared WHERE clause builder — date range is on opened_at (matches the
+// cash-management module's own listCounters filter, so "This Month" means
+// the same thing here as it does on the operational Cash Management page).
+_buildCashManagementWhere(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; search?: string; statuses?: string[] }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where: string[] = ["cm.salon_id = $1"];
+  let idx = 2;
+
+  if (filters.start_date) {
+    where.push(`DATE(cm.opened_at) >= $${idx++}::date`);
+    values.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    where.push(`DATE(cm.opened_at) <= $${idx++}::date`);
+    values.push(filters.end_date);
+  }
+  if (filters.statuses?.length) {
+    where.push(`cm.status = ANY($${idx++})`);
+    values.push(filters.statuses);
+  }
+  if (filters.search) {
+    where.push(`(
+      COALESCE(ou.full_name, TRIM(COALESCE(ou.first_name, '') || ' ' || COALESCE(ou.last_name, ''))) ILIKE $${idx}
+      OR COALESCE(cu.full_name, TRIM(COALESCE(cu.first_name, '') || ' ' || COALESCE(cu.last_name, ''))) ILIKE $${idx}
+      OR COALESCE(cm.remarks, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search}%`);
+    idx += 1;
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+_CASH_MANAGEMENT_JOIN(): string {
+  return `
+    FROM cash_management cm
+    LEFT JOIN users ou ON ou.id = cm.created_by
+    LEFT JOIN users cu ON cu.id = cm.closed_by
+  `;
+},
+
+async getCashManagementReportStats(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; search?: string; statuses?: string[] }
+): Promise<CashManagementReportStats> {
+  const { where, values } = this._buildCashManagementWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      COALESCE(SUM(cm.opening_balance), 0)         AS total_opening_balance,
+      COALESCE(SUM(cm.cash_revenue), 0)             AS total_cash_revenue,
+      COALESCE(SUM(cm.cash_expense), 0)             AS total_cash_expense,
+      COALESCE(SUM(cm.closing_balance), 0)          AS total_closing_balance,
+      COALESCE(SUM(cm.reconciliation_amount), 0)    AS total_reconciliation_amount,
+      COUNT(*)::int                                 AS total_sessions,
+      COUNT(*) FILTER (WHERE cm.status = 'open')::int   AS open_sessions,
+      COUNT(*) FILTER (WHERE cm.status = 'closed')::int AS closed_sessions
+    ${this._CASH_MANAGEMENT_JOIN()}
+    WHERE ${where}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  return {
+    total_opening_balance: Math.round(Number(r.total_opening_balance ?? 0)),
+    total_cash_revenue: Math.round(Number(r.total_cash_revenue ?? 0)),
+    total_cash_expense: Math.round(Number(r.total_cash_expense ?? 0)),
+    total_closing_balance: Math.round(Number(r.total_closing_balance ?? 0)),
+    total_reconciliation_amount: Math.round(Number(r.total_reconciliation_amount ?? 0)),
+    total_sessions: Number(r.total_sessions ?? 0),
+    open_sessions: Number(r.open_sessions ?? 0),
+    closed_sessions: Number(r.closed_sessions ?? 0),
+  };
+},
+
+async getCashManagementReportRows(
+  salonId: string,
+  filters: CashManagementReportFilters
+): Promise<{
+  items: CashManagementReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildCashManagementWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    SELECT
+      cm.id, cm.status, cm.opening_balance, cm.cash_revenue, cm.cash_expense,
+      cm.closing_balance, cm.in_store_cash, cm.reconciliation_amount, cm.remarks,
+      cm.opened_at, cm.closed_at,
+      COALESCE(ou.full_name, TRIM(COALESCE(ou.first_name, '') || ' ' || COALESCE(ou.last_name, ''))) AS opened_by,
+      COALESCE(cu.full_name, TRIM(COALESCE(cu.first_name, '') || ' ' || COALESCE(cu.last_name, ''))) AS closed_by,
+      COUNT(*) OVER() AS total_count
+    ${this._CASH_MANAGEMENT_JOIN()}
+    WHERE ${where}
+    ORDER BY cm.opened_at DESC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: CashManagementReportRow[] = rows.map((row: any) => ({
+    id: row.id,
+    status: row.status === "open" ? "open" : "closed",
+    opening_balance: Math.round(Number(row.opening_balance ?? 0)),
+    cash_revenue: Math.round(Number(row.cash_revenue ?? 0)),
+    cash_expense: Math.round(Number(row.cash_expense ?? 0)),
+    closing_balance: Math.round(Number(row.closing_balance ?? 0)),
+    in_store_cash: row.in_store_cash === null ? null : Math.round(Number(row.in_store_cash)),
+    reconciliation_amount: row.reconciliation_amount === null ? null : Math.round(Number(row.reconciliation_amount)),
+    remarks: row.remarks,
+    opened_at: row.opened_at,
+    closed_at: row.closed_at,
+    opened_by: row.opened_by || "System",
+    closed_by: row.closed_by,
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+async getCashManagementFiltersAvailable(): Promise<CashManagementFiltersAvailable> {
+  // Fixed two-value vocabulary (cash_management.status is open/closed) — no
+  // DB lookup needed, unlike Payment Collection's free-text payment_method.
+  return {
+    status: [
+      { id: "open", label: "Open" },
+      { id: "closed", label: "Closed" },
+    ],
   };
 },
 
@@ -17237,6 +17475,213 @@ async getRebookingRateReportRows(
       limit: effectiveLimit,
       total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
     },
+  };
+},
+
+// ======================================================
+// PAYROLL HISTORY REPORT (independent report API)
+// POST /api/report/payroll-history — reads payroll_entries directly, one
+// row per payroll entry (staff x period). Never calls the Appointment API.
+// ======================================================
+
+_buildPayrollHistoryWhere(
+  salonId: string,
+  filters: PayrollHistoryReportFilters
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["pe.salon_id = $1"];
+  let idx = 2;
+
+  if (filters.start_date) {
+    where.push(`pe.period_end >= $${idx++}::date`);
+    values.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    where.push(`pe.period_start <= $${idx++}::date`);
+    values.push(filters.end_date);
+  }
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    where.push(`pe.staff_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.staff_ids);
+  }
+  if (filters.payment_methods && filters.payment_methods.length > 0) {
+    where.push(`pe.payment_method = ANY($${idx++}::text[])`);
+    values.push(filters.payment_methods);
+  } else if (filters.payment_method) {
+    where.push(`pe.payment_method = $${idx++}`);
+    values.push(filters.payment_method);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(s.first_name, '') ILIKE $${idx}
+      OR COALESCE(s.last_name, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+// payment_status (Paid/Partial/Unpaid) is derived from paid_amount vs the
+// stored net pay, matching PayrollPage.tsx's paymentStatus() — never stored
+// on payroll_entries itself, so it can't be pushed into
+// _buildPayrollHistoryWhere and is built separately here.
+_PAYROLL_NET_PAY_EXPR: `
+  (pe.base_salary + pe.commission + pe.tips + pe.bonus - pe.salary_advance - pe.deductions)
+`,
+
+_buildPayrollStatusFilter(
+  filters: PayrollHistoryReportFilters
+): string {
+  const netPayExpr = this._PAYROLL_NET_PAY_EXPR;
+  const statuses = filters.payment_statuses && filters.payment_statuses.length > 0
+    ? filters.payment_statuses
+    : filters.payment_status ? [filters.payment_status] : [];
+  if (statuses.length === 0) return "";
+  const clauses = statuses.map((s) => {
+    const v = s.toLowerCase();
+    if (v === "paid") return `(${netPayExpr} - pe.paid_amount::numeric) <= 0`;
+    if (v === "unpaid") return `pe.paid_amount::numeric <= 0`;
+    return `pe.paid_amount::numeric > 0 AND (${netPayExpr} - pe.paid_amount::numeric) > 0`;
+  });
+  return `AND (${clauses.join(" OR ")})`;
+},
+
+async getPayrollHistoryReportStats(
+  salonId: string,
+  filters: PayrollHistoryReportFilters
+): Promise<PayrollHistoryReportStats> {
+  const { where, values } = this._buildPayrollHistoryWhere(salonId, filters);
+  const netPayExpr = this._PAYROLL_NET_PAY_EXPR;
+  const statusFilter = this._buildPayrollStatusFilter(filters);
+
+  const query = `
+    SELECT
+      COUNT(*)::int AS total_entries,
+      COALESCE(SUM(${netPayExpr}), 0) AS total_net_payroll,
+      COALESCE(SUM(pe.paid_amount::numeric), 0) AS total_paid,
+      COALESCE(SUM(GREATEST(${netPayExpr} - pe.paid_amount::numeric, 0)), 0) AS total_pending
+    FROM payroll_entries pe
+    JOIN staff s ON s.id = pe.staff_id
+    WHERE ${where} ${statusFilter}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  return {
+    total_entries: Number(r.total_entries ?? 0),
+    total_net_payroll: Number(r.total_net_payroll ?? 0),
+    total_paid: Number(r.total_paid ?? 0),
+    total_pending: Number(r.total_pending ?? 0),
+  };
+},
+
+async getPayrollHistoryReportRows(
+  salonId: string,
+  filters: PayrollHistoryReportFilters
+): Promise<{
+  items: PayrollHistoryReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildPayrollHistoryWhere(salonId, filters);
+  const netPayExpr = this._PAYROLL_NET_PAY_EXPR;
+  const statusFilter = this._buildPayrollStatusFilter(filters);
+  let idx = nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    SELECT
+      pe.id,
+      pe.staff_id,
+      NULLIF(TRIM(CONCAT(COALESCE(s.first_name, ''), ' ', COALESCE(s.last_name, ''))), '') AS staff_name,
+      s.designation AS staff_designation,
+      pe.period_type,
+      TO_CHAR(pe.period_start, 'YYYY-MM-DD') AS period_start,
+      TO_CHAR(pe.period_end, 'YYYY-MM-DD') AS period_end,
+      pe.base_salary,
+      pe.commission,
+      pe.tips,
+      pe.bonus,
+      pe.salary_advance,
+      pe.deductions,
+      ${netPayExpr} AS net_pay,
+      pe.paid_amount,
+      GREATEST(${netPayExpr} - pe.paid_amount::numeric, 0) AS pending_amount,
+      pe.payment_method,
+      TO_CHAR(pe.payment_date, 'YYYY-MM-DD') AS payment_date,
+      COUNT(*) OVER() AS total_count
+    FROM payroll_entries pe
+    JOIN staff s ON s.id = pe.staff_id
+    WHERE ${where} ${statusFilter}
+    ORDER BY pe.period_start DESC, staff_name ASC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: PayrollHistoryReportRow[] = rows.map((row: any) => {
+    const netPay = Number(row.net_pay ?? 0);
+    const paidAmount = Number(row.paid_amount ?? 0);
+    const pendingAmount = Number(row.pending_amount ?? 0);
+    const payment_status = paidAmount <= 0 ? "unpaid" : pendingAmount <= 0 ? "paid" : "partial";
+    return {
+      id: row.id,
+      staff_id: row.staff_id,
+      staff_name: row.staff_name || "—",
+      staff_designation: row.staff_designation ?? null,
+      period_type: row.period_type,
+      period_start: row.period_start,
+      period_end: row.period_end,
+      base_salary: Number(row.base_salary ?? 0),
+      commission: Number(row.commission ?? 0),
+      tips: Number(row.tips ?? 0),
+      bonus: Number(row.bonus ?? 0),
+      salary_advance: Number(row.salary_advance ?? 0),
+      deductions: Number(row.deductions ?? 0),
+      net_pay: netPay,
+      paid_amount: paidAmount,
+      pending_amount: pendingAmount,
+      payment_status,
+      payment_method: row.payment_method ?? null,
+      payment_date: row.payment_date ?? null,
+    };
+  });
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// Distinct staff who have EVER had a payroll entry in this salon — scoped
+// only to salon_id, not the current date/filters, so the dropdown stays
+// complete.
+async getPayrollHistoryFiltersAvailable(salonId: string): Promise<{
+  staff: PayrollHistoryFilterOption[];
+}> {
+  const { rows: staffRows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT s.id, TRIM(CONCAT(COALESCE(s.first_name, ''), ' ', COALESCE(s.last_name, ''))) AS label
+     FROM payroll_entries pe
+     JOIN staff s ON s.id = pe.staff_id
+     WHERE pe.salon_id = $1
+     ORDER BY label ASC`,
+    [salonId]
+  ));
+
+  return {
+    staff: staffRows.map((r: any) => ({ id: r.id, label: r.label })),
   };
 },
 

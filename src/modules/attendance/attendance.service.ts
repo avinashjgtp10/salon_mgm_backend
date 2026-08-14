@@ -315,11 +315,25 @@ export const attendanceService = {
         staff: { id: string; full_name: string; role: string }[];
         records: Attendance[];
     }> {
-        const [allStaff, records] = await Promise.all([
+        const [allStaff, records, leaveDates] = await Promise.all([
             attendanceRepository.getActiveSalonStaff(salonId),
             attendanceRepository.findBySalonAndRange(salonId, startDate, endDate),
+            attendanceRepository.findApprovedLeaveDatesInRange(salonId, startDate, endDate),
         ]);
-        return { staff: allStaff, records };
+
+        // "staff_id|date" lookup so hours_worked can be zeroed for approved
+        // leave days without a per-row query — the report must never count a
+        // leave day's hours, even for a row that also carries a stray
+        // check-in/check-out (e.g. leave approved after a partial clock-in).
+        const leaveSet = new Set(leaveDates.map((l) => `${l.staff_id}|${l.date}`));
+        const annotated = records.map((r) => {
+            const onLeave = leaveSet.has(`${r.staff_id}|${r.date}`);
+            return onLeave
+                ? { ...r, on_approved_leave: true, hours_worked: 0 }
+                : { ...r, on_approved_leave: false };
+        });
+
+        return { staff: allStaff, records: annotated };
     },
 
     // ── Daily summary counts ─────────────────────────────────────────────────

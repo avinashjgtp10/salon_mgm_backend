@@ -295,6 +295,26 @@ export const cashManagementRepository = {
         );
       }
 
+      // A counter (open OR closed) for today already means the daily
+      // open/close cycle already happened — closing is a one-way action,
+      // there is no "reopen" — so a second open the same day must be
+      // blocked outright rather than just re-checking for an open row.
+      const todayRows = await client.query<{ id: string }>(
+        `SELECT id
+         FROM cash_management
+         WHERE salon_id = $1
+           AND DATE(opened_at) = CURRENT_DATE
+         LIMIT 1`,
+        [salonId],
+      );
+      if (todayRows.rows[0]) {
+        throw new AppError(
+          409,
+          "You can open the cash counter only once per day.",
+          "COUNTER_ONCE_PER_DAY",
+        );
+      }
+
       const { rows } = await client.query<CashManagementRecord>(
         `INSERT INTO cash_management (
           salon_id, status, opening_balance, closing_balance, created_by
@@ -417,6 +437,96 @@ export const cashManagementRepository = {
       closed_at: refreshed.closed_at,
       remarks: refreshed.remarks,
     };
+  },
+
+  // Itemized breakdown of the individual cash payments (Quick Sale,
+  // Calendar/Appointment checkout, Package, Membership) that make up a
+  // counter's cash_revenue total — the same sources recalculateCounterById
+  // sums, just returned as rows instead of a single total, so the UI can
+  // show each payment rather than only the aggregate figure.
+  async listCashIncomeEntries(params: { salonId: string; cashManagementId: string }) {
+    const counter = await getCounterContext(pool, params.cashManagementId, params.salonId);
+
+    const { rows } = await safeQuery(() =>
+      pool.query(
+        `SELECT * FROM (
+          SELECT
+            py.id::text AS id,
+            py.updated_at AS occurred_at,
+            CASE WHEN py.appointment_id IS NULL THEN 'Quick Sale' ELSE 'Appointment' END AS source,
+            COALESCE(s.invoice_number, '') AS reference,
+            COALESCE(c.full_name, 'Walk-in') AS client_name,
+            CASE
+              WHEN LOWER(COALESCE(py.payment_method, '')) = 'cash'
+                THEN COALESCE(py.paid_amount, py.net_amount, py.amount, 0)::numeric
+              ELSE COALESCE((
+                SELECT SUM(value::numeric)
+                FROM jsonb_each_text(COALESCE(py.split_details, '{}'::jsonb)) AS cash_part(key, value)
+                WHERE LOWER(key) = 'cash'
+              ), 0::numeric)
+            END AS amount
+          FROM payments py
+          LEFT JOIN sales s ON s.appointment_id = py.appointment_id AND s.salon_id = py.salon_id
+          LEFT JOIN clients c ON c.id = py.client_id
+          WHERE py.salon_id = $1
+            AND py.status IN ('partial', 'completed')
+            AND py.updated_at >= $2::timestamptz
+            AND py.updated_at <= COALESCE($3::timestamptz, NOW())
+            AND (
+              LOWER(COALESCE(py.payment_method, '')) = 'cash'
+              OR COALESCE((
+                SELECT SUM(value::numeric)
+                FROM jsonb_each_text(COALESCE(py.split_details, '{}'::jsonb)) AS cash_part(key, value)
+                WHERE LOWER(key) = 'cash'
+              ), 0::numeric) > 0
+            )
+
+          UNION ALL
+
+          SELECT
+            cp.id::text AS id,
+            cp.created_date AS occurred_at,
+            'Package' AS source,
+            COALESCE(cp.package_name, '') AS reference,
+            COALESCE(cp.client_name, 'Walk-in') AS client_name,
+            COALESCE(cp.paid_amount, 0)::numeric AS amount
+          FROM client_packages cp
+          WHERE cp.salon_id = $1
+            AND LOWER(COALESCE(cp.payment_method, '')) = 'cash'
+            AND COALESCE(cp.paid_amount, 0) > 0
+            AND cp.created_date >= $2::timestamptz
+            AND cp.created_date <= COALESCE($3::timestamptz, NOW())
+
+          UNION ALL
+
+          SELECT
+            cm.id::text AS id,
+            cm.purchased_at AS occurred_at,
+            'Membership' AS source,
+            COALESCE(cm.membership_name, '') AS reference,
+            COALESCE(cm.client_name, 'Walk-in') AS client_name,
+            COALESCE(cm.price_paid, 0)::numeric AS amount
+          FROM client_memberships cm
+          WHERE cm.salon_id = $1
+            AND LOWER(COALESCE(cm.payment_method, '')) = 'cash'
+            AND COALESCE(cm.price_paid, 0) > 0
+            AND cm.purchased_at >= $2::timestamptz
+            AND cm.purchased_at <= COALESCE($3::timestamptz, NOW())
+        ) entries
+        WHERE amount > 0
+        ORDER BY occurred_at DESC`,
+        [params.salonId, counter.opened_at, counter.closed_at],
+      ),
+    );
+
+    return rows.map((row: any) => ({
+      id: row.id,
+      occurred_at: row.occurred_at,
+      source: row.source,
+      reference: row.reference || null,
+      client_name: row.client_name,
+      amount: parseFloat(row.amount ?? "0"),
+    }));
   },
 
   async listCounters(filters: CounterListFilters) {
@@ -766,7 +876,7 @@ export const cashManagementRepository = {
       if (counter.status !== "open") {
         throw new AppError(
           409,
-          "Cash counter is already closed",
+          "Cash counter is already closed.",
           "COUNTER_ALREADY_CLOSED",
         );
       }

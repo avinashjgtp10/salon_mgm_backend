@@ -4,6 +4,8 @@ import { AppError } from "../../middleware/error.middleware";
 const isNonEmptyString = (v: unknown) => typeof v === "string" && v.trim().length > 0;
 const isOptionalString = (v: unknown) => v === undefined || typeof v === "string";
 const isOptionalNumber = (v: unknown) => v === undefined || typeof v === "number";
+const VALID_CATEGORY_TYPES = ["service", "product", "both"];
+const isOptionalCategoryType = (v: unknown) => v === undefined || VALID_CATEGORY_TYPES.includes(v as string);
 
 export const validateCreateCategory = (req: Request, _res: Response, next: NextFunction) => {
     try {
@@ -26,6 +28,10 @@ export const validateCreateCategory = (req: Request, _res: Response, next: NextF
 
         if (b.is_active !== undefined && typeof b.is_active !== "boolean") {
             throw new AppError(400, "is_active must be boolean", "VALIDATION_ERROR");
+        }
+
+        if (!isOptionalCategoryType(b.type)) {
+            throw new AppError(400, "type must be one of: service, product, both", "VALIDATION_ERROR");
         }
 
         return next();
@@ -55,6 +61,10 @@ export const validateUpdateCategory = (req: Request, _res: Response, next: NextF
 
         if (b.is_active !== undefined && typeof b.is_active !== "boolean") {
             throw new AppError(400, "is_active must be boolean", "VALIDATION_ERROR");
+        }
+
+        if (!isOptionalCategoryType(b.type)) {
+            throw new AppError(400, "type must be one of: service, product, both", "VALIDATION_ERROR");
         }
 
         return next();

@@ -1317,6 +1317,9 @@ export interface CustomerSpendReportFilters {
     // would silently swallow the Regular segment).
     vip_min_spend?: number;
     low_max_spend?: number;
+    // Row-level filter — clients with at least this many visits in the
+    // filtered date range. Combines with every other filter (AND).
+    min_visits?: number;
     page?: number;
     limit?: number;
     is_export?: boolean;
@@ -1662,6 +1665,9 @@ export interface PaymentCollectionReportStats {
     // see collection rate rather than only the outstanding balance.
     total_billed: number;
     total_collected: number;
+    // total_collected split by how it was paid, summed from each individual
+    // payment transaction (not the row-level latest-method field).
+    collected_by_method: { method: string; amount: number }[];
 }
 
 export interface PaymentCollectionReportPagination {
@@ -1685,6 +1691,68 @@ export interface PaymentCollectionReportResponse {
     pagination: PaymentCollectionReportPagination;
     stats: PaymentCollectionReportStats;
     filters_available: PaymentCollectionFiltersAvailable;
+}
+
+// ===============================
+// CASH MANAGEMENT REPORT
+// One row per cash counter session (cash_management table) — opening/
+// closing balance, cash revenue/expense collected while the counter was
+// open, in-store cash counted at close, and the reconciliation difference.
+// ===============================
+
+export interface CashManagementReportFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    statuses?: string[];
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface CashManagementReportRow {
+    id: string;
+    status: "open" | "closed";
+    opening_balance: number;
+    cash_revenue: number;
+    cash_expense: number;
+    closing_balance: number;
+    in_store_cash: number | null;
+    reconciliation_amount: number | null;
+    remarks: string | null;
+    opened_at: string | null;
+    closed_at: string | null;
+    opened_by: string;
+    closed_by: string | null;
+}
+
+export interface CashManagementReportStats {
+    total_opening_balance: number;
+    total_cash_revenue: number;
+    total_cash_expense: number;
+    total_closing_balance: number;
+    total_reconciliation_amount: number;
+    total_sessions: number;
+    open_sessions: number;
+    closed_sessions: number;
+}
+
+export interface CashManagementReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface CashManagementFiltersAvailable {
+    status: { id: string; label: string }[];
+}
+
+export interface CashManagementReportResponse {
+    rows: CashManagementReportRow[];
+    pagination: CashManagementReportPagination;
+    stats: CashManagementReportStats;
+    filters_available: CashManagementFiltersAvailable;
 }
 
 // ===============================
@@ -2761,6 +2829,77 @@ export interface RebookingRateReportResponse {
     rows: RebookingRateReportRow[];
     pagination: RebookingRateReportPagination;
     stats: RebookingRateReportStats;
+}
+
+// ===============================
+// Payroll History Report (independent report API —
+// POST /api/report/payroll-history)
+// Reads directly from payroll_entries joined to staff, one row per payroll
+// entry (staff x period). Never touches the Appointment API.
+// ===============================
+
+export interface PayrollHistoryReportFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    payment_status?: string;
+    payment_statuses?: string[];
+    payment_method?: string;
+    payment_methods?: string[];
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface PayrollHistoryReportRow {
+    id: string;
+    staff_id: string;
+    staff_name: string;
+    staff_designation: string | null;
+    period_type: string;
+    period_start: string;
+    period_end: string;
+    base_salary: number;
+    commission: number;
+    tips: number;
+    bonus: number;
+    salary_advance: number;
+    deductions: number;
+    net_pay: number;
+    paid_amount: number;
+    pending_amount: number;
+    payment_status: string;
+    payment_method: string | null;
+    payment_date: string | null;
+}
+
+export interface PayrollHistoryReportStats {
+    total_entries: number;
+    total_net_payroll: number;
+    total_paid: number;
+    total_pending: number;
+}
+
+export interface PayrollHistoryReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface PayrollHistoryFilterOption {
+    id: string;
+    label: string;
+}
+
+export interface PayrollHistoryReportResponse {
+    rows: PayrollHistoryReportRow[];
+    pagination: PayrollHistoryReportPagination;
+    stats: PayrollHistoryReportStats;
+    filters_available: {
+        staff: PayrollHistoryFilterOption[];
+    };
 }
 
 export interface ClientRatingReportResponse {

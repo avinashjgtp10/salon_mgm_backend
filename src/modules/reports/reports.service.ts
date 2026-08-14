@@ -255,6 +255,8 @@ import {
     ReferralReportResponse,
     PaymentCollectionReportFilters,
     PaymentCollectionReportResponse,
+    CashManagementReportFilters,
+    CashManagementReportResponse,
     MembershipHistoryReportFilters,
     MembershipHistoryReportResponse,
     ServiceFrequencyReportFilters,
@@ -269,6 +271,8 @@ import {
     StaffItemSalesReportResponse,
     PackageSaleReportFilters,
     PackageSaleReportResponse,
+    PayrollHistoryReportFilters,
+    PayrollHistoryReportResponse,
     PackageHistoryReportFilters,
     PackageHistoryReportResponse,
     MemberSaleReportFilters,
@@ -1644,6 +1648,28 @@ async getPaymentCollectionReport(
 },
 
 // ======================================================
+// CASH MANAGEMENT REPORT (independent report API)
+// ======================================================
+
+async getCashManagementReport(
+    salonId: string,
+    filters: CashManagementReportFilters
+): Promise<CashManagementReportResponse> {
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
+        reportsRepository.getCashManagementReportStats(salonId, filters),
+        reportsRepository.getCashManagementReportRows(salonId, filters),
+        reportsRepository.getCashManagementFiltersAvailable(),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+        filters_available: filtersAvailable,
+    };
+},
+
+// ======================================================
 // STAFF SALES REPORT (independent report API)
 // ======================================================
 
@@ -1927,6 +1953,28 @@ async getRebookingRateReport(
         rows: rowsResult.items,
         pagination: rowsResult.pagination,
         stats,
+    };
+},
+
+// ======================================================
+// PAYROLL HISTORY REPORT (independent report API)
+// ======================================================
+
+async getPayrollHistoryReport(
+    salonId: string,
+    filters: PayrollHistoryReportFilters
+): Promise<PayrollHistoryReportResponse> {
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
+        reportsRepository.getPayrollHistoryReportStats(salonId, filters),
+        reportsRepository.getPayrollHistoryReportRows(salonId, filters),
+        reportsRepository.getPayrollHistoryFiltersAvailable(salonId),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+        filters_available: filtersAvailable,
     };
 },
 

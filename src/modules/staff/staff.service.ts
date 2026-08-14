@@ -78,7 +78,11 @@ export const staffService = {
             }
 
             console.log("[DEBUG] staffService.create - Step 2: Creating staff in DB...");
-            const staff = await staffRepository.create(salonId, body, passwordHash);
+            // Admin-set password activates immediately regardless of email verification
+            // (the password path bypasses invitation/OTP entirely). Otherwise, activation
+            // follows whether the frontend confirmed the staff member's email OTP.
+            const activateImmediately = body.password ? true : body.email_verified === true;
+            const staff = await staffRepository.create(salonId, body, passwordHash, activateImmediately);
             if (!staff) {
                 console.error("[DEBUG] staffService.create - DB returned null staff object");
                 throw new AppError(500, "Database failed to create staff record", "DB_ERROR");
