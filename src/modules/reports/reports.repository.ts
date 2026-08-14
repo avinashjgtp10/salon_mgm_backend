@@ -4391,11 +4391,16 @@ _CLIENT_REVENUE_AGG(where: string, saleJoin: string, having: string): string {
         COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS contact,
         COUNT(s.id) AS visits,
         COALESCE(SUM(s.total_amount::numeric), 0) AS total_spend,
-        MAX(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS last_visit,
+        -- The actual appointment date/time, not when the sale/invoice record
+        -- was created (checkout can happen well after the visit) — falls
+        -- back to sales.created_at only for walk-in sales with no linked
+        -- appointment, which have no other timestamp to use.
+        MAX(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS last_visit,
         rs.avg_rating,
         COALESCE(rs.review_count, 0) AS review_count
       FROM clients c
       LEFT JOIN sales s ON ${saleJoin}
+      LEFT JOIN appointments a ON a.id = s.appointment_id
       LEFT JOIN review_stats rs ON rs.client_id = c.id
       WHERE ${where}
       GROUP BY c.id, c.full_name, c.phone_number, c.phone_country_code, rs.avg_rating, rs.review_count
@@ -4487,12 +4492,15 @@ _CUSTOMER_SPEND_AGG(where: string, saleJoin: string, vipIdx: number, lowIdx: num
         COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS contact,
         COUNT(s.id)::int AS visits,
         COALESCE(SUM(s.total_amount::numeric), 0) AS total_spend,
-        MIN(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS first_visit,
-        MAX(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS last_visit
+        -- Appointment date/time, not sale/checkout time — see the matching
+        -- comment on _CLIENT_REVENUE_AGG.
+        MIN(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS first_visit,
+        MAX(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS last_visit
       FROM clients c
       -- LEFT, so a client with no completed sale still produces a row with
       -- total_spend = 0 and is classified 'low'.
       LEFT JOIN sales s ON ${saleJoin}
+      LEFT JOIN appointments a ON a.id = s.appointment_id
       WHERE ${where}
       GROUP BY c.id, c.full_name, c.phone_number, c.phone_country_code
     ),
@@ -4842,12 +4850,15 @@ _CUSTOMER_FREQUENCY_AGG(where: string, saleJoin: string, startDateIdx: number | 
         COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS contact,
         COUNT(s.id) AS visits,
         COALESCE(SUM(s.total_amount::numeric), 0) AS total_spend,
-        MIN(s.created_at AT TIME ZONE 'Asia/Kolkata') AS first_visit_ts,
-        MAX(s.created_at AT TIME ZONE 'Asia/Kolkata') AS last_visit_ts,
-        MIN(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD'))::date AS first_visit,
-        MAX(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD'))::date AS last_visit
+        -- Appointment date/time, not sale/checkout time — see the matching
+        -- comment on _CLIENT_REVENUE_AGG.
+        MIN(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata') AS first_visit_ts,
+        MAX(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata') AS last_visit_ts,
+        MIN(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD'))::date AS first_visit,
+        MAX(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD'))::date AS last_visit
       FROM clients c
       LEFT JOIN sales s ON ${saleJoin}
+      LEFT JOIN appointments a ON a.id = s.appointment_id
       WHERE ${where}
       GROUP BY c.id, c.full_name, c.phone_number, c.phone_country_code
     ),
@@ -5086,12 +5097,15 @@ _SERVICE_FREQUENCY_AGG(where: string): string {
         COUNT(*)::int AS visits,
         COALESCE(SUM(si.quantity), 0)::int AS total_qty,
         COALESCE(SUM(si.total_price::numeric), 0) AS total_spend,
-        MIN(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS first_visit,
-        MAX(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS last_visit
+        -- Appointment date/time, not sale/checkout time — see the matching
+        -- comment on _CLIENT_REVENUE_AGG.
+        MIN(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS first_visit,
+        MAX(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD')) AS last_visit
       FROM sale_items si
       JOIN sales s ON s.id = si.sale_id
       -- INNER on clients: a pair only exists if it belongs to someone.
       JOIN clients c ON c.id = s.client_id
+      LEFT JOIN appointments a ON a.id = s.appointment_id
       LEFT JOIN services sv ON sv.id = si.item_id
       LEFT JOIN service_categories sc ON sc.id = sv.category_id
       WHERE ${where}
@@ -5262,10 +5276,15 @@ _LOST_CUSTOMERS_AGG(where: string, saleJoin: string, lostDaysIdx: number, startD
         COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS contact,
         COUNT(s.id) AS visits,
         COALESCE(SUM(s.total_amount::numeric), 0) AS total_spend,
-        MIN(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD'))::date AS first_visit,
-        MAX(TO_CHAR(s.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD'))::date AS last_visit
+        -- Appointment date/time, not sale/checkout time — a booking made
+        -- weeks ago that only gets paid/checked-out today must still count
+        -- as a visit back then, not "just visited today". Falls back to
+        -- sales.created_at only for walk-in sales with no linked appointment.
+        MIN(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD'))::date AS first_visit,
+        MAX(TO_CHAR(COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD'))::date AS last_visit
       FROM clients c
       INNER JOIN sales s ON ${saleJoin}
+      LEFT JOIN appointments a ON a.id = s.appointment_id
       WHERE ${where}
       GROUP BY c.id, c.full_name, c.phone_number, c.phone_country_code
     ),

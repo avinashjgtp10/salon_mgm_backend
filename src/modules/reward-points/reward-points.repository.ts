@@ -40,10 +40,11 @@ export const rewardPointsRepository = {
     sourceType?: string;
     sourceId?: string;
     note?: string;
-  }): Promise<number> {
+  }, client?: import("pg").PoolClient): Promise<number> {
     const { clientId, salonId, type, delta, sourceType, sourceId, note } = params;
+    const db = client ?? pool;
 
-    const { rows } = await pool.query(
+    const { rows } = await db.query(
       `UPDATE clients
        SET reward_points_balance = GREATEST(0, reward_points_balance + $1)
        WHERE id = $2
@@ -52,7 +53,7 @@ export const rewardPointsRepository = {
     );
     const balanceAfter = Number(rows[0]?.reward_points_balance) || 0;
 
-    await pool.query(
+    await db.query(
       `INSERT INTO reward_points_ledger
          (client_id, salon_id, type, points, balance_after, source_type, source_id, note)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,

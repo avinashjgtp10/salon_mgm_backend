@@ -2,9 +2,30 @@ import pool, { safeQuery } from "../../config/database";
 import { Sale, SaleItem, CreateSaleBody, UpdateSaleBody } from "./sales.types";
 import { getTaxModuleConfig } from "../settings/tax.util";
 
+// Accepts either a plain calendar date ("2026-08-14", no time component —
+// treated as midnight UTC) or a full timestamp. Timestamps can arrive in two
+// shapes: ISO with a literal "T" separator (what a JS Date.toISOString() or
+// an API client sends), or Postgres's own space-separated wire format
+// ("2026-08-14 10:30:00+00", e.g. straight off appointments.scheduled_at —
+// this DB's pg driver returns timestamp columns as raw strings, see
+// config/database.ts's type parsers). The space-separated shape has no "T"
+// but DOES have a time component, so it must never fall into the date-only
+// branch below — appending 'T00:00:00.000Z' to it produces a string like
+// "2026-08-14 10:30:00+00T00:00:00.000Z", which Date() parses as Invalid
+// Date, which then fails the INSERT (silently, if the caller's try/catch
+// swallows it) instead of ever creating the sale row.
 function parseCreatedAt(input: string | undefined | null): Date {
     if (!input) return new Date();
-    if (input.includes('T') || /\d{4}-\d{2}-\d{2}T/.test(input)) return new Date(input);
+    const hasTimeComponent = /\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(input);
+    if (hasTimeComponent) {
+        // Swap the date/time separator, then normalize a bare 2-digit
+        // timezone offset ("+00", "-05") to the "+00:00"/"-05:00" form
+        // Date() actually accepts — Postgres's wire format can omit the
+        // minutes/colon entirely, which Date() otherwise rejects outright
+        // (Invalid Date), not just misparses.
+        const iso = input.replace(' ', 'T').replace(/([+-]\d{2})$/, '$1:00');
+        return new Date(iso);
+    }
     return new Date(input + 'T00:00:00.000Z');
 }
 

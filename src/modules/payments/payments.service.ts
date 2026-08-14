@@ -1111,6 +1111,14 @@ export const paymentsService = {
           appointment_id: data.appointment_id,
           staff_id: appt.staff_id || undefined,
           origin: 'calendar_checkout',
+          // The sale must be dated to when the appointment actually happened,
+          // not left to default to "now" (the checkout/payment moment) —
+          // otherwise a booking paid days after the visit (e.g. a settled
+          // partial/deposit) shows up as having occurred on the payment date
+          // everywhere sales.created_at is read as "visit date" (Reports'
+          // Lost Customers/Customer Frequency/Client Revenue last_visit,
+          // revenue-by-day charts, etc).
+          created_at: appt.scheduled_at,
           // Membership wallet usage must reduce recognized revenue here — that
           // money was already counted as revenue when the membership itself was
           // purchased. Without this, every visit that draws down the wallet
@@ -1293,6 +1301,10 @@ export const paymentsService = {
             appointment_id: data.appointment_id,
             staff_id: appt.staff_id || undefined,
             origin: 'calendar_checkout',
+            // See the matching comment on the recordTransaction call above —
+            // date this sale to the appointment's real scheduled time, not
+            // whenever the package-covered checkout happened to run.
+            created_at: appt.scheduled_at,
             // Every item's unit_price is exactly matched by its own
             // discount_amount above, so subtotal (and therefore
             // total_amount) is always 0 here — no revenue recorded twice.
