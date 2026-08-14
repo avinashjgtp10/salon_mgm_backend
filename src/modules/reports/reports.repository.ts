@@ -5954,8 +5954,8 @@ async getPaymentCollectionReportRows(
       payment_method, payment_status, staff_name,
       COUNT(*) OVER() AS total_count
     FROM filtered
-    -- Outstanding first within a date, so the rows that need chasing lead.
-    ORDER BY payment_date DESC NULLS LAST, due_amount DESC, customer_name ASC
+    -- Invoice-wise descending, so the newest invoices lead.
+    ORDER BY invoice_number DESC NULLS LAST, payment_date DESC NULLS LAST, due_amount DESC, customer_name ASC
     ${limitClause}
   `;
 
