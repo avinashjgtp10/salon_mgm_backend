@@ -15,6 +15,7 @@ import { membershipsRepository } from "../memberships/memberships.repository";
 import { clientMembershipsService } from "../client-memberships/client-memberships.service";
 import { sendPurchaseReceipt } from "./receipt-send.helper";
 import { notifyAppointmentCompleted } from "../appointments/appointment-completed.helper";
+import { clientPackagesService } from "../client-packages/client-packages.service";
 
 export const salesService = {
 
@@ -191,6 +192,18 @@ export const salesService = {
             } catch (error) {
                 logger.error("Failed to update appointment status after checkout:", { appointmentId: sale.appointment_id, error })
             }
+
+            // ── Package redemption: this appointment may have been booked from a
+            // package sale's schedule-at-purchase flow — deduct the one session it
+            // was reserved for now that it's actually complete. No-op for any
+            // appointment not created that way (see redeemForAppointmentIfScheduled).
+            // appointments.service.ts's own checkout() already does this for its
+            // two paths; this one — checkout initiated from the Sales/Quick Sale
+            // side — was missing it entirely, so a package service completed this
+            // way never consumed its session. Never blocks checkout on failure.
+            await clientPackagesService
+                .redeemForAppointmentIfScheduled(sale.salon_id, sale.appointment_id, "Staff")
+                .catch((err: any) => logger.error("[client-packages] redemption on checkout failed:", err?.message ?? err));
         }
 
         // ── Commission Calculation (fire-and-forget — never blocks checkout) ──
