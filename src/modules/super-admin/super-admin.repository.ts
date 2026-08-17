@@ -113,6 +113,12 @@ export const superAdminRepository = {
         (SELECT COUNT(*)::int FROM users
            WHERE role != 'super_admin' AND DATE(created_at) = CURRENT_DATE)             AS signups_today,
         (SELECT COUNT(*)::int FROM users
+           WHERE role = 'client' AND DATE(created_at) = CURRENT_DATE)                   AS new_clients_today,
+        (SELECT COALESCE(SUM(net_amount), 0)::numeric
+           FROM payments
+           WHERE status IN ('completed','partial')
+             AND DATE(created_at) = CURRENT_DATE)                                       AS revenue_today,
+        (SELECT COUNT(*)::int FROM users
            WHERE role != 'super_admin' AND created_at >= NOW() - INTERVAL '7 days')     AS signups_this_week,
         (SELECT COUNT(*)::int FROM users
            WHERE role != 'super_admin' AND created_at >= date_trunc('month', NOW()))    AS signups_this_month,
@@ -160,6 +166,81 @@ export const superAdminRepository = {
       ORDER BY s.created_at DESC
     `, [param]);
     return rows;
+  },
+
+  // Owner (from salons.owner_id/users) plus every row in `staff` for this
+  // salon, each with lifetime revenue attributed the same way the
+  // salon-owner-facing dashboard does it (sales.staff_id / sale_items.staff_id,
+  // falling back to open partial payments via appointments.staff_id — see
+  // salon-dashboard.repository.ts::getStaffRevenue).
+  async getSalonStaff(salonId: string) {
+    const { rows } = await pool.query(`
+      WITH sales_rows AS (
+        SELECT COALESCE(si.staff_id, sl.staff_id) AS staff_id,
+               COALESCE(si.total_price, sl.total_amount)::numeric AS amount
+        FROM sales sl
+        LEFT JOIN sale_items si ON si.sale_id = sl.id
+        WHERE sl.salon_id = $1
+          AND sl.status = 'completed'
+      ),
+      open_partial_rows AS (
+        SELECT a.staff_id, p.paid_amount::numeric AS amount
+        FROM payments p
+        JOIN appointments a ON a.id = p.appointment_id
+        WHERE p.salon_id = $1
+          AND p.status = 'partial'
+          AND a.deleted_at IS NULL
+          AND a.status NOT IN ('cancelled', 'no-show')
+          AND NOT EXISTS (
+            SELECT 1 FROM sales s2
+            WHERE s2.appointment_id = p.appointment_id AND s2.status = 'completed'
+          )
+      ),
+      revenue_by_staff AS (
+        SELECT staff_id, SUM(amount) AS revenue
+        FROM (
+          SELECT staff_id, amount FROM sales_rows
+          UNION ALL
+          SELECT staff_id, amount FROM open_partial_rows
+        ) x
+        WHERE staff_id IS NOT NULL
+        GROUP BY staff_id
+      )
+      SELECT
+        u.id,
+        TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,''))) AS name,
+        u.email,
+        u.phone,
+        'owner'                                                  AS role,
+        u.is_active,
+        u.last_login,
+        COALESCE(u.login_count, 0)                                AS login_count,
+        0::numeric                                                AS revenue,
+        0                                                          AS sort_rank
+      FROM salons s
+      JOIN users u ON u.id = s.owner_id
+      WHERE s.id = $1
+
+      UNION ALL
+
+      SELECT
+        st.id,
+        TRIM(CONCAT(st.first_name,' ',COALESCE(st.last_name,''))) AS name,
+        st.email,
+        st.phone,
+        COALESCE(st.designation, 'staff')                          AS role,
+        st.is_active,
+        NULL::timestamptz                                          AS last_login,
+        0                                                           AS login_count,
+        COALESCE(rbs.revenue, 0)::numeric                          AS revenue,
+        1                                                           AS sort_rank
+      FROM staff st
+      LEFT JOIN revenue_by_staff rbs ON rbs.staff_id = st.id
+      WHERE st.salon_id = $1
+
+      ORDER BY sort_rank, revenue DESC
+    `, [salonId]);
+    return rows.map(({ sort_rank, ...row }) => row);
   },
 
   async getSalonById(id: string) {
@@ -294,6 +375,12 @@ export const superAdminRepository = {
   // is allowed to perform — enforced by requireSubscriptionPermission()
   // middleware on every request, so changes apply without requiring logout.
 
+  // Every salon's subscription lifecycle (trial or paid) is tracked in the
+  // Razorpay-integrated `subscriptions` table, not `billing_subscriptions`
+  // (that one is only ever written by the legacy/manual-comp paid-checkout
+  // path and a super-admin "grant days" action, so it's empty for almost
+  // every real account — trial_start/trial_end cover trial accounts,
+  // current_period_start/end cover paid ones).
   async searchSalonsForSubscriptionPermissions(query: string) {
     const param = query ? `%${query.trim()}%` : "%";
     const { rows } = await pool.query(`
@@ -303,12 +390,23 @@ export const superAdminRepository = {
         s.is_active,
         u.email                                                  AS owner_email,
         TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,''))) AS owner_name,
-        bp.name                                                  AS plan_name,
+        sp.name                                                  AS plan_name,
+        sub.status                                               AS subscription_status,
+        COALESCE(sub.trial_start, sub.current_period_start)      AS subscription_start_date,
+        COALESCE(sub.trial_end, sub.current_period_end)          AS subscription_end_date,
+        sub.cancel_at_period_end                                 AS subscription_cancel_at_period_end,
+        sub.cancelled_at                                         AS subscription_cancelled_at,
+        sub.is_trial                                             AS subscription_is_trial,
         ss.value                                                 AS subscription_permissions
       FROM salons s
       JOIN  users u  ON u.id = s.owner_id
-      LEFT JOIN billing_subscriptions bs ON bs.salon_id = s.id AND bs.status IN ('active','trialing')
-      LEFT JOIN billing_plans bp ON bp.id = bs.plan_id
+      LEFT JOIN LATERAL (
+        SELECT * FROM subscriptions
+        WHERE salon_id = s.id
+        ORDER BY created_at DESC
+        LIMIT 1
+      ) sub ON true
+      LEFT JOIN subscription_plans sp ON sp.id = sub.plan_id
       LEFT JOIN salon_settings ss ON ss.salon_id = s.id AND ss.key = 'subscription_permissions'
       WHERE (
         s.business_name ILIKE $1
@@ -619,36 +717,4 @@ export const superAdminRepository = {
     return rows;
   },
 
-  // ── BILLING / SUBSCRIPTIONS ───────────────────────────────────────────────────
-
-  async getAllSubscriptions(statusFilter?: string) {
-    const { rows } = await pool.query(`
-      SELECT
-        bs.id,
-        bs.salon_id,
-        COALESCE(s.business_name, s.slug, 'Unnamed') AS salon_name,
-        u.email                                        AS owner_email,
-        bp.name                                        AS plan_name,
-        bp.price_per_unit,
-        bp.interval,
-        bs.status,
-        bs.current_period_start,
-        bs.current_period_end,
-        bs.created_at
-      FROM billing_subscriptions bs
-      LEFT JOIN salons s     ON s.id  = bs.salon_id
-      LEFT JOIN users u      ON u.id  = s.owner_id
-      LEFT JOIN billing_plans bp ON bp.id = bs.plan_id
-      WHERE ($1::text IS NULL OR bs.status = $1)
-      ORDER BY bs.created_at DESC
-    `, [statusFilter || null]);
-    return rows;
-  },
-
-  async getAllPlans() {
-    const { rows } = await pool.query(
-      `SELECT * FROM billing_plans ORDER BY price_per_unit ASC`
-    );
-    return rows;
-  },
 };

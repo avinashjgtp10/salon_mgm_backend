@@ -1,4 +1,0 @@
-ALTER TABLE sales
-  ADD COLUMN IF NOT EXISTS coupon_code VARCHAR(50),
-  ADD COLUMN IF NOT EXISTS discount_percent NUMERIC(5,2),
-  ADD COLUMN IF NOT EXISTS discount_type VARCHAR(20);

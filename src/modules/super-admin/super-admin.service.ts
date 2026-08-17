@@ -76,6 +76,10 @@ export const superAdminService = {
     return superAdminRepository.getAllSalons(search);
   },
 
+  async getSalonStaff(salonId: string) {
+    return superAdminRepository.getSalonStaff(salonId);
+  },
+
   async setSalonStatus(id: string, isActive: boolean) {
     const result = await superAdminRepository.setSalonStatus(id, isActive);
     if (!result) throw new AppError(404, "Salon not found", "NOT_FOUND");
@@ -307,11 +311,4 @@ export const superAdminService = {
 
   // ── BILLING ───────────────────────────────────────────────────────────────────
 
-  async getAllSubscriptions(statusFilter?: string) {
-    return superAdminRepository.getAllSubscriptions(statusFilter);
-  },
-
-  async getAllPlans() {
-    return superAdminRepository.getAllPlans();
-  },
 };
