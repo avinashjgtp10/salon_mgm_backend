@@ -375,6 +375,12 @@ export const superAdminRepository = {
   // is allowed to perform — enforced by requireSubscriptionPermission()
   // middleware on every request, so changes apply without requiring logout.
 
+  // Every salon's subscription lifecycle (trial or paid) is tracked in the
+  // Razorpay-integrated `subscriptions` table, not `billing_subscriptions`
+  // (that one is only ever written by the legacy/manual-comp paid-checkout
+  // path and a super-admin "grant days" action, so it's empty for almost
+  // every real account — trial_start/trial_end cover trial accounts,
+  // current_period_start/end cover paid ones).
   async searchSalonsForSubscriptionPermissions(query: string) {
     const param = query ? `%${query.trim()}%` : "%";
     const { rows } = await pool.query(`
@@ -384,12 +390,23 @@ export const superAdminRepository = {
         s.is_active,
         u.email                                                  AS owner_email,
         TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,''))) AS owner_name,
-        bp.name                                                  AS plan_name,
+        sp.name                                                  AS plan_name,
+        sub.status                                               AS subscription_status,
+        COALESCE(sub.trial_start, sub.current_period_start)      AS subscription_start_date,
+        COALESCE(sub.trial_end, sub.current_period_end)          AS subscription_end_date,
+        sub.cancel_at_period_end                                 AS subscription_cancel_at_period_end,
+        sub.cancelled_at                                         AS subscription_cancelled_at,
+        sub.is_trial                                             AS subscription_is_trial,
         ss.value                                                 AS subscription_permissions
       FROM salons s
       JOIN  users u  ON u.id = s.owner_id
-      LEFT JOIN billing_subscriptions bs ON bs.salon_id = s.id AND bs.status IN ('active','trialing')
-      LEFT JOIN billing_plans bp ON bp.id = bs.plan_id
+      LEFT JOIN LATERAL (
+        SELECT * FROM subscriptions
+        WHERE salon_id = s.id
+        ORDER BY created_at DESC
+        LIMIT 1
+      ) sub ON true
+      LEFT JOIN subscription_plans sp ON sp.id = sub.plan_id
       LEFT JOIN salon_settings ss ON ss.salon_id = s.id AND ss.key = 'subscription_permissions'
       WHERE (
         s.business_name ILIKE $1
