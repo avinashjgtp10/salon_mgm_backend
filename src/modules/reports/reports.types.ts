@@ -1195,6 +1195,110 @@ export interface ProductInventoryReportResponse {
     stats: ProductInventoryReportStats;
 }
 
+// ===============================
+// BRAND PERFORMANCE REPORT (independent report API)
+// Reads products/product_brands directly (sales aggregated from
+// sale_items/sales) — never calls the Appointment API/service.
+// ===============================
+
+export interface BrandPerformanceReportFilters {
+    search?: string;
+    brand_id?: string;
+    brand_ids?: string[];
+    date_from?: string;
+    date_to?: string;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface BrandPerformanceReportRow {
+    brand_id: string;
+    brand_name: string;
+    product_count: number;
+    current_stock: number;
+    stock_value: number;
+    units_sold: number;
+    sales_revenue: number;
+    avg_selling_price: number;
+}
+
+export interface BrandPerformanceReportStats {
+    total_brands: number;
+    total_units_sold: number;
+    total_sales_revenue: number;
+    total_stock_value: number;
+}
+
+export interface BrandPerformanceReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface BrandPerformanceReportResponse {
+    rows: BrandPerformanceReportRow[];
+    pagination: BrandPerformanceReportPagination;
+    stats: BrandPerformanceReportStats;
+}
+
+// ===============================
+// PURCHASE VS SALES INVENTORY REPORT (independent report API)
+// Reads products/stock_movements/consumable_usage/sale_items directly, one
+// row per product. Never calls the Appointment API/service.
+// ===============================
+
+export interface PurchaseVsSalesReportFilters {
+    search?: string;
+    category_id?: string;
+    category_ids?: string[];
+    brand_id?: string;
+    brand_ids?: string[];
+    date_from?: string;
+    date_to?: string;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface PurchaseVsSalesReportRow {
+    product_id: string;
+    product_name: string;
+    category_name: string;
+    brand_name: string;
+    current_stock: number;
+    purchase_qty: number;
+    purchase_value: number;
+    sales_qty: number;
+    sales_value: number;
+    consumption_qty: number;
+    consumption_value: number;
+    net_movement: number;
+    turnover_ratio: number;
+}
+
+export interface PurchaseVsSalesReportStats {
+    total_purchase_value: number;
+    total_sales_value: number;
+    total_consumption_value: number;
+    net_inventory_change: number;
+    overall_turnover_ratio: number;
+}
+
+export interface PurchaseVsSalesReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface PurchaseVsSalesReportResponse {
+    rows: PurchaseVsSalesReportRow[];
+    pagination: PurchaseVsSalesReportPagination;
+    stats: PurchaseVsSalesReportStats;
+}
+
 export interface EwalletReportRow {
     client_id: string;
     client_name: string;
