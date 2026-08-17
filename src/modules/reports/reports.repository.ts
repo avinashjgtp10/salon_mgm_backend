@@ -24,6 +24,10 @@ import {
     EwalletReportStats,
     ProductInventoryReportRow,
     ProductInventoryReportStats,
+    BrandPerformanceReportRow,
+    BrandPerformanceReportStats,
+    PurchaseVsSalesReportRow,
+    PurchaseVsSalesReportStats,
     WaCampaignReportRow,
     WaCampaignReportStats,
     WaCampaignFiltersAvailable,
@@ -4284,6 +4288,409 @@ async getProductInventoryReportRows(
     sales_qty: Number(row.sales_qty ?? 0),
     sales_revenue: Number(row.sales_revenue ?? 0),
     status: row.status,
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// ======================================================
+// BRAND PERFORMANCE REPORT (independent report API)
+// POST /api/report/brand-performance — reads products/product_brands
+// directly, one row per brand (sales aggregated from sale_items/sales).
+// Never calls the Appointment API/service.
+// ======================================================
+
+_buildBrandPerformanceWhere(
+  salonId: string,
+  filters: { search?: string; brand_id?: string; brand_ids?: string[] }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["pb.salon_id = $1"];
+  let idx = 2;
+
+  if (filters.search?.trim()) {
+    where.push(`pb.name ILIKE $${idx++}`);
+    values.push(`%${filters.search.trim()}%`);
+  }
+  if (filters.brand_ids && filters.brand_ids.length > 0) {
+    where.push(`pb.id = ANY($${idx++}::uuid[])`);
+    values.push(filters.brand_ids);
+  } else if (filters.brand_id) {
+    where.push(`pb.id = $${idx++}`);
+    values.push(filters.brand_id);
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+async getBrandPerformanceReportStats(
+  salonId: string,
+  filters: { search?: string; brand_id?: string; brand_ids?: string[]; date_from?: string; date_to?: string }
+): Promise<BrandPerformanceReportStats> {
+  const { where, values, nextIndex } = this._buildBrandPerformanceWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const dateConds: string[] = ["s.salon_id = $1", "s.status <> 'draft'", "si.item_type = 'product'", "si.item_id IS NOT NULL"];
+  const dateValues: any[] = [];
+  if (filters.date_from) { dateConds.push(`s.created_at >= $${idx++}::date`); dateValues.push(filters.date_from); }
+  if (filters.date_to) { dateConds.push(`s.created_at < ($${idx++}::date + interval '1 day')`); dateValues.push(filters.date_to); }
+
+  const query = `
+    SELECT
+      COUNT(DISTINCT pb.id)::int AS total_brands,
+      COALESCE(SUM(sales_agg.quantity), 0) AS total_units_sold,
+      COALESCE(SUM(sales_agg.revenue), 0) AS total_sales_revenue,
+      COALESCE(SUM(stock_agg.stock_value), 0) AS total_stock_value
+    FROM product_brands pb
+    LEFT JOIN (
+      SELECT p.brand_id, SUM((${STOCK_IN_PRICING_UNITS_SQL}) * ${UNIT_COST_SQL}) AS stock_value
+      FROM products p
+      WHERE p.salon_id = $1
+      GROUP BY p.brand_id
+    ) stock_agg ON stock_agg.brand_id = pb.id
+    LEFT JOIN (
+      SELECT p2.brand_id, SUM(si.quantity) AS quantity, SUM(si.total_price) AS revenue
+      FROM sale_items si
+      JOIN sales s ON s.id = si.sale_id
+      JOIN products p2 ON p2.id = si.item_id
+      WHERE ${dateConds.join(" AND ")}
+      GROUP BY p2.brand_id
+    ) sales_agg ON sales_agg.brand_id = pb.id
+    WHERE ${where}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...dateValues]));
+  const r = rows[0] ?? {};
+  return {
+    total_brands: Number(r.total_brands ?? 0),
+    total_units_sold: Number(r.total_units_sold ?? 0),
+    total_sales_revenue: Number(r.total_sales_revenue ?? 0),
+    total_stock_value: Number(r.total_stock_value ?? 0),
+  };
+},
+
+async getBrandPerformanceReportRows(
+  salonId: string,
+  filters: {
+    search?: string; brand_id?: string; brand_ids?: string[];
+    date_from?: string; date_to?: string;
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: BrandPerformanceReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildBrandPerformanceWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const dateConds: string[] = ["s.salon_id = $1", "s.status <> 'draft'", "si.item_type = 'product'", "si.item_id IS NOT NULL"];
+  const dateValues: any[] = [];
+  if (filters.date_from) { dateConds.push(`s.created_at >= $${idx++}::date`); dateValues.push(filters.date_from); }
+  if (filters.date_to) { dateConds.push(`s.created_at < ($${idx++}::date + interval '1 day')`); dateValues.push(filters.date_to); }
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    SELECT
+      pb.id AS brand_id,
+      pb.name AS brand_name,
+      COALESCE(stock_agg.product_count, 0) AS product_count,
+      COALESCE(stock_agg.current_stock, 0) AS current_stock,
+      COALESCE(stock_agg.stock_value, 0) AS stock_value,
+      COALESCE(sales_agg.quantity, 0) AS units_sold,
+      COALESCE(sales_agg.revenue, 0) AS sales_revenue,
+      CASE WHEN COALESCE(sales_agg.quantity, 0) > 0
+           THEN COALESCE(sales_agg.revenue, 0) / sales_agg.quantity
+           ELSE 0
+      END AS avg_selling_price,
+      COUNT(*) OVER() AS total_count
+    FROM product_brands pb
+    LEFT JOIN (
+      SELECT
+        p.brand_id,
+        COUNT(*)::int AS product_count,
+        SUM(${STOCK_IN_PRICING_UNITS_SQL}) AS current_stock,
+        SUM((${STOCK_IN_PRICING_UNITS_SQL}) * ${UNIT_COST_SQL}) AS stock_value
+      FROM products p
+      WHERE p.salon_id = $1
+      GROUP BY p.brand_id
+    ) stock_agg ON stock_agg.brand_id = pb.id
+    LEFT JOIN (
+      SELECT p2.brand_id, SUM(si.quantity) AS quantity, SUM(si.total_price) AS revenue
+      FROM sale_items si
+      JOIN sales s ON s.id = si.sale_id
+      JOIN products p2 ON p2.id = si.item_id
+      WHERE ${dateConds.join(" AND ")}
+      GROUP BY p2.brand_id
+    ) sales_agg ON sales_agg.brand_id = pb.id
+    WHERE ${where}
+    ORDER BY sales_revenue DESC, pb.name ASC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...dateValues, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: BrandPerformanceReportRow[] = rows.map((row: any) => ({
+    brand_id: row.brand_id,
+    brand_name: row.brand_name,
+    product_count: Number(row.product_count ?? 0),
+    current_stock: Number(row.current_stock ?? 0),
+    stock_value: Number(row.stock_value ?? 0),
+    units_sold: Number(row.units_sold ?? 0),
+    sales_revenue: Number(row.sales_revenue ?? 0),
+    avg_selling_price: Number(row.avg_selling_price ?? 0),
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// ======================================================
+// PURCHASE VS SALES INVENTORY REPORT (independent report API)
+// POST /api/report/purchase-vs-sales — one row per product, comparing stock
+// coming IN (stock_movements, movement_type='in' — purchases/restocks) with
+// stock going OUT via client sales (sale_items/sales, same monetary
+// aggregate as the Product Inventory report) and via internal consumption
+// (consumable_usage — back-bar usage during services, valued at unit cost
+// since that ledger carries no price snapshot of its own). Never calls the
+// Appointment API/service.
+// ======================================================
+
+_buildPurchaseVsSalesWhere(
+  salonId: string,
+  filters: { search?: string; category_id?: string; category_ids?: string[]; brand_id?: string; brand_ids?: string[] }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["p.salon_id = $1"];
+  let idx = 2;
+
+  if (filters.search?.trim()) {
+    where.push(`(
+      p.name ILIKE $${idx}
+      OR EXISTS (SELECT 1 FROM product_brands pb_search WHERE pb_search.id = p.brand_id AND pb_search.name ILIKE $${idx})
+      OR EXISTS (SELECT 1 FROM service_categories sc_search WHERE sc_search.id = p.category_id AND sc_search.name ILIKE $${idx})
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+  if (filters.category_ids && filters.category_ids.length > 0) {
+    where.push(`p.category_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.category_ids);
+  } else if (filters.category_id) {
+    where.push(`p.category_id = $${idx++}`);
+    values.push(filters.category_id);
+  }
+  if (filters.brand_ids && filters.brand_ids.length > 0) {
+    where.push(`p.brand_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.brand_ids);
+  } else if (filters.brand_id) {
+    where.push(`p.brand_id = $${idx++}`);
+    values.push(filters.brand_id);
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+async getPurchaseVsSalesReportStats(
+  salonId: string,
+  filters: { search?: string; category_id?: string; category_ids?: string[]; brand_id?: string; brand_ids?: string[]; date_from?: string; date_to?: string }
+): Promise<PurchaseVsSalesReportStats> {
+  const { where, values, nextIndex } = this._buildPurchaseVsSalesWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const purchaseDateConds: string[] = [];
+  const salesDateConds: string[] = ["s.salon_id = $1", "s.status <> 'draft'", "si.item_type = 'product'", "si.item_id IS NOT NULL"];
+  const usageDateConds: string[] = ["cu.salon_id = $1"];
+  const dateValues: any[] = [];
+  if (filters.date_from) {
+    purchaseDateConds.push(`sm.created_at >= $${idx}::date`);
+    salesDateConds.push(`s.created_at >= $${idx}::date`);
+    usageDateConds.push(`cu.created_at >= $${idx}::date`);
+    dateValues.push(filters.date_from);
+    idx++;
+  }
+  if (filters.date_to) {
+    purchaseDateConds.push(`sm.created_at < ($${idx}::date + interval '1 day')`);
+    salesDateConds.push(`s.created_at < ($${idx}::date + interval '1 day')`);
+    usageDateConds.push(`cu.created_at < ($${idx}::date + interval '1 day')`);
+    dateValues.push(filters.date_to);
+    idx++;
+  }
+  const purchaseWhere = purchaseDateConds.length ? ` AND ${purchaseDateConds.join(" AND ")}` : "";
+  const usageWhere = usageDateConds.length > 1 ? ` AND ${usageDateConds.slice(1).join(" AND ")}` : "";
+
+  const query = `
+    SELECT
+      COALESCE(SUM(purchase_agg.value), 0) AS total_purchase_value,
+      COALESCE(SUM(sales_agg.revenue), 0) AS total_sales_value,
+      COALESCE(SUM(usage_agg.value), 0) AS total_consumption_value
+    FROM products p
+    LEFT JOIN (
+      SELECT sm.product_id, SUM(COALESCE(sm.total_amount, sm.quantity * COALESCE(sm.unit_price, 0))) AS value
+      FROM stock_movements sm
+      JOIN products p3 ON p3.id = sm.product_id
+      WHERE p3.salon_id = $1 AND sm.movement_type = 'in'${purchaseWhere}
+      GROUP BY sm.product_id
+    ) purchase_agg ON purchase_agg.product_id = p.id
+    LEFT JOIN (
+      SELECT si.item_id AS product_id, SUM(si.total_price) AS revenue
+      FROM sale_items si
+      JOIN sales s ON s.id = si.sale_id
+      WHERE ${salesDateConds.join(" AND ")}
+      GROUP BY si.item_id
+    ) sales_agg ON sales_agg.product_id = p.id
+    LEFT JOIN (
+      SELECT cu.product_id, SUM((CASE WHEN cu.direction = 'return' THEN -cu.qty ELSE cu.qty END) * ${UNIT_COST_SQL.replace(/\bp\./g, "p4.")}) AS value
+      FROM consumable_usage cu
+      JOIN products p4 ON p4.id = cu.product_id
+      WHERE cu.salon_id = $1${usageWhere}
+      GROUP BY cu.product_id
+    ) usage_agg ON usage_agg.product_id = p.id
+    WHERE ${where}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...dateValues]));
+  const r = rows[0] ?? {};
+  const totalPurchaseValue = Number(r.total_purchase_value ?? 0);
+  const totalSalesValue = Number(r.total_sales_value ?? 0);
+  const totalConsumptionValue = Number(r.total_consumption_value ?? 0);
+  return {
+    total_purchase_value: totalPurchaseValue,
+    total_sales_value: totalSalesValue,
+    total_consumption_value: totalConsumptionValue,
+    net_inventory_change: totalPurchaseValue - totalSalesValue - totalConsumptionValue,
+    overall_turnover_ratio: totalPurchaseValue > 0 ? (totalSalesValue + totalConsumptionValue) / totalPurchaseValue : 0,
+  };
+},
+
+async getPurchaseVsSalesReportRows(
+  salonId: string,
+  filters: {
+    search?: string; category_id?: string; category_ids?: string[]; brand_id?: string; brand_ids?: string[];
+    date_from?: string; date_to?: string;
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: PurchaseVsSalesReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildPurchaseVsSalesWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const purchaseDateConds: string[] = [];
+  const salesDateConds: string[] = ["s.salon_id = $1", "s.status <> 'draft'", "si.item_type = 'product'", "si.item_id IS NOT NULL"];
+  const usageDateConds: string[] = [];
+  const dateValues: any[] = [];
+  if (filters.date_from) {
+    purchaseDateConds.push(`sm.created_at >= $${idx}::date`);
+    salesDateConds.push(`s.created_at >= $${idx}::date`);
+    usageDateConds.push(`cu.created_at >= $${idx}::date`);
+    dateValues.push(filters.date_from);
+    idx++;
+  }
+  if (filters.date_to) {
+    purchaseDateConds.push(`sm.created_at < ($${idx}::date + interval '1 day')`);
+    salesDateConds.push(`s.created_at < ($${idx}::date + interval '1 day')`);
+    usageDateConds.push(`cu.created_at < ($${idx}::date + interval '1 day')`);
+    dateValues.push(filters.date_to);
+    idx++;
+  }
+  const purchaseWhere = purchaseDateConds.length ? ` AND ${purchaseDateConds.join(" AND ")}` : "";
+  const usageWhere = usageDateConds.length ? ` AND ${usageDateConds.join(" AND ")}` : "";
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    SELECT
+      p.id AS product_id,
+      p.name AS product_name,
+      COALESCE(sc.name, '—') AS category_name,
+      COALESCE(pb.name, '—') AS brand_name,
+      COALESCE(p.amount, 0) AS current_stock,
+      COALESCE(purchase_agg.qty, 0) AS purchase_qty,
+      COALESCE(purchase_agg.value, 0) AS purchase_value,
+      COALESCE(sales_agg.qty, 0) AS sales_qty,
+      COALESCE(sales_agg.revenue, 0) AS sales_value,
+      COALESCE(usage_agg.qty, 0) AS consumption_qty,
+      COALESCE(usage_agg.value, 0) AS consumption_value,
+      (COALESCE(purchase_agg.qty, 0) - COALESCE(sales_agg.qty, 0) - COALESCE(usage_agg.qty, 0)) AS net_movement,
+      CASE WHEN COALESCE(purchase_agg.value, 0) > 0
+           THEN (COALESCE(sales_agg.revenue, 0) + COALESCE(usage_agg.value, 0)) / purchase_agg.value
+           ELSE 0
+      END AS turnover_ratio,
+      COUNT(*) OVER() AS total_count
+    FROM products p
+    LEFT JOIN product_brands pb ON p.brand_id = pb.id
+    LEFT JOIN service_categories sc ON p.category_id = sc.id
+    LEFT JOIN (
+      SELECT sm.product_id, SUM(sm.quantity) AS qty, SUM(COALESCE(sm.total_amount, sm.quantity * COALESCE(sm.unit_price, 0))) AS value
+      FROM stock_movements sm
+      JOIN products p3 ON p3.id = sm.product_id
+      WHERE p3.salon_id = $1 AND sm.movement_type = 'in'${purchaseWhere}
+      GROUP BY sm.product_id
+    ) purchase_agg ON purchase_agg.product_id = p.id
+    LEFT JOIN (
+      SELECT si.item_id AS product_id, SUM(si.quantity) AS qty, SUM(si.total_price) AS revenue
+      FROM sale_items si
+      JOIN sales s ON s.id = si.sale_id
+      WHERE ${salesDateConds.join(" AND ")}
+      GROUP BY si.item_id
+    ) sales_agg ON sales_agg.product_id = p.id
+    LEFT JOIN (
+      SELECT cu.product_id,
+             SUM(CASE WHEN cu.direction = 'return' THEN -cu.qty ELSE cu.qty END) AS qty,
+             SUM((CASE WHEN cu.direction = 'return' THEN -cu.qty ELSE cu.qty END) * ${UNIT_COST_SQL.replace(/\bp\./g, "p4.")}) AS value
+      FROM consumable_usage cu
+      JOIN products p4 ON p4.id = cu.product_id
+      WHERE cu.salon_id = $1${usageWhere}
+      GROUP BY cu.product_id
+    ) usage_agg ON usage_agg.product_id = p.id
+    WHERE ${where}
+    ORDER BY purchase_value DESC, p.name ASC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...dateValues, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: PurchaseVsSalesReportRow[] = rows.map((row: any) => ({
+    product_id: row.product_id,
+    product_name: row.product_name,
+    category_name: row.category_name,
+    brand_name: row.brand_name,
+    current_stock: Number(row.current_stock ?? 0),
+    purchase_qty: Number(row.purchase_qty ?? 0),
+    purchase_value: Number(row.purchase_value ?? 0),
+    sales_qty: Number(row.sales_qty ?? 0),
+    sales_value: Number(row.sales_value ?? 0),
+    consumption_qty: Number(row.consumption_qty ?? 0),
+    consumption_value: Number(row.consumption_value ?? 0),
+    net_movement: Number(row.net_movement ?? 0),
+    turnover_ratio: Number(row.turnover_ratio ?? 0),
   }));
   const effectiveLimit = limit ?? Math.max(total, 1);
   return {

@@ -245,6 +245,10 @@ import {
     EwalletReportResponse,
     ProductInventoryReportFilters,
     ProductInventoryReportResponse,
+    BrandPerformanceReportFilters,
+    BrandPerformanceReportResponse,
+    PurchaseVsSalesReportFilters,
+    PurchaseVsSalesReportResponse,
     ClientRevenueReportFilters,
     ClientRevenueReportResponse,
     CustomerFrequencyReportFilters,
@@ -1474,6 +1478,46 @@ async getProductInventoryReport(
     const [stats, rowsResult] = await Promise.all([
         reportsRepository.getProductInventoryReportStats(salonId, filters),
         reportsRepository.getProductInventoryReportRows(salonId, filters),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+    };
+},
+
+// ======================================================
+// BRAND PERFORMANCE REPORT (independent report API)
+// ======================================================
+
+async getBrandPerformanceReport(
+    salonId: string,
+    filters: BrandPerformanceReportFilters
+): Promise<BrandPerformanceReportResponse> {
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getBrandPerformanceReportStats(salonId, filters),
+        reportsRepository.getBrandPerformanceReportRows(salonId, filters),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+    };
+},
+
+// ======================================================
+// PURCHASE VS SALES INVENTORY REPORT (independent report API)
+// ======================================================
+
+async getPurchaseVsSalesReport(
+    salonId: string,
+    filters: PurchaseVsSalesReportFilters
+): Promise<PurchaseVsSalesReportResponse> {
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getPurchaseVsSalesReportStats(salonId, filters),
+        reportsRepository.getPurchaseVsSalesReportRows(salonId, filters),
     ]);
 
     return {
