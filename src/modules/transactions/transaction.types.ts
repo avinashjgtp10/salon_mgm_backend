@@ -1,4 +1,4 @@
-import type { Sale, SaleItem, SaleItemType } from "../sales/sales.types";
+import type { Sale, SaleItem, SaleItemType, TipBreakdownEntry } from "../sales/sales.types";
 
 export type TransactionOrigin =
   | "calendar_checkout"
@@ -50,6 +50,8 @@ export interface RecordTransactionInput {
    *  sales.total_amount (revenue), same as ex_charges. Unchecked (default):
    *  tip_amount stays excluded, same as it's always behaved. */
   tip_added_to_salon?: boolean;
+  /** Optional per-staff split of tip_amount — see TipBreakdownEntry. */
+  tip_breakdown?: TipBreakdownEntry[] | null;
   /** A client-facing surcharge the business keeps — unlike tip_amount, this DOES count as revenue. */
   ex_charges?: number;
   coupon_code?: string;
