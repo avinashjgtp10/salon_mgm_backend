@@ -34,6 +34,7 @@ import {
     IncomingAppointmentServiceItem,
     UpdateAppointmentBody,
     CancelAppointmentBody,
+    TipBreakdownEntry,
 } from "./appointments.types";
 
 // A "Booked" (never paid) appointment has no persisted, tax-inclusive total
@@ -1062,6 +1063,7 @@ export const appointmentsService = {
         discount_amount?: number;
         tip_amount?: number;
         tip_added_to_salon?: boolean;
+        tip_breakdown?: TipBreakdownEntry[];
         tax_amount?: number;
         ex_charges?: number;
         payment_method?: string;
@@ -1338,6 +1340,7 @@ export const appointmentsService = {
             ex_charges:      saleExtras.ex_charges ?? existing.ex_charges,
             tip_amount:      saleExtras.tip_amount ?? existing.tip_amount,
             tip_added_to_salon: (saleExtras as any).tip_added_to_salon ?? (existing as any).tip_added_to_salon,
+            tip_breakdown:   saleExtras.tip_breakdown ?? (existing as any).tip_breakdown,
             notes:           saleExtras.notes,
             items:           resolvedItems as any,
         });

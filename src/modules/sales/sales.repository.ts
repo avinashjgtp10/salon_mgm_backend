@@ -322,16 +322,17 @@ export const salesRepository = {
                     const saleResult = await client.query(
                         `INSERT INTO sales (
                             salon_id, client_id, appointment_id, staff_id, status, subtotal,
-                            discount_amount, tip_amount, tip_added_to_salon, tax_amount, ex_charges, total_amount, payment_method,
+                            discount_amount, tip_amount, tip_added_to_salon, tip_breakdown, tax_amount, ex_charges, total_amount, payment_method,
                             payment_reference, notes, invoice_number, created_by, created_at,
                             coupon_code, discount_percent, discount_type,
                             manual_discount_amount, coupon_id, coupon_discount_amount, coupon_discount_type,
                             referral_discount_amount, referral_id, referral_source
-                        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28) RETURNING *`,
+                        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29) RETURNING *`,
                         [
                             data.salon_id, data.client_id || null, data.appointment_id || null, data.staff_id || null,
                             data.status || 'draft', subtotal.toString(), data.discount_amount || '0',
-                            data.tip_amount || '0', tipAddedToSalon, data.tax_amount || '0', data.ex_charges || '0', total.toString(),
+                            data.tip_amount || '0', tipAddedToSalon, JSON.stringify(data.tip_breakdown ?? []),
+                            data.tax_amount || '0', data.ex_charges || '0', total.toString(),
                             data.payment_method ? data.payment_method.toLowerCase() : null, data.payment_reference || null, data.notes || null,
                             invoiceNumber, createdBy, createdAtVal,
                             data.coupon_code || null, data.discount_percent || null, data.discount_type || null,
@@ -415,13 +416,19 @@ export const salesRepository = {
                 let idx = 3;
 
                 const extraFields = [
-                    'client_id', 'discount_amount', 'tip_amount', 'tip_added_to_salon', 'tax_amount', 'ex_charges', 'notes', 'status', 'payment_method', 'payment_reference', 'created_at',
+                    'client_id', 'discount_amount', 'tip_amount', 'tip_added_to_salon', 'tip_breakdown', 'tax_amount', 'ex_charges', 'notes', 'status', 'payment_method', 'payment_reference', 'created_at',
                     'coupon_code', 'discount_percent', 'discount_type',
                     'manual_discount_amount', 'coupon_id', 'coupon_discount_amount', 'coupon_discount_type',
                     'referral_discount_amount', 'referral_id', 'referral_source',
                 ];
+                const JSONB_SALE_FIELDS = new Set(['tip_breakdown']);
                 for (const key of extraFields) {
                     if (key in salePatch && (salePatch as any)[key] !== undefined) {
+                        if (JSONB_SALE_FIELDS.has(key)) {
+                            setParts.push(`${key} = $${idx++}::jsonb`);
+                            values.push(JSON.stringify((salePatch as any)[key]));
+                            continue;
+                        }
                         setParts.push(`${key} = $${idx++}`);
                         const val = key === 'created_at'
                             ? parseCreatedAt((salePatch as any)[key])
@@ -452,6 +459,11 @@ export const salesRepository = {
             const setParts: string[] = [];
             const values: any[]      = [];
             keys.forEach((k, i) => {
+                if (String(k) === 'tip_breakdown') {
+                    setParts.push(`${String(k)} = $${i + 1}::jsonb`);
+                    values.push(JSON.stringify((salePatch as any)[k]));
+                    return;
+                }
                 setParts.push(`${String(k)} = $${i + 1}`);
                 const val = k === 'created_at'
                     ? parseCreatedAt((salePatch as any)[k])

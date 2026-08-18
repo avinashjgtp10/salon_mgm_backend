@@ -34,6 +34,8 @@ function buildSyntheticSale(membership: ClientMembership): { sale: Sale; items: 
     subtotal: String(price),
     discount_amount: '0',
     tip_amount: '0',
+    tip_added_to_salon: false,
+    tip_breakdown: null,
     tax_amount: '0',
     ex_charges: '0',
     total_amount: String(price),
