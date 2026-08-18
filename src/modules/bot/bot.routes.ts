@@ -49,7 +49,7 @@ async function callGroq(question: string): Promise<string> {
     const response = await axios.post(
       'https://api.groq.com/openai/v1/chat/completions',
       {
-        model: 'llama-3.3-70b-versatile',
+        model: 'openai/gpt-oss-120b',
         messages: [
           {
             role: 'system',
@@ -60,7 +60,7 @@ If unsure, say: "Please contact SalonOx support for help with this."`,
           },
           { role: 'user', content: question },
         ],
-        max_tokens: 200,
+        max_tokens: 6000,
         temperature: 0.5,
       },
       {
