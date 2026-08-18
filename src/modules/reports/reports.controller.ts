@@ -1351,6 +1351,74 @@ async getProductInventoryReport(
 },
 
 // ======================================================
+// SLOW MOVING / FAST MOVING PRODUCTS REPORTS (independent report APIs)
+// ======================================================
+
+async getSlowMovingProductsReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            search: asString(body.search),
+            category_id: asString(body.category_id),
+            category_ids: Array.isArray(body.category_ids) ? body.category_ids.map(String) : undefined,
+            brand_id: asString(body.brand_id),
+            brand_ids: Array.isArray(body.brand_ids) ? body.brand_ids.map(String) : undefined,
+            date_from: asString(body.date_from),
+            date_to: asString(body.date_to),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+            sort_by: asString(body.sort_by),
+            sort_dir: body.sort_dir === "desc" ? ("desc" as const) : body.sort_dir === "asc" ? ("asc" as const) : undefined,
+        };
+
+        const data = await reportsService.getSlowMovingProductsReport(salonId, filters);
+
+        sendSuccess(res, 200, data, "Slow moving products report fetched successfully");
+    } catch (error) {
+        next(error);
+    }
+},
+
+async getFastMovingProductsReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            search: asString(body.search),
+            category_id: asString(body.category_id),
+            category_ids: Array.isArray(body.category_ids) ? body.category_ids.map(String) : undefined,
+            brand_id: asString(body.brand_id),
+            brand_ids: Array.isArray(body.brand_ids) ? body.brand_ids.map(String) : undefined,
+            date_from: asString(body.date_from),
+            date_to: asString(body.date_to),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+            sort_by: asString(body.sort_by),
+            sort_dir: body.sort_dir === "desc" ? ("desc" as const) : body.sort_dir === "asc" ? ("asc" as const) : undefined,
+        };
+
+        const data = await reportsService.getFastMovingProductsReport(salonId, filters);
+
+        sendSuccess(res, 200, data, "Fast moving products report fetched successfully");
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
 // BRAND PERFORMANCE REPORT (independent report API)
 // POST /api/report/brand-performance
 // ======================================================
@@ -2341,6 +2409,40 @@ async getOpenRateCampaignDetail(
         }
 
         sendSuccess(res, 200, data, "Campaign detail fetched successfully");
+    } catch (error) {
+        next(error);
+    }
+},
+
+async getBirthdayCampaignReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const asStringArray = (v: unknown): string[] | undefined =>
+            Array.isArray(v)
+                ? v.map((x) => String(x)).filter((x) => x.trim() !== "")
+                : undefined;
+
+        const filters = {
+            search: asString(body.search),
+            statuses: asStringArray(body.statuses),
+            date_from: asString(body.date_from),
+            date_to: asString(body.date_to),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+            sort_by: asString(body.sort_by),
+            sort_dir: body.sort_dir === "asc" ? ("asc" as const) : ("desc" as const),
+        };
+
+        const data = await reportsService.getBirthdayCampaignReport(salonId, filters);
+
+        sendSuccess(res, 200, data, "Birthday campaign report fetched successfully");
     } catch (error) {
         next(error);
     }
