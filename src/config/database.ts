@@ -103,6 +103,14 @@ setImmediate(() => {
   `).catch((err: any) => console.warn('⚠️  salons extra fields migration:', err.message));
 });
 
+// Add expiry_date to products (safe, idempotent) — Add/Edit Product form has
+// captured this since before the column existed, so it was silently dropped
+// on every save until this migration lands.
+setImmediate(() => {
+  pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS expiry_date DATE`)
+    .catch((err: any) => console.warn('⚠️  products expiry_date migration:', err.message));
+});
+
 // Add owner-configurable Half Day Rule fields to attendance_settings (safe, idempotent)
 setImmediate(() => {
   pool.query(`
