@@ -21,7 +21,7 @@ import { branchesRepository } from "../branches/branches.repository";
 import { staffService } from "../staff/staff.service";
 import { clientsRepository } from "../clients/clients.repository";
 import { sendReceiptDocument } from "../sales/receipt-whatsapp.service";
-import { sendPurchaseReceipt } from "../sales/receipt-send.helper";
+import { sendPurchaseReceipt, getPurchaseReceiptPdf } from "../sales/receipt-send.helper";
 import { notifyAppointmentCompleted } from "./appointment-completed.helper";
 import { computeBillTotals, rowsTotal, normalizeDiscountAppliesTo, ActiveTaxRow } from "../pricing/pricing.engine";
 import { getActiveTaxes } from "../settings/tax.util";
@@ -322,6 +322,48 @@ async function attachConsumables(appt: Appointment): Promise<Appointment> {
                 })),
             };
         }),
+    };
+}
+
+// Shared by sendReceiptWhatsApp/getReceiptLink below — validates the
+// appointment can have a receipt sent/shared, resolves its linked sale +
+// items, and builds the params both receipt-send.helper.ts functions expect.
+async function resolveReceiptContext(appointmentId: string, salonId: string) {
+    const existing = await appointmentsRepository.findById(appointmentId);
+    if (!existing || existing.salon_id !== salonId) throw new AppError(404, "Appointment not found", "NOT_FOUND");
+    if (!["paid", "partial"].includes(existing.status))
+        throw new AppError(400, "No receipt to send for this appointment yet", "BAD_REQUEST");
+    if (!existing.client_id || !(existing as any).client_phone)
+        throw new AppError(400, "This client has no phone number on file", "BAD_REQUEST");
+
+    const sale = existing.sale_id
+        ? await salesRepository.findById(existing.sale_id)
+        : await salesRepository.findByAppointmentId(appointmentId);
+    if (!sale) throw new AppError(400, "No invoice found for this appointment yet", "BAD_REQUEST");
+    const items = await salesRepository.findItemsBySaleId(sale.id);
+
+    const totalAmount = Number(sale.total_amount) || 0;
+    const paidAmount = Number((existing as any).paid_amount) || 0;
+    const dueAmount = Math.max(0, totalAmount - paidAmount);
+
+    return {
+        salonId,
+        phone: (existing as any).client_phone as string,
+        countryCode: (existing as any).client_phone_code ?? null,
+        clientId: existing.client_id,
+        clientName: existing.client_name ?? "Valued Customer",
+        sale,
+        items,
+        appointment: {
+            id: existing.id,
+            scheduledAt: existing.scheduled_at,
+            durationMinutes: existing.duration_minutes,
+            status: existing.status,
+            notes: existing.notes,
+        },
+        paidAmount,
+        dueAmount,
+        couponCode: sale.coupon_code ?? null,
     };
 }
 
@@ -962,6 +1004,18 @@ export const appointmentsService = {
         }
         logger.info("appointmentsService.bulkDelete complete", { requested: appointmentIds.length, deleted: deleted.length, failed: failed.length });
         return { deleted, failed };
+    },
+
+    // On-demand "Send to WhatsApp" from the calendar's three-dot menu —
+    // renders the same PDF the print button uses and returns the raw bytes,
+    // for the salon owner's own (already-authenticated) browser to download
+    // and hand off to WhatsApp itself (native share sheet, or a manual
+    // attach) — no Meta Business API, no public hosting/PUBLIC_BASE_URL
+    // dependency, works regardless of whether the salon has WhatsApp
+    // connected.
+    async getReceiptPdf(appointmentId: string, salonId: string): Promise<{ buffer: Buffer; filename: string }> {
+        const ctx = await resolveReceiptContext(appointmentId, salonId);
+        return getPurchaseReceiptPdf(ctx);
     },
 
     async checkout(params: {
