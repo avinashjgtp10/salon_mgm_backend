@@ -101,6 +101,30 @@ router.post(
 );
 
 // ======================================================
+// BRAND PERFORMANCE REPORT (independent report API)
+// Reads products/product_brands directly (sales aggregated from sale_items/
+// sales) — never calls the Appointment API/service.
+// ======================================================
+
+router.post(
+    "/brand-performance",
+    ...guard,
+    reportsController.getBrandPerformanceReport
+);
+
+// ======================================================
+// PURCHASE VS SALES INVENTORY REPORT (independent report API)
+// Reads products/stock_movements/consumable_usage/sale_items directly —
+// never calls the Appointment API/service.
+// ======================================================
+
+router.post(
+    "/purchase-vs-sales",
+    ...guard,
+    reportsController.getPurchaseVsSalesReport
+);
+
+// ======================================================
 // PRODUCT MARGIN REPORT (independent report API)
 // Reads sale_items/products directly — never calls the Appointment
 // API/service.

@@ -1351,6 +1351,84 @@ async getProductInventoryReport(
 },
 
 // ======================================================
+// BRAND PERFORMANCE REPORT (independent report API)
+// POST /api/report/brand-performance
+// ======================================================
+
+async getBrandPerformanceReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            search: asString(body.search),
+            brand_id: asString(body.brand_id),
+            brand_ids: Array.isArray(body.brand_ids) ? body.brand_ids.map(String) : undefined,
+            date_from: asString(body.date_from),
+            date_to: asString(body.date_to),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getBrandPerformanceReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Brand performance report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// PURCHASE VS SALES INVENTORY REPORT (independent report API)
+// POST /api/report/purchase-vs-sales
+// ======================================================
+
+async getPurchaseVsSalesReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            search: asString(body.search),
+            category_id: asString(body.category_id),
+            category_ids: Array.isArray(body.category_ids) ? body.category_ids.map(String) : undefined,
+            brand_id: asString(body.brand_id),
+            brand_ids: Array.isArray(body.brand_ids) ? body.brand_ids.map(String) : undefined,
+            date_from: asString(body.date_from),
+            date_to: asString(body.date_to),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getPurchaseVsSalesReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Purchase vs sales inventory report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
 // CLIENT REVENUE REPORT (independent report API)
 // POST /api/report/client-revenue
 // ======================================================
