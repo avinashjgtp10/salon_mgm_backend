@@ -11,6 +11,7 @@ import { startAutomationScheduler, stopAutomationScheduler } from './modules/wha
 import { startWaLimitSyncScheduler, stopWaLimitSyncScheduler } from './modules/marketing/whatsapp/config/wa-limit-sync.scheduler'
 import { startNoShowScheduler, stopNoShowScheduler } from './modules/appointments/appointments.scheduler'
 import { startPushReceiptScheduler, stopPushReceiptScheduler } from './modules/notifications/pushNotification.service'
+import { startBotQuestionsCleanupScheduler, stopBotQuestionsCleanupScheduler } from './modules/bot/bot-questions-cleanup.scheduler'
 
 const PORT = config.port
 
@@ -50,6 +51,9 @@ httpServer.listen(PORT, () => {
 
   // Retry Expo push receipt processing after restarts.
   startPushReceiptScheduler()
+
+  // Purge bot_questions rows older than 30 days (Super Admin retention policy)
+  startBotQuestionsCleanupScheduler()
 })
 
 // Graceful shutdown
@@ -60,6 +64,7 @@ process.on('SIGTERM', () => {
   stopWaLimitSyncScheduler()
   stopNoShowScheduler()
   stopPushReceiptScheduler()
+  stopBotQuestionsCleanupScheduler()
   httpServer.close(() => {
     logger.info('HTTP server closed')
     db.end()
