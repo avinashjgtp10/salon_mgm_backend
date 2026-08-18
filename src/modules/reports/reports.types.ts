@@ -1166,6 +1166,7 @@ export interface ProductInventoryReportRow {
     brand_name: string;
     sku: string;
     date_added: string;
+    expiry_date: string | null;
     current_stock: number;
     reorder_level: number;
     unit_cost: number;
