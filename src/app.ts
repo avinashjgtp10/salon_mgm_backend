@@ -72,6 +72,7 @@ import { ensureTable as ensureAppointmentsTables } from "./modules/appointments/
 import cashManagementRoutes from "./modules/cash-management/cash-management.routes";
 import { ensureCashManagementTables } from "./modules/cash-management/cash-management.repository";
 import superAdminRoutes from "./modules/super-admin/super-admin.routes";
+import salonGroupsRoutes from "./modules/salon-groups/salon-groups.routes";
 import demoRequestsRoutes from "./modules/demo-requests/demo-requests.routes";
 import supportRoutes from "./modules/support/support.routes";
 import notificationsRoutes from "./modules/notifications/notifications.routes";
@@ -282,6 +283,7 @@ app.use("/api/v1/ewallet", ewalletRoutes);
 app.use("/api/v1/reward-points", rewardPointsRoutes);
 app.use("/api/v1/referral", referralRoutes);
 app.use("/api/v1/super-admin", superAdminRoutes);
+app.use("/api/v1/super-admin/salon-groups", salonGroupsRoutes);
 app.use("/api/v1/demo-requests", demoRequestsRoutes);
 app.use("/api/v1/support", supportRoutes);
 app.use("/api/v1/notifications", notificationsRoutes);

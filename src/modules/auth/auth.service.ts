@@ -7,6 +7,7 @@ import type { RegisterBody, LoginBody } from "./auth.types";
 import { generateOtp, hashOtp, compareOtp, otpExpiry } from "../utils/otp.util";
 import { emailService } from "../utils/email.service";
 import { salonsRepository } from "../salons/salons.repository";
+import { salonGroupsRepository } from "../salon-groups/salon-groups.repository";
 import { canSendEmail } from "../utils/notif-prefs";
 import { exotelSendSmsOtp, exotelVerifySmsOtp } from "../utils/exotel.service";
 import logger from "../../config/logger";
@@ -282,6 +283,91 @@ export const authService = {
     await authRepository.deleteRefreshToken(refreshToken);
     logger.info("[authService.logout] Refresh token deleted");
     return { message: "Logged out" };
+  },
+
+  // ================= BRANCH SWITCHING (Salon Groups — Phase 1) =================
+  // Mirrors super-admin.service.ts's getImpersonateToken pattern: rather than
+  // threading a mutable "current salon" through every request, mint a brand
+  // new access token scoped to the target salon. Every one of the many
+  // controllers across the app that read req.user.salonId directly (not just
+  // the ones going through getSalonId) pick this up for free.
+
+  /** Salons the caller can switch into — their own group, or just their current salon if ungrouped. */
+  async getMySalonGroup(currentSalonId: string | null) {
+    if (!currentSalonId) return [];
+    return salonGroupsRepository.getGroupSalonsForSalon(currentSalonId);
+  },
+
+  // ================= GROUP ADMIN PORTAL =================
+  // Security boundary for the /group-admin mini-panel: only ever returns
+  // salons that are actually members of the group the caller's OWN current
+  // salon belongs to — never anything client-supplied. Throws NOT_GROUPED
+  // (not just an empty list) so the frontend can distinguish "this account
+  // isn't part of any group" from "group has no salons".
+  async getMyGroupSalons(currentSalonId: string | null) {
+    if (!currentSalonId) {
+      throw new AppError(403, "No active salon on this session", "NOT_GROUPED");
+    }
+    const salons = await salonGroupsRepository.getGroupDetailsForSalon(currentSalonId);
+    if (!salons) {
+      throw new AppError(403, "This account is not part of any salon group", "NOT_GROUPED");
+    }
+    return salons;
+  },
+
+  // Combined totals across every salon in the caller's group — the rollup
+  // shown at the top of the Group Admin dashboard, above the per-salon list.
+  async getMyGroupSummary(currentSalonId: string | null) {
+    if (!currentSalonId) {
+      throw new AppError(403, "No active salon on this session", "NOT_GROUPED");
+    }
+    const summary = await salonGroupsRepository.getGroupSummaryForSalon(currentSalonId);
+    if (!summary) {
+      throw new AppError(403, "This account is not part of any salon group", "NOT_GROUPED");
+    }
+    return summary;
+  },
+
+  async switchSalon(userId: string, currentSalonId: string | null, targetSalonId: string) {
+    assertEnv();
+    if (!currentSalonId) {
+      throw new AppError(403, "No active salon on this session", "NO_SALON_CONTEXT");
+    }
+
+    const groupSalons = await salonGroupsRepository.getGroupSalonsForSalon(currentSalonId);
+    const isAllowed = groupSalons.some((s) => s.id === targetSalonId);
+    if (!isAllowed) {
+      throw new AppError(403, "That salon is not in your salon group", "NOT_IN_GROUP");
+    }
+
+    const user = await authRepository.findUserById(userId);
+    if (!user) throw new AppError(401, "User not found", "USER_NOT_FOUND");
+    if (user.is_active === false) throw new AppError(403, "User is inactive", "USER_INACTIVE");
+
+    const accessToken = signAccessToken({ userId: user.id, role: user.role, salonId: targetSalonId });
+    const refreshToken = signRefreshToken({ userId: user.id });
+    await authRepository.saveRefreshToken({
+      user_id: user.id,
+      token: refreshToken,
+      expires_at: refreshExpiryDate(),
+    });
+
+    logger.info("[authService.switchSalon] Switched active salon", { userId, from: currentSalonId, to: targetSalonId });
+
+    return {
+      accessToken,
+      refreshToken,
+      isOnboardingComplete: user.is_onboarding_complete ?? false,
+      user: {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        salonId: targetSalonId,
+        custom_permissions: user.custom_permissions ?? null,
+      },
+    };
   },
 
   // ================= EMAIL OTP =================

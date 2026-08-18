@@ -197,6 +197,50 @@ export const authController = {
     }
   },
 
+  // ================= BRANCH SWITCHING (Salon Groups — Phase 1) =================
+  async getMySalonGroup(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      if (!req.user?.userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+      const data = await authService.getMySalonGroup(req.user?.salonId ?? null);
+      return sendSuccess(res, 200, data, "Salon group fetched successfully");
+    } catch (error) {
+      return next(error);
+    }
+  },
+
+  async getMyGroupSalons(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      if (!req.user?.userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+      const data = await authService.getMyGroupSalons(req.user?.salonId ?? null);
+      return sendSuccess(res, 200, data, "Group salons fetched successfully");
+    } catch (error) {
+      return next(error);
+    }
+  },
+
+  async getMyGroupSummary(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      if (!req.user?.userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+      const data = await authService.getMyGroupSummary(req.user?.salonId ?? null);
+      return sendSuccess(res, 200, data, "Group summary fetched successfully");
+    } catch (error) {
+      return next(error);
+    }
+  },
+
+  async switchSalon(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user?.userId;
+      if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+      const targetSalonId = String(req.body?.salon_id || "");
+      if (!targetSalonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR");
+      const data = await authService.switchSalon(userId, req.user?.salonId ?? null, targetSalonId);
+      return sendSuccess(res, 200, data, "Switched active salon successfully");
+    } catch (error) {
+      return next(error);
+    }
+  },
+
   // ================= EMAIL OTP =================
   async sendEmailOtp(req: Request, res: Response, next: NextFunction) {
     try {

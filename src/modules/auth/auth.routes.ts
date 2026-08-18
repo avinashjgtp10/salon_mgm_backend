@@ -16,6 +16,14 @@ router.post("/login", loginRateLimitCheck, authController.login);
 router.post("/refresh", authController.refresh);
 router.post("/logout", authController.logout);
 router.post("/logout-all", authMiddleware, authController.logoutAll);
+
+// Branch switching (Salon Groups — Phase 1)
+router.get("/my-salon-group", authMiddleware, authController.getMySalonGroup);
+router.post("/switch-salon", authMiddleware, authController.switchSalon);
+
+// Group Admin portal (mini Super-Admin-style panel for a grouped owner)
+router.get("/my-group-salons", authMiddleware, authController.getMyGroupSalons);
+router.get("/my-group-summary", authMiddleware, authController.getMyGroupSummary);
 router.delete("/account", authMiddleware, authController.deleteAccount);
 
 // Email OTP
