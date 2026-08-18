@@ -51,6 +51,7 @@ import analyticsRoutes from './modules/marketing/whatsapp/analytics/analytics.ro
 import reviewsRoutes from './modules/reviews/reviews.routes'
 import reviewsPublicRoutes from './modules/reviews/reviews.public.routes'
 import botRoutes from "./modules/bot/bot.routes";
+import botQuestionsRoutes from "./modules/bot/bot-questions.routes";
 import aiEngineRoutes from "./modules/ai-engine/ai-engine.routes";
 import { ensureTable as ensureAiEngineTables } from "./modules/ai-engine/ai-engine.repository";
 import waAutomationRoutes from "./modules/whatsapp-automation/whatsapp-automation.routes";
@@ -268,6 +269,7 @@ app.use("/api/v1/payments", paymentsRoutes);
 app.use("/api/v1/blocked-times", blockedTimesRoutes);
 app.use("/api/v1/settings", settingsRoutes);
 app.use("/api/v1/bot", botRoutes);
+app.use("/api/v1/bot-questions", botQuestionsRoutes);
 app.use("/api/v1/ai-engine", aiEngineRoutes);
 app.use("/api/report", reportsRoutes);
 app.use("/api/v1/reports", legacyReportsRoutes);

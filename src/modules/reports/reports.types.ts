@@ -1166,6 +1166,7 @@ export interface ProductInventoryReportRow {
     brand_name: string;
     sku: string;
     date_added: string;
+    expiry_date: string | null;
     current_stock: number;
     reorder_level: number;
     unit_cost: number;
@@ -1193,6 +1194,68 @@ export interface ProductInventoryReportResponse {
     rows: ProductInventoryReportRow[];
     pagination: ProductInventoryReportPagination;
     stats: ProductInventoryReportStats;
+}
+
+// ===============================
+// SLOW MOVING / FAST MOVING PRODUCTS REPORTS (independent report APIs)
+// Both share the exact same row/stats shape and repository query — one row
+// per product, sales aggregated from sale_items/sales within the selected
+// date range (NOT product-added date, unlike Product Inventory Report).
+// Only the default sort direction and framing text differ between the two
+// endpoints. Never calls the Appointment API/service.
+// ===============================
+
+export interface ProductMovementReportFilters {
+    search?: string;
+    category_id?: string;
+    category_ids?: string[];
+    brand_id?: string;
+    brand_ids?: string[];
+    date_from?: string;
+    date_to?: string;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+    sort_by?: string;
+    sort_dir?: "asc" | "desc";
+}
+
+export interface ProductMovementReportRow {
+    product_id: string;
+    product_name: string;
+    category_name: string;
+    brand_name: string;
+    sku: string;
+    current_stock: number;
+    unit_cost: number;
+    stock_value: number;
+    sales_qty: number;
+    sales_revenue: number;
+    /** Null when the product has never sold at all (not just outside the selected range). */
+    last_sale_date: string | null;
+    /** Null when the product has never sold at all. */
+    days_since_last_sale: number | null;
+}
+
+export interface ProductMovementReportStats {
+    total_products: number;
+    /** Products with zero units sold within the selected date range. */
+    products_with_no_sales: number;
+    total_units_sold: number;
+    total_sales_revenue: number;
+}
+
+export interface ProductMovementReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface ProductMovementReportResponse {
+    rows: ProductMovementReportRow[];
+    pagination: ProductMovementReportPagination;
+    stats: ProductMovementReportStats;
 }
 
 // ===============================
@@ -2293,6 +2356,7 @@ export interface MembershipHistoryReportFilters {
 
 export interface MembershipHistoryReportRow {
     date: string | null;
+    start_date: string | null;
     client_id: string | null;
     client_name: string;
     membership_name: string;
@@ -2382,6 +2446,7 @@ export interface MemberSaleReportRow {
     id: string;
     client_id: string | null;
     purchased_at: string;
+    expiry_date: string | null;
     invoice_number: string | null;
     client_name: string;
     staff_name: string;
@@ -2832,6 +2897,65 @@ export interface OpenRateReportResponse {
     /** Only populated if a caller asks for it — the report itself has no
      *  charts, so the service skips the trend query entirely. */
     trend?: OpenRateTrendPoint[];
+}
+
+// ===============================
+// Birthday Campaign Performance Report (independent report API —
+// POST /api/report/birthday-campaign)
+// Birthday wishes are sent by the WhatsApp automation scheduler, one row per
+// client per birthday (wa_automation_logs WHERE event_type = 'birthday_wishes')
+// — there is no campaign grouping here, unlike wa_campaigns/wa_campaign_contacts,
+// so this report is a flat message log rather than a per-campaign rollup.
+// ===============================
+
+export interface BirthdayCampaignReportFilters {
+    search?: string;
+    statuses?: string[];
+    date_from?: string;
+    date_to?: string;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+    sort_by?: string;
+    sort_dir?: "asc" | "desc";
+}
+
+export interface BirthdayCampaignReportRow {
+    id: string;
+    client_id: string | null;
+    client_name: string;
+    phone_number: string | null;
+    template_name: string | null;
+    status: string;
+    failure_reason: string | null;
+    sent_at: string | null;
+    delivered_at: string | null;
+    read_at: string | null;
+    created_at: string;
+}
+
+export interface BirthdayCampaignReportStats {
+    total_sent: number;
+    total_delivered: number;
+    total_read: number;
+    total_failed: number;
+    /** Percentage 0-100, guarded against a zero denominator. */
+    delivery_rate: number;
+    /** Percentage 0-100 of delivered messages that were read, guarded against a zero denominator. */
+    read_rate: number;
+}
+
+export interface BirthdayCampaignReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface BirthdayCampaignReportResponse {
+    rows: BirthdayCampaignReportRow[];
+    pagination: BirthdayCampaignReportPagination;
+    stats: BirthdayCampaignReportStats;
 }
 
 // ===============================

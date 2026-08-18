@@ -40,6 +40,11 @@ import {
     ReplyRateReportRow,
     ReplyRateReportStats,
     ReplyRateCampaignDetail,
+    BirthdayCampaignReportFilters,
+    BirthdayCampaignReportRow,
+    BirthdayCampaignReportStats,
+    ProductMovementReportRow,
+    ProductMovementReportStats,
     ClientRevenueReportRow,
     ClientRevenueReportStats,
     CustomerFrequencyReportRow,
@@ -4232,6 +4237,7 @@ async getProductInventoryReportRows(
       COALESCE(pb.name, '—') AS brand_name,
       COALESCE(p.barcode, '—') AS sku,
       p.created_at AS date_added,
+      p.expiry_date AS expiry_date,
       COALESCE(p.amount, 0) AS current_stock,
       COALESCE(p.qty_alert, 0) AS reorder_level,
       ${UNIT_COST_SQL} AS unit_cost,
@@ -4281,6 +4287,7 @@ async getProductInventoryReportRows(
     brand_name: row.brand_name,
     sku: row.sku,
     date_added: row.date_added,
+    expiry_date: row.expiry_date ?? null,
     current_stock: Number(row.current_stock ?? 0),
     reorder_level: Number(row.reorder_level ?? 0),
     unit_cost: Number(row.unit_cost ?? 0),
@@ -4288,6 +4295,224 @@ async getProductInventoryReportRows(
     sales_qty: Number(row.sales_qty ?? 0),
     sales_revenue: Number(row.sales_revenue ?? 0),
     status: row.status,
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// ======================================================
+// SLOW MOVING / FAST MOVING PRODUCTS REPORTS (independent report APIs)
+// POST /api/report/slow-moving-products, POST /api/report/fast-moving-products
+// Same underlying query for both — sales aggregated from sale_items/sales
+// WITHIN THE SELECTED DATE RANGE (unlike Product Inventory Report's
+// sales_agg, which is lifetime and filters on p.created_at instead). Only
+// the default sort direction differs between the two callers.
+// ======================================================
+
+_buildProductMovementWhere(
+  salonId: string,
+  filters: { search?: string; category_id?: string; category_ids?: string[]; brand_id?: string; brand_ids?: string[] }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["p.salon_id = $1"];
+  let idx = 2;
+
+  if (filters.search?.trim()) {
+    where.push(`(
+      p.name ILIKE $${idx}
+      OR COALESCE(p.barcode, '') ILIKE $${idx}
+      OR EXISTS (SELECT 1 FROM product_brands pb_search WHERE pb_search.id = p.brand_id AND pb_search.name ILIKE $${idx})
+      OR EXISTS (SELECT 1 FROM service_categories sc_search WHERE sc_search.id = p.category_id AND sc_search.name ILIKE $${idx})
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+  if (filters.category_ids && filters.category_ids.length > 0) {
+    where.push(`p.category_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.category_ids);
+  } else if (filters.category_id) {
+    where.push(`p.category_id = $${idx++}`);
+    values.push(filters.category_id);
+  }
+  if (filters.brand_ids && filters.brand_ids.length > 0) {
+    where.push(`p.brand_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.brand_ids);
+  } else if (filters.brand_id) {
+    where.push(`p.brand_id = $${idx++}`);
+    values.push(filters.brand_id);
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+// The sales_agg subquery's date range is built separately from the main
+// WHERE (rather than reusing _buildProductMovementWhere's values) because it
+// filters `sales.created_at`, a different table than the rest of the WHERE
+// clause — folding it into one values array would misalign placeholders
+// between the outer query and the subquery.
+_productMovementSalesDateConds(
+  filters: { date_from?: string; date_to?: string },
+  startIdx: number
+): { conds: string[]; values: any[]; nextIndex: number } {
+  const conds: string[] = ["s.salon_id = $1", "s.status <> 'draft'", "si.item_type = 'product'", "si.item_id IS NOT NULL"];
+  const values: any[] = [];
+  let idx = startIdx;
+  if (filters.date_from) {
+    conds.push(`s.created_at >= $${idx++}::date`);
+    values.push(filters.date_from);
+  }
+  if (filters.date_to) {
+    conds.push(`s.created_at < ($${idx++}::date + interval '1 day')`);
+    values.push(filters.date_to);
+  }
+  return { conds, values, nextIndex: idx };
+},
+
+async getProductMovementReportStats(
+  salonId: string,
+  filters: { search?: string; category_id?: string; category_ids?: string[]; brand_id?: string; brand_ids?: string[]; date_from?: string; date_to?: string }
+): Promise<ProductMovementReportStats> {
+  const { where, values, nextIndex } = this._buildProductMovementWhere(salonId, filters);
+  const { conds: salesDateConds, values: dateValues } = this._productMovementSalesDateConds(filters, nextIndex);
+
+  const query = `
+    SELECT
+      COUNT(*)::int AS total_products,
+      COUNT(*) FILTER (WHERE COALESCE(sales_agg.quantity, 0) = 0)::int AS products_with_no_sales,
+      COALESCE(SUM(sales_agg.quantity), 0)::int AS total_units_sold,
+      COALESCE(SUM(sales_agg.revenue), 0) AS total_sales_revenue
+    FROM products p
+    LEFT JOIN (
+      SELECT
+        si.item_id AS product_id,
+        SUM(si.quantity) AS quantity,
+        SUM(
+          si.total_price + (
+            CASE WHEN COALESCE(s.subtotal, 0) > 0
+                 THEN COALESCE(s.tax_amount, 0) * (si.total_price / s.subtotal)
+                 ELSE 0
+            END
+          )
+        ) AS revenue
+      FROM sale_items si
+      JOIN sales s ON s.id = si.sale_id
+      WHERE ${salesDateConds.join(" AND ")}
+      GROUP BY si.item_id
+    ) sales_agg ON sales_agg.product_id = p.id
+    WHERE ${where}
+  `;
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...dateValues]));
+  const r = rows[0] ?? {};
+  return {
+    total_products: Number(r.total_products ?? 0),
+    products_with_no_sales: Number(r.products_with_no_sales ?? 0),
+    total_units_sold: Number(r.total_units_sold ?? 0),
+    total_sales_revenue: Number(r.total_sales_revenue ?? 0),
+  };
+},
+
+async getProductMovementReportRows(
+  salonId: string,
+  filters: {
+    search?: string; category_id?: string; category_ids?: string[]; brand_id?: string; brand_ids?: string[];
+    date_from?: string; date_to?: string;
+    page?: number; limit?: number; is_export?: boolean;
+    sort_by?: string; sort_dir?: "asc" | "desc";
+  },
+  defaultSortDir: "asc" | "desc"
+): Promise<{
+  items: ProductMovementReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildProductMovementWhere(salonId, filters);
+  const { conds: salesDateConds, values: dateValues, nextIndex: afterDateIdx } = this._productMovementSalesDateConds(filters, nextIndex);
+  let idx = afterDateIdx;
+
+  const SORTABLE: Record<string, string> = {
+    product_name: "p.name", sales_qty: "sales_qty", sales_revenue: "sales_revenue",
+    current_stock: "current_stock", days_since_last_sale: "days_since_last_sale",
+  };
+  const sortCol = SORTABLE[filters.sort_by ?? ""] ?? "sales_qty";
+  const sortDir = filters.sort_dir === "asc" ? "ASC" : filters.sort_dir === "desc" ? "DESC" : defaultSortDir.toUpperCase();
+  // NULLS LAST regardless of direction — a product that has genuinely never
+  // sold belongs at the bottom of "days since last sale", not silently
+  // sorted to the top by NULL's default ordering.
+  const nullsClause = sortCol === "days_since_last_sale" ? "NULLS LAST" : "";
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    SELECT
+      p.id AS product_id,
+      p.name AS product_name,
+      COALESCE(sc.name, '—') AS category_name,
+      COALESCE(pb.name, '—') AS brand_name,
+      COALESCE(p.barcode, '—') AS sku,
+      COALESCE(p.amount, 0) AS current_stock,
+      ${UNIT_COST_SQL} AS unit_cost,
+      (${STOCK_IN_PRICING_UNITS_SQL}) * ${UNIT_COST_SQL} AS stock_value,
+      COALESCE(sales_agg.quantity, 0) AS sales_qty,
+      COALESCE(sales_agg.revenue, 0) AS sales_revenue,
+      sales_agg.last_sale_date,
+      CASE WHEN sales_agg.last_sale_date IS NOT NULL
+           THEN (CURRENT_DATE - sales_agg.last_sale_date::date)
+           ELSE NULL
+      END AS days_since_last_sale,
+      COUNT(*) OVER() AS total_count
+    FROM products p
+    LEFT JOIN product_brands pb ON p.brand_id = pb.id
+    LEFT JOIN service_categories sc ON p.category_id = sc.id
+    LEFT JOIN (
+      SELECT
+        si.item_id AS product_id,
+        SUM(si.quantity) AS quantity,
+        SUM(
+          si.total_price + (
+            CASE WHEN COALESCE(s.subtotal, 0) > 0
+                 THEN COALESCE(s.tax_amount, 0) * (si.total_price / s.subtotal)
+                 ELSE 0
+            END
+          )
+        ) AS revenue,
+        MAX(s.created_at) AS last_sale_date
+      FROM sale_items si
+      JOIN sales s ON s.id = si.sale_id
+      WHERE ${salesDateConds.join(" AND ")}
+      GROUP BY si.item_id
+    ) sales_agg ON sales_agg.product_id = p.id
+    WHERE ${where}
+    ORDER BY ${sortCol} ${sortDir} ${nullsClause}, p.name ASC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...dateValues, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: ProductMovementReportRow[] = rows.map((row: any) => ({
+    product_id: row.product_id,
+    product_name: row.product_name,
+    category_name: row.category_name,
+    brand_name: row.brand_name,
+    sku: row.sku,
+    current_stock: Number(row.current_stock ?? 0),
+    unit_cost: Number(row.unit_cost ?? 0),
+    stock_value: Number(row.stock_value ?? 0),
+    sales_qty: Number(row.sales_qty ?? 0),
+    sales_revenue: Number(row.sales_revenue ?? 0),
+    last_sale_date: row.last_sale_date,
+    days_since_last_sale: row.days_since_last_sale !== null && row.days_since_last_sale !== undefined ? Number(row.days_since_last_sale) : null,
   }));
   const effectiveLimit = limit ?? Math.max(total, 1);
   return {
@@ -8174,6 +8399,7 @@ _MEMBERSHIP_HISTORY_SOURCE: `
       cm.client_name,
       cm.membership_name,
       cm.pricing_type,
+      cm.purchased_at,
       cm.expires_at,
       cm.status        AS membership_status,
       ul.service_name,
@@ -8199,6 +8425,7 @@ _MEMBERSHIP_HISTORY_SOURCE: `
       COALESCE(NULLIF(TRIM(c.full_name), ''), 'Walk-in') AS client_name,
       COALESCE(lm.name, 'Loyalty')                       AS membership_name,
       'loyalty'        AS pricing_type,
+      NULL::timestamptz AS purchased_at,
       NULL::timestamptz AS expires_at,
       'active'         AS membership_status,
       NULL::varchar    AS service_name,
@@ -8390,6 +8617,7 @@ async getMembershipHistoryReportRows(
   const query = `
     SELECT
       TO_CHAR(ul.used_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS date,
+      TO_CHAR(ul.purchased_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS start_date,
       ul.client_id,
       COALESCE(NULLIF(TRIM(ul.client_name), ''), 'Walk-in') AS client_name,
       COALESCE(NULLIF(TRIM(ul.membership_name), ''), '—') AS membership_name,
@@ -8418,6 +8646,7 @@ async getMembershipHistoryReportRows(
   const total = rows.length ? Number(rows[0].total_count) : 0;
   const items: MembershipHistoryReportRow[] = rows.map((row: any) => ({
     date: row.date ?? null,
+    start_date: row.start_date ?? null,
     client_id: row.client_id ? String(row.client_id) : null,
     client_name: row.client_name,
     membership_name: row.membership_name,
@@ -8624,6 +8853,7 @@ async getMemberSaleReportRows(
       cm.id,
       cm.client_id,
       TO_CHAR(cm.purchased_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS purchased_at,
+      TO_CHAR(cm.expires_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS expiry_date,
       s.invoice_number,
       cm.client_name,
       NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
@@ -8656,6 +8886,7 @@ async getMemberSaleReportRows(
     id: row.id,
     client_id: row.client_id,
     purchased_at: row.purchased_at,
+    expiry_date: row.expiry_date ?? null,
     invoice_number: row.invoice_number,
     client_name: row.client_name,
     staff_name: row.staff_name ?? "—",
@@ -10038,6 +10269,135 @@ async getOpenRateFiltersAvailable(salonId: string): Promise<OpenRateFiltersAvail
     [salonId]
   ));
   return { campaigns: rows.map((r: any) => ({ id: r.id, label: r.label })) };
+},
+
+// ======================================================
+// BIRTHDAY CAMPAIGN PERFORMANCE REPORT (independent report API)
+// One row per birthday_wishes send in wa_automation_logs — no campaign
+// grouping exists for automation events, unlike wa_campaigns, so this is a
+// flat message-log report rather than a per-campaign rollup.
+// ======================================================
+
+_buildBirthdayCampaignWhere(
+  salonId: string,
+  filters: BirthdayCampaignReportFilters
+): { where: string; values: any[] } {
+  const conditions: string[] = ["l.salon_id = $1", "l.event_type = 'birthday_wishes'"];
+  const values: any[] = [salonId];
+  let idx = 2;
+
+  if (filters.search?.trim()) {
+    conditions.push(`(COALESCE(c.first_name || ' ' || c.last_name, '') ILIKE $${idx} OR l.phone_number ILIKE $${idx})`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+  if (filters.statuses && filters.statuses.length > 0) {
+    conditions.push(`l.status = ANY($${idx++})`);
+    values.push(filters.statuses);
+  }
+  if (filters.date_from) {
+    conditions.push(`l.created_at >= $${idx++}`);
+    values.push(filters.date_from);
+  }
+  if (filters.date_to) {
+    conditions.push(`l.created_at < ($${idx++}::date + INTERVAL '1 day')`);
+    values.push(filters.date_to);
+  }
+
+  return { where: conditions.join(" AND "), values };
+},
+
+async getBirthdayCampaignReportStats(
+  salonId: string,
+  filters: BirthdayCampaignReportFilters
+): Promise<BirthdayCampaignReportStats> {
+  const { where, values } = this._buildBirthdayCampaignWhere(salonId, filters);
+  const query = `
+    SELECT
+      COUNT(*) FILTER (WHERE l.status IN ('SENT','DELIVERED','READ'))::int AS total_sent,
+      COUNT(*) FILTER (WHERE l.status IN ('DELIVERED','READ'))::int       AS total_delivered,
+      COUNT(*) FILTER (WHERE l.status = 'READ')::int                     AS total_read,
+      COUNT(*) FILTER (WHERE l.status = 'FAILED')::int                   AS total_failed
+    FROM wa_automation_logs l
+    LEFT JOIN clients c ON c.id = l.client_id
+    WHERE ${where}
+  `;
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  const total_sent = Number(r.total_sent ?? 0);
+  const total_delivered = Number(r.total_delivered ?? 0);
+  const total_read = Number(r.total_read ?? 0);
+  return {
+    total_sent,
+    total_delivered,
+    total_read,
+    total_failed: Number(r.total_failed ?? 0),
+    // Guarded: no sends yet must read as 0%, not NaN.
+    delivery_rate: total_sent > 0 ? (total_delivered / total_sent) * 100 : 0,
+    read_rate: total_delivered > 0 ? (total_read / total_delivered) * 100 : 0,
+  };
+},
+
+async getBirthdayCampaignReportRows(
+  salonId: string,
+  filters: BirthdayCampaignReportFilters
+): Promise<{
+  items: BirthdayCampaignReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values } = this._buildBirthdayCampaignWhere(salonId, filters);
+
+  const SORTABLE: Record<string, string> = {
+    client_name: "client_name", created_at: "l.created_at",
+    status: "l.status", sent_at: "l.sent_at",
+  };
+  const sortCol = SORTABLE[filters.sort_by ?? ""] ?? "l.created_at";
+  const sortDir = filters.sort_dir === "asc" ? "ASC" : "DESC";
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${values.length + 1} OFFSET $${values.length + 2}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    SELECT
+      l.id, l.client_id, l.phone_number, l.template_name, l.status,
+      l.failure_reason, l.sent_at, l.delivered_at, l.read_at, l.created_at,
+      COALESCE(NULLIF(TRIM(CONCAT(c.first_name, ' ', COALESCE(c.last_name, ''))), ''), 'Unknown') AS client_name,
+      COUNT(*) OVER() AS total_count
+    FROM wa_automation_logs l
+    LEFT JOIN clients c ON c.id = l.client_id
+    WHERE ${where}
+    ORDER BY ${sortCol} ${sortDir}, l.created_at DESC
+    ${limitClause}
+  `;
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: BirthdayCampaignReportRow[] = rows.map((row: any) => ({
+    id: row.id,
+    client_id: row.client_id,
+    client_name: row.client_name,
+    phone_number: row.phone_number,
+    template_name: row.template_name,
+    status: row.status,
+    failure_reason: row.failure_reason,
+    sent_at: row.sent_at,
+    delivered_at: row.delivered_at,
+    read_at: row.read_at,
+    created_at: row.created_at,
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
 },
 
 // ======================================================

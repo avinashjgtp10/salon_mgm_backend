@@ -1,4 +1,7 @@
 import type { DiscountScope } from "../pricing/pricing.engine";
+import type { TipBreakdownEntry } from "../sales/sales.types";
+
+export type { TipBreakdownEntry };
 
 export type AppointmentStatus =
     | "booked"
@@ -192,6 +195,14 @@ export type Appointment = {
     discount_applies_to: DiscountScope[] | null;
     ex_charges: number;
     tip_amount: number;
+    // "Add Tip to Salon" checkbox — checked: tip counts toward Grand Total
+    // and salon revenue (staff paid out separately, outside this
+    // transaction). Unchecked (default): tip is record-only, passed
+    // straight to staff, same as tip_amount has always behaved. Read at
+    // payment time in payments.service.ts alongside tip_amount.
+    tip_added_to_salon: boolean;
+    // Optional per-staff split of tip_amount — see TipBreakdownEntry.
+    tip_breakdown?: TipBreakdownEntry[] | null;
     gst_percent: number;
     // Persisted "Include GST" checkbox state — independent of whether a
     // payment has actually been made, so a bill deliberately billed without
@@ -242,6 +253,8 @@ export type CreateAppointmentBody = {
     discount_applies_to?: DiscountScope[] | null;
     ex_charges?: number;
     tip_amount?: number;
+    tip_added_to_salon?: boolean;
+    tip_breakdown?: TipBreakdownEntry[] | null;
     gst_percent?: number;
     include_gst?: boolean;
     apply_membership_wallet?: boolean;

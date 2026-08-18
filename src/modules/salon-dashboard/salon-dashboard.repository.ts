@@ -743,8 +743,9 @@ export const salonDashboardRepository = {
   // ── Today's Birthdays ────────────────────────────────────────────────────────
   // birthday_day_month is stored as "MM-DD" (see clients.types.ts).
   async getTodaysBirthdays(salonId: string): Promise<TodaysBirthdays> {
-    const { rows } = await pool.query<{ id: string; name: string }>(
-      `SELECT c.id, COALESCE(c.full_name, TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,''))) AS name
+    const { rows } = await pool.query<{ id: string; name: string; phone_number: string | null; phone_country_code: string | null }>(
+      `SELECT c.id, COALESCE(c.full_name, TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,''))) AS name,
+              c.phone_number, c.phone_country_code
        FROM clients c
        WHERE c.salon_id = $1
          AND c.is_active = true
@@ -761,7 +762,13 @@ export const salonDashboardRepository = {
          )`,
       [salonId]
     );
-    return { count: rows.length, clients: rows.map((r) => ({ id: r.id, name: r.name || "Unknown" })) };
+    return {
+      count: rows.length,
+      clients: rows.map((r) => ({
+        id: r.id, name: r.name || "Unknown",
+        phone: r.phone_number, phoneCountryCode: r.phone_country_code,
+      })),
+    };
   },
 
   // ── Inactive Clients — visited before, nothing in the last 30 days ──────────

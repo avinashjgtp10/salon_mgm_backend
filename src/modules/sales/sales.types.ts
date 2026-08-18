@@ -2,6 +2,18 @@ export type SaleStatus = "draft" | "completed" | "cancelled" | "refunded";
 export type PaymentMethod = "cash" | "card" | "gift_card" | "split" | "upi" | "wallet" | "package" | "membership";
 export type SaleItemType = "service" | "product" | "membership" | "gift_card" | "quick" | "package";
 
+// Per-staff share of tip_amount — purely an attribution record ("who
+// actually got what") alongside the existing lump tip_amount column, which
+// stays the source of truth for bill math (pricing.engine.ts, receipts,
+// sales.total_amount) and is expected to equal the sum of these entries.
+// Optional/empty when the tip wasn't split (single-staff sale, or staff just
+// used the plain Tip field) — nothing downstream requires it.
+export type TipBreakdownEntry = {
+    staff_id: string;
+    staff_name: string;
+    amount: number;
+};
+
 export type Sale = {
     id: string;
     salon_id: string;
@@ -11,9 +23,14 @@ export type Sale = {
     status: SaleStatus;
     subtotal: string;
     discount_amount: string;
-    // Passes through to staff, not the salon — tracked here but deliberately
-    // excluded from total_amount (see salesRepository.create()).
+    // Passes through to staff, not the salon — tracked here but excluded
+    // from total_amount unless tip_added_to_salon is set (see
+    // salesRepository.create()).
     tip_amount: string;
+    // "Add Tip to Salon" checkbox state this sale was recorded under.
+    tip_added_to_salon: boolean;
+    // Optional per-staff split of tip_amount — see TipBreakdownEntry.
+    tip_breakdown: TipBreakdownEntry[] | null;
     tax_amount: string;
     // Counts as revenue — included in total_amount, unlike tip_amount.
     ex_charges: string;
@@ -70,6 +87,8 @@ export type CreateSaleBody = {
     status?: SaleStatus;
     discount_amount?: string;
     tip_amount?: string;
+    tip_added_to_salon?: boolean;
+    tip_breakdown?: TipBreakdownEntry[] | null;
     tax_amount?: string;
     ex_charges?: string;
     payment_method?: PaymentMethod;

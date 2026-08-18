@@ -103,6 +103,14 @@ setImmediate(() => {
   `).catch((err: any) => console.warn('⚠️  salons extra fields migration:', err.message));
 });
 
+// Add expiry_date to products (safe, idempotent) — Add/Edit Product form has
+// captured this since before the column existed, so it was silently dropped
+// on every save until this migration lands.
+setImmediate(() => {
+  pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS expiry_date DATE`)
+    .catch((err: any) => console.warn('⚠️  products expiry_date migration:', err.message));
+});
+
 // Add owner-configurable Half Day Rule fields to attendance_settings (safe, idempotent)
 setImmediate(() => {
   pool.query(`
@@ -130,6 +138,66 @@ setImmediate(() => {
       updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `).catch((err: any) => console.warn('⚠️  support_tickets table migration:', err.message));
+});
+
+// Create bot_questions table — every question asked to the support chatbot,
+// whether answered from the predefined qa.json set or via the Groq fallback,
+// so Super Admin can review question history / frequency. Rows older than
+// 30 days are purged by botQuestionsCleanup.scheduler.ts, not by this
+// migration — this only ensures the table shape (safe, idempotent).
+setImmediate(() => {
+  pool.query(`
+    CREATE TABLE IF NOT EXISTS bot_questions (
+      id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      salon_id          UUID REFERENCES salons(id) ON DELETE SET NULL,
+      user_id           UUID REFERENCES users(id)  ON DELETE SET NULL,
+      question          TEXT NOT NULL,
+      answer            TEXT,
+      source            TEXT NOT NULL DEFAULT 'predefined',
+      matched_id        TEXT,
+      matched_category  TEXT,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `)
+    .then(() => pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_bot_questions_created_at ON bot_questions (created_at);
+      CREATE INDEX IF NOT EXISTS idx_bot_questions_source      ON bot_questions (source);
+      CREATE INDEX IF NOT EXISTS idx_bot_questions_matched_id  ON bot_questions (matched_id);
+    `))
+    .catch((err: any) => console.warn('⚠️  bot_questions table migration:', err.message));
+});
+
+// Create predefined_questions table — the chatbot's keyword-matched knowledge
+// base. Seeded once from the legacy qa.json on first creation so existing
+// entries aren't lost; after that, rows are the source of truth and qa.json
+// is no longer read. New entries are added via Super Admin's "Answer" flow
+// on Chatbot Question History (safe, idempotent).
+setImmediate(() => {
+  pool.query(`
+    CREATE TABLE IF NOT EXISTS predefined_questions (
+      id           TEXT PRIMARY KEY,
+      category     TEXT NOT NULL,
+      triggers     TEXT[] NOT NULL,
+      answer       TEXT NOT NULL,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `)
+    .then(async () => {
+      const { rows } = await pool.query(`SELECT COUNT(*)::int AS count FROM predefined_questions`);
+      if (rows[0]?.count > 0) return;
+      const qaData: { id: string; cat: string; triggers: string[]; answer: string }[] =
+        require('../modules/bot/qa.json');
+      for (const qa of qaData) {
+        await pool.query(
+          `INSERT INTO predefined_questions (id, category, triggers, answer) VALUES ($1,$2,$3,$4)
+           ON CONFLICT (id) DO NOTHING`,
+          [qa.id, qa.cat, qa.triggers, qa.answer]
+        );
+      }
+      console.log(`✅ Seeded predefined_questions with ${qaData.length} entries from qa.json`);
+    })
+    .catch((err: any) => console.warn('⚠️  predefined_questions table migration:', err.message));
 });
 
 // Create demo_requests table — landing page "Schedule a Free Demo" submissions (safe, idempotent)

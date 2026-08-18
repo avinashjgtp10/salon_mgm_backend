@@ -30,6 +30,8 @@ function buildSyntheticSale(pkg: ClientPackage): { sale: Sale; items: SaleItem[]
     subtotal: String(pkg.basePrice ?? 0),
     discount_amount: String(pkg.discount ?? 0),
     tip_amount: "0",
+    tip_added_to_salon: false,
+    tip_breakdown: null,
     tax_amount: String(pkg.gstAmount ?? 0),
     ex_charges: "0",
     total_amount: String(pkg.totalAmount ?? 0),
