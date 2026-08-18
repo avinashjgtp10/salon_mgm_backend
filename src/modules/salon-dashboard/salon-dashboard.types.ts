@@ -52,6 +52,8 @@ export interface PendingPayments {
 export interface BirthdayClient {
   id: string;
   name: string;
+  phone: string | null;
+  phoneCountryCode: string | null;
 }
 
 export interface TodaysBirthdays {
