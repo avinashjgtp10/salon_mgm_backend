@@ -8174,6 +8174,7 @@ _MEMBERSHIP_HISTORY_SOURCE: `
       cm.client_name,
       cm.membership_name,
       cm.pricing_type,
+      cm.purchased_at,
       cm.expires_at,
       cm.status        AS membership_status,
       ul.service_name,
@@ -8199,6 +8200,7 @@ _MEMBERSHIP_HISTORY_SOURCE: `
       COALESCE(NULLIF(TRIM(c.full_name), ''), 'Walk-in') AS client_name,
       COALESCE(lm.name, 'Loyalty')                       AS membership_name,
       'loyalty'        AS pricing_type,
+      NULL::timestamptz AS purchased_at,
       NULL::timestamptz AS expires_at,
       'active'         AS membership_status,
       NULL::varchar    AS service_name,
@@ -8390,6 +8392,7 @@ async getMembershipHistoryReportRows(
   const query = `
     SELECT
       TO_CHAR(ul.used_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS date,
+      TO_CHAR(ul.purchased_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS start_date,
       ul.client_id,
       COALESCE(NULLIF(TRIM(ul.client_name), ''), 'Walk-in') AS client_name,
       COALESCE(NULLIF(TRIM(ul.membership_name), ''), '—') AS membership_name,
@@ -8418,6 +8421,7 @@ async getMembershipHistoryReportRows(
   const total = rows.length ? Number(rows[0].total_count) : 0;
   const items: MembershipHistoryReportRow[] = rows.map((row: any) => ({
     date: row.date ?? null,
+    start_date: row.start_date ?? null,
     client_id: row.client_id ? String(row.client_id) : null,
     client_name: row.client_name,
     membership_name: row.membership_name,
@@ -8624,6 +8628,7 @@ async getMemberSaleReportRows(
       cm.id,
       cm.client_id,
       TO_CHAR(cm.purchased_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS purchased_at,
+      TO_CHAR(cm.expires_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS expiry_date,
       s.invoice_number,
       cm.client_name,
       NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
@@ -8656,6 +8661,7 @@ async getMemberSaleReportRows(
     id: row.id,
     client_id: row.client_id,
     purchased_at: row.purchased_at,
+    expiry_date: row.expiry_date ?? null,
     invoice_number: row.invoice_number,
     client_name: row.client_name,
     staff_name: row.staff_name ?? "—",

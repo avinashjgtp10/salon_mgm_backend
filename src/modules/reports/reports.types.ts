@@ -2293,6 +2293,7 @@ export interface MembershipHistoryReportFilters {
 
 export interface MembershipHistoryReportRow {
     date: string | null;
+    start_date: string | null;
     client_id: string | null;
     client_name: string;
     membership_name: string;
@@ -2382,6 +2383,7 @@ export interface MemberSaleReportRow {
     id: string;
     client_id: string | null;
     purchased_at: string;
+    expiry_date: string | null;
     invoice_number: string | null;
     client_name: string;
     staff_name: string;
