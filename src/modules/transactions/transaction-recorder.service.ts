@@ -32,6 +32,7 @@ export async function recordTransaction(input: RecordTransactionInput): Promise<
         discount_amount: input.discount_amount != null ? String(input.discount_amount) : undefined,
         tax_amount:      input.tax_amount      != null ? String(input.tax_amount)      : undefined,
         tip_amount:      input.tip_amount      != null ? String(input.tip_amount)      : undefined,
+        tip_added_to_salon: input.tip_added_to_salon,
         ex_charges:      input.ex_charges      != null ? String(input.ex_charges)      : undefined,
         // Previously frozen at whatever a paid appointment's coupon/discount
         // was when its sale row was FIRST created — editing/topping-up an
@@ -78,6 +79,7 @@ export async function recordTransaction(input: RecordTransactionInput): Promise<
         discount_amount: input.discount_amount != null ? String(input.discount_amount) : undefined,
         tax_amount: input.tax_amount != null ? String(input.tax_amount) : undefined,
         tip_amount: input.tip_amount != null ? String(input.tip_amount) : undefined,
+        tip_added_to_salon: input.tip_added_to_salon,
         ex_charges: input.ex_charges != null ? String(input.ex_charges) : undefined,
         payment_method: method,
         payment_reference: reference,

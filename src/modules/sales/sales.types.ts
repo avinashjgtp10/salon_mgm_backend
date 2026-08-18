@@ -11,9 +11,12 @@ export type Sale = {
     status: SaleStatus;
     subtotal: string;
     discount_amount: string;
-    // Passes through to staff, not the salon — tracked here but deliberately
-    // excluded from total_amount (see salesRepository.create()).
+    // Passes through to staff, not the salon — tracked here but excluded
+    // from total_amount unless tip_added_to_salon is set (see
+    // salesRepository.create()).
     tip_amount: string;
+    // "Add Tip to Salon" checkbox state this sale was recorded under.
+    tip_added_to_salon: boolean;
     tax_amount: string;
     // Counts as revenue — included in total_amount, unlike tip_amount.
     ex_charges: string;
@@ -70,6 +73,7 @@ export type CreateSaleBody = {
     status?: SaleStatus;
     discount_amount?: string;
     tip_amount?: string;
+    tip_added_to_salon?: boolean;
     tax_amount?: string;
     ex_charges?: string;
     payment_method?: PaymentMethod;

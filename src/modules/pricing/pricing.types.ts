@@ -24,6 +24,8 @@ export interface CalculateTotalsBody {
 
   exCharges: number;
   tip: number;
+  // "Add Tip to Salon" checkbox — see ComputeBillTotalsInput.tipAddedToSalon.
+  tipAddedToSalon?: boolean;
   // Per-transaction "no GST this time" override — when false, tax is zero for
   // this bill only; does not touch salon-wide tax settings.
   includeGst: boolean;

@@ -43,8 +43,13 @@ export interface RecordTransactionInput {
   discount_amount?: number;
   /** Must be pre-computed by the caller — tax rules differ enough by origin that this function does not recompute it. */
   tax_amount?: number;
-  /** Passes through to staff, not the salon — stored but excluded from sales.total_amount (revenue). */
+  /** Passes through to staff, not the salon — stored but excluded from
+   *  sales.total_amount (revenue) unless tip_added_to_salon is set. */
   tip_amount?: number;
+  /** "Add Tip to Salon" checkbox — checked: tip_amount counts toward
+   *  sales.total_amount (revenue), same as ex_charges. Unchecked (default):
+   *  tip_amount stays excluded, same as it's always behaved. */
+  tip_added_to_salon?: boolean;
   /** A client-facing surcharge the business keeps — unlike tip_amount, this DOES count as revenue. */
   ex_charges?: number;
   coupon_code?: string;

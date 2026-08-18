@@ -297,6 +297,7 @@ export const pricingService = {
       taxes,
       exCharges: body.exCharges ?? 0,
       tip: body.tip ?? 0,
+      tipAddedToSalon: !!body.tipAddedToSalon,
       roundSubtotalBeforeDiscount: false,
     });
     // Ceiling for the sequential Membership Wallet → eWallet → Reward Points →
@@ -409,6 +410,7 @@ export const pricingService = {
       taxes,
       exCharges: body.exCharges ?? 0,
       tip: body.tip ?? 0,
+      tipAddedToSalon: !!body.tipAddedToSalon,
       eWalletUsed: appliedEWallet,
       membershipWalletUsed: appliedMembershipWallet,
       membershipServiceWalletUsed,

@@ -109,10 +109,10 @@ export const appointmentsController = {
             const userId = req.user?.userId;
             const id = String(req.params.id || "").trim();
             if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
-            const { items, discount_amount, tip_amount, tax_amount, payment_method, notes } = req.body;
+            const { items, discount_amount, tip_amount, tip_added_to_salon, tax_amount, payment_method, notes } = req.body;
             const result = await appointmentsService.checkout({
                 appointmentId: id, requesterUserId: userId, requesterRole: req.user?.role,
-                saleItems: items, discount_amount, tip_amount, tax_amount, payment_method, notes,
+                saleItems: items, discount_amount, tip_amount, tip_added_to_salon, tax_amount, payment_method, notes,
             });
             return sendSuccess(res, 200, result, "Appointment checked out and sale created");
         } catch (err) { return next(err); }

@@ -53,7 +53,7 @@ import {
 function computeAppointmentTotals(appt: {
     services?: any[]; package_items?: any[]; product_items?: any[]; membership_items?: any[];
     discount_type?: string; discount_value?: number; discount_applies_to?: unknown;
-    ex_charges?: number; tip_amount?: number;
+    ex_charges?: number; tip_amount?: number; tip_added_to_salon?: boolean;
     include_gst?: boolean; membership_discount_used?: number | string;
 }, activeTaxes: ActiveTaxRow[]) {
     const toRow = (items: any[] = []) => (items || []).map((i) => ({
@@ -99,6 +99,7 @@ function computeAppointmentTotals(appt: {
         taxes: appt.include_gst === false ? [] : activeTaxes,
         exCharges: Number(appt.ex_charges) || 0,
         tip: Number(appt.tip_amount) || 0,
+        tipAddedToSalon: !!appt.tip_added_to_salon,
     });
 }
 
@@ -626,7 +627,7 @@ export const appointmentsService = {
         // disagree about what "changed the bill" means.
         const isContentEdit = ["services", "package_items", "product_items", "membership_items",
                                 "discount_value", "discount_type", "discount_applies_to",
-                                "ex_charges", "tip_amount", "include_gst"]
+                                "ex_charges", "tip_amount", "tip_added_to_salon", "include_gst"]
                                 .some((k) => k in patch);
 
         if (existing.status === "no-show" && isReschedule) {
@@ -649,6 +650,7 @@ export const appointmentsService = {
                 discount_applies_to: patch.discount_applies_to ?? existing.discount_applies_to,
                 ex_charges:       patch.ex_charges        ?? existing.ex_charges,
                 tip_amount:       patch.tip_amount         ?? existing.tip_amount,
+                tip_added_to_salon: patch.tip_added_to_salon ?? (existing as any).tip_added_to_salon,
                 include_gst:      patch.include_gst        ?? existing.include_gst,
             };
             const activeTaxes = await getActiveTaxes(existing.salon_id).catch(() => []);
@@ -1059,6 +1061,7 @@ export const appointmentsService = {
         saleItems: any[];
         discount_amount?: number;
         tip_amount?: number;
+        tip_added_to_salon?: boolean;
         tax_amount?: number;
         ex_charges?: number;
         payment_method?: string;
@@ -1334,6 +1337,7 @@ export const appointmentsService = {
             // (this fallback path) doesn't explicitly pass them.
             ex_charges:      saleExtras.ex_charges ?? existing.ex_charges,
             tip_amount:      saleExtras.tip_amount ?? existing.tip_amount,
+            tip_added_to_salon: (saleExtras as any).tip_added_to_salon ?? (existing as any).tip_added_to_salon,
             notes:           saleExtras.notes,
             items:           resolvedItems as any,
         });
