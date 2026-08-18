@@ -266,7 +266,7 @@ export const appointmentsRepository = {
                 ends_at,
                 colour, created_by,
                 services, package_items, product_items, membership_items,
-                discount_value, discount_type, discount_applies_to, ex_charges, tip_amount, gst_percent,
+                discount_value, discount_type, discount_applies_to, ex_charges, tip_amount, tip_added_to_salon, gst_percent,
                 apply_membership_wallet, include_gst
             )
             VALUES (
@@ -276,8 +276,8 @@ export const appointmentsRepository = {
                 ($10::timestamptz + ($11::integer * INTERVAL '1 minute')),
                 $12, $13,
                 $14::jsonb, $15::jsonb, $16::jsonb, $17::jsonb,
-                $18, $19, $20::jsonb, $21, $22, $23,
-                $24, $25
+                $18, $19, $20::jsonb, $21, $22, $23, $24,
+                $25, $26
             )
             RETURNING *`,
             [
@@ -307,6 +307,7 @@ export const appointmentsRepository = {
                 data.discount_applies_to ? JSON.stringify(data.discount_applies_to) : null,
                 data.ex_charges         ?? 0,
                 data.tip_amount         ?? 0,
+                data.tip_added_to_salon ?? false,
                 data.gst_percent        ?? 0,
                 data.apply_membership_wallet ?? false,
                 data.include_gst        ?? true,
