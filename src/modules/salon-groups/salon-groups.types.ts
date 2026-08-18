@@ -31,6 +31,7 @@ export interface AddSalonToGroupBody {
 export interface GroupAdminSalonCard {
   id: string;
   name: string;
+  email: string | null;
   status: string;
   plan_name: string | null;
   staff_count: number;

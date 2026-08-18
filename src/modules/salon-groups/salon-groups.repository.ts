@@ -192,6 +192,7 @@ export const salonGroupsRepository = {
         `SELECT
            s.id,
            COALESCE(s.business_name, s.slug, 'Unnamed')             AS name,
+           COALESCE(s.email, u.email)                                AS email,
            CASE WHEN s.is_active THEN 'active' ELSE 'inactive' END AS status,
            (SELECT bp.name FROM billing_subscriptions bs
               JOIN billing_plans bp ON bp.id = bs.plan_id
@@ -206,6 +207,7 @@ export const salonGroupsRepository = {
            s.created_at
          FROM salon_group_members sgm
          JOIN salons s ON s.id = sgm.salon_id
+         LEFT JOIN users u ON u.id = s.owner_id
          WHERE sgm.salon_group_id = $1
          ORDER BY s.business_name ASC`,
         [groupId]
