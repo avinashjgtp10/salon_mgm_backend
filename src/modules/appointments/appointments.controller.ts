@@ -118,6 +118,19 @@ export const appointmentsController = {
         } catch (err) { return next(err); }
     },
 
+    async getReceiptPdf(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const salonId = req.user?.salonId;
+            const id = String(req.params.id || "").trim();
+            if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+            if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
+            const { buffer, filename } = await appointmentsService.getReceiptPdf(id, salonId);
+            res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+            res.setHeader("Content-Type", "application/pdf");
+            return res.send(buffer);
+        } catch (err) { return next(err); }
+    },
+
     async exportAppointments(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const salonId = req.user?.salonId;

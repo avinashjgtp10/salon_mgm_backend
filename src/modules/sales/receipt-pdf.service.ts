@@ -4,7 +4,11 @@ import config from "../../config/env";
 import { buildReceiptHtml } from "./receipt-html.template";
 import { Sale, SaleItem } from "./sales.types";
 
-async function renderReceiptPdf(params: Parameters<typeof buildReceiptHtml>[0]): Promise<Buffer> {
+// Exported (not just used internally by generateAndSaveReceipt below) so a
+// caller that just wants the raw bytes — e.g. an authenticated download
+// endpoint the salon owner's own browser hits directly — doesn't need
+// PUBLIC_BASE_URL configured or a file written to disk at all.
+export async function renderReceiptPdf(params: Parameters<typeof buildReceiptHtml>[0]): Promise<Buffer> {
     // Puppeteer 25.x ships as an ESM package — a static import produces a `require()`
     // call in this CommonJS project and fails at runtime, so this loads it dynamically.
     const puppeteer = (await import("puppeteer")).default;
