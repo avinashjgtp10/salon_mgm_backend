@@ -79,14 +79,15 @@ export const inboxService = {
 
     try {
       const io = getIO()
-      io.to(`salon:${params.salonId}`).emit('inbox:message', {
+      const room = `salon:${params.salonId}`
+      io.to(room).emit('inbox:message', {
         salonId:      params.salonId,
         contactPhone: normalizedPhone,
         contactName:  params.name,
         message,
       })
       const conversations = await inboxRepository.getConversations(params.salonId)
-      io.to(`salon:${params.salonId}`).emit('inbox:conversations', conversations)
+      io.to(room).emit('inbox:conversations', conversations)
     } catch (err) {
       console.error('Socket emit error:', err)
     }

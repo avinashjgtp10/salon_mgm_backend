@@ -65,11 +65,12 @@ export const dashboardRepository = {
       ORDER BY DATE(cc.created_at) ASC
     `, [salonId])
 
-    const [recentCampaigns, topCampaigns, topTemplates, engagedContacts] = await Promise.all([
+    const [recentCampaigns, topCampaigns, topTemplates, engagedContacts, sentToday] = await Promise.all([
       this.getRecentCampaigns(salonId),
       this.getTopCampaigns(salonId),
       this.getTopTemplates(salonId),
       this.getEngagedContacts(salonId),
+      this.getSentToday(salonId),
     ])
 
     return {
@@ -86,11 +87,46 @@ export const dashboardRepository = {
       deliveryRate:       totalSent > 0 ? Math.round((totalDelivered / totalSent) * 100) : 0,
       readRate:           totalSent > 0 ? Math.round((totalRead      / totalSent) * 100) : 0,
       dailyVolume:        dailyRows,
+      sentToday,
       recentCampaigns,
       topCampaigns,
       topTemplates,
       engagedContacts,
     }
+  },
+
+  // Every outbound WhatsApp message counts against Meta's per-number daily
+  // cap, not just campaign blasts — automation triggers (thank_you,
+  // review_request, reminders...) and inbox replies send too. Summed here
+  // across all three send paths so the dashboard's usage bar reflects real
+  // usage against the limit instead of just campaign volume.
+  async getSentToday(salonId: string): Promise<number> {
+    const { rows: [row] } = await pool.query(`
+      SELECT
+        (
+          SELECT COUNT(*) FROM wa_campaign_contacts cc
+          JOIN wa_campaigns c ON c.id = cc.campaign_id
+          WHERE c.salon_id = $1
+            AND cc.status IN ('SENT','DELIVERED','READ','FAILED','BLOCKED')
+            AND cc.created_at::date = CURRENT_DATE
+        )
+        +
+        (
+          SELECT COUNT(*) FROM wa_automation_logs
+          WHERE salon_id = $1
+            AND status IN ('SENT','DELIVERED','READ','FAILED')
+            AND created_at::date = CURRENT_DATE
+        )
+        +
+        (
+          SELECT COUNT(*) FROM wa_messages
+          WHERE salon_id = $1
+            AND direction = 'OUTBOUND'
+            AND sent_at::date = CURRENT_DATE
+        )
+        AS sent_today
+    `, [salonId])
+    return parseInt(row.sent_today) || 0
   },
 
   async getRecentCampaigns(salonId: string): Promise<WARecentCampaign[]> {

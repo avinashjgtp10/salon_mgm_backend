@@ -11,6 +11,7 @@ export type WADashboardStats = {
   totalContacts:      number
   deliveryRate:       number
   readRate:           number
+  sentToday:          number
   dailyVolume:        { date: string; count: number }[]
   recentCampaigns:    WARecentCampaign[]
   topCampaigns:       WATopCampaign[]
