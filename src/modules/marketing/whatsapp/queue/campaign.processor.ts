@@ -18,14 +18,12 @@ export const campaignWorker = new Worker<CampaignJobData>(
   'wa-campaign-messages',
   async (job: Job<CampaignJobData>) => {
     const { campaignId, salonId, contactIds } = job.data
-    console.log(`[WA-TRACE] campaign batch START — campaign=${campaignId} batchIndex=${job.data.batchIndex} contacts=${contactIds.length}`)
 
     const { rows: [camp] } = await pool.query(
       `SELECT status FROM wa_campaigns WHERE id = $1`,
       [campaignId]
     )
     if (!camp || camp.status === 'PAUSED') {
-      console.log(`[WA-TRACE] campaign batch SKIP — campaign=${campaignId} status=${camp?.status ?? 'not found'}`)
       return
     }
 
@@ -122,7 +120,6 @@ export const campaignWorker = new Worker<CampaignJobData>(
         })
 
         const wamid = result?.messages?.[0]?.id
-        console.log(`[WA-TRACE] campaign ✅ SENT → ${normalizedPhone} (wamid: ${wamid ?? 'none'})`)
 
         await pool.query(
           `UPDATE wa_campaign_contacts
@@ -179,9 +176,6 @@ export const campaignWorker = new Worker<CampaignJobData>(
         // diagnosed as the root cause of the "GoodHairDayOffer" mass-failure).
         const isBilling   = parseInt(code) === 131042
 
-        const label = isBilling ? '💳 BILLING-BLOCKED' : isBlocked ? '🚫 BLOCKED' : '❌ FAILED'
-        console.log(`[WA-TRACE] campaign ${label} → ${normalizedPhone} — Meta [${code}] ${msg}`)
-
         await pool.query(
           `UPDATE wa_campaign_contacts
            SET status=$1, error_code=$2, error_message=$3, updated_at=NOW()
@@ -203,7 +197,6 @@ export const campaignWorker = new Worker<CampaignJobData>(
     // fluctuate up/down and even exceed total_contacts in production. Using the
     // same idempotent recompute on both paths removes the race entirely. This
     // also flips the campaign to COMPLETED when everything is terminal.
-    console.log(`[WA-TRACE] campaign batch DONE — campaign=${campaignId} batchIndex=${job.data.batchIndex} → sent=${sent} failed=${failed} blocked=${blocked}`)
     void sent; void failed; void blocked;
     await webhooksRepository.refreshCampaignCounts(campaignId)
   },
@@ -215,5 +208,4 @@ export const campaignWorker = new Worker<CampaignJobData>(
   { connection: redisConnection, concurrency: 10 }
 )
 
-campaignWorker.on('completed', j     => console.log(`✅ WA Job ${j.id} completed`))
-campaignWorker.on('failed',    (j,e) => console.error(`❌ WA Job ${j?.id} failed:`, e.message))
+campaignWorker.on('failed', (j, e) => console.error(`❌ WA Job ${j?.id} failed:`, e.message))
