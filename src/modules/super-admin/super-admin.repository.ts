@@ -698,6 +698,64 @@ export const superAdminRepository = {
     }
   },
 
+  // ── BRANCH OWNER SALON ASSIGNMENT ────────────────────────────────────────────
+
+  async getUserById(id: string) {
+    const { rows } = await pool.query(
+      `SELECT id, first_name, last_name, email, role FROM users WHERE id = $1 LIMIT 1`,
+      [id]
+    );
+    return rows[0] || null;
+  },
+
+  async getBranchOwnerSalons(branchOwnerId: string) {
+    const { rows } = await pool.query(`
+      SELECT
+        s.id,
+        COALESCE(s.business_name, s.slug, 'Unnamed')                                    AS name,
+        u.email                                                                           AS owner_email,
+        TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,'')))                         AS owner_name,
+        CASE WHEN s.is_active THEN 'active' ELSE 'inactive' END                         AS status,
+        bos.created_at                                                                    AS assigned_at
+      FROM branch_owner_salons bos
+      JOIN salons s ON s.id = bos.salon_id
+      LEFT JOIN users u ON u.id = s.owner_id
+      WHERE bos.branch_owner_id = $1
+      ORDER BY s.created_at DESC
+    `, [branchOwnerId]);
+    return rows;
+  },
+
+  // Full-replace semantics: assignment set becomes exactly salonIds.
+  async replaceBranchOwnerSalons(branchOwnerId: string, salonIds: string[], assignedBy: string) {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(`DELETE FROM branch_owner_salons WHERE branch_owner_id = $1`, [branchOwnerId]);
+      for (const salonId of salonIds) {
+        await client.query(
+          `INSERT INTO branch_owner_salons (branch_owner_id, salon_id, assigned_by)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (branch_owner_id, salon_id) DO NOTHING`,
+          [branchOwnerId, salonId, assignedBy]
+        );
+      }
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  },
+
+  async unassignSalon(branchOwnerId: string, salonId: string) {
+    await pool.query(
+      `DELETE FROM branch_owner_salons WHERE branch_owner_id = $1 AND salon_id = $2`,
+      [branchOwnerId, salonId]
+    );
+  },
+
   async getAllPayments(statusFilter?: string) {
     const { rows } = await pool.query(`
       SELECT

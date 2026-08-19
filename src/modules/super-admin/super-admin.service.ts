@@ -219,7 +219,7 @@ export const superAdminService = {
   // ── USERS ─────────────────────────────────────────────────────────────────────
 
   async createUser(data: { first_name: string; last_name?: string; email: string; password: string; phone?: string; role: string; business_name?: string; address?: string }) {
-    const allowed = ["salon_owner", "admin", "staff", "client"];
+    const allowed = ["salon_owner", "admin", "staff", "client", "branch_owner"];
     if (!allowed.includes(data.role)) throw new AppError(400, "Invalid role", "VALIDATION_ERROR");
     if (!data.email?.trim()) throw new AppError(400, "Email is required", "VALIDATION_ERROR");
     if (!data.password || data.password.length < 6) throw new AppError(400, "Password must be at least 6 characters", "VALIDATION_ERROR");
@@ -276,7 +276,7 @@ export const superAdminService = {
   },
 
   async setUserRole(id: string, role: string) {
-    const allowed = ["salon_owner", "admin", "staff", "client"];
+    const allowed = ["salon_owner", "admin", "staff", "client", "branch_owner"];
     if (!allowed.includes(role)) throw new AppError(400, "Invalid role", "VALIDATION_ERROR");
     const result = await superAdminRepository.setUserRole(id, role);
     if (!result) throw new AppError(404, "User not found", "NOT_FOUND");
@@ -300,6 +300,27 @@ export const superAdminService = {
         "USER_OWNS_SALON",
       );
     }
+    return { success: true };
+  },
+
+  // ── BRANCH OWNER SALON ASSIGNMENT ────────────────────────────────────────────
+
+  async getBranchOwnerSalons(branchOwnerId: string) {
+    const user = await superAdminRepository.getUserById(branchOwnerId);
+    if (!user || user.role !== "branch_owner") throw new AppError(404, "Branch owner not found", "NOT_FOUND");
+    return superAdminRepository.getBranchOwnerSalons(branchOwnerId);
+  },
+
+  async assignSalonsToBranchOwner(branchOwnerId: string, salonIds: string[], assignedBy: string) {
+    const user = await superAdminRepository.getUserById(branchOwnerId);
+    if (!user || user.role !== "branch_owner") throw new AppError(404, "Branch owner not found", "NOT_FOUND");
+    if (!Array.isArray(salonIds)) throw new AppError(400, "salonIds must be an array", "VALIDATION_ERROR");
+    await superAdminRepository.replaceBranchOwnerSalons(branchOwnerId, salonIds, assignedBy);
+    return superAdminRepository.getBranchOwnerSalons(branchOwnerId);
+  },
+
+  async unassignSalonFromBranchOwner(branchOwnerId: string, salonId: string) {
+    await superAdminRepository.unassignSalon(branchOwnerId, salonId);
     return { success: true };
   },
 
