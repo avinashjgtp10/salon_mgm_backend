@@ -158,11 +158,26 @@ export const billingService = {
         const plan = await billingPlansRepository.findById(params.plan_id);
         if (!plan) throw new AppError(404, "Plan not found", "NOT_FOUND");
 
-        const order = await razorpay.orders.create({
-            amount: Math.round(params.amount * 100), // paise
-            currency: "INR",
-            receipt: `rcpt_${params.plan_id.slice(0, 8)}_${Date.now()}`,
-        });
+        const amountPaise = Math.round(params.amount * 100);
+        if (!Number.isFinite(amountPaise) || amountPaise < 100) {
+            throw new AppError(400, "Amount must be at least ₹1 (100 paise)", "INVALID_AMOUNT");
+        }
+
+        let order;
+        try {
+            order = await razorpay.orders.create({
+                amount: amountPaise,
+                currency: "INR",
+                receipt: `rcpt_${params.plan_id.slice(0, 8)}_${Date.now()}`,
+            });
+        } catch (err: any) {
+            const statusCode = err?.statusCode;
+            if (statusCode === 401) {
+                throw new AppError(401, "Razorpay authentication failed", "RAZORPAY_AUTH_FAILED");
+            }
+            logger.error("billingService.createRazorpayOrder failed", { error: err?.error || err?.message });
+            throw new AppError(500, "Failed to create Razorpay order", "RAZORPAY_ORDER_FAILED");
+        }
 
         logger.info("billingService.createRazorpayOrder", { orderId: order.id, amount: params.amount });
 
@@ -172,6 +187,7 @@ export const billingService = {
             currency: "INR",
             plan_id: params.plan_id,
             plan_name: plan.name,
+            key_id: process.env.RAZORPAY_KEY_ID,
         };
     },
 
@@ -184,6 +200,10 @@ export const billingService = {
         razorpay_signature: string;
     }): Promise<BillingSubscription> {
         const { salonId, plan_id, razorpay_order_id, razorpay_payment_id, razorpay_signature } = params;
+
+        if (!plan_id || !razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+            throw new AppError(400, "plan_id, razorpay_order_id, razorpay_payment_id and razorpay_signature are required", "VALIDATION_ERROR");
+        }
 
         // Verify HMAC signature
         const body = razorpay_order_id + "|" + razorpay_payment_id;

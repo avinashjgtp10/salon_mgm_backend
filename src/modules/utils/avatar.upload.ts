@@ -42,7 +42,6 @@ export async function uploadAvatarToS3(
     Key: key,
     Body: fileContent,
     ContentType: mimetype,
-    ACL: "public-read",
   };
 
   const result = await s3.upload(params).promise();
