@@ -4238,12 +4238,9 @@ async getProductInventoryReportRows(
       COALESCE(p.barcode, '—') AS sku,
       p.created_at AS date_added,
       p.expiry_date AS expiry_date,
-      COALESCE(p.amount, 0) AS current_stock,
+      (${STOCK_IN_PRICING_UNITS_SQL}) AS current_stock,
       COALESCE(p.qty_alert, 0) AS reorder_level,
       ${UNIT_COST_SQL} AS unit_cost,
-      -- Note current_stock is in base units while unit_cost is per package, so
-      -- for a consumable with a bottle_size these two columns deliberately do
-      -- NOT multiply out to total_value. See STOCK_IN_PRICING_UNITS_SQL.
       (${STOCK_IN_PRICING_UNITS_SQL}) * ${UNIT_COST_SQL} AS total_value,
       COALESCE(sales_agg.quantity, 0) AS sales_qty,
       COALESCE(sales_agg.revenue, 0) AS sales_revenue,
@@ -4461,7 +4458,7 @@ async getProductMovementReportRows(
       COALESCE(sc.name, '—') AS category_name,
       COALESCE(pb.name, '—') AS brand_name,
       COALESCE(p.barcode, '—') AS sku,
-      COALESCE(p.amount, 0) AS current_stock,
+      (${STOCK_IN_PRICING_UNITS_SQL}) AS current_stock,
       ${UNIT_COST_SQL} AS unit_cost,
       (${STOCK_IN_PRICING_UNITS_SQL}) * ${UNIT_COST_SQL} AS stock_value,
       COALESCE(sales_agg.quantity, 0) AS sales_qty,
@@ -4856,7 +4853,7 @@ async getPurchaseVsSalesReportRows(
       p.name AS product_name,
       COALESCE(sc.name, '—') AS category_name,
       COALESCE(pb.name, '—') AS brand_name,
-      COALESCE(p.amount, 0) AS current_stock,
+      (${STOCK_IN_PRICING_UNITS_SQL}) AS current_stock,
       COALESCE(purchase_agg.qty, 0) AS purchase_qty,
       COALESCE(purchase_agg.value, 0) AS purchase_value,
       COALESCE(sales_agg.qty, 0) AS sales_qty,
