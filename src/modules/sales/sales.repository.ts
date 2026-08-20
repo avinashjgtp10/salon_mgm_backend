@@ -274,15 +274,13 @@ export const salesRepository = {
             const discountAmt = data.discount_amount ? parseFloat(data.discount_amount) : 0;
             const taxAmt      = data.tax_amount      ? parseFloat(data.tax_amount)      : 0;
             const exChargesAmt = data.ex_charges     ? parseFloat(data.ex_charges)      : 0;
-            const tipAmt        = data.tip_amount    ? parseFloat(data.tip_amount)      : 0;
+            // tip_amount is still stored as its own column (below) but is
+            // NEVER part of this total — matches pricing.engine.ts's
+            // identical (now unconditional) exclusion. tip_added_to_salon
+            // is stored for historical/audit purposes only; no longer read
+            // here. ex_charges always counts (a client-facing surcharge the
+            // business actually keeps), unlike tip.
             const tipAddedToSalon = !!data.tip_added_to_salon;
-            // tip_amount is still stored as its own column (below) — excluded
-            // from this total UNLESS tip_added_to_salon is set ("Add Tip to
-            // Salon" checkbox), matching pricing.engine.ts's identical
-            // conditional. Off by default: tip passes through to staff, not
-            // the salon, so it doesn't count as revenue. ex_charges always
-            // counts (a client-facing surcharge the business actually keeps),
-            // unlike tip either way.
             // Rounded to the nearest rupee — same rounding pricing.engine.ts applies
             // to grandTotal at checkout (the actual amount collected from the
             // client, and what the bill/receipt displays). Storing the raw
@@ -290,7 +288,7 @@ export const salesRepository = {
             // report reads) could differ from the real charged amount by up to
             // ~₹1 — e.g. a ₹1650.60 raw total showed as ₹1651 on the bill but
             // ₹1650.60 in reports, for the same sale.
-            const total = Math.round(subtotal - discountAmt + taxAmt + exChargesAmt + (tipAddedToSalon ? tipAmt : 0));
+            const total = Math.round(subtotal - discountAmt + taxAmt + exChargesAmt);
             const { invoice_prefix } = await getTaxModuleConfig(data.salon_id);
             const createdAtVal = parseCreatedAt(data.created_at);
 
@@ -406,10 +404,9 @@ export const salesRepository = {
                 const discountAmt  = salePatch.discount_amount ? parseFloat(salePatch.discount_amount) : 0;
                 const taxAmt       = salePatch.tax_amount      ? parseFloat(salePatch.tax_amount)      : 0;
                 const exChargesAmt = salePatch.ex_charges      ? parseFloat(salePatch.ex_charges)      : 0;
-                const tipAmt       = salePatch.tip_amount      ? parseFloat(salePatch.tip_amount)      : 0;
-                // tip_amount excluded from total unless tip_added_to_salon is
-                // set — see create()'s identical conditional/comment.
-                const total        = Math.round(subtotal - discountAmt + taxAmt + exChargesAmt + (salePatch.tip_added_to_salon ? tipAmt : 0));
+                // tip_amount is never part of this total — see create()'s
+                // identical (unconditional) exclusion and comment.
+                const total        = Math.round(subtotal - discountAmt + taxAmt + exChargesAmt);
 
                 const setParts: string[] = ['subtotal = $1', 'total_amount = $2', 'updated_at = NOW()'];
                 const values: any[]      = [subtotal.toString(), total.toString()];

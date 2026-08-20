@@ -43,12 +43,14 @@ export interface RecordTransactionInput {
   discount_amount?: number;
   /** Must be pre-computed by the caller — tax rules differ enough by origin that this function does not recompute it. */
   tax_amount?: number;
-  /** Passes through to staff, not the salon — stored but excluded from
-   *  sales.total_amount (revenue) unless tip_added_to_salon is set. */
+  /** Passes through to staff, not the salon — stored but never counted
+   *  toward sales.total_amount (revenue). Unlike ex_charges, there is no
+   *  toggle that folds it in; the exclusion is unconditional. */
   tip_amount?: number;
-  /** "Add Tip to Salon" checkbox — checked: tip_amount counts toward
-   *  sales.total_amount (revenue), same as ex_charges. Unchecked (default):
-   *  tip_amount stays excluded, same as it's always behaved. */
+  /** Formerly the "Add Tip to Salon" checkbox's stored value — that control
+   *  has been removed and tip_amount is now always excluded from revenue
+   *  regardless of this flag. Kept on the type/stored for historical rows
+   *  only; no longer read anywhere to affect a total. */
   tip_added_to_salon?: boolean;
   /** Optional per-staff split of tip_amount — see TipBreakdownEntry. */
   tip_breakdown?: TipBreakdownEntry[] | null;

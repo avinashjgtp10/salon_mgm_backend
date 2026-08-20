@@ -457,7 +457,12 @@ const APPOINTMENT_BASE_CTES = `
                     + COALESCE(a.ex_charges::numeric, 0)
                   ) * COALESCE(a.gst_percent::numeric, 0) / 100
                 )
-                + COALESCE(a.tip_amount::numeric, 0)
+                -- tip_amount deliberately excluded — never part of the bill
+                -- total/revenue, same rule pricing.engine.ts's withCharges
+                -- and sales.repository.ts's total now both enforce
+                -- unconditionally. This fallback previously added it
+                -- unconditionally too, inconsistent with even the old
+                -- "Add Tip to Salon" toggle everywhere else.
             END
           ),
           2
