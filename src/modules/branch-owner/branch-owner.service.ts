@@ -5,10 +5,6 @@ import { superAdminRepository } from "../super-admin/super-admin.repository";
 import { AppError } from "../../middleware/error.middleware";
 import { salonDashboardRepository } from "../salon-dashboard/salon-dashboard.repository";
 import { staffCommissionsService } from "../staff/staff.service";
-import { membershipsRepository } from "../memberships/memberships.repository";
-import type { CreateMembershipDTO } from "../memberships/memberships.types";
-import { packageTemplatesRepository } from "../package-templates/package-templates.repository";
-import type { CreatePackageTemplateDTO } from "../package-templates/package-templates.types";
 
 const ACCESS_SECRET: Secret = process.env.JWT_ACCESS_SECRET || "";
 
@@ -23,6 +19,23 @@ export const branchOwnerService = {
 
   async getMySalons(branchOwnerId: string) {
     return branchOwnerRepository.getMySalons(branchOwnerId);
+  },
+
+  // Single combined payload for the Branch Owner dashboard — replaces what
+  // used to be 3 separate calls (salons, stats, payments), 2 of which
+  // (/stats, /payments) hit routes that never existed on the backend and
+  // silently 404'd, leaving those cards permanently empty on the frontend.
+  async getDashboard(branchOwnerId: string) {
+    const [salons, stats, payments] = await Promise.all([
+      branchOwnerRepository.getMySalons(branchOwnerId),
+      branchOwnerRepository.getDashboardStats(branchOwnerId),
+      branchOwnerRepository.getRecentPayments(branchOwnerId, 10),
+    ]);
+    return { salons, stats, payments };
+  },
+
+  async getPayments(branchOwnerId: string, status?: string) {
+    return branchOwnerRepository.getRecentPayments(branchOwnerId, 200, status);
   },
 
   async listSalonProducts(branchOwnerId: string, salonId: string, search?: string) {
@@ -194,6 +207,33 @@ export const branchOwnerService = {
       return { salons: rows, totals };
   },
 
+  async getCashManagementOverview(branchOwnerId: string) {
+      const rows = await branchOwnerRepository.getCashManagementBySalon(branchOwnerId);
+      const salons = rows.map((r: any) => ({
+          salonId: r.salon_id,
+          salonName: r.salon_name,
+          openingBalance: Math.round(Number(r.total_opening_balance ?? 0)),
+          cashRevenue: Math.round(Number(r.total_cash_revenue ?? 0)),
+          cashExpense: Math.round(Number(r.total_cash_expense ?? 0)),
+          closingBalance: Math.round(Number(r.total_closing_balance ?? 0)),
+          reconciliationAmount: Math.round(Number(r.total_reconciliation_amount ?? 0)),
+          totalSessions: Number(r.total_sessions ?? 0),
+          openSessions: Number(r.open_sessions ?? 0),
+          closedSessions: Number(r.closed_sessions ?? 0),
+      }));
+      const totals = salons.reduce((acc, r) => ({
+          openingBalance: acc.openingBalance + r.openingBalance,
+          cashRevenue: acc.cashRevenue + r.cashRevenue,
+          cashExpense: acc.cashExpense + r.cashExpense,
+          closingBalance: acc.closingBalance + r.closingBalance,
+          reconciliationAmount: acc.reconciliationAmount + r.reconciliationAmount,
+          totalSessions: acc.totalSessions + r.totalSessions,
+          openSessions: acc.openSessions + r.openSessions,
+          closedSessions: acc.closedSessions + r.closedSessions,
+      }), { openingBalance: 0, cashRevenue: 0, cashExpense: 0, closingBalance: 0, reconciliationAmount: 0, totalSessions: 0, openSessions: 0, closedSessions: 0 });
+      return { salons, totals };
+  },
+
   async getSalonStaffCommissions(branchOwnerId: string, salonId: string, status?: string) {
       await assertSalonsAssigned(branchOwnerId, [salonId]);
       return staffCommissionsService.getEarnedBySalon(salonId, undefined, undefined, undefined, undefined, undefined, status);
@@ -232,78 +272,6 @@ export const branchOwnerService = {
           });
       }));
       return perSalon.flat();
-  },
-
-  // ── Membership Sharing ─────────────────────────────────────────────────────
-  // Memberships have no shared catalog across salons — "sharing" means
-  // copying the plan definition into the destination salon as a brand new
-  // row. includedServices/categoryIds reference salon-scoped service/category
-  // ids that don't carry across, so the copy drops them (frontend surfaces
-  // this so the owner knows to re-attach services on the new salon's side).
-
-  async listSalonMemberships(branchOwnerId: string, salonId: string) {
-      await assertSalonsAssigned(branchOwnerId, [salonId]);
-      return membershipsRepository.listAll({}, salonId);
-  },
-
-  async copyMembership(branchOwnerId: string, sourceSalonId: string, destSalonId: string, membershipId: string) {
-      if (sourceSalonId === destSalonId) throw new AppError(400, "Source and destination salon must differ", "VALIDATION_ERROR");
-      await assertSalonsAssigned(branchOwnerId, [sourceSalonId, destSalonId]);
-      const source = await membershipsRepository.findById(membershipId, sourceSalonId);
-      if (!source) throw new AppError(404, "Membership not found", "NOT_FOUND");
-
-      const dto: CreateMembershipDTO = {
-          name: source.name,
-          description: source.description,
-          includedServices: [], // service ids are salon-scoped — can't carry across
-          sessionType: source.sessionType,
-          numberOfSessions: source.numberOfSessions,
-          validFor: source.validFor,
-          price: source.price,
-          taxRate: source.taxRate,
-          colour: source.colour,
-          enableOnlineSales: source.enableOnlineSales,
-          enableOnlineRedemption: source.enableOnlineRedemption,
-          termsAndConditions: source.termsAndConditions,
-          appliesTo: source.appliesTo,
-          pricingType: source.pricingType,
-          discountPercent: source.discountPercent,
-          discountBalance: source.discountBalance,
-          loyaltyTiers: source.loyaltyTiers,
-      };
-      return membershipsRepository.create(dto, destSalonId);
-  },
-
-  // ── Package Sharing ────────────────────────────────────────────────────────
-  // Package template services are stored as free-text service names (not
-  // service ids), so — unlike memberships — the full definition copies
-  // cleanly with nothing to drop.
-
-  async listSalonPackages(branchOwnerId: string, salonId: string) {
-      await assertSalonsAssigned(branchOwnerId, [salonId]);
-      return packageTemplatesRepository.list(salonId);
-  },
-
-  async copyPackage(branchOwnerId: string, sourceSalonId: string, destSalonId: string, templateId: string) {
-      if (sourceSalonId === destSalonId) throw new AppError(400, "Source and destination salon must differ", "VALIDATION_ERROR");
-      await assertSalonsAssigned(branchOwnerId, [sourceSalonId, destSalonId]);
-      const source = await packageTemplatesRepository.findById(templateId, sourceSalonId);
-      if (!source) throw new AppError(404, "Package template not found", "NOT_FOUND");
-
-      const dto: CreatePackageTemplateDTO = {
-          name: source.name,
-          description: source.description,
-          expiryMonths: source.expiryMonths,
-          expiryDays: source.expiryDays,
-          neverExpires: source.neverExpires,
-          expireAfterServices: source.expireAfterServices,
-          basePrice: source.basePrice,
-          gstPercentage: source.gstPercentage,
-          discount: source.discount,
-          paymentMethod: source.paymentMethod,
-          services: source.services.map((s) => ({ serviceName: s.serviceName, totalSessions: s.totalSessions, price: s.price })),
-      };
-      return packageTemplatesRepository.create(destSalonId, dto);
   },
 
   async enterSalon(branchOwnerId: string, salonId: string) {

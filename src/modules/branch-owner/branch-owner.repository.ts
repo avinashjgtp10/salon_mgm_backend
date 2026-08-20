@@ -20,12 +20,186 @@ export const branchOwnerRepository = {
     return rows;
   },
 
+  // Cross-salon dashboard stats — one query per metric, each scoped to every
+  // salon assigned to this branch owner via branch_owner_salons, rather than
+  // fanning out N queries (one per salon) like getFinanceOverview does. The
+  // dashboard only needs the totals, not a per-salon breakdown, so a single
+  // aggregate query per metric is both simpler and cheaper.
+  async getDashboardStats(branchOwnerId: string) {
+    const [salonCounts, revenueAndBookings, staffCount, clientCount, newClientsToday, activeSubs] = await Promise.all([
+      pool.query<{ total_salons: string; active_salons: string; inactive_salons: string }>(`
+        SELECT
+          COUNT(*)::int                                        AS total_salons,
+          COUNT(*) FILTER (WHERE s.is_active)::int              AS active_salons,
+          COUNT(*) FILTER (WHERE NOT s.is_active)::int          AS inactive_salons
+        FROM branch_owner_salons bos
+        JOIN salons s ON s.id = bos.salon_id
+        WHERE bos.branch_owner_id = $1
+      `, [branchOwnerId]),
+
+      // Revenue/bookings follow the same "completed sale, or an open partial
+      // deposit with no completed sale yet" convention as the single-salon
+      // dashboard's getSummary() (salon-dashboard.repository.ts), just summed
+      // across every assigned salon instead of scoped to one.
+      pool.query<{
+        total_revenue: string; revenue_today: string;
+        total_bookings: string; bookings_today: string;
+      }>(`
+        WITH my_salons AS (
+          SELECT salon_id FROM branch_owner_salons WHERE branch_owner_id = $1
+        ),
+        sales_rows AS (
+          SELECT s.created_at AS event_at, ROUND(s.total_amount) AS amount
+          FROM sales s
+          LEFT JOIN appointments a ON a.id = s.appointment_id
+          WHERE s.salon_id IN (SELECT salon_id FROM my_salons)
+            AND s.status = 'completed'
+            AND (a.id IS NULL OR (a.status IN ('paid', 'partial') AND a.deleted_at IS NULL))
+        ),
+        open_partial_rows AS (
+          SELECT p.created_at AS event_at, p.paid_amount AS amount
+          FROM payments p
+          JOIN appointments a ON a.id = p.appointment_id
+          WHERE p.salon_id IN (SELECT salon_id FROM my_salons)
+            AND p.status = 'partial'
+            AND a.deleted_at IS NULL
+            AND a.status NOT IN ('cancelled', 'no-show')
+            AND NOT EXISTS (
+              SELECT 1 FROM sales s2 WHERE s2.appointment_id = p.appointment_id AND s2.status = 'completed'
+            )
+        ),
+        revenue_events AS (
+          SELECT event_at, amount FROM sales_rows
+          UNION ALL
+          SELECT event_at, amount FROM open_partial_rows
+        )
+        SELECT
+          COALESCE((SELECT SUM(amount) FROM revenue_events), 0)::numeric AS total_revenue,
+          COALESCE((SELECT SUM(amount) FROM revenue_events WHERE DATE(event_at) = CURRENT_DATE), 0)::numeric AS revenue_today,
+          (SELECT COUNT(*) FROM appointments
+            WHERE salon_id IN (SELECT salon_id FROM my_salons)
+              AND deleted_at IS NULL AND status NOT IN ('cancelled', 'no-show'))::int AS total_bookings,
+          (SELECT COUNT(*) FROM appointments
+            WHERE salon_id IN (SELECT salon_id FROM my_salons)
+              AND deleted_at IS NULL AND status NOT IN ('cancelled', 'no-show')
+              AND DATE(scheduled_at) = CURRENT_DATE)::int AS bookings_today
+      `, [branchOwnerId]),
+
+      pool.query<{ total_staff: string }>(`
+        SELECT COUNT(*)::int AS total_staff
+        FROM staff st
+        JOIN branch_owner_salons bos ON bos.salon_id = st.salon_id
+        WHERE bos.branch_owner_id = $1 AND st.is_active = true
+      `, [branchOwnerId]),
+
+      // Clients table has no salon_id — a client "belongs" to a salon only
+      // via having an appointment/sale there, same join getSummary() uses.
+      pool.query<{ total_clients: string }>(`
+        SELECT COUNT(DISTINCT c.id)::int AS total_clients
+        FROM clients c
+        INNER JOIN (
+          SELECT client_id FROM appointments
+            WHERE salon_id IN (SELECT salon_id FROM branch_owner_salons WHERE branch_owner_id = $1)
+              AND client_id IS NOT NULL AND deleted_at IS NULL
+          UNION
+          SELECT client_id FROM sales
+            WHERE salon_id IN (SELECT salon_id FROM branch_owner_salons WHERE branch_owner_id = $1)
+              AND client_id IS NOT NULL
+        ) visited ON visited.client_id = c.id
+        WHERE c.is_active = true
+      `, [branchOwnerId]),
+
+      pool.query<{ new_clients_today: string }>(`
+        SELECT COUNT(*)::int AS new_clients_today
+        FROM clients c
+        WHERE c.is_active = true
+          AND DATE(c.created_at) = CURRENT_DATE
+          AND EXISTS (
+            SELECT 1 FROM appointments a
+            WHERE a.client_id = c.id
+              AND a.salon_id IN (SELECT salon_id FROM branch_owner_salons WHERE branch_owner_id = $1)
+          )
+      `, [branchOwnerId]),
+
+      pool.query<{ active_subscriptions: string }>(`
+        SELECT COUNT(DISTINCT bs.salon_id)::int AS active_subscriptions
+        FROM billing_subscriptions bs
+        JOIN branch_owner_salons bos ON bos.salon_id = bs.salon_id
+        WHERE bos.branch_owner_id = $1 AND bs.status IN ('trialing', 'active')
+      `, [branchOwnerId]),
+    ]);
+
+    return {
+      total_salons: salonCounts.rows[0]?.total_salons ?? 0,
+      active_salons: salonCounts.rows[0]?.active_salons ?? 0,
+      inactive_salons: salonCounts.rows[0]?.inactive_salons ?? 0,
+      total_staff: staffCount.rows[0]?.total_staff ?? 0,
+      total_clients: clientCount.rows[0]?.total_clients ?? 0,
+      total_revenue: Number(revenueAndBookings.rows[0]?.total_revenue ?? 0),
+      total_bookings: revenueAndBookings.rows[0]?.total_bookings ?? 0,
+      bookings_today: revenueAndBookings.rows[0]?.bookings_today ?? 0,
+      revenue_today: Number(revenueAndBookings.rows[0]?.revenue_today ?? 0),
+      new_clients_today: newClientsToday.rows[0]?.new_clients_today ?? 0,
+      active_subscriptions: activeSubs.rows[0]?.active_subscriptions ?? 0,
+    };
+  },
+
+  async getRecentPayments(branchOwnerId: string, limit = 10, status?: string) {
+    const values: any[] = [branchOwnerId];
+    let statusClause = "";
+    if (status) {
+      values.push(status);
+      statusClause = `AND p.status = $${values.length}`;
+    }
+    values.push(limit);
+    const { rows } = await pool.query(`
+      SELECT
+        p.id, p.amount, p.status, p.payment_method, p.created_at,
+        s.id                                        AS salon_id,
+        COALESCE(s.business_name, s.slug, 'Unnamed') AS salon_name
+      FROM payments p
+      JOIN branch_owner_salons bos ON bos.salon_id = p.salon_id
+      JOIN salons s ON s.id = p.salon_id
+      WHERE bos.branch_owner_id = $1 ${statusClause}
+      ORDER BY p.created_at DESC
+      LIMIT $${values.length}
+    `, values);
+    return rows;
+  },
+
   async isSalonAssignedToBranchOwner(branchOwnerId: string, salonId: string): Promise<boolean> {
     const { rows } = await pool.query(
       `SELECT 1 FROM branch_owner_salons WHERE branch_owner_id = $1 AND salon_id = $2 LIMIT 1`,
       [branchOwnerId, salonId]
     );
     return rows.length > 0;
+  },
+
+  // Cash counter session totals per assigned salon — same source columns as
+  // the single-salon Cash Management Report (reports.repository.ts), summed
+  // per salon instead of filtered to one, so a branch owner sees every
+  // branch's cash position on one screen.
+  async getCashManagementBySalon(branchOwnerId: string) {
+    const { rows } = await pool.query(`
+      SELECT
+        s.id                                            AS salon_id,
+        COALESCE(s.business_name, s.slug, 'Unnamed')     AS salon_name,
+        COALESCE(SUM(cm.opening_balance), 0)             AS total_opening_balance,
+        COALESCE(SUM(cm.cash_revenue), 0)                AS total_cash_revenue,
+        COALESCE(SUM(cm.cash_expense), 0)                AS total_cash_expense,
+        COALESCE(SUM(cm.closing_balance), 0)             AS total_closing_balance,
+        COALESCE(SUM(cm.reconciliation_amount), 0)       AS total_reconciliation_amount,
+        COUNT(cm.id)::int                                AS total_sessions,
+        COUNT(cm.id) FILTER (WHERE cm.status = 'open')::int   AS open_sessions,
+        COUNT(cm.id) FILTER (WHERE cm.status = 'closed')::int AS closed_sessions
+      FROM branch_owner_salons bos
+      JOIN salons s ON s.id = bos.salon_id
+      LEFT JOIN cash_management cm ON cm.salon_id = s.id
+      WHERE bos.branch_owner_id = $1
+      GROUP BY s.id, s.business_name, s.slug
+      ORDER BY s.created_at DESC
+    `, [branchOwnerId]);
+    return rows;
   },
 
   // Cross-salon stock transfer: products are salon-scoped, no shared catalog

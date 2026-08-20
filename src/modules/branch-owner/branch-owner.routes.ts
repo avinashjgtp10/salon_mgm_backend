@@ -7,6 +7,9 @@ const router = Router();
 
 router.use(authMiddleware, roleMiddleware("branch_owner"));
 
+router.get("/dashboard",         branchOwnerController.getDashboard);
+router.get("/payments",          branchOwnerController.getPayments);
+
 router.get("/salons",            branchOwnerController.getMySalons);
 router.post("/salons/:id/enter", branchOwnerController.enterSalon);
 
@@ -24,15 +27,10 @@ router.get("/inventory/categories", branchOwnerController.getCategoryBreakdown);
 router.get("/inventory/categories/:categoryName/products", branchOwnerController.getProductsByCategory);
 
 router.get("/finance/overview", branchOwnerController.getFinanceOverview);
+router.get("/finance/cash-management", branchOwnerController.getCashManagementOverview);
 router.get("/finance/salons/:salonId/commissions", branchOwnerController.getSalonStaffCommissions);
 router.post("/finance/salons/:salonId/commissions/settle", branchOwnerController.settleStaffCommission);
 
 router.get("/staff-performance", branchOwnerController.getStaffPerformance);
-
-router.get("/salons/:salonId/memberships", branchOwnerController.listSalonMemberships);
-router.post("/memberships/copy", branchOwnerController.copyMembership);
-
-router.get("/salons/:salonId/packages", branchOwnerController.listSalonPackages);
-router.post("/packages/copy", branchOwnerController.copyPackage);
 
 export default router;

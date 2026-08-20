@@ -13,6 +13,23 @@ export const branchOwnerController = {
     } catch (err) { return next(err); }
   },
 
+  async getDashboard(req: AuthedRequest, res: Response, next: NextFunction) {
+    try {
+      const branchOwnerId = req.user!.userId;
+      const data = await branchOwnerService.getDashboard(branchOwnerId);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
+  async getPayments(req: AuthedRequest, res: Response, next: NextFunction) {
+    try {
+      const branchOwnerId = req.user!.userId;
+      const status = req.query.status ? String(req.query.status) : undefined;
+      const data = await branchOwnerService.getPayments(branchOwnerId, status);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
   async enterSalon(req: AuthedRequest, res: Response, next: NextFunction) {
     try {
       const branchOwnerId = req.user!.userId;
@@ -119,6 +136,13 @@ export const branchOwnerController = {
     } catch (err) { return next(err); }
   },
 
+  async getCashManagementOverview(req: AuthedRequest, res: Response, next: NextFunction) {
+    try {
+      const data = await branchOwnerService.getCashManagementOverview(req.user!.userId);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
   async getSalonStaffCommissions(req: AuthedRequest, res: Response, next: NextFunction) {
     try {
       const salonId = String(req.params.salonId);
@@ -142,44 +166,6 @@ export const branchOwnerController = {
   async getStaffPerformance(req: AuthedRequest, res: Response, next: NextFunction) {
     try {
       const data = await branchOwnerService.getStaffPerformance(req.user!.userId);
-      return res.json({ success: true, data });
-    } catch (err) { return next(err); }
-  },
-
-  // ── Membership Sharing ─────────────────────────────────────────────────────
-
-  async listSalonMemberships(req: AuthedRequest, res: Response, next: NextFunction) {
-    try {
-      const salonId = String(req.params.salonId);
-      const data = await branchOwnerService.listSalonMemberships(req.user!.userId, salonId);
-      return res.json({ success: true, data });
-    } catch (err) { return next(err); }
-  },
-
-  async copyMembership(req: AuthedRequest, res: Response, next: NextFunction) {
-    try {
-      const branchOwnerId = req.user!.userId;
-      const { source_salon_id, dest_salon_id, membership_id } = req.body ?? {};
-      const data = await branchOwnerService.copyMembership(branchOwnerId, String(source_salon_id), String(dest_salon_id), String(membership_id));
-      return res.json({ success: true, data });
-    } catch (err) { return next(err); }
-  },
-
-  // ── Package Sharing ────────────────────────────────────────────────────────
-
-  async listSalonPackages(req: AuthedRequest, res: Response, next: NextFunction) {
-    try {
-      const salonId = String(req.params.salonId);
-      const data = await branchOwnerService.listSalonPackages(req.user!.userId, salonId);
-      return res.json({ success: true, data });
-    } catch (err) { return next(err); }
-  },
-
-  async copyPackage(req: AuthedRequest, res: Response, next: NextFunction) {
-    try {
-      const branchOwnerId = req.user!.userId;
-      const { source_salon_id, dest_salon_id, template_id } = req.body ?? {};
-      const data = await branchOwnerService.copyPackage(branchOwnerId, String(source_salon_id), String(dest_salon_id), String(template_id));
       return res.json({ success: true, data });
     } catch (err) { return next(err); }
   },
