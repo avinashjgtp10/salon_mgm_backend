@@ -59,6 +59,16 @@ export async function ensureTable(): Promise<void> {
     await pool.query(
         `ALTER TABLE appointments ADD COLUMN IF NOT EXISTS reopened_from_paid BOOLEAN NOT NULL DEFAULT FALSE`,
     );
+    // Unit Conversion system: appointment_service_consumables.standard_qty/
+    // actual_qty are always canonical base-unit amounts — what's actually
+    // deducted (see appointmentConsumablesService.collectServiceRowItems).
+    // entered_qty preserves what staff actually typed, in `unit`, before
+    // conversion — for usage-history/audit display only, never used for
+    // deduction math. NULL on every row written before this column existed;
+    // readers fall back to actual_qty for those.
+    await pool.query(
+        `ALTER TABLE appointment_service_consumables ADD COLUMN IF NOT EXISTS entered_qty NUMERIC NULL`,
+    );
 }
 
 export const appointmentsRepository = {
@@ -398,7 +408,7 @@ export const appointmentsRepository = {
     async getServiceConsumables(appointmentId: string): Promise<AppointmentServiceConsumableRecord[]> {
         const { rows } = await pool.query(
             `SELECT asc_.service_row_id, asc_.service_id, asc_.product_id, p.name AS product_name,
-                    asc_.standard_qty, asc_.actual_qty, asc_.unit, asc_.branch_id, asc_.staff_id
+                    asc_.standard_qty, asc_.actual_qty, asc_.entered_qty, asc_.unit, asc_.branch_id, asc_.staff_id
              FROM appointment_service_consumables asc_
              LEFT JOIN products p ON p.id = asc_.product_id
              WHERE asc_.appointment_id = $1`,
@@ -418,18 +428,18 @@ export const appointmentsRepository = {
         const values: unknown[] = [];
         const rowsSql: string[] = [];
         rows.forEach((r, i) => {
-            const base = i * 9;
+            const base = i * 10;
             values.push(
                 appointmentId, r.service_row_id, r.service_id ?? null, r.product_id,
-                r.standard_qty, r.actual_qty, r.unit ?? null, r.branch_id ?? null, r.staff_id ?? null
+                r.standard_qty, r.actual_qty, r.entered_qty ?? null, r.unit ?? null, r.branch_id ?? null, r.staff_id ?? null
             );
             rowsSql.push(
-                `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9})`
+                `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, $${base + 10})`
             );
         });
         await pool.query(
             `INSERT INTO appointment_service_consumables
-               (appointment_id, service_row_id, service_id, product_id, standard_qty, actual_qty, unit, branch_id, staff_id)
+               (appointment_id, service_row_id, service_id, product_id, standard_qty, actual_qty, entered_qty, unit, branch_id, staff_id)
              VALUES ${rowsSql.join(", ")}`,
             values
         );

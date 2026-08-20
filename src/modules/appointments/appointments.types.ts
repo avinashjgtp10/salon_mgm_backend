@@ -71,8 +71,13 @@ export type AppointmentServiceConsumableRecord = {
     // Read-time-only enrichment (joined from products, never persisted on
     // this table) — see appointmentsRepository.getServiceConsumables.
     product_name?: string;
+    // Always canonical base-unit amounts — what's actually deducted.
     standard_qty: number;
     actual_qty: number;
+    // What staff actually typed, in `unit`, before conversion to base-unit
+    // above — audit/history display only, never used for deduction math.
+    // Undefined/null on rows written before this column existed.
+    entered_qty?: number | null;
     unit?: string | null;
     branch_id?: string | null;
     staff_id?: string | null;
