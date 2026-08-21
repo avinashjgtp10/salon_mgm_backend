@@ -7,6 +7,9 @@ import { salesRepository } from "../sales/sales.repository";
 import type { SaleItem } from "../sales/sales.types";
 import { productsRepository } from "../products/products.repository";
 import { appointmentConsumablesService } from "../inventory/inventory.service";
+import { consumableInventoryRepository } from "../inventory/consumable-inventory.repository";
+import { resolveConversionRatio, FAMILY_MESSAGE } from "../inventory/unit-families";
+import type { UnitConversion } from "../inventory/consumable-inventory.types";
 import { commissionCalculationService } from "../commission/commissionCalculation.service";
 import { blockedTimesRepository } from "../blocked_times/blocked_times.repository";
 import { recordTransaction } from "../transactions/transaction-recorder.service";
@@ -286,13 +289,58 @@ function assignServiceRowIds(services?: IncomingAppointmentServiceItem[]): void 
     }
 }
 
+// Looks up, once per flattenServiceConsumables() call, every distinct
+// product referenced by services[].consumables[]: its base unit
+// (products.measure_unit) and its configured packaging conversions
+// (product_unit_conversions) — the two things resolveConversionRatio needs
+// to turn "1 Bottle" into a base-unit amount. One query pair per distinct
+// product (typically 1-5 per appointment), not per consumable row.
+async function buildUnitConversionContext(
+    services: IncomingAppointmentServiceItem[] | undefined,
+    salonId: string
+): Promise<Map<string, { baseUnit: string; conversions: UnitConversion[] }>> {
+    const productIds = new Set<string>();
+    for (const s of services ?? []) {
+        for (const c of s.consumables ?? []) {
+            if (c.product_id) productIds.add(c.product_id);
+        }
+    }
+    const context = new Map<string, { baseUnit: string; conversions: UnitConversion[] }>();
+    await Promise.all(
+        Array.from(productIds).map(async (id) => {
+            const [product, conversions] = await Promise.all([
+                productsRepository.findById(id, salonId),
+                consumableInventoryRepository.getUnitConversions(id),
+            ]);
+            if (product) context.set(id, { baseUnit: product.measure_unit ?? "", conversions });
+        })
+    );
+    return context;
+}
+
 // Flattens services[].consumables[] into one row per (service_row_id,
 // product_id), ready for appointment_service_consumables. Must run AFTER
 // assignServiceRowIds so every row has a stable id to key off. actual_qty
 // defaults to the configured qty when the caller hasn't touched it yet.
+//
+// Unit Conversion: standard_qty/actual_qty stored here are ALWAYS base-unit
+// amounts — inventory is deducted in the base unit only (see
+// appointmentConsumablesService.collectServiceRowItems, which trusts
+// actual_qty as-is with no conversion of its own). When a consumable was
+// logged in a display unit other than the product's base unit (e.g. "1
+// Bottle" on an ml-based product), what the caller sent is converted here,
+// once, at ingestion — the raw entered amount is preserved separately as
+// entered_qty for audit/history display. A unit that can't be resolved for
+// this specific product (wrong measurement family, or a packaging unit this
+// product has never had configured) is rejected outright: this can only be
+// reached by bypassing the picker UI (which only ever offers resolvable
+// units), so failing the whole request here — before anything is written —
+// is correct, not overly strict; silently falling back to a 1:1 ratio is
+// exactly the bug this replaces (a "1 L" entry deducted as if it were "1 ml").
 function flattenServiceConsumables(
     services: IncomingAppointmentServiceItem[] | undefined,
-    branchId: string | null
+    branchId: string | null,
+    unitContext: Map<string, { baseUnit: string; conversions: UnitConversion[] }>
 ): AppointmentServiceConsumableRecord[] {
     if (!services) return [];
     const rows: AppointmentServiceConsumableRecord[] = [];
@@ -300,14 +348,31 @@ function flattenServiceConsumables(
         if (!s.id || !s.consumables?.length) continue;
         for (const c of s.consumables) {
             if (!c.product_id) continue;
-            const standardQty = Number(c.qty) || 0;
-            const actualQty = c.actual_qty !== undefined && c.actual_qty !== null ? Number(c.actual_qty) : standardQty;
+            const enteredStandardQty = Number(c.qty) || 0;
+            const enteredActualQty = c.actual_qty !== undefined && c.actual_qty !== null ? Number(c.actual_qty) : enteredStandardQty;
+
+            let ratio = 1;
+            const productCtx = unitContext.get(c.product_id);
+            if (productCtx && c.unit) {
+                const resolved = resolveConversionRatio(productCtx.baseUnit, c.unit, productCtx.conversions);
+                if (resolved === null) {
+                    throw new AppError(
+                        400,
+                        `${FAMILY_MESSAGE} ("${c.unit}" is not a configured unit for this product.)`,
+                        "INVALID_UNIT_CONVERSION",
+                        { unit_name: c.unit, product_id: c.product_id }
+                    );
+                }
+                ratio = resolved;
+            }
+
             rows.push({
                 service_row_id: s.id,
                 service_id: s.service_id ?? null,
                 product_id: c.product_id,
-                standard_qty: standardQty,
-                actual_qty: actualQty,
+                standard_qty: enteredStandardQty * ratio,
+                actual_qty: enteredActualQty * ratio,
+                entered_qty: enteredActualQty,
                 unit: c.unit ?? null,
                 branch_id: branchId,
                 staff_id: s.staff_id ?? null,
@@ -453,7 +518,8 @@ export const appointmentsService = {
         let consumableRows: AppointmentServiceConsumableRecord[] = [];
         if (body.services?.some((s) => s.consumables?.length)) {
             const branchId = await appointmentConsumablesService.resolveBranchId(body.salon_id, body.branch_id ?? null);
-            consumableRows = flattenServiceConsumables(body.services, branchId);
+            const unitContext = await buildUnitConversionContext(body.services, body.salon_id);
+            consumableRows = flattenServiceConsumables(body.services, branchId, unitContext);
         }
         body.services = stripConsumables(body.services) as typeof body.services;
 
@@ -705,7 +771,8 @@ export const appointmentsService = {
             const branchId = wasFirstTimePaid || hadPriorDeduction
                 ? await appointmentConsumablesService.resolveBranchId(existing.salon_id, existing.branch_id)
                 : null;
-            newConsumableRows = flattenServiceConsumables(patch.services as IncomingAppointmentServiceItem[], branchId);
+            const unitContext = await buildUnitConversionContext(patch.services as IncomingAppointmentServiceItem[], existing.salon_id);
+            newConsumableRows = flattenServiceConsumables(patch.services as IncomingAppointmentServiceItem[], branchId, unitContext);
             patch = { ...patch, services: stripConsumables(patch.services as IncomingAppointmentServiceItem[]) as typeof patch.services };
 
             if (wasFirstTimePaid && branchId) {

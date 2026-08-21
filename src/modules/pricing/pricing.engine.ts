@@ -140,10 +140,11 @@ export interface ComputeBillTotalsInput {
   taxes: ActiveTaxRow[];
   exCharges: number;
   tip: number;
-  // "Add Tip to Salon" checkbox — checked: tip is collected as part of the
-  // bill and counts toward Grand Total (staff is paid out separately,
-  // outside this transaction). Unchecked (default): tip is display-only,
-  // handed to staff directly, never part of what's charged/collected.
+  // Formerly gated whether `tip` counted toward the bill total ("Add Tip to
+  // Salon" checkbox) — that control has been removed and tip is now NEVER
+  // added to the total (see withCharges below), so this is accepted and
+  // ignored. Kept on the type only so existing callers that still pass a
+  // saved appointment's stored value don't need an unrelated type change.
   tipAddedToSalon?: boolean;
   eWalletUsed?: number;
   membershipWalletUsed?: number;
@@ -430,10 +431,6 @@ export function computeBillTotals(input: ComputeBillTotalsInput): BillTotalsResu
   const {
     actualAmounts, catalogAmounts = actualAmounts,
     discountType, discountValue, discountAppliesTo, couponDiscount = 0, membershipDiscountAmount = 0, referralDiscount = 0, taxes,
-    // `tip` (Staff Tip) only affects the total when tipAddedToSalon is set —
-    // see withCharges below. Off by default: display/record-only, passed
-    // straight to staff, same as it's always been.
-    tip = 0, tipAddedToSalon = false,
     exCharges, eWalletUsed = 0, membershipWalletUsed = 0,
     membershipServiceWalletUsed = 0, membershipProductWalletUsed = 0,
     membershipServiceDiscountUsed = 0, membershipProductDiscountUsed = 0,
@@ -599,14 +596,16 @@ export function computeBillTotals(input: ComputeBillTotalsInput): BillTotalsResu
 
   const afterSvcDiscount = Math.max(0, billTotal - manualDiscount);
   // Extra Charges are excluded from the Svc/Bill Discount base above (see
-  // billTotal) — added here, after the discount, not before. `tip` is only
-  // added when tipAddedToSalon is checked ("Add Tip to Salon") — by default
-  // it stays a display-only, record-only figure (shown as its own Sale
-  // Summary row) passed straight to staff, never collected as part of the
-  // bill or counted as revenue, matching sales.total_amount's identical
-  // conditional in sales.repository.ts. Unlike exCharges, tip is never
-  // taxed either way — matches the flat ₹ amount actually handed to staff.
-  const withCharges = afterSvcDiscount + exCharges + (tipAddedToSalon ? tip : 0);
+  // billTotal) — added here, after the discount, not before. `tip` is NEVER
+  // added to the bill total or counted as revenue — it's display/record-only
+  // (shown as its own Sale Summary row), passed straight to staff. There was
+  // previously an "Add Tip to Salon" toggle that let it opt into the total;
+  // that control has been removed, and this exclusion is now unconditional —
+  // matches sales.total_amount's identical (now also unconditional) exclusion
+  // in sales.repository.ts. `tipAddedToSalon` is kept on the input type only
+  // so callers passing an old saved appointment's stored value don't need an
+  // unrelated type change; it's read nowhere below.
+  const withCharges = afterSvcDiscount + exCharges;
 
   // Referral Discount (first-bill welcome discount) is a POST-tax,
   // POST-Svc-Discount deduction — applied here, not folded into the pre-tax
