@@ -214,6 +214,51 @@ async function recalculateCounterById(client: DbClient, counterId: string, salon
   return rows[0];
 }
 
+// Counts how many payments in this counter's session window (opened_at ->
+// closed_at, same window recalculateCounterById sums Cash Revenue over) used
+// each method. Mirrors that function's cash-leg detection — check the
+// authoritative split_details JSON first, falling back to payment_method —
+// but does it independently per method instead of collapsing to one, since a
+// split payment can genuinely count toward more than one method (e.g. a
+// Cash+UPI split is one payment via both).
+async function getPaymentMethodCounts(
+  client: DbClient,
+  salonId: string,
+  openedAt: string,
+  closedAt: string | null,
+) {
+  const legAmount = (leg: string) => `COALESCE((
+    SELECT SUM(value::numeric)
+    FROM jsonb_each_text(COALESCE(py.split_details, '{}'::jsonb)) AS leg(key, value)
+    WHERE LOWER(key) = '${leg}'
+  ), 0::numeric)`;
+
+  const { rows } = await client.query<{ upi_count: string; card_count: string; cash_count: string }>(
+    `SELECT
+       COUNT(*) FILTER (
+         WHERE LOWER(COALESCE(py.payment_method, '')) = 'upi' OR ${legAmount("upi")} > 0
+       ) AS upi_count,
+       COUNT(*) FILTER (
+         WHERE LOWER(COALESCE(py.payment_method, '')) = 'card' OR ${legAmount("card")} > 0
+       ) AS card_count,
+       COUNT(*) FILTER (
+         WHERE LOWER(COALESCE(py.payment_method, '')) = 'cash' OR ${legAmount("cash")} > 0
+       ) AS cash_count
+     FROM payments py
+     WHERE py.salon_id = $1
+       AND py.status IN ('partial', 'completed')
+       AND py.updated_at >= $2::timestamptz
+       AND py.updated_at <= COALESCE($3::timestamptz, NOW())`,
+    [salonId, openedAt, closedAt],
+  );
+
+  return {
+    upi_count: Number(rows[0]?.upi_count ?? 0),
+    card_count: Number(rows[0]?.card_count ?? 0),
+    cash_count: Number(rows[0]?.cash_count ?? 0),
+  };
+}
+
 export async function ensureCashManagementTables(): Promise<void> {
   await safeQuery(() =>
     pool.query(`
@@ -417,6 +462,12 @@ export const cashManagementRepository = {
   async getDashboardSummary(salonId: string, cashManagementId?: string) {
     const counter = await this.findCounterForDashboard(salonId, cashManagementId);
     const refreshed = await recalculateCounterById(pool, counter.id, salonId);
+    const methodCounts = await getPaymentMethodCounts(
+      pool,
+      salonId,
+      refreshed.opened_at,
+      refreshed.closed_at,
+    );
 
     const closingBalance = parseFloat(refreshed.closing_balance ?? "0");
     const inStoreCash = parseFloat(refreshed.in_store_cash ?? "0");
@@ -436,6 +487,9 @@ export const cashManagementRepository = {
       opened_at: refreshed.opened_at,
       closed_at: refreshed.closed_at,
       remarks: refreshed.remarks,
+      upi_count: methodCounts.upi_count,
+      card_count: methodCounts.card_count,
+      cash_count: methodCounts.cash_count,
     };
   },
 
@@ -905,8 +959,20 @@ export const cashManagementRepository = {
         ],
       );
 
+      const methodCounts = await getPaymentMethodCounts(
+        client,
+        params.salonId,
+        rows[0].opened_at,
+        rows[0].closed_at,
+      );
+
       await client.query("COMMIT");
-      return rows[0];
+      return {
+        ...rows[0],
+        upi_count: methodCounts.upi_count,
+        card_count: methodCounts.card_count,
+        cash_count: methodCounts.cash_count,
+      };
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
