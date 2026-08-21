@@ -157,7 +157,11 @@ function needsTaxBackfill(appt: Appointment): boolean {
 function backfillTaxBreakdown(appt: Appointment, activeTaxes: ActiveTaxRow[]): Appointment {
     if (!needsTaxBackfill(appt)) return appt;
     const result = computeAppointmentTotals(appt, activeTaxes);
-    return { ...appt, tax_breakdown: result.taxBreakdown, computed_grand_total: result.grandTotal };
+    // result.grandTotal is the pure revenue figure (tip excluded, matches
+    // sales.total_amount) — computed_grand_total is display-only (calendar
+    // tooltip/chip, never written back), so tip is added back on for the
+    // same reason pricing.service.ts's preview response does.
+    return { ...appt, tax_breakdown: result.taxBreakdown, computed_grand_total: result.grandTotal + (Number(appt.tip_amount) || 0) };
 }
 
 // Once an appointment has a linked, paid sale, its real per-item GST lives on
@@ -1263,7 +1267,9 @@ export const appointmentsService = {
                                 status:          "paid",
                                 notes:           existing.notes,
                             },
-                            paidAmount:  Number(preExistingSale.total_amount ?? 0),
+                            // Fully-settled sale — total_amount is revenue (tip-exclusive);
+                            // what the client actually paid includes tip on top of it.
+                            paidAmount:  Number(preExistingSale.total_amount ?? 0) + Number(preExistingSale.tip_amount ?? 0),
                             dueAmount:   0,
                             couponCode:  null,
                         });
@@ -1513,7 +1519,9 @@ export const appointmentsService = {
                         status: existing.status,
                         notes: existing.notes,
                     },
-                    paidAmount: Number(sale.total_amount) || 0,
+                    // Fully-settled sale — total_amount is revenue (tip-exclusive); what
+                    // the client actually paid includes tip on top of it.
+                    paidAmount: (Number(sale.total_amount) || 0) + (Number(sale.tip_amount) || 0),
                     dueAmount: 0,
                     couponCode: null,
                 });

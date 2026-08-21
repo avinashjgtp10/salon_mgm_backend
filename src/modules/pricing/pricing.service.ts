@@ -441,8 +441,19 @@ export const pricingService = {
       } catch { /* non-fatal — omit if lookup fails */ }
     }
 
+    // result.grandTotal/preRedemptionTotal are the pure revenue figures (tip
+    // excluded — matches sales.total_amount, which is what every dashboard/
+    // report reads). This preview response feeds the frontend's displayed
+    // "Grand Total"/"Amount to Pay" AND what PaymentPanel asks the cashier to
+    // collect, so tip is added back on here, display-side only — the actual
+    // charge is independently recomputed and capped server-side at checkout
+    // (see payments.service.ts's payableCeiling), this is read-only preview.
+    const previewTipAmt = body.tip ?? 0;
+
     return {
       ...result,
+      grandTotal: result.grandTotal + previewTipAmt,
+      preRedemptionTotal: result.preRedemptionTotal + previewTipAmt,
       rowMembershipDiscount: { service: membershipServiceDiscounts, product: membershipProductDiscounts },
       // Per-row membership WALLET coverage — same fill-in-order split
       // (services first, then products) already baked into rowTax above,
