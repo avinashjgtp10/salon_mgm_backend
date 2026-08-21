@@ -745,6 +745,14 @@ export const paymentsService = {
           // in this system, so a frontend-sent amount above the remaining due (e.g. a POS
           // cash/split entry typo) must never be persisted as-is, or reports/KPIs downstream
           // silently show paid > billed for that transaction.
+          //
+          // Capped at effectiveBill only — tip is deliberately NOT part of this ceiling.
+          // The client may hand over bill+tip in one swipe (see receipt-html.template.ts's
+          // printed Grand Total), but paid_amount/due_amount only ever settle the bill
+          // portion; tip is tracked and settled entirely separately via tip_amount +
+          // tipCalculationService (Tip Settle), never through payments.paid_amount. This
+          // keeps every dashboard/report/client-spend figure that reads paid_amount
+          // tip-free by construction, instead of needing to subtract tip back out everywhere.
           const requestedPaid = Math.max(0, (
             data.paid_amount != null ? Number(data.paid_amount)
             : data.net_amount  != null ? Number(data.net_amount)

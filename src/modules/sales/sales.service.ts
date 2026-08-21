@@ -265,7 +265,9 @@ export const salesService = {
                 items,
                 appointment: null,
                 paidAmount:  body.amount_paid,
-                dueAmount:   Math.max(0, parseFloat(sale.total_amount) - body.amount_paid),
+                // total_amount is revenue (tip-exclusive); the client's actual bill —
+                // and what's actually owed if underpaid — includes tip on top of it.
+                dueAmount:   Math.max(0, parseFloat(sale.total_amount) + (parseFloat(sale.tip_amount) || 0) - body.amount_paid),
                 couponCode:  null,
             }).catch(() => {});
         }

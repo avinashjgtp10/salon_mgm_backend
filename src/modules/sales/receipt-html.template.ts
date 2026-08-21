@@ -114,7 +114,12 @@ export function buildReceiptHtml(params: {
     const discountAmt = Number(sale.discount_amount) || 0;
     const tipAmt = Number(sale.tip_amount) || 0;
     const taxAmt = Number(sale.tax_amount) || 0;
-    const grandTotal = Number(sale.total_amount) || 0;
+    // sale.total_amount is the revenue figure (tip-exclusive — matches every
+    // dashboard/report reading of this same column). The printed Grand Total
+    // is what the client actually paid, so tip is added back on here only,
+    // display-side — see payments.service.ts's payableCeiling for the same
+    // split applied to what's actually collectible at checkout.
+    const grandTotal = (Number(sale.total_amount) || 0) + tipAmt;
 
     const summaryRows = [
         subtotalAmt > 0 ? sumRow("Subtotal", fmt(subtotalAmt)) : "",
