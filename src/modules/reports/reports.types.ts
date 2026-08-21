@@ -1154,6 +1154,10 @@ export interface ProductInventoryReportFilters {
     stock_status?: "in_stock" | "low_stock" | "out_of_stock";
     date_from?: string;
     date_to?: string;
+    // Separate from date_from/date_to (which filter "Date Added" — created_at)
+    // — these filter the product's expiry_date instead.
+    expiry_from?: string;
+    expiry_to?: string;
     page?: number;
     limit?: number;
     is_export?: boolean;
