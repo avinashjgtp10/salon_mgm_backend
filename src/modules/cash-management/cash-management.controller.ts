@@ -235,6 +235,8 @@ export const cashManagementController = {
           inStoreCash: Number(req.body?.in_store_cash ?? req.body?.inStoreCash ?? 0),
           reconciliationAmount: Number(req.body?.reconciliation_amount ?? req.body?.reconciliationAmount ?? 0),
           remarks: req.body?.remarks ? String(req.body.remarks) : "",
+          upiPaymentCount: Number(req.body?.upi_payment_count ?? req.body?.upiPaymentCount ?? 0),
+          cardPaymentCount: Number(req.body?.card_payment_count ?? req.body?.cardPaymentCount ?? 0),
         },
       });
 

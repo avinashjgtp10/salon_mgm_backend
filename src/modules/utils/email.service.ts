@@ -1122,6 +1122,8 @@ export const emailService = {
       inStoreCash?: number;
       reconciliationAmount?: number;
       remarks?: string;
+      upiPaymentCount?: number;
+      cardPaymentCount?: number;
     };
   }) {
     const { to, summary = {} } = params;
@@ -1248,6 +1250,35 @@ export const emailService = {
                               <td>
                                 <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:${reconciliationLabelColor};letter-spacing:0.5px;display:block;margin-bottom:6px;">Reconciliation Amount</span>
                                 <div style="font-size:20px;font-weight:800;color:${reconciliationColor};">${reconciliationPrefix}${formatINR(summary.reconciliationAmount)}</div>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <!-- Row 4: UPI Payments & Card Payments -->
+                    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 16px;">
+                      <tr>
+                        <td width="48%" style="vertical-align:top;">
+                          <table width="100%" cellpadding="0" cellspacing="0"
+                            style="background:#f5f3ff;border:1px solid #ddd6fe;border-left:4px solid #7c3aed;border-radius:8px;padding:16px;">
+                            <tr>
+                              <td>
+                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#5b21b6;letter-spacing:0.5px;display:block;margin-bottom:6px;">UPI Payments</span>
+                                <div style="font-size:20px;font-weight:800;color:#7c3aed;">${Number(summary.upiPaymentCount || 0)}</div>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                        <td width="4%"></td>
+                        <td width="48%" style="vertical-align:top;">
+                          <table width="100%" cellpadding="0" cellspacing="0"
+                            style="background:#eff6ff;border:1px solid #bfdbfe;border-left:4px solid #2563eb;border-radius:8px;padding:16px;">
+                            <tr>
+                              <td>
+                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#1d4ed8;letter-spacing:0.5px;display:block;margin-bottom:6px;">Card Payments</span>
+                                <div style="font-size:20px;font-weight:800;color:#2563eb;">${Number(summary.cardPaymentCount || 0)}</div>
                               </td>
                             </tr>
                           </table>
