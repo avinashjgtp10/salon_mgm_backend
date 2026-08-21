@@ -3,6 +3,7 @@ import PDFDocument from "pdfkit";
 import { AppError } from "../../middleware/error.middleware";
 import logger from "../../config/logger";
 import { commissionCalculationService } from "../commission/commissionCalculation.service";
+import { tipCalculationService } from "../tips/tipCalculation.service";
 import { salesRepository } from "./sales.repository";
 import { Sale, SaleItem, CreateSaleBody, UpdateSaleBody, CheckoutSaleBody } from "./sales.types";
 import { paymentsRepository } from "../payments/payments.repository";
@@ -118,9 +119,10 @@ export const salesService = {
         const sale = await salesRepository.update(id, patch);
         const updatedItems = await salesRepository.findItemsBySaleId(id);
 
-        // Reverse pending commissions when a sale is cancelled or refunded
+        // Reverse pending commissions/tips when a sale is cancelled or refunded
         if (patch.status && ["cancelled", "refunded"].includes(patch.status)) {
             commissionCalculationService.reverseForSale(id).catch(() => {});
+            tipCalculationService.reverseForSale(id).catch(() => {});
         }
 
         return { sale, items: updatedItems };
@@ -214,6 +216,7 @@ export const salesService = {
             fallbackStaffId: sale.staff_id       ?? null,
             items,
         }).catch(() => {}); // already safe internally, double-guard here
+        tipCalculationService.earnForSale(sale.id, sale.salon_id).catch(() => {});
 
         // ── WhatsApp Automation: Purchase confirmation (per item type) ─────────
         // service_purchased / product_purchased fire once each if that item type

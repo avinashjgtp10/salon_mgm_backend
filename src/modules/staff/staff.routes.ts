@@ -7,6 +7,7 @@ import { uploadMiddleware } from "../../middleware/upload.middleware";
 import {
   staffController, staffInvitationController, staffAddressController,
   staffEmergencyContactController, staffWagesController, staffCommissionsController,
+  staffTipsController,
   staffPayRunsController, staffSchedulesController, staffLeavesController,
 } from "./staff.controller";
 import {
@@ -49,6 +50,14 @@ router.post("/commissions/:staffId/mark-paid",  auth, ownerAdmin, staffCommissio
 router.get("/commissions/:staffId/settlements", auth, ownerAdmin, staffCommissionsController.getSettlementHistory);
 router.get("/commissions/all",                  auth, ownerAdmin, staffCommissionsController.listBySalon);
 router.post("/commissions/bulk-configure",      auth, ownerAdmin, staffCommissionsController.bulkConfigure);
+
+// ─── Tips — salon-wide (must be BEFORE /:staffId routes, same reason as
+// Commissions above — a literal segment like "tips" registered after a
+// "/:staffId" route would otherwise be swallowed by it) ──────────────────────
+router.get("/tips/summary",              auth, ownerAdmin, staffTipsController.getTipSummary);
+router.get("/tips/earned",               auth, ownerAdmin, staffTipsController.getEarnedBySalon);
+router.post("/tips/:staffId/settle",     auth, ownerAdmin, staffTipsController.settleStaffTip);
+router.get("/tips/:staffId/settlements", auth, ownerAdmin, staffTipsController.getSettlementHistory);
 
 // ─── Commission Slabs + History — per staff ──────────────────────────────────
 router.get("/:staffId/commissions/slabs",   auth, ownerAdmin, staffCommissionsController.getSlabs);

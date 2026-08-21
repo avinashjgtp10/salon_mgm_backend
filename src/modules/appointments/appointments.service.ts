@@ -7,6 +7,7 @@ import { salesRepository } from "../sales/sales.repository";
 import type { SaleItem } from "../sales/sales.types";
 import { productsRepository } from "../products/products.repository";
 import { appointmentConsumablesService } from "../inventory/inventory.service";
+import { tipCalculationService } from "../tips/tipCalculation.service";
 import { consumableInventoryRepository } from "../inventory/consumable-inventory.repository";
 import { resolveConversionRatio, FAMILY_MESSAGE } from "../inventory/unit-families";
 import type { UnitConversion } from "../inventory/consumable-inventory.types";
@@ -1181,6 +1182,8 @@ export const appointmentsService = {
                 items:           saleItems,
                 packageItemIds:  new Set((existing.package_items ?? []).map(p => p.package_id)),
             }).catch(() => {});
+            await tipCalculationService.reverseForSale(preExistingSale.id).catch(() => {});
+            tipCalculationService.earnForSale(preExistingSale.id, existing.salon_id).catch(() => {});
 
             // Auto-mark attendance (fire-and-forget)
             if (existing.staff_id) {
@@ -1431,6 +1434,7 @@ export const appointmentsService = {
             items,
             packageItemIds:  new Set((existing.package_items ?? []).map(p => p.package_id)),
         }).catch(() => {});
+        tipCalculationService.earnForSale(sale.id, existing.salon_id).catch(() => {});
 
         // ── Auto-mark attendance for the staff member (fire-and-forget) ───────
         if (existing.staff_id) {
