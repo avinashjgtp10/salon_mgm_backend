@@ -1332,6 +1332,8 @@ async getProductInventoryReport(
                 : undefined,
             date_from: asString(body.date_from),
             date_to: asString(body.date_to),
+            expiry_from: asString(body.expiry_from),
+            expiry_to: asString(body.expiry_to),
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,

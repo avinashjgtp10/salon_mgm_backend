@@ -91,7 +91,7 @@ export default pool;
  * Two retries with a short backoff ride out short-lived DNS/connection
  * blips that a single immediate retry can still land inside of.
  *
- * USAGE:
+ * USAGE:///
  *   const { rows } = await safeQuery(() => pool.query(sql, params));
  */
 export async function safeQuery<T>(queryFn: () => Promise<T>, retries = 2): Promise<T> {

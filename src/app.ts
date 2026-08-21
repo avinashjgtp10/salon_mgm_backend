@@ -70,6 +70,7 @@ import { ensureTable as ensureClientNotesTable } from "./modules/client-notes/cl
 import clientCommunicationRoutes from "./modules/client-communication/client-communication.routes";
 import { ensureTable as ensurePaymentsTables } from "./modules/payments/payments.repository";
 import { ensureTable as ensureAppointmentsTables } from "./modules/appointments/appointments.repository";
+import { ensureTable as ensureTipTables } from "./modules/tips/tipCalculation.service";
 import cashManagementRoutes from "./modules/cash-management/cash-management.routes";
 import { ensureCashManagementTables } from "./modules/cash-management/cash-management.repository";
 import superAdminRoutes from "./modules/super-admin/super-admin.routes";
@@ -116,6 +117,11 @@ ensureAppointmentsTables().catch(err =>
 // Bootstrap cash-management tables (idempotent)
 ensureCashManagementTables().catch(err =>
   logger.warn("cash-management table init warning:", err?.message ?? err),
+);
+
+// Bootstrap tip_earned/tip_settlements tables (idempotent) — Tip Settle
+ensureTipTables().catch(err =>
+  logger.warn("tip tables init warning:", err?.message ?? err),
 );
 
 // Bootstrap ai-engine (LUNOX) tables (idempotent)
