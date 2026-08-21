@@ -72,6 +72,16 @@ router.get(
 // Referral-code lookup (for the "Referred by" field) — must be BEFORE /:clientId
 router.get("/referral/:code", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), clientsController.lookupReferralCode);
 
+// Client profile lookup (packages/memberships/history/loyalty in one call) via
+// POST body instead of a GET query string — must be BEFORE /:clientId
+router.post(
+    "/:clientId/details",
+    authMiddleware,
+    ownerAdminStaff,
+    requirePermission("view_clients"),
+    clientsController.getByIdDetails
+);
+
 // GET / PATCH / DELETE by id
 router.get("/:clientId", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), clientsController.getById);
 router.patch("/:clientId", authMiddleware, ownerAdminStaff, requirePermission("edit_clients"), validateUpdateClient, clientsController.update);
