@@ -6,6 +6,8 @@ import { requirePermission } from "../../middleware/permission.middleware";
 import { uploadMiddleware } from "../../middleware/upload.middleware";
 import { clientsController } from "./clients.controller";
 import { upload } from "./clients.upload";
+import { clientNotesController } from "../client-notes/client-notes.controller";
+import { clientCommunicationController } from "../client-communication/client-communication.controller";
 import {
     validateCreateClient,
     validateUpdateClient,
@@ -86,5 +88,14 @@ router.post(
 router.get("/:clientId", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), clientsController.getById);
 router.patch("/:clientId", authMiddleware, ownerAdminStaff, requirePermission("edit_clients"), validateUpdateClient, clientsController.update);
 router.delete("/:clientId", authMiddleware, ownerAdminStaff, requirePermission("delete_clients"), clientsController.remove);
+
+// NOTES
+router.get("/:clientId/notes", authMiddleware, ownerAdminStaff, clientNotesController.list);
+router.post("/:clientId/notes", authMiddleware, ownerAdminStaff, clientNotesController.create);
+router.patch("/:clientId/notes/:id", authMiddleware, ownerAdminStaff, clientNotesController.update);
+router.delete("/:clientId/notes/:id", authMiddleware, ownerAdminStaff, clientNotesController.delete);
+
+// COMMUNICATIONS
+router.get("/:clientId/communications", authMiddleware, ownerAdminStaff, clientCommunicationController.list);
 
 export default router;
