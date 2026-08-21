@@ -4130,6 +4130,10 @@ _buildProductInventoryWhere(
     search?: string; category_id?: string; category_ids?: string[]; brand_id?: string; brand_ids?: string[];
     stock_status?: "in_stock" | "low_stock" | "out_of_stock";
     date_from?: string; date_to?: string;
+    // Separate from date_from/date_to above (which filter p.created_at, the
+    // "Date Added" column) — these filter p.expiry_date instead, so both
+    // date filters can be applied together without conflicting.
+    expiry_from?: string; expiry_to?: string;
   }
 ): { where: string; values: any[]; nextIndex: number } {
   const values: any[] = [salonId];
@@ -4175,6 +4179,14 @@ _buildProductInventoryWhere(
     where.push(`p.created_at < ($${idx++}::date + interval '1 day')`);
     values.push(filters.date_to);
   }
+  if (filters.expiry_from) {
+    where.push(`p.expiry_date >= $${idx++}::date`);
+    values.push(filters.expiry_from);
+  }
+  if (filters.expiry_to) {
+    where.push(`p.expiry_date < ($${idx++}::date + interval '1 day')`);
+    values.push(filters.expiry_to);
+  }
 
   return { where: where.join(" AND "), values, nextIndex: idx };
 },
@@ -4185,6 +4197,7 @@ async getProductInventoryReportStats(
     search?: string; category_id?: string; category_ids?: string[]; brand_id?: string; brand_ids?: string[];
     stock_status?: "in_stock" | "low_stock" | "out_of_stock";
     date_from?: string; date_to?: string;
+    expiry_from?: string; expiry_to?: string;
   }
 ): Promise<ProductInventoryReportStats> {
   const { where, values } = this._buildProductInventoryWhere(salonId, filters);
@@ -4215,6 +4228,7 @@ async getProductInventoryReportRows(
     search?: string; category_id?: string; category_ids?: string[]; brand_id?: string; brand_ids?: string[];
     stock_status?: "in_stock" | "low_stock" | "out_of_stock";
     date_from?: string; date_to?: string;
+    expiry_from?: string; expiry_to?: string;
     page?: number; limit?: number; is_export?: boolean;
   }
 ): Promise<{
