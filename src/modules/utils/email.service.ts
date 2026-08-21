@@ -1122,8 +1122,8 @@ export const emailService = {
       inStoreCash?: number;
       reconciliationAmount?: number;
       remarks?: string;
-      upiPaymentCount?: number;
-      cardPaymentCount?: number;
+      upiPaymentAmount?: number;
+      cardPaymentAmount?: number;
     };
   }) {
     const { to, summary = {} } = params;
@@ -1266,7 +1266,7 @@ export const emailService = {
                             <tr>
                               <td>
                                 <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#5b21b6;letter-spacing:0.5px;display:block;margin-bottom:6px;">UPI Payments</span>
-                                <div style="font-size:20px;font-weight:800;color:#7c3aed;">${Number(summary.upiPaymentCount || 0)}</div>
+                                <div style="font-size:20px;font-weight:800;color:#7c3aed;">${formatINR(summary.upiPaymentAmount)}</div>
                               </td>
                             </tr>
                           </table>
@@ -1278,7 +1278,7 @@ export const emailService = {
                             <tr>
                               <td>
                                 <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#1d4ed8;letter-spacing:0.5px;display:block;margin-bottom:6px;">Card Payments</span>
-                                <div style="font-size:20px;font-weight:800;color:#2563eb;">${Number(summary.cardPaymentCount || 0)}</div>
+                                <div style="font-size:20px;font-weight:800;color:#2563eb;">${formatINR(summary.cardPaymentAmount)}</div>
                               </td>
                             </tr>
                           </table>
