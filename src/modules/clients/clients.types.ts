@@ -104,6 +104,20 @@ export type ClientWithRelations = Client & {
     // Basic info about the client who referred this one, resolved from
     // referred_by_client_id — null if this client wasn't referred by anyone.
     referred_by?: { id: string; full_name: string; email: string | null; phone_country_code: string | null; phone_number: string | null; avatar_url: string | null } | null;
+    // ?include=packages,memberships,history,loyalty on GET /clients/:id (and
+    // returned by POST /clients on create, always empty/zeroed there since a
+    // brand-new client has none of this yet) — added so callers that need a
+    // client's full profile stop firing 3-4 separate /client-packages,
+    // /client-memberships, /clients/:id/history, /loyalty-eligibility
+    // requests for the same client right after fetching this one.
+    packages?: unknown[];
+    memberships?: unknown[];
+    history?: {
+        total_visits: number;
+        cancelled_count: number;
+        total_revenue: number;
+    };
+    loyalty_eligibility?: unknown | null;
 };
 
 export type CreateClientAddressInput = Omit<ClientAddress, "id" | "client_id" | "created_at" | "updated_at">;
