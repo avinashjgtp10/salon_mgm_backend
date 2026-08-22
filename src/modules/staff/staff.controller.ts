@@ -10,6 +10,7 @@ import { uploadAvatarToS3 } from "../utils/avatar.upload";
 import {
   staffService, staffInvitationService, staffAddressService,
   staffEmergencyContactService, staffWagesService, staffCommissionsService,
+  staffTipsService,
   staffPayRunsService, staffSchedulesService, staffLeavesService,
 } from "./staff.service";
 import {
@@ -647,6 +648,76 @@ export const staffCommissionsController = {
       return sendSuccess(res, 200, result, `Configured for ${result.saved.length} staff`);
     } catch (err) { return next(err); }
   },
+};
+
+// ─── Tip Settle ───────────────────────────────────────────────────────────────
+export const staffTipsController = {
+  async getTipSummary(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = getSalonId(req);
+      const startDate = req.query.start_date ? String(req.query.start_date) : undefined;
+      const endDate   = req.query.end_date   ? String(req.query.end_date)   : undefined;
+      const staffIds  = req.query.staff_ids
+        ? String(req.query.staff_ids).split(",").map(s => s.trim()).filter(Boolean)
+        : undefined;
+      const data = await staffTipsService.getSalonSummary(salonId, startDate, endDate, staffIds);
+      return sendSuccess(res, 200, data, "Tip summary fetched successfully");
+    } catch (err) { return next(err); }
+  },
+
+  async getEarnedBySalon(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = getSalonId(req);
+      const startDate = req.query.start_date ? String(req.query.start_date) : undefined;
+      const endDate   = req.query.end_date   ? String(req.query.end_date)   : undefined;
+      const staffIds  = req.query.staff_ids
+        ? String(req.query.staff_ids).split(",").map(s => s.trim()).filter(Boolean)
+        : undefined;
+      const status = req.query.status ? String(req.query.status) : undefined;
+      const data = await staffTipsService.getEarnedBySalon(salonId, startDate, endDate, staffIds, status);
+      return sendSuccess(res, 200, data, "Tip earned by staff fetched successfully");
+    } catch (err) { return next(err); }
+  },
+
+  // Full settle when no body is given, or a specific full/partial amount
+  // when `amount` is provided — same convention as markStaffCommissionPaid.
+  async settleStaffTip(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = getSalonId(req);
+      const staffId = String(req.params.staffId);
+      if (!staffId) throw new AppError(400, "staffId is required", "VALIDATION_ERROR");
+
+      const bodyAmount = req.body?.amount;
+      const paymentMethod = req.body?.payment_method ? String(req.body.payment_method) : null;
+      if (bodyAmount !== undefined && bodyAmount !== null) {
+        const amount = Number(bodyAmount);
+        if (!Number.isFinite(amount) || amount <= 0) {
+          throw new AppError(400, "amount must be a positive number", "VALIDATION_ERROR");
+        }
+        const settledBy = req.user?.userId ?? null;
+        const result = await staffTipsService.settleStaffTip(salonId, staffId, amount, paymentMethod, settledBy);
+        return sendSuccess(res, 200, {
+          settled_amount: result.settledAmount,
+          remaining_balance: result.remainingBalance,
+          status: result.remainingBalance <= 0 ? "paid" : "partial",
+        }, "Tip settled successfully");
+      }
+
+      const count = await staffTipsService.markStaffTipPaid(salonId, staffId);
+      return sendSuccess(res, 200, { marked_paid: count }, `${count} tip(s) marked as paid`);
+    } catch (err) { return next(err); }
+  },
+
+  async getSettlementHistory(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = getSalonId(req);
+      const staffId = String(req.params.staffId);
+      const limit = req.query.limit ? Number(req.query.limit) : undefined;
+      const data = await staffTipsService.getSettlementHistory(salonId, staffId, limit);
+      return sendSuccess(res, 200, data, "Tip settlement history fetched successfully");
+    } catch (err) { return next(err); }
+  },
+
 };
 
 // ─── Pay Runs ─────────────────────────────────────────────────────────────────

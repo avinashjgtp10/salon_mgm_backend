@@ -182,6 +182,12 @@ const validateProductFields = (b: Record<string, unknown>, requireName = false) 
     if (!isOptionalBoolean(b.is_active)) {
         throw new AppError(400, "is_active must be a boolean", "VALIDATION_ERROR");
     }
+    if (!isOptionalString(b.expiry_date)) {
+        throw new AppError(400, "expiry_date must be a string", "VALIDATION_ERROR");
+    }
+    if (typeof b.expiry_date === "string" && !/^\d{4}-\d{2}-\d{2}$/.test(b.expiry_date)) {
+        throw new AppError(400, "expiry_date must be in YYYY-MM-DD format", "VALIDATION_ERROR");
+    }
 };
 
 // ─── Product Validators ───────────────────────────────────────────────────────

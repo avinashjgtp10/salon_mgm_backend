@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response } from "express";
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
+import { emailService } from "../utils/email.service";
 import { cashManagementService } from "./cash-management.service";
 import type {
   CloseCounterBody,
@@ -212,6 +213,36 @@ export const cashManagementController = {
 
       return sendSuccess(res, 200, result, "Cash counter closed successfully");
     } catch (error) {
+      return next(error);
+    }
+  },
+
+  async sendSummaryEmail(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const email = req.body?.email || req.query?.email;
+      const recipientEmail = String(email || "").trim();
+      if (!recipientEmail) {
+        return sendSuccess(res, 200, { sent: false }, "No recipient email provided");
+      }
+
+      await emailService.sendDailySummaryEmail({
+        to: recipientEmail,
+        summary: {
+          openingBalance: Number(req.body?.opening_balance ?? req.body?.openingBalance ?? 0),
+          cashRevenue: Number(req.body?.cash_revenue ?? req.body?.cashRevenue ?? 0),
+          cashExpense: Number(req.body?.cash_expense ?? req.body?.cashExpense ?? 0),
+          closingBalance: Number(req.body?.closing_balance ?? req.body?.closingBalance ?? 0),
+          inStoreCash: Number(req.body?.in_store_cash ?? req.body?.inStoreCash ?? 0),
+          reconciliationAmount: Number(req.body?.reconciliation_amount ?? req.body?.reconciliationAmount ?? 0),
+          remarks: req.body?.remarks ? String(req.body.remarks) : "",
+          upiPaymentAmount: Number(req.body?.upi_payment_amount ?? req.body?.upiPaymentAmount ?? 0),
+          cardPaymentAmount: Number(req.body?.card_payment_amount ?? req.body?.cardPaymentAmount ?? 0),
+        },
+      });
+
+      return sendSuccess(res, 200, { sent: true }, "Daily summary email sent successfully");
+    } catch (error) {
+      console.error("[cash-management-controller] Error sending summary email:", error);
       return next(error);
     }
   },

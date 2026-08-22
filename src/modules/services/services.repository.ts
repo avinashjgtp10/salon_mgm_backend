@@ -134,6 +134,23 @@ const buildBundleWhere = (q: ListBundlesQuery, salonId: string) => {
 // ─── Services ─────────────────────────────────────────────────────────────────
 
 export const servicesRepository = {
+  async findDuplicate(
+    name: string,
+    duration: number,
+    price: number,
+    salonId: string,
+    excludeId?: string
+  ): Promise<Service | null> {
+    const values: unknown[] = [name.trim(), duration, price, salonId];
+    let sql = `SELECT * FROM services WHERE LOWER(TRIM(name)) = LOWER($1) AND duration_minutes = $2 AND price = $3 AND salon_id = $4`;
+    if (excludeId) {
+      values.push(excludeId);
+      sql += ` AND id != $5`;
+    }
+    const { rows } = await pool.query(sql, values);
+    return rows[0] || null;
+  },
+
   async findById(id: string, salonId: string): Promise<Service | null> {
     const { rows } = await pool.query(
       `SELECT s.*, s.duration_minutes AS duration, c.name AS category_name,

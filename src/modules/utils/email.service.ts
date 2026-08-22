@@ -1111,4 +1111,205 @@ export const emailService = {
       `,
     });
   },
+
+  async sendDailySummaryEmail(params: {
+    to: string;
+    summary?: {
+      openingBalance?: number;
+      cashRevenue?: number;
+      cashExpense?: number;
+      closingBalance?: number;
+      inStoreCash?: number;
+      reconciliationAmount?: number;
+      remarks?: string;
+      upiPaymentAmount?: number;
+      cardPaymentAmount?: number;
+    };
+  }) {
+    const { to, summary = {} } = params;
+    const formatINR = (val: number = 0) => `₹${Number(val || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`;
+
+    const recAmt = summary.reconciliationAmount ?? 0;
+    const reconciliationBg = recAmt === 0 ? "#f0fdf4" : recAmt > 0 ? "#f0f9ff" : "#fef2f2";
+    const reconciliationBorder = recAmt === 0 ? "#bbf7d0" : recAmt > 0 ? "#bae6fd" : "#fecaca";
+    const reconciliationColor = recAmt === 0 ? "#16a34a" : recAmt > 0 ? "#0284c7" : "#dc2626";
+    const reconciliationLabelColor = recAmt === 0 ? "#15803d" : recAmt > 0 ? "#0369a1" : "#991b1b";
+    const reconciliationPrefix = recAmt > 0 ? "+" : "";
+
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to,
+      subject: `Daily Salon Cash Summary - ${new Date().toLocaleDateString("en-IN")}`,
+      html: `
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+          <meta charset="UTF-8"/>
+          <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+          <title>Daily Summary Report</title>
+        </head>
+        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
+            <tr><td align="center">
+              <table width="600" cellpadding="0" cellspacing="0"
+                style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.08);max-width:600px;width:100%;">
+                
+                <!-- Header -->
+                <tr>
+                  <td style="background:linear-gradient(135deg,#4f46e5 0%,#7c3aed 100%);padding:32px 36px;">
+                    <h1 style="margin:0;color:#ffffff;font-size:24px;font-weight:800;letter-spacing:-0.5px;">
+                      Daily Counter Summary Report
+                    </h1>
+                    <p style="margin:6px 0 0;color:rgba(255,255,255,0.85);font-size:14px;">
+                      ${new Date().toLocaleDateString("en-IN", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
+                    </p>
+                  </td>
+                </tr>
+
+                <!-- Content -->
+                <tr>
+                  <td style="padding:32px 36px;">
+                    <p style="margin:0 0 24px;color:#374151;font-size:15px;line-height:1.6;">
+                      Here is the financial summary for today's cash counter session:
+                    </p>
+
+                    <!-- Summary Cards Grid -->
+                    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 16px;">
+                      <!-- Row 1: Opening Balance & Cash Revenue -->
+                      <tr>
+                        <td width="48%" style="vertical-align:top;padding-bottom:16px;">
+                          <table width="100%" cellpadding="0" cellspacing="0"
+                            style="background:#f8fafc;border:1px solid #e2e8f0;border-left:4px solid #3b82f6;border-radius:8px;padding:16px;">
+                            <tr>
+                              <td>
+                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#64748b;letter-spacing:0.5px;display:block;margin-bottom:6px;">Opening Balance</span>
+                                <div style="font-size:20px;font-weight:800;color:#1e293b;">${formatINR(summary.openingBalance)}</div>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                        <td width="4%"></td>
+                        <td width="48%" style="vertical-align:top;padding-bottom:16px;">
+                          <table width="100%" cellpadding="0" cellspacing="0"
+                            style="background:#f0fdf4;border:1px solid #bbf7d0;border-left:4px solid #16a34a;border-radius:8px;padding:16px;">
+                            <tr>
+                              <td>
+                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#15803d;letter-spacing:0.5px;display:block;margin-bottom:6px;">Cash Revenue</span>
+                                <div style="font-size:20px;font-weight:800;color:#16a34a;">${formatINR(summary.cashRevenue)}</div>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+
+                      <!-- Row 2: Cash Expense & Closing Balance -->
+                      <tr>
+                        <td width="48%" style="vertical-align:top;padding-bottom:16px;">
+                          <table width="100%" cellpadding="0" cellspacing="0"
+                            style="background:#fffbeb;border:1px solid #fef3c7;border-left:4px solid #d97706;border-radius:8px;padding:16px;">
+                            <tr>
+                              <td>
+                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#b45309;letter-spacing:0.5px;display:block;margin-bottom:6px;">Cash Expense</span>
+                                <div style="font-size:20px;font-weight:800;color:#d97706;">${formatINR(summary.cashExpense)}</div>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                        <td width="4%"></td>
+                        <td width="48%" style="vertical-align:top;padding-bottom:16px;">
+                          <table width="100%" cellpadding="0" cellspacing="0"
+                            style="background:#f5f3ff;border:1px solid #ddd6fe;border-left:4px solid #6366f1;border-radius:8px;padding:16px;">
+                            <tr>
+                              <td>
+                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#4338ca;letter-spacing:0.5px;display:block;margin-bottom:6px;">Closing Balance</span>
+                                <div style="font-size:20px;font-weight:800;color:#4f46e5;">${formatINR(summary.closingBalance)}</div>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+
+                      <!-- Row 3: In Store Cash & Reconciliation Amount -->
+                      <tr>
+                        <td width="48%" style="vertical-align:top;padding-bottom:16px;">
+                          <table width="100%" cellpadding="0" cellspacing="0"
+                            style="background:#f0f9ff;border:1px solid #bae6fd;border-left:4px solid #0284c7;border-radius:8px;padding:16px;">
+                            <tr>
+                              <td>
+                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#0369a1;letter-spacing:0.5px;display:block;margin-bottom:6px;">In Store Cash</span>
+                                <div style="font-size:20px;font-weight:800;color:#0284c7;">${formatINR(summary.inStoreCash)}</div>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                        <td width="4%"></td>
+                        <td width="48%" style="vertical-align:top;padding-bottom:16px;">
+                          <table width="100%" cellpadding="0" cellspacing="0"
+                            style="background:${reconciliationBg};border:1px solid ${reconciliationBorder};border-left:4px solid ${reconciliationColor};border-radius:8px;padding:16px;">
+                            <tr>
+                              <td>
+                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:${reconciliationLabelColor};letter-spacing:0.5px;display:block;margin-bottom:6px;">Reconciliation Amount</span>
+                                <div style="font-size:20px;font-weight:800;color:${reconciliationColor};">${reconciliationPrefix}${formatINR(summary.reconciliationAmount)}</div>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <!-- Row 4: UPI Payments & Card Payments -->
+                    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 16px;">
+                      <tr>
+                        <td width="48%" style="vertical-align:top;">
+                          <table width="100%" cellpadding="0" cellspacing="0"
+                            style="background:#f5f3ff;border:1px solid #ddd6fe;border-left:4px solid #7c3aed;border-radius:8px;padding:16px;">
+                            <tr>
+                              <td>
+                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#5b21b6;letter-spacing:0.5px;display:block;margin-bottom:6px;">UPI Payments</span>
+                                <div style="font-size:20px;font-weight:800;color:#7c3aed;">${formatINR(summary.upiPaymentAmount)}</div>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                        <td width="4%"></td>
+                        <td width="48%" style="vertical-align:top;">
+                          <table width="100%" cellpadding="0" cellspacing="0"
+                            style="background:#eff6ff;border:1px solid #bfdbfe;border-left:4px solid #2563eb;border-radius:8px;padding:16px;">
+                            <tr>
+                              <td>
+                                <span style="font-size:11px;text-transform:uppercase;font-weight:700;color:#1d4ed8;letter-spacing:0.5px;display:block;margin-bottom:6px;">Card Payments</span>
+                                <div style="font-size:20px;font-weight:800;color:#2563eb;">${formatINR(summary.cardPaymentAmount)}</div>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                    </table>
+
+                    ${summary.remarks ? `
+                      <div style="background:#f9fafb;border-radius:8px;padding:16px;border:1px solid #e5e7eb;margin-top:8px;">
+                        <span style="font-size:12px;font-weight:700;color:#4b5563;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">Closing Remarks</span>
+                        <p style="margin:0;color:#374151;font-size:14px;line-height:1.5;">${escapeHtml(summary.remarks)}</p>
+                      </div>
+                    ` : ''}
+                  </td>
+                </tr>
+
+                <!-- Footer -->
+                <tr>
+                  <td style="background:#f9fafb;padding:20px 36px;border-top:1px solid #e5e7eb;">
+                    <p style="margin:0 0 4px;color:#9ca3af;font-size:12px;text-align:center;">
+                      © ${new Date().getFullYear()} SalonOx. Automated Daily Summary Report.
+                    </p>
+                  </td>
+                </tr>
+
+              </table>
+            </td></tr>
+          </table>
+        </body>
+        </html>
+      `,
+    });
+  },
 };

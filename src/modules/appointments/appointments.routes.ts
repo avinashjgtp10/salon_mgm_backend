@@ -19,5 +19,6 @@ router.patch("/:id", authMiddleware, ownerAdminStaff, requirePermission("manage_
 router.post("/:id/cancel", authMiddleware, roleMiddleware("salon_owner", "admin", "staff", "client"), requirePermission("manage_calendar"), appointmentsController.cancel);
 router.delete("/:id", authMiddleware, ownerAdminStaff, requirePermission("manage_calendar"), appointmentsController.delete);
 router.post("/:id/checkout", authMiddleware, ownerAdminStaff, requirePermission("create_sales"), validateCheckoutAppointment, appointmentsController.checkout);
+router.get("/:id/receipt-pdf", authMiddleware, ownerAdminStaff, requirePermission("view_calendar"), appointmentsController.getReceiptPdf);
 
 export default router;

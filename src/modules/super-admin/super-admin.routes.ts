@@ -33,6 +33,7 @@ router.get("/stats",    superAdminController.getStats);
 
 // Salons
 router.get("/salons",                       superAdminController.getAllSalons);
+router.get("/salons/:id/staff",             superAdminController.getSalonStaff);
 router.patch("/salons/:id/status",          superAdminController.setSalonStatus);
 router.patch("/salons/:id/onboarding",      superAdminController.forceOnboarding);
 router.post("/salons/:id/impersonate",      superAdminController.impersonateSalon);
@@ -53,9 +54,5 @@ router.post("/users/:id/impersonate",       superAdminController.impersonateUser
 
 // Payments
 router.get("/payments",                     superAdminController.getAllPayments);
-
-// Billing
-router.get("/subscriptions",                superAdminController.getAllSubscriptions);
-router.get("/plans",                        superAdminController.getAllPlans);
 
 export default router;

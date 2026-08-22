@@ -11,6 +11,24 @@ import type {
 
 // ── Row → Domain mapper ───────────────────────────────────────────────────────
 
+// `status` is only ever explicitly written as 'Active' (at creation) or
+// 'Completed' (all sessions consumed — see completeSession() below) —
+// nothing in this module transitions it to 'Expired' when expiry_date
+// passes, so a package purchased last year with the same day/month expiry
+// as today stays "Active" in the database forever (same DD-MM, different
+// year — the actual bug: every consumer that trusted this column straight
+// through, from Quick Sale/Calendar's package picker to the client's
+// "active package" count, ended up only ever noticing the day/month
+// matched, never that the year hadn't). Computed once here, at the source,
+// rather than patched into every frontend call site — the next consumer
+// that reads `status` directly would otherwise reintroduce the same bug.
+function effectiveStatus(status: string, expiryDate: string | null): string {
+  if (status === "Active" && expiryDate && new Date(expiryDate).getTime() < Date.now()) {
+    return "Expired";
+  }
+  return status;
+}
+
 function toClientPackage(row: ClientPackageRow): ClientPackage {
   const base     = parseFloat(row.base_price);
   const gstPct   = parseFloat(row.gst_percentage);
@@ -34,7 +52,7 @@ function toClientPackage(row: ClientPackageRow): ClientPackage {
     expiryDate:    row.expiry_date,
     expireAfterServices: row.expire_after_services ?? null,
     description:   row.description ?? null,
-    status:        row.status,
+    status:        effectiveStatus(row.status, row.expiry_date),
     basePrice:     base,
     gstPercentage: gstPct,
     gstAmount:     gstAmt,
@@ -463,13 +481,22 @@ export const clientPackagesRepository = {
       // previous one's COMMIT, so the status/cap check every call performs
       // is always against up-to-date state.
       const pkgRes = await client.query(
-        `SELECT status, expire_after_services FROM client_packages
+        `SELECT status, expire_after_services, expiry_date FROM client_packages
          WHERE id = $1 AND salon_id = $2 FOR UPDATE`,
         [packageId, salonId],
       );
       if (!pkgRes.rows.length) throw new Error("Client package not found");
       if (pkgRes.rows[0].status === "Completed") {
         throw new Error("This package has already been fully used.");
+      }
+      // status alone doesn't catch this — it's only ever written 'Active' (at
+      // creation) or 'Completed' (all sessions consumed), never flipped to
+      // 'Expired' when expiry_date passes (see toClientPackage()'s identical
+      // fix for the read side). Without this, Quick Sale/Calendar could still
+      // redeem a session from a package whose expiry was the same day/month
+      // as today but a past year, since only 'Completed' was ever rejected.
+      if (pkgRes.rows[0].expiry_date && new Date(pkgRes.rows[0].expiry_date).getTime() < Date.now()) {
+        throw new Error("This package has expired and can no longer be used.");
       }
       const cap = pkgRes.rows[0].expire_after_services;
 

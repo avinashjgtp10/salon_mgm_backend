@@ -7,6 +7,10 @@ import { emailService } from "../utils/email.service";
 import { canSendEmail } from "../utils/notif-prefs";
 import { generateReferralCode } from "../referral/referral.types";
 import { paymentsRepository } from "../payments/payments.repository";
+import { clientPackagesService } from "../client-packages/client-packages.service";
+import { clientMembershipsService } from "../client-memberships/client-memberships.service";
+import { membershipsService } from "../memberships/memberships.service";
+import pool from "../../config/database";
 import logger from "../../config/logger";
 import {
     Client,
@@ -57,12 +61,75 @@ const normalizeCreateBody = (b: CreateClientBody): CreateClientBody => ({
     address: b.address ? safeTrim(b.address) : b.address ?? null,
 });
 
+// Fetches the packages/memberships/history/loyalty sub-resources requested
+// via `include` and attaches them onto `result` in place. Packages/
+// memberships are fetched unfiltered (no status, high limit) rather than the
+// narrower "active only" params some individual callers used to pass — the
+// caller filters client-side for whichever narrower view it needs, so this
+// one shared fetch can serve every consumer instead of each running its own
+// differently-filtered request.
+async function attachExtendedProfile(
+    result: ClientWithRelations,
+    clientId: string,
+    salonId: string,
+    includeSet: Set<string>,
+): Promise<void> {
+    const [packagesRes, membershipsRes, apptStatsRes, revenueRes, loyaltyRes] = await Promise.all([
+        includeSet.has("packages")
+            ? clientPackagesService.list(salonId, { clientId, limit: 500 })
+            : Promise.resolve(null),
+        includeSet.has("memberships")
+            ? clientMembershipsService.list(salonId, { clientId, limit: 200 })
+            : Promise.resolve(null),
+        // Two independent queries — same split clientsController.getHistory uses
+        // (its "stats" + "lifetime spend" legs) — rather than one JOIN, since an
+        // appointment can carry more than one payments row and a naive join
+        // would multiply the appointment counts by however many payments it has.
+        includeSet.has("history")
+            ? pool.query(
+                `SELECT
+                    COUNT(*) FILTER (WHERE a.status IN ('paid','partial'))::int AS total_visits,
+                    COUNT(*) FILTER (WHERE a.status = 'cancelled')::int         AS cancelled_count
+                 FROM appointments a
+                 WHERE a.client_id = $1 AND a.salon_id = $2 AND a.deleted_at IS NULL`,
+                [clientId, salonId],
+            )
+            : Promise.resolve(null),
+        includeSet.has("history")
+            ? pool.query(
+                `SELECT COALESCE(SUM(
+                    GREATEST(0, paid_amount - COALESCE(ewallet_used, 0) - COALESCE(membership_wallet_used, 0))
+                 ), 0) AS total_revenue
+                 FROM payments
+                 WHERE client_id = $1 AND salon_id = $2 AND status IN ('completed', 'partial')`,
+                [clientId, salonId],
+            )
+            : Promise.resolve(null),
+        includeSet.has("loyalty")
+            ? membershipsService.getLoyaltyEligibility(clientId, salonId)
+            : Promise.resolve(null),
+    ]);
+
+    if (packagesRes) result.packages = packagesRes.items;
+    if (membershipsRes) result.memberships = membershipsRes.items;
+    if (apptStatsRes && revenueRes) {
+        const statsRow = apptStatsRes.rows[0] ?? {};
+        const revenueRow = revenueRes.rows[0] ?? {};
+        result.history = {
+            total_visits: Number(statsRow.total_visits ?? 0),
+            cancelled_count: Number(statsRow.cancelled_count ?? 0),
+            total_revenue: Number(revenueRow.total_revenue ?? 0),
+        };
+    }
+    if (includeSet.has("loyalty")) result.loyalty_eligibility = loyaltyRes ?? null;
+}
+
 export const clientsService = {
     async list(query: ClientsListQuery, salonId: string) {
         return clientsRepository.list(query, salonId);
     },
 
-    async create(body: CreateClientBody, salonId: string): Promise<ClientWithRelations> {
+    async create(body: CreateClientBody, salonId: string, include?: string): Promise<ClientWithRelations> {
         const normalized = normalizeCreateBody(body);
 
         // One active client per phone number — same number under a different
@@ -148,8 +215,22 @@ export const clientsService = {
             } catch (err: any) { logger.error("[email] newClient failed:", err?.message ?? err); }
         })();
 
-        const withRel = await clientsRepository.getByIdWithRelations(created.id, salonId);
-        return withRel as ClientWithRelations;
+        const withRel = await clientsRepository.getByIdWithRelations(created.id, salonId) as ClientWithRelations;
+
+        // A brand-new client has no packages/memberships/visits/loyalty-unlock
+        // yet — seed empty/zeroed values instead of running the same queries
+        // getById's `include` handling would (which are guaranteed to return
+        // nothing for a client that was just created), so the caller doesn't
+        // need a follow-up GET just to learn "this client has nothing yet".
+        if (include) {
+            const includeSet = new Set(String(include).split(",").map((s) => s.trim()).filter(Boolean));
+            if (includeSet.has("packages")) withRel.packages = [];
+            if (includeSet.has("memberships")) withRel.memberships = [];
+            if (includeSet.has("history")) withRel.history = { total_visits: 0, cancelled_count: 0, total_revenue: 0 };
+            if (includeSet.has("loyalty")) withRel.loyalty_eligibility = null;
+        }
+
+        return withRel;
     },
 
     async getById(clientId: string, salonId: string, include?: string): Promise<ClientWithRelations> {
@@ -170,6 +251,18 @@ export const clientsService = {
             if (includeSet.has("addresses")) result.addresses = rel.addresses;
             if (includeSet.has("emergency_contacts")) result.emergency_contacts = rel.emergency_contacts;
         }
+
+        // ?include=packages,memberships,history,loyalty — added so a caller
+        // that needs this client's full profile (Quick Sale / booking modal
+        // selecting a client) gets everything in this one request instead of
+        // separately hitting /client-packages, /client-memberships,
+        // /clients/:id/history, and /memberships/loyalty-eligibility right
+        // after. Each sub-fetch runs only when actually requested, and all
+        // requested ones run concurrently.
+        if (includeSet.has("packages") || includeSet.has("memberships") || includeSet.has("history") || includeSet.has("loyalty")) {
+            await attachExtendedProfile(result, clientId, salonId, includeSet);
+        }
+
         return result;
     },
 

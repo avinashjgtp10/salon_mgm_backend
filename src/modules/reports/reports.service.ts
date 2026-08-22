@@ -245,6 +245,12 @@ import {
     EwalletReportResponse,
     ProductInventoryReportFilters,
     ProductInventoryReportResponse,
+    ProductMovementReportFilters,
+    ProductMovementReportResponse,
+    BrandPerformanceReportFilters,
+    BrandPerformanceReportResponse,
+    PurchaseVsSalesReportFilters,
+    PurchaseVsSalesReportResponse,
     ClientRevenueReportFilters,
     ClientRevenueReportResponse,
     CustomerFrequencyReportFilters,
@@ -288,6 +294,8 @@ import {
     OpenRateCampaignDetail,
     ReplyRateReportResponse,
     ReplyRateCampaignDetail,
+    BirthdayCampaignReportFilters,
+    BirthdayCampaignReportResponse,
     ClientRatingReportFilters,
     ClientRatingReportResponse,
     RebookingRateReportFilters,
@@ -1484,6 +1492,83 @@ async getProductInventoryReport(
 },
 
 // ======================================================
+// SLOW MOVING / FAST MOVING PRODUCTS REPORTS (independent report APIs)
+// Same repository query for both — only the default sort direction differs.
+// ======================================================
+
+async getSlowMovingProductsReport(
+    salonId: string,
+    filters: ProductMovementReportFilters
+): Promise<ProductMovementReportResponse> {
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getProductMovementReportStats(salonId, filters),
+        reportsRepository.getProductMovementReportRows(salonId, filters, "asc"),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+    };
+},
+
+async getFastMovingProductsReport(
+    salonId: string,
+    filters: ProductMovementReportFilters
+): Promise<ProductMovementReportResponse> {
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getProductMovementReportStats(salonId, filters),
+        reportsRepository.getProductMovementReportRows(salonId, filters, "desc"),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+    };
+},
+
+// ======================================================
+// BRAND PERFORMANCE REPORT (independent report API)
+// ======================================================
+
+async getBrandPerformanceReport(
+    salonId: string,
+    filters: BrandPerformanceReportFilters
+): Promise<BrandPerformanceReportResponse> {
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getBrandPerformanceReportStats(salonId, filters),
+        reportsRepository.getBrandPerformanceReportRows(salonId, filters),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+    };
+},
+
+// ======================================================
+// PURCHASE VS SALES INVENTORY REPORT (independent report API)
+// ======================================================
+
+async getPurchaseVsSalesReport(
+    salonId: string,
+    filters: PurchaseVsSalesReportFilters
+): Promise<PurchaseVsSalesReportResponse> {
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getPurchaseVsSalesReportStats(salonId, filters),
+        reportsRepository.getPurchaseVsSalesReportRows(salonId, filters),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+    };
+},
+
+// ======================================================
 // CLIENT REVENUE REPORT (independent report API)
 // ======================================================
 
@@ -1883,6 +1968,26 @@ async getOpenRateCampaignDetail(
     opts: { status?: string; page?: number; limit?: number; search?: string }
 ): Promise<OpenRateCampaignDetail | null> {
     return reportsRepository.getOpenRateCampaignDetail(salonId, campaignId, opts);
+},
+
+// ======================================================
+// BIRTHDAY CAMPAIGN PERFORMANCE REPORT (independent report API)
+// ======================================================
+
+async getBirthdayCampaignReport(
+    salonId: string,
+    filters: BirthdayCampaignReportFilters
+): Promise<BirthdayCampaignReportResponse> {
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getBirthdayCampaignReportStats(salonId, filters),
+        reportsRepository.getBirthdayCampaignReportRows(salonId, filters),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+    };
 },
 
 // ======================================================

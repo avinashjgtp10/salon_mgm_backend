@@ -35,6 +35,17 @@ export const servicesService = {
   }): Promise<Service> {
     const { requesterUserId, requesterRole, salonId, body } = params;
     logger.info("servicesService.create", { requesterUserId, requesterRole, salonId });
+
+    const duplicate = await servicesRepository.findDuplicate(
+      body.name,
+      body.duration ?? 30,
+      body.price ?? 0,
+      salonId
+    );
+    if (duplicate) {
+      throw new AppError(400, "A service with the same name, duration, and price already exists.", "DUPLICATE_SERVICE");
+    }
+
     const created = await servicesRepository.create(body, salonId);
     if (body.staff_ids?.length) {
       await servicesRepository.replaceStaff(created.id, body.staff_ids);
@@ -63,6 +74,22 @@ export const servicesService = {
     logger.info("servicesService.update", { serviceId, requesterUserId, requesterRole });
     const existing = await servicesRepository.findById(serviceId, salonId);
     if (!existing) throw new AppError(404, "Service not found", "NOT_FOUND");
+
+    const nameToCheck = patch.name !== undefined ? patch.name : existing.name;
+    const durationToCheck = patch.duration !== undefined ? patch.duration : existing.duration;
+    const priceToCheck = patch.price !== undefined ? Number(patch.price) : Number(existing.price);
+
+    const duplicate = await servicesRepository.findDuplicate(
+      nameToCheck,
+      durationToCheck,
+      priceToCheck,
+      salonId,
+      serviceId
+    );
+    if (duplicate) {
+      throw new AppError(400, "A service with the same name, duration, and price already exists.", "DUPLICATE_SERVICE");
+    }
+
     const staffIds =
       patch.staff_ids ??
       ((patch as Record<string, unknown>).team_member_ids as string[] | undefined);

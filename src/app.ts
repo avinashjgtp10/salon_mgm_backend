@@ -51,6 +51,7 @@ import analyticsRoutes from './modules/marketing/whatsapp/analytics/analytics.ro
 import reviewsRoutes from './modules/reviews/reviews.routes'
 import reviewsPublicRoutes from './modules/reviews/reviews.public.routes'
 import botRoutes from "./modules/bot/bot.routes";
+import botQuestionsRoutes from "./modules/bot/bot-questions.routes";
 import aiEngineRoutes from "./modules/ai-engine/ai-engine.routes";
 import { ensureTable as ensureAiEngineTables } from "./modules/ai-engine/ai-engine.repository";
 import waAutomationRoutes from "./modules/whatsapp-automation/whatsapp-automation.routes";
@@ -64,11 +65,10 @@ import { ensureTable as ensureClientMembershipsTables } from "./modules/client-m
 import ewalletRoutes from "./modules/ewallet/ewallet.routes";
 import rewardPointsRoutes from "./modules/reward-points/reward-points.routes";
 import referralRoutes from "./modules/referral/referral.routes";
-import clientNotesRoutes from "./modules/client-notes/client-notes.routes";
 import { ensureTable as ensureClientNotesTable } from "./modules/client-notes/client-notes.repository";
-import clientCommunicationRoutes from "./modules/client-communication/client-communication.routes";
 import { ensureTable as ensurePaymentsTables } from "./modules/payments/payments.repository";
 import { ensureTable as ensureAppointmentsTables } from "./modules/appointments/appointments.repository";
+import { ensureTable as ensureTipTables } from "./modules/tips/tipCalculation.service";
 import cashManagementRoutes from "./modules/cash-management/cash-management.routes";
 import { ensureCashManagementTables } from "./modules/cash-management/cash-management.repository";
 import superAdminRoutes from "./modules/super-admin/super-admin.routes";
@@ -115,6 +115,11 @@ ensureAppointmentsTables().catch(err =>
 // Bootstrap cash-management tables (idempotent)
 ensureCashManagementTables().catch(err =>
   logger.warn("cash-management table init warning:", err?.message ?? err),
+);
+
+// Bootstrap tip_earned/tip_settlements tables (idempotent) — Tip Settle
+ensureTipTables().catch(err =>
+  logger.warn("tip tables init warning:", err?.message ?? err),
 );
 
 // Bootstrap ai-engine (LUNOX) tables (idempotent)
@@ -235,8 +240,6 @@ app.use("/api/v1/staff", staffRoutes);
 app.use("/api/v1/commission-rules", commissionRulesRoutes);
 app.use("/api/v1/payroll", payrollRoutes);
 app.use("/api/v1/clients", clientsRoutes);
-app.use("/api/v1/clients", clientNotesRoutes);
-app.use("/api/v1/clients", clientCommunicationRoutes);
 app.use("/api/v1/services", servicesRoutes);
 app.use("/api/v1/marketplace", marketplaceRoutes);
 app.use("/api/v1/memberships", membershipsRoutes);
@@ -268,6 +271,7 @@ app.use("/api/v1/payments", paymentsRoutes);
 app.use("/api/v1/blocked-times", blockedTimesRoutes);
 app.use("/api/v1/settings", settingsRoutes);
 app.use("/api/v1/bot", botRoutes);
+app.use("/api/v1/bot-questions", botQuestionsRoutes);
 app.use("/api/v1/ai-engine", aiEngineRoutes);
 app.use("/api/report", reportsRoutes);
 app.use("/api/v1/reports", legacyReportsRoutes);
@@ -288,7 +292,6 @@ app.use("/api/v1/notifications", notificationsRoutes);
 app.use("/api/v1/deployment-announcements", deploymentAnnouncementsRoutes);
 app.use("/api/v1/enquiries", enquiriesRoutes);
 
-// Swagger Documentation
 const swaggerDocument = require(path.join(__dirname, "../docs/api/swagger-gen.json"));
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 

@@ -101,6 +101,48 @@ router.post(
 );
 
 // ======================================================
+// SLOW MOVING / FAST MOVING PRODUCTS REPORTS (independent report APIs)
+// Reads products directly (sales aggregated from sale_items/sales within
+// the selected date range) — never calls the Appointment API/service.
+// ======================================================
+
+router.post(
+    "/slow-moving-products",
+    ...guard,
+    reportsController.getSlowMovingProductsReport
+);
+
+router.post(
+    "/fast-moving-products",
+    ...guard,
+    reportsController.getFastMovingProductsReport
+);
+
+// ======================================================
+// BRAND PERFORMANCE REPORT (independent report API)
+// Reads products/product_brands directly (sales aggregated from sale_items/
+// sales) — never calls the Appointment API/service.
+// ======================================================
+
+router.post(
+    "/brand-performance",
+    ...guard,
+    reportsController.getBrandPerformanceReport
+);
+
+// ======================================================
+// PURCHASE VS SALES INVENTORY REPORT (independent report API)
+// Reads products/stock_movements/consumable_usage/sale_items directly —
+// never calls the Appointment API/service.
+// ======================================================
+
+router.post(
+    "/purchase-vs-sales",
+    ...guard,
+    reportsController.getPurchaseVsSalesReport
+);
+
+// ======================================================
 // PRODUCT MARGIN REPORT (independent report API)
 // Reads sale_items/products directly — never calls the Appointment
 // API/service.
@@ -397,6 +439,18 @@ router.post(
     "/open-rate/campaign",
     ...guard,
     reportsController.getOpenRateCampaignDetail
+);
+
+// ======================================================
+// BIRTHDAY CAMPAIGN PERFORMANCE REPORT (independent report API)
+// Reads wa_automation_logs directly (event_type = 'birthday_wishes'), never
+// through the whatsapp-automation module's own API.
+// ======================================================
+
+router.post(
+    "/birthday-campaign",
+    ...guard,
+    reportsController.getBirthdayCampaignReport
 );
 
 // ======================================================

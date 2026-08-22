@@ -27,6 +27,7 @@ export const pricingController = {
         couponCode: body.couponCode,
         exCharges: Number(body.exCharges) || 0,
         tip: Number(body.tip) || 0,
+        tipAddedToSalon: !!body.tipAddedToSalon,
         includeGst: body.includeGst !== false,
         applyEwallet: !!body.applyEwallet,
         eWalletRequested: Number(body.eWalletRequested) || 0,

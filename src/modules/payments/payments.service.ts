@@ -150,6 +150,13 @@ export const paymentsService = {
     // it passes straight through to staff (see recordTransaction() call below).
     let exChargesAmt = 0;
     let tipAmt = 0;
+    // "Add Tip to Salon" — checked: tip counts toward Grand Total/revenue
+    // (see computeBillTotals calls + recordTransaction() below); unchecked
+    // (default): tip stays record-only, same as it's always behaved.
+    let tipAddedToSalon = false;
+    // Optional per-staff split of tipAmt — pure attribution, never affects
+    // any of the totals below (see recordTransaction() call further down).
+    let tipBreakdown: any[] | null | undefined;
     // Bill's overall taxable base — only needed as a fallback for the
     // items.length===0 case below (a single synthetic item stands in for the
     // whole bill, so its own taxable_amount is just the bill's taxable total).
@@ -342,6 +349,8 @@ export const paymentsService = {
           // deduction ceiling just below needs them.
           exChargesAmt = Number(appt.ex_charges) || 0;
           tipAmt       = Number(appt.tip_amount) || 0;
+          tipAddedToSalon = !!(appt as any).tip_added_to_salon;
+          tipBreakdown = (appt as any).tip_breakdown ?? null;
 
           // ── Sequential benefit deduction ────────────────────────────────────
           // eWallet / membership wallet / reward points / referral credit used
@@ -453,6 +462,7 @@ export const paymentsService = {
             taxes: activeTaxesForCeiling,
             exCharges: exChargesAmt,
             tip: tipAmt,
+            tipAddedToSalon,
             roundSubtotalBeforeDiscount: true,
           });
           // Ceiling for the sequential Membership Wallet → eWallet → Reward
@@ -666,6 +676,7 @@ export const paymentsService = {
               taxes: activeTaxes,
               exCharges: exChargesAmt,
               tip: tipAmt,
+              tipAddedToSalon,
               eWalletUsed: ewallet,
               membershipWalletUsed,
               rows: {
@@ -734,6 +745,14 @@ export const paymentsService = {
           // in this system, so a frontend-sent amount above the remaining due (e.g. a POS
           // cash/split entry typo) must never be persisted as-is, or reports/KPIs downstream
           // silently show paid > billed for that transaction.
+          //
+          // Capped at effectiveBill only — tip is deliberately NOT part of this ceiling.
+          // The client may hand over bill+tip in one swipe (see receipt-html.template.ts's
+          // printed Grand Total), but paid_amount/due_amount only ever settle the bill
+          // portion; tip is tracked and settled entirely separately via tip_amount +
+          // tipCalculationService (Tip Settle), never through payments.paid_amount. This
+          // keeps every dashboard/report/client-spend figure that reads paid_amount
+          // tip-free by construction, instead of needing to subtract tip back out everywhere.
           const requestedPaid = Math.max(0, (
             data.paid_amount != null ? Number(data.paid_amount)
             : data.net_amount  != null ? Number(data.net_amount)
@@ -1136,6 +1155,8 @@ export const paymentsService = {
           tax_amount: taxAmount,
           ex_charges: exChargesAmt,
           tip_amount: tipAmt,
+          tip_added_to_salon: tipAddedToSalon,
+          tip_breakdown: tipBreakdown,
           payment_label: data.payment_method || '',
           split_details: data.split_details ?? undefined,
           source_amounts: {

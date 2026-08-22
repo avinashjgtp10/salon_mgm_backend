@@ -63,6 +63,14 @@ export const superAdminController = {
     } catch (err) { return next(err); }
   },
 
+  async getSalonStaff(req: Request, res: Response, next: NextFunction) {
+    try {
+      const id = String(req.params.id);
+      const data = await superAdminService.getSalonStaff(id);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
   async setSalonStatus(req: Request, res: Response, next: NextFunction) {
     try {
       const id = typeof req.params.id === "string" ? req.params.id : String(req.params.id);
@@ -275,18 +283,4 @@ export const superAdminController = {
 
   // ── BILLING ───────────────────────────────────────────────────────────────────
 
-  async getAllSubscriptions(req: Request, res: Response, next: NextFunction) {
-    try {
-      const status = typeof req.query.status === "string" ? req.query.status : undefined;
-      const data = await superAdminService.getAllSubscriptions(status);
-      return res.json({ success: true, data });
-    } catch (err) { return next(err); }
-  },
-
-  async getAllPlans(_req: Request, res: Response, next: NextFunction) {
-    try {
-      const data = await superAdminService.getAllPlans();
-      return res.json({ success: true, data });
-    } catch (err) { return next(err); }
-  },
 };

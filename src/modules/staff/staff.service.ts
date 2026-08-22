@@ -17,6 +17,7 @@ import { staffInvitationRepository } from "./staffInvitation.repository";
 import { salonsRepository } from "../salons/salons.repository";
 import { authService } from "../auth/auth.service";
 import { commissionCalculationService } from "../commission/commissionCalculation.service";
+import { tipCalculationService } from "../tips/tipCalculation.service";
 import {
     Staff, StaffAddress, StaffEmergencyContact, StaffLeave, StaffSchedule,
     StaffWageSettings, StaffCommissionSettings, StaffPayRunSettings,
@@ -763,6 +764,7 @@ export const staffCommissionsService = {
     async exportCommissions(salonId: string, month?: string) {
         return commissionCalculationService.exportBySalon(salonId, month);
     },
+
     async list(staffId: string, salonId: string): Promise<StaffCommissionSettings[]> {
         await _ensureStaff(staffId, salonId);
         return staffCommissionsRepository.listByStaffId(staffId);
@@ -785,6 +787,35 @@ export const staffCommissionsService = {
         slabs: { revenue_target: number; commission_kind: string; commission_value: number }[]
     ) {
         return staffCommissionsRepository.bulkUpsert(salonId, staffIds, data, slabs);
+    },
+};
+
+// ─── Tip Settle ───────────────────────────────────────────────────────────────
+// Thin delegation to tipCalculationService, same shape as staffCommissionsService
+// above — tip_earned rows are created automatically at checkout (see
+// tipCalculationService.earnForSale, hooked into appointments.service.ts /
+// sales.service.ts alongside the existing commission calculation), so there's
+// no upsert/config surface here, only summary/settle/history.
+
+export const staffTipsService = {
+    async getSalonSummary(salonId: string, startDate?: string, endDate?: string, staffIds?: string[]) {
+        return tipCalculationService.getSalonSummary(salonId, startDate, endDate, staffIds);
+    },
+
+    async getEarnedBySalon(salonId: string, startDate?: string, endDate?: string, staffIds?: string[], status?: string) {
+        return tipCalculationService.getEarnedBySalon(salonId, startDate, endDate, staffIds, status);
+    },
+
+    async markStaffTipPaid(salonId: string, staffId: string) {
+        return tipCalculationService.markStaffPaid(salonId, staffId);
+    },
+
+    async settleStaffTip(salonId: string, staffId: string, amount: number, paymentMethod?: string | null, settledBy?: string | null) {
+        return tipCalculationService.settleStaffTip(salonId, staffId, amount, paymentMethod, settledBy);
+    },
+
+    async getSettlementHistory(salonId: string, staffId: string, limit?: number) {
+        return tipCalculationService.getSettlementHistory(salonId, staffId, limit);
     },
 };
 
