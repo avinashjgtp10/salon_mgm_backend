@@ -1,9 +1,6 @@
 import { Request, Response, NextFunction } from 'express'
-import { sendSuccess } from '../../../utils/response.util'
 import { webhooksService } from './webhooks.service'
 import logger from '../../../../config/logger'
-
-type AuthRequest = Request & { user?: { userId: string; salonId?: string; role?: string } }
 
 export const webhooksController = {
 
@@ -49,21 +46,5 @@ export const webhooksController = {
     void webhooksService.handleWebhook(body).catch(err =>
       logger.error('handle: webhook processing failed', { err })
     )
-  },
-
-  async getEvents(req: AuthRequest, res: Response, next: NextFunction) {
-    try {
-      const salonId = req.user?.salonId
-      if (!salonId) return res.status(400).json({ error: 'salonId missing from token' })
-      const campaignId = req.query.campaignId as string | undefined
-      const status     = req.query.status as string | undefined
-      const page       = Math.max(1, parseInt(String(req.query.page  || '1'),  10) || 1)
-      const limit      = Math.min(100, Math.max(1, parseInt(String(req.query.limit || '10'), 10) || 10))
-      const [{ events, total }, statusCounts] = await Promise.all([
-        webhooksService.getRecentEvents(salonId, { campaignId, status, page, limit }),
-        webhooksService.getEventStatusCounts(salonId, campaignId),
-      ])
-      return sendSuccess(res, 200, { events, total, page, limit, statusCounts }, 'Webhook events fetched successfully')
-    } catch (e) { return next(e) }
   },
 }
