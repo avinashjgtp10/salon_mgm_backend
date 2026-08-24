@@ -3,6 +3,8 @@ import { recordTransaction } from "../transactions/transaction-recorder.service"
 import { sendPurchaseReceipt } from "../sales/receipt-send.helper";
 import { appointmentsService } from "../appointments/appointments.service";
 import { getPackageNoShowPolicy } from "./package-settings.util";
+import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
+import { salonsRepository } from "../salons/salons.repository";
 import type { Sale, SaleItem } from "../sales/sales.types";
 import logger from "../../config/logger";
 import type {
@@ -240,6 +242,32 @@ export const clientPackagesService = {
       logger.error('[clientPackagesService] Failed to auto-create sale for package purchase:', { error: err });
     }
 
+    // ── WhatsApp Automation: Package Purchased ──────────────────────────────
+    // mobile field on ClientPackage is the client's phone number
+    if (pkg.mobile) {
+      (async () => {
+        const salon = await salonsRepository.findById(salonId);
+        whatsappAutomationService.trigger({
+          salonId,
+          eventType:     "package_purchased",
+          clientId:      dto.clientId,
+          phone:         pkg.mobile!,
+          countryCode:   null,
+          variables: {
+            "1": pkg.clientName ?? "Valued Customer",
+            "2": pkg.packageName,
+            "3": String((pkg.basePrice ?? 0) - (pkg.discount ?? 0)),
+            "4": String(pkg.services.reduce((sum, s) => sum + s.totalSessions, 0)),
+            "5": pkg.expiryDate ?? "",
+            "6": salon?.business_name ?? "our salon",
+          },
+          referenceId:   pkg.id,
+          referenceType: "package",
+          dedupeByReference: true,
+        }).catch(() => {});
+      })().catch(() => {});
+    }
+
     // ── WhatsApp: PDF purchase receipt ─────────────────────────────────────
     // mobile field on ClientPackage is the client's phone number
     if (pkg.mobile) {
@@ -284,6 +312,31 @@ export const clientPackagesService = {
   ): Promise<ClientPackage> {
     const updated = await clientPackagesRepository.completeSession(packageId, salonId, dto);
     if (!updated) throw { statusCode: 404, message: "Client package not found" };
+
+    // ── WhatsApp Automation: Package Session Used (every redemption) ───────
+    if (updated.mobile) {
+      (async () => {
+        const salon = await salonsRepository.findById(salonId);
+        const svc = updated.services.find((s) => s.serviceId === dto.serviceId);
+        whatsappAutomationService.trigger({
+          salonId,
+          eventType:     "package_session_used",
+          clientId:      updated.clientId,
+          phone:         updated.mobile!,
+          countryCode:   null,
+          variables: {
+            "1": updated.clientName ?? "Valued Customer",
+            "2": svc?.serviceName ?? "your service",
+            "3": updated.packageName,
+            "4": String(svc?.remainingSessions ?? 0),
+            "5": salon?.business_name ?? "our salon",
+          },
+          referenceId:   `${updated.id}:${dto.serviceId}:${(svc?.completedSessions ?? 0)}`,
+          referenceType: "package",
+          dedupeByReference: true,
+        }).catch(() => {});
+      })().catch(() => {});
+    }
 
     return updated;
   },
@@ -471,6 +524,32 @@ export const clientPackagesService = {
             if (schedulingErrors.length > 0) {
               logger.warn('[client-packages/auto-create] scheduling errors', { packageId: created.id, schedulingErrors });
             }
+          }
+
+          // ── WhatsApp Automation: Package Purchased ───────────────────────
+          // Only when NOT sold within a Calendar/appointment checkout — that
+          // checkout's own single payment_received message already covers it,
+          // so this itemized confirmation stays Quick-Sale/standalone only.
+          if (!appointmentId && created.mobile) {
+            const salon = await salonsRepository.findById(salonId);
+            whatsappAutomationService.trigger({
+              salonId,
+              eventType:     "package_purchased",
+              clientId,
+              phone:         created.mobile,
+              countryCode:   null,
+              variables: {
+                "1": created.clientName ?? "Valued Customer",
+                "2": created.packageName,
+                "3": String(basePrice - discount),
+                "4": String(services.reduce((sum, s) => sum + s.totalSessions, 0)),
+                "5": expiryDate,
+                "6": salon?.business_name ?? "our salon",
+              },
+              referenceId:   created.id,
+              referenceType: "package",
+              dedupeByReference: true,
+            }).catch(() => {});
           }
 
         } catch (err: any) {

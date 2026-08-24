@@ -96,8 +96,8 @@ export const dashboardRepository = {
   },
 
   // Every outbound WhatsApp message counts against Meta's per-number daily
-  // cap, not just campaign blasts — automation triggers (thank_you,
-  // review_request, reminders...) and inbox replies send too. Summed here
+  // cap, not just campaign blasts — automation triggers (bill_receipt,
+  // appointment_confirmation, reminders...) and inbox replies send too. Summed here
   // across all three send paths so the dashboard's usage bar reflects real
   // usage against the limit instead of just campaign volume.
   async getSentToday(salonId: string): Promise<number> {

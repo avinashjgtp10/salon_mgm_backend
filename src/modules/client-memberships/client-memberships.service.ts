@@ -12,6 +12,8 @@ import type {
 } from './client-memberships.types';
 import logger from '../../config/logger';
 import { sendPurchaseReceipt } from '../sales/receipt-send.helper';
+import { whatsappAutomationService } from '../whatsapp-automation/whatsapp-automation.service';
+import { salonsRepository } from '../salons/salons.repository';
 import type { Sale, SaleItem } from '../sales/sales.types';
 
 // Memberships have no real `sales`/`sale_items` rows to attach a receipt to —
@@ -82,12 +84,41 @@ function buildSyntheticSale(membership: ClientMembership): { sale: Sale; items: 
 // that flow already sent one PDF covering the whole sale (service+product+
 // membership etc.), so sending this synthetic membership-only PDF too would
 // duplicate it.
-async function notifyMembershipPurchased(membership: ClientMembership, includeReceipt: boolean): Promise<void> {
-  if (!includeReceipt) return;
+//
+// The membership_purchased text trigger is independent of the receipt: it
+// fires whenever this membership was NOT sold within a Calendar/appointment
+// checkout (appointmentId unset) — that checkout's own single
+// payment_received message already covers it, so this itemized confirmation
+// stays Quick-Sale/standalone only.
+async function notifyMembershipPurchased(membership: ClientMembership, includeReceipt: boolean, appointmentId?: string): Promise<void> {
   if (!membership.mobile) {
-    logger.info(`[WA-AUTO] Skipping purchase receipt for membership ${membership.id} — no mobile number`);
+    if (includeReceipt) logger.info(`[WA-AUTO] Skipping purchase receipt for membership ${membership.id} — no mobile number`);
     return;
   }
+
+  if (!appointmentId) {
+    const salon = await salonsRepository.findById(membership.salonId);
+    whatsappAutomationService.trigger({
+      salonId:       membership.salonId,
+      eventType:     'membership_purchased',
+      clientId:      membership.clientId,
+      phone:         membership.mobile,
+      countryCode:   null,
+      variables: {
+        '1': membership.clientName ?? 'Valued Customer',
+        '2': membership.membershipName,
+        '3': salon?.business_name ?? 'our salon',
+        '4': String(membership.pricePaid ?? 0),
+        '5': String(membership.membershipWalletBalance ?? membership.pricePaid ?? 0),
+        '6': membership.expiresAt ?? '',
+      },
+      referenceId:   membership.id,
+      referenceType: 'membership',
+      dedupeByReference: true,
+    }).catch(() => {});
+  }
+
+  if (!includeReceipt) return;
 
   const { sale, items } = buildSyntheticSale(membership);
   sendPurchaseReceipt({
@@ -159,7 +190,36 @@ export const clientMembershipsService = {
   },
 
   async consume(id: string, salonId: string, dto: ConsumeSessionDTO) {
-    return clientMembershipsRepository.consumeSession(id, salonId, dto);
+    const updated = await clientMembershipsRepository.consumeSession(id, salonId, dto);
+
+    // ── WhatsApp Automation: Membership Session Used (every redemption) ────
+    if (updated?.mobile) {
+      (async () => {
+        const salon = await salonsRepository.findById(salonId);
+        const perSessionValue = updated.totalSessions > 0
+          ? (updated.pricePaid ?? 0) / updated.totalSessions
+          : 0;
+        whatsappAutomationService.trigger({
+          salonId,
+          eventType:     'membership_session_used',
+          clientId:      updated.clientId,
+          phone:         updated.mobile!,
+          countryCode:   null,
+          variables: {
+            '1': updated.clientName ?? 'Valued Customer',
+            '2': dto.serviceName ?? 'your service',
+            '3': perSessionValue.toFixed(0),
+            '4': String(updated.membershipWalletBalance ?? 0),
+            '5': salon?.business_name ?? 'our salon',
+          },
+          referenceId:   `${updated.id}:${updated.usedSessions}`,
+          referenceType: 'membership',
+          dedupeByReference: true,
+        }).catch(() => {});
+      })().catch(() => {});
+    }
+
+    return updated;
   },
 
   async cancel(id: string, salonId: string) {
@@ -179,9 +239,36 @@ export const clientMembershipsService = {
   ): Promise<WalletDeductionResult> {
     const memberships = await clientMembershipsRepository.findAllActiveWithBalanceForClient(clientId, salonId);
     if (memberships.length === 0) return { totalWalletUsed: 0, remainingBalance: 0, perService: [], reused: false };
-    return clientMembershipsRepository.deductWalletAcrossMemberships(
+    const result = await clientMembershipsRepository.deductWalletAcrossMemberships(
       memberships.map((m) => m.id), salonId, { appointmentId, services, maxTotalAmount },
     );
+
+    // ── WhatsApp Automation: Membership Session Used (every redemption) ────
+    const spender = memberships[0];
+    if (result.totalWalletUsed > 0 && spender?.mobile) {
+      (async () => {
+        const salon = await salonsRepository.findById(salonId);
+        whatsappAutomationService.trigger({
+          salonId,
+          eventType:     'membership_session_used',
+          clientId,
+          phone:         spender.mobile!,
+          countryCode:   null,
+          variables: {
+            '1': spender.clientName ?? 'Valued Customer',
+            '2': services[0]?.serviceName ?? 'your service',
+            '3': result.totalWalletUsed.toFixed(0),
+            '4': result.remainingBalance.toFixed(0),
+            '5': salon?.business_name ?? 'our salon',
+          },
+          referenceId:   `${appointmentId}:wallet`,
+          referenceType: 'appointment',
+          dedupeByReference: true,
+        }).catch(() => {});
+      })().catch(() => {});
+    }
+
+    return result;
   },
 
   // Gate for whether payments.service.ts should include service/product items
@@ -446,7 +533,7 @@ export const clientMembershipsService = {
           membershipId, pricePaid, totalSessions, staffId, saleId,
         });
         logger.info(`[client-memberships/auto-create] RENEWED — client=${clientId}, membership=${membershipName}`);
-        notifyMembershipPurchased(renewed, false).catch(() => {});
+        notifyMembershipPurchased(renewed, false, appointmentId).catch(() => {});
         return;
       }
       const created = await clientMembershipsRepository.create(salonId, {
@@ -466,7 +553,7 @@ export const clientMembershipsService = {
       logger.info(`[client-memberships/auto-create] SUCCESS — client=${clientId}, membership=${membershipName}`);
       // Text only, no PDF here — the calling checkout flow (sales/payments)
       // already sent one PDF covering this whole sale, membership line included.
-      notifyMembershipPurchased(created, false).catch(() => {});
+      notifyMembershipPurchased(created, false, appointmentId).catch(() => {});
     } catch (err: any) {
       logger.warn('[client-memberships/auto-create] FAILED:', err?.message ?? err);
     }

@@ -8,7 +8,7 @@
 export type ClientCommunicationEntry = {
   channel: "whatsapp";
   source: "automation" | "campaign";
-  // Automation: the event that triggered it (e.g. "appointment_reminder_24h").
+  // Automation: the event that triggered it (e.g. "service_reminder_24h").
   // Campaign: the campaign's own name.
   label: string;
   status: string; // SENT | DELIVERED | READ | FAILED | SKIPPED | BLOCKED | ...

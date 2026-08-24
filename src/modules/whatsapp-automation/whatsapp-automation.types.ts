@@ -4,26 +4,73 @@
 
 // ── Event Types ───────────────────────────────────────────────────────────────
 export type AutomationEventType =
-  | 'appointment_cancelled'
+  // Salon-editable trigger events (see PURCHASE_EVENTS below) — organized into
+  // Quick Sale / Calendar / Other by the frontend Trigger Templates UI.
+  | 'client_welcome'
+  | 'service_purchased'
+  | 'product_purchased'
+  | 'package_purchased'
+  | 'membership_purchased'
+  | 'bill_receipt'
+  | 'appointment_confirmation'
   | 'appointment_rescheduled'
-  | 'invoice_generated'
+  | 'appointment_cancelled'
   | 'payment_received'
+  | 'package_expiring_7d'
+  | 'package_expiring_24h'
+  | 'membership_expiring_7d'
+  | 'membership_expiring_24h'
+  | 'package_session_used'
+  | 'membership_session_used'
+  | 'package_appointment_reminder_24h'
+  | 'service_reminder_24h'
+  | 'reward_points_earned'
+  | 'referral_reward'
+  // Legacy global (admin-managed, salon_id IS NULL) events, untouched by the
+  // trigger-template rework.
   | 'pending_payment_reminder'
-  | 'membership_renewal_reminder'
   | 'birthday_wishes'
   | 'new_year_campaign'
   | 'we_miss_you_30d'
   | 'we_miss_you_60d'
   | 'we_miss_you_90d'
 
+// Salon-owner-editable events — submitted to Meta under the salon's own WABA
+// (see wa-purchase-templates.service.ts), unlike the legacy events below which
+// still use a single global admin-managed row.
+export const PURCHASE_EVENTS: AutomationEventType[] = [
+  'client_welcome',
+  'service_purchased',
+  'product_purchased',
+  'package_purchased',
+  'membership_purchased',
+  'bill_receipt',
+  'appointment_confirmation',
+  'appointment_rescheduled',
+  'appointment_cancelled',
+  'payment_received',
+  'package_expiring_7d',
+  'package_expiring_24h',
+  'membership_expiring_7d',
+  'membership_expiring_24h',
+  'package_session_used',
+  'membership_session_used',
+  'package_appointment_reminder_24h',
+  'service_reminder_24h',
+  'reward_points_earned',
+  'referral_reward',
+]
+
+// The one PURCHASE_EVENTS member that never goes through Meta template
+// submission/approval — it's sent as a plain caption on the bill's PDF
+// document message, not a standalone template message, so its wording is
+// salon-editable but has no {{n}} numbering rule and no Submit/Sync workflow.
+export const CAPTION_ONLY_EVENTS: AutomationEventType[] = ['bill_receipt']
+
 // Transactional events — controlled by client.whatsapp_notifications
 export const TRANSACTIONAL_EVENTS: AutomationEventType[] = [
-  'appointment_cancelled',
-  'appointment_rescheduled',
-  'invoice_generated',
-  'payment_received',
   'pending_payment_reminder',
-  'membership_renewal_reminder',
+  ...PURCHASE_EVENTS,
 ]
 
 // Marketing events — controlled by client.whatsapp_marketing
@@ -74,14 +121,17 @@ export type AutomationLog = {
 }
 
 // ── DB Row: wa_automation_templates ──────────────────────────────────────────
-// One row per event type, global, managed by SalonOx admin only.
+// Legacy rows (salon_id IS NULL) are global, one per event type, managed by
+// SalonOx admin only. Rows for PURCHASE_EVENTS have salon_id set — each salon
+// owns and submits their own copy to Meta under their own WABA (except
+// CAPTION_ONLY_EVENTS, which never go to Meta at all).
 export type TemplateSubmissionStatus = 'DRAFT' | 'PENDING' | 'APPROVED' | 'REJECTED'
 
 export type AutomationTemplate = {
   id:                string
   salon_id:          string | null
   event_type:        AutomationEventType
-  template_name:     string    // Meta template name
+  template_name:     string    // Meta template name (legacy: pre-set; purchase events: minted on submit)
   language:          string    // e.g. 'en'
   is_active:         boolean
   status:            TemplateSubmissionStatus
@@ -92,11 +142,22 @@ export type AutomationTemplate = {
   approved_at:       string | null
   created_at:        string
   updated_at:        string
-  // Optional single CTA-URL button, kept generic on the row so any event can
-  // opt in.
+  // Optional single CTA-URL button — unused by the current default catalog,
+  // but kept generic on the row so any future event can opt in.
   has_button:        boolean
   button_text:       string | null
   button_url_base:   string | null
+  // ── In-flight resubmission candidate ────────────────────────────────────
+  // Set only while status = 'APPROVED' and the salon has edited + resubmitted
+  // new wording — the row above (body_text/template_name/meta_template_id/
+  // status) stays untouched and keeps serving live sends the whole time.
+  // Promoted into those columns (and cleared here) only once Meta approves
+  // this candidate — see wa-purchase-templates.service.ts's syncStatus().
+  pending_body_text:        string | null
+  pending_status:            'PENDING' | 'REJECTED' | null
+  pending_template_name:     string | null
+  pending_meta_template_id:  string | null
+  pending_rejection_reason:  string | null
 }
 
 // ── Trigger Payload ───────────────────────────────────────────────────────────
@@ -109,11 +170,12 @@ export type AutomationTriggerPayload = {
   variables:      Record<string, string>  // { '1': 'Nishant', '2': 'Style Studio', ... }
   referenceId?:   string | null
   referenceType?: string | null
-  // Event-driven call sites (invoice, payment, cancellation) set this so
-  // trigger() sends at most once per (eventType, referenceId), using an
-  // atomic guard — prevents double messages from a retry or a double-submit.
-  // Recurring scheduler events (birthday, we-miss-you) leave it off; they do
-  // their own date-keyed guarding and intentionally re-send over time.
+  // Event-driven call sites (confirmations, purchases, thank-you, etc.) set
+  // this so trigger() sends at most once per (eventType, referenceId), using an
+  // atomic guard — prevents double messages from a retry, a double-submit, or
+  // two call sites firing the same event for the same record. Recurring
+  // scheduler events (reminders, birthday) leave it off; they do their own
+  // date-keyed guarding and intentionally re-send over time.
   dedupeByReference?: boolean
   // Per-recipient suffix appended to the template's stored button_url_base at
   // send time (Meta's dynamic URL button mechanism). Only meaningful when the

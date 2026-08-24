@@ -52,27 +52,6 @@ export const salesService = {
             });
         });
 
-        // ── WhatsApp Automation: Invoice Generated ────────────────────────────
-        // Only fire when there's a real client (not walk-in) and it's a proper sale
-        if (sale.client_id && (sale as any).client_phone) {
-            whatsappAutomationService.trigger({
-                salonId:       sale.salon_id,
-                eventType:     "invoice_generated",
-                clientId:      sale.client_id,
-                phone:         (sale as any).client_phone,
-                countryCode:   (sale as any).client_phone_code ?? null,
-                variables: {
-                    "1": (sale as any).client_name  ?? "Valued Customer",
-                    "2": sale.invoice_number ?? "",
-                    "3": String(sale.total_amount   ?? "0"),
-                    "4": (sale as any).salon_name   ?? "our salon",
-                },
-                referenceId:   sale.id,
-                referenceType: "invoice",
-                dedupeByReference: true,
-            }).catch(() => {});
-        }
-
         return { sale, items };
     },
 
@@ -212,6 +191,43 @@ export const salesService = {
             items,
         }).catch(() => {}); // already safe internally, double-guard here
         tipCalculationService.earnForSale(sale.id, sale.salon_id).catch(() => {});
+
+        // ── WhatsApp Automation: Purchase confirmation (per item type) ─────────
+        // service_purchased / product_purchased fire once each if that item type
+        // is present — a mixed sale (e.g. one service + one product) intentionally
+        // sends one text per type, not a single combined message. Only for a true
+        // walk-in (no linked appointment) — an appointment-linked checkout gets
+        // Calendar's single generic payment_received message instead. Membership
+        // items are handled separately above; package items aren't sold through
+        // this cart at all.
+        if (!sale.appointment_id && sale.client_id && (sale as any).client_phone) {
+            const presentTypes = new Set(items.map((i) => i.item_type));
+            const purchaseEvents: Array<{ eventType: "service_purchased" | "product_purchased"; itemType: "service" | "product" }> = [
+                { eventType: "service_purchased", itemType: "service" },
+                { eventType: "product_purchased", itemType: "product" },
+            ];
+
+            for (const { eventType, itemType } of purchaseEvents) {
+                if (!presentTypes.has(itemType)) continue;
+                const itemName = items.find((i) => i.item_type === itemType)?.name ?? "your purchase";
+                whatsappAutomationService.trigger({
+                    salonId:       sale.salon_id,
+                    eventType,
+                    clientId:      sale.client_id,
+                    phone:         (sale as any).client_phone,
+                    countryCode:   (sale as any).client_phone_code ?? null,
+                    variables: {
+                        "1": (sale as any).client_name ?? "Valued Customer",
+                        "2": String(items.find((i) => i.item_type === itemType)?.total_price ?? sale.total_amount ?? "0"),
+                        "3": itemName,
+                        "4": (sale as any).salon_name   ?? "our salon",
+                    },
+                    referenceId:   `${sale.id}:${eventType}`,
+                    referenceType: "invoice",
+                    dedupeByReference: true,
+                }).catch(() => {});
+            }
+        }
 
         // ── WhatsApp: PDF purchase receipt ──────────────────────────────────
         if (sale.client_id && (sale as any).client_phone) {

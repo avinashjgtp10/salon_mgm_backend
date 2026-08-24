@@ -55,6 +55,10 @@ async function runScheduledJobs(): Promise<void> {
 
   logger.info(`[WA-AUTO-SCHEDULER] Tick — IST ${String(hour).padStart(2,'0')}:${String(minute).padStart(2,'0')}`)
 
+  // ── Every hour: appointment reminders (tomorrow) ───────────────────────────
+  await whatsappAutomationService.runServiceReminders24h()
+  await whatsappAutomationService.runPackageAppointmentReminders24h()
+
   // ── 9:00 AM IST daily jobs ─────────────────────────────────────────────────
   if (hour === 9 && minute < 5) {
     const today = getTodayIST()
@@ -63,7 +67,10 @@ async function runScheduledJobs(): Promise<void> {
       logger.info('[WA-AUTO-SCHEDULER] Running 9AM IST daily jobs...')
       await Promise.allSettled([
         whatsappAutomationService.runBirthdayWishes(),
-        whatsappAutomationService.runMembershipRenewalReminders(),
+        whatsappAutomationService.runPackageExpiringReminders(7),
+        whatsappAutomationService.runPackageExpiringReminders(1),
+        whatsappAutomationService.runMembershipExpiringReminders(7),
+        whatsappAutomationService.runMembershipExpiringReminders(1),
         whatsappAutomationService.runWeMissYou(30),
         whatsappAutomationService.runWeMissYou(60),
         whatsappAutomationService.runWeMissYou(90),

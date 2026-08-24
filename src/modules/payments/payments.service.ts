@@ -18,6 +18,7 @@ import type { Appointment, AppointmentServiceConsumableRecord } from '../appoint
 import { appointmentConsumablesService } from '../inventory/inventory.service';
 import logger from '../../config/logger';
 import { sendReceiptDocument } from '../sales/receipt-whatsapp.service';
+import { whatsappAutomationService } from '../whatsapp-automation/whatsapp-automation.service';
 import { salonsRepository } from '../salons/salons.repository';
 import { branchesRepository } from '../branches/branches.repository';
 import { staffService } from '../staff/staff.service';
@@ -918,7 +919,7 @@ export const paymentsService = {
         if (config.active && config.spend_amount > 0) {
           const pointsEarned = Math.floor((Number(data.net_amount) / config.spend_amount) * config.points_earned);
           if (pointsEarned > 0) {
-            await rewardPointsRepository.applyLedgerEntry({
+            const newBalance = await rewardPointsRepository.applyLedgerEntry({
               clientId: data.client_id,
               salonId: data.salon_id,
               type: 'earn',
@@ -927,6 +928,28 @@ export const paymentsService = {
               sourceId: payment.id,
               note: `Earned on ₹${Number(data.net_amount).toFixed(2)} payment`,
             });
+
+            // ── WhatsApp Automation: Reward Points Earned ────────────────────
+            const earner = await clientsRepository.findById(data.client_id, data.salon_id);
+            if (earner?.phone_number) {
+              const salon = await salonsRepository.findById(data.salon_id);
+              whatsappAutomationService.trigger({
+                salonId:       data.salon_id,
+                eventType:     'reward_points_earned',
+                clientId:      data.client_id,
+                phone:         earner.phone_number,
+                countryCode:   earner.phone_country_code ?? null,
+                variables: {
+                  '1': earner.full_name ?? 'Valued Customer',
+                  '2': String(pointsEarned),
+                  '3': salon?.business_name ?? 'our salon',
+                  '4': String(newBalance),
+                },
+                referenceId:   payment.id,
+                referenceType: 'payment',
+                dedupeByReference: true,
+              }).catch(() => {});
+            }
           }
         }
       } catch (err: any) {
@@ -954,7 +977,7 @@ export const paymentsService = {
           if (config.active && billAmount >= config.min_bill_amount) {
             if (config.referrer_reward_amount > 0) {
               // Own dedicated referral balance now — no longer eWallet money.
-              await referralRepository.applyLedgerEntry({
+              const newReferralBalance = await referralRepository.applyLedgerEntry({
                 clientId: referredClient.referred_by_client_id,
                 salonId: data.salon_id,
                 type: 'earn',
@@ -963,6 +986,29 @@ export const paymentsService = {
                 sourceId: data.client_id,
                 note: 'Referral reward for referring a new customer',
               });
+
+              // ── WhatsApp Automation: Referral Reward Credited ──────────────
+              const referrer = await clientsRepository.findById(referredClient.referred_by_client_id, data.salon_id);
+              if (referrer?.phone_number) {
+                const salon = await salonsRepository.findById(data.salon_id);
+                whatsappAutomationService.trigger({
+                  salonId:       data.salon_id,
+                  eventType:     'referral_reward',
+                  clientId:      referredClient.referred_by_client_id,
+                  phone:         referrer.phone_number,
+                  countryCode:   referrer.phone_country_code ?? null,
+                  variables: {
+                    '1': referrer.full_name ?? 'Valued Customer',
+                    '2': referredClient.full_name ?? 'your referral',
+                    '3': salon?.business_name ?? 'our salon',
+                    '4': String(config.referrer_reward_amount),
+                    '5': String(newReferralBalance),
+                  },
+                  referenceId:   data.client_id,
+                  referenceType: 'client',
+                  dedupeByReference: true,
+                }).catch(() => {});
+              }
             }
             await clientsRepository.markReferralRewarded(data.client_id);
           }
