@@ -1,5 +1,6 @@
 import pool from "../../config/database";
 import bcrypt from "bcrypt";
+import { purgeSalon } from "../salons/salons.repository";
 
 export const superAdminRepository = {
 
@@ -676,20 +677,35 @@ export const superAdminRepository = {
         await client.query("ROLLBACK");
         return null;
       }
+      const ownerId = salons[0].owner_id;
 
-      // Tables with no FK constraint to salons — must delete manually
-      await client.query(`DELETE FROM invoices              WHERE salon_id = $1`, [id]);
-      await client.query(`DELETE FROM billing_subscriptions WHERE salon_id = $1`, [id]);
+      // Deletes every row scoped to this salon, including tables with no FK
+      // to salons (appointments, sales, bundles, etc.) that ON DELETE CASCADE
+      // never reaches on its own — see purgeSalon's own comment for the full
+      // list and why each one needs an explicit delete.
+      const deleted = await purgeSalon(client, id);
 
-      // Delete the salon — FK ON DELETE CASCADE handles staff, clients,
-      // appointments, payments, services, categories, salon_settings, bookings, etc.
-      const { rows } = await client.query(
-        `DELETE FROM salons WHERE id = $1 RETURNING id`,
-        [id]
-      );
+      // "Delete the salon" means every account related to it, not just the
+      // business data — an ownerless (salon_id-less) user row left behind
+      // would look like the deletion only half-worked. Skip this if the
+      // owner still owns another salon (multi-salon owners keep their login).
+      if (ownerId) {
+        const { rows: stillOwns } = await client.query(
+          `SELECT id FROM salons WHERE owner_id = $1 LIMIT 1`,
+          [ownerId]
+        );
+        if (!stillOwns[0]) {
+          await client.query(`DELETE FROM refresh_tokens WHERE user_id = $1`, [ownerId]);
+          await client.query(`DELETE FROM otp_verifications WHERE user_id = $1`, [ownerId]);
+          await client.query(`DELETE FROM user_identities WHERE user_id = $1`, [ownerId]);
+          await client.query(`UPDATE staff SET user_id = NULL, updated_at = NOW() WHERE user_id = $1`, [ownerId]);
+          await client.query(`UPDATE support_tickets SET user_id = NULL, updated_at = NOW() WHERE user_id = $1`, [ownerId]);
+          await client.query(`DELETE FROM users WHERE id = $1 AND role != 'super_admin'`, [ownerId]);
+        }
+      }
 
       await client.query("COMMIT");
-      return rows[0] ?? null;
+      return deleted;
     } catch (err) {
       await client.query("ROLLBACK");
       throw err;
