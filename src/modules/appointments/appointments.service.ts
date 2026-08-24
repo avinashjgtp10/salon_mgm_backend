@@ -1275,6 +1275,22 @@ export const appointmentsService = {
                 } catch (err: any) { logger.error("[email] newPayment (preexisting) failed:", err?.message ?? err); }
             })();
 
+            // ── Push Notification: Payment Complete (to salon staff) ──────────
+            // Same pattern as "New Appointment Booked" — a calendar-facing push
+            // so staff know a bill was just settled without needing to refresh.
+            notificationsService.create({
+                salon_id: existing.salon_id,
+                type:     "payment",
+                title:    "Payment Complete",
+                body:     `${existing.client_name ?? "Walk-in"} — ₹${preExistingSale.total_amount ?? 0}`,
+                event_key: "newPayment",
+                scheduled_at: existing.scheduled_at,
+            }).catch((err: any) => {
+                logger.error("Payment complete notification failed", {
+                    appointmentId, salonId: existing.salon_id, message: err?.message,
+                });
+            });
+
             return { appointment: completedAppt, saleId: preExistingSale.id };
         }
 
@@ -1527,6 +1543,20 @@ export const appointmentsService = {
                 logger.info(`[email] newPayment sent to ${ownerEmail}`);
             } catch (err: any) { logger.error("[email] newPayment (checkout) failed:", err?.message ?? err); }
         })();
+
+        // ── Push Notification: Payment Complete (to salon staff) ──────────────
+        notificationsService.create({
+            salon_id: existing.salon_id,
+            type:     "payment",
+            title:    "Payment Complete",
+            body:     `${existing.client_name ?? "Walk-in"} — ₹${sale.total_amount ?? 0}`,
+            event_key: "newPayment",
+            scheduled_at: existing.scheduled_at,
+        }).catch((err: any) => {
+            logger.error("Payment complete notification failed", {
+                appointmentId, salonId: existing.salon_id, message: err?.message,
+            });
+        });
 
         return { appointment, saleId: sale.id };
     },
