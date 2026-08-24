@@ -47,6 +47,9 @@ import {
     ProductMovementReportStats,
     ClientRevenueReportRow,
     ClientRevenueReportStats,
+    AllClientsReportRow,
+    AllClientsReportStats,
+    AllClientsFiltersAvailable,
     CustomerFrequencyReportRow,
     CustomerFrequencyReportStats,
     LostCustomersReportRow,
@@ -5438,6 +5441,260 @@ async getClientRevenueReportRows(
       limit: effectiveLimit,
       total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
     },
+  };
+},
+
+// ======================================================
+// ALL CLIENTS REPORT (independent report API)
+// POST /api/report/all-clients — pure client-profile listing, deliberately
+// carrying NO revenue/visit figures (that's Client Revenue's job). Reads
+// clients directly, never the Appointment API. Filter semantics (birth
+// month, spend range, has_membership/has_package, last-visit range,
+// customer_type) intentionally mirror clientsRepository's own
+// _buildCampaignFilterSql so "has an active membership" etc. can never mean
+// something different here than it does for campaign targeting — but this
+// report does NOT reuse that function directly, since it hard-requires
+// is_active=true and a non-blank phone (both wrong for a general listing
+// that must also surface blocked clients via its own status filter).
+// ======================================================
+
+_buildAllClientsWhere(
+  salonId: string,
+  filters: {
+    search?: string; genders?: string[]; client_source?: string;
+    birth_month?: number; joined_from?: string; joined_to?: string;
+    total_spend_min?: number; total_spend_max?: number;
+    has_membership?: boolean; has_package?: boolean;
+    last_visit_from?: string; last_visit_to?: string;
+    customer_type?: "new" | "repetitive"; status?: "active" | "blocked";
+  }
+): { joinSql: string; where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["c.salon_id = $1"];
+  const joins: string[] = [];
+  let idx = 2;
+
+  if (filters.status === "active") where.push("c.is_active = true AND c.is_blocked = false");
+  else if (filters.status === "blocked") where.push("c.is_blocked = true");
+
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+      OR COALESCE(c.email, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+  if (filters.genders && filters.genders.length > 0) {
+    where.push(`LOWER(c.gender) = ANY($${idx++}::text[])`);
+    values.push(filters.genders.map(g => g.toLowerCase()));
+  }
+  if (filters.client_source && filters.client_source !== "all") {
+    where.push(`c.client_source = $${idx++}`);
+    values.push(filters.client_source);
+  }
+  if (filters.birth_month) {
+    // Same CASE-guarded parse as _buildCampaignFilterSql: malformed
+    // birthday_day_month values (a full date instead of "MM-DD") must parse
+    // to NULL per-row rather than throwing and aborting the whole query.
+    where.push(`
+      EXTRACT(MONTH FROM (
+        CASE WHEN c.birthday_day_month ~ '^\\d{2}-\\d{2}$'
+             THEN TO_DATE(c.birthday_day_month, 'MM-DD')
+             ELSE NULL
+        END
+      )) = $${idx++}
+    `);
+    values.push(filters.birth_month);
+  }
+  if (filters.joined_from) { where.push(`c.created_at::date >= $${idx++}::date`); values.push(filters.joined_from); }
+  if (filters.joined_to)   { where.push(`c.created_at::date <= $${idx++}::date`); values.push(filters.joined_to); }
+
+  if (filters.has_membership === true) {
+    where.push(`EXISTS (SELECT 1 FROM client_memberships cm WHERE cm.client_id = c.id AND LOWER(cm.status) = 'active')`);
+  } else if (filters.has_membership === false) {
+    where.push(`NOT EXISTS (SELECT 1 FROM client_memberships cm WHERE cm.client_id = c.id AND LOWER(cm.status) = 'active')`);
+  }
+  if (filters.has_package === true) {
+    where.push(`EXISTS (SELECT 1 FROM client_packages cp WHERE cp.client_id = c.id AND LOWER(cp.status) = 'active')`);
+  } else if (filters.has_package === false) {
+    where.push(`NOT EXISTS (SELECT 1 FROM client_packages cp WHERE cp.client_id = c.id AND LOWER(cp.status) = 'active')`);
+  }
+
+  // Spend range / last-visit range / customer_type all read off the same
+  // computed join — pulled in once, only when any of those three filters
+  // is actually in play.
+  if (
+    filters.total_spend_min != null || filters.total_spend_max != null ||
+    filters.last_visit_from || filters.last_visit_to || filters.customer_type
+  ) {
+    joins.push(`
+      LEFT JOIN (
+        SELECT client_id,
+               MAX(scheduled_at) FILTER (WHERE status = 'paid') AS last_visit_at,
+               COUNT(*)          FILTER (WHERE status = 'paid') AS completed_count
+        FROM appointments
+        WHERE salon_id = $1 AND deleted_at IS NULL
+        GROUP BY client_id
+      ) av ON av.client_id = c.id
+    `);
+  }
+  if (filters.total_spend_min != null || filters.total_spend_max != null) {
+    joins.push(`
+      LEFT JOIN (
+        SELECT client_id, COALESCE(SUM(amount), 0) AS total_spend
+        FROM (
+          SELECT s.client_id, s.total_amount AS amount
+          FROM sales s
+          LEFT JOIN appointments a ON a.id = s.appointment_id
+          WHERE s.salon_id = $1
+            AND s.status = 'completed'
+            AND s.client_id IS NOT NULL
+            AND (a.id IS NULL OR (a.status IN ('paid', 'partial') AND a.deleted_at IS NULL))
+          UNION ALL
+          SELECT p.client_id, GREATEST(0, p.paid_amount - COALESCE(p.ewallet_used, 0) - COALESCE(p.membership_wallet_used, 0)) AS amount
+          FROM payments p
+          JOIN appointments a ON a.id = p.appointment_id
+          WHERE p.salon_id = $1
+            AND p.status = 'partial'
+            AND p.client_id IS NOT NULL
+            AND a.deleted_at IS NULL
+            AND a.status NOT IN ('cancelled', 'no-show')
+            AND NOT EXISTS (
+              SELECT 1 FROM sales s2
+              WHERE s2.appointment_id = p.appointment_id AND s2.status = 'completed'
+            )
+        ) combined
+        GROUP BY client_id
+      ) ps ON ps.client_id = c.id
+    `);
+    if (filters.total_spend_min != null) { where.push(`COALESCE(ps.total_spend, 0) >= $${idx++}`); values.push(filters.total_spend_min); }
+    if (filters.total_spend_max != null) { where.push(`COALESCE(ps.total_spend, 0) <= $${idx++}`); values.push(filters.total_spend_max); }
+  }
+  if (filters.last_visit_from) { where.push(`av.last_visit_at::date >= $${idx++}::date`); values.push(filters.last_visit_from); }
+  if (filters.last_visit_to)   { where.push(`av.last_visit_at::date <= $${idx++}::date`); values.push(filters.last_visit_to); }
+  if (filters.customer_type === "new") where.push(`COALESCE(av.completed_count, 0) = 0`);
+  else if (filters.customer_type === "repetitive") where.push(`COALESCE(av.completed_count, 0) > 0`);
+
+  return { joinSql: joins.join("\n"), where: where.join(" AND "), values, nextIndex: idx };
+},
+
+async getAllClientsReportStats(
+  salonId: string,
+  filters: {
+    search?: string; genders?: string[]; client_source?: string;
+    birth_month?: number; joined_from?: string; joined_to?: string;
+    total_spend_min?: number; total_spend_max?: number;
+    has_membership?: boolean; has_package?: boolean;
+    last_visit_from?: string; last_visit_to?: string;
+    customer_type?: "new" | "repetitive"; status?: "active" | "blocked";
+  }
+): Promise<AllClientsReportStats> {
+  const { joinSql, where, values } = this._buildAllClientsWhere(salonId, filters);
+  const query = `
+    SELECT
+      COUNT(*)::int                                                                       AS total_clients,
+      COUNT(*) FILTER (WHERE c.is_active = true AND c.is_blocked = false)::int             AS active_clients,
+      COUNT(*) FILTER (WHERE c.is_blocked = true)::int                                     AS blocked_clients,
+      COUNT(*) FILTER (WHERE c.created_at >= date_trunc('month', CURRENT_DATE))::int        AS new_this_month
+    FROM clients c
+    ${joinSql}
+    WHERE ${where}
+  `;
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  return {
+    total_clients: Number(r.total_clients ?? 0),
+    active_clients: Number(r.active_clients ?? 0),
+    blocked_clients: Number(r.blocked_clients ?? 0),
+    new_this_month: Number(r.new_this_month ?? 0),
+  };
+},
+
+async getAllClientsReportRows(
+  salonId: string,
+  filters: {
+    search?: string; genders?: string[]; client_source?: string;
+    birth_month?: number; joined_from?: string; joined_to?: string;
+    total_spend_min?: number; total_spend_max?: number;
+    has_membership?: boolean; has_package?: boolean;
+    last_visit_from?: string; last_visit_to?: string;
+    customer_type?: "new" | "repetitive"; status?: "active" | "blocked";
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: AllClientsReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { joinSql, where, values, nextIndex } = this._buildAllClientsWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    SELECT
+      c.id AS client_id,
+      COALESCE(NULLIF(TRIM(c.full_name), ''), 'Unnamed Client') AS client_name,
+      COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS contact,
+      NULLIF(TRIM(c.email), '') AS email,
+      NULLIF(TRIM(c.gender), '') AS gender,
+      c.birthday_day_month AS birthday,
+      NULLIF(TRIM(c.address), '') AS address,
+      NULLIF(TRIM(c.client_source), '') AS client_source,
+      CASE WHEN c.is_blocked = true THEN 'Blocked' ELSE 'Active' END AS status,
+      TO_CHAR(c.created_at, 'YYYY-MM-DD') AS joined_date,
+      COUNT(*) OVER() AS total_count
+    FROM clients c
+    ${joinSql}
+    WHERE ${where}
+    ORDER BY c.created_at DESC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: AllClientsReportRow[] = rows.map((row: any) => ({
+    client_id: row.client_id,
+    client_name: row.client_name,
+    contact: row.contact,
+    email: row.email,
+    gender: row.gender,
+    birthday: row.birthday,
+    address: row.address,
+    client_source: row.client_source,
+    status: row.status,
+    joined_date: row.joined_date,
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// Filter dropdown options for the All Clients report — client_source
+// values actually present on this salon's clients, not a hardcoded list.
+async getAllClientsFiltersAvailable(salonId: string): Promise<AllClientsFiltersAvailable> {
+  const { rows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT client_source AS id, client_source AS label
+     FROM clients
+     WHERE salon_id = $1 AND client_source IS NOT NULL AND TRIM(client_source) <> ''
+     ORDER BY client_source ASC`,
+    [salonId]
+  ));
+  return {
+    client_sources: rows.map((r: any) => ({ id: r.id, label: r.label })),
   };
 },
 

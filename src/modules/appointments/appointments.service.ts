@@ -905,7 +905,30 @@ export const appointmentsService = {
         // reassignment, or LUNOX's modifyAppointmentServices changing what's
         // booked/its duration) never did, so any of these silently required a
         // manual page refresh to appear correctly.
-        if (patch.scheduled_at || patch.staff_id || patch.services || patch.duration_minutes) {
+        //
+        // scheduled_at/staff_id are checked for an actual value change, not
+        // just presence in the patch — the frontend's save() always resends
+        // both on every save (it serializes current UI state wholesale, it
+        // doesn't track which fields were actually touched), so a
+        // presence-only check fired this push on every single save — e.g.
+        // completing payment on an unedited booking — reading to staff as
+        // "appointment rescheduled" when nothing had.
+        //
+        // duration_minutes/services are deliberately NOT part of this
+        // trigger (they used to be, presence-only, which is the same bug):
+        // a real content edit to services always changes the appointment's
+        // total/duration/staff too, which already fires this via the checks
+        // below, so the coverage lost is negligible. A duration/services
+        // comparison here would need real value-equality, and services in
+        // particular is a computed array (fresh timestamps, differing key
+        // shape between patch and existing) that can't be compared with
+        // JSON.stringify — that was tried and still false-positived on
+        // every save, since the two sides are never byte-identical even
+        // when nothing changed.
+        const scheduledAtChanged = !!patch.scheduled_at &&
+            new Date(patch.scheduled_at).getTime() !== new Date(existing.scheduled_at).getTime();
+        const staffChanged = !!patch.staff_id && patch.staff_id !== existing.staff_id;
+        if (scheduledAtChanged || staffChanged) {
             notificationsService.create({
                 salon_id: existing.salon_id,
                 type:     "appointment",
@@ -1277,6 +1300,22 @@ export const appointmentsService = {
                 } catch (err: any) { logger.error("[email] newPayment (preexisting) failed:", err?.message ?? err); }
             })();
 
+            // ── Push Notification: Payment Complete (to salon staff) ──────────
+            // Same pattern as "New Appointment Booked" — a calendar-facing push
+            // so staff know a bill was just settled without needing to refresh.
+            notificationsService.create({
+                salon_id: existing.salon_id,
+                type:     "payment",
+                title:    "Payment Complete",
+                body:     `${existing.client_name ?? "Walk-in"} — ₹${preExistingSale.total_amount ?? 0}`,
+                event_key: "newPayment",
+                scheduled_at: existing.scheduled_at,
+            }).catch((err: any) => {
+                logger.error("Payment complete notification failed", {
+                    appointmentId, salonId: existing.salon_id, message: err?.message,
+                });
+            });
+
             return { appointment: completedAppt, saleId: preExistingSale.id };
         }
 
@@ -1532,6 +1571,20 @@ export const appointmentsService = {
                 logger.info(`[email] newPayment sent to ${ownerEmail}`);
             } catch (err: any) { logger.error("[email] newPayment (checkout) failed:", err?.message ?? err); }
         })();
+
+        // ── Push Notification: Payment Complete (to salon staff) ──────────────
+        notificationsService.create({
+            salon_id: existing.salon_id,
+            type:     "payment",
+            title:    "Payment Complete",
+            body:     `${existing.client_name ?? "Walk-in"} — ₹${sale.total_amount ?? 0}`,
+            event_key: "newPayment",
+            scheduled_at: existing.scheduled_at,
+        }).catch((err: any) => {
+            logger.error("Payment complete notification failed", {
+                appointmentId, salonId: existing.salon_id, message: err?.message,
+            });
+        });
 
         return { appointment, saleId: sale.id };
     },

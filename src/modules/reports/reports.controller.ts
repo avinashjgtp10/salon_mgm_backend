@@ -1544,6 +1544,60 @@ async getClientRevenueReport(
 },
 
 // ======================================================
+// ALL CLIENTS REPORT (independent report API)
+// POST /api/report/all-clients
+// ======================================================
+
+async getAllClientsReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const asStringArray = (value: unknown): string[] | undefined =>
+            Array.isArray(value)
+                ? value.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined;
+        const asBool = (value: unknown): boolean | undefined =>
+            typeof value === "boolean" ? value : undefined;
+
+        const filters = {
+            search: asString(body.search),
+            genders: asStringArray(body.genders),
+            client_source: asString(body.client_source),
+            birth_month: body.birth_month !== undefined ? Number(body.birth_month) : undefined,
+            joined_from: asString(body.joined_from),
+            joined_to: asString(body.joined_to),
+            total_spend_min: body.total_spend_min !== undefined ? Number(body.total_spend_min) : undefined,
+            total_spend_max: body.total_spend_max !== undefined ? Number(body.total_spend_max) : undefined,
+            has_membership: asBool(body.has_membership),
+            has_package: asBool(body.has_package),
+            last_visit_from: asString(body.last_visit_from),
+            last_visit_to: asString(body.last_visit_to),
+            customer_type: body.customer_type === "new" ? "new" as const : body.customer_type === "repetitive" ? "repetitive" as const : undefined,
+            status: body.status === "active" ? "active" as const : body.status === "blocked" ? "blocked" as const : undefined,
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getAllClientsReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "All clients report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
 // CUSTOMER FREQUENCY REPORT (independent report API)
 // POST /api/report/customer-frequency
 // ======================================================

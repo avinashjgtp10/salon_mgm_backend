@@ -253,6 +253,8 @@ import {
     PurchaseVsSalesReportResponse,
     ClientRevenueReportFilters,
     ClientRevenueReportResponse,
+    AllClientsReportFilters,
+    AllClientsReportResponse,
     CustomerFrequencyReportFilters,
     CustomerFrequencyReportResponse,
     LostCustomersReportFilters,
@@ -1587,6 +1589,28 @@ async getClientRevenueReport(
         rows: rowsResult.items,
         pagination: rowsResult.pagination,
         stats,
+    };
+},
+
+// ======================================================
+// ALL CLIENTS REPORT (independent report API)
+// ======================================================
+
+async getAllClientsReport(
+    salonId: string,
+    filters: AllClientsReportFilters
+): Promise<AllClientsReportResponse> {
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
+        reportsRepository.getAllClientsReportStats(salonId, filters),
+        reportsRepository.getAllClientsReportRows(salonId, filters),
+        reportsRepository.getAllClientsFiltersAvailable(salonId),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+        filters_available: filtersAvailable,
     };
 },
 

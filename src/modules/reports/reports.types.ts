@@ -1451,6 +1451,74 @@ export interface ClientRevenueReportResponse {
 }
 
 // ===============================
+// All Clients Report (independent report API — POST /api/report/all-clients)
+// Pure client-profile listing — name, contact, DOB, gender, source, status,
+// joined date — deliberately carries NO revenue/visit figures (that's what
+// Client Revenue is for). Filters reuse clientsRepository's own
+// _buildCampaignFilterSql (the same engine campaign contact-targeting uses)
+// rather than re-deriving equivalent SQL here, so the two can never diverge
+// on what "has an active membership" or "new vs repetitive" means.
+// ===============================
+
+export interface AllClientsReportFilters {
+    search?: string;
+    genders?: string[];
+    client_source?: string;
+    birth_month?: number;
+    joined_from?: string;
+    joined_to?: string;
+    total_spend_min?: number;
+    total_spend_max?: number;
+    has_membership?: boolean;
+    has_package?: boolean;
+    last_visit_from?: string;
+    last_visit_to?: string;
+    customer_type?: "new" | "repetitive";
+    status?: "active" | "blocked";
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface AllClientsReportRow {
+    client_id: string;
+    client_name: string;
+    contact: string;
+    email: string | null;
+    gender: string | null;
+    birthday: string | null;
+    address: string | null;
+    client_source: string | null;
+    status: "Active" | "Blocked";
+    joined_date: string;
+}
+
+export interface AllClientsReportStats {
+    total_clients: number;
+    active_clients: number;
+    blocked_clients: number;
+    new_this_month: number;
+}
+
+export interface AllClientsReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface AllClientsFiltersAvailable {
+    client_sources: { id: string; label: string }[];
+}
+
+export interface AllClientsReportResponse {
+    rows: AllClientsReportRow[];
+    pagination: AllClientsReportPagination;
+    stats: AllClientsReportStats;
+    filters_available: AllClientsFiltersAvailable;
+}
+
+// ===============================
 // Customer Spend Segments Report (POST /api/report/customer-spend)
 //
 // Classifies clients as VIP / Regular / Low by how much they have spent, and
