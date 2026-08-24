@@ -233,7 +233,24 @@ async function getPaymentMethodCounts(
     WHERE LOWER(key) = '${leg}'
   ), 0::numeric)`;
 
-  const { rows } = await client.query<{ upi_count: string; card_count: string; cash_count: string }>(
+  // Amount per method: a straight (non-split) payment attributes its whole
+  // paid amount to that one method; a split payment attributes only the
+  // leg named in split_details — mirrors the count FILTERs above, but
+  // summing amounts instead so a Cash+UPI split correctly credits both
+  // methods for their own portion instead of the whole ticket landing on
+  // whichever method happened to be recorded last.
+  const legOrFull = (leg: string) => `(
+    CASE
+      WHEN LOWER(COALESCE(py.payment_method, '')) = '${leg}'
+        THEN COALESCE(py.paid_amount, py.net_amount, py.amount, 0)::numeric
+      ELSE ${legAmount(leg)}
+    END
+  )`;
+
+  const { rows } = await client.query<{
+    upi_count: string; card_count: string; cash_count: string;
+    upi_amount: string; card_amount: string; cash_amount: string;
+  }>(
     `SELECT
        COUNT(*) FILTER (
          WHERE LOWER(COALESCE(py.payment_method, '')) = 'upi' OR ${legAmount("upi")} > 0
@@ -243,7 +260,10 @@ async function getPaymentMethodCounts(
        ) AS card_count,
        COUNT(*) FILTER (
          WHERE LOWER(COALESCE(py.payment_method, '')) = 'cash' OR ${legAmount("cash")} > 0
-       ) AS cash_count
+       ) AS cash_count,
+       COALESCE(SUM(${legOrFull("upi")}), 0) AS upi_amount,
+       COALESCE(SUM(${legOrFull("card")}), 0) AS card_amount,
+       COALESCE(SUM(${legOrFull("cash")}), 0) AS cash_amount
      FROM payments py
      WHERE py.salon_id = $1
        AND py.status IN ('partial', 'completed')
@@ -256,6 +276,9 @@ async function getPaymentMethodCounts(
     upi_count: Number(rows[0]?.upi_count ?? 0),
     card_count: Number(rows[0]?.card_count ?? 0),
     cash_count: Number(rows[0]?.cash_count ?? 0),
+    upi_amount: Number(rows[0]?.upi_amount ?? 0),
+    card_amount: Number(rows[0]?.card_amount ?? 0),
+    cash_amount: Number(rows[0]?.cash_amount ?? 0),
   };
 }
 
@@ -344,11 +367,19 @@ export const cashManagementRepository = {
       // open/close cycle already happened — closing is a one-way action,
       // there is no "reopen" — so a second open the same day must be
       // blocked outright rather than just re-checking for an open row.
+      //
+      // Both sides must be compared in the salon's business timezone
+      // (Asia/Kolkata), not the DB session's default (UTC on RDS) — bare
+      // CURRENT_DATE/DATE(opened_at) roll over at UTC midnight, which is
+      // 5:30am IST, so for the first ~5.5 hours of a new IST day this was
+      // still comparing against the *previous* day's date and wrongly
+      // blocking that day's very first Open Counter.
       const todayRows = await client.query<{ id: string }>(
         `SELECT id
          FROM cash_management
          WHERE salon_id = $1
-           AND DATE(opened_at) = CURRENT_DATE
+           AND (opened_at AT TIME ZONE 'Asia/Kolkata')::date
+             = (NOW() AT TIME ZONE 'Asia/Kolkata')::date
          LIMIT 1`,
         [salonId],
       );
@@ -460,7 +491,39 @@ export const cashManagementRepository = {
   },
 
   async getDashboardSummary(salonId: string, cashManagementId?: string) {
-    const counter = await this.findCounterForDashboard(salonId, cashManagementId);
+    let counter: CashManagementRecord;
+    try {
+      counter = await this.findCounterForDashboard(salonId, cashManagementId);
+    } catch (err) {
+      // No counter ever opened for this salon (e.g. a brand-new account) is
+      // a normal, expected state — not a failure — so it's reported as a
+      // 200 with a "nothing yet" summary instead of a 404. A caller that
+      // asked for a *specific* counter ID that doesn't exist still gets a
+      // real 404, since that IS a genuine lookup error.
+      if (!cashManagementId && err instanceof AppError && err.code === "CASH_COUNTER_NOT_FOUND") {
+        return {
+          cash_management_id: null,
+          status: "closed",
+          opening_balance: 0,
+          cash_revenue: 0,
+          cash_expense: 0,
+          closing_balance: 0,
+          in_store_cash: null,
+          reconciliation_amount: null,
+          difference: null,
+          opened_at: null,
+          closed_at: null,
+          remarks: null,
+          upi_count: 0,
+          card_count: 0,
+          cash_count: 0,
+          upi_amount: 0,
+          card_amount: 0,
+          cash_amount: 0,
+        };
+      }
+      throw err;
+    }
     const refreshed = await recalculateCounterById(pool, counter.id, salonId);
     const methodCounts = await getPaymentMethodCounts(
       pool,
@@ -490,6 +553,9 @@ export const cashManagementRepository = {
       upi_count: methodCounts.upi_count,
       card_count: methodCounts.card_count,
       cash_count: methodCounts.cash_count,
+      upi_amount: methodCounts.upi_amount,
+      card_amount: methodCounts.card_amount,
+      cash_amount: methodCounts.cash_amount,
     };
   },
 
@@ -972,6 +1038,9 @@ export const cashManagementRepository = {
         upi_count: methodCounts.upi_count,
         card_count: methodCounts.card_count,
         cash_count: methodCounts.cash_count,
+        upi_amount: methodCounts.upi_amount,
+        card_amount: methodCounts.card_amount,
+        cash_amount: methodCounts.cash_amount,
       };
     } catch (error) {
       await client.query("ROLLBACK");
