@@ -122,7 +122,9 @@ export const whatsappAutomationController = {
 
   // ── Test / Manual Trigger (Dev Only) ─────────────────────────────────────
   // POST /api/v1/wa-automation/run-job/:jobName
-  // jobName: birthday | pending-payment | membership-renewal | we-miss-you-30 | we-miss-you-60 | we-miss-you-90 | new-year
+  // jobName: birthday | pending-payment | package-expiring-7d | package-expiring-24h |
+  //          membership-expiring-7d | membership-expiring-24h | package-appointment-reminder-24h |
+  //          service-reminder-24h | we-miss-you-30 | we-miss-you-60 | we-miss-you-90 | new-year
   async runJob(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const job = req.params.jobName as string
@@ -131,8 +133,18 @@ export const whatsappAutomationController = {
           await whatsappAutomationService.runBirthdayWishes(); break
         case 'pending-payment':
           await whatsappAutomationService.runPendingPaymentReminders(); break
-        case 'membership-renewal':
-          await whatsappAutomationService.runMembershipRenewalReminders(); break
+        case 'package-expiring-7d':
+          await whatsappAutomationService.runPackageExpiringReminders(7); break
+        case 'package-expiring-24h':
+          await whatsappAutomationService.runPackageExpiringReminders(1); break
+        case 'membership-expiring-7d':
+          await whatsappAutomationService.runMembershipExpiringReminders(7); break
+        case 'membership-expiring-24h':
+          await whatsappAutomationService.runMembershipExpiringReminders(1); break
+        case 'package-appointment-reminder-24h':
+          await whatsappAutomationService.runPackageAppointmentReminders24h(); break
+        case 'service-reminder-24h':
+          await whatsappAutomationService.runServiceReminders24h(); break
         case 'we-miss-you-30':
           await whatsappAutomationService.runWeMissYou(30); break
         case 'we-miss-you-60':

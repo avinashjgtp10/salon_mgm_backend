@@ -72,6 +72,13 @@ function formatDateIST(dateStr: string): string {
   })
 }
 
+function formatTimeIST(dateStr: string): string {
+  return new Date(dateStr).toLocaleTimeString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    hour: '2-digit', minute: '2-digit', hour12: true,
+  })
+}
+
 // ── Core Service ──────────────────────────────────────────────────────────────
 
 export const whatsappAutomationService = {
@@ -134,10 +141,10 @@ export const whatsappAutomationService = {
         }
       }
 
-      // 3. Fetch the global admin-managed template for this event
-      const template = await whatsappAutomationRepository.findTemplate(eventType)
+      // 3. Fetch template — salon's own approved copy for purchase events, else the global row
+      const template = await whatsappAutomationRepository.findTemplate(eventType, salonId)
       if (!template) {
-        logger.info(`[WA-TRACE] SKIP ${eventType} — no active template configured for this event`)
+        logger.info(`[WA-TRACE] SKIP ${eventType} — no active/APPROVED template for this salon (submit & get it approved first)`)
         return
       }
 
@@ -366,35 +373,134 @@ export const whatsappAutomationService = {
     }
   },
 
-  async runMembershipRenewalReminders(): Promise<void> {
-    logger.info('[WA-AUTO] Running membership renewal reminder job...')
+  // membership_expiring_7d / membership_expiring_24h
+  async runMembershipExpiringReminders(daysBefore: 7 | 1): Promise<void> {
+    const eventType: AutomationEventType = daysBefore === 7 ? 'membership_expiring_7d' : 'membership_expiring_24h'
+    logger.info(`[WA-AUTO] Running membership expiring reminder job (${daysBefore}d)...`)
     try {
-      const memberships = await whatsappAutomationRepository.getMembershipsExpiringIn7Days()
+      const memberships = await whatsappAutomationRepository.getMembershipsExpiringIn(daysBefore)
 
       for (const mem of memberships) {
         if (!mem.phone_number) continue
 
-        const guardKey    = `membership-renewal:${mem.membership_id}`
+        const guardKey = `${eventType}:${mem.membership_id}`
         const inserted = await whatsappAutomationRepository.guardInsertIfNotExists(guardKey)
         if (!inserted) continue
 
         await this.trigger({
           salonId:       mem.salon_id,
-          eventType:     'membership_renewal_reminder',
+          eventType,
           clientId:      mem.client_id,
           phone:         mem.phone_number,
           countryCode:   mem.phone_country_code,
-          variables: {
-            '1': mem.client_name     ?? 'Valued Customer',
-            '2': mem.membership_name,
-            '3': formatDateIST(mem.expiry_date),
-          },
+          variables: daysBefore === 7
+            ? { '1': mem.client_name ?? 'Valued Customer', '2': mem.membership_name, '3': formatDateIST(mem.expiry_date), '4': String(mem.remaining_balance ?? '0') }
+            : { '1': mem.client_name ?? 'Valued Customer', '2': mem.membership_name, '3': String(mem.remaining_balance ?? '0'), '4': formatDateIST(mem.expiry_date) },
           referenceId:   mem.membership_id,
           referenceType: 'membership',
         })
       }
     } catch (err: any) {
-      logger.error('[WA-AUTO] runMembershipRenewalReminders error:', err?.message)
+      logger.error(`[WA-AUTO] runMembershipExpiringReminders(${daysBefore}) error:`, err?.message)
+    }
+  },
+
+  // package_expiring_7d / package_expiring_24h
+  async runPackageExpiringReminders(daysBefore: 7 | 1): Promise<void> {
+    const eventType: AutomationEventType = daysBefore === 7 ? 'package_expiring_7d' : 'package_expiring_24h'
+    logger.info(`[WA-AUTO] Running package expiring reminder job (${daysBefore}d)...`)
+    try {
+      const packages = await whatsappAutomationRepository.getPackagesExpiringIn(daysBefore)
+
+      for (const pkg of packages) {
+        if (!pkg.phone_number) continue
+
+        const guardKey = `${eventType}:${pkg.package_id}`
+        const inserted = await whatsappAutomationRepository.guardInsertIfNotExists(guardKey)
+        if (!inserted) continue
+
+        await this.trigger({
+          salonId:       pkg.salon_id,
+          eventType,
+          clientId:      pkg.client_id,
+          phone:         pkg.phone_number,
+          countryCode:   pkg.phone_country_code,
+          variables: daysBefore === 7
+            ? { '1': pkg.client_name ?? 'Valued Customer', '2': pkg.package_name, '3': formatDateIST(pkg.expiry_date), '4': String(pkg.remaining_sessions ?? 0) }
+            : { '1': pkg.client_name ?? 'Valued Customer', '2': pkg.package_name, '3': String(pkg.remaining_sessions ?? 0), '4': formatDateIST(pkg.expiry_date) },
+          referenceId:   pkg.package_id,
+          referenceType: 'package',
+        })
+      }
+    } catch (err: any) {
+      logger.error(`[WA-AUTO] runPackageExpiringReminders(${daysBefore}) error:`, err?.message)
+    }
+  },
+
+  // package_appointment_reminder_24h — package-linked appointments tomorrow
+  async runPackageAppointmentReminders24h(): Promise<void> {
+    logger.info('[WA-AUTO] Running package appointment reminder job (24h)...')
+    try {
+      const appointments = await whatsappAutomationRepository.getPackageAppointmentsForReminder24h()
+
+      for (const appt of appointments) {
+        if (!appt.phone_number) continue
+
+        await this.trigger({
+          salonId:       appt.salon_id,
+          eventType:     'package_appointment_reminder_24h',
+          clientId:      appt.client_id,
+          phone:         appt.phone_number,
+          countryCode:   appt.phone_country_code,
+          variables: {
+            '1': appt.client_name   ?? 'Valued Customer',
+            '2': appt.salon_name    ?? 'our salon',
+            '3': formatDateIST(appt.scheduled_at),
+            '4': formatTimeIST(appt.scheduled_at),
+            '5': appt.service_name  ?? 'your service',
+            '6': appt.package_name  ?? 'your package',
+          },
+          // Date-scoped so a reschedule earns a fresh reminder — see
+          // getPackageAppointmentsForReminder24h()'s dedup clause, which must
+          // build this exact same key.
+          referenceId:   `${appt.appointment_id}:${appt.scheduled_date}`,
+          referenceType: 'appointment',
+        })
+      }
+    } catch (err: any) {
+      logger.error('[WA-AUTO] runPackageAppointmentReminders24h error:', err?.message)
+    }
+  },
+
+  // service_reminder_24h — generic appointments tomorrow
+  async runServiceReminders24h(): Promise<void> {
+    logger.info('[WA-AUTO] Running service reminder job (24h)...')
+    try {
+      const appointments = await whatsappAutomationRepository.getAppointmentsForReminder24h()
+
+      for (const appt of appointments) {
+        if (!appt.phone_number) continue
+
+        await this.trigger({
+          salonId:       appt.salon_id,
+          eventType:     'service_reminder_24h',
+          clientId:      appt.client_id,
+          phone:         appt.phone_number,
+          countryCode:   appt.phone_country_code,
+          variables: {
+            '1': appt.client_name  ?? 'Valued Customer',
+            '2': appt.salon_name   ?? 'our salon',
+            '3': formatDateIST(appt.scheduled_at),
+            '4': formatTimeIST(appt.scheduled_at),
+            '5': appt.service_name ?? 'your service',
+            '6': appt.staff_name   ?? 'our team',
+          },
+          referenceId:   appt.appointment_id,
+          referenceType: 'appointment',
+        })
+      }
+    } catch (err: any) {
+      logger.error('[WA-AUTO] runServiceReminders24h error:', err?.message)
     }
   },
 

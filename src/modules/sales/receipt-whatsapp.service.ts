@@ -42,6 +42,10 @@ export async function sendReceiptDocument(params: {
     paidAmount: number;
     dueAmount: number;
     couponCode: string | null;
+    // bill_receipt trigger's wording, built by receipt-send.helper.ts — sent
+    // as the document message's caption, i.e. the same "ONE MESSAGE" as the
+    // PDF itself, not a separate send.
+    caption?: string;
 }): Promise<{ sent: boolean; reason?: string }> {
     const to = formatPhone(params.phone, params.countryCode);
     logger.info(`[WA-TRACE] PDF-BILL START — sale=${params.sale.id} salon=${params.salonId} to=${to}`);
@@ -80,6 +84,7 @@ export async function sendReceiptDocument(params: {
             to,
             link: url,
             filename: `Receipt-${invoiceLabel}.pdf`,
+            caption: params.caption,
         });
         logger.info(`[WA-TRACE] PDF-BILL ✅ SENT — sale=${params.sale.id} to=${to}`);
         return { sent: true };

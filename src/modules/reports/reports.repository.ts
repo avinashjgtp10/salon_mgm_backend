@@ -508,7 +508,7 @@ const SERVICE_REMINDER_BASE_CTES = `
     FROM wa_automation_logs l
     WHERE
       l.salon_id = $1
-      AND l.event_type IN ('appointment_reminder_24h', 'appointment_reminder_1h')
+      AND l.event_type IN ('service_reminder_24h', 'package_appointment_reminder_24h')
       AND DATE(COALESCE(l.sent_at, l.created_at)) >= $2
       AND DATE(COALESCE(l.sent_at, l.created_at)) <= $3
   ),
