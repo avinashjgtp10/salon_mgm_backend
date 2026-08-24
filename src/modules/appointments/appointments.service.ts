@@ -15,6 +15,7 @@ import { commissionCalculationService } from "../commission/commissionCalculatio
 import { blockedTimesRepository } from "../blocked_times/blocked_times.repository";
 import { recordTransaction } from "../transactions/transaction-recorder.service";
 import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
+import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
 import { attendanceService } from "../attendance/attendance.service";
 import { notificationsService } from "../notifications/notifications.service";
 import { emailService } from "../utils/email.service";

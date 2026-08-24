@@ -5,6 +5,7 @@
 // ── Event Types ───────────────────────────────────────────────────────────────
 export type AutomationEventType =
   | 'appointment_cancelled'
+  | 'appointment_rescheduled'
   | 'invoice_generated'
   | 'payment_received'
   | 'pending_payment_reminder'
@@ -18,6 +19,7 @@ export type AutomationEventType =
 // Transactional events — controlled by client.whatsapp_notifications
 export const TRANSACTIONAL_EVENTS: AutomationEventType[] = [
   'appointment_cancelled',
+  'appointment_rescheduled',
   'invoice_generated',
   'payment_received',
   'pending_payment_reminder',
