@@ -59,6 +59,10 @@ export type Staff = {
     salon_id: string;
     branch_id: string | null;
     employee_code: string | null;
+    // Auto-generated on creation (STF-00001, ...), unique per salon, never
+    // user-editable and never reused — separate from employee_code, which
+    // stays a free-text field the salon can set themselves.
+    staff_code: string;
     designation: string | null;
     specialization: string[];
     experience_years: number | null;

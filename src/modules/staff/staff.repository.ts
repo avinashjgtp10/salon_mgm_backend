@@ -133,7 +133,10 @@ export const staffRepository = {
         passwordHash?: string | null,
         activateImmediately?: boolean
     ): Promise<Staff> {
+        const client = await pool.connect();
         try {
+            await client.query('BEGIN');
+
             // is_active means "enabled in the system", independent of whether the
             // invitation has actually been accepted yet — a newly added staff
             // member should show as Active immediately, not wait on them setting
@@ -144,49 +147,86 @@ export const staffRepository = {
             const invitationStatus = activateImmediately ? "accepted" : "pending";
             const invitationAcceptedAt = activateImmediately ? new Date() : null;
 
-            const { rows } = await pool.query(
-                `INSERT INTO staff (
-            salon_id, first_name, last_name, email, phone, phone_country_code,
-            additional_phone, country, calendar_color, designation,
-            staff_external_id, employment_type, branch_id, employee_code,
-              experience_years, specialization, password_hash,
-              allow_calendar_bookings,
-              is_active, invitation_status,
-              invitation_accepted_at,
-              permission_level, custom_permissions,
-              joined_date, birthday_day, birthday_month,
-              gender, address, avatar_url, working_hours_per_day, holidays
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31)
-            RETURNING *`,
-                [
-                    salonId, data.first_name, data.last_name ?? null, data.email,
-                    data.phone ?? null, data.phone_country_code ?? null,
-                    data.additional_phone ?? null, data.country ?? null,
-                    data.calendar_color ?? "blue", data.job_title ?? null,
-                    data.staff_external_id ?? null, data.employment_type ?? null,
-                    data.branch_id ?? null, data.employee_code ?? null,
-                    data.experience_years ?? null, data.specialization ?? [],
-                    passwordHash ?? null,
-                    data.allow_calendar_bookings ?? true,
-                    isActive,
-                    invitationStatus,
-                    invitationAcceptedAt,
-                    data.permission_level ?? "low",
-                    data.custom_permissions ?? null,
-                    data.joined_date ?? null,
-                    data.birthday_day ?? null,
-                    data.birthday_month ?? null,
-                    data.gender ?? null,
-                    data.address ?? null,
-                    data.avatar_url ?? null,
-                    data.working_hours_per_day ?? null,
-                    data.holidays ?? null,
-                ]
-            );
-            return rows[0];
+            // Per-salon sequential Staff Code (STF-00001, STF-00002, ...) — same
+            // pattern as sales' invoice_number: the UPDATE...RETURNING serializes
+            // on the salon's own row via Postgres row-level locking, so concurrent
+            // staff creations for the same salon never read the same sequence
+            // number. If the code still collides (e.g. next_staff_seq drifted
+            // behind reality), bump again and retry rather than failing outright.
+            let staff: Staff | undefined;
+            for (let attempt = 0; ; attempt++) {
+                const { rows: seqRows } = await client.query(
+                    `UPDATE salons SET next_staff_seq = next_staff_seq + 1
+                     WHERE id = $1 RETURNING next_staff_seq - 1 AS seq`,
+                    [salonId]
+                );
+                const seq = seqRows[0].seq;
+                const staffCode = `STF-${String(seq).padStart(5, "0")}`;
+
+                await client.query('SAVEPOINT staff_insert_attempt');
+                try {
+                    const { rows } = await client.query(
+                        `INSERT INTO staff (
+                    salon_id, first_name, last_name, email, phone, phone_country_code,
+                    additional_phone, country, calendar_color, designation,
+                    staff_external_id, employment_type, branch_id, employee_code,
+                      staff_code,
+                      experience_years, specialization, password_hash,
+                      allow_calendar_bookings,
+                      is_active, invitation_status,
+                      invitation_accepted_at,
+                      permission_level, custom_permissions,
+                      joined_date, birthday_day, birthday_month,
+                      gender, address, avatar_url, working_hours_per_day, holidays
+                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32)
+                    RETURNING *`,
+                        [
+                            salonId, data.first_name, data.last_name ?? null, data.email,
+                            data.phone ?? null, data.phone_country_code ?? null,
+                            data.additional_phone ?? null, data.country ?? null,
+                            data.calendar_color ?? "blue", data.job_title ?? null,
+                            data.staff_external_id ?? null, data.employment_type ?? null,
+                            data.branch_id ?? null, data.employee_code ?? null,
+                            staffCode,
+                            data.experience_years ?? null, data.specialization ?? [],
+                            passwordHash ?? null,
+                            data.allow_calendar_bookings ?? true,
+                            isActive,
+                            invitationStatus,
+                            invitationAcceptedAt,
+                            data.permission_level ?? "low",
+                            data.custom_permissions ?? null,
+                            data.joined_date ?? null,
+                            data.birthday_day ?? null,
+                            data.birthday_month ?? null,
+                            data.gender ?? null,
+                            data.address ?? null,
+                            data.avatar_url ?? null,
+                            data.working_hours_per_day ?? null,
+                            data.holidays ?? null,
+                        ]
+                    );
+                    await client.query('RELEASE SAVEPOINT staff_insert_attempt');
+                    staff = rows[0];
+                    break;
+                } catch (insertErr: any) {
+                    await client.query('ROLLBACK TO SAVEPOINT staff_insert_attempt');
+                    const isStaffCodeCollision = insertErr?.code === '23505'
+                        && insertErr?.constraint === 'idx_staff_staff_code_salon_uq';
+                    if (!isStaffCodeCollision || attempt >= 5) throw insertErr;
+                    // Retry with a fresh sequence number — the loop's next
+                    // iteration re-reads/re-increments next_staff_seq.
+                }
+            }
+
+            await client.query('COMMIT');
+            return staff!;
         } catch (error) {
+            await client.query('ROLLBACK');
             console.error("[DB DEBUG] staffRepository.create - DATABASE ERROR:", error);
             throw error;
+        } finally {
+            client.release();
         }
     },
 
