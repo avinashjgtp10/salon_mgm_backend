@@ -868,7 +868,30 @@ export const appointmentsService = {
         // reassignment, or LUNOX's modifyAppointmentServices changing what's
         // booked/its duration) never did, so any of these silently required a
         // manual page refresh to appear correctly.
-        if (patch.scheduled_at || patch.staff_id || patch.services || patch.duration_minutes) {
+        //
+        // scheduled_at/staff_id are checked for an actual value change, not
+        // just presence in the patch — the frontend's save() always resends
+        // both on every save (it serializes current UI state wholesale, it
+        // doesn't track which fields were actually touched), so a
+        // presence-only check fired this push on every single save — e.g.
+        // completing payment on an unedited booking — reading to staff as
+        // "appointment rescheduled" when nothing had.
+        //
+        // duration_minutes/services are deliberately NOT part of this
+        // trigger (they used to be, presence-only, which is the same bug):
+        // a real content edit to services always changes the appointment's
+        // total/duration/staff too, which already fires this via the checks
+        // below, so the coverage lost is negligible. A duration/services
+        // comparison here would need real value-equality, and services in
+        // particular is a computed array (fresh timestamps, differing key
+        // shape between patch and existing) that can't be compared with
+        // JSON.stringify — that was tried and still false-positived on
+        // every save, since the two sides are never byte-identical even
+        // when nothing changed.
+        const scheduledAtChanged = !!patch.scheduled_at &&
+            new Date(patch.scheduled_at).getTime() !== new Date(existing.scheduled_at).getTime();
+        const staffChanged = !!patch.staff_id && patch.staff_id !== existing.staff_id;
+        if (scheduledAtChanged || staffChanged) {
             notificationsService.create({
                 salon_id: existing.salon_id,
                 type:     "appointment",
@@ -893,6 +916,51 @@ export const appointmentsService = {
         if (patch.scheduled_at && new Date(patch.scheduled_at).getTime() !== new Date(existing.scheduled_at).getTime()) {
             clientPackagesService.rescheduleForAppointment(appointmentId, patch.scheduled_at)
                 .catch((err: any) => logger.error("[client-packages] rescheduleForAppointment failed:", err?.message ?? err));
+        }
+
+        // ── WhatsApp Automation: Appointment Rescheduled ──────────────────────
+        // Only fire if scheduled_at actually changed — guarded by a real
+        // old-vs-new comparison (not just presence in the patch), same as the
+        // client-packages sync above. Without this, any update that merely
+        // carries the existing scheduled_at forward (e.g. clicking "Continue
+        // to Payment" on the calendar, which always resends scheduled_at even
+        // when the time didn't change) sent a false "rescheduled" WhatsApp
+        // message to the client.
+        if (
+            patch.scheduled_at &&
+            new Date(patch.scheduled_at).getTime() !== new Date(existing.scheduled_at).getTime() &&
+            existing.client_id
+        ) {
+            try {
+                const full = await appointmentsRepository.findById(appointmentId);
+                if (full && (full as any).client_phone) {
+                    const alreadySent = await whatsappAutomationRepository.logExistsForReference(
+                        full.id,
+                        'appointment_rescheduled'
+                    )
+                    if (!alreadySent) {
+                        whatsappAutomationService.trigger({
+                            salonId:       full.salon_id,
+                            eventType:     "appointment_rescheduled",
+                            clientId:      full.client_id,
+                            phone:         (full as any).client_phone,
+                            countryCode:   (full as any).client_phone_code ?? null,
+                            variables: {
+                                "1": full.client_name         ?? "Valued Customer",
+                                "2": (full as any).salon_name ?? "our salon",
+                                "3": formatDate(full.scheduled_at),
+                                "4": formatTime(full.scheduled_at),
+                            },
+                            referenceId:   full.id,
+                            referenceType: "appointment",
+                            dedupeByReference: true,
+                        }).catch(() => {});
+                    }
+                }
+            } catch (err: any) {
+                // Never block core flow — but log so a real bug here isn't invisible.
+                logger.error("[WA-AUTO] appointment notification trigger failed:", err?.message ?? err);
+            }
         }
 
         return updated;
