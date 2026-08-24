@@ -10,6 +10,7 @@ import { paymentsRepository } from "../payments/payments.repository";
 import { clientPackagesService } from "../client-packages/client-packages.service";
 import { clientMembershipsService } from "../client-memberships/client-memberships.service";
 import { membershipsService } from "../memberships/memberships.service";
+import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
 import pool from "../../config/database";
 import logger from "../../config/logger";
 import {
@@ -194,6 +195,31 @@ export const clientsService = {
                 error: err,
             });
         });
+
+        // ── WhatsApp Automation: New Client Welcome ───────────────────────────
+        if (created.phone_number) {
+            (async () => {
+                try {
+                    const salon = await salonsRepository.findById(salonId);
+                    whatsappAutomationService.trigger({
+                        salonId,
+                        eventType:     "client_welcome",
+                        clientId:      created.id,
+                        phone:         created.phone_number!,
+                        countryCode:   created.phone_country_code ?? null,
+                        variables: {
+                            "1": `${created.first_name} ${created.last_name ?? ""}`.trim() || "there",
+                            "2": salon?.business_name ?? "our salon",
+                        },
+                        referenceId:   created.id,
+                        referenceType: "client",
+                        dedupeByReference: true,
+                    }).catch(() => {});
+                } catch (err: any) {
+                    logger.error("[WA-AUTO] client_welcome trigger failed:", err?.message ?? err);
+                }
+            })();
+        }
 
         // ── Email: New Client (to salon owner) ────────────────────────────────
         ;(async () => {

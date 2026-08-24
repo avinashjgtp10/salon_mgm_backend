@@ -572,6 +572,42 @@ export const appointmentsService = {
             });
         });
 
+        // ── WhatsApp Automation: Appointment Confirmation ─────────────────────
+        // Dedup check — NEVER send confirmation twice for the same appointment
+        if (appointment.client_id) {
+            try {
+                if (full && (full as any).client_phone) {
+                    const alreadySent = await whatsappAutomationRepository.logExistsForReference(
+                        full.id,
+                        "appointment_confirmation"
+                    );
+                    if (!alreadySent) {
+                        whatsappAutomationService.trigger({
+                            salonId:       full.salon_id,
+                            eventType:     "appointment_confirmation",
+                            clientId:      full.client_id,
+                            phone:         (full as any).client_phone,
+                            countryCode:   (full as any).client_phone_code ?? null,
+                            variables: {
+                                "1": full.client_name                      ?? "Valued Customer",
+                                "2": (full as any).salon_name              ?? "our salon",
+                                "3": formatDate(full.scheduled_at),
+                                "4": formatTime(full.scheduled_at),
+                                "5": full.services?.[0]?.name ?? full.title ?? "your service",
+                                "6": full.staff_name ?? "our team",
+                            },
+                            referenceId:   full.id,
+                            referenceType: "appointment",
+                            dedupeByReference: true,
+                        }).catch(() => {});
+                    }
+                }
+            } catch (err: any) {
+                // Never block core flow — but log so a real bug here isn't invisible.
+                logger.error("[WA-AUTO] appointment_confirmation trigger failed:", err?.message ?? err);
+            }
+        }
+
         // ── Email: New Appointment (to salon owner) ───────────────────────────
         ;(async () => {
             try {
@@ -920,47 +956,34 @@ export const appointmentsService = {
         }
 
         // ── WhatsApp Automation: Appointment Rescheduled ──────────────────────
-        // Only fire if scheduled_at actually changed — guarded by a real
-        // old-vs-new comparison (not just presence in the patch), same as the
-        // client-packages sync above. Without this, any update that merely
-        // carries the existing scheduled_at forward (e.g. clicking "Continue
-        // to Payment" on the calendar, which always resends scheduled_at even
-        // when the time didn't change) sent a false "rescheduled" WhatsApp
-        // message to the client.
-        if (
-            patch.scheduled_at &&
-            new Date(patch.scheduled_at).getTime() !== new Date(existing.scheduled_at).getTime() &&
-            existing.client_id
-        ) {
+        // Only fire if scheduled_at actually changed
+        if (patch.scheduled_at && new Date(patch.scheduled_at).getTime() !== new Date(existing.scheduled_at).getTime() && existing.client_id) {
             try {
                 const full = await appointmentsRepository.findById(appointmentId);
                 if (full && (full as any).client_phone) {
-                    const alreadySent = await whatsappAutomationRepository.logExistsForReference(
-                        full.id,
-                        'appointment_rescheduled'
-                    )
-                    if (!alreadySent) {
-                        whatsappAutomationService.trigger({
-                            salonId:       full.salon_id,
-                            eventType:     "appointment_rescheduled",
-                            clientId:      full.client_id,
-                            phone:         (full as any).client_phone,
-                            countryCode:   (full as any).client_phone_code ?? null,
-                            variables: {
-                                "1": full.client_name         ?? "Valued Customer",
-                                "2": (full as any).salon_name ?? "our salon",
-                                "3": formatDate(full.scheduled_at),
-                                "4": formatTime(full.scheduled_at),
-                            },
-                            referenceId:   full.id,
-                            referenceType: "appointment",
-                            dedupeByReference: true,
-                        }).catch(() => {});
-                    }
+                    whatsappAutomationService.trigger({
+                        salonId:       full.salon_id,
+                        eventType:     "appointment_rescheduled",
+                        clientId:      full.client_id,
+                        phone:         (full as any).client_phone,
+                        countryCode:   (full as any).client_phone_code ?? null,
+                        variables: {
+                            "1": full.client_name         ?? "Valued Customer",
+                            "2": (full as any).salon_name ?? "our salon",
+                            "3": formatDate(existing.scheduled_at),
+                            "4": formatTime(existing.scheduled_at),
+                            "5": formatDate(full.scheduled_at),
+                            "6": formatTime(full.scheduled_at),
+                            "7": full.services?.[0]?.name ?? full.title ?? "your service",
+                            "8": full.staff_name ?? "our team",
+                        },
+                        referenceId:   `${full.id}:${full.scheduled_at}`,
+                        referenceType: "appointment",
+                        dedupeByReference: true,
+                    }).catch(() => {});
                 }
             } catch (err: any) {
-                // Never block core flow — but log so a real bug here isn't invisible.
-                logger.error("[WA-AUTO] appointment notification trigger failed:", err?.message ?? err);
+                logger.error("[WA-AUTO] appointment_rescheduled trigger failed:", err?.message ?? err);
             }
         }
 
@@ -1025,6 +1048,7 @@ export const appointmentsService = {
                     "2": (existing as any).salon_name ?? "our salon",
                     "3": formatDate(existing.scheduled_at),
                     "4": formatTime(existing.scheduled_at),
+                    "5": existing.services?.[0]?.name ?? existing.title ?? "your service",
                 },
                 referenceId:   existing.id,
                 referenceType: "appointment",
@@ -1441,7 +1465,10 @@ export const appointmentsService = {
                 variables: {
                     '1': existing.client_name         ?? 'Valued Customer',
                     '2': String(sale.total_amount     ?? '0'),
-                    '3': sale.invoice_number ?? '',
+                    '3': existing.services?.[0]?.name ?? existing.title ?? 'your service',
+                    '4': formatDate(existing.scheduled_at),
+                    '5': formatTime(existing.scheduled_at),
+                    '6': (existing as any).salon_name ?? 'our salon',
                 },
                 referenceId:   sale.id,
                 referenceType: 'invoice',
