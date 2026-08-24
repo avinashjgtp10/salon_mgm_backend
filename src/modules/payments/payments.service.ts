@@ -17,7 +17,6 @@ import { CreatePaymentBody, Payment } from './payments.types';
 import type { Appointment, AppointmentServiceConsumableRecord } from '../appointments/appointments.types';
 import { appointmentConsumablesService } from '../inventory/inventory.service';
 import logger from '../../config/logger';
-import { whatsappAutomationService } from '../whatsapp-automation/whatsapp-automation.service';
 import { sendReceiptDocument } from '../sales/receipt-whatsapp.service';
 import { salonsRepository } from '../salons/salons.repository';
 import { branchesRepository } from '../branches/branches.repository';
@@ -1181,41 +1180,12 @@ export const paymentsService = {
         // (POST /api/v1/appointments/:id/checkout) to avoid double-completion
         // appointment.payment_status is updated above — that's all payments handles here
 
-        // ── WhatsApp Automation: Purchase confirmation (per item type) ──────
-        // Skip entirely on idempotent reuse — an existing sale means these
-        // events already fired the first time this appointment was paid.
+        // ── WhatsApp: PDF purchase receipt ──────────────────────────────────
+        // Skip entirely on idempotent reuse — an existing sale means this
+        // already fired the first time this appointment was paid.
         if (!wasIdempotentReuse) {
           const enrichedSale = sale;
           if (enrichedSale && data.client_id && (enrichedSale as any).client_phone) {
-            const presentTypes = new Set(saleItemsForEvents.map((i) => i.item_type));
-            const purchaseEvents: Array<{ eventType: 'service_purchased' | 'product_purchased'; itemType: 'service' | 'product' }> = [
-              { eventType: 'service_purchased', itemType: 'service' },
-              { eventType: 'product_purchased', itemType: 'product' },
-            ];
-
-            // membership_purchased is NOT fired here — that's centralized in
-            // clientMembershipsService.autoCreateFromPayment(), called below
-            // for this same sale's membership_items, so it's never double-fired.
-            for (const { eventType, itemType } of purchaseEvents) {
-              if (!presentTypes.has(itemType)) continue;
-              const itemName = saleItemsForEvents.find((i) => i.item_type === itemType)?.name ?? 'your purchase';
-              whatsappAutomationService.trigger({
-                salonId:       data.salon_id,
-                eventType,
-                clientId:      data.client_id,
-                phone:         (enrichedSale as any).client_phone,
-                countryCode:   (enrichedSale as any).client_phone_code ?? null,
-                variables: {
-                  '1': (enrichedSale as any).client_name ?? 'Valued Customer',
-                  '2': (enrichedSale as any).salon_name   ?? 'our salon',
-                  '3': itemName,
-                },
-                referenceId:   enrichedSale.id,
-                referenceType: 'invoice',
-                dedupeByReference: true,
-              }).catch(() => {});
-            }
-
             // PDF receipt as a WhatsApp document attachment — best-effort, only
             // deliverable within 24h of the customer's last message. Failure here
             // is expected outside that window and never blocks the triggers above.
