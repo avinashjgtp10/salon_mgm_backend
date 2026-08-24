@@ -2,6 +2,7 @@ import AWS from "aws-sdk";
 import path from "path";
 import fs from "fs";
 import logger from "../../config/logger";
+import config from "../../config/env";
 
 // ── S3 client ─────────────────────────────────────────────────────────────────
 const s3 = new AWS.S3({
@@ -31,7 +32,7 @@ export async function uploadAvatarToS3(
     // Fallback: serve from local /uploads directory when S3 is not configured
     logger.warn("[avatarUpload] AWS_S3_BUCKET not set — serving file locally");
     const filename = path.basename(filePath);
-    const localUrl = `${process.env.APP_BASE_URL || ""}/uploads/${filename}`;
+    const localUrl = `${config.publicBaseUrl}/uploads/${filename}`;
     return localUrl;
   }
 
