@@ -55,11 +55,6 @@ async function runScheduledJobs(): Promise<void> {
 
   logger.info(`[WA-AUTO-SCHEDULER] Tick — IST ${String(hour).padStart(2,'0')}:${String(minute).padStart(2,'0')}`)
 
-  // ── Every hour: Appointment Reminders ──────────────────────────────────────
-  // Runs hourly — checks appointments in the 24h window and the 1h window
-  await whatsappAutomationService.runAppointmentReminders()
-  await whatsappAutomationService.runAppointmentReminders1h()
-
   // ── 9:00 AM IST daily jobs ─────────────────────────────────────────────────
   if (hour === 9 && minute < 5) {
     const today = getTodayIST()
@@ -69,12 +64,6 @@ async function runScheduledJobs(): Promise<void> {
       await Promise.allSettled([
         whatsappAutomationService.runBirthdayWishes(),
         whatsappAutomationService.runMembershipRenewalReminders(),
-        whatsappAutomationService.runPackageExpiringReminders(),
-        // Date-offset reminders for package-booked appointments — here
-        // rather than the hourly block above because "2 days before" is a
-        // date, not an hour offset. Each self-dedups on (appointment, date).
-        whatsappAutomationService.runPackageAppointmentReminders(2),
-        whatsappAutomationService.runPackageAppointmentReminders(1),
         whatsappAutomationService.runWeMissYou(30),
         whatsappAutomationService.runWeMissYou(60),
         whatsappAutomationService.runWeMissYou(90),

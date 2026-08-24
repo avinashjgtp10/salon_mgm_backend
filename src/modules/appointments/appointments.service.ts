@@ -15,7 +15,6 @@ import { commissionCalculationService } from "../commission/commissionCalculatio
 import { blockedTimesRepository } from "../blocked_times/blocked_times.repository";
 import { recordTransaction } from "../transactions/transaction-recorder.service";
 import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
-import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
 import { attendanceService } from "../attendance/attendance.service";
 import { notificationsService } from "../notifications/notifications.service";
 import { emailService } from "../utils/email.service";
@@ -26,7 +25,6 @@ import { staffService } from "../staff/staff.service";
 import { clientsRepository } from "../clients/clients.repository";
 import { sendReceiptDocument } from "../sales/receipt-whatsapp.service";
 import { sendPurchaseReceipt, getPurchaseReceiptPdf } from "../sales/receipt-send.helper";
-import { notifyAppointmentCompleted } from "./appointment-completed.helper";
 import { computeBillTotals, rowsTotal, normalizeDiscountAppliesTo, ActiveTaxRow } from "../pricing/pricing.engine";
 import { getActiveTaxes } from "../settings/tax.util";
 import { paymentsRepository } from "../payments/payments.repository";
@@ -573,41 +571,6 @@ export const appointmentsService = {
             });
         });
 
-        // ── WhatsApp Automation: Appointment Confirmation ─────────────────────
-        // Dedup check — NEVER send confirmation twice for the same appointment
-        if (appointment.client_id) {
-            try {
-                if (full && (full as any).client_phone) {
-                    const alreadySent = await whatsappAutomationRepository.logExistsForReference(
-                        full.id,
-                        "appointment_confirmation"
-                    );
-                    if (!alreadySent) {
-                        whatsappAutomationService.trigger({
-                            salonId:       full.salon_id,
-                            eventType:     "appointment_confirmation",
-                            clientId:      full.client_id,
-                            phone:         (full as any).client_phone,
-                            countryCode:   (full as any).client_phone_code ?? null,
-                            variables: {
-                                "1": full.client_name                      ?? "Valued Customer",
-                                "2": (full as any).salon_name              ?? "our salon",
-                                "3": full.services?.[0]?.name ?? full.title ?? "your service",
-                                "4": formatDate(full.scheduled_at),
-                                "5": formatTime(full.scheduled_at),
-                            },
-                            referenceId:   full.id,
-                            referenceType: "appointment",
-                            dedupeByReference: true,
-                        }).catch(() => {});
-                    }
-                }
-            } catch (err: any) {
-                // Never block core flow — but log so a real bug here isn't invisible.
-                logger.error("[WA-AUTO] appointment notification trigger failed:", err?.message ?? err);
-            }
-        }
-
         // ── Email: New Appointment (to salon owner) ───────────────────────────
         ;(async () => {
             try {
@@ -932,41 +895,6 @@ export const appointmentsService = {
                 .catch((err: any) => logger.error("[client-packages] rescheduleForAppointment failed:", err?.message ?? err));
         }
 
-        // ── WhatsApp Automation: Appointment Rescheduled ──────────────────────
-        // Only fire if scheduled_at actually changed
-        if (patch.scheduled_at && existing.client_id) {
-            try {
-                const full = await appointmentsRepository.findById(appointmentId);
-                if (full && (full as any).client_phone) {
-                    const alreadySent = await whatsappAutomationRepository.logExistsForReference(
-                        full.id,
-                        'appointment_rescheduled'
-                    )
-                    if (!alreadySent) {
-                        whatsappAutomationService.trigger({
-                            salonId:       full.salon_id,
-                            eventType:     "appointment_rescheduled",
-                            clientId:      full.client_id,
-                            phone:         (full as any).client_phone,
-                            countryCode:   (full as any).client_phone_code ?? null,
-                            variables: {
-                                "1": full.client_name         ?? "Valued Customer",
-                                "2": (full as any).salon_name ?? "our salon",
-                                "3": formatDate(full.scheduled_at),
-                                "4": formatTime(full.scheduled_at),
-                            },
-                            referenceId:   full.id,
-                            referenceType: "appointment",
-                            dedupeByReference: true,
-                        }).catch(() => {});
-                    }
-                }
-            } catch (err: any) {
-                // Never block core flow — but log so a real bug here isn't invisible.
-                logger.error("[WA-AUTO] appointment notification trigger failed:", err?.message ?? err);
-            }
-        }
-
         return updated;
     },
 
@@ -1210,48 +1138,13 @@ export const appointmentsService = {
                 .redeemForAppointmentIfScheduled(existing.salon_id, appointmentId, existing.staff_name ?? "Staff")
                 .catch((err: any) => logger.error("[client-packages] redemption on checkout failed:", err?.message ?? err));
 
-            // ── WhatsApp Automation: Thank You + Review Request (fire-and-forget) ──
-            notifyAppointmentCompleted(appointmentId).catch(() => {});
-
-            // ── WhatsApp Automation: Purchase confirmation + PDF receipt (fallback) ──
+            // ── WhatsApp: PDF purchase receipt (fallback) ──────────────────────
             // payments.service.ts already fires this at payment-creation time when it
-            // auto-creates the sale — this is a dedup-guarded safety net for when that
-            // didn't happen (e.g. no client phone on file yet at payment time), so
-            // completing the appointment doesn't silently leave the customer with only
-            // the plain booking confirmation and no purchase text/PDF.
+            // auto-creates the sale — this is a safety net for when that didn't happen
+            // (e.g. no client phone on file yet at payment time).
             if (existing.client_id && (existing as any).client_phone) {
                 (async () => {
                     try {
-                        const alreadySent =
-                            (await whatsappAutomationRepository.logExistsForReference(preExistingSale.id, "service_purchased")) ||
-                            (await whatsappAutomationRepository.logExistsForReference(preExistingSale.id, "product_purchased"));
-                        if (alreadySent) return;
-
-                        const presentTypes = new Set(saleItems.map((i) => i.item_type));
-                        const purchaseEvents: Array<{ eventType: "service_purchased" | "product_purchased"; itemType: "service" | "product" }> = [
-                            { eventType: "service_purchased", itemType: "service" },
-                            { eventType: "product_purchased", itemType: "product" },
-                        ];
-                        for (const { eventType, itemType } of purchaseEvents) {
-                            if (!presentTypes.has(itemType)) continue;
-                            const itemName = saleItems.find((i) => i.item_type === itemType)?.name ?? "your purchase";
-                            whatsappAutomationService.trigger({
-                                salonId:       existing.salon_id,
-                                eventType,
-                                clientId:      existing.client_id!,
-                                phone:         (existing as any).client_phone,
-                                countryCode:   (existing as any).client_phone_code ?? null,
-                                variables: {
-                                    "1": existing.client_name         ?? "Valued Customer",
-                                    "2": (existing as any).salon_name ?? "our salon",
-                                    "3": itemName,
-                                },
-                                referenceId:   preExistingSale.id,
-                                referenceType: "invoice",
-                                dedupeByReference: true,
-                            }).catch(() => {});
-                        }
-
                         await sendPurchaseReceipt({
                             salonId:     existing.salon_id,
                             phone:       (existing as any).client_phone,

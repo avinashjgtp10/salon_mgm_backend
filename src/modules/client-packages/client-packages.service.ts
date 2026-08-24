@@ -1,8 +1,5 @@
 import { clientPackagesRepository } from "./client-packages.repository";
 import { recordTransaction } from "../transactions/transaction-recorder.service";
-import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
-import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
-import { salonsRepository } from "../salons/salons.repository";
 import { sendPurchaseReceipt } from "../sales/receipt-send.helper";
 import { appointmentsService } from "../appointments/appointments.service";
 import { getPackageNoShowPolicy } from "./package-settings.util";
@@ -93,37 +90,6 @@ function buildSyntheticSale(pkg: ClientPackage): { sale: Sale; items: SaleItem[]
         ];
 
   return { sale, items };
-}
-
-// Fires once when a package's total remaining sessions (across all its
-// services) first drops to this threshold — never on every subsequent visit,
-// dedup'd via wa_automation_logs keyed on the package id + event type.
-const SESSIONS_REMAINING_THRESHOLD = 2;
-
-async function notifySessionsRemainingIfLow(pkg: ClientPackage): Promise<void> {
-  if (!pkg.mobile) return;
-
-  const totalSessions  = pkg.services.reduce((sum, s) => sum + s.totalSessions, 0);
-  const totalRemaining = pkg.services.reduce((sum, s) => sum + s.remainingSessions, 0);
-  if (totalSessions === 0 || totalRemaining === 0 || totalRemaining > SESSIONS_REMAINING_THRESHOLD) return;
-
-  const alreadyNotified = await whatsappAutomationRepository.logExistsForReference(pkg.id, "sessions_remaining");
-  if (alreadyNotified) return;
-
-  whatsappAutomationService.trigger({
-    salonId:       pkg.salonId,
-    eventType:     "sessions_remaining",
-    clientId:      pkg.clientId,
-    phone:         pkg.mobile,
-    countryCode:   null,
-    variables: {
-      "1": pkg.clientName ?? "Valued Customer",
-      "2": pkg.packageName,
-      "3": String(totalRemaining),
-    },
-    referenceId:   pkg.id,
-    referenceType: "package",
-  }).catch(() => {});
 }
 
 // Shared by create() and autoCreateFromPayment() — both end up with a
@@ -274,26 +240,9 @@ export const clientPackagesService = {
       logger.error('[clientPackagesService] Failed to auto-create sale for package purchase:', { error: err });
     }
 
-    // ── WhatsApp Automation: Membership / Package Purchased ───────────────────
+    // ── WhatsApp: PDF purchase receipt ─────────────────────────────────────
     // mobile field on ClientPackage is the client's phone number
     if (pkg.mobile) {
-      const salon = await salonsRepository.findById(pkg.salonId);
-      whatsappAutomationService.trigger({
-        salonId:       pkg.salonId,
-        eventType:     "package_purchased",
-        clientId:      pkg.clientId,
-        phone:         pkg.mobile,
-        countryCode:   null,   // client-packages doesn't store country code separately
-        variables: {
-          "1": pkg.clientName  ?? "Valued Customer",
-          "2": salon?.business_name ?? "our salon",
-          "3": pkg.packageName,
-        },
-        referenceId:   pkg.id,
-        referenceType: "package",
-        dedupeByReference: true,
-      }).catch(() => {});
-
       // PDF receipt as a WhatsApp document attachment — best-effort, only
       // deliverable within 24h of the customer's last message.
       const { sale, items } = buildSyntheticSale(pkg);
@@ -311,7 +260,7 @@ export const clientPackagesService = {
         couponCode:  null,
       }).catch(() => {});
     } else {
-      logger.info(`[WA-AUTO] Skipping package_purchased for package ${pkg.id} — no mobile number`)
+      logger.info(`[WA-AUTO] Skipping purchase receipt for package ${pkg.id} — no mobile number`)
     }
 
     return pkg;
@@ -335,8 +284,6 @@ export const clientPackagesService = {
   ): Promise<ClientPackage> {
     const updated = await clientPackagesRepository.completeSession(packageId, salonId, dto);
     if (!updated) throw { statusCode: 404, message: "Client package not found" };
-
-    notifySessionsRemainingIfLow(updated).catch(() => {});
 
     return updated;
   },
@@ -526,26 +473,6 @@ export const clientPackagesService = {
             }
           }
 
-          // Text only, no PDF here — the calling checkout flow (payments)
-          // already sent one PDF covering this whole sale, package line included.
-          if (created.mobile) {
-            const salon = await salonsRepository.findById(salonId);
-            whatsappAutomationService.trigger({
-              salonId,
-              eventType:   "package_purchased",
-              clientId:    created.clientId,
-              phone:       created.mobile,
-              countryCode: null,
-              variables: {
-                "1": created.clientName ?? "Valued Customer",
-                "2": salon?.business_name ?? "our salon",
-                "3": created.packageName,
-              },
-              referenceId:   created.id,
-              referenceType: "package",
-              dedupeByReference: true,
-            }).catch(() => {});
-          }
         } catch (err: any) {
           logger.warn('[client-packages/auto-create] post-create work failed:', err?.message ?? err);
         }
