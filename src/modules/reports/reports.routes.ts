@@ -262,6 +262,19 @@ router.post(
 );
 
 // ======================================================
+// PENDING PAYMENT REPORT (independent report API)
+// Reads appointments + payments directly (never sales — an unpaid bill has
+// no sales row at all). Shares Payment Collection's underlying aggregation,
+// scoped to due_amount > 0.
+// ======================================================
+
+router.post(
+    "/pending-payment",
+    ...guard,
+    reportsController.getPendingPaymentReport
+);
+
+// ======================================================
 // CASH MANAGEMENT REPORT (independent report API)
 // Reads cash_management directly — never calls the cash-management module's
 // own service/repository, and never calls the Appointment API/service.
