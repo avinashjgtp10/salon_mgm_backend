@@ -189,6 +189,18 @@ router.post(
 );
 
 // ======================================================
+// ALL CLIENTS REPORT (independent report API)
+// Reads clients directly — never calls the Appointment API/service. Pure
+// client-profile listing, no revenue/visit figures.
+// ======================================================
+
+router.post(
+    "/all-clients",
+    ...guard,
+    reportsController.getAllClientsReport
+);
+
+// ======================================================
 // CUSTOMER FREQUENCY REPORT (independent report API)
 // Reads clients/sales directly — never calls the Appointment API/service.
 // ======================================================
