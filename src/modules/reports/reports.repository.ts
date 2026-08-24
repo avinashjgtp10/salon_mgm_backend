@@ -56,6 +56,9 @@ import {
     PaymentCollectionReportRow,
     PaymentCollectionReportStats,
     PaymentCollectionFiltersAvailable,
+    PendingPaymentReportRow,
+    PendingPaymentReportStats,
+    PendingPaymentFiltersAvailable,
     MembershipHistoryReportRow,
     MembershipHistoryReportStats,
     MembershipHistoryFiltersAvailable,
@@ -6745,6 +6748,179 @@ async getPaymentCollectionFiltersAvailable(salonId: string): Promise<PaymentColl
        AND a.deleted_at IS NULL
        AND a.status::text NOT IN ('cancelled', 'deleted', 'no-show')
        AND EXISTS (SELECT 1 FROM payments p WHERE p.appointment_id = a.id AND p.status <> 'refunded')
+     ORDER BY label ASC`,
+    [salonId]
+  ));
+
+  return {
+    payment_methods: methodRows
+      .filter((r: any) => r.id && r.label)
+      .map((r: any) => ({ id: r.id, label: r.label })),
+    staff: staffRows
+      .filter((r: any) => r.label)
+      .map((r: any) => ({ id: String(r.id), label: r.label })),
+  };
+},
+
+// ======================================================
+// PENDING PAYMENT REPORT (independent report API)
+// POST /api/report/pending-payment — one row per bill still carrying a due
+// balance (partial or unpaid). Reads appointments + payments directly, never
+// sales, for the same reason as Payment Collection above. Shares that
+// report's _buildPaymentCollectionWhere/_PAYMENT_COLLECTION_AGG so the two
+// reports can never disagree on what a given bill's due/paid amounts are —
+// this one just narrows to due_amount > 0.
+// ======================================================
+
+async getPendingPaymentReportStats(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string; staff_ids?: string[];
+    payment_methods?: string[];
+  }
+): Promise<PendingPaymentReportStats> {
+  const { where, values, nextIndex } = this._buildPaymentCollectionWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const extraValues: any[] = [];
+  let startDateIdx: number | null = null;
+  let endDateIdx: number | null = null;
+  let methodIdx: number | null = null;
+  if (filters.start_date) { startDateIdx = idx++; extraValues.push(filters.start_date); }
+  if (filters.end_date)   { endDateIdx   = idx++; extraValues.push(filters.end_date); }
+  if (filters.payment_methods?.length) { methodIdx = idx++; extraValues.push(filters.payment_methods.map(m => m.toLowerCase())); }
+
+  const query = `
+    ${this._PAYMENT_COLLECTION_AGG(where, startDateIdx, endDateIdx, null, methodIdx)}
+    SELECT
+      COALESCE(SUM(due_amount), 0)     AS total_pending_amount,
+      COUNT(*)::int                    AS total_pending_transactions,
+      COUNT(DISTINCT client_id) FILTER (WHERE client_id IS NOT NULL)::int AS total_customers_with_due,
+      MIN(payment_date)                AS oldest_pending_payment_date
+    FROM filtered
+    WHERE due_amount > 0
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...extraValues]));
+  const r = rows[0] ?? {};
+  const totalPending = Math.round(Number(r.total_pending_amount ?? 0));
+  const pendingTxns = Number(r.total_pending_transactions ?? 0);
+  return {
+    total_pending_amount: totalPending,
+    total_pending_transactions: pendingTxns,
+    total_customers_with_due: Number(r.total_customers_with_due ?? 0),
+    average_pending_amount: pendingTxns > 0 ? Math.round(totalPending / pendingTxns) : 0,
+    oldest_pending_payment_date: r.oldest_pending_payment_date ?? null,
+  };
+},
+
+async getPendingPaymentReportRows(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string; staff_ids?: string[];
+    payment_methods?: string[]; page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: PendingPaymentReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildPaymentCollectionWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const extraValues: any[] = [];
+  let startDateIdx: number | null = null;
+  let endDateIdx: number | null = null;
+  let methodIdx: number | null = null;
+  if (filters.start_date) { startDateIdx = idx++; extraValues.push(filters.start_date); }
+  if (filters.end_date)   { endDateIdx   = idx++; extraValues.push(filters.end_date); }
+  if (filters.payment_methods?.length) { methodIdx = idx++; extraValues.push(filters.payment_methods.map(m => m.toLowerCase())); }
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    ${this._PAYMENT_COLLECTION_AGG(where, startDateIdx, endDateIdx, null, methodIdx)}
+    SELECT
+      appointment_id, client_id, payment_date, customer_name, contact,
+      invoice_number, total_amount, paid_amount, due_amount,
+      payment_method, staff_name,
+      GREATEST(0, (CURRENT_DATE - payment_date::date))::int AS days_pending,
+      COUNT(*) OVER() AS total_count
+    FROM filtered
+    WHERE due_amount > 0
+    ORDER BY due_amount DESC, payment_date ASC NULLS LAST, customer_name ASC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...extraValues, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: PendingPaymentReportRow[] = rows.map((row: any) => ({
+    appointment_id: row.appointment_id,
+    client_id: row.client_id,
+    bill_date: row.payment_date,
+    customer_name: row.customer_name,
+    contact: row.contact,
+    invoice_number: row.invoice_number,
+    total_amount: Math.round(Number(row.total_amount ?? 0)),
+    paid_amount: Math.round(Number(row.paid_amount ?? 0)),
+    due_amount: Math.round(Number(row.due_amount ?? 0)),
+    payment_method: row.payment_method,
+    staff_name: row.staff_name,
+    days_pending: Number(row.days_pending ?? 0),
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// Filter dropdown options for the Pending Payment report — scoped to bills
+// that currently carry a due balance, so a method/staff that only ever
+// shows up on fully-paid bills is never offered (it would return an empty
+// table if selected). Same de-duplication convention as
+// getPaymentCollectionFiltersAvailable.
+async getPendingPaymentFiltersAvailable(salonId: string): Promise<PendingPaymentFiltersAvailable> {
+  const { rows: methodRows } = await safeQuery(() => pool.query(
+    `WITH latest AS (
+       SELECT DISTINCT ON (a.id) TRIM(p.payment_method) AS method, p.due_amount
+       FROM appointments a
+       JOIN payments p ON p.appointment_id = a.id AND p.status <> 'refunded'
+       WHERE a.salon_id = $1
+         AND a.deleted_at IS NULL
+         AND a.status::text NOT IN ('cancelled', 'deleted', 'no-show')
+       ORDER BY a.id, p.created_at DESC
+     )
+     SELECT DISTINCT ON (LOWER(method))
+       LOWER(method) AS id,
+       method        AS label
+     FROM latest
+     WHERE NULLIF(method, '') IS NOT NULL AND due_amount > 0
+     ORDER BY LOWER(method) ASC, (LEFT(method, 1) = UPPER(LEFT(method, 1))) DESC, method ASC`,
+    [salonId]
+  ));
+
+  const { rows: staffRows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT st.id,
+       TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))) AS label
+     FROM appointments a
+     JOIN staff st ON st.id = a.staff_id
+     WHERE a.salon_id = $1
+       AND a.deleted_at IS NULL
+       AND a.status::text NOT IN ('cancelled', 'deleted', 'no-show')
+       AND EXISTS (
+         SELECT 1 FROM payments p
+         WHERE p.appointment_id = a.id AND p.status <> 'refunded' AND p.due_amount > 0
+       )
      ORDER BY label ASC`,
     [salonId]
   ));

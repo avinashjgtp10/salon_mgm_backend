@@ -261,6 +261,8 @@ import {
     ReferralReportResponse,
     PaymentCollectionReportFilters,
     PaymentCollectionReportResponse,
+    PendingPaymentReportFilters,
+    PendingPaymentReportResponse,
     CashManagementReportFilters,
     CashManagementReportResponse,
     MembershipHistoryReportFilters,
@@ -1722,6 +1724,28 @@ async getPaymentCollectionReport(
         reportsRepository.getPaymentCollectionReportStats(salonId, filters),
         reportsRepository.getPaymentCollectionReportRows(salonId, filters),
         reportsRepository.getPaymentCollectionFiltersAvailable(salonId),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+        filters_available: filtersAvailable,
+    };
+},
+
+// ======================================================
+// PENDING PAYMENT REPORT (independent report API)
+// ======================================================
+
+async getPendingPaymentReport(
+    salonId: string,
+    filters: PendingPaymentReportFilters
+): Promise<PendingPaymentReportResponse> {
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
+        reportsRepository.getPendingPaymentReportStats(salonId, filters),
+        reportsRepository.getPendingPaymentReportRows(salonId, filters),
+        reportsRepository.getPendingPaymentFiltersAvailable(salonId),
     ]);
 
     return {

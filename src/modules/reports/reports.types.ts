@@ -1865,6 +1865,67 @@ export interface PaymentCollectionReportResponse {
 }
 
 // ===============================
+// PENDING PAYMENT REPORT
+// One row per bill still carrying a due balance (partial or unpaid).
+// Shares Payment Collection's underlying appointments+payments aggregation,
+// scoped down to due_amount > 0 so the two reports can never disagree on
+// what counts as "pending".
+// ===============================
+
+export interface PendingPaymentReportFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    payment_methods?: string[];
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface PendingPaymentReportRow {
+    appointment_id: string | null;
+    client_id: string | null;
+    bill_date: string | null;
+    customer_name: string;
+    contact: string;
+    invoice_number: string;
+    total_amount: number;
+    paid_amount: number;
+    due_amount: number;
+    payment_method: string;
+    staff_name: string;
+    days_pending: number;
+}
+
+export interface PendingPaymentReportStats {
+    total_pending_amount: number;
+    total_pending_transactions: number;
+    total_customers_with_due: number;
+    average_pending_amount: number;
+    oldest_pending_payment_date: string | null;
+}
+
+export interface PendingPaymentReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface PendingPaymentFiltersAvailable {
+    payment_methods: { id: string; label: string }[];
+    staff: { id: string; label: string }[];
+}
+
+export interface PendingPaymentReportResponse {
+    rows: PendingPaymentReportRow[];
+    pagination: PendingPaymentReportPagination;
+    stats: PendingPaymentReportStats;
+    filters_available: PendingPaymentFiltersAvailable;
+}
+
+// ===============================
 // CASH MANAGEMENT REPORT
 // One row per cash counter session (cash_management table) — opening/
 // closing balance, cash revenue/expense collected while the counter was

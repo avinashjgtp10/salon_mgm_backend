@@ -1854,6 +1854,49 @@ async getPaymentCollectionReport(
 },
 
 // ======================================================
+// PENDING PAYMENT REPORT (independent report API)
+// POST /api/report/pending-payment
+// ======================================================
+
+async getPendingPaymentReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const asStringArray = (value: unknown): string[] | undefined =>
+            Array.isArray(value)
+                ? value.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined;
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            search: asString(body.search),
+            staff_ids: asStringArray(body.staff_ids),
+            payment_methods: asStringArray(body.payment_methods),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getPendingPaymentReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Pending payment report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
 // CASH MANAGEMENT REPORT (independent report API)
 // POST /api/report/cash-management
 // ======================================================
