@@ -2,6 +2,7 @@
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { marketplaceService } from "./marketplace.service";
+import config from "../../config/env";
 import {
     UpsertEssentialsBody, UpsertAboutBody, UpsertLocationBody,
     UpsertWorkingHoursBody, AddImageBody, ReorderImagesBody, UpsertFeaturesBody,
@@ -84,9 +85,8 @@ export const marketplaceController = {
             let imageUrl: string = (req.body as AddImageBody)?.image_url;
             const file = (req as any).file as Express.Multer.File | undefined;
             if (file) {
-                // Use APP_BASE_URL in production; fall back to relative path for dev proxy
-                const base = process.env.APP_BASE_URL || "";
-                imageUrl = `${base}/uploads/${file.filename}`;
+                // Use the backend's own public URL, not the frontend's — see config.publicBaseUrl.
+                imageUrl = `${config.publicBaseUrl}/uploads/${file.filename}`;
             }
             if (!imageUrl) throw new AppError(400, "No image provided", "VALIDATION_ERROR");
             const data = await marketplaceService.addImage(await getSalonId(req), { image_url: imageUrl });
@@ -135,8 +135,7 @@ export const marketplaceController = {
         try {
             const file = (req as any).file as Express.Multer.File | undefined;
             if (!file) throw new AppError(400, "No image file provided", "VALIDATION_ERROR");
-            const base = process.env.APP_BASE_URL || "";
-            const logoUrl = `${base}/uploads/${file.filename}`;
+            const logoUrl = `${config.publicBaseUrl}/uploads/${file.filename}`;
             const data = await marketplaceService.uploadLogo(await getSalonId(req), logoUrl);
             return sendSuccess(res, 200, data, "Logo uploaded");
         } catch (err) { return next(err); }
@@ -146,8 +145,7 @@ export const marketplaceController = {
         try {
             const file = (req as any).file as Express.Multer.File | undefined;
             if (!file) throw new AppError(400, "No image file provided", "VALIDATION_ERROR");
-            const base = process.env.APP_BASE_URL || "";
-            const coverUrl = `${base}/uploads/${file.filename}`;
+            const coverUrl = `${config.publicBaseUrl}/uploads/${file.filename}`;
             const data = await marketplaceService.uploadCover(await getSalonId(req), coverUrl);
             return sendSuccess(res, 200, data, "Cover photo uploaded");
         } catch (err) { return next(err); }
