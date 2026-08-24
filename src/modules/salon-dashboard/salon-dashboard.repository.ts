@@ -727,13 +727,31 @@ export const salonDashboardRepository = {
       `SELECT COUNT(DISTINCT a.client_id)::int AS cnt, COALESCE(SUM(latest.due_amount), 0)::numeric AS amount
        FROM appointments a
        CROSS JOIN LATERAL (
+         -- Excludes refunded rows so a refunded payment can never surface as
+         -- "latest" and contribute a stale due_amount — same rule the Pending
+         -- Payment/Payment Collection reports apply, so the two figures can't
+         -- structurally disagree over which payment row is authoritative.
          SELECT p.due_amount FROM payments p
          WHERE p.appointment_id = a.id
-         ORDER BY p.created_at DESC LIMIT 1
+           AND p.status <> 'refunded'
+         -- Same tie-break as the Pending Payment/Payment Collection reports:
+         -- when two payment rows share the same created_at timestamp (a
+         -- completing payment written in the same second as the partial it
+         -- settles), prefer the 'completed' row. Without this, plain
+         -- "ORDER BY created_at DESC" leaves Postgres to pick arbitrarily
+         -- between the tied rows, and picking the stale 'partial' row reports
+         -- a bill the client already paid off in full as still pending —
+         -- inflating this card's client count/amount above what the reports
+         -- (which always break the tie deterministically) show.
+         ORDER BY p.created_at DESC, (p.status = 'completed') DESC, p.due_amount ASC
+         LIMIT 1
        ) latest
        WHERE a.salon_id = $1
          AND a.deleted_at IS NULL
          AND a.client_id IS NOT NULL
+         -- Same exclusion as the reports: a cancelled/no-show/deleted
+         -- appointment's stale payment row must not count as outstanding.
+         AND a.status::text NOT IN ('cancelled', 'deleted', 'no-show')
          AND latest.due_amount > 0`,
       [salonId]
     );

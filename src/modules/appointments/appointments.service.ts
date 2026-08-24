@@ -26,7 +26,6 @@ import { staffService } from "../staff/staff.service";
 import { clientsRepository } from "../clients/clients.repository";
 import { sendReceiptDocument } from "../sales/receipt-whatsapp.service";
 import { sendPurchaseReceipt, getPurchaseReceiptPdf } from "../sales/receipt-send.helper";
-import { notifyAppointmentCompleted } from "./appointment-completed.helper";
 import { computeBillTotals, rowsTotal, normalizeDiscountAppliesTo, ActiveTaxRow } from "../pricing/pricing.engine";
 import { getActiveTaxes } from "../settings/tax.util";
 import { paymentsRepository } from "../payments/payments.repository";
@@ -573,41 +572,6 @@ export const appointmentsService = {
             });
         });
 
-        // ── WhatsApp Automation: Appointment Confirmation ─────────────────────
-        // Dedup check — NEVER send confirmation twice for the same appointment
-        if (appointment.client_id) {
-            try {
-                if (full && (full as any).client_phone) {
-                    const alreadySent = await whatsappAutomationRepository.logExistsForReference(
-                        full.id,
-                        "appointment_confirmation"
-                    );
-                    if (!alreadySent) {
-                        whatsappAutomationService.trigger({
-                            salonId:       full.salon_id,
-                            eventType:     "appointment_confirmation",
-                            clientId:      full.client_id,
-                            phone:         (full as any).client_phone,
-                            countryCode:   (full as any).client_phone_code ?? null,
-                            variables: {
-                                "1": full.client_name                      ?? "Valued Customer",
-                                "2": (full as any).salon_name              ?? "our salon",
-                                "3": full.services?.[0]?.name ?? full.title ?? "your service",
-                                "4": formatDate(full.scheduled_at),
-                                "5": formatTime(full.scheduled_at),
-                            },
-                            referenceId:   full.id,
-                            referenceType: "appointment",
-                            dedupeByReference: true,
-                        }).catch(() => {});
-                    }
-                }
-            } catch (err: any) {
-                // Never block core flow — but log so a real bug here isn't invisible.
-                logger.error("[WA-AUTO] appointment notification trigger failed:", err?.message ?? err);
-            }
-        }
-
         // ── Email: New Appointment (to salon owner) ───────────────────────────
         ;(async () => {
             try {
@@ -905,7 +869,30 @@ export const appointmentsService = {
         // reassignment, or LUNOX's modifyAppointmentServices changing what's
         // booked/its duration) never did, so any of these silently required a
         // manual page refresh to appear correctly.
-        if (patch.scheduled_at || patch.staff_id || patch.services || patch.duration_minutes) {
+        //
+        // scheduled_at/staff_id are checked for an actual value change, not
+        // just presence in the patch — the frontend's save() always resends
+        // both on every save (it serializes current UI state wholesale, it
+        // doesn't track which fields were actually touched), so a
+        // presence-only check fired this push on every single save — e.g.
+        // completing payment on an unedited booking — reading to staff as
+        // "appointment rescheduled" when nothing had.
+        //
+        // duration_minutes/services are deliberately NOT part of this
+        // trigger (they used to be, presence-only, which is the same bug):
+        // a real content edit to services always changes the appointment's
+        // total/duration/staff too, which already fires this via the checks
+        // below, so the coverage lost is negligible. A duration/services
+        // comparison here would need real value-equality, and services in
+        // particular is a computed array (fresh timestamps, differing key
+        // shape between patch and existing) that can't be compared with
+        // JSON.stringify — that was tried and still false-positived on
+        // every save, since the two sides are never byte-identical even
+        // when nothing changed.
+        const scheduledAtChanged = !!patch.scheduled_at &&
+            new Date(patch.scheduled_at).getTime() !== new Date(existing.scheduled_at).getTime();
+        const staffChanged = !!patch.staff_id && patch.staff_id !== existing.staff_id;
+        if (scheduledAtChanged || staffChanged) {
             notificationsService.create({
                 salon_id: existing.salon_id,
                 type:     "appointment",
@@ -933,8 +920,18 @@ export const appointmentsService = {
         }
 
         // ── WhatsApp Automation: Appointment Rescheduled ──────────────────────
-        // Only fire if scheduled_at actually changed
-        if (patch.scheduled_at && existing.client_id) {
+        // Only fire if scheduled_at actually changed — guarded by a real
+        // old-vs-new comparison (not just presence in the patch), same as the
+        // client-packages sync above. Without this, any update that merely
+        // carries the existing scheduled_at forward (e.g. clicking "Continue
+        // to Payment" on the calendar, which always resends scheduled_at even
+        // when the time didn't change) sent a false "rescheduled" WhatsApp
+        // message to the client.
+        if (
+            patch.scheduled_at &&
+            new Date(patch.scheduled_at).getTime() !== new Date(existing.scheduled_at).getTime() &&
+            existing.client_id
+        ) {
             try {
                 const full = await appointmentsRepository.findById(appointmentId);
                 if (full && (full as any).client_phone) {
@@ -1210,48 +1207,13 @@ export const appointmentsService = {
                 .redeemForAppointmentIfScheduled(existing.salon_id, appointmentId, existing.staff_name ?? "Staff")
                 .catch((err: any) => logger.error("[client-packages] redemption on checkout failed:", err?.message ?? err));
 
-            // ── WhatsApp Automation: Thank You + Review Request (fire-and-forget) ──
-            notifyAppointmentCompleted(appointmentId).catch(() => {});
-
-            // ── WhatsApp Automation: Purchase confirmation + PDF receipt (fallback) ──
+            // ── WhatsApp: PDF purchase receipt (fallback) ──────────────────────
             // payments.service.ts already fires this at payment-creation time when it
-            // auto-creates the sale — this is a dedup-guarded safety net for when that
-            // didn't happen (e.g. no client phone on file yet at payment time), so
-            // completing the appointment doesn't silently leave the customer with only
-            // the plain booking confirmation and no purchase text/PDF.
+            // auto-creates the sale — this is a safety net for when that didn't happen
+            // (e.g. no client phone on file yet at payment time).
             if (existing.client_id && (existing as any).client_phone) {
                 (async () => {
                     try {
-                        const alreadySent =
-                            (await whatsappAutomationRepository.logExistsForReference(preExistingSale.id, "service_purchased")) ||
-                            (await whatsappAutomationRepository.logExistsForReference(preExistingSale.id, "product_purchased"));
-                        if (alreadySent) return;
-
-                        const presentTypes = new Set(saleItems.map((i) => i.item_type));
-                        const purchaseEvents: Array<{ eventType: "service_purchased" | "product_purchased"; itemType: "service" | "product" }> = [
-                            { eventType: "service_purchased", itemType: "service" },
-                            { eventType: "product_purchased", itemType: "product" },
-                        ];
-                        for (const { eventType, itemType } of purchaseEvents) {
-                            if (!presentTypes.has(itemType)) continue;
-                            const itemName = saleItems.find((i) => i.item_type === itemType)?.name ?? "your purchase";
-                            whatsappAutomationService.trigger({
-                                salonId:       existing.salon_id,
-                                eventType,
-                                clientId:      existing.client_id!,
-                                phone:         (existing as any).client_phone,
-                                countryCode:   (existing as any).client_phone_code ?? null,
-                                variables: {
-                                    "1": existing.client_name         ?? "Valued Customer",
-                                    "2": (existing as any).salon_name ?? "our salon",
-                                    "3": itemName,
-                                },
-                                referenceId:   preExistingSale.id,
-                                referenceType: "invoice",
-                                dedupeByReference: true,
-                            }).catch(() => {});
-                        }
-
                         await sendPurchaseReceipt({
                             salonId:     existing.salon_id,
                             phone:       (existing as any).client_phone,
@@ -1313,6 +1275,22 @@ export const appointmentsService = {
                     });
                 } catch (err: any) { logger.error("[email] newPayment (preexisting) failed:", err?.message ?? err); }
             })();
+
+            // ── Push Notification: Payment Complete (to salon staff) ──────────
+            // Same pattern as "New Appointment Booked" — a calendar-facing push
+            // so staff know a bill was just settled without needing to refresh.
+            notificationsService.create({
+                salon_id: existing.salon_id,
+                type:     "payment",
+                title:    "Payment Complete",
+                body:     `${existing.client_name ?? "Walk-in"} — ₹${preExistingSale.total_amount ?? 0}`,
+                event_key: "newPayment",
+                scheduled_at: existing.scheduled_at,
+            }).catch((err: any) => {
+                logger.error("Payment complete notification failed", {
+                    appointmentId, salonId: existing.salon_id, message: err?.message,
+                });
+            });
 
             return { appointment: completedAppt, saleId: preExistingSale.id };
         }
@@ -1566,6 +1544,20 @@ export const appointmentsService = {
                 logger.info(`[email] newPayment sent to ${ownerEmail}`);
             } catch (err: any) { logger.error("[email] newPayment (checkout) failed:", err?.message ?? err); }
         })();
+
+        // ── Push Notification: Payment Complete (to salon staff) ──────────────
+        notificationsService.create({
+            salon_id: existing.salon_id,
+            type:     "payment",
+            title:    "Payment Complete",
+            body:     `${existing.client_name ?? "Walk-in"} — ₹${sale.total_amount ?? 0}`,
+            event_key: "newPayment",
+            scheduled_at: existing.scheduled_at,
+        }).catch((err: any) => {
+            logger.error("Payment complete notification failed", {
+                appointmentId, salonId: existing.salon_id, message: err?.message,
+            });
+        });
 
         return { appointment, saleId: sale.id };
     },

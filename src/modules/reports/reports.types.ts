@@ -1451,6 +1451,74 @@ export interface ClientRevenueReportResponse {
 }
 
 // ===============================
+// All Clients Report (independent report API — POST /api/report/all-clients)
+// Pure client-profile listing — name, contact, DOB, gender, source, status,
+// joined date — deliberately carries NO revenue/visit figures (that's what
+// Client Revenue is for). Filters reuse clientsRepository's own
+// _buildCampaignFilterSql (the same engine campaign contact-targeting uses)
+// rather than re-deriving equivalent SQL here, so the two can never diverge
+// on what "has an active membership" or "new vs repetitive" means.
+// ===============================
+
+export interface AllClientsReportFilters {
+    search?: string;
+    genders?: string[];
+    client_source?: string;
+    birth_month?: number;
+    joined_from?: string;
+    joined_to?: string;
+    total_spend_min?: number;
+    total_spend_max?: number;
+    has_membership?: boolean;
+    has_package?: boolean;
+    last_visit_from?: string;
+    last_visit_to?: string;
+    customer_type?: "new" | "repetitive";
+    status?: "active" | "blocked";
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface AllClientsReportRow {
+    client_id: string;
+    client_name: string;
+    contact: string;
+    email: string | null;
+    gender: string | null;
+    birthday: string | null;
+    address: string | null;
+    client_source: string | null;
+    status: "Active" | "Blocked";
+    joined_date: string;
+}
+
+export interface AllClientsReportStats {
+    total_clients: number;
+    active_clients: number;
+    blocked_clients: number;
+    new_this_month: number;
+}
+
+export interface AllClientsReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface AllClientsFiltersAvailable {
+    client_sources: { id: string; label: string }[];
+}
+
+export interface AllClientsReportResponse {
+    rows: AllClientsReportRow[];
+    pagination: AllClientsReportPagination;
+    stats: AllClientsReportStats;
+    filters_available: AllClientsFiltersAvailable;
+}
+
+// ===============================
 // Customer Spend Segments Report (POST /api/report/customer-spend)
 //
 // Classifies clients as VIP / Regular / Low by how much they have spent, and
@@ -1862,6 +1930,67 @@ export interface PaymentCollectionReportResponse {
     pagination: PaymentCollectionReportPagination;
     stats: PaymentCollectionReportStats;
     filters_available: PaymentCollectionFiltersAvailable;
+}
+
+// ===============================
+// PENDING PAYMENT REPORT
+// One row per bill still carrying a due balance (partial or unpaid).
+// Shares Payment Collection's underlying appointments+payments aggregation,
+// scoped down to due_amount > 0 so the two reports can never disagree on
+// what counts as "pending".
+// ===============================
+
+export interface PendingPaymentReportFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    payment_methods?: string[];
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface PendingPaymentReportRow {
+    appointment_id: string | null;
+    client_id: string | null;
+    bill_date: string | null;
+    customer_name: string;
+    contact: string;
+    invoice_number: string;
+    total_amount: number;
+    paid_amount: number;
+    due_amount: number;
+    payment_method: string;
+    staff_name: string;
+    days_pending: number;
+}
+
+export interface PendingPaymentReportStats {
+    total_pending_amount: number;
+    total_pending_transactions: number;
+    total_customers_with_due: number;
+    average_pending_amount: number;
+    oldest_pending_payment_date: string | null;
+}
+
+export interface PendingPaymentReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface PendingPaymentFiltersAvailable {
+    payment_methods: { id: string; label: string }[];
+    staff: { id: string; label: string }[];
+}
+
+export interface PendingPaymentReportResponse {
+    rows: PendingPaymentReportRow[];
+    pagination: PendingPaymentReportPagination;
+    stats: PendingPaymentReportStats;
+    filters_available: PendingPaymentFiltersAvailable;
 }
 
 // ===============================

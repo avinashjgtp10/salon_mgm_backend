@@ -236,15 +236,4 @@ export const webhooksService = {
 
     await webhooksRepository.refreshCampaignCounts(contact.campaign_id)
   },
-
-  async getRecentEvents(
-    salonId: string,
-    opts: { campaignId?: string; status?: string; page?: number; limit?: number } = {}
-  ) {
-    return webhooksRepository.getRecentEvents(salonId, opts)
-  },
-
-  async getEventStatusCounts(salonId: string, campaignId?: string) {
-    return webhooksRepository.getEventStatusCounts(salonId, campaignId)
-  },
 }

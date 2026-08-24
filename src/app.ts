@@ -55,7 +55,6 @@ import botQuestionsRoutes from "./modules/bot/bot-questions.routes";
 import aiEngineRoutes from "./modules/ai-engine/ai-engine.routes";
 import { ensureTable as ensureAiEngineTables } from "./modules/ai-engine/ai-engine.repository";
 import waAutomationRoutes from "./modules/whatsapp-automation/whatsapp-automation.routes";
-import waPurchaseTemplatesRoutes from "./modules/whatsapp-automation/wa-purchase-templates.routes";
 import attendanceRoutes from "./modules/attendance/attendance.routes";
 import { deviceApiRouter, admsRouter } from "./modules/device/device.routes";
 import packageTemplatesRoutes from "./modules/package-templates/package-templates.routes";
@@ -126,6 +125,9 @@ ensureTipTables().catch(err =>
 ensureAiEngineTables().catch(err =>
   logger.warn("ai-engine table init warning:", err?.message ?? err),
 );
+
+// purchases/purchase_items/salons.next_purchase_seq: NOT auto-run here — see
+// Migration/create_purchases_tables.sql, run by hand per environment.
 
 // Security middleware
 app.use(helmet());
@@ -277,7 +279,6 @@ app.use("/api/report", reportsRoutes);
 app.use("/api/v1/reports", legacyReportsRoutes);
 app.use("/api/v1/cash-management", cashManagementRoutes);
 app.use("/api/v1/wa-automation", waAutomationRoutes);
-app.use("/api/v1/wa-automation/purchase-templates", waPurchaseTemplatesRoutes);
 app.use("/api/v1/attendance", attendanceRoutes);
 app.use("/api/v1/devices", deviceApiRouter);
 app.use("/api/v1/package-templates", packageTemplatesRoutes);

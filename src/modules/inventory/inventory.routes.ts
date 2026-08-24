@@ -12,12 +12,14 @@ import {
 } from "./inventory.controller";
 import { consumableInventoryController } from "./consumable-inventory.controller";
 import { productInventoryController } from "./product-inventory.controller";
+import { purchasesController } from "./purchases.controller";
 import {
     validateCreateSupplier,
     validateUpdateSupplier,
     validateCreateStockMovement,
     validateStockTake,
 } from "./inventory.validator";
+import { validateCreatePurchase } from "./purchases.validator";
 
 const router = Router();
 const viewInventory = requirePermission("view_inventory");
@@ -101,6 +103,37 @@ router.post(
     roleMiddleware("salon_owner", "admin", "staff"),
     stockAdjustment,
     productInventoryController.stockIn
+);
+
+// ─── Purchases (supplier deliveries — multi-product, adds stock) ─────────────
+// Registered ahead of /stock-movements for the same "more specific first"
+// reason as the block above. A Purchase adds stock exactly like Add Stock
+// does, so it sits behind the same stock_adjustment permission, not
+// manage_inventory — a staff member who can Add Stock must also be able to
+// record a Purchase.
+router.post(
+    "/product-inventory/purchases",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    stockAdjustment,
+    validateCreatePurchase,
+    purchasesController.create
+);
+
+router.get(
+    "/product-inventory/purchases",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    purchasesController.list
+);
+
+router.get(
+    "/product-inventory/purchases/:id",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    purchasesController.getById
 );
 
 // ─── Stock Movements ──────────────────────────────────────────────────────────
