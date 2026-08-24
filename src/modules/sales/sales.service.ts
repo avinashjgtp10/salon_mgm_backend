@@ -15,7 +15,6 @@ import { notificationsService } from "../notifications/notifications.service";
 import { membershipsRepository } from "../memberships/memberships.repository";
 import { clientMembershipsService } from "../client-memberships/client-memberships.service";
 import { sendPurchaseReceipt } from "./receipt-send.helper";
-import { notifyAppointmentCompleted } from "../appointments/appointment-completed.helper";
 import { clientPackagesService } from "../client-packages/client-packages.service";
 
 export const salesService = {
@@ -187,10 +186,6 @@ export const salesService = {
             try {
                 const apptStatus = saleDueAmount > 0 ? "partial" : "paid";
                 await appointmentsRepository.updateStatus(sale.appointment_id, apptStatus);
-                // Only a fully-paid checkout should trigger the thank-you/review-request message.
-                if (apptStatus === "paid") {
-                    notifyAppointmentCompleted(sale.appointment_id).catch(() => {});
-                }
             } catch (error) {
                 logger.error("Failed to update appointment status after checkout:", { appointmentId: sale.appointment_id, error })
             }
@@ -218,43 +213,10 @@ export const salesService = {
         }).catch(() => {}); // already safe internally, double-guard here
         tipCalculationService.earnForSale(sale.id, sale.salon_id).catch(() => {});
 
-        // ── WhatsApp Automation: Purchase confirmation (per item type) ─────────
-        // service_purchased / product_purchased fire once each if that item type
-        // is present — a mixed sale (e.g. one service + one product) intentionally
-        // sends one text per type, not a single combined message. Membership items
-        // are NOT fired here — that's centralized in clientMembershipsService
-        // .autoCreateFromPayment() below, the single call site every membership
-        // purchase path (QuickSale, calendar) already funnels through.
+        // ── WhatsApp: PDF purchase receipt ──────────────────────────────────
         if (sale.client_id && (sale as any).client_phone) {
-            const presentTypes = new Set(items.map((i) => i.item_type));
-            const purchaseEvents: Array<{ eventType: "service_purchased" | "product_purchased"; itemType: "service" | "product" }> = [
-                { eventType: "service_purchased", itemType: "service" },
-                { eventType: "product_purchased", itemType: "product" },
-            ];
-
-            for (const { eventType, itemType } of purchaseEvents) {
-                if (!presentTypes.has(itemType)) continue;
-                const itemName = items.find((i) => i.item_type === itemType)?.name ?? "your purchase";
-                whatsappAutomationService.trigger({
-                    salonId:       sale.salon_id,
-                    eventType,
-                    clientId:      sale.client_id,
-                    phone:         (sale as any).client_phone,
-                    countryCode:   (sale as any).client_phone_code ?? null,
-                    variables: {
-                        "1": (sale as any).client_name ?? "Valued Customer",
-                        "2": (sale as any).salon_name   ?? "our salon",
-                        "3": itemName,
-                    },
-                    referenceId:   sale.id,
-                    referenceType: "invoice",
-                    dedupeByReference: true,
-                }).catch(() => {});
-            }
-
             // PDF receipt as a WhatsApp document attachment — best-effort, only
-            // deliverable within 24h of the customer's last message. Failure here
-            // is expected outside that window and never blocks the triggers above.
+            // deliverable within 24h of the customer's last message.
             sendPurchaseReceipt({
                 salonId:     sale.salon_id,
                 phone:       (sale as any).client_phone,

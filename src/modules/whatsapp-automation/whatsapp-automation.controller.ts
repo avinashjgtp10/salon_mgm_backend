@@ -122,7 +122,7 @@ export const whatsappAutomationController = {
 
   // ── Test / Manual Trigger (Dev Only) ─────────────────────────────────────
   // POST /api/v1/wa-automation/run-job/:jobName
-  // jobName: birthday | pending-payment | membership-renewal | we-miss-you-30 | we-miss-you-60 | we-miss-you-90 | new-year | appointment-reminder | appointment-reminder-1h | package-expiring
+  // jobName: birthday | pending-payment | membership-renewal | we-miss-you-30 | we-miss-you-60 | we-miss-you-90 | new-year
   async runJob(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const job = req.params.jobName as string
@@ -133,8 +133,6 @@ export const whatsappAutomationController = {
           await whatsappAutomationService.runPendingPaymentReminders(); break
         case 'membership-renewal':
           await whatsappAutomationService.runMembershipRenewalReminders(); break
-        case 'package-expiring':
-          await whatsappAutomationService.runPackageExpiringReminders(); break
         case 'we-miss-you-30':
           await whatsappAutomationService.runWeMissYou(30); break
         case 'we-miss-you-60':
@@ -143,14 +141,6 @@ export const whatsappAutomationController = {
           await whatsappAutomationService.runWeMissYou(90); break
         case 'new-year':
           await whatsappAutomationService.runNewYearCampaign(); break
-        case 'appointment-reminder':
-          await whatsappAutomationService.runAppointmentReminders(); break
-        case 'appointment-reminder-1h':
-          await whatsappAutomationService.runAppointmentReminders1h(); break
-        case 'package-appointment-reminder-2d':
-          await whatsappAutomationService.runPackageAppointmentReminders(2); break
-        case 'package-appointment-reminder-1d':
-          await whatsappAutomationService.runPackageAppointmentReminders(1); break
         default:
           return next(new AppError(400, `Unknown job: ${job}`, 'VALIDATION_ERROR'))
       }

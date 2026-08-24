@@ -11,9 +11,6 @@ import type {
   WalletDeductionResult,
 } from './client-memberships.types';
 import logger from '../../config/logger';
-import { whatsappAutomationService } from '../whatsapp-automation/whatsapp-automation.service';
-import { whatsappAutomationRepository } from '../whatsapp-automation/whatsapp-automation.repository';
-import { salonsRepository } from '../salons/salons.repository';
 import { sendPurchaseReceipt } from '../sales/receipt-send.helper';
 import type { Sale, SaleItem } from '../sales/sales.types';
 
@@ -79,36 +76,18 @@ function buildSyntheticSale(membership: ClientMembership): { sale: Sale; items: 
   return { sale, items };
 }
 
-// Fires the membership_purchased text always. The PDF receipt is only sent
-// when the membership was purchased standalone (includeReceipt=true, from
-// purchase() below) — when it's part of a larger checkout (autoCreateFromPayment,
-// called from sales/payments checkout flows), that flow already sent one PDF
-// covering the whole sale (service+product+membership etc.), so sending this
-// synthetic membership-only PDF too would duplicate it.
+// The PDF receipt is only sent when the membership was purchased standalone
+// (includeReceipt=true, from purchase() below) — when it's part of a larger
+// checkout (autoCreateFromPayment, called from sales/payments checkout flows),
+// that flow already sent one PDF covering the whole sale (service+product+
+// membership etc.), so sending this synthetic membership-only PDF too would
+// duplicate it.
 async function notifyMembershipPurchased(membership: ClientMembership, includeReceipt: boolean): Promise<void> {
+  if (!includeReceipt) return;
   if (!membership.mobile) {
-    logger.info(`[WA-AUTO] Skipping membership_purchased for ${membership.id} — no mobile number`);
+    logger.info(`[WA-AUTO] Skipping purchase receipt for membership ${membership.id} — no mobile number`);
     return;
   }
-  const salon = await salonsRepository.findById(membership.salonId);
-
-  whatsappAutomationService.trigger({
-    salonId: membership.salonId,
-    eventType: 'membership_purchased',
-    clientId: membership.clientId,
-    phone: membership.mobile,
-    countryCode: null,
-    variables: {
-      '1': membership.clientName ?? 'Valued Customer',
-      '2': salon?.business_name ?? 'our salon',
-      '3': membership.membershipName,
-    },
-    referenceId: membership.id,
-    referenceType: 'membership',
-    dedupeByReference: true,
-  }).catch(() => {});
-
-  if (!includeReceipt) return;
 
   const { sale, items } = buildSyntheticSale(membership);
   sendPurchaseReceipt({
@@ -123,37 +102,6 @@ async function notifyMembershipPurchased(membership: ClientMembership, includeRe
     paidAmount: membership.pricePaid ?? 0,
     dueAmount: 0,
     couponCode: null,
-  }).catch(() => {});
-}
-
-// Fires once when a membership's remaining sessions first drops to this
-// threshold — never on every subsequent visit, dedup'd via wa_automation_logs
-// keyed on the membership id + event type. total_sessions === 0 means
-// unlimited, so no threshold ever applies.
-const SESSIONS_REMAINING_THRESHOLD = 2;
-
-async function notifySessionsRemainingIfLow(membership: ClientMembership): Promise<void> {
-  if (!membership.mobile) return;
-  if (membership.totalSessions === 0) return;
-  if (membership.remainingSessions === 0 || membership.remainingSessions > SESSIONS_REMAINING_THRESHOLD) return;
-
-  const alreadyNotified = await whatsappAutomationRepository.logExistsForReference(membership.id, 'sessions_remaining');
-  if (alreadyNotified) return;
-
-  whatsappAutomationService.trigger({
-    salonId: membership.salonId,
-    eventType: 'sessions_remaining',
-    clientId: membership.clientId,
-    phone: membership.mobile,
-    countryCode: null,
-    variables: {
-      '1': membership.clientName ?? 'Valued Customer',
-      '2': membership.membershipName,
-      '3': String(membership.remainingSessions),
-    },
-    referenceId: membership.id,
-    referenceType: 'membership',
-    dedupeByReference: true,
   }).catch(() => {});
 }
 
@@ -211,9 +159,7 @@ export const clientMembershipsService = {
   },
 
   async consume(id: string, salonId: string, dto: ConsumeSessionDTO) {
-    const updated = await clientMembershipsRepository.consumeSession(id, salonId, dto);
-    notifySessionsRemainingIfLow(updated).catch(() => {});
-    return updated;
+    return clientMembershipsRepository.consumeSession(id, salonId, dto);
   },
 
   async cancel(id: string, salonId: string) {
