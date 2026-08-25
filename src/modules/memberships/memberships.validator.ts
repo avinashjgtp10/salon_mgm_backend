@@ -9,7 +9,7 @@ const APPLIES_TO_VALUES = ["services", "products", "both"];
 const validatePricingFields = (body: any) => {
   const {
     pricingType, discountPercent, discountBalance,
-    loyaltyTiers, appliesTo, categoryIds,
+    loyaltyTiers, appliesTo, categoryIds, serviceIds, productIds,
   } = body;
 
   if (pricingType !== undefined && !PRICING_TYPES.includes(pricingType))
@@ -22,6 +22,17 @@ const validatePricingFields = (body: any) => {
   if (categoryIds !== undefined && categoryIds !== null) {
     if (!Array.isArray(categoryIds) || categoryIds.some((c: unknown) => typeof c !== "string" || !c))
       throw new AppError(400, "categoryIds must be an array of category id strings", "VALIDATION_ERROR");
+  }
+
+  // Further, additive narrowing to specific services/products — see
+  // serviceIds/productIds on CreateMembershipDTO.
+  if (serviceIds !== undefined && serviceIds !== null) {
+    if (!Array.isArray(serviceIds) || serviceIds.some((c: unknown) => typeof c !== "string" || !c))
+      throw new AppError(400, "serviceIds must be an array of service id strings", "VALIDATION_ERROR");
+  }
+  if (productIds !== undefined && productIds !== null) {
+    if (!Array.isArray(productIds) || productIds.some((c: unknown) => typeof c !== "string" || !c))
+      throw new AppError(400, "productIds must be an array of product id strings", "VALIDATION_ERROR");
   }
 
   if (discountPercent !== undefined && discountPercent !== null &&
