@@ -277,6 +277,7 @@ export const clientMembershipsService = {
   async getWalletCoverage(salonId: string, clientId: string): Promise<{
     coversServices: boolean; coversProducts: boolean;
     serviceCategoryIds: string[] | null; productCategoryIds: string[] | null;
+    serviceItemIds: string[] | null; productItemIds: string[] | null;
   }> {
     return clientMembershipsRepository.getWalletCoverageForClient(clientId, salonId);
   },

@@ -22,6 +22,9 @@ export interface ClientMembership {
   appliesTo: MembershipAppliesTo;
   /** Optional narrowing of appliesTo to specific categories — empty means unrestricted. */
   categoryIds: string[];
+  /** Further narrowing to specific services/products within (or independent of) categoryIds — additive, empty means no individual-item narrowing. */
+  serviceIds: string[];
+  productIds: string[];
   /** Denormalized plain-text description from the plan at purchase time — see memberships.types.ts. */
   description?: string;
   pricingType: 'value' | 'percentage' | 'loyalty';
@@ -144,6 +147,8 @@ export interface ClientMembershipRow {
   membership_wallet_balance?: string | number | null;
   applies_to?: MembershipAppliesTo | null;
   category_ids?: string[] | null;
+  service_ids?: string[] | null;
+  product_ids?: string[] | null;
   description?: string | null;
   pricing_type?: string | null;
   discount_percent?: string | number | null;
