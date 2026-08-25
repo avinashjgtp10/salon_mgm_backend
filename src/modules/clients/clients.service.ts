@@ -75,7 +75,7 @@ async function attachExtendedProfile(
     salonId: string,
     includeSet: Set<string>,
 ): Promise<void> {
-    const [packagesRes, membershipsRes, apptStatsRes, revenueRes, loyaltyRes] = await Promise.all([
+    const [packagesRes, membershipsRes, apptStatsRes, revenueRes, loyaltyRes, staffAlertRes] = await Promise.all([
         includeSet.has("packages")
             ? clientPackagesService.list(salonId, { clientId, limit: 500 })
             : Promise.resolve(null),
@@ -109,6 +109,29 @@ async function attachExtendedProfile(
         includeSet.has("loyalty")
             ? membershipsService.getLoyaltyEligibility(clientId, salonId)
             : Promise.resolve(null),
+        // Latest non-empty staff_alert and notes, picked independently — an
+        // alert set two visits ago can still be the current one even if the
+        // most recent visit's own notes field happens to be empty, so this
+        // isn't just "read the latest appointment's two columns".
+        //
+        // Ordered by updated_at (when the field was actually typed/saved),
+        // NOT scheduled_at (when the visit itself is booked for) — every
+        // appointment save sets updated_at = NOW() (see
+        // appointments.repository.ts's update()), so this reflects "whichever
+        // alert staff entered most recently" rather than "whichever
+        // appointment happens to be scheduled furthest in the future", which
+        // could surface a stale alert over one just entered on an earlier-
+        // dated visit.
+        includeSet.has("staffAlert")
+            ? pool.query(
+                `SELECT
+                    (SELECT staff_alert  FROM appointments WHERE client_id = $1 AND salon_id = $2 AND deleted_at IS NULL AND staff_alert IS NOT NULL AND staff_alert <> '' ORDER BY updated_at DESC LIMIT 1) AS staff_alert,
+                    (SELECT updated_at   FROM appointments WHERE client_id = $1 AND salon_id = $2 AND deleted_at IS NULL AND staff_alert IS NOT NULL AND staff_alert <> '' ORDER BY updated_at DESC LIMIT 1) AS staff_alert_at,
+                    (SELECT notes        FROM appointments WHERE client_id = $1 AND salon_id = $2 AND deleted_at IS NULL AND notes IS NOT NULL AND notes <> '' ORDER BY updated_at DESC LIMIT 1) AS notes,
+                    (SELECT updated_at   FROM appointments WHERE client_id = $1 AND salon_id = $2 AND deleted_at IS NULL AND notes IS NOT NULL AND notes <> '' ORDER BY updated_at DESC LIMIT 1) AS notes_at`,
+                [clientId, salonId],
+            )
+            : Promise.resolve(null),
     ]);
 
     if (packagesRes) result.packages = packagesRes.items;
@@ -123,6 +146,11 @@ async function attachExtendedProfile(
         };
     }
     if (includeSet.has("loyalty")) result.loyalty_eligibility = loyaltyRes ?? null;
+    if (includeSet.has("staffAlert")) {
+        const row = staffAlertRes?.rows[0] ?? {};
+        result.latest_staff_alert = row.staff_alert ? { text: row.staff_alert, date: row.staff_alert_at } : null;
+        result.latest_notes = row.notes ? { text: row.notes, date: row.notes_at } : null;
+    }
 }
 
 export const clientsService = {
@@ -285,7 +313,7 @@ export const clientsService = {
         // /clients/:id/history, and /memberships/loyalty-eligibility right
         // after. Each sub-fetch runs only when actually requested, and all
         // requested ones run concurrently.
-        if (includeSet.has("packages") || includeSet.has("memberships") || includeSet.has("history") || includeSet.has("loyalty")) {
+        if (includeSet.has("packages") || includeSet.has("memberships") || includeSet.has("history") || includeSet.has("loyalty") || includeSet.has("staffAlert")) {
             await attachExtendedProfile(result, clientId, salonId, includeSet);
         }
 

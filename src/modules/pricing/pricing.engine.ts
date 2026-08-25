@@ -46,6 +46,11 @@ export interface LineItem {
   // cover. Unused by this engine's own tax/discount math, only by the
   // eligibility gating in pricing.service.ts/payments.service.ts.
   categoryId?: string;
+  // Optional service/product id — same eligibility-gating-only contract as
+  // categoryId, but for the finer-grained "restricted to these specific
+  // services/products" case (see resolveItemRestriction in
+  // client-memberships.repository.ts).
+  itemId?: string;
   // Membership-wallet-eligibility only (see pricing.service.ts's wallet split)
   // — unused by the rest of this engine, which only reads price/qty/total.
   isPackageService?: boolean;

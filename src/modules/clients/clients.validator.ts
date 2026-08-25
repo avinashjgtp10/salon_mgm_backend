@@ -45,6 +45,30 @@ const validateAddressesArray = (arr: any, allowId: boolean) => {
     }
 };
 
+const GSTIN_FORMAT_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
+
+// Shared by create/update — GST is optional but must be a valid GSTIN when
+// present (mirrors salons.validator.ts's own GST check, which validates the
+// salon's OWN business GST — this is the same format, unrelated table).
+// Credit fields are optional but can't be negative when present.
+const validateGstAndCredit = (b: any) => {
+    if (b.gst_number !== undefined && b.gst_number !== null && b.gst_number !== "") {
+        if (typeof b.gst_number !== "string" || !GSTIN_FORMAT_RE.test(b.gst_number.toUpperCase())) {
+            throw new AppError(400, "gst_number must be a valid 15-character GSTIN (e.g. 22AAAAA0000A1Z5)", "VALIDATION_ERROR");
+        }
+    }
+    if (b.credit_limit !== undefined && b.credit_limit !== null) {
+        if (typeof b.credit_limit !== "number" || !Number.isFinite(b.credit_limit) || b.credit_limit < 0) {
+            throw new AppError(400, "credit_limit must be a number >= 0", "VALIDATION_ERROR");
+        }
+    }
+    if (b.credit_duration_days !== undefined && b.credit_duration_days !== null) {
+        if (!Number.isInteger(b.credit_duration_days) || b.credit_duration_days < 0) {
+            throw new AppError(400, "credit_duration_days must be an integer >= 0", "VALIDATION_ERROR");
+        }
+    }
+};
+
 const validateEmergencyContactsArray = (arr: any, allowId: boolean) => {
     if (arr === undefined || arr === null) return;
     if (!Array.isArray(arr)) throw new AppError(400, "emergency_contacts must be array", "VALIDATION_ERROR");
@@ -83,6 +107,13 @@ export const validateCreateClient = (req: Request, _res: Response, next: NextFun
             "gender",
             "pronouns",
             "address",
+            "state",
+            "pincode",
+            "gst_number",
+            "client_code",
+            "identification_number",
+            "lead_source",
+            "source_description",
             "client_source",
             "preferred_language",
             "occupation",
@@ -97,6 +128,7 @@ export const validateCreateClient = (req: Request, _res: Response, next: NextFun
             "email_marketing",
             "sms_marketing",
             "whatsapp_marketing",
+            "has_whatsapp",
         ] as const;
 
         for (const f of optionalStringFields) {
@@ -106,6 +138,8 @@ export const validateCreateClient = (req: Request, _res: Response, next: NextFun
         for (const f of optionalBooleanFields) {
             if (!isOptionalBoolean(b[f])) throw new AppError(400, `${f} must be boolean`, "VALIDATION_ERROR");
         }
+
+        validateGstAndCredit(b);
 
         if (b.referred_by_client_id !== undefined && b.referred_by_client_id !== null && !isUUID(b.referred_by_client_id)) {
             throw new AppError(400, "referred_by_client_id must be uuid", "VALIDATION_ERROR");
@@ -147,6 +181,13 @@ export const validateUpdateClient = (req: Request, _res: Response, next: NextFun
             "gender",
             "pronouns",
             "address",
+            "state",
+            "pincode",
+            "gst_number",
+            "client_code",
+            "identification_number",
+            "lead_source",
+            "source_description",
             "client_source",
             "preferred_language",
             "occupation",
@@ -163,6 +204,7 @@ export const validateUpdateClient = (req: Request, _res: Response, next: NextFun
             "email_marketing",
             "sms_marketing",
             "whatsapp_marketing",
+            "has_whatsapp",
         ] as const;
 
         for (const f of optionalStringFields) {
@@ -172,6 +214,8 @@ export const validateUpdateClient = (req: Request, _res: Response, next: NextFun
         for (const f of optionalBooleanFields) {
             if (!isOptionalBoolean(b[f])) throw new AppError(400, `${f} must be boolean`, "VALIDATION_ERROR");
         }
+
+        validateGstAndCredit(b);
 
         if (b.referred_by_client_id !== undefined && b.referred_by_client_id !== null && !isUUID(b.referred_by_client_id)) {
             throw new AppError(400, "referred_by_client_id must be uuid", "VALIDATION_ERROR");

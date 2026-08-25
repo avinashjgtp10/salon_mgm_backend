@@ -39,9 +39,14 @@ interface DiscountEligibleItem {
 
 // Optional narrowing of appliesTo to specific categories — empty/undefined
 // means unrestricted, preserving today's behavior for every plan that
-// doesn't use this feature.
-function matchesCategoryRestriction(item: DiscountEligibleItem, categoryIds: string[] | undefined): boolean {
-  return !categoryIds?.length || (!!item.categoryId && categoryIds.includes(item.categoryId));
+// doesn't use this feature. itemIds is a further, additive narrowing to
+// specific services/products — a row matches if EITHER its category is in
+// categoryIds OR its own id is in itemIds; only jointly empty means
+// unrestricted.
+function matchesCategoryRestriction(item: DiscountEligibleItem, categoryIds: string[] | undefined, itemIds: string[] | undefined = []): boolean {
+  if (!categoryIds?.length && !itemIds?.length) return true;
+  return (!!categoryIds?.length && !!item.categoryId && categoryIds.includes(item.categoryId))
+      || (!!itemIds?.length && !!item.itemId && itemIds.includes(item.itemId));
 }
 
 interface MembershipDiscountResult {
@@ -90,8 +95,8 @@ async function applyMembershipDiscountForBooking(
       const appliesTo = percentageMembership.appliesTo;
       const categoryIds = percentageMembership.categoryIds;
       const eligible = [
-        ...(appliesTo !== 'products' ? serviceItems.filter((i) => !i.isPackageService && i.amount > 0 && matchesCategoryRestriction(i, categoryIds)) : []),
-        ...(appliesTo !== 'services' ? productItems.filter((i) => i.amount > 0 && matchesCategoryRestriction(i, categoryIds)) : []),
+        ...(appliesTo !== 'products' ? serviceItems.filter((i) => !i.isPackageService && i.amount > 0 && matchesCategoryRestriction(i, categoryIds, percentageMembership.serviceIds)) : []),
+        ...(appliesTo !== 'services' ? productItems.filter((i) => i.amount > 0 && matchesCategoryRestriction(i, categoryIds, percentageMembership.productIds)) : []),
       ];
       if (eligible.length) {
         const result = await clientMembershipsRepository.deductDiscountBalanceForBooking(
@@ -113,8 +118,8 @@ async function applyMembershipDiscountForBooking(
     const loyalty = await membershipsRepository.findLoyaltyEligibility(clientId, salonId);
     if (loyalty?.eligible) {
       const eligible = [
-        ...(loyalty.appliesTo !== 'products' ? serviceItems.filter((i) => !i.isPackageService && i.amount > 0 && matchesCategoryRestriction(i, loyalty.categoryIds)) : []),
-        ...(loyalty.appliesTo !== 'services' ? productItems.filter((i) => i.amount > 0 && matchesCategoryRestriction(i, loyalty.categoryIds)) : []),
+        ...(loyalty.appliesTo !== 'products' ? serviceItems.filter((i) => !i.isPackageService && i.amount > 0 && matchesCategoryRestriction(i, loyalty.categoryIds, loyalty.serviceIds)) : []),
+        ...(loyalty.appliesTo !== 'services' ? productItems.filter((i) => i.amount > 0 && matchesCategoryRestriction(i, loyalty.categoryIds, loyalty.productIds)) : []),
       ];
       const { total: loyaltyTotal, discounts } = allocateMembershipDiscount(eligible.map((i) => i.amount), loyalty.discountPercent, Infinity);
       total += loyaltyTotal;
@@ -493,11 +498,24 @@ export const paymentsService = {
                 // services-only, products-only, or both; services are no
                 // longer unconditionally eligible the way they used to be
                 // before "products only" existed as an option.
-                const { coversServices, coversProducts, serviceCategoryIds, productCategoryIds } =
+                const { coversServices, coversProducts, serviceCategoryIds, productCategoryIds, serviceItemIds, productItemIds } =
                   await clientMembershipsService.getWalletCoverage(data.salon_id, data.client_id);
+                // Additive: a row is covered if its category is in the
+                // *CategoryIds list OR its own id is in the *ItemIds list —
+                // only jointly empty means unrestricted. See
+                // resolveCategoryRestriction/resolveItemRestriction in
+                // client-memberships.repository.ts.
+                const coversServiceRow = (s: { category_id?: string | null; service_id?: string | null }) =>
+                  (!serviceCategoryIds?.length && !serviceItemIds?.length)
+                  || (!!serviceCategoryIds?.length && !!s.category_id && serviceCategoryIds.includes(s.category_id))
+                  || (!!serviceItemIds?.length && !!s.service_id && serviceItemIds.includes(s.service_id));
+                const coversProductRow = (p: { category_id?: string | null; product_id?: string | null }) =>
+                  (!productCategoryIds?.length && !productItemIds?.length)
+                  || (!!productCategoryIds?.length && !!p.category_id && productCategoryIds.includes(p.category_id))
+                  || (!!productItemIds?.length && !!p.product_id && productItemIds.includes(p.product_id));
                 const itemsForWallet = [
                   ...(coversServices ? (appt.services || [])
-                    .filter(s => !serviceCategoryIds?.length || (s.category_id && serviceCategoryIds.includes(s.category_id)))
+                    .filter(coversServiceRow)
                     .map(s => ({
                       serviceId:   s.service_id,
                       serviceName: s.name,
@@ -505,7 +523,7 @@ export const paymentsService = {
                     })) : []),
                   ...(coversProducts ? (appt.product_items || [])
                     .filter(p => !!p.product_id)
-                    .filter(p => !productCategoryIds?.length || (p.category_id && productCategoryIds.includes(p.category_id)))
+                    .filter(coversProductRow)
                     .map(p => ({
                       serviceId:   p.product_id as string,
                       serviceName: p.name,
