@@ -118,6 +118,12 @@ export type ClientWithRelations = Client & {
         total_revenue: number;
     };
     loyalty_eligibility?: unknown | null;
+    // ?include=staffAlert — the most recent appointment (by scheduled_at) that
+    // carries a non-empty staff_alert/notes, independently for each (an alert
+    // set two visits ago can still be the current one even if the latest
+    // visit's own notes field is empty). Null when the client has none.
+    latest_staff_alert?: { text: string; date: string } | null;
+    latest_notes?: { text: string; date: string } | null;
 };
 
 export type CreateClientAddressInput = Omit<ClientAddress, "id" | "client_id" | "created_at" | "updated_at">;
