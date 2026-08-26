@@ -7,8 +7,9 @@ export type AutomationEventType =
   // Salon-editable trigger events (see PURCHASE_EVENTS below) — organized into
   // Quick Sale / Calendar / Other by the frontend Trigger Templates UI.
   | 'client_welcome'
-  | 'service_purchased'
-  | 'product_purchased'
+  // service_purchased / product_purchased retired — fully redundant with
+  // bill_receipt below, which itemizes every item type in a Quick Sale
+  // regardless of how many were purchased. See sales.service.ts checkout().
   | 'package_purchased'
   | 'membership_purchased'
   // Meta-approved document-header template — the bill PDF is the template's
@@ -44,8 +45,6 @@ export type AutomationEventType =
 // still use a single global admin-managed row.
 export const PURCHASE_EVENTS: AutomationEventType[] = [
   'client_welcome',
-  'service_purchased',
-  'product_purchased',
   'package_purchased',
   'membership_purchased',
   'bill_receipt',
