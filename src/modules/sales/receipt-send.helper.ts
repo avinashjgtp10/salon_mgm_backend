@@ -4,63 +4,25 @@ import { branchesRepository } from "../branches/branches.repository";
 import { staffRepository } from "../staff/staff.repository";
 import { clientsRepository } from "../clients/clients.repository";
 import { sendReceiptDocument } from "./receipt-whatsapp.service";
-import { renderReceiptPdf } from "./receipt-pdf.service";
+import { renderReceiptPdf, generateAndSaveReceipt } from "./receipt-pdf.service";
 import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
+import { sendBillReceiptTemplateMessage } from "../whatsapp-automation/wa-bill-receipt-template.helper";
 import { generateFeedbackToken } from "../reviews/feedback-token.util";
 import logger from "../../config/logger";
 
-const ITEM_ICON: Partial<Record<SaleItem["item_type"], string>> = {
-    service: "💇", product: "🛍️", package: "🎟️", membership: "💳",
-};
+// Only buildable when this bill is tied to a real appointment, since the
+// public feedback form is built entirely around an appointment's service
+// list (see reviews.service.ts). A true walk-in Quick Sale has nothing to
+// attach a feedback link to — gets a fallback line instead (see below).
+function buildFeedbackLink(appointmentId: string): string {
+    return `${process.env.FRONTEND_URL || process.env.APP_BASE_URL || "http://localhost:5173"}/feedback/${appointmentId}.${generateFeedbackToken(appointmentId)}`;
+}
 
-// The bill_receipt trigger's caption, sent alongside the PDF as one WhatsApp
-// document message. Never goes through Meta template approval — its wording
-// is salon-editable (see wa_automation_templates event_type='bill_receipt')
-// but uses named placeholders instead of Meta's {{n}} numbering, since Meta
-// never sees this text. {{feedback_link}} is only included when this bill is
-// tied to a real appointment — the public feedback form is built entirely
-// around an appointment's service list (see reviews.service.ts), so a true
-// walk-in Quick Sale with no appointment has nothing to attach a feedback
-// link to; that line is dropped gracefully rather than shipping a dead link.
-async function buildBillReceiptCaption(params: {
-    salonId: string;
-    salonName: string;
-    clientName: string;
-    appointmentId?: string | null;
-    items: SaleItem[];
-    paidAmount: number;
-    dueAmount: number;
-}): Promise<string> {
-    const template = await whatsappAutomationRepository.findOrSeedSalonPurchaseTemplate(params.salonId, "bill_receipt");
-    let body = template.body_text ?? "";
-
-    const lines = params.items.map((i) => {
-        const icon = ITEM_ICON[i.item_type] ?? "•";
-        return `${icon} ${i.name} — ₹${Number(i.total_price).toFixed(0)}`;
-    });
-    lines.push(`💰 Total Paid: ₹${params.paidAmount.toFixed(0)}`);
-    if (params.dueAmount > 0) lines.push(`⏳ Due: ₹${params.dueAmount.toFixed(0)}`);
-    const itemsBlock = lines.join("\n");
-
-    const feedbackLink = params.appointmentId
-        ? `${process.env.FRONTEND_URL || process.env.APP_BASE_URL || "http://localhost:5173"}/feedback/${params.appointmentId}.${generateFeedbackToken(params.appointmentId)}`
-        : "";
-
-    body = body
-        .replace(/\{\{customer_name\}\}/g, params.clientName)
-        .replace(/\{\{salon_name\}\}/g, params.salonName)
-        .replace(/\{\{items\}\}/g, itemsBlock)
-        .replace(/\{\{feedback_link\}\}/g, feedbackLink);
-
-    // Drop the feedback ask/link lines entirely when there's no appointment
-    // to attach them to, rather than leaving a blank line + dead prompt.
-    if (!params.appointmentId) {
-        body = body
-            .replace(/We'd love to hear your feedback\.\n?/g, "")
-            .replace(/Share your feedback here:\n?\n?/g, "");
-    }
-
-    return body;
+function buildItemsBlock(items: SaleItem[], paidAmount: number, dueAmount: number): string {
+    const lines = items.map((i) => `${i.name} — ₹${Number(i.total_price).toFixed(0)}`);
+    lines.push(`Total Paid: ₹${paidAmount.toFixed(0)}`);
+    if (dueAmount > 0) lines.push(`Due: ₹${dueAmount.toFixed(0)}`);
+    return lines.join("\n");
 }
 
 type ReceiptContextParams = {
@@ -133,26 +95,49 @@ async function gatherReceiptContext(params: ReceiptContextParams) {
     };
 }
 
-// Fire-and-forget by design (matches sendReceiptDocument itself): never
-// throws, never blocks the caller's sale. Sends the PDF as a WhatsApp
-// document via the Meta Business Cloud API — requires the salon to have
-// WhatsApp connected and only delivers within Meta's 24h messaging window.
+// Fire-and-forget by design: never throws, never blocks the caller's sale.
+// bill_receipt is a real Meta document-header template — sent whenever the
+// salon has an APPROVED copy (guaranteed delivery, no 24h-window limit).
+// Otherwise falls back to the original plain PDF-only freeform send (works
+// only within Meta's 24h customer-session window), same as before bill_receipt
+// existed as a trigger — so a salon still mid-approval isn't left with nothing.
 export async function sendPurchaseReceipt(params: ReceiptContextParams): Promise<{ sent: boolean; reason?: string }> {
     try {
         const ctx = await gatherReceiptContext(params);
-        const caption = await buildBillReceiptCaption({
-            salonId:       params.salonId,
-            salonName:     ctx.salon.business_name,
-            clientName:    ctx.client.name,
-            appointmentId: params.appointment?.id ?? null,
-            items:         params.items,
-            paidAmount:    params.paidAmount,
-            dueAmount:     params.dueAmount ?? 0,
-        }).catch((err: any) => {
-            logger.warn(`[WA-TRACE] bill_receipt caption build FAILED — sale=${params.sale?.id} — ${err?.message ?? err}`);
-            return undefined;
-        });
-        return await sendReceiptDocument({ ...ctx, caption });
+        const billTemplate = await whatsappAutomationRepository.findTemplate("bill_receipt", params.salonId);
+
+        if (billTemplate) {
+            const pdfUrl = await generateAndSaveReceipt(ctx);
+            if (!pdfUrl) {
+                logger.warn(`[WA-TRACE] bill_receipt SKIP — PUBLIC_BASE_URL not configured (PDF can't be hosted for Meta to fetch)`);
+                return { sent: false, reason: "WhatsApp receipt delivery isn't configured for this salon yet" };
+            }
+
+            const appointmentId = params.appointment?.id ?? null;
+            const feedbackLine = appointmentId
+                ? `We'd love to hear your feedback: ${buildFeedbackLink(appointmentId)}`
+                : "We'd love to hear your feedback — just reply to this message!";
+            const invoiceLabel = ctx.sale.invoice_number ?? ctx.sale.id.slice(0, 8).toUpperCase();
+
+            return await sendBillReceiptTemplateMessage({
+                salonId:      params.salonId,
+                phone:        params.phone,
+                countryCode:  params.countryCode,
+                templateName: billTemplate.template_name,
+                language:     billTemplate.language,
+                pdfUrl,
+                pdfFilename:  `Receipt-${invoiceLabel}.pdf`,
+                variables: {
+                    "1": ctx.client.name,
+                    "2": ctx.salon.business_name,
+                    "3": buildItemsBlock(params.items, params.paidAmount, params.dueAmount ?? 0),
+                    "4": feedbackLine,
+                },
+            });
+        }
+
+        logger.info(`[WA-TRACE] bill_receipt not yet APPROVED for salon=${params.salonId} — falling back to plain PDF`);
+        return await sendReceiptDocument(ctx);
     } catch (err: any) {
         // Best-effort — sendReceiptDocument already swallows its own errors;
         // this catches failures in the gathering step above (e.g. a bad salonId).
