@@ -22,17 +22,24 @@ export type Product = {
     qty_alert: number | null;
     short_description: string | null;
     description: string | null;
+    remark: string | null;
+    lot_number: string | null;
     supply_price: number;
     retail_sales_enabled: boolean;
     retail_price: number | null;
     markup_percentage: number | null;
     tax_type: TaxType;
     custom_tax_rate: number | null;
+    tax_group: string | null;
     hsn_sac: string | null;
     team_commission_enabled: boolean;
     team_commission_rate: number | null;
     // 'YYYY-MM-DD' text, or null when the product has no tracked expiry.
     expiry_date: string | null;
+    // Whether this product is visible on public-facing surfaces (e.g. a
+    // client-facing booking/catalog page) — distinct from is_active, which
+    // controls whether the product is usable/sellable internally at all.
+    is_public: boolean;
     // Soft-delete/deactivate flag — a deactivated product drops out of
     // Consumable Inventory's default list and stops being sellable/usable
     // (Products page, service consumable pickers), but stays in the DB so its
@@ -73,17 +80,21 @@ export type CreateProductBody = {
     qty_alert?: number;
     short_description?: string;
     description?: string;
+    remark?: string;
+    lot_number?: string;
     supply_price?: number;
     retail_sales_enabled?: boolean;
     retail_price?: number;
     markup_percentage?: number;
     tax_type?: string;
     custom_tax_rate?: number;
+    tax_group?: string;
     hsn_sac?: string;
     team_commission_enabled?: boolean;
     team_commission_rate?: number;
     expiry_date?: string | null;
     is_active?: boolean;
+    is_public?: boolean;
 };
 
 export type UpdateProductBody = Partial<CreateProductBody>;
