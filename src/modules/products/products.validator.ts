@@ -45,7 +45,7 @@ const coerceProductFields = (b: Record<string, any>) => {
             if (!Number.isNaN(parsed)) b[f] = parsed;
         }
     }
-    const boolFields = ["retail_sales_enabled", "team_commission_enabled", "is_active"];
+    const boolFields = ["retail_sales_enabled", "team_commission_enabled", "is_active", "is_public"];
     for (const f of boolFields) {
         if (b[f] === "true" || b[f] === "1") b[f] = true;
         if (b[f] === "false" || b[f] === "0") b[f] = false;
@@ -149,6 +149,18 @@ const validateProductFields = (b: Record<string, unknown>, requireName = false) 
     if (typeof b.description === "string" && b.description.length > 1000) {
         throw new AppError(400, "description must be at most 1000 characters", "VALIDATION_ERROR");
     }
+    if (!isOptionalString(b.remark)) {
+        throw new AppError(400, "remark must be a string", "VALIDATION_ERROR");
+    }
+    if (typeof b.remark === "string" && b.remark.length > 1000) {
+        throw new AppError(400, "remark must be at most 1000 characters", "VALIDATION_ERROR");
+    }
+    if (!isOptionalString(b.lot_number)) {
+        throw new AppError(400, "lot_number must be a string", "VALIDATION_ERROR");
+    }
+    if (typeof b.lot_number === "string" && b.lot_number.length > 50) {
+        throw new AppError(400, "lot_number must be at most 50 characters", "VALIDATION_ERROR");
+    }
     if (!isOptionalNonNeg(b.supply_price)) {
         throw new AppError(400, "supply_price must be a non-negative number", "VALIDATION_ERROR");
     }
@@ -167,6 +179,12 @@ const validateProductFields = (b: Record<string, unknown>, requireName = false) 
     if (!isOptionalNumber(b.custom_tax_rate)) {
         throw new AppError(400, "custom_tax_rate must be a number", "VALIDATION_ERROR");
     }
+    if (!isOptionalString(b.tax_group)) {
+        throw new AppError(400, "tax_group must be a string", "VALIDATION_ERROR");
+    }
+    if (typeof b.tax_group === "string" && b.tax_group.length > 50) {
+        throw new AppError(400, "tax_group must be at most 50 characters", "VALIDATION_ERROR");
+    }
     if (!isOptionalString(b.hsn_sac)) {
         throw new AppError(400, "hsn_sac must be a string", "VALIDATION_ERROR");
     }
@@ -181,6 +199,9 @@ const validateProductFields = (b: Record<string, unknown>, requireName = false) 
     }
     if (!isOptionalBoolean(b.is_active)) {
         throw new AppError(400, "is_active must be a boolean", "VALIDATION_ERROR");
+    }
+    if (!isOptionalBoolean(b.is_public)) {
+        throw new AppError(400, "is_public must be a boolean", "VALIDATION_ERROR");
     }
     if (!isOptionalString(b.expiry_date)) {
         throw new AppError(400, "expiry_date must be a string", "VALIDATION_ERROR");
