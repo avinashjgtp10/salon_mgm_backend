@@ -1234,10 +1234,41 @@ export const appointmentsService = {
             // ── WhatsApp: PDF purchase receipt (fallback) ──────────────────────
             // payments.service.ts already fires this at payment-creation time when it
             // auto-creates the sale — this is a safety net for when that didn't happen
-            // (e.g. no client phone on file yet at payment time).
+            // (e.g. no client phone on file yet at payment time). Guarded against
+            // payments.service.ts's own send actually having gone through for
+            // this exact sale (the standard pay-then-checkout two-step call
+            // order) — without this both fired unconditionally and the client
+            // got the same PDF twice, only one copy carrying the bill_receipt
+            // caption (whichever call happened to build it).
             if (existing.client_id && (existing as any).client_phone) {
+                // ── WhatsApp Automation: Payment Received ──────────────────────
+                // Only fired in the fresh-sale branch below before now — a
+                // checkout that finds a pre-existing sale (the standard
+                // pay-then-checkout flow, where payments.service.ts creates
+                // the sale first) never got this text confirmation at all.
+                whatsappAutomationService.trigger({
+                    salonId:       existing.salon_id,
+                    eventType:     'payment_received',
+                    clientId:      existing.client_id,
+                    phone:         (existing as any).client_phone,
+                    countryCode:   (existing as any).client_phone_code ?? null,
+                    variables: {
+                        '1': existing.client_name             ?? 'Valued Customer',
+                        '2': String(preExistingSale.total_amount ?? '0'),
+                        '3': (existing as any).salon_name ?? 'our salon',
+                        '4': formatDate(existing.scheduled_at),
+                        '5': formatTime(existing.scheduled_at),
+                    },
+                    referenceId:   preExistingSale.id,
+                    referenceType: 'invoice',
+                    dedupeByReference: true,
+                }).catch(() => {});
+
                 (async () => {
                     try {
+                        const won = await whatsappAutomationRepository.guardInsertIfNotExists(`receipt-pdf-auto:${preExistingSale.id}`);
+                        if (!won) return;
+
                         await sendPurchaseReceipt({
                             salonId:     existing.salon_id,
                             phone:       (existing as any).client_phone,
@@ -1465,10 +1496,9 @@ export const appointmentsService = {
                 variables: {
                     '1': existing.client_name         ?? 'Valued Customer',
                     '2': String(sale.total_amount     ?? '0'),
-                    '3': existing.services?.[0]?.name ?? existing.title ?? 'your service',
+                    '3': (existing as any).salon_name ?? 'our salon',
                     '4': formatDate(existing.scheduled_at),
                     '5': formatTime(existing.scheduled_at),
-                    '6': (existing as any).salon_name ?? 'our salon',
                 },
                 referenceId:   sale.id,
                 referenceType: 'invoice',

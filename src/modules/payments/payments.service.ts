@@ -19,6 +19,7 @@ import { appointmentConsumablesService } from '../inventory/inventory.service';
 import logger from '../../config/logger';
 import { sendReceiptDocument } from '../sales/receipt-whatsapp.service';
 import { whatsappAutomationService } from '../whatsapp-automation/whatsapp-automation.service';
+import { whatsappAutomationRepository } from '../whatsapp-automation/whatsapp-automation.repository';
 import { salonsRepository } from '../salons/salons.repository';
 import { branchesRepository } from '../branches/branches.repository';
 import { staffService } from '../staff/staff.service';
@@ -1253,7 +1254,17 @@ export const paymentsService = {
             // PDF receipt as a WhatsApp document attachment — best-effort, only
             // deliverable within 24h of the customer's last message. Failure here
             // is expected outside that window and never blocks the triggers above.
+            //
+            // Guarded against appointments.service.ts checkout()'s own
+            // "safety net" send for the same sale (its preExistingSale branch
+            // fires right after this same payment flow, for the standard
+            // pay-then-checkout two-step) — whichever of the two actually
+            // runs first wins the guard and sends; the other silently skips
+            // instead of both firing and the client getting two PDFs.
             (async () => {
+              const won = await whatsappAutomationRepository.guardInsertIfNotExists(`receipt-pdf-auto:${enrichedSale.id}`);
+              if (!won) return;
+
               const [salonRecord, branches, staffList, clientRecord] = await Promise.all([
                 salonsRepository.findById(data.salon_id),
                 branchesRepository.listBySalonId(data.salon_id),

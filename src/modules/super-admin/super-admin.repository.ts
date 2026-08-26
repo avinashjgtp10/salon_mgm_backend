@@ -1,6 +1,6 @@
 import pool from "../../config/database";
 import bcrypt from "bcrypt";
-import { purgeSalon } from "../salons/salons.repository";
+import { purgeSalon, clearSalonData as clearSalonDataRows } from "../salons/salons.repository";
 
 export const superAdminRepository = {
 
@@ -713,6 +713,33 @@ export const superAdminRepository = {
       client.release();
     }
   },
+
+  async clearSalonData(id: string) {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      // FOR UPDATE guards against a concurrent request racing this same
+      // salon (e.g. double-click on "Clear All Data").
+      const { rows: salons } = await client.query(
+        `SELECT id FROM salons WHERE id = $1 FOR UPDATE`,
+        [id]
+      );
+      if (!salons[0]) {
+        await client.query("ROLLBACK");
+        return false;
+      }
+      const cleared = await clearSalonDataRows(client, id);
+      await client.query("COMMIT");
+      return cleared;
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  },
+
+  // ── PAYMENTS ──────────────────────────────────────────────────────────────────
 
   async getAllPayments(statusFilter?: string) {
     const { rows } = await pool.query(`

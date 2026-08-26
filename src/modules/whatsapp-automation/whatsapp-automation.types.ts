@@ -7,10 +7,15 @@ export type AutomationEventType =
   // Salon-editable trigger events (see PURCHASE_EVENTS below) — organized into
   // Quick Sale / Calendar / Other by the frontend Trigger Templates UI.
   | 'client_welcome'
-  | 'service_purchased'
-  | 'product_purchased'
+  // service_purchased / product_purchased retired — fully redundant with
+  // bill_receipt below, which itemizes every item type in a Quick Sale
+  // regardless of how many were purchased. See sales.service.ts checkout().
   | 'package_purchased'
   | 'membership_purchased'
+  // Meta-approved document-header template — the bill PDF is the template's
+  // HEADER component, the thank-you/feedback text is its BODY. Real Meta
+  // template like everything else below, so it delivers regardless of the
+  // 24h customer-session window (no separate backup event needed).
   | 'bill_receipt'
   | 'appointment_confirmation'
   | 'appointment_rescheduled'
@@ -40,8 +45,6 @@ export type AutomationEventType =
 // still use a single global admin-managed row.
 export const PURCHASE_EVENTS: AutomationEventType[] = [
   'client_welcome',
-  'service_purchased',
-  'product_purchased',
   'package_purchased',
   'membership_purchased',
   'bill_receipt',
@@ -61,11 +64,10 @@ export const PURCHASE_EVENTS: AutomationEventType[] = [
   'referral_reward',
 ]
 
-// The one PURCHASE_EVENTS member that never goes through Meta template
-// submission/approval — it's sent as a plain caption on the bill's PDF
-// document message, not a standalone template message, so its wording is
-// salon-editable but has no {{n}} numbering rule and no Submit/Sync workflow.
-export const CAPTION_ONLY_EVENTS: AutomationEventType[] = ['bill_receipt']
+// PURCHASE_EVENTS members that skip Meta template submission entirely (sent
+// as a freeform caption instead of a template) — none currently. Kept as an
+// extensibility point; a future event could opt back into this.
+export const CAPTION_ONLY_EVENTS: AutomationEventType[] = []
 
 // Transactional events — controlled by client.whatsapp_notifications
 export const TRANSACTIONAL_EVENTS: AutomationEventType[] = [
