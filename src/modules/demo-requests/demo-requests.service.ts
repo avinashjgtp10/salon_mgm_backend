@@ -3,7 +3,7 @@ import { demoRequestsRepository } from "./demo-requests.repository";
 import { CreateDemoRequestBody, DemoRequestStatus } from "./demo-requests.types";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const ALLOWED_STATUSES: DemoRequestStatus[] = ["new", "contacted", "converted", "closed"];
+const ALLOWED_STATUSES: DemoRequestStatus[] = ["new", "contacted", "converted", "closed", "lost", "unqualified"];
 
 export const demoRequestsService = {
     async create(body: CreateDemoRequestBody) {
