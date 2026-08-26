@@ -156,6 +156,10 @@ export type Appointment = {
     duration_minutes: number;
     ends_at: string | null;
     colour: string | null;
+    // Quick Sale (book + pay in one step) vs a real advance Calendar booking —
+    // both create an identical appointments row otherwise; this is the only
+    // signal that distinguishes them for WhatsApp automation gating.
+    source: 'calendar' | 'quick_sale';
     sale_id: string | null;
     created_by: string | null;
     created_at: string;
@@ -247,6 +251,7 @@ export type CreateAppointmentBody = {
     staff_alert?: string;
     status?: AppointmentStatus;
     colour?: string;
+    source?: 'calendar' | 'quick_sale';
     // JSONB items
     services?: IncomingAppointmentServiceItem[];
     package_items?: AppointmentPackageItem[];

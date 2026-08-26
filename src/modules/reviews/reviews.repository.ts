@@ -67,7 +67,7 @@ export const reviewsRepository = {
       `INSERT INTO reviews
          (salon_id, client_id, phone, staff_id, booking_id, rating, review_text, source,
           overall_rating, improvement_tags, additional_comments)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'whatsapp', $6, $8, $7)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'whatsapp', $8, $9, $10)
        ON CONFLICT (booking_id) WHERE booking_id IS NOT NULL
        DO UPDATE SET rating = EXCLUDED.rating, review_text = EXCLUDED.review_text, staff_id = EXCLUDED.staff_id,
                       overall_rating = EXCLUDED.overall_rating, improvement_tags = EXCLUDED.improvement_tags,
@@ -75,7 +75,8 @@ export const reviewsRepository = {
        RETURNING *`,
       [
         params.salonId, params.clientId, params.phone, params.staffId, params.appointmentId,
-        params.overallRating, params.additionalComments, params.improvementTags,
+        params.overallRating, params.additionalComments,
+        params.overallRating, params.improvementTags, params.additionalComments,
       ]
     )
     return rows[0]
