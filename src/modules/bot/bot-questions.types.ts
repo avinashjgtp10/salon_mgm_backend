@@ -3,6 +3,7 @@ export type BotQuestionSource = "predefined" | "groq" | "error";
 export interface BotQuestion {
   id: string;
   salon_id: string | null;
+  salon_name?: string | null;
   user_id: string | null;
   question: string;
   answer: string | null;
