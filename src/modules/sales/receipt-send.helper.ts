@@ -18,11 +18,15 @@ function buildFeedbackLink(appointmentId: string): string {
     return `${process.env.FRONTEND_URL || process.env.APP_BASE_URL || "http://localhost:5173"}/feedback/${appointmentId}.${generateFeedbackToken(appointmentId)}`;
 }
 
+// Meta rejects a newline character inside a single template parameter's
+// value (error 132018, "issue with the parameters in your template") — this
+// has to render as one flat line, unlike a freeform caption which allows
+// multi-line text freely.
 function buildItemsBlock(items: SaleItem[], paidAmount: number, dueAmount: number): string {
     const lines = items.map((i) => `${i.name} — ₹${Number(i.total_price).toFixed(0)}`);
     lines.push(`Total Paid: ₹${paidAmount.toFixed(0)}`);
     if (dueAmount > 0) lines.push(`Due: ₹${dueAmount.toFixed(0)}`);
-    return lines.join("\n");
+    return lines.join(", ");
 }
 
 type ReceiptContextParams = {

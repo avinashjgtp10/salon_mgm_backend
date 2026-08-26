@@ -85,18 +85,18 @@ function buildSyntheticSale(membership: ClientMembership): { sale: Sale; items: 
 // membership etc.), so sending this synthetic membership-only PDF too would
 // duplicate it.
 //
-// The membership_purchased text trigger is independent of the receipt: it
-// fires whenever this membership was NOT sold within a Calendar/appointment
-// checkout (appointmentId unset) — that checkout's own single
-// payment_received message already covers it, so this itemized confirmation
-// stays Quick-Sale/standalone only.
-async function notifyMembershipPurchased(membership: ClientMembership, includeReceipt: boolean, appointmentId?: string): Promise<void> {
+// The membership_purchased text trigger fires only for the same case as the
+// PDF above — a genuinely standalone purchase (includeReceipt=true). Sold as
+// a line item inside a bigger checkout (autoCreateFromPayment, Quick Sale or
+// Calendar), that checkout's own bill_receipt/payment_received message
+// already covers it, so this itemized confirmation would just duplicate it.
+async function notifyMembershipPurchased(membership: ClientMembership, includeReceipt: boolean): Promise<void> {
   if (!membership.mobile) {
     if (includeReceipt) logger.info(`[WA-AUTO] Skipping purchase receipt for membership ${membership.id} — no mobile number`);
     return;
   }
 
-  if (!appointmentId) {
+  if (includeReceipt) {
     const salon = await salonsRepository.findById(membership.salonId);
     whatsappAutomationService.trigger({
       salonId:       membership.salonId,
@@ -530,11 +530,10 @@ export const clientMembershipsService = {
       const existing = await clientMembershipsRepository.findActiveByClientAndMembership(clientId, membershipId, salonId);
       if (existing) {
         logger.info(`[client-memberships/auto-create] already active (id=${existing.id}) — renewing instead of creating a duplicate`);
-        const renewed = await clientMembershipsRepository.renew(existing.id, salonId, {
+        await clientMembershipsRepository.renew(existing.id, salonId, {
           membershipId, pricePaid, totalSessions, staffId, saleId,
         });
         logger.info(`[client-memberships/auto-create] RENEWED — client=${clientId}, membership=${membershipName}`);
-        notifyMembershipPurchased(renewed, false, appointmentId).catch(() => {});
         return;
       }
       const created = await clientMembershipsRepository.create(salonId, {
@@ -552,9 +551,10 @@ export const clientMembershipsService = {
         await clientMembershipsRepository.setSaleId(created.id, salonId, saleId);
       }
       logger.info(`[client-memberships/auto-create] SUCCESS — client=${clientId}, membership=${membershipName}`);
-      // Text only, no PDF here — the calling checkout flow (sales/payments)
-      // already sent one PDF covering this whole sale, membership line included.
-      notifyMembershipPurchased(created, false, appointmentId).catch(() => {});
+      // No confirmation message here — the calling checkout flow (sales/
+      // payments) already sent one covering this whole sale, membership
+      // line included (bill_receipt for Quick Sale, payment_received for
+      // Calendar). See notifyMembershipPurchased's own comment.
     } catch (err: any) {
       logger.warn('[client-memberships/auto-create] FAILED:', err?.message ?? err);
     }

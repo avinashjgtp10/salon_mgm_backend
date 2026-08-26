@@ -1241,6 +1241,29 @@ export const appointmentsService = {
             // got the same PDF twice, only one copy carrying the bill_receipt
             // caption (whichever call happened to build it).
             if (existing.client_id && (existing as any).client_phone) {
+                // ── WhatsApp Automation: Payment Received ──────────────────────
+                // Only fired in the fresh-sale branch below before now — a
+                // checkout that finds a pre-existing sale (the standard
+                // pay-then-checkout flow, where payments.service.ts creates
+                // the sale first) never got this text confirmation at all.
+                whatsappAutomationService.trigger({
+                    salonId:       existing.salon_id,
+                    eventType:     'payment_received',
+                    clientId:      existing.client_id,
+                    phone:         (existing as any).client_phone,
+                    countryCode:   (existing as any).client_phone_code ?? null,
+                    variables: {
+                        '1': existing.client_name             ?? 'Valued Customer',
+                        '2': String(preExistingSale.total_amount ?? '0'),
+                        '3': (existing as any).salon_name ?? 'our salon',
+                        '4': formatDate(existing.scheduled_at),
+                        '5': formatTime(existing.scheduled_at),
+                    },
+                    referenceId:   preExistingSale.id,
+                    referenceType: 'invoice',
+                    dedupeByReference: true,
+                }).catch(() => {});
+
                 (async () => {
                     try {
                         const won = await whatsappAutomationRepository.guardInsertIfNotExists(`receipt-pdf-auto:${preExistingSale.id}`);
@@ -1473,10 +1496,9 @@ export const appointmentsService = {
                 variables: {
                     '1': existing.client_name         ?? 'Valued Customer',
                     '2': String(sale.total_amount     ?? '0'),
-                    '3': existing.services?.[0]?.name ?? existing.title ?? 'your service',
+                    '3': (existing as any).salon_name ?? 'our salon',
                     '4': formatDate(existing.scheduled_at),
                     '5': formatTime(existing.scheduled_at),
-                    '6': (existing as any).salon_name ?? 'our salon',
                 },
                 referenceId:   sale.id,
                 referenceType: 'invoice',
