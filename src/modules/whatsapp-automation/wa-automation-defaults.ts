@@ -1,20 +1,20 @@
+import { AppError } from "../../middleware/error.middleware";
 import { AutomationEventType } from "./whatsapp-automation.types";
 
 // Predefined starting wording for the salon-owner-editable events (see
 // PURCHASE_EVENTS in whatsapp-automation.types.ts) a salon can edit and submit
-// to Meta for approval under their own WABA. {{1}}, {{2}}, {{3}}... are Meta
-// template variable placeholders, numbered sequentially in order of first
-// appearance and reused where a value repeats — filled in at send time from
-// the same positions each trigger call site uses (see each trigger() call for
-// the exact variable mapping).
+// to Meta for approval under their own WABA.
 //
-// `bill_receipt` is the one exception: it's sent as a caption on the bill PDF
-// document message, never submitted to Meta, so it uses named placeholders
-// instead — {{customer_name}}, {{salon_name}}, {{items}}, {{feedback_link}} —
-// substituted server-side in receipt-send.helper.ts. {{items}} is filled with
-// a server-built itemized breakdown of the sale (service/product lines, plus
-// "Package Used" / "Membership Used" lines when applicable) — there's no
-// {{n}} numbering rule to satisfy since Meta never sees this text.
+// All placeholders — for every one of these events, including the ones that
+// DO go to Meta — use the same friendly named format bill_receipt already
+// used ({{customer_name}}, {{salon_name}}, ...), never Meta's raw {{1}}/{{2}}
+// numbering. Meta itself still requires strict sequential {{1}}, {{2}}, ...
+// numbering on the template it actually approves — EVENT_VARIABLE_NAMES below
+// maps each event's named placeholders to their fixed Meta position (matching
+// exactly what each trigger() call site already fills positionally), and
+// toMetaNumberedBody() converts a salon's named-placeholder wording into that
+// numbered form only at submission time. The salon never sees or edits a raw
+// {{n}}; the DB's body_text/pending_body_text stay in named form always.
 const FEEDBACK_FORM_BASE_URL =
     process.env.FRONTEND_URL || process.env.APP_BASE_URL || "http://localhost:5173";
 
@@ -37,121 +37,129 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         label: "New Client Welcome",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{1}}! 👋\nWelcome to {{2}}! ✨\nWe're happy to have you with us.\nThank you for choosing {{2}}!",
+        bodyText: "Hi {{customer_name}},\nWelcome to {{salon_name}}!\nWe're happy to have you with us.\nThank you for choosing {{salon_name}} — we appreciate you!",
     },
     service_purchased: {
         label: "Service Purchased",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{1}}! 👋\nYour payment of ₹{{2}} for {{3}} has been successfully received. ✅\nThank you for choosing {{4}}. 💜",
+        bodyText: "Hi {{customer_name}},\nYour payment of ₹{{amount}} for {{service_name}} has been successfully received.\nThank you for choosing {{salon_name}} — we appreciate you!",
     },
     product_purchased: {
         label: "Product Purchased",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{1}}! 👋\nYour payment of ₹{{2}} for {{3}} has been successfully received. ✅\nThank you for shopping with {{4}}! 💜",
+        bodyText: "Hi {{customer_name}},\nYour payment of ₹{{amount}} for {{product_name}} has been successfully received.\nThank you for shopping with {{salon_name}} — we appreciate you!",
     },
     package_purchased: {
         label: "Package Purchased",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{1}}! 🎉\nYour {{2}} package has been successfully activated. ✅\nPackage Value: ₹{{3}}\nSessions: {{4}}\nValid Until: {{5}}\nThank you for choosing {{6}}! 💜",
+        bodyText: "Hi {{customer_name}},\nYour {{package_name}} package has been successfully activated.\nPackage Value: ₹{{package_value}}\nSessions: {{total_sessions}}\nValid Until: {{expiry_date}}\nThank you for choosing {{salon_name}} — we appreciate you!",
     },
     membership_purchased: {
         label: "Membership Purchased",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{1}}! 🎉\nWelcome to {{2}} at {{3}}! 💜\nMembership Value: ₹{{4}}\nAvailable Balance: ₹{{5}}\nValid Until: {{6}}\nThank you for choosing {{3}}! 💜",
+        bodyText: "Hi {{customer_name}},\nWelcome to {{membership_name}} at {{salon_name}}!\nMembership Value: ₹{{membership_price}}\nAvailable Balance: ₹{{membership_balance}}\nValid Until: {{expiry_date}}\nThank you for choosing {{salon_name}} — we appreciate you!",
     },
+    // Document-header Meta template — the bill PDF is submitted/sent as the
+    // template's HEADER component (see wa-bill-receipt-template.helper.ts),
+    // this bodyText is its BODY. {{items}} carries the server-built itemized
+    // breakdown (one variable, multi-line value — Meta only restricts the
+    // NUMBER/position of variables, not whether a given value spans multiple
+    // lines). {{feedback_line}} carries either the real feedback link
+    // (appointment-linked checkouts) or a fallback line (a true walk-in with
+    // no appointment to attach one to).
     bill_receipt: {
         label: "Bill Receipt (Thank You + Feedback)",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{customer_name}}! 👋\nThank you for visiting {{salon_name}}. 💜\nWe hope you had a great experience!\n🧾 Your bill is attached with this message.\n{{items}}\nWe'd love to hear your feedback.\nShare your feedback here:\n{{feedback_link}}\nThank you for choosing {{salon_name}}! ✨",
+        bodyText: "Hi {{customer_name}},\nThank you for visiting {{salon_name}}.\nWe hope you had a great experience!\nYour bill is attached with this message.\n{{items}}\n{{feedback_line}}\nThank you for choosing {{salon_name}} — we appreciate you!",
     },
     appointment_confirmation: {
         label: "Appointment Confirmation",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{1}}! 👋\nYour appointment at {{2}} is confirmed. ✅\n📅 Date: {{3}}\n⏰ Time: {{4}}\n💇 Service: {{5}}\n👤 Staff: {{6}}\nWe look forward to seeing you! 💜",
+        bodyText: "Hi {{customer_name}},\nYour appointment at {{salon_name}} is confirmed.\nDate: {{appointment_date}}\nTime: {{appointment_time}}\nService: {{service_name}}\nStaff: {{staff_name}}\nWe look forward to seeing you!",
     },
     appointment_rescheduled: {
         label: "Appointment Rescheduled",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{1}}! 👋\nYour appointment at {{2}} has been rescheduled. 🔄\nPrevious: {{3}} at {{4}}\nNew: {{5}} at {{6}}\n💇 Service: {{7}}\n👤 Staff: {{8}}\nWe look forward to seeing you! 💜",
+        bodyText: "Hi {{customer_name}},\nYour appointment at {{salon_name}} has been rescheduled.\nPrevious: {{old_date}} at {{old_time}}\nNew: {{new_date}} at {{new_time}}\nService: {{service_name}}\nStaff: {{staff_name}}\nWe look forward to seeing you!",
     },
     appointment_cancelled: {
         label: "Appointment Cancelled",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{1}},\nYour appointment at {{2}} has been cancelled. ❌\n📅 Date: {{3}}\n⏰ Time: {{4}}\n💇 Service: {{5}}\nIf you'd like to book another appointment, we're happy to help. 💜",
+        bodyText: "Hi {{customer_name}},\nYour appointment at {{salon_name}} has been cancelled.\nDate: {{appointment_date}}\nTime: {{appointment_time}}\nService: {{service_name}}\nIf you'd like to book another appointment, we're happy to help.",
     },
     payment_received: {
         label: "Payment Received (Appointment)",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{1}}! 👋\nYour payment of ₹{{2}} for your {{3}} appointment has been successfully received. ✅\n📅 Appointment: {{4}}\n⏰ Time: {{5}}\nThank you for choosing {{6}}! 💜",
+        bodyText: "Hi {{customer_name}},\nYour payment of ₹{{amount}} for your {{service_name}} appointment has been successfully received.\nAppointment: {{appointment_date}}\nTime: {{appointment_time}}\nThank you for choosing {{salon_name}} — we appreciate you!",
     },
     package_expiring_7d: {
         label: "Package Expiring (7 Days)",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{1}}! 👋\nYour {{2}} is expiring in 7 days. ⏳\n📅 Expiry Date: {{3}}\n🎟️ Sessions Remaining: {{4}}\nDon't miss out on your remaining sessions! 💜\nBook your next visit today.",
+        bodyText: "Hi {{customer_name}},\nYour {{package_name}} is expiring in 7 days.\nExpiry Date: {{expiry_date}}\nSessions Remaining: {{remaining_sessions}}\nDon't miss out on your remaining sessions!\nBook your next visit today.",
     },
     package_expiring_24h: {
         label: "Package Expiring (Tomorrow)",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{1}}! ⚠️\nYour {{2}} expires tomorrow.\n🎟️ Sessions Remaining: {{3}}\n📅 Expiry Date: {{4}}\nYou still have time to use your remaining sessions. 💜\nBook your appointment now.",
+        bodyText: "Hi {{customer_name}},\nYour {{package_name}} expires tomorrow.\nSessions Remaining: {{remaining_sessions}}\nExpiry Date: {{expiry_date}}\nYou still have time to use your remaining sessions.\nBook your appointment now.",
     },
     membership_expiring_7d: {
         label: "Membership Expiring (7 Days)",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{1}}! 👋\nYour {{2}} membership expires in 7 days. ⏳\n📅 Expiry Date: {{3}}\n💰 Balance Remaining: ₹{{4}}\nMake the most of your remaining membership benefits before it expires. 💜",
+        bodyText: "Hi {{customer_name}},\nYour {{membership_name}} membership expires in 7 days.\nExpiry Date: {{expiry_date}}\nBalance Remaining: ₹{{remaining_balance}}\nMake the most of your remaining membership benefits before it expires.",
     },
     membership_expiring_24h: {
         label: "Membership Expiring (Tomorrow)",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{1}}! ⚠️\nYour {{2}} membership expires tomorrow.\n💰 Remaining Balance: ₹{{3}}\n📅 Expiry Date: {{4}}\nDon't let your remaining membership balance go unused. 💜",
+        bodyText: "Hi {{customer_name}},\nYour {{membership_name}} membership expires tomorrow.\nRemaining Balance: ₹{{remaining_balance}}\nExpiry Date: {{expiry_date}}\nDon't let your remaining membership balance go unused.",
     },
     package_session_used: {
         label: "Package Session Used",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{1}}! 👋\nYour {{2}} service has been successfully redeemed from your {{3}}. ✅\n🎟️ Session Used: 1\n🎟️ Sessions Remaining: {{4}}\nThank you for visiting {{5}}! 💜",
+        bodyText: "Hi {{customer_name}},\nYour {{service_name}} service has been successfully redeemed from your {{package_name}}.\nSession Used: 1\nSessions Remaining: {{remaining_sessions}}\nThank you for visiting {{salon_name}} — we appreciate you!",
     },
     membership_session_used: {
         label: "Membership Session Used",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{1}}! 👋\nYour {{2}} service has been successfully redeemed from your membership. ✅\n💰 Amount Used: ₹{{3}}\n💰 Remaining Balance: ₹{{4}}\nThank you for visiting {{5}}! 💜",
+        bodyText: "Hi {{customer_name}},\nYour {{service_name}} service has been successfully redeemed from your membership.\nAmount Used: ₹{{amount_used}}\nRemaining Balance: ₹{{remaining_balance}}\nThank you for visiting {{salon_name}} — we appreciate you!",
     },
     package_appointment_reminder_24h: {
         label: "Package Appointment Reminder (Tomorrow)",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{1}}! 👋\nJust a reminder that you have an appointment tomorrow at {{2}}. ⏰\n📅 Date: {{3}}\n⏰ Time: {{4}}\n💇 Service: {{5}}\n🎟️ This appointment will use 1 session from your {{6}}.\nSee you tomorrow! 💜",
+        bodyText: "Hi {{customer_name}},\nJust a reminder that you have an appointment tomorrow at {{salon_name}}.\nDate: {{appointment_date}}\nTime: {{appointment_time}}\nService: {{service_name}}\nThis appointment will use 1 session from your {{package_name}}.\nSee you tomorrow!",
     },
     service_reminder_24h: {
         label: "Appointment Reminder (Tomorrow)",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{1}}! 👋\nThis is a reminder for your appointment tomorrow at {{2}}. ⏰\n📅 Date: {{3}}\n⏰ Time: {{4}}\n💇 Service: {{5}}\n👤 Staff: {{6}}\nWe look forward to seeing you tomorrow! 💜",
+        bodyText: "Hi {{customer_name}},\nThis is a reminder for your appointment tomorrow at {{salon_name}}.\nDate: {{appointment_date}}\nTime: {{appointment_time}}\nService: {{service_name}}\nStaff: {{staff_name}}\nWe look forward to seeing you tomorrow!",
     },
     reward_points_earned: {
         label: "Reward Points Earned",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{1}}! 🎉\nYou've earned {{2}} reward points from your recent visit to {{3}}. 💜\n⭐ Points Earned: {{2}}\n⭐ Total Points: {{4}}\nKeep visiting and earning rewards! ✨",
+        bodyText: "Hi {{customer_name}},\nYou've earned {{points_earned}} reward points from your recent visit to {{salon_name}}.\nPoints Earned: {{points_earned}}\nTotal Points: {{total_points}}\nKeep visiting and earning rewards!",
     },
     referral_reward: {
         label: "Referral Reward Credited",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{1}}! 🎉\nGreat news! Your referral {{2}} has completed their qualifying visit at {{3}}. 💜\n🎁 Referral Reward: {{4}}\n⭐ Your Total Reward Points: {{5}}\nThank you for spreading the word! 🙌",
+        bodyText: "Hi {{customer_name}},\nGreat news! Your referral {{referred_customer_name}} has completed their qualifying visit at {{salon_name}}.\nReferral Reward: {{reward}}\nYour Total Reward Points: {{total_points}}\nThank you for spreading the word!",
     },
 };
 
@@ -159,6 +167,76 @@ export type DefaultPurchaseEventType = keyof typeof DEFAULT_PURCHASE_TEMPLATES;
 
 export function isPurchaseEventType(eventType: AutomationEventType): eventType is DefaultPurchaseEventType {
     return eventType in DEFAULT_PURCHASE_TEMPLATES;
+}
+
+// ── Named-placeholder ↔ Meta {{n}} mapping ─────────────────────────────────
+// Ordered so index+1 == the Meta template position — MUST match exactly what
+// each event's trigger() call site fills positionally ('1', '2', '3', ...).
+export const EVENT_VARIABLE_NAMES: Record<DefaultPurchaseEventType, string[]> = {
+    client_welcome:       ["customer_name", "salon_name"],
+    service_purchased:    ["customer_name", "amount", "service_name", "salon_name"],
+    product_purchased:    ["customer_name", "amount", "product_name", "salon_name"],
+    package_purchased:    ["customer_name", "package_name", "package_value", "total_sessions", "expiry_date", "salon_name"],
+    membership_purchased: ["customer_name", "membership_name", "salon_name", "membership_price", "membership_balance", "expiry_date"],
+    bill_receipt:         ["customer_name", "salon_name", "items", "feedback_line"],
+    appointment_confirmation: ["customer_name", "salon_name", "appointment_date", "appointment_time", "service_name", "staff_name"],
+    appointment_rescheduled:  ["customer_name", "salon_name", "old_date", "old_time", "new_date", "new_time", "service_name", "staff_name"],
+    appointment_cancelled:    ["customer_name", "salon_name", "appointment_date", "appointment_time", "service_name"],
+    payment_received:         ["customer_name", "amount", "service_name", "appointment_date", "appointment_time", "salon_name"],
+    package_expiring_7d:     ["customer_name", "package_name", "expiry_date", "remaining_sessions"],
+    package_expiring_24h:    ["customer_name", "package_name", "remaining_sessions", "expiry_date"],
+    membership_expiring_7d:  ["customer_name", "membership_name", "expiry_date", "remaining_balance"],
+    membership_expiring_24h: ["customer_name", "membership_name", "remaining_balance", "expiry_date"],
+    package_session_used:    ["customer_name", "service_name", "package_name", "remaining_sessions", "salon_name"],
+    membership_session_used: ["customer_name", "service_name", "amount_used", "remaining_balance", "salon_name"],
+    package_appointment_reminder_24h: ["customer_name", "salon_name", "appointment_date", "appointment_time", "service_name", "package_name"],
+    service_reminder_24h:             ["customer_name", "salon_name", "appointment_date", "appointment_time", "service_name", "staff_name"],
+    reward_points_earned: ["customer_name", "points_earned", "salon_name", "total_points"],
+    referral_reward:      ["customer_name", "referred_customer_name", "salon_name", "reward", "total_points"],
+};
+
+// Converts a salon's named-placeholder wording into Meta's required
+// sequential {{1}}, {{2}}, ... form, right before submission — the DB copy
+// (body_text/pending_body_text) is never touched, only this transient
+// submission payload. Each name always maps to its fixed position (matching
+// the meaning trigger() already sends there), regardless of how many times
+// it's used or where it appears in the salon's edited text — so reordering
+// sentences is always safe, dropping a placeholder is not (see validation).
+export function toMetaNumberedBody(bodyText: string, eventType: DefaultPurchaseEventType): string {
+    const names = EVENT_VARIABLE_NAMES[eventType];
+    if (!names) throw new AppError(400, `"${eventType}" does not go through Meta submission`, "VALIDATION_ERROR");
+
+    let result = bodyText;
+    names.forEach((name, idx) => {
+        const re = new RegExp(`\\{\\{\\s*${name}\\s*\\}\\}`, "gi");
+        result = result.replace(re, `{{${idx + 1}}}`);
+    });
+    return result;
+}
+
+// Every required named placeholder for this event must appear at least once
+// (a salon can reword freely and reuse a name, but can't drop one — trigger()
+// always fills every position, so a missing placeholder would leave that data
+// point unrenderable and, worse, could shift Meta's {{n}} numbering into a
+// gap it rejects). Also rejects any {{...}} token that isn't a recognized
+// name for this event, catching typos before they reach Meta as an opaque
+// rejection.
+export function validateNamedPlaceholders(bodyText: string, eventType: DefaultPurchaseEventType): void {
+    const names = EVENT_VARIABLE_NAMES[eventType];
+    if (!names) return;
+
+    const found = [...bodyText.matchAll(/\{\{\s*([a-zA-Z_]+)\s*\}\}/g)].map((m) => m[1].toLowerCase());
+    const nameSet = new Set(names.map((n) => n.toLowerCase()));
+
+    const unknown = [...new Set(found.filter((n) => !nameSet.has(n)))];
+    if (unknown.length > 0) {
+        throw new AppError(400, `Unknown variable(s): ${unknown.map((n) => `{{${n}}}`).join(", ")}`, "VALIDATION_ERROR");
+    }
+
+    const missing = names.filter((n) => !found.includes(n.toLowerCase()));
+    if (missing.length > 0) {
+        throw new AppError(400, `Missing required variable(s): ${missing.map((n) => `{{${n}}}`).join(", ")}`, "VALIDATION_ERROR");
+    }
 }
 
 // bill_receipt's feedback link base — same mechanism the removed review_request
