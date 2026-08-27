@@ -874,7 +874,7 @@ export const paymentsService = {
     // ── eWallet: actually deduct the real balance now that the payment row exists ──
     if (data.client_id && ewalletUsedActual > 0) {
       try {
-        await ewalletRepository.applyLedgerEntry({
+        const remainingBalance = await ewalletRepository.applyLedgerEntry({
           clientId: data.client_id,
           salonId: data.salon_id,
           type: 'redeem',
@@ -883,6 +883,28 @@ export const paymentsService = {
           sourceId: payment.id,
           note: `Used for ₹${ewalletUsedActual.toFixed(2)} payment`,
         });
+
+        // ── WhatsApp Automation: eWallet Used ──────────────────────────────
+        const spender = await clientsRepository.findById(data.client_id, data.salon_id);
+        if (spender?.phone_number) {
+          const salon = await salonsRepository.findById(data.salon_id);
+          whatsappAutomationService.trigger({
+            salonId:       data.salon_id,
+            eventType:     'ewallet_used',
+            clientId:      data.client_id,
+            phone:         spender.phone_number,
+            countryCode:   spender.phone_country_code ?? null,
+            variables: {
+              '1': spender.full_name ?? 'Valued Customer',
+              '2': ewalletUsedActual.toFixed(2),
+              '3': salon?.business_name ?? 'our salon',
+              '4': remainingBalance.toFixed(2),
+            },
+            referenceId:   payment.id,
+            referenceType: 'payment',
+            dedupeByReference: true,
+          }).catch(() => {});
+        }
       } catch (err: any) {
         logger.warn('[payments] ewallet redeem ledger write failed:', err?.message ?? err);
       }
