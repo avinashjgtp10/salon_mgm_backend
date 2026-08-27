@@ -6686,18 +6686,13 @@ _PAYMENT_COLLECTION_AGG(
         --      membership discount), GST applied on that taxable base, plus
         --      extra charges. Falls back to the payment's net_amount only if
         --      the appointment has no items at all.
-        COALESCE(
-          sl.total_amount::numeric,
-          NULLIF(unb.price, 0),
-          latest.net_amount,
-          0
-        ) AS total_amount,
+        corrected.total_amount AS total_amount,
         -- Same as Sales Summary: paid comes from the payment rows whenever the
         -- bill is tied to an appointment (always true here).
         COALESCE(agg.paid_amount, 0)   AS paid_amount,
-        GREATEST(COALESCE(latest.due_amount, 0), 0) AS due_amount,
+        GREATEST(corrected.total_amount - COALESCE(agg.paid_amount, 0), 0) AS due_amount,
         COALESCE(NULLIF(TRIM(latest.payment_method), ''), '—') AS payment_method,
-        CASE WHEN latest.due_amount > 0 THEN 'partial' ELSE 'paid' END AS payment_status,
+        CASE WHEN corrected.total_amount - COALESCE(agg.paid_amount, 0) > 0.5 THEN 'partial' ELSE 'paid' END AS payment_status,
         COALESCE(
           NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), ''),
           '—'
@@ -6791,6 +6786,27 @@ _PAYMENT_COLLECTION_AGG(
           ) src
         ) it
       ) unb ON TRUE
+      -- The bill actually owed right now. sl.total_amount is a snapshot taken
+      -- the moment the bill was first fully settled — editing a paid/partial
+      -- appointment afterwards (add a service, bump a price) updates the
+      -- appointment's own line items but nothing ever writes that change back
+      -- onto the old sales row (salesRepository.update() is never called) or
+      -- onto a fresh payments row (no payment has happened yet). So a
+      -- reopened appointment (a.status = 'partial') must use the LIVE
+      -- reconstruction from its current items instead of trusting the stale
+      -- sales snapshot — otherwise the extra amount owed never surfaces here
+      -- even though the calendar (which always computes live) already shows
+      -- it. A currently-'paid' appointment has no such gap: its sales row IS
+      -- the live truth, so it's used unchanged.
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(
+          CASE WHEN a.status::text = 'partial' THEN NULLIF(unb.price, 0) END,
+          sl.total_amount::numeric,
+          NULLIF(unb.price, 0),
+          latest.net_amount,
+          0
+        ) AS total_amount
+      ) corrected ON TRUE
       WHERE ${where}
     ),
     filtered AS (
