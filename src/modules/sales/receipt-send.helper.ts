@@ -10,12 +10,17 @@ import { sendBillReceiptTemplateMessage } from "../whatsapp-automation/wa-bill-r
 import { generateFeedbackToken } from "../reviews/feedback-token.util";
 import logger from "../../config/logger";
 
+// Dedicated production domain for the public feedback form (points at the
+// same frontend deployment/route, just its own subdomain) — no longer tied
+// to FRONTEND_URL/APP_BASE_URL, which stay pointed at the dev ngrok tunnel.
+const FEEDBACK_BASE_URL = "https://feedback.salonox.com";
+
 // Only buildable when this bill is tied to a real appointment, since the
 // public feedback form is built entirely around an appointment's service
 // list (see reviews.service.ts). A true walk-in Quick Sale has nothing to
 // attach a feedback link to — gets a fallback line instead (see below).
 function buildFeedbackLink(appointmentId: string): string {
-    return `${process.env.FRONTEND_URL || process.env.APP_BASE_URL || "http://localhost:5173"}/feedback/${appointmentId}.${generateFeedbackToken(appointmentId)}`;
+    return `${FEEDBACK_BASE_URL}/feedback/${appointmentId}.${generateFeedbackToken(appointmentId)}`;
 }
 
 // Meta rejects a newline character inside a single template parameter's
