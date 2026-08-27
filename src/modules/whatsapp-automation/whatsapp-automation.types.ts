@@ -31,6 +31,7 @@ export type AutomationEventType =
   | 'service_reminder_24h'
   | 'reward_points_earned'
   | 'referral_reward'
+  | 'ewallet_used'
   // Legacy global (admin-managed, salon_id IS NULL) events, untouched by the
   // trigger-template rework.
   | 'pending_payment_reminder'
@@ -62,6 +63,7 @@ export const PURCHASE_EVENTS: AutomationEventType[] = [
   'service_reminder_24h',
   'reward_points_earned',
   'referral_reward',
+  'ewallet_used',
 ]
 
 // PURCHASE_EVENTS members that skip Meta template submission entirely (sent
