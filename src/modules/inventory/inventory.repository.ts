@@ -1,11 +1,65 @@
 import pool from "../../config/database";
 import {
-    Supplier, CreateSupplierBody, UpdateSupplierBody,
+    Supplier, CreateSupplierBody, UpdateSupplierBody, SupplierWithBalance,
     StockMovement, CreateStockMovementBody, ListStockMovementsFilters,
     StockReconciliationRow, ReconciliationItemBody, SaveConsumableUsageBody,
 } from "./inventory.types";
 
 // ─── Suppliers ────────────────────────────────────────────────────────────────
+
+// due_amount/status are DERIVED from purchases.total_amount minus
+// SUM(supplier_payments.amount) — see Migration/add_supplier_payments.sql's
+// header comment for why there's no stored balance column to keep in sync.
+// pending_order_count counts orders still carrying a due amount once the
+// supplier's total payments are applied oldest-first (FIFO) across their
+// orders — a running-total window over purchases ordered by date, same
+// allocation purchasesRepository.list() projects per-row for the Orders tab.
+const BALANCE_COLUMNS = `
+    COALESCE(agg.total_purchase_amount, 0) AS total_purchase_amount,
+    COALESCE(agg.pending_order_count, 0)   AS pending_order_count,
+    GREATEST(COALESCE(agg.total_purchase_amount, 0) - COALESCE(pay.total_paid, 0), 0) AS due_amount,
+    agg.earliest_unpaid_date AS due_date,
+    CASE
+      WHEN GREATEST(COALESCE(agg.total_purchase_amount, 0) - COALESCE(pay.total_paid, 0), 0) <= 0 THEN 'paid'
+      WHEN agg.earliest_unpaid_date IS NOT NULL AND agg.earliest_unpaid_date < CURRENT_DATE THEN 'overdue'
+      ELSE 'due'
+    END AS status
+`;
+
+const BALANCE_JOINS = `
+    LEFT JOIN (
+      SELECT supplier_id,
+             SUM(total_amount) AS total_purchase_amount,
+             -- An order is still "pending" once cumulative orders-so-far
+             -- (this one included, oldest-first) exceed the supplier's total
+             -- payments — i.e. the payment pool hasn't reached this order yet.
+             COUNT(*) FILTER (WHERE cumulative_total > total_paid) AS pending_order_count,
+             MIN(purchase_date) FILTER (WHERE cumulative_total > total_paid) AS earliest_unpaid_date
+        FROM (
+          SELECT p.supplier_id, p.purchase_date, p.total_amount,
+                 COALESCE(pay.total_paid, 0) AS total_paid,
+                 SUM(p.total_amount) OVER (
+                   PARTITION BY p.supplier_id
+                   ORDER BY p.purchase_date, p.created_at
+                 ) AS cumulative_total
+            FROM purchases p
+            LEFT JOIN (
+              SELECT supplier_id, SUM(amount) AS total_paid
+                FROM supplier_payments
+               WHERE salon_id = $1
+               GROUP BY supplier_id
+            ) pay ON pay.supplier_id = p.supplier_id
+           WHERE p.salon_id = $1
+        ) per_order
+       GROUP BY supplier_id
+    ) agg ON agg.supplier_id = s.id
+    LEFT JOIN (
+      SELECT supplier_id, SUM(amount) AS total_paid
+        FROM supplier_payments
+       WHERE salon_id = $1
+       GROUP BY supplier_id
+    ) pay ON pay.supplier_id = s.id
+`;
 
 export const suppliersRepository = {
     async findById(id: string, salonId: string): Promise<Supplier | null> {
@@ -15,9 +69,32 @@ export const suppliersRepository = {
         return rows[0] || null;
     },
 
+    async findByIdWithBalance(id: string, salonId: string): Promise<SupplierWithBalance | null> {
+        const { rows } = await pool.query(
+            `SELECT s.*, ${BALANCE_COLUMNS}
+               FROM suppliers s
+               ${BALANCE_JOINS}
+              WHERE s.id = $2 AND s.salon_id = $1`,
+            [salonId, id],
+        );
+        return rows[0] || null;
+    },
+
     async listAll(salonId: string): Promise<Supplier[]> {
         const { rows } = await pool.query(
             `SELECT * FROM suppliers WHERE salon_id = $1 ORDER BY created_at DESC`, [salonId]
+        );
+        return rows;
+    },
+
+    async listAllWithBalance(salonId: string): Promise<SupplierWithBalance[]> {
+        const { rows } = await pool.query(
+            `SELECT s.*, ${BALANCE_COLUMNS}
+               FROM suppliers s
+               ${BALANCE_JOINS}
+              WHERE s.salon_id = $1
+              ORDER BY s.created_at DESC`,
+            [salonId],
         );
         return rows;
     },

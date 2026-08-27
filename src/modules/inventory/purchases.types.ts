@@ -23,6 +23,12 @@ export interface Purchase {
     created_at: string;
     updated_at: string;
     items?: PurchaseItem[];
+    // Populated only by purchasesRepository.list()'s supplier-scoped query —
+    // per-order payment status derived from supplier_payments applied
+    // oldest-first (see suppliersRepository.getBalance / listOrdersWithBalance).
+    amount_paid?: number;
+    amount_due?: number;
+    payment_status?: "paid" | "due" | "overdue";
 }
 
 export interface CreatePurchaseItemDTO {
@@ -40,6 +46,7 @@ export interface CreatePurchaseDTO {
 
 export interface ListPurchaseFilters {
     search?: string;
+    supplier_id?: string;
     page?: number;
     limit?: number;
 }

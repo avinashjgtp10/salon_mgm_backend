@@ -14,6 +14,7 @@ import { inventoryTransactionsRepository } from "./inventory-transactions.reposi
 import { AppointmentServiceConsumableRow, InventoryTransactionItem } from "./inventory-transactions.types";
 import {
     Supplier,
+    SupplierWithBalance,
     CreateSupplierBody,
     UpdateSupplierBody,
     StockMovement,
@@ -46,14 +47,14 @@ export const suppliersService = {
         return created;
     },
 
-    async getById(id: string, salonId: string): Promise<Supplier> {
-        const supplier = await suppliersRepository.findById(id, salonId);
+    async getById(id: string, salonId: string): Promise<SupplierWithBalance> {
+        const supplier = await suppliersRepository.findByIdWithBalance(id, salonId);
         if (!supplier) throw new AppError(404, "Supplier not found", "NOT_FOUND");
         return supplier;
     },
 
-    async listAll(salonId: string): Promise<Supplier[]> {
-        return suppliersRepository.listAll(salonId);
+    async listAll(salonId: string): Promise<SupplierWithBalance[]> {
+        return suppliersRepository.listAllWithBalance(salonId);
     },
 
     async update(params: {
