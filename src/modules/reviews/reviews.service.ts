@@ -3,7 +3,7 @@ import { appointmentsRepository } from "../appointments/appointments.repository"
 import { salonsRepository } from "../salons/salons.repository"
 import { AppError } from "../../middleware/error.middleware"
 import { parseFeedbackSlug, assertFeedbackToken } from "./feedback-token.util"
-import { Review, ReviewStats, ListReviewsFilters, IMPROVEMENT_TAGS } from "./reviews.types"
+import { Review, ReviewStats, ListReviewsFilters, IMPROVEMENT_TAGS, ClientReviewEntry } from "./reviews.types"
 
 export const reviewsService = {
 
@@ -13,6 +13,10 @@ export const reviewsService = {
 
   async getStats(salonId: string, staffId?: string): Promise<ReviewStats> {
     return reviewsRepository.getStats(salonId, staffId)
+  },
+
+  async listForClient(clientId: string, salonId: string): Promise<ClientReviewEntry[]> {
+    return reviewsRepository.listForClient(clientId, salonId)
   },
 
   // ── Public feedback form (no login) — deep-linked from the review_request

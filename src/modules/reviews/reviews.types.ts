@@ -71,6 +71,29 @@ export interface ListReviewsFilters {
   limit?:   number
 }
 
+// One row per submitted feedback for a client's "Feedback & Review" tab in
+// Client History — the review itself plus its per-service breakdown, joined
+// in one call rather than making the frontend fetch review_service_ratings
+// separately per review.
+export interface ClientReviewEntry {
+  id:                   string
+  appointment_id:       string | null
+  staff_name:           string | null
+  rating:               number
+  staff_rating:         number | null
+  service_rating:       number | null
+  ambience_rating:      number | null
+  improvement_tags:     string[] | null
+  additional_comments:  string | null
+  created_at:           string
+  service_ratings: Array<{
+    service_name: string
+    staff_name:   string | null
+    rating:       number
+    comment:      string | null
+  }>
+}
+
 export type WaReviewPromptStatus = "PENDING_REPLY" | "RATED" | "LIST_SEND_FAILED"
 
 export interface WaReviewPrompt {

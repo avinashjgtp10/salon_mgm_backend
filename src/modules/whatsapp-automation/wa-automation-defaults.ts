@@ -24,7 +24,7 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
     | "appointment_cancelled" | "payment_received" | "package_expiring_7d" | "package_expiring_24h"
     | "membership_expiring_7d" | "membership_expiring_24h" | "package_session_used"
     | "membership_session_used" | "package_appointment_reminder_24h" | "service_reminder_24h"
-    | "reward_points_earned" | "referral_reward",
+    | "reward_points_earned" | "referral_reward" | "ewallet_used",
     {
         label: string;
         category: "UTILITY";
@@ -149,6 +149,12 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         language: "en",
         bodyText: "Hi {{customer_name}},\nGreat news! Your referral {{referred_customer_name}} has completed their qualifying visit at {{salon_name}}.\nReferral Reward: {{reward}}\nYour Total Reward Points: {{total_points}}\nThank you for spreading the word!",
     },
+    ewallet_used: {
+        label: "eWallet Used",
+        category: "UTILITY",
+        language: "en",
+        bodyText: "Hi {{customer_name}},\nYour eWallet was used for a payment at {{salon_name}}.\nAmount Used: ₹{{amount_used}}\nRemaining Balance: ₹{{remaining_balance}}\nThank you for choosing {{salon_name}} — we appreciate you!",
+    },
 };
 
 export type DefaultPurchaseEventType = keyof typeof DEFAULT_PURCHASE_TEMPLATES;
@@ -179,6 +185,7 @@ export const EVENT_VARIABLE_NAMES: Record<DefaultPurchaseEventType, string[]> = 
     service_reminder_24h:             ["customer_name", "salon_name", "appointment_date", "appointment_time", "service_name", "staff_name"],
     reward_points_earned: ["customer_name", "points_earned", "salon_name", "total_points"],
     referral_reward:      ["customer_name", "referred_customer_name", "salon_name", "reward", "total_points"],
+    ewallet_used:         ["customer_name", "amount_used", "salon_name", "remaining_balance"],
 };
 
 // Converts a salon's named-placeholder wording into Meta's required
