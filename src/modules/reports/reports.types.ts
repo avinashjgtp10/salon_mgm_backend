@@ -824,6 +824,7 @@ export interface ProductRetailReportRow {
     invoice_no: string;
     client_id: string | null;
     client_name: string | null;
+    client_phone: string | null;
     staff_id: string | null;
     staff_name: string | null;
     product_id: string | null;
@@ -907,6 +908,7 @@ export interface ServiceSaleReportRow {
     invoice_no: string;
     client_id: string | null;
     client_name: string | null;
+    client_phone: string | null;
     staff_id: string | null;
     staff_name: string | null;
     service_id: string | null;
@@ -1812,6 +1814,8 @@ export interface ReferralReportRow {
     referrer_client_id: string | null;
     referrer_name: string;
     referred_name: string;
+    referrer_phone: string | null;
+    referred_phone: string | null;
     referral_date: string | null;
     first_visit: string | null;
     total_visits: number;
@@ -2311,6 +2315,7 @@ export interface PackageSaleReportRow {
     date: string;
     client_id: string | null;
     client_name: string;
+    client_phone: string | null;
     package_name: string;
     expiry_date: string | null;
     total_amount: number;
@@ -2399,6 +2404,7 @@ export interface PackageHistoryReportRow {
     date: string;
     client_id: string | null;
     client_name: string;
+    client_phone: string | null;
     package_name: string;
     service_name: string;
     session_no: number;
@@ -2492,6 +2498,7 @@ export interface MembershipHistoryReportRow {
     start_date: string | null;
     client_id: string | null;
     client_name: string;
+    client_phone: string | null;
     membership_name: string;
     // The membership's pricing model: 'value' | 'percentage' | 'loyalty'.
     membership_type: string;
@@ -2582,6 +2589,7 @@ export interface MemberSaleReportRow {
     expiry_date: string | null;
     invoice_number: string | null;
     client_name: string;
+    client_phone: string | null;
     staff_name: string;
     membership_name: string;
     pricing_type: string | null;
