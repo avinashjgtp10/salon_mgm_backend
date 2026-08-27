@@ -2996,6 +2996,7 @@ async getProductRetailReportRows(
       s.invoice_number AS invoice_no,
       s.client_id,
       c.full_name AS client_name,
+      c.phone_number AS client_phone,
       st.id AS staff_id,
       NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
       si.item_id AS product_id,
@@ -3046,6 +3047,7 @@ async getProductRetailReportRows(
     invoice_no: row.invoice_no,
     client_id: row.client_id,
     client_name: row.client_name,
+    client_phone: row.client_phone,
     staff_id: row.staff_id,
     staff_name: row.staff_name,
     product_id: row.product_id,
@@ -3372,6 +3374,7 @@ async getServiceSaleReportRows(
       s.invoice_number AS invoice_no,
       s.client_id,
       c.full_name AS client_name,
+      c.phone_number AS client_phone,
       st.id AS staff_id,
       NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
       si.item_id AS service_id,
@@ -3419,6 +3422,7 @@ async getServiceSaleReportRows(
     invoice_no: row.invoice_no,
     client_id: row.client_id,
     client_name: row.client_name,
+    client_phone: row.client_phone,
     staff_id: row.staff_id,
     staff_name: row.staff_name,
     service_id: row.service_id,
@@ -6388,6 +6392,8 @@ _REFERRAL_AGG(where: string, startDateIdx: number | null, endDateIdx: number | n
         r.id   AS referrer_client_id,
         COALESCE(NULLIF(TRIM(r.full_name), ''), 'Walk-in') AS referrer_name,
         COALESCE(NULLIF(TRIM(c.full_name), ''), 'Walk-in') AS referred_name,
+        r.phone_number AS referrer_phone,
+        c.phone_number AS referred_phone,
         -- clients.created_at is a naive timestamp (unlike sales.created_at,
         -- which is timestamptz), and the session runs at UTC — so it must be
         -- stamped AT TIME ZONE 'UTC' first to become an instant, then
@@ -6538,6 +6544,7 @@ async getReferralReportRows(
     ${this._REFERRAL_AGG(where, startDateIdx, endDateIdx, staffIdsIdx)}
     SELECT
       referred_client_id, referrer_client_id, referrer_name, referred_name,
+      referrer_phone, referred_phone,
       referral_date, first_visit, total_visits, revenue_generated,
       reward_earned, reward_status, staff_name,
       COUNT(*) OVER() AS total_count
@@ -6553,6 +6560,8 @@ async getReferralReportRows(
     referrer_client_id: row.referrer_client_id,
     referrer_name: row.referrer_name,
     referred_name: row.referred_name,
+    referrer_phone: row.referrer_phone,
+    referred_phone: row.referred_phone,
     referral_date: row.referral_date,
     first_visit: row.first_visit,
     total_visits: Number(row.total_visits ?? 0),
@@ -6677,18 +6686,13 @@ _PAYMENT_COLLECTION_AGG(
         --      membership discount), GST applied on that taxable base, plus
         --      extra charges. Falls back to the payment's net_amount only if
         --      the appointment has no items at all.
-        COALESCE(
-          sl.total_amount::numeric,
-          NULLIF(unb.price, 0),
-          latest.net_amount,
-          0
-        ) AS total_amount,
+        corrected.total_amount AS total_amount,
         -- Same as Sales Summary: paid comes from the payment rows whenever the
         -- bill is tied to an appointment (always true here).
         COALESCE(agg.paid_amount, 0)   AS paid_amount,
-        GREATEST(COALESCE(latest.due_amount, 0), 0) AS due_amount,
+        GREATEST(corrected.total_amount - COALESCE(agg.paid_amount, 0), 0) AS due_amount,
         COALESCE(NULLIF(TRIM(latest.payment_method), ''), '—') AS payment_method,
-        CASE WHEN latest.due_amount > 0 THEN 'partial' ELSE 'paid' END AS payment_status,
+        CASE WHEN corrected.total_amount - COALESCE(agg.paid_amount, 0) > 0.5 THEN 'partial' ELSE 'paid' END AS payment_status,
         COALESCE(
           NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), ''),
           '—'
@@ -6782,6 +6786,27 @@ _PAYMENT_COLLECTION_AGG(
           ) src
         ) it
       ) unb ON TRUE
+      -- The bill actually owed right now. sl.total_amount is a snapshot taken
+      -- the moment the bill was first fully settled — editing a paid/partial
+      -- appointment afterwards (add a service, bump a price) updates the
+      -- appointment's own line items but nothing ever writes that change back
+      -- onto the old sales row (salesRepository.update() is never called) or
+      -- onto a fresh payments row (no payment has happened yet). So a
+      -- reopened appointment (a.status = 'partial') must use the LIVE
+      -- reconstruction from its current items instead of trusting the stale
+      -- sales snapshot — otherwise the extra amount owed never surfaces here
+      -- even though the calendar (which always computes live) already shows
+      -- it. A currently-'paid' appointment has no such gap: its sales row IS
+      -- the live truth, so it's used unchanged.
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(
+          CASE WHEN a.status::text = 'partial' THEN NULLIF(unb.price, 0) END,
+          sl.total_amount::numeric,
+          NULLIF(unb.price, 0),
+          latest.net_amount,
+          0
+        ) AS total_amount
+      ) corrected ON TRUE
       WHERE ${where}
     ),
     filtered AS (
@@ -8335,6 +8360,7 @@ async getPackageSaleReportRows(
       TO_CHAR(cp.created_date AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS date,
       cp.client_id,
       cp.client_name,
+      cp.mobile AS client_phone,
       cp.package_name,
       TO_CHAR(cp.expiry_date, 'YYYY-MM-DD') AS expiry_date,
       cp.total_amount,
@@ -8363,6 +8389,7 @@ async getPackageSaleReportRows(
     date: row.date,
     client_id: row.client_id,
     client_name: row.client_name,
+    client_phone: row.client_phone ?? null,
     package_name: row.package_name,
     expiry_date: row.expiry_date ?? null,
     total_amount: Number(row.total_amount ?? 0),
@@ -8652,6 +8679,7 @@ async getPackageHistoryReportRows(
       TO_CHAR(h.session_date AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS date,
       cp.client_id,
       cp.client_name,
+      cp.mobile AS client_phone,
       cp.package_name,
       cps.service_name,
       h.session_no,
@@ -8678,6 +8706,7 @@ async getPackageHistoryReportRows(
     date: row.date,
     client_id: row.client_id,
     client_name: row.client_name,
+    client_phone: row.client_phone ?? null,
     package_name: row.package_name,
     service_name: row.service_name,
     session_no: Number(row.session_no ?? 0),
@@ -8846,6 +8875,7 @@ _MEMBERSHIP_HISTORY_SOURCE: `
       cm.salon_id,
       cm.client_id,
       cm.client_name,
+      cm.mobile        AS client_phone,
       cm.membership_name,
       cm.pricing_type,
       cm.purchased_at,
@@ -8872,6 +8902,7 @@ _MEMBERSHIP_HISTORY_SOURCE: `
       pay.salon_id,
       pay.client_id,
       COALESCE(NULLIF(TRIM(c.full_name), ''), 'Walk-in') AS client_name,
+      c.phone_number                                     AS client_phone,
       COALESCE(lm.name, 'Loyalty')                       AS membership_name,
       'loyalty'        AS pricing_type,
       NULL::timestamptz AS purchased_at,
@@ -9069,6 +9100,7 @@ async getMembershipHistoryReportRows(
       TO_CHAR(ul.purchased_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS start_date,
       ul.client_id,
       COALESCE(NULLIF(TRIM(ul.client_name), ''), 'Walk-in') AS client_name,
+      ul.client_phone,
       COALESCE(NULLIF(TRIM(ul.membership_name), ''), '—') AS membership_name,
       COALESCE(NULLIF(TRIM(ul.pricing_type), ''), 'value') AS membership_type,
       COALESCE(NULLIF(TRIM(ul.service_name), ''), '—') AS service_name,
@@ -9098,6 +9130,7 @@ async getMembershipHistoryReportRows(
     start_date: row.start_date ?? null,
     client_id: row.client_id ? String(row.client_id) : null,
     client_name: row.client_name,
+    client_phone: row.client_phone ?? null,
     membership_name: row.membership_name,
     membership_type: row.membership_type,
     service_name: row.service_name,
@@ -9305,6 +9338,7 @@ async getMemberSaleReportRows(
       TO_CHAR(cm.expires_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS expiry_date,
       s.invoice_number,
       cm.client_name,
+      cm.mobile AS client_phone,
       NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
       cm.membership_name,
       cm.pricing_type,
@@ -9338,6 +9372,7 @@ async getMemberSaleReportRows(
     expiry_date: row.expiry_date ?? null,
     invoice_number: row.invoice_number,
     client_name: row.client_name,
+    client_phone: row.client_phone ?? null,
     staff_name: row.staff_name ?? "—",
     membership_name: row.membership_name,
     pricing_type: row.pricing_type,
@@ -18434,12 +18469,20 @@ async getClientRatingReportRows(
       st.id AS staff_id,
       NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
       r.rating,
-      r.staff_rating,
-      r.service_rating,
-      r.ambience_rating,
+      r.improvement_tags,
       r.review_text,
       r.created_at AS review_date,
       r.source,
+      COALESCE((
+        SELECT json_agg(json_build_object(
+          'service_name', sr.service_name,
+          'staff_name',   sr.staff_name,
+          'rating',       sr.rating,
+          'comment',      sr.comment
+        ) ORDER BY sr.created_at)
+        FROM review_service_ratings sr
+        WHERE sr.review_id = r.id
+      ), '[]'::json) AS service_ratings,
       COALESCE((
         SELECT SUM(s.total_amount::numeric)
         FROM sales s
@@ -18466,9 +18509,8 @@ async getClientRatingReportRows(
     staff_id: row.staff_id,
     staff_name: row.staff_name ?? "—",
     rating: Number(row.rating ?? 0),
-    staff_rating: row.staff_rating !== null && row.staff_rating !== undefined ? Number(row.staff_rating) : null,
-    service_rating: row.service_rating !== null && row.service_rating !== undefined ? Number(row.service_rating) : null,
-    ambience_rating: row.ambience_rating !== null && row.ambience_rating !== undefined ? Number(row.ambience_rating) : null,
+    improvement_tags: row.improvement_tags ?? [],
+    service_ratings: row.service_ratings ?? [],
     review_text: row.review_text,
     review_date: row.review_date,
     source: row.source,

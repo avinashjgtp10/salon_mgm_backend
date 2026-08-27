@@ -19,12 +19,12 @@ const FEEDBACK_FORM_BASE_URL =
     process.env.FRONTEND_URL || process.env.APP_BASE_URL || "http://localhost:5173";
 
 export const DEFAULT_PURCHASE_TEMPLATES: Record<
-    | "client_welcome" | "service_purchased" | "product_purchased" | "package_purchased"
+    | "client_welcome" | "package_purchased"
     | "membership_purchased" | "bill_receipt" | "appointment_confirmation" | "appointment_rescheduled"
     | "appointment_cancelled" | "payment_received" | "package_expiring_7d" | "package_expiring_24h"
     | "membership_expiring_7d" | "membership_expiring_24h" | "package_session_used"
     | "membership_session_used" | "package_appointment_reminder_24h" | "service_reminder_24h"
-    | "reward_points_earned" | "referral_reward",
+    | "reward_points_earned" | "referral_reward" | "ewallet_used",
     {
         label: string;
         category: "UTILITY";
@@ -38,18 +38,6 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         category: "UTILITY",
         language: "en",
         bodyText: "Hi {{customer_name}},\nWelcome to {{salon_name}}!\nWe're happy to have you with us.\nThank you for choosing {{salon_name}} — we appreciate you!",
-    },
-    service_purchased: {
-        label: "Service Purchased",
-        category: "UTILITY",
-        language: "en",
-        bodyText: "Hi {{customer_name}},\nYour payment of ₹{{amount}} for {{service_name}} has been successfully received.\nThank you for choosing {{salon_name}} — we appreciate you!",
-    },
-    product_purchased: {
-        label: "Product Purchased",
-        category: "UTILITY",
-        language: "en",
-        bodyText: "Hi {{customer_name}},\nYour payment of ₹{{amount}} for {{product_name}} has been successfully received.\nThank you for shopping with {{salon_name}} — we appreciate you!",
     },
     package_purchased: {
         label: "Package Purchased",
@@ -99,7 +87,7 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         label: "Payment Received (Appointment)",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{customer_name}},\nYour payment of ₹{{amount}} for your {{service_name}} appointment has been successfully received.\nAppointment: {{appointment_date}}\nTime: {{appointment_time}}\nThank you for choosing {{salon_name}} — we appreciate you!",
+        bodyText: "Hi {{customer_name}},\nYour bill of ₹{{amount}} at {{salon_name}} has been successfully paid.\nAppointment: {{appointment_date}}\nTime: {{appointment_time}}\nThank you for choosing {{salon_name}} — we appreciate you!",
     },
     package_expiring_7d: {
         label: "Package Expiring (7 Days)",
@@ -161,6 +149,12 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         language: "en",
         bodyText: "Hi {{customer_name}},\nGreat news! Your referral {{referred_customer_name}} has completed their qualifying visit at {{salon_name}}.\nReferral Reward: {{reward}}\nYour Total Reward Points: {{total_points}}\nThank you for spreading the word!",
     },
+    ewallet_used: {
+        label: "eWallet Used",
+        category: "UTILITY",
+        language: "en",
+        bodyText: "Hi {{customer_name}},\nYour eWallet was used for a payment at {{salon_name}}.\nAmount Used: ₹{{amount_used}}\nRemaining Balance: ₹{{remaining_balance}}\nThank you for choosing {{salon_name}} — we appreciate you!",
+    },
 };
 
 export type DefaultPurchaseEventType = keyof typeof DEFAULT_PURCHASE_TEMPLATES;
@@ -174,15 +168,13 @@ export function isPurchaseEventType(eventType: AutomationEventType): eventType i
 // each event's trigger() call site fills positionally ('1', '2', '3', ...).
 export const EVENT_VARIABLE_NAMES: Record<DefaultPurchaseEventType, string[]> = {
     client_welcome:       ["customer_name", "salon_name"],
-    service_purchased:    ["customer_name", "amount", "service_name", "salon_name"],
-    product_purchased:    ["customer_name", "amount", "product_name", "salon_name"],
     package_purchased:    ["customer_name", "package_name", "package_value", "total_sessions", "expiry_date", "salon_name"],
     membership_purchased: ["customer_name", "membership_name", "salon_name", "membership_price", "membership_balance", "expiry_date"],
     bill_receipt:         ["customer_name", "salon_name", "items", "feedback_line"],
     appointment_confirmation: ["customer_name", "salon_name", "appointment_date", "appointment_time", "service_name", "staff_name"],
     appointment_rescheduled:  ["customer_name", "salon_name", "old_date", "old_time", "new_date", "new_time", "service_name", "staff_name"],
     appointment_cancelled:    ["customer_name", "salon_name", "appointment_date", "appointment_time", "service_name"],
-    payment_received:         ["customer_name", "amount", "service_name", "appointment_date", "appointment_time", "salon_name"],
+    payment_received:         ["customer_name", "amount", "salon_name", "appointment_date", "appointment_time"],
     package_expiring_7d:     ["customer_name", "package_name", "expiry_date", "remaining_sessions"],
     package_expiring_24h:    ["customer_name", "package_name", "remaining_sessions", "expiry_date"],
     membership_expiring_7d:  ["customer_name", "membership_name", "expiry_date", "remaining_balance"],
@@ -193,6 +185,7 @@ export const EVENT_VARIABLE_NAMES: Record<DefaultPurchaseEventType, string[]> = 
     service_reminder_24h:             ["customer_name", "salon_name", "appointment_date", "appointment_time", "service_name", "staff_name"],
     reward_points_earned: ["customer_name", "points_earned", "salon_name", "total_points"],
     referral_reward:      ["customer_name", "referred_customer_name", "salon_name", "reward", "total_points"],
+    ewallet_used:         ["customer_name", "amount_used", "salon_name", "remaining_balance"],
 };
 
 // Converts a salon's named-placeholder wording into Meta's required

@@ -17,12 +17,10 @@ import { CreatePaymentBody, Payment } from './payments.types';
 import type { Appointment, AppointmentServiceConsumableRecord } from '../appointments/appointments.types';
 import { appointmentConsumablesService } from '../inventory/inventory.service';
 import logger from '../../config/logger';
-import { sendReceiptDocument } from '../sales/receipt-whatsapp.service';
+import { sendPurchaseReceipt } from '../sales/receipt-send.helper';
 import { whatsappAutomationService } from '../whatsapp-automation/whatsapp-automation.service';
 import { whatsappAutomationRepository } from '../whatsapp-automation/whatsapp-automation.repository';
 import { salonsRepository } from '../salons/salons.repository';
-import { branchesRepository } from '../branches/branches.repository';
-import { staffService } from '../staff/staff.service';
 import { clientsRepository } from '../clients/clients.repository';
 import { getIO } from '../../config/socket';
 import { getActiveTaxes } from '../settings/tax.util';
@@ -876,7 +874,7 @@ export const paymentsService = {
     // ── eWallet: actually deduct the real balance now that the payment row exists ──
     if (data.client_id && ewalletUsedActual > 0) {
       try {
-        await ewalletRepository.applyLedgerEntry({
+        const remainingBalance = await ewalletRepository.applyLedgerEntry({
           clientId: data.client_id,
           salonId: data.salon_id,
           type: 'redeem',
@@ -885,6 +883,28 @@ export const paymentsService = {
           sourceId: payment.id,
           note: `Used for ₹${ewalletUsedActual.toFixed(2)} payment`,
         });
+
+        // ── WhatsApp Automation: eWallet Used ──────────────────────────────
+        const spender = await clientsRepository.findById(data.client_id, data.salon_id);
+        if (spender?.phone_number) {
+          const salon = await salonsRepository.findById(data.salon_id);
+          whatsappAutomationService.trigger({
+            salonId:       data.salon_id,
+            eventType:     'ewallet_used',
+            clientId:      data.client_id,
+            phone:         spender.phone_number,
+            countryCode:   spender.phone_country_code ?? null,
+            variables: {
+              '1': spender.full_name ?? 'Valued Customer',
+              '2': ewalletUsedActual.toFixed(2),
+              '3': salon?.business_name ?? 'our salon',
+              '4': remainingBalance.toFixed(2),
+            },
+            referenceId:   payment.id,
+            referenceType: 'payment',
+            dedupeByReference: true,
+          }).catch(() => {});
+        }
       } catch (err: any) {
         logger.warn('[payments] ewallet redeem ledger write failed:', err?.message ?? err);
       }
@@ -1263,47 +1283,27 @@ export const paymentsService = {
             // instead of both firing and the client getting two PDFs.
             (async () => {
               const won = await whatsappAutomationRepository.guardInsertIfNotExists(`receipt-pdf-auto:${enrichedSale.id}`);
+              console.log(`[BILL_RECEIPT] payments.service.ts guard won=${won} saleId=${enrichedSale.id}`);
               if (!won) return;
 
-              const [salonRecord, branches, staffList, clientRecord] = await Promise.all([
-                salonsRepository.findById(data.salon_id),
-                branchesRepository.listBySalonId(data.salon_id),
-                staffService.list(data.salon_id, { is_active: true, limit: 100 } as any),
-                data.client_id ? clientsRepository.findById(data.client_id, data.salon_id) : Promise.resolve(null),
-              ]);
-              const saleItems = saleItemsForEvents;
+              const clientRecord = data.client_id ? await clientsRepository.findById(data.client_id, data.salon_id) : null;
 
-              const branch = branches.find((b) => b.is_main) ?? branches[0] ?? null;
-              const salonAddress = branch
-                ? [branch.address_line1, branch.address_line2, branch.city, branch.state, branch.pincode].filter(Boolean).join(", ")
-                : null;
-
-              const staffNames: Record<string, string> = {};
-              for (const s of staffList.data as any[]) {
-                staffNames[s.id] = [s.first_name, s.last_name].filter(Boolean).join(" ").trim() || s.email;
-              }
-
-              await sendReceiptDocument({
+              // bill_receipt-aware — sends the real Meta document-header
+              // template (PDF + itemized caption, no 24h-window limit) when
+              // the salon has one APPROVED, falling back to the old plain
+              // PDF-only send otherwise. Previously called sendReceiptDocument
+              // directly here, which never checked for bill_receipt at all —
+              // since this call almost always wins the guard race against
+              // appointments.service.ts checkout()'s own (correct) call, every
+              // receipt was silently going out as a bare PDF with no caption.
+              await sendPurchaseReceipt({
                 salonId: data.salon_id,
                 phone: (enrichedSale as any).client_phone,
                 countryCode: (enrichedSale as any).client_phone_code ?? null,
-                salon: {
-                  business_name: salonRecord?.business_name ?? (enrichedSale as any).salon_name ?? "our salon",
-                  logo_url: (salonRecord as any)?.logo_url ?? null,
-                  email: salonRecord?.email ?? null,
-                  phone: salonRecord?.phone ?? null,
-                  website_url: salonRecord?.website_url ?? null,
-                  gst_number: salonRecord?.gst_number ?? null,
-                },
-                salonAddress,
-                client: {
-                  name: clientRecord?.full_name ?? (enrichedSale as any).client_name ?? "Valued Customer",
-                  phone: clientRecord?.phone_number ?? (enrichedSale as any).client_phone ?? null,
-                  email: clientRecord?.email ?? null,
-                },
+                clientId: data.client_id ?? null,
+                clientName: clientRecord?.full_name ?? (enrichedSale as any).client_name ?? "Valued Customer",
                 sale: enrichedSale,
-                items: saleItems,
-                staffNames,
+                items: saleItemsForEvents,
                 appointment: appt
                   ? {
                         id: appt.id,

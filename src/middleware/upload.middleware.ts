@@ -1,13 +1,8 @@
 import multer from "multer";
 import path from "path";
 import { AppError } from "./error.middleware";
-import fs from "fs";
 
-// Ensure uploads directory exists
 const uploadDir = path.join(__dirname, "../../uploads");
-if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir, { recursive: true });
-}
 
 const storage = multer.diskStorage({
     destination: (_req, _file, cb) => {

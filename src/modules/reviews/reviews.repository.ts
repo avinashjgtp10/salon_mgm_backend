@@ -1,5 +1,5 @@
 import pool from "../../config/database"
-import { Review, ReviewStats, ListReviewsFilters, ReviewServiceRating } from "./reviews.types"
+import { Review, ReviewStats, ListReviewsFilters, ReviewServiceRating, ClientReviewEntry } from "./reviews.types"
 
 export const reviewsRepository = {
 
@@ -67,7 +67,7 @@ export const reviewsRepository = {
       `INSERT INTO reviews
          (salon_id, client_id, phone, staff_id, booking_id, rating, review_text, source,
           overall_rating, improvement_tags, additional_comments)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'whatsapp', $6, $8, $7)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'whatsapp', $8, $9, $10)
        ON CONFLICT (booking_id) WHERE booking_id IS NOT NULL
        DO UPDATE SET rating = EXCLUDED.rating, review_text = EXCLUDED.review_text, staff_id = EXCLUDED.staff_id,
                       overall_rating = EXCLUDED.overall_rating, improvement_tags = EXCLUDED.improvement_tags,
@@ -75,7 +75,8 @@ export const reviewsRepository = {
        RETURNING *`,
       [
         params.salonId, params.clientId, params.phone, params.staffId, params.appointmentId,
-        params.overallRating, params.additionalComments, params.improvementTags,
+        params.overallRating, params.additionalComments,
+        params.overallRating, params.improvementTags, params.additionalComments,
       ]
     )
     return rows[0]
@@ -123,5 +124,39 @@ export const reviewsRepository = {
     } finally {
       client.release()
     }
+  },
+
+  // Client History → "Feedback & Review" tab — every review this client has
+  // submitted, each with its per-service breakdown attached (aggregated via
+  // a correlated subquery rather than a join, since a review can have
+  // several service_ratings rows and a plain join would duplicate the
+  // parent review once per service).
+  async listForClient(clientId: string, salonId: string): Promise<ClientReviewEntry[]> {
+    const { rows } = await pool.query(
+      `SELECT
+         r.id, r.booking_id AS appointment_id,
+         TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))) AS staff_name,
+         r.rating, r.staff_rating, r.service_rating, r.ambience_rating,
+         r.improvement_tags, r.additional_comments, r.created_at,
+         COALESCE((
+           SELECT json_agg(json_build_object(
+             'service_name', sr.service_name,
+             'staff_name',   sr.staff_name,
+             'rating',       sr.rating,
+             'comment',      sr.comment
+           ) ORDER BY sr.created_at)
+           FROM review_service_ratings sr
+           WHERE sr.review_id = r.id
+         ), '[]'::json) AS service_ratings
+       FROM reviews r
+       LEFT JOIN staff st ON st.id = r.staff_id
+       WHERE r.client_id = $1 AND r.salon_id = $2
+       ORDER BY r.created_at DESC`,
+      [clientId, salonId]
+    )
+    return rows.map((row: any) => ({
+      ...row,
+      staff_name: row.staff_name?.trim() || null,
+    }))
   },
 }

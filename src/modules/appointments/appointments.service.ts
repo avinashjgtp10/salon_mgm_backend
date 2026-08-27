@@ -261,11 +261,18 @@ function deriveDisplayStatus(appt: Appointment): Appointment {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+// DD-MM-YYYY — matches the frontend's app-wide standard date format (see
+// src/utils/dateFormat.ts's formatDateDDMMYYYY on the frontend), used here so
+// notification text (e.g. "New Appointment Booked") reads the same way.
 function formatDate(dateStr: string): string {
-    return new Date(dateStr).toLocaleDateString("en-IN", {
+    const parts = new Intl.DateTimeFormat("en-GB", {
         timeZone: "Asia/Kolkata",
-        day: "2-digit", month: "short", year: "numeric",
-    });
+        day: "2-digit", month: "2-digit", year: "numeric",
+    }).formatToParts(new Date(dateStr));
+    const day = parts.find(p => p.type === "day")?.value ?? "";
+    const month = parts.find(p => p.type === "month")?.value ?? "";
+    const year = parts.find(p => p.type === "year")?.value ?? "";
+    return `${day}-${month}-${year}`;
 }
 
 function formatTime(dateStr: string): string {
@@ -573,8 +580,11 @@ export const appointmentsService = {
         });
 
         // ── WhatsApp Automation: Appointment Confirmation ─────────────────────
-        // Dedup check — NEVER send confirmation twice for the same appointment
-        if (appointment.client_id) {
+        // Calendar only — a Quick Sale appointment is booked and paid in the
+        // same transaction, so there's no future visit to "confirm"; it gets
+        // bill_receipt from checkout() instead. Dedup check — NEVER send
+        // confirmation twice for the same appointment.
+        if (appointment.client_id && body.source !== "quick_sale") {
             try {
                 if (full && (full as any).client_phone) {
                     const alreadySent = await whatsappAutomationRepository.logExistsForReference(
@@ -1241,9 +1251,34 @@ export const appointmentsService = {
             // got the same PDF twice, only one copy carrying the bill_receipt
             // caption (whichever call happened to build it).
             if (existing.client_id && (existing as any).client_phone) {
+                // ── WhatsApp Automation: Payment Received ──────────────────────
+                // Calendar only — Quick Sale's bill_receipt below already
+                // covers this (there's no separate "booking" to distinguish
+                // from "payment" when both happen in the same transaction).
+                if (existing.source !== "quick_sale") {
+                    whatsappAutomationService.trigger({
+                        salonId:       existing.salon_id,
+                        eventType:     'payment_received',
+                        clientId:      existing.client_id,
+                        phone:         (existing as any).client_phone,
+                        countryCode:   (existing as any).client_phone_code ?? null,
+                        variables: {
+                            '1': existing.client_name             ?? 'Valued Customer',
+                            '2': String(preExistingSale.total_amount ?? '0'),
+                            '3': (existing as any).salon_name ?? 'our salon',
+                            '4': formatDate(existing.scheduled_at),
+                            '5': formatTime(existing.scheduled_at),
+                        },
+                        referenceId:   preExistingSale.id,
+                        referenceType: 'invoice',
+                        dedupeByReference: true,
+                    }).catch(() => {});
+                }
+
                 (async () => {
                     try {
                         const won = await whatsappAutomationRepository.guardInsertIfNotExists(`receipt-pdf-auto:${preExistingSale.id}`);
+                        console.log(`[BILL_RECEIPT] appointments.service.ts checkout() preExistingSale branch — guard won=${won} saleId=${preExistingSale.id}`);
                         if (!won) return;
 
                         await sendPurchaseReceipt({
@@ -1463,7 +1498,9 @@ export const appointmentsService = {
         }
 
         // ── WhatsApp Automation: Payment Received ─────────────────────────────
-        if (existing.client_id && (existing as any).client_phone) {
+        // Calendar only — see the matching comment on the preExistingSale
+        // branch above.
+        if (existing.client_id && (existing as any).client_phone && existing.source !== "quick_sale") {
             whatsappAutomationService.trigger({
                 salonId:       existing.salon_id,
                 eventType:     'payment_received',
@@ -1473,10 +1510,9 @@ export const appointmentsService = {
                 variables: {
                     '1': existing.client_name         ?? 'Valued Customer',
                     '2': String(sale.total_amount     ?? '0'),
-                    '3': existing.services?.[0]?.name ?? existing.title ?? 'your service',
+                    '3': (existing as any).salon_name ?? 'our salon',
                     '4': formatDate(existing.scheduled_at),
                     '5': formatTime(existing.scheduled_at),
-                    '6': (existing as any).salon_name ?? 'our salon',
                 },
                 referenceId:   sale.id,
                 referenceType: 'invoice',
