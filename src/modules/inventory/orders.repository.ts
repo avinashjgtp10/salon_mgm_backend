@@ -121,6 +121,96 @@ export const ordersRepository = {
         }
     },
 
+    /**
+     * Replaces an order's header fields and line items in one transaction —
+     * order_number and created_by are never touched. Items are deleted and
+     * re-inserted rather than diffed line-by-line (same "whole document"
+     * mental model as create()); totals are recomputed with the exact same
+     * math so an edited order's Order Summary can't drift from a fresh one's.
+     */
+    async update(id: string, data: CreateOrderDTO, salonId: string): Promise<Order | null> {
+        const taxRate = data.tax_rate ?? 0;
+
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+
+            const { rows: existingRows } = await client.query(
+                `SELECT id FROM orders WHERE id = $1 AND salon_id = $2 FOR UPDATE`,
+                [id, salonId],
+            );
+            if (!existingRows.length) {
+                await client.query("ROLLBACK");
+                return null;
+            }
+
+            await client.query(
+                `UPDATE orders SET
+                   supplier_id = $1, bill_to_branch_id = $2, ship_to_branch_id = $3,
+                   order_date = COALESCE($4, order_date), remark = $5, ref_number = $6,
+                   payment_terms_days = $7, shipment_date = $8, delivery_date = $9,
+                   tax_type = $10, tax_group = $11, terms_conditions = $12,
+                   signature_url = $13, shipping_cost = $14, updated_at = NOW()
+                 WHERE id = $15`,
+                [
+                    data.supplier_id, data.bill_to_branch_id ?? null, data.ship_to_branch_id ?? null,
+                    data.order_date ?? null, data.remark ?? null, data.ref_number ?? null,
+                    data.payment_terms_days ?? null, data.shipment_date ?? null, data.delivery_date ?? null,
+                    data.tax_type, data.tax_group ?? null, data.terms_conditions ?? null,
+                    data.signature_url ?? null, data.shipping_cost ?? 0, id,
+                ],
+            );
+
+            await client.query(`DELETE FROM order_items WHERE order_id = $1`, [id]);
+
+            let totalQuantity = 0;
+            let totalPrice = 0;
+            const items: OrderItem[] = [];
+
+            for (const item of data.items) {
+                const discountPercent = item.discount_percent ?? 0;
+                const costWoTax = item.cost_price;
+                const totalCostWoTax = costWoTax * item.qty;
+                const totalTax = totalCostWoTax * (taxRate / 100);
+                const lineSellingTotal = item.selling_price * item.qty * (1 - discountPercent / 100);
+
+                totalQuantity += item.qty;
+                totalPrice += lineSellingTotal;
+
+                const { rows: itemRows } = await client.query(
+                    `INSERT INTO order_items (
+                       order_id, product_id, product_code, qty, selling_price,
+                       discount_percent, cost_price, cost_wo_tax, total_cost_wo_tax, total_tax
+                     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                     RETURNING *`,
+                    [
+                        id, item.product_id, item.product_code ?? null, item.qty, item.selling_price,
+                        discountPercent, item.cost_price, costWoTax, totalCostWoTax, totalTax,
+                    ],
+                );
+                items.push(itemRows[0]);
+            }
+
+            const totalTaxAmount = items.reduce((sum, item) => sum + Number(item.total_tax), 0);
+            const shippingCost = data.shipping_cost ?? 0;
+            const grandTotal = totalPrice + totalTaxAmount + shippingCost;
+
+            const { rows: updatedOrderRows } = await client.query(
+                `UPDATE orders SET total_quantity = $1, total_price = $2, updated_at = NOW()
+                 WHERE id = $3 RETURNING *`,
+                [totalQuantity, grandTotal, id],
+            );
+
+            await client.query("COMMIT");
+            return { ...updatedOrderRows[0], items };
+        } catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        } finally {
+            client.release();
+        }
+    },
+
     async list(filters: ListOrderFilters, salonId: string): Promise<{ data: Order[]; total: number }> {
         const conditions: string[] = [`o.salon_id = $1`];
         const values: unknown[] = [salonId];
@@ -193,5 +283,16 @@ export const ordersRepository = {
             [salonId, url, createdBy],
         );
         return rows[0];
+    },
+
+    // Orders are a document only (no stock/movement rows to unwind — see the
+    // "no stock movement" note atop create()), so deleting one is a plain
+    // row delete; order_items cascades via its FK to orders.
+    async delete(id: string, salonId: string): Promise<boolean> {
+        const { rowCount } = await pool.query(
+            `DELETE FROM orders WHERE id = $1 AND salon_id = $2`,
+            [id, salonId],
+        );
+        return (rowCount ?? 0) > 0;
     },
 };

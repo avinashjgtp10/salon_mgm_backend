@@ -84,11 +84,40 @@ export const ordersController = {
         } catch (err) { next(err); }
     },
 
+    // POST, not PUT/PATCH — matches this module's other mutating routes.
+    async update(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const salonId = getSalonId(req);
+            const body = req.body as CreateOrderDTO;
+            const order = await ordersRepository.update(String(req.params.id), body, salonId);
+            if (!order) {
+                next(new AppError(404, "Order not found", "ORDER_NOT_FOUND"));
+                return;
+            }
+            sendSuccess(res, 200, order, "Order updated successfully");
+        } catch (err) { next(err); }
+    },
+
     async listSignatures(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             const salonId = getSalonId(req);
             const signatures = await ordersRepository.listSignatures(salonId);
             sendSuccess(res, 200, signatures);
+        } catch (err) { next(err); }
+    },
+
+    // POST rather than DELETE — matches this module's other mutating routes
+    // (create, uploadSignature) all being POST, so the order detail page's
+    // "Delete" action doesn't need a different HTTP method wired through.
+    async delete(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const salonId = getSalonId(req);
+            const deleted = await ordersRepository.delete(String(req.params.id), salonId);
+            if (!deleted) {
+                next(new AppError(404, "Order not found", "ORDER_NOT_FOUND"));
+                return;
+            }
+            sendSuccess(res, 200, null, "Order deleted successfully");
         } catch (err) { next(err); }
     },
 };

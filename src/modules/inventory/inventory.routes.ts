@@ -215,6 +215,24 @@ router.get(
     ordersController.getById
 );
 
+// POST, not DELETE — see ordersController.delete for why.
+router.post(
+    "/orders/:id/delete",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin"),
+    ordersController.delete
+);
+
+// POST, not PUT/PATCH — see ordersController.update for why.
+router.post(
+    "/orders/:id/update",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    manageInventory,
+    validateCreateOrder,
+    ordersController.update
+);
+
 // ─── Stock Movements ──────────────────────────────────────────────────────────
 
 router.post(
