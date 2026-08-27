@@ -13,6 +13,7 @@ import {
 import { consumableInventoryController } from "./consumable-inventory.controller";
 import { productInventoryController } from "./product-inventory.controller";
 import { purchasesController } from "./purchases.controller";
+import { productAuditController } from "./product-audit.controller";
 import {
     validateCreateSupplier,
     validateUpdateSupplier,
@@ -20,6 +21,13 @@ import {
     validateStockTake,
 } from "./inventory.validator";
 import { validateCreatePurchase } from "./purchases.validator";
+import {
+    validateCreateProductAudit,
+    validateAddAuditItems,
+    validateUpdateAuditItem,
+    validateRejectAudit,
+    validateApproveAudit,
+} from "./product-audit.validator";
 
 const router = Router();
 const viewInventory = requirePermission("view_inventory");
@@ -320,6 +328,101 @@ router.put(
     roleMiddleware("salon_owner", "admin", "staff"),
     stockAdjustment,
     consumableInventoryController.replaceUnitConversions
+);
+
+// ─── Product Audit (mock-adjacent workflow — read-only against real stock;
+// see product-audit.repository.ts) ────────────────────────────────────────────
+
+router.post(
+    "/product-audits",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    manageInventory,
+    validateCreateProductAudit,
+    productAuditController.create
+);
+
+router.get(
+    "/product-audits",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    productAuditController.list
+);
+
+router.get(
+    "/product-audits/:id",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    productAuditController.getById
+);
+
+router.delete(
+    "/product-audits/:id",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin"),
+    productAuditController.delete
+);
+
+router.post(
+    "/product-audits/:id/items",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    manageInventory,
+    validateAddAuditItems,
+    productAuditController.addItems
+);
+
+router.delete(
+    "/product-audits/:id/items/:itemId",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    manageInventory,
+    productAuditController.removeItem
+);
+
+router.patch(
+    "/product-audits/:id/items/:itemId",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    manageInventory,
+    validateUpdateAuditItem,
+    productAuditController.updateItem
+);
+
+router.post(
+    "/product-audits/:id/submit",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    manageInventory,
+    productAuditController.submitForReview
+);
+
+// Approve/reject are review actions — restricted to owner/admin, unlike the
+// count-entry endpoints above which staff can also perform.
+router.post(
+    "/product-audits/:id/approve",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin"),
+    validateApproveAudit,
+    productAuditController.approve
+);
+
+router.post(
+    "/product-audits/:id/reject",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin"),
+    validateRejectAudit,
+    productAuditController.reject
+);
+
+router.post(
+    "/product-audits/:id/reopen",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    manageInventory,
+    productAuditController.reopen
 );
 
 // ─── Consumable Usage (from Calendar appointments) ────────────────────────────
