@@ -3126,9 +3126,8 @@ export interface ClientRatingReportRow {
     staff_id: string | null;
     staff_name: string;
     rating: number;
-    staff_rating: number | null;
-    service_rating: number | null;
-    ambience_rating: number | null;
+    improvement_tags: string[];
+    service_ratings: Array<{ service_name: string; staff_name: string | null; rating: number; comment: string | null }>;
     review_text: string | null;
     review_date: string;
     source: string;

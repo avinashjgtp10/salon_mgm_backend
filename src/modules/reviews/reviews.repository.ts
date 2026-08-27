@@ -1,5 +1,5 @@
 import pool from "../../config/database"
-import { Review, ReviewStats, ListReviewsFilters, ReviewServiceRating } from "./reviews.types"
+import { Review, ReviewStats, ListReviewsFilters, ReviewServiceRating, ClientReviewEntry } from "./reviews.types"
 
 export const reviewsRepository = {
 
@@ -124,5 +124,39 @@ export const reviewsRepository = {
     } finally {
       client.release()
     }
+  },
+
+  // Client History → "Feedback & Review" tab — every review this client has
+  // submitted, each with its per-service breakdown attached (aggregated via
+  // a correlated subquery rather than a join, since a review can have
+  // several service_ratings rows and a plain join would duplicate the
+  // parent review once per service).
+  async listForClient(clientId: string, salonId: string): Promise<ClientReviewEntry[]> {
+    const { rows } = await pool.query(
+      `SELECT
+         r.id, r.booking_id AS appointment_id,
+         TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))) AS staff_name,
+         r.rating, r.staff_rating, r.service_rating, r.ambience_rating,
+         r.improvement_tags, r.additional_comments, r.created_at,
+         COALESCE((
+           SELECT json_agg(json_build_object(
+             'service_name', sr.service_name,
+             'staff_name',   sr.staff_name,
+             'rating',       sr.rating,
+             'comment',      sr.comment
+           ) ORDER BY sr.created_at)
+           FROM review_service_ratings sr
+           WHERE sr.review_id = r.id
+         ), '[]'::json) AS service_ratings
+       FROM reviews r
+       LEFT JOIN staff st ON st.id = r.staff_id
+       WHERE r.client_id = $1 AND r.salon_id = $2
+       ORDER BY r.created_at DESC`,
+      [clientId, salonId]
+    )
+    return rows.map((row: any) => ({
+      ...row,
+      staff_name: row.staff_name?.trim() || null,
+    }))
   },
 }

@@ -33,4 +33,18 @@ export const reviewsController = {
       return next(e)
     }
   },
+
+  // GET /api/v1/clients/:clientId/reviews — Client History's Feedback & Review tab
+  async listForClient(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId
+      if (!salonId) return res.status(400).json({ error: "salonId missing from token" })
+
+      const clientId = String(req.params.clientId || "").trim()
+      const data = await reviewsService.listForClient(clientId, salonId)
+      return res.status(200).json({ data })
+    } catch (e) {
+      return next(e)
+    }
+  },
 }

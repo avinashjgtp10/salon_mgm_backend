@@ -18453,12 +18453,20 @@ async getClientRatingReportRows(
       st.id AS staff_id,
       NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
       r.rating,
-      r.staff_rating,
-      r.service_rating,
-      r.ambience_rating,
+      r.improvement_tags,
       r.review_text,
       r.created_at AS review_date,
       r.source,
+      COALESCE((
+        SELECT json_agg(json_build_object(
+          'service_name', sr.service_name,
+          'staff_name',   sr.staff_name,
+          'rating',       sr.rating,
+          'comment',      sr.comment
+        ) ORDER BY sr.created_at)
+        FROM review_service_ratings sr
+        WHERE sr.review_id = r.id
+      ), '[]'::json) AS service_ratings,
       COALESCE((
         SELECT SUM(s.total_amount::numeric)
         FROM sales s
@@ -18485,9 +18493,8 @@ async getClientRatingReportRows(
     staff_id: row.staff_id,
     staff_name: row.staff_name ?? "—",
     rating: Number(row.rating ?? 0),
-    staff_rating: row.staff_rating !== null && row.staff_rating !== undefined ? Number(row.staff_rating) : null,
-    service_rating: row.service_rating !== null && row.service_rating !== undefined ? Number(row.service_rating) : null,
-    ambience_rating: row.ambience_rating !== null && row.ambience_rating !== undefined ? Number(row.ambience_rating) : null,
+    improvement_tags: row.improvement_tags ?? [],
+    service_ratings: row.service_ratings ?? [],
     review_text: row.review_text,
     review_date: row.review_date,
     source: row.source,
