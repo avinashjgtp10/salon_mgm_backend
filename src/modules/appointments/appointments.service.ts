@@ -261,11 +261,18 @@ function deriveDisplayStatus(appt: Appointment): Appointment {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+// DD-MM-YYYY — matches the frontend's app-wide standard date format (see
+// src/utils/dateFormat.ts's formatDateDDMMYYYY on the frontend), used here so
+// notification text (e.g. "New Appointment Booked") reads the same way.
 function formatDate(dateStr: string): string {
-    return new Date(dateStr).toLocaleDateString("en-IN", {
+    const parts = new Intl.DateTimeFormat("en-GB", {
         timeZone: "Asia/Kolkata",
-        day: "2-digit", month: "short", year: "numeric",
-    });
+        day: "2-digit", month: "2-digit", year: "numeric",
+    }).formatToParts(new Date(dateStr));
+    const day = parts.find(p => p.type === "day")?.value ?? "";
+    const month = parts.find(p => p.type === "month")?.value ?? "";
+    const year = parts.find(p => p.type === "year")?.value ?? "";
+    return `${day}-${month}-${year}`;
 }
 
 function formatTime(dateStr: string): string {
