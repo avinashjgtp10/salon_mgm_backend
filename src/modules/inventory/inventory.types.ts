@@ -57,6 +57,45 @@ export type CreateSupplierBody = {
 
 export type UpdateSupplierBody = Partial<CreateSupplierBody>;
 
+// ─── Supplier balance (derived from purchases − supplier_payments) ───────────
+
+export type SupplierPaymentStatus = "paid" | "due" | "overdue";
+
+export type SupplierWithBalance = Supplier & {
+    total_purchase_amount: number;
+    pending_order_count: number;
+    due_amount: number;
+    due_date: string | null;
+    status: SupplierPaymentStatus;
+};
+
+export type PayoutMethod = "cash" | "upi" | "bank_transfer" | "cheque" | "card" | "other";
+
+export type SupplierPayment = {
+    id: string;
+    salon_id: string;
+    supplier_id: string;
+    amount: number;
+    payment_date: string;
+    payment_method: PayoutMethod;
+    note: string | null;
+    created_by: string | null;
+    created_at: string;
+    updated_at: string;
+};
+
+export type CreateSupplierPaymentBody = {
+    amount: number;
+    payment_date: string;
+    payment_method: PayoutMethod;
+    note?: string;
+};
+
+export type ListSupplierPaymentsFilters = {
+    page?: number;
+    limit?: number;
+};
+
 // ─── Stock Movement ──────────────────────────────────────────────────────────
 
 export type MovementType = "in" | "out" | "adjustment" | "transfer";

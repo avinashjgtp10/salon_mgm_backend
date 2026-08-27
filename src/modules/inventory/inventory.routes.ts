@@ -2,6 +2,7 @@ import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { requirePermission } from "../../middleware/permission.middleware";
+import { uploadMiddleware } from "../../middleware/upload.middleware";
 import {
     suppliersController,
     stockMovementsController,
@@ -13,6 +14,8 @@ import {
 import { consumableInventoryController } from "./consumable-inventory.controller";
 import { productInventoryController } from "./product-inventory.controller";
 import { purchasesController } from "./purchases.controller";
+import { supplierPaymentsController } from "./supplier-payments.controller";
+import { ordersController } from "./orders.controller";
 import {
     validateCreateSupplier,
     validateUpdateSupplier,
@@ -20,6 +23,8 @@ import {
     validateStockTake,
 } from "./inventory.validator";
 import { validateCreatePurchase } from "./purchases.validator";
+import { validateCreateSupplierPayment } from "./supplier-payments.validator";
+import { validateCreateOrder } from "./orders.validator";
 
 const router = Router();
 const viewInventory = requirePermission("view_inventory");
@@ -65,6 +70,24 @@ router.delete(
     authMiddleware,
     roleMiddleware("salon_owner", "admin"),
     suppliersController.delete
+);
+
+// Payouts are a money-movement action, so restricted to owner/admin like
+// supplier create/update/delete — not opened up to staff via viewInventory.
+router.post(
+    "/suppliers/:id/payments",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin"),
+    validateCreateSupplierPayment,
+    supplierPaymentsController.create
+);
+
+router.get(
+    "/suppliers/:id/payments",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    supplierPaymentsController.list
 );
 
 // ─── Product Inventory (retail stock) ─────────────────────────────────────────
@@ -134,6 +157,54 @@ router.get(
     roleMiddleware("salon_owner", "admin", "staff"),
     viewInventory,
     purchasesController.getById
+);
+
+// ─── Orders (purchase orders — a document only, no stock movement) ──────────
+// Registered ahead of /stock-movements for the same "more specific first"
+// reason as Purchases above.
+
+// Signature upload/gallery must be registered BEFORE /orders/:id or Express
+// would match "upload-signature"/"signatures" as the :id param.
+router.post(
+    "/orders/upload-signature",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    manageInventory,
+    uploadMiddleware.single("signature"),
+    ordersController.uploadSignature
+);
+
+router.get(
+    "/orders/signatures",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    ordersController.listSignatures
+);
+
+router.post(
+    "/orders",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    manageInventory,
+    validateCreateOrder,
+    ordersController.create
+);
+
+router.get(
+    "/orders",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    ordersController.list
+);
+
+router.get(
+    "/orders/:id",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    ordersController.getById
 );
 
 // ─── Stock Movements ──────────────────────────────────────────────────────────

@@ -60,6 +60,7 @@ export const purchasesController = {
             const result = await purchasesRepository.list(
                 {
                     search: (req.query.search as string) || undefined,
+                    supplier_id: (req.query.supplier_id as string) || undefined,
                     page: asPositiveInt(req.query.page, 1),
                     limit: asPositiveInt(req.query.limit, 20),
                 },
