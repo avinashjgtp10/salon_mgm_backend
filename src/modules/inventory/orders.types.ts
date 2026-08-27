@@ -34,6 +34,7 @@ export interface Order {
     tax_group: string | null;
     terms_conditions: string | null;
     signature_url: string | null;
+    shipping_cost: number;
     total_quantity: number;
     total_price: number;
     created_by: string | null;
@@ -66,6 +67,7 @@ export interface CreateOrderDTO {
     tax_rate?: number;
     terms_conditions?: string;
     signature_url?: string;
+    shipping_cost?: number;
     items: CreateOrderItemDTO[];
 }
 

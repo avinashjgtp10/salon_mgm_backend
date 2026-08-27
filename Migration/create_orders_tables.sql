@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS orders (
   tax_group             VARCHAR(100),
   terms_conditions      TEXT,
   signature_url         TEXT,
+  shipping_cost         NUMERIC(12,2) NOT NULL DEFAULT 0,
   total_quantity        NUMERIC(12,3) NOT NULL DEFAULT 0,
   total_price           NUMERIC(12,2) NOT NULL DEFAULT 0,
   created_by            UUID,

@@ -55,6 +55,11 @@ export const validateCreateOrder = (
                 throw new AppError(400, "tax_rate must be a non-negative number", "VALIDATION_ERROR");
             }
         }
+        if (b.shipping_cost !== undefined && b.shipping_cost !== null) {
+            if (typeof b.shipping_cost !== "number" || !Number.isFinite(b.shipping_cost) || b.shipping_cost < 0) {
+                throw new AppError(400, "shipping_cost must be a non-negative number", "VALIDATION_ERROR");
+            }
+        }
         if (!isOptionalString(b.remark) || !isOptionalString(b.ref_number)
             || !isOptionalString(b.tax_group) || !isOptionalString(b.terms_conditions)
             || !isOptionalString(b.signature_url)) {

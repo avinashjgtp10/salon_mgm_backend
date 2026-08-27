@@ -47,8 +47,8 @@ export const ordersRepository = {
                            remark, ref_number, payment_terms_days,
                            shipment_date, delivery_date,
                            tax_type, tax_group, terms_conditions, signature_url,
-                           created_by
-                         ) VALUES ($1,$2,$3,$4,$5,COALESCE($6, CURRENT_DATE),$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+                           shipping_cost, created_by
+                         ) VALUES ($1,$2,$3,$4,$5,COALESCE($6, CURRENT_DATE),$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
                          RETURNING *`,
                         [
                             salonId, orderNumber, data.supplier_id,
@@ -56,7 +56,7 @@ export const ordersRepository = {
                             data.remark ?? null, data.ref_number ?? null, data.payment_terms_days ?? null,
                             data.shipment_date ?? null, data.delivery_date ?? null,
                             data.tax_type, data.tax_group ?? null, data.terms_conditions ?? null, data.signature_url ?? null,
-                            createdBy,
+                            data.shipping_cost ?? 0, createdBy,
                         ],
                     );
                     await client.query("RELEASE SAVEPOINT order_insert_attempt");
@@ -98,9 +98,16 @@ export const ordersRepository = {
                 items.push(itemRows[0]);
             }
 
+            // total_price is the grand total shown as "TOTAL" in the Order
+            // Summary — line totals (after per-line discount) plus tax and
+            // shipping, not just the raw line subtotal.
+            const totalTaxAmount = items.reduce((sum, item) => sum + Number(item.total_tax), 0);
+            const shippingCost = data.shipping_cost ?? 0;
+            const grandTotal = totalPrice + totalTaxAmount + shippingCost;
+
             const { rows: updatedOrderRows } = await client.query(
                 `UPDATE orders SET total_quantity = $1, total_price = $2, updated_at = NOW() WHERE id = $3 RETURNING *`,
-                [totalQuantity, totalPrice, order.id],
+                [totalQuantity, grandTotal, order.id],
             );
             order = updatedOrderRows[0];
 
