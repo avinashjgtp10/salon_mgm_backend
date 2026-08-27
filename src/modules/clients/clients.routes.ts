@@ -8,6 +8,7 @@ import { clientsController } from "./clients.controller";
 import { upload } from "./clients.upload";
 import { clientNotesController } from "../client-notes/client-notes.controller";
 import { clientCommunicationController } from "../client-communication/client-communication.controller";
+import { reviewsController } from "../reviews/reviews.controller";
 import {
     validateCreateClient,
     validateUpdateClient,
@@ -97,5 +98,8 @@ router.delete("/:clientId/notes/:id", authMiddleware, ownerAdminStaff, clientNot
 
 // COMMUNICATIONS
 router.get("/:clientId/communications", authMiddleware, ownerAdminStaff, clientCommunicationController.list);
+
+// FEEDBACK & REVIEW
+router.get("/:clientId/reviews", authMiddleware, ownerAdminStaff, reviewsController.listForClient);
 
 export default router;
