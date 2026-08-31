@@ -9,8 +9,6 @@ import {
 
 const REASON_LABEL: Record<InventoryTransactionParams["reason"], string> = {
   consumable_usage: "Consumable usage",
-  retail_sale: "Retail sale",
-  waste: "Waste",
   adjustment: "Adjustment",
 };
 

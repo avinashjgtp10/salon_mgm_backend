@@ -7,6 +7,50 @@ import { CreatePurchaseDTO, ListPurchaseFilters, Purchase, PurchaseItem } from "
 // auto-run. See Migration/create_purchases_tables.sql; run it by hand
 // against each environment before using this module.
 
+// Payouts are always general balance payments against a supplier (see
+// supplier_payments — no per-order linkage), but the Orders tab still wants
+// to show each order as paid/due/overdue. Allocate the supplier's total
+// payments across their orders oldest-first (FIFO) purely for that display —
+// this is a read-time projection, not a stored allocation, so it always
+// reflects the current total regardless of which orders happen to be on the
+// current page.
+async function withPaymentStatus(rows: any[], supplierId: string, salonId: string): Promise<any[]> {
+    const { rows: paidRows } = await pool.query(
+        `SELECT COALESCE(SUM(amount), 0)::float8 AS total_paid
+           FROM supplier_payments
+          WHERE supplier_id = $1 AND salon_id = $2`,
+        [supplierId, salonId],
+    );
+    let remainingCredit = Number(paidRows[0].total_paid) || 0;
+
+    const { rows: allOrders } = await pool.query(
+        `SELECT id, total_amount, purchase_date FROM purchases
+          WHERE supplier_id = $1 AND salon_id = $2
+          ORDER BY purchase_date ASC, created_at ASC`,
+        [supplierId, salonId],
+    );
+
+    const amountDueById = new Map<string, number>();
+    for (const order of allOrders) {
+        const total = Number(order.total_amount) || 0;
+        const applied = Math.min(remainingCredit, total);
+        remainingCredit -= applied;
+        amountDueById.set(order.id, Math.max(0, total - applied));
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    return rows.map((row) => {
+        const total = Number(row.total_amount) || 0;
+        const due = amountDueById.get(row.id) ?? total;
+        const paid = total - due;
+        const purchaseDate = row.purchase_date instanceof Date
+            ? row.purchase_date.toISOString().slice(0, 10)
+            : String(row.purchase_date).slice(0, 10);
+        const status = due <= 0 ? "paid" : purchaseDate < today ? "overdue" : "due";
+        return { ...row, amount_paid: paid, amount_due: due, payment_status: status };
+    });
+}
+
 export const purchasesRepository = {
     /**
      * Records a purchase from a supplier: one header row, one row per product
@@ -63,10 +107,10 @@ export const purchasesRepository = {
                 await client.query("SAVEPOINT purchase_insert_attempt");
                 try {
                     const purchaseResult = await client.query(
-                        `INSERT INTO purchases (salon_id, supplier_id, purchase_number, purchase_date, created_by)
-                         VALUES ($1, $2, $3, COALESCE($4, CURRENT_DATE), $5)
+                        `INSERT INTO purchases (salon_id, supplier_id, purchase_number, purchase_date, created_by, order_id)
+                         VALUES ($1, $2, $3, COALESCE($4, CURRENT_DATE), $5, $6)
                          RETURNING *`,
-                        [salonId, data.supplier_id, purchaseNumber, data.purchase_date ?? null, createdBy],
+                        [salonId, data.supplier_id, purchaseNumber, data.purchase_date ?? null, createdBy, data.order_id ?? null],
                     );
                     await client.query("RELEASE SAVEPOINT purchase_insert_attempt");
                     purchase = purchaseResult.rows[0];
@@ -169,6 +213,10 @@ export const purchasesRepository = {
             values.push(`%${filters.search}%`);
             idx++;
         }
+        if (filters.supplier_id) {
+            conditions.push(`pu.supplier_id = $${idx++}`);
+            values.push(filters.supplier_id);
+        }
 
         const where = `WHERE ${conditions.join(" AND ")}`;
         const page = Math.max(1, filters.page ?? 1);
@@ -191,6 +239,13 @@ export const purchasesRepository = {
               LIMIT $${idx++} OFFSET $${idx++}`,
             [...values, limit, offset],
         );
+
+        // Only worth computing per-order payment status when scoped to one
+        // supplier (the Supplier Detail Orders tab) — the plain Purchase
+        // History list has no due/payment concept and doesn't need it.
+        if (filters.supplier_id && rows.length) {
+            return { data: await withPaymentStatus(rows, filters.supplier_id, salonId), total };
+        }
 
         return { data: rows, total };
     },

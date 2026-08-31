@@ -92,10 +92,9 @@ async function applyMembershipDiscountForBooking(
     const percentageMembership = await clientMembershipsRepository.findActivePercentageForClient(clientId, salonId);
     if (percentageMembership) {
       const appliesTo = percentageMembership.appliesTo;
-      const categoryIds = percentageMembership.categoryIds;
       const eligible = [
-        ...(appliesTo !== 'products' ? serviceItems.filter((i) => !i.isPackageService && i.amount > 0 && matchesCategoryRestriction(i, categoryIds, percentageMembership.serviceIds)) : []),
-        ...(appliesTo !== 'services' ? productItems.filter((i) => i.amount > 0 && matchesCategoryRestriction(i, categoryIds, percentageMembership.productIds)) : []),
+        ...(appliesTo !== 'products' ? serviceItems.filter((i) => !i.isPackageService && i.amount > 0 && matchesCategoryRestriction(i, percentageMembership.serviceCategoryIds, percentageMembership.serviceIds)) : []),
+        ...(appliesTo !== 'services' ? productItems.filter((i) => i.amount > 0 && matchesCategoryRestriction(i, percentageMembership.productCategoryIds, percentageMembership.productIds)) : []),
       ];
       if (eligible.length) {
         const result = await clientMembershipsRepository.deductDiscountBalanceForBooking(
@@ -117,8 +116,8 @@ async function applyMembershipDiscountForBooking(
     const loyalty = await membershipsRepository.findLoyaltyEligibility(clientId, salonId);
     if (loyalty?.eligible) {
       const eligible = [
-        ...(loyalty.appliesTo !== 'products' ? serviceItems.filter((i) => !i.isPackageService && i.amount > 0 && matchesCategoryRestriction(i, loyalty.categoryIds, loyalty.serviceIds)) : []),
-        ...(loyalty.appliesTo !== 'services' ? productItems.filter((i) => i.amount > 0 && matchesCategoryRestriction(i, loyalty.categoryIds, loyalty.productIds)) : []),
+        ...(loyalty.appliesTo !== 'products' ? serviceItems.filter((i) => !i.isPackageService && i.amount > 0 && matchesCategoryRestriction(i, loyalty.serviceCategoryIds, loyalty.serviceIds)) : []),
+        ...(loyalty.appliesTo !== 'services' ? productItems.filter((i) => i.amount > 0 && matchesCategoryRestriction(i, loyalty.productCategoryIds, loyalty.productIds)) : []),
       ];
       const { total: loyaltyTotal, discounts } = allocateMembershipDiscount(eligible.map((i) => i.amount), loyalty.discountPercent, Infinity);
       total += loyaltyTotal;
@@ -846,12 +845,13 @@ export const paymentsService = {
     // Run both on one transaction so a ledger failure rolls back the
     // payment instead of being silently swallowed.
     let payment: Payment;
+    let rewardPointsRemainingAfterRedeem: number | null = null;
     if (data.client_id && rewardPointsRedeemedActual > 0) {
       const txClient = await pool.connect();
       try {
         await txClient.query('BEGIN');
         payment = await paymentsRepository.create(data, txClient);
-        await rewardPointsRepository.applyLedgerEntry({
+        rewardPointsRemainingAfterRedeem = await rewardPointsRepository.applyLedgerEntry({
           clientId: data.client_id,
           salonId: data.salon_id,
           type: 'redeem',
@@ -866,6 +866,32 @@ export const paymentsService = {
         throw err;
       } finally {
         txClient.release();
+      }
+
+      // ── WhatsApp Automation: Reward Points Used ─────────────────────────
+      // Fired outside the transaction — network I/O has no business holding
+      // a DB transaction open, and the redemption itself is already durably
+      // committed by this point regardless of whether the notification send
+      // succeeds.
+      const spender = await clientsRepository.findById(data.client_id, data.salon_id);
+      if (spender?.phone_number) {
+        const salon = await salonsRepository.findById(data.salon_id);
+        whatsappAutomationService.trigger({
+          salonId:       data.salon_id,
+          eventType:     'reward_points_used',
+          clientId:      data.client_id,
+          phone:         spender.phone_number,
+          countryCode:   spender.phone_country_code ?? null,
+          variables: {
+            '1': spender.full_name ?? 'Valued Customer',
+            '2': String(rewardPointsRedeemedActual),
+            '3': salon?.business_name ?? 'our salon',
+            '4': String(rewardPointsRemainingAfterRedeem ?? 0),
+          },
+          referenceId:   payment.id,
+          referenceType: 'payment',
+          dedupeByReference: true,
+        }).catch(() => {});
       }
     } else {
       payment = await paymentsRepository.create(data);
@@ -917,7 +943,7 @@ export const paymentsService = {
     // payment row exists — mirrors the eWallet redeem block above exactly.
     if (data.client_id && referralCreditUsedActual > 0) {
       try {
-        await referralRepository.applyLedgerEntry({
+        const remainingBalance = await referralRepository.applyLedgerEntry({
           clientId: data.client_id,
           salonId: data.salon_id,
           type: 'redeem',
@@ -926,6 +952,28 @@ export const paymentsService = {
           sourceId: payment.id,
           note: `Used ₹${referralCreditUsedActual.toFixed(2)} referral credit for payment`,
         });
+
+        // ── WhatsApp Automation: Referral Credit Used ──────────────────────
+        const spender = await clientsRepository.findById(data.client_id, data.salon_id);
+        if (spender?.phone_number) {
+          const salon = await salonsRepository.findById(data.salon_id);
+          whatsappAutomationService.trigger({
+            salonId:       data.salon_id,
+            eventType:     'referral_credit_used',
+            clientId:      data.client_id,
+            phone:         spender.phone_number,
+            countryCode:   spender.phone_country_code ?? null,
+            variables: {
+              '1': spender.full_name ?? 'Valued Customer',
+              '2': referralCreditUsedActual.toFixed(2),
+              '3': salon?.business_name ?? 'our salon',
+              '4': remainingBalance.toFixed(2),
+            },
+            referenceId:   payment.id,
+            referenceType: 'payment',
+            dedupeByReference: true,
+          }).catch(() => {});
+        }
       } catch (err: any) {
         logger.warn('[payments] referral credit redeem ledger write failed:', err?.message ?? err);
       }
