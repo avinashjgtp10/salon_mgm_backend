@@ -197,25 +197,6 @@ export type StockReconciliationRow = {
     remark: string;
 };
 
-export type ReconciliationItemBody = {
-    product_id: string;
-    adjust_stock: number;
-    adjust_consumable: number;
-    remark?: string;
-};
-
-export type SaveReconciliationBody = {
-    branch_id: string;
-    items: ReconciliationItemBody[];
-};
-
-export type SaveReconciliationRowBody = {
-    branch_id: string;
-    product_id: string;
-    adjust_stock: number;
-    adjust_consumable: number;
-    remark?: string;
-};
 
 // ─── Consumable Usage ────────────────────────────────────────────────────────
 

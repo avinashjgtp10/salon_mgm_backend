@@ -1,5 +1,7 @@
 import pool from "../../config/database";
-import { CreateOrderDTO, ListOrderFilters, Order, OrderItem, OrderSignature } from "./orders.types";
+import { AppError } from "../../middleware/error.middleware";
+import { CreateOrderDTO, ListOrderFilters, Order, OrderItem, OrderSignature, ReceiveOrderDTO } from "./orders.types";
+import { purchasesRepository } from "./purchases.repository";
 
 // Schema (orders, order_items, order_signatures, salons.next_order_seq) is
 // NOT self-migrated from here — per project policy, schema changes are never
@@ -8,10 +10,10 @@ import { CreateOrderDTO, ListOrderFilters, Order, OrderItem, OrderSignature } fr
 
 export const ordersRepository = {
     /**
-     * Records a purchase order as a standalone document — header + line
-     * items, its own sequential order number. Unlike purchasesRepository's
-     * create(), this never touches products.amount or stock_movements: an
-     * Order precedes receiving, it doesn't record a delivery.
+     * Records a purchase order document — header + line items, its own
+     * sequential order number. Creating an Order itself never touches
+     * products.amount or stock_movements: an Order precedes receiving, it
+     * doesn't record a delivery — see receive() below for the step that does.
      *
      * Per-line math (see NewOrderPage): discount_percent is a percentage,
      * cost_price is entered tax-exclusive so cost_wo_tax === cost_price,
@@ -42,16 +44,16 @@ export const ordersRepository = {
                 try {
                     const orderResult = await client.query(
                         `INSERT INTO orders (
-                           salon_id, order_number, supplier_id,
+                           salon_id, order_number, status, supplier_id,
                            bill_to_branch_id, ship_to_branch_id, order_date,
                            remark, ref_number, payment_terms_days,
                            shipment_date, delivery_date,
                            tax_type, tax_group, terms_conditions, signature_url,
                            shipping_cost, created_by
-                         ) VALUES ($1,$2,$3,$4,$5,COALESCE($6, CURRENT_DATE),$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+                         ) VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7, CURRENT_DATE),$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
                          RETURNING *`,
                         [
-                            salonId, orderNumber, data.supplier_id,
+                            salonId, orderNumber, data.status === "draft" ? "draft" : "sent", data.supplier_id,
                             data.bill_to_branch_id ?? null, data.ship_to_branch_id ?? null, data.order_date ?? null,
                             data.remark ?? null, data.ref_number ?? null, data.payment_terms_days ?? null,
                             data.shipment_date ?? null, data.delivery_date ?? null,
@@ -267,6 +269,87 @@ export const ordersRepository = {
         );
 
         return { ...orderRows[0], items: itemRows };
+    },
+
+    /**
+     * Records a delivery against this Order — the step the diagrammed flow
+     * calls "Receive Against Order". Reuses purchasesRepository.create()
+     * for the actual stock-in (products.amount + stock_movements + a
+     * SUP-numbered Purchase row, order_id-linked) rather than duplicating
+     * that transaction here, so this and a standalone Purchase always move
+     * stock identically. Supports partial receiving: each call only sends
+     * the quantities that arrived THIS delivery; order_items.received_qty
+     * accumulates across calls, and the order's status is derived from it.
+     */
+    async receive(orderId: string, data: ReceiveOrderDTO, salonId: string, createdBy: string): Promise<Order> {
+        const order = await this.getById(orderId, salonId);
+        if (!order) throw new AppError(404, "Order not found", "ORDER_NOT_FOUND");
+        if (order.status === "cancelled") throw new AppError(400, "Cannot receive a cancelled order", "ORDER_CANCELLED");
+        if (order.status === "received") throw new AppError(400, "Order is already fully received", "ORDER_ALREADY_RECEIVED");
+
+        const itemsById = new Map((order.items ?? []).map((i) => [i.id, i]));
+        const purchaseItems: { product_id: string; quantity: number; purchase_price: number }[] = [];
+
+        for (const line of data.items) {
+            const orderItem = itemsById.get(line.order_item_id);
+            if (!orderItem) throw new AppError(400, `order_item_id ${line.order_item_id} does not belong to this order`, "VALIDATION_ERROR");
+            const remaining = Number(orderItem.qty) - Number(orderItem.received_qty);
+            if (line.received_qty > remaining + 0.001) {
+                throw new AppError(400, `Cannot receive ${line.received_qty} of "${orderItem.product_name ?? orderItem.product_id}" — only ${remaining} remaining on this order`, "VALIDATION_ERROR");
+            }
+            if (line.received_qty > 0) {
+                purchaseItems.push({ product_id: orderItem.product_id, quantity: line.received_qty, purchase_price: Number(orderItem.cost_price) });
+            }
+        }
+
+        if (!purchaseItems.length) throw new AppError(400, "At least one item must have a received quantity > 0", "VALIDATION_ERROR");
+
+        // The actual stock-in — same code path a standalone Purchase uses,
+        // so products.amount/stock_movements/supplier balance all update
+        // exactly the way they already do today.
+        await purchasesRepository.create(
+            { supplier_id: order.supplier_id, purchase_date: data.purchase_date, order_id: orderId, items: purchaseItems },
+            salonId,
+            createdBy,
+        );
+
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            for (const line of data.items) {
+                if (line.received_qty <= 0) continue;
+                await client.query(
+                    `UPDATE order_items SET received_qty = received_qty + $1 WHERE id = $2`,
+                    [line.received_qty, line.order_item_id],
+                );
+            }
+            const { rows: refreshedItems } = await client.query(
+                `SELECT qty, received_qty FROM order_items WHERE order_id = $1`,
+                [orderId],
+            );
+            const fullyReceived = refreshedItems.every((r) => Number(r.received_qty) >= Number(r.qty) - 0.001);
+            const anyReceived = refreshedItems.some((r) => Number(r.received_qty) > 0);
+            const newStatus = fullyReceived ? "received" : anyReceived ? "partially_received" : order.status;
+            await client.query(`UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2`, [newStatus, orderId]);
+            await client.query("COMMIT");
+        } catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        } finally {
+            client.release();
+        }
+
+        return (await this.getById(orderId, salonId))!;
+    },
+
+    async cancel(orderId: string, salonId: string): Promise<Order> {
+        const order = await this.getById(orderId, salonId);
+        if (!order) throw new AppError(404, "Order not found", "ORDER_NOT_FOUND");
+        if (order.status === "received" || order.status === "partially_received") {
+            throw new AppError(400, "Cannot cancel an order that has already been received against", "ORDER_ALREADY_RECEIVED");
+        }
+        await pool.query(`UPDATE orders SET status = 'cancelled', updated_at = NOW() WHERE id = $1 AND salon_id = $2`, [orderId, salonId]);
+        return (await this.getById(orderId, salonId))!;
     },
 
     async listSignatures(salonId: string): Promise<OrderSignature[]> {
