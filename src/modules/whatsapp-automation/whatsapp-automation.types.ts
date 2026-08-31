@@ -205,3 +205,94 @@ export type ListAutomationLogsFilters = {
   page?:       number
   limit?:      number
 }
+
+// ── Scheduled Templates ──────────────────────────────────────────────────────
+// Events with a genuine future date, known the moment their source entity is
+// created (a package's expiry date, an appointment's time, a client's
+// birthday) — these get a REAL wa_scheduled_messages row created ahead of
+// time, at source-creation, not computed by a same-instant poll like every
+// other event above.
+export const SCHEDULABLE_GROUP_A: AutomationEventType[] = [
+  'package_expiring_7d',
+  'package_expiring_24h',
+  'membership_expiring_7d',
+  'membership_expiring_24h',
+  'package_appointment_reminder_24h',
+  'service_reminder_24h',
+  'birthday_wishes',
+  'new_year_campaign',
+]
+
+// Events whose firing depends on an ongoing condition (an unpaid balance, a
+// client's inactivity) that can resolve on any given day — no fixed date to
+// commit to days in advance. Shown as a 1-day-ahead rolling preview,
+// recomputed nightly; a row can vanish before it's ever due if the
+// underlying condition stops being true.
+export const SCHEDULABLE_GROUP_B: AutomationEventType[] = [
+  'pending_payment_reminder',
+  'we_miss_you_30d',
+  'we_miss_you_60d',
+  'we_miss_you_90d',
+]
+
+export const SCHEDULABLE_EVENTS: AutomationEventType[] = [
+  ...SCHEDULABLE_GROUP_A,
+  ...SCHEDULABLE_GROUP_B,
+]
+
+export type ScheduledMessageStatus =
+  | 'SCHEDULED'
+  | 'SENDING'
+  | 'SENT'
+  | 'FAILED'
+  | 'SKIPPED'
+  | 'CANCELLED'
+
+export type ScheduledMessage = {
+  id:                 string
+  salon_id:           string
+  client_id:          string | null
+  phone_number:       string
+  phone_country_code: string | null
+  event_type:         AutomationEventType
+  is_preview:         boolean
+  reference_id:       string | null
+  reference_type:     string | null
+  scheduled_at:       string
+  status:             ScheduledMessageStatus
+  variables:          Record<string, string>
+  message_preview:    string | null
+  failure_reason:     string | null
+  attempt_count:      number
+  sent_at:            string | null
+  cancelled_at:       string | null
+  automation_log_id:  string | null
+  created_at:         string
+  updated_at:         string
+}
+
+export type UpsertScheduledParams = {
+  salonId:           string
+  clientId?:         string | null
+  phone:             string
+  countryCode?:      string | null
+  eventType:         AutomationEventType
+  referenceId:       string
+  referenceType:     string
+  scheduledAt:       Date | string
+  variables:         Record<string, string>
+  messagePreview:    string
+  isPreview?:        boolean
+}
+
+export type ListScheduledMessagesFilters = {
+  salonId:    string
+  status?:    ScheduledMessageStatus
+  eventType?: AutomationEventType
+  clientId?:  string
+  dateFrom?:  string
+  dateTo?:    string
+  search?:    string
+  page?:      number
+  limit?:     number
+}

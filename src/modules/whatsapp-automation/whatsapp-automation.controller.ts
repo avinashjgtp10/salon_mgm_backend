@@ -4,6 +4,7 @@
 
 import { Request, Response, NextFunction } from 'express'
 import { whatsappAutomationService } from './whatsapp-automation.service'
+import { waScheduledMessagesService } from './wa-scheduled-messages.service'
 import { sendSuccess } from '../utils/response.util'
 import { AppError } from '../../middleware/error.middleware'
 import { getSalonId } from '../utils/salon.util'
@@ -125,34 +126,26 @@ export const whatsappAutomationController = {
   // jobName: birthday | pending-payment | package-expiring-7d | package-expiring-24h |
   //          membership-expiring-7d | membership-expiring-24h | package-appointment-reminder-24h |
   //          service-reminder-24h | we-miss-you-30 | we-miss-you-60 | we-miss-you-90 | new-year
+  // package-expiring/membership-expiring/appointment-reminders/birthday/
+  // we-miss-you/new-year/pending-payment moved to the Scheduled Templates
+  // system (see wa-scheduled-messages.service.ts) — they're no longer
+  // same-instant jobs, so there's nothing left here to manually re-trigger
+  // for them; use the Scheduled Templates list's Send Now/Retry Now actions
+  // on the specific row instead. The two cases below are for manually
+  // poking the new system during testing.
   async runJob(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const job = req.params.jobName as string
       switch (job) {
-        case 'birthday':
-          await whatsappAutomationService.runBirthdayWishes(); break
-        case 'pending-payment':
-          await whatsappAutomationService.runPendingPaymentReminders(); break
-        case 'package-expiring-7d':
-          await whatsappAutomationService.runPackageExpiringReminders(7); break
-        case 'package-expiring-24h':
-          await whatsappAutomationService.runPackageExpiringReminders(1); break
-        case 'membership-expiring-7d':
-          await whatsappAutomationService.runMembershipExpiringReminders(7); break
-        case 'membership-expiring-24h':
-          await whatsappAutomationService.runMembershipExpiringReminders(1); break
-        case 'package-appointment-reminder-24h':
-          await whatsappAutomationService.runPackageAppointmentReminders24h(); break
-        case 'service-reminder-24h':
-          await whatsappAutomationService.runServiceReminders24h(); break
-        case 'we-miss-you-30':
-          await whatsappAutomationService.runWeMissYou(30); break
-        case 'we-miss-you-60':
-          await whatsappAutomationService.runWeMissYou(60); break
-        case 'we-miss-you-90':
-          await whatsappAutomationService.runWeMissYou(90); break
-        case 'new-year':
-          await whatsappAutomationService.runNewYearCampaign(); break
+        case 'scheduled-due-tick':
+          await waScheduledMessagesService.runDueTick(); break
+        case 'scheduled-group-b-preview':
+          await Promise.allSettled([
+            waScheduledMessagesService.upsertGroupBPreview('pending_payment_reminder'),
+            waScheduledMessagesService.upsertGroupBPreview('we_miss_you_30d'),
+            waScheduledMessagesService.upsertGroupBPreview('we_miss_you_60d'),
+            waScheduledMessagesService.upsertGroupBPreview('we_miss_you_90d'),
+          ]); break
         default:
           return next(new AppError(400, `Unknown job: ${job}`, 'VALIDATION_ERROR'))
       }

@@ -16,6 +16,7 @@ import { blockedTimesRepository } from "../blocked_times/blocked_times.repositor
 import { recordTransaction } from "../transactions/transaction-recorder.service";
 import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
 import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
+import { waScheduledMessagesService } from "../whatsapp-automation/wa-scheduled-messages.service";
 import { attendanceService } from "../attendance/attendance.service";
 import { notificationsService } from "../notifications/notifications.service";
 import { emailService } from "../utils/email.service";
@@ -618,6 +619,27 @@ export const appointmentsService = {
             }
         }
 
+        // ── Scheduled Templates: service_reminder_24h ─────────────────────────
+        // Package-linked appointments (booked via scheduleServicesForPackage in
+        // client-packages.service.ts) get package_appointment_reminder_24h
+        // instead, scheduled separately at that call site — skip here so the
+        // client isn't scheduled two reminders for the same visit, mirroring
+        // getAppointmentsForReminder24h()'s own exclusion of package-linked rows.
+        if (full && (full as any).client_phone) {
+            const isPackageLinked = (full.services ?? []).some((s: any) => s.is_package_service);
+            if (!isPackageLinked) {
+                waScheduledMessagesService.scheduleAppointmentReminder({
+                    salonId: full.salon_id, clientId: full.client_id,
+                    phone: (full as any).client_phone, countryCode: (full as any).client_phone_code ?? null,
+                    appointmentId: full.id, scheduledAt: full.scheduled_at,
+                    clientName: full.client_name ?? "Valued Customer",
+                    salonName: (full as any).salon_name ?? "our salon",
+                    serviceName: full.services?.[0]?.name ?? full.title ?? "your service",
+                    staffName: full.staff_name ?? "our team",
+                }).catch((err: any) => logger.error("[wa-scheduled] service_reminder_24h schedule failed:", err?.message ?? err));
+            }
+        }
+
         // ── Email: New Appointment (to salon owner) ───────────────────────────
         ;(async () => {
             try {
@@ -963,6 +985,11 @@ export const appointmentsService = {
         if (patch.scheduled_at && new Date(patch.scheduled_at).getTime() !== new Date(existing.scheduled_at).getTime()) {
             clientPackagesService.rescheduleForAppointment(appointmentId, patch.scheduled_at)
                 .catch((err: any) => logger.error("[client-packages] rescheduleForAppointment failed:", err?.message ?? err));
+            // service_reminder_24h (the non-package-linked reminder) — the
+            // package-linked one is handled inside rescheduleForAppointment above.
+            const newReminderAt = new Date(new Date(patch.scheduled_at).getTime() - 24 * 3600_000);
+            waScheduledMessagesService.rescheduleForReference('appointment', appointmentId, 'service_reminder_24h', newReminderAt)
+                .catch((err: any) => logger.error("[wa-scheduled] reschedule-on-move failed:", err?.message ?? err));
         }
 
         // ── WhatsApp Automation: Appointment Rescheduled ──────────────────────
@@ -1017,6 +1044,10 @@ export const appointmentsService = {
         // created by the package-sale scheduling flow.
         clientPackagesService.cancelScheduleForAppointment(params.appointmentId)
             .catch((err: any) => logger.error("[client-packages] cancelScheduleForAppointment failed:", err?.message ?? err));
+        // service_reminder_24h (the non-package-linked reminder) — the
+        // package-linked one is handled inside cancelScheduleForAppointment above.
+        waScheduledMessagesService.cancelForReference('appointment', params.appointmentId, 'service_reminder_24h')
+            .catch((err: any) => logger.error("[wa-scheduled] cancel-on-cancel failed:", err?.message ?? err));
 
         // Restore stock for cancelled appointment products (fire-and-forget)
         const cancelledProducts = (existing.product_items ?? []).filter(p => p.product_id);

@@ -4,6 +4,7 @@ import { sendPurchaseReceipt } from "../sales/receipt-send.helper";
 import { appointmentsService } from "../appointments/appointments.service";
 import { getPackageNoShowPolicy } from "./package-settings.util";
 import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
+import { waScheduledMessagesService } from "../whatsapp-automation/wa-scheduled-messages.service";
 import { salonsRepository } from "../salons/salons.repository";
 import type { Sale, SaleItem } from "../sales/sales.types";
 import logger from "../../config/logger";
@@ -110,6 +111,10 @@ async function scheduleServicesForPackage(params: {
   clientId: string;
   packageId: string;
   requesterUserId?: string;
+  // Threaded through purely so the package_appointment_reminder_24h
+  // scheduled row (below) can be created without a second DB round-trip —
+  // the caller (create()/autoCreateFromPayment()) already has all of this.
+  reminderContext?: { phone: string | null; countryCode: string | null; clientName: string; packageName: string; salonName: string };
   items: Array<{
     createdService: { serviceId: string; serviceName: string; catalogServiceId: string | null };
     schedule: { scheduledAt: string; staffId?: string; durationMinutes?: number };
@@ -159,6 +164,18 @@ async function scheduleServicesForPackage(params: {
           staffId:                schedule.staffId ?? null,
           scheduledAt:            schedule.scheduledAt,
         });
+
+        // ── Scheduled Templates: package_appointment_reminder_24h ──────────
+        if (params.reminderContext?.phone) {
+          await waScheduledMessagesService.scheduleAppointmentReminder({
+            salonId: params.salonId, clientId: params.clientId,
+            phone: params.reminderContext.phone, countryCode: params.reminderContext.countryCode,
+            appointmentId: appointment.id, scheduledAt: schedule.scheduledAt,
+            clientName: params.reminderContext.clientName, salonName: params.reminderContext.salonName,
+            serviceName: createdService.serviceName,
+            packageLinked: { packageName: params.reminderContext.packageName },
+          }).catch((err: any) => logger.error("[wa-scheduled] package_appointment_reminder_24h schedule failed:", err?.message ?? err));
+        }
       }),
     );
     results.forEach((result, i) => {
@@ -192,6 +209,13 @@ export const clientPackagesService = {
   async create(salonId: string, dto: CreateClientPackageDTO, requesterUserId?: string): Promise<ClientPackage> {
     const pkg = await clientPackagesRepository.create(salonId, dto);
 
+    // Fetched once, reused below for both the package_appointment_reminder_24h
+    // scheduling context and the package_purchased trigger's salon_name.
+    const salon = pkg.mobile ? await salonsRepository.findById(salonId) : null;
+    const reminderContext = pkg.mobile
+      ? { phone: pkg.mobile, countryCode: null, clientName: pkg.clientName ?? "Valued Customer", packageName: pkg.packageName, salonName: salon?.business_name ?? "our salon" }
+      : undefined;
+
     // ── Auto-schedule future appointments for services that carried a `schedule` ──
     // dto.services and pkg.services are index-aligned (repository.create()
     // reorders its result to guarantee this).
@@ -203,9 +227,19 @@ export const clientPackagesService = {
 
     if (toSchedule.length > 0) {
       const schedulingErrors = await scheduleServicesForPackage({
-        salonId, clientId: dto.clientId, packageId: pkg.id, requesterUserId, items: toSchedule,
+        salonId, clientId: dto.clientId, packageId: pkg.id, requesterUserId, reminderContext, items: toSchedule,
       });
       if (schedulingErrors.length > 0) pkg.schedulingErrors = schedulingErrors;
+    }
+
+    // ── Scheduled Templates: package_expiring_7d / package_expiring_24h ────
+    if (pkg.mobile && pkg.expiryDate) {
+      waScheduledMessagesService.schedulePackageExpiry({
+        salonId, clientId: dto.clientId, phone: pkg.mobile, countryCode: null,
+        packageId: pkg.id, packageName: pkg.packageName, clientName: pkg.clientName ?? "Valued Customer",
+        expiryDate: pkg.expiryDate,
+        remainingSessions: pkg.services.reduce((sum, s) => sum + s.remainingSessions, 0),
+      }).catch((err: any) => logger.error("[wa-scheduled] package expiry schedule failed:", err?.message ?? err));
     }
 
     // ── Auto-create sale record so package revenue appears in dashboard ────────
@@ -302,12 +336,25 @@ export const clientPackagesService = {
   async update(id: string, salonId: string, dto: UpdateClientPackageDTO): Promise<ClientPackage> {
     const pkg = await clientPackagesRepository.update(id, salonId, dto);
     if (!pkg) throw { statusCode: 404, message: "Client package not found" };
+    // A direct expiry-date edit (outside the normal purchase/renewal flow)
+    // must move its expiry reminders too, or they go stale — same reasoning
+    // as the reschedule-on-appointment-move hook above.
+    if (dto.expiryDate && pkg.mobile) {
+      waScheduledMessagesService.schedulePackageExpiry({
+        salonId, clientId: pkg.clientId, phone: pkg.mobile, countryCode: null,
+        packageId: pkg.id, packageName: pkg.packageName, clientName: pkg.clientName ?? "Valued Customer",
+        expiryDate: pkg.expiryDate,
+        remainingSessions: pkg.services.reduce((sum, s) => sum + s.remainingSessions, 0),
+      }).catch((err: any) => logger.error("[wa-scheduled] expiry reschedule-on-edit failed:", err?.message ?? err));
+    }
     return pkg;
   },
 
   async delete(id: string, salonId: string): Promise<void> {
     const deleted = await clientPackagesRepository.delete(id, salonId);
     if (!deleted) throw { statusCode: 404, message: "Client package not found" };
+    waScheduledMessagesService.cancelForReference('package', id)
+      .catch((err: any) => logger.error("[wa-scheduled] cancel-on-delete failed:", err?.message ?? err));
   },
 
   async completeSession(
@@ -366,6 +413,10 @@ export const clientPackagesService = {
       appointmentId,
     });
     await clientPackagesRepository.updateScheduleStatusByAppointmentId(appointmentId, "Completed");
+    // The visit already happened — a "your appointment is tomorrow" reminder
+    // scheduled for this appointment (if it hadn't fired yet) no longer makes sense.
+    waScheduledMessagesService.cancelForReference('appointment', appointmentId, 'package_appointment_reminder_24h')
+      .catch((err: any) => logger.error("[wa-scheduled] cancel-on-complete failed:", err?.message ?? err));
   },
 
   // Cancelling never deducts the session — the service becomes reschedulable
@@ -373,6 +424,8 @@ export const clientPackagesService = {
   // Cancelled). Safe to call on any appointment id; a no-op if unlinked.
   async cancelScheduleForAppointment(appointmentId: string): Promise<void> {
     await clientPackagesRepository.updateScheduleStatusByAppointmentId(appointmentId, "Cancelled");
+    waScheduledMessagesService.cancelForReference('appointment', appointmentId, 'package_appointment_reminder_24h')
+      .catch((err: any) => logger.error("[wa-scheduled] cancel-on-cancel failed:", err?.message ?? err));
   },
 
   // Reschedule reuses the same schedule row/appointment — only the
@@ -380,6 +433,9 @@ export const clientPackagesService = {
   // id; a no-op if unlinked.
   async rescheduleForAppointment(appointmentId: string, scheduledAt: string): Promise<void> {
     await clientPackagesRepository.updateScheduleTimeByAppointmentId(appointmentId, scheduledAt);
+    const reminderAt = new Date(new Date(scheduledAt).getTime() - 24 * 3600_000);
+    waScheduledMessagesService.rescheduleForReference('appointment', appointmentId, 'package_appointment_reminder_24h', reminderAt)
+      .catch((err: any) => logger.error("[wa-scheduled] reschedule-on-move failed:", err?.message ?? err));
   },
 
   // No-show follows the salon's configured policy (default: do not deduct,
@@ -517,6 +573,14 @@ export const clientPackagesService = {
           // (repository.create() guarantees this). Logged only — this checkout
           // has already fully succeeded (payment collected, package created),
           // so a scheduling failure must never surface as a payment error.
+          // Fetched once, reused for both the appointment-reminder scheduling
+          // context below and (unlike create()'s salon lookup) not needed by
+          // the package_purchased trigger, which carries no salon_name variable.
+          const salon = created.mobile ? await salonsRepository.findById(salonId) : null;
+          const reminderContext = created.mobile
+            ? { phone: created.mobile, countryCode: null, clientName: created.clientName ?? "Valued Customer", packageName: created.packageName, salonName: salon?.business_name ?? "our salon" }
+            : undefined;
+
           const toSchedule = services
             .map((svc, idx) => ({ svc, created: created.services[idx] }))
             .filter((x): x is { svc: typeof services[number] & { schedule: NonNullable<typeof x.svc.schedule> }; created: typeof x.created } =>
@@ -524,11 +588,24 @@ export const clientPackagesService = {
             .map((x) => ({ createdService: x.created, schedule: x.svc.schedule }));
           if (toSchedule.length > 0) {
             const schedulingErrors = await scheduleServicesForPackage({
-              salonId, clientId, packageId: created.id, requesterUserId, items: toSchedule,
+              salonId, clientId, packageId: created.id, requesterUserId, reminderContext, items: toSchedule,
             });
             if (schedulingErrors.length > 0) {
               logger.warn('[client-packages/auto-create] scheduling errors', { packageId: created.id, schedulingErrors });
             }
+          }
+
+          // ── Scheduled Templates: package_expiring_7d / package_expiring_24h ──
+          // Unconditional (unlike package_purchased below) — a Calendar-sold
+          // package still has an expiry date that needs its own reminder,
+          // independent of which notification covered the purchase itself.
+          if (created.mobile && expiryDate) {
+            await waScheduledMessagesService.schedulePackageExpiry({
+              salonId, clientId, phone: created.mobile, countryCode: null,
+              packageId: created.id, packageName: created.packageName, clientName: created.clientName ?? "Valued Customer",
+              expiryDate,
+              remainingSessions: created.services.reduce((sum, s) => sum + s.remainingSessions, 0),
+            }).catch((err: any) => logger.error("[wa-scheduled] package expiry schedule failed:", err?.message ?? err));
           }
 
           // ── WhatsApp Automation: Package Purchased ───────────────────────
