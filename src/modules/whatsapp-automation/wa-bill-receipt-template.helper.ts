@@ -111,20 +111,20 @@ export async function submitBillReceiptTemplate(params: {
 }
 
 // Sends an APPROVED bill_receipt template — the real per-checkout PDF is
-// supplied as a link (already hosted by generateAndSaveReceipt for the same
-// checkout), not re-uploaded; Meta fetches it directly at send time. This is
-// the one difference from the campaign-template send path (whatsapp/queue/
+// uploaded straight to Meta as bytes (via uploadMedia) and referenced by
+// media id, not by a link Meta would have to fetch itself. This is the one
+// difference from the campaign-template send path (whatsapp/queue/
 // campaign.processor.ts), which reuses one static uploaded media id forever
 // since a campaign's header file never changes between recipients — every
 // bill_receipt send has a genuinely different PDF, so a fixed media id can't
-// work here.
+// work here; each send uploads its own.
 export async function sendBillReceiptTemplateMessage(params: {
     salonId: string;
     phone: string;
     countryCode?: string | null;
     templateName: string;
     language: string;
-    pdfUrl: string;
+    pdfBuffer: Buffer;
     pdfFilename: string;
     variables: Record<string, string>;
 }): Promise<{ sent: boolean; reason?: string }> {
@@ -135,8 +135,22 @@ export async function sendBillReceiptTemplateMessage(params: {
 
     const to = formatPhone(params.phone, params.countryCode);
 
+    let mediaId: string;
+    try {
+        mediaId = await whatsappMetaApi.uploadMedia({
+            phoneNumberId: config.phone_number_id,
+            accessToken: config.access_token,
+            buffer: params.pdfBuffer,
+            filename: params.pdfFilename,
+            mimeType: "application/pdf",
+        });
+    } catch (err: any) {
+        const msg = err?.response?.data?.error?.message ?? err?.message ?? "Unknown error";
+        return { sent: false, reason: `Failed to upload receipt PDF to WhatsApp: ${msg}` };
+    }
+
     const components: any[] = [
-        { type: "header", parameters: [{ type: "document", document: { link: params.pdfUrl, filename: params.pdfFilename } }] },
+        { type: "header", parameters: [{ type: "document", document: { id: mediaId, filename: params.pdfFilename } }] },
     ];
     const bodyParams = Object.values(params.variables).map((v) => ({ type: "text", text: String(v) }));
     if (bodyParams.length > 0) components.push({ type: "body", parameters: bodyParams });

@@ -343,6 +343,14 @@ export const clientPackagesRepository = {
     return rows[0]?.payment_method ?? null;
   },
 
+  async getSaleInvoiceNumber(saleId: string, salonId: string): Promise<string | null> {
+    const { rows } = await pool.query(
+      `SELECT invoice_number FROM sales WHERE id = $1 AND salon_id = $2`,
+      [saleId, salonId],
+    );
+    return rows[0]?.invoice_number ?? null;
+  },
+
   async update(
     id:      string,
     salonId: string,

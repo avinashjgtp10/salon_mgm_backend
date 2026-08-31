@@ -4,7 +4,7 @@ import { branchesRepository } from "../branches/branches.repository";
 import { staffRepository } from "../staff/staff.repository";
 import { clientsRepository } from "../clients/clients.repository";
 import { sendReceiptDocument } from "./receipt-whatsapp.service";
-import { renderReceiptPdf, generateAndSaveReceipt } from "./receipt-pdf.service";
+import { renderReceiptPdf } from "./receipt-pdf.service";
 import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
 import { sendBillReceiptTemplateMessage } from "../whatsapp-automation/wa-bill-receipt-template.helper";
 import { generateFeedbackToken } from "../reviews/feedback-token.util";
@@ -118,13 +118,8 @@ export async function sendPurchaseReceipt(params: ReceiptContextParams): Promise
         console.log(`[BILL_RECEIPT] findTemplate result — found=${!!billTemplate} status=${billTemplate?.status} template_name=${billTemplate?.template_name} meta_template_id=${billTemplate?.meta_template_id}`);
 
         if (billTemplate) {
-            console.log(`[BILL_RECEIPT] PUBLIC_BASE_URL=${process.env.PUBLIC_BASE_URL}`);
-            const pdfUrl = await generateAndSaveReceipt(ctx);
-            console.log(`[BILL_RECEIPT] generateAndSaveReceipt result — pdfUrl=${pdfUrl}`);
-            if (!pdfUrl) {
-                logger.warn(`[WA-TRACE] bill_receipt SKIP — PUBLIC_BASE_URL not configured (PDF can't be hosted for Meta to fetch)`);
-                return { sent: false, reason: "WhatsApp receipt delivery isn't configured for this salon yet" };
-            }
+            const pdfBuffer = await renderReceiptPdf(ctx);
+            console.log(`[BILL_RECEIPT] renderReceiptPdf result — bytes=${pdfBuffer.length}`);
 
             const appointmentId = params.appointment?.id ?? null;
             const feedbackLine = appointmentId
@@ -139,7 +134,7 @@ export async function sendPurchaseReceipt(params: ReceiptContextParams): Promise
                 countryCode:  params.countryCode,
                 templateName: billTemplate.template_name,
                 language:     billTemplate.language,
-                pdfUrl,
+                pdfBuffer,
                 pdfFilename:  `Receipt-${invoiceLabel}.pdf`,
                 variables: {
                     "1": ctx.client.name,

@@ -1,4 +1,5 @@
 import axios from 'axios'
+import FormData from 'form-data'
 
 const WA_BASE_URL    = process.env.WA_BASE_URL    ?? 'https://graph.facebook.com'
 const WA_API_VERSION = process.env.WA_API_VERSION ?? 'v22.0'
@@ -90,18 +91,58 @@ export const whatsappMetaApi = {
     return res.data
   },
 
+  // Uploads a file's raw bytes directly to Meta (no publicly-fetchable URL
+  // needed) — returns a media id good for one send. Preferred over the
+  // link-based document/header params below: a `link` requires Meta's
+  // servers to fetch it themselves, which silently breaks behind anything
+  // that intercepts the request before it reaches the real file (e.g. a free
+  // ngrok tunnel's browser-warning interstitial, or the tunnel just being
+  // offline) — Meta ends up "sending" whatever HTML that intermediary
+  // returned instead of the real document.
+  async uploadMedia(params: {
+    phoneNumberId: string
+    accessToken:   string
+    buffer:        Buffer
+    filename:      string
+    mimeType:      string
+  }): Promise<string> {
+    const form = new FormData()
+    form.append('messaging_product', 'whatsapp')
+    form.append('type', params.mimeType)
+    form.append('file', params.buffer, { filename: params.filename, contentType: params.mimeType })
+
+    const res = await http.post(
+      `${WA_BASE_URL}/${WA_API_VERSION}/${params.phoneNumberId}/media`,
+      form,
+      { headers: { Authorization: `Bearer ${params.accessToken}`, ...form.getHeaders() } }
+    )
+    if (!res.data.id) throw new Error('No media ID returned from Meta')
+    return res.data.id
+  },
+
   // Freeform document message — only deliverable within 24h of the customer's
   // last inbound message (Meta's "service window"). Outside that window this
   // requires a pre-approved media-header template instead; the caller should
   // treat a failure here as expected, not fatal, and fall back to text-only.
+  // Pass mediaId (via uploadMedia above) whenever you have the file's bytes —
+  // link is kept only for a caller that genuinely has nothing but a URL.
   async sendDocumentMessage(params: {
     phoneNumberId: string
     accessToken:   string
     to:            string
-    link:          string
+    link?:         string
+    mediaId?:      string
     filename:      string
     caption?:      string
   }) {
+    if (!params.link && !params.mediaId) {
+      throw new Error('sendDocumentMessage requires either link or mediaId')
+    }
+    const document: Record<string, any> = params.mediaId
+      ? { id: params.mediaId, filename: params.filename }
+      : { link: params.link, filename: params.filename }
+    if (params.caption) document.caption = params.caption
+
     const res = await http.post(
       `${WA_BASE_URL}/${WA_API_VERSION}/${params.phoneNumberId}/messages`,
       {
@@ -109,11 +150,7 @@ export const whatsappMetaApi = {
         recipient_type:    'individual',
         to:                params.to,
         type:               'document',
-        document: {
-          link:     params.link,
-          filename: params.filename,
-          ...(params.caption ? { caption: params.caption } : {}),
-        },
+        document,
       },
       { headers: { Authorization: `Bearer ${params.accessToken}`, 'Content-Type': 'application/json' } }
     )
