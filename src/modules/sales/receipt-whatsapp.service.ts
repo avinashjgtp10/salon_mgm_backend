@@ -2,7 +2,7 @@ import logger from "../../config/logger";
 import { whatsappMetaApi } from "../marketing/whatsapp/shared/whatsapp.api";
 import { configRepository } from "../marketing/whatsapp/config/config.repository";
 import { formatPhone } from "../whatsapp-automation/whatsapp-automation.service";
-import { generateAndSaveReceipt } from "./receipt-pdf.service";
+import { renderReceiptPdf } from "./receipt-pdf.service";
 import { Sale, SaleItem } from "./sales.types";
 
 // Sends the PDF receipt as a WhatsApp document attachment. Never throws —
@@ -50,7 +50,14 @@ export async function sendReceiptDocument(params: {
     const to = formatPhone(params.phone, params.countryCode);
     logger.info(`[WA-TRACE] PDF-BILL START — sale=${params.sale.id} salon=${params.salonId} to=${to}`);
     try {
-        const url = await generateAndSaveReceipt({
+        const salonConfig = await configRepository.findBySalonId(params.salonId);
+        if (!salonConfig?.phone_number_id || !salonConfig?.access_token) {
+            const reason = "WhatsApp isn't connected for this salon";
+            logger.info(`[WA-TRACE] PDF-BILL SKIP — salon ${params.salonId} has no WhatsApp config`);
+            return { sent: false, reason };
+        }
+
+        const buffer = await renderReceiptPdf({
             salon: params.salon,
             salonAddress: params.salonAddress,
             client: params.client,
@@ -62,28 +69,26 @@ export async function sendReceiptDocument(params: {
             dueAmount: params.dueAmount,
             couponCode: params.couponCode,
         });
-        if (!url) {
-            const reason = "WhatsApp receipt delivery isn't configured for this salon yet";
-            logger.info(`[WA-TRACE] PDF-BILL SKIP — PUBLIC_BASE_URL not configured (PDF can't be hosted for Meta to fetch)`);
-            return { sent: false, reason };
-        }
-        logger.info(`[WA-TRACE] PDF-BILL generated — url=${url}`);
-
-        const salonConfig = await configRepository.findBySalonId(params.salonId);
-        if (!salonConfig?.phone_number_id || !salonConfig?.access_token) {
-            const reason = "WhatsApp isn't connected for this salon";
-            logger.info(`[WA-TRACE] PDF-BILL SKIP — salon ${params.salonId} has no WhatsApp config`);
-            return { sent: false, reason };
-        }
-
         const invoiceLabel = params.sale.invoice_number ?? params.sale.id.slice(0, 8).toUpperCase();
+        const filename = `Receipt-${invoiceLabel}.pdf`;
+
+        // Uploaded straight to Meta as bytes — no public URL/hosting required,
+        // so this can't be intercepted by an ngrok interstitial or broken by
+        // the tunnel being offline (see uploadMedia's own comment).
+        const mediaId = await whatsappMetaApi.uploadMedia({
+            phoneNumberId: salonConfig.phone_number_id,
+            accessToken: salonConfig.access_token,
+            buffer,
+            filename,
+            mimeType: "application/pdf",
+        });
 
         await whatsappMetaApi.sendDocumentMessage({
             phoneNumberId: salonConfig.phone_number_id,
             accessToken: salonConfig.access_token,
             to,
-            link: url,
-            filename: `Receipt-${invoiceLabel}.pdf`,
+            mediaId,
+            filename,
             caption: params.caption,
         });
         logger.info(`[WA-TRACE] PDF-BILL ✅ SENT — sale=${params.sale.id} to=${to}`);

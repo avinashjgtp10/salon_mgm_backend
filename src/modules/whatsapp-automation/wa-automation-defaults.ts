@@ -24,7 +24,7 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
     | "appointment_cancelled" | "payment_received" | "package_expiring_7d" | "package_expiring_24h"
     | "membership_expiring_7d" | "membership_expiring_24h" | "package_session_used"
     | "membership_session_used" | "package_appointment_reminder_24h" | "service_reminder_24h"
-    | "reward_points_earned" | "referral_reward" | "ewallet_used",
+    | "reward_points_earned" | "referral_reward" | "ewallet_used" | "referral_credit_used" | "reward_points_used",
     {
         label: string;
         category: "UTILITY";
@@ -43,13 +43,13 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         label: "Package Purchased",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{customer_name}},\nYour {{package_name}} package has been successfully activated.\nPackage Value: ₹{{package_value}}\nSessions: {{total_sessions}}\nValid Until: {{expiry_date}}\nThank you for choosing {{salon_name}} — we appreciate you!",
+        bodyText: "Hi {{customer_name}},\nThank you for purchasing our {{package_name}}!\n\nPackage: {{package_name}}\nServices: {{services}}\nSessions: {{total_sessions}}\nValid Until: {{expiry_date}}\nAmount: ₹{{package_value}}\nInvoice: {{invoice_number}}\n\nWe look forward to seeing you again. Book your next visit with us!",
     },
     membership_purchased: {
         label: "Membership Purchased",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{customer_name}},\nWelcome to {{membership_name}} at {{salon_name}}!\nMembership Value: ₹{{membership_price}}\nAvailable Balance: ₹{{membership_balance}}\nValid Until: {{expiry_date}}\nThank you for choosing {{salon_name}} — we appreciate you!",
+        bodyText: "Hi {{customer_name}},\n\n🎉 Your {{membership_name}} is now active!\n\nMembership: {{membership_name}}\nBenefit: {{benefit}}\nStart Date: {{start_date}}\nValid Until: {{expiry_date}}\nMembership Price: ₹{{membership_price}}\nInvoice: {{invoice_number}}\n\nEnjoy your exclusive membership benefits on your future visits!",
     },
     // Document-header Meta template — the bill PDF is submitted/sent as the
     // template's HEADER component (see wa-bill-receipt-template.helper.ts),
@@ -155,6 +155,18 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         language: "en",
         bodyText: "Hi {{customer_name}},\nYour eWallet was used for a payment at {{salon_name}}.\nAmount Used: ₹{{amount_used}}\nRemaining Balance: ₹{{remaining_balance}}\nThank you for choosing {{salon_name}} — we appreciate you!",
     },
+    referral_credit_used: {
+        label: "Referral Credit Used",
+        category: "UTILITY",
+        language: "en",
+        bodyText: "Hi {{customer_name}},\nYour Referral Balance was used for a payment at {{salon_name}}.\nAmount Used: ₹{{amount_used}}\nRemaining Referral Balance: ₹{{remaining_balance}}\nThank you for choosing {{salon_name}} — we appreciate you!",
+    },
+    reward_points_used: {
+        label: "Reward Points Used",
+        category: "UTILITY",
+        language: "en",
+        bodyText: "Hi {{customer_name}},\nYour Reward Points were used for a payment at {{salon_name}}.\nPoints Used: {{points_used}}\nRemaining Points: {{remaining_points}}\nThank you for choosing {{salon_name}} — we appreciate you!",
+    },
 };
 
 export type DefaultPurchaseEventType = keyof typeof DEFAULT_PURCHASE_TEMPLATES;
@@ -168,8 +180,8 @@ export function isPurchaseEventType(eventType: AutomationEventType): eventType i
 // each event's trigger() call site fills positionally ('1', '2', '3', ...).
 export const EVENT_VARIABLE_NAMES: Record<DefaultPurchaseEventType, string[]> = {
     client_welcome:       ["customer_name", "salon_name"],
-    package_purchased:    ["customer_name", "package_name", "package_value", "total_sessions", "expiry_date", "salon_name"],
-    membership_purchased: ["customer_name", "membership_name", "salon_name", "membership_price", "membership_balance", "expiry_date"],
+    package_purchased:    ["customer_name", "package_name", "services", "total_sessions", "expiry_date", "package_value", "invoice_number"],
+    membership_purchased: ["customer_name", "membership_name", "benefit", "start_date", "expiry_date", "membership_price", "invoice_number"],
     bill_receipt:         ["customer_name", "salon_name", "items", "feedback_line"],
     appointment_confirmation: ["customer_name", "salon_name", "appointment_date", "appointment_time", "service_name", "staff_name"],
     appointment_rescheduled:  ["customer_name", "salon_name", "old_date", "old_time", "new_date", "new_time", "service_name", "staff_name"],
@@ -186,6 +198,8 @@ export const EVENT_VARIABLE_NAMES: Record<DefaultPurchaseEventType, string[]> = 
     reward_points_earned: ["customer_name", "points_earned", "salon_name", "total_points"],
     referral_reward:      ["customer_name", "referred_customer_name", "salon_name", "reward", "total_points"],
     ewallet_used:         ["customer_name", "amount_used", "salon_name", "remaining_balance"],
+    referral_credit_used: ["customer_name", "amount_used", "salon_name", "remaining_balance"],
+    reward_points_used:   ["customer_name", "points_used", "salon_name", "remaining_points"],
 };
 
 // Converts a salon's named-placeholder wording into Meta's required

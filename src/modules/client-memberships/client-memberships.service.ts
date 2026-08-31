@@ -90,14 +90,28 @@ function buildSyntheticSale(membership: ClientMembership): { sale: Sale; items: 
 // a line item inside a bigger checkout (autoCreateFromPayment, Quick Sale or
 // Calendar), that checkout's own bill_receipt/payment_received message
 // already covers it, so this itemized confirmation would just duplicate it.
-async function notifyMembershipPurchased(membership: ClientMembership, includeReceipt: boolean): Promise<void> {
+// One-line description of what this membership actually gives the client —
+// varies by pricingType (see memberships.types.ts's discriminated fields).
+function buildMembershipBenefitText(membership: ClientMembership): string {
+  switch (membership.pricingType) {
+    case 'percentage':
+      return `${membership.discountPercent ?? 0}% discount on eligible services`;
+    case 'value':
+      return `₹${membership.membershipWalletBalance ?? 0} wallet balance for eligible services`;
+    case 'loyalty':
+      return 'Loyalty rewards on eligible services';
+    default:
+      return 'Exclusive benefits on eligible services';
+  }
+}
+
+async function notifyMembershipPurchased(membership: ClientMembership, includeReceipt: boolean, invoiceNumber?: string | null): Promise<void> {
   if (!membership.mobile) {
     if (includeReceipt) logger.info(`[WA-AUTO] Skipping purchase receipt for membership ${membership.id} — no mobile number`);
     return;
   }
 
   if (includeReceipt) {
-    const salon = await salonsRepository.findById(membership.salonId);
     whatsappAutomationService.trigger({
       salonId:       membership.salonId,
       eventType:     'membership_purchased',
@@ -107,10 +121,11 @@ async function notifyMembershipPurchased(membership: ClientMembership, includeRe
       variables: {
         '1': membership.clientName ?? 'Valued Customer',
         '2': membership.membershipName,
-        '3': salon?.business_name ?? 'our salon',
-        '4': String(membership.pricePaid ?? 0),
-        '5': String(membership.membershipWalletBalance ?? membership.pricePaid ?? 0),
-        '6': membership.expiresAt ?? '',
+        '3': buildMembershipBenefitText(membership),
+        '4': membership.purchasedAt ?? '',
+        '5': membership.expiresAt ?? '',
+        '6': String(membership.pricePaid ?? 0),
+        '7': invoiceNumber ?? '—',
       },
       referenceId:   membership.id,
       referenceType: 'membership',
@@ -145,6 +160,9 @@ export const clientMembershipsService = {
     // Mirrors client-packages.service.ts's create() — without this, a membership
     // sold directly (not through an appointment) never shows up in sales/sale_items
     // at all, so any Sales/Revenue page built from those tables misses it entirely.
+    // Captured outside the try so the WhatsApp trigger below (Membership
+    // Purchased) can include the real invoice number without a second lookup.
+    let invoiceNumber: string | null = null;
     try {
       const pricePaid = Number(membership.pricePaid || 0);
       const txn = await recordTransaction({
@@ -173,11 +191,12 @@ export const clientMembershipsService = {
       // Link this membership row to its invoice-bearing sale so a Member
       // Sale report can show invoice_no via a join.
       await clientMembershipsRepository.setSaleId(membership.id, salonId, txn.sale.id);
+      invoiceNumber = txn.sale.invoice_number;
     } catch (err) {
       logger.error('[clientMembershipsService] Failed to auto-create sale for membership purchase:', { error: err });
     }
 
-    notifyMembershipPurchased(membership, true).catch(() => {});
+    notifyMembershipPurchased(membership, true, invoiceNumber).catch(() => {});
     return membership;
   },
 

@@ -209,6 +209,10 @@ export const clientPackagesService = {
     }
 
     // ── Auto-create sale record so package revenue appears in dashboard ────────
+    // Captured outside the try block so the WhatsApp trigger below (Package
+    // Purchased) can include the real invoice number without a second
+    // round-trip — null if the sale record itself failed to create.
+    let invoiceNumber: string | null = null;
     try {
       const gstAmt      = Number(pkg.gstAmount  || 0);
       const discountAmt = Number(pkg.discount    || 0);
@@ -238,6 +242,7 @@ export const clientPackagesService = {
       // Link this package row to its invoice-bearing sale so the Package
       // Sale report can show invoice_no via a join.
       await clientPackagesRepository.setSaleId(pkg.id, salonId, txn.sale.id);
+      invoiceNumber = txn.sale.invoice_number;
     } catch (err) {
       logger.error('[clientPackagesService] Failed to auto-create sale for package purchase:', { error: err });
     }
@@ -246,7 +251,6 @@ export const clientPackagesService = {
     // mobile field on ClientPackage is the client's phone number
     if (pkg.mobile) {
       (async () => {
-        const salon = await salonsRepository.findById(salonId);
         whatsappAutomationService.trigger({
           salonId,
           eventType:     "package_purchased",
@@ -256,10 +260,11 @@ export const clientPackagesService = {
           variables: {
             "1": pkg.clientName ?? "Valued Customer",
             "2": pkg.packageName,
-            "3": String((pkg.basePrice ?? 0) - (pkg.discount ?? 0)),
+            "3": pkg.services.map((s) => s.serviceName).join(", "),
             "4": String(pkg.services.reduce((sum, s) => sum + s.totalSessions, 0)),
             "5": pkg.expiryDate ?? "",
-            "6": salon?.business_name ?? "our salon",
+            "6": String((pkg.basePrice ?? 0) - (pkg.discount ?? 0)),
+            "7": invoiceNumber ?? "—",
           },
           referenceId:   pkg.id,
           referenceType: "package",
@@ -531,7 +536,9 @@ export const clientPackagesService = {
           // checkout's own single payment_received message already covers it,
           // so this itemized confirmation stays Quick-Sale/standalone only.
           if (!appointmentId && created.mobile) {
-            const salon = await salonsRepository.findById(salonId);
+            const invoiceNumber = saleId
+              ? await clientPackagesRepository.getSaleInvoiceNumber(saleId, salonId)
+              : null;
             whatsappAutomationService.trigger({
               salonId,
               eventType:     "package_purchased",
@@ -541,10 +548,11 @@ export const clientPackagesService = {
               variables: {
                 "1": created.clientName ?? "Valued Customer",
                 "2": created.packageName,
-                "3": String(basePrice - discount),
+                "3": created.services.map((s) => s.serviceName).join(", "),
                 "4": String(services.reduce((sum, s) => sum + s.totalSessions, 0)),
                 "5": expiryDate,
-                "6": salon?.business_name ?? "our salon",
+                "6": String(basePrice - discount),
+                "7": invoiceNumber ?? "—",
               },
               referenceId:   created.id,
               referenceType: "package",
