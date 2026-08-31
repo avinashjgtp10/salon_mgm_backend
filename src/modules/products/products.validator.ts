@@ -270,6 +270,35 @@ export const validateListQuery = (req: Request, _res: Response, next: NextFuncti
     return next();
 };
 
+// ─── Search Body Validator ─────────────────────────────────────────────────────
+// POST /products/search — same filters as GET /products, but as a JSON body
+// instead of query params, so callers that need more than MAX_PAGE_SIZE rows
+// in one call (e.g. preloading a product picker) aren't limited by the GET
+// route's 100-row cap or a URL length limit on a large filter set.
+
+export const validateSearchBody = (req: Request, _res: Response, next: NextFunction) => {
+    const MAX_SEARCH_PAGE_SIZE = 500;
+    const { page, pageSize, limit } = req.body ?? {};
+
+    if (page !== undefined) {
+        const n = Number(page);
+        if (!Number.isInteger(n) || n < 1) {
+            return next(new AppError(400, "page must be a positive integer", "VALIDATION_ERROR"));
+        }
+    }
+    const sizeParam = pageSize ?? limit;
+    if (sizeParam !== undefined) {
+        const n = Number(sizeParam);
+        if (!Number.isInteger(n) || n < 1) {
+            return next(new AppError(400, "pageSize must be a positive integer", "VALIDATION_ERROR"));
+        }
+        if (n > MAX_SEARCH_PAGE_SIZE) {
+            return next(new AppError(400, `pageSize must not exceed ${MAX_SEARCH_PAGE_SIZE}`, "VALIDATION_ERROR"));
+        }
+    }
+    return next();
+};
+
 // ─── Brand Validators ─────────────────────────────────────────────────────────
 
 export const validateCreateBrand = (req: Request, _res: Response, next: NextFunction) => {
