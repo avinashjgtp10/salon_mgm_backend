@@ -11,6 +11,7 @@ import { clientPackagesService } from "../client-packages/client-packages.servic
 import { clientMembershipsService } from "../client-memberships/client-memberships.service";
 import { membershipsService } from "../memberships/memberships.service";
 import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
+import { waScheduledMessagesService } from "../whatsapp-automation/wa-scheduled-messages.service";
 import pool from "../../config/database";
 import logger from "../../config/logger";
 import {
@@ -249,6 +250,27 @@ export const clientsService = {
             })();
         }
 
+        // ── Scheduled Templates: birthday_wishes ──────────────────────────────
+        // Self-perpetuating after the first send — see wa-scheduled-messages.
+        // service.ts's executeScheduledRow(), which re-schedules +1 year on
+        // every successful send, so this is the only place a birthday row is
+        // ever created from scratch.
+        if (created.phone_number && created.birthday_day_month) {
+            (async () => {
+                try {
+                    const salon = await salonsRepository.findById(salonId);
+                    await waScheduledMessagesService.scheduleBirthday({
+                        salonId, clientId: created.id, phone: created.phone_number!, countryCode: created.phone_country_code ?? null,
+                        fullName: `${created.first_name} ${created.last_name ?? ""}`.trim() || "there",
+                        salonName: salon?.business_name ?? "our salon",
+                        birthdayDayMonth: created.birthday_day_month!,
+                    });
+                } catch (err: any) {
+                    logger.error("[wa-scheduled] birthday_wishes schedule failed:", err?.message ?? err);
+                }
+            })();
+        }
+
         // ── Email: New Client (to salon owner) ────────────────────────────────
         ;(async () => {
             try {
@@ -370,6 +392,27 @@ export const clientsService = {
         if (patch.emergency_contacts) await clientsRepository.replaceUpsertEmergencyContacts(clientId, patch.emergency_contacts);
 
         const withRel = await clientsRepository.getByIdWithRelations(updated.id, salonId);
+
+        // A birthday added/changed after the client's own creation (it wasn't
+        // required at signup) needs its own schedule row too — create()'s own
+        // hook only fires once, at creation, so without this a client who adds
+        // their birthday later would never get one.
+        if (patch.birthday_day_month && withRel?.phone_number) {
+            (async () => {
+                try {
+                    const salon = await salonsRepository.findById(salonId);
+                    await waScheduledMessagesService.scheduleBirthday({
+                        salonId, clientId, phone: withRel.phone_number!, countryCode: withRel.phone_country_code ?? null,
+                        fullName: `${withRel.first_name} ${withRel.last_name ?? ""}`.trim() || "there",
+                        salonName: salon?.business_name ?? "our salon",
+                        birthdayDayMonth: patch.birthday_day_month!,
+                    });
+                } catch (err: any) {
+                    logger.error("[wa-scheduled] birthday_wishes reschedule-on-edit failed:", err?.message ?? err);
+                }
+            })();
+        }
+
         return withRel as ClientWithRelations;
     },
 
@@ -379,6 +422,8 @@ export const clientsService = {
 
         if (hard) await clientsRepository.hardDelete(clientId, salonId);
         else await clientsRepository.softDelete(clientId, salonId);
+        waScheduledMessagesService.cancelForReference('client', clientId)
+            .catch((err: any) => logger.error("[wa-scheduled] cancel-on-delete failed:", err?.message ?? err));
     },
 
     async blockClients(ids: string[], reason: string, salonId: string): Promise<void> {

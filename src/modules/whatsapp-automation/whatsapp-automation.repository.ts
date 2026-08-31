@@ -482,6 +482,20 @@ export const whatsappAutomationRepository = {
     return rows.length > 0
   },
 
+  // Used by wa-scheduled-messages.service.ts's executeScheduledRow() — trigger()
+  // never throws or returns whether it actually sent, so the executor reads
+  // back the log trigger() just wrote (keyed by the same referenceId/
+  // referenceType it passed in) to learn the real outcome.
+  async findLatestByReference(referenceId: string, referenceType: string): Promise<AutomationLog | null> {
+    const { rows } = await pool.query(
+      `SELECT * FROM wa_automation_logs
+       WHERE reference_id = $1 AND reference_type = $2
+       ORDER BY created_at DESC LIMIT 1`,
+      [referenceId, referenceType]
+    )
+    return rows[0] ?? null
+  },
+
   async listLogs(filters: ListAutomationLogsFilters): Promise<{ data: AutomationLog[]; total: number }> {
     const page   = Math.max(1, parseInt(String(filters.page  ?? 1))  || 1)
     const limit  = Math.min(100, Math.max(1, parseInt(String(filters.limit ?? 20)) || 20))
