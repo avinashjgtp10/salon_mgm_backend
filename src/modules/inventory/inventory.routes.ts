@@ -17,6 +17,7 @@ import { purchasesController } from "./purchases.controller";
 import { supplierPaymentsController } from "./supplier-payments.controller";
 import { ordersController } from "./orders.controller";
 import { productAuditController } from "./product-audit.controller";
+import { stockLedgerController } from "./stock-ledger.controller";
 import {
     validateCreateSupplier,
     validateUpdateSupplier,
@@ -33,6 +34,10 @@ import {
     validateRejectAudit,
     validateApproveAudit,
 } from "./product-audit.validator";
+import {
+    validateCreateStockLedgerEntry,
+    validateUpdateStockLedgerEntry,
+} from "./stock-ledger.validator";
 
 const router = Router();
 const viewInventory = requirePermission("view_inventory");
@@ -529,6 +534,70 @@ router.post(
     roleMiddleware("salon_owner", "admin", "staff"),
     manageInventory,
     consumableUsageController.save
+);
+
+// ─── Stock Ledger — full movement history per product, one row per
+// transaction with the running balance already applied (see
+// stock-ledger.repository.ts / Migration/create_stock_ledger_table.sql) ───────
+
+router.post(
+    "/stock-ledger",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    stockAdjustment,
+    validateCreateStockLedgerEntry,
+    stockLedgerController.create
+);
+
+router.get(
+    "/stock-ledger",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    stockLedgerController.list
+);
+
+// POST /inventory/stock-ledger/list — same as GET /stock-ledger above, but
+// filters travel in the JSON body (report-style) instead of the query string.
+router.post(
+    "/stock-ledger/list",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    stockLedgerController.search
+);
+
+router.get(
+    "/stock-ledger/:id",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    stockLedgerController.getById
+);
+
+router.get(
+    "/stock-ledger/product/:productId/timeline",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    stockLedgerController.getTimelineForProduct
+);
+
+router.put(
+    "/stock-ledger/:id",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    manageInventory,
+    validateUpdateStockLedgerEntry,
+    stockLedgerController.update
+);
+
+router.delete(
+    "/stock-ledger/:id",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin"),
+    manageInventory,
+    stockLedgerController.delete
 );
 
 export default router;
