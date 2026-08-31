@@ -107,10 +107,10 @@ export const purchasesRepository = {
                 await client.query("SAVEPOINT purchase_insert_attempt");
                 try {
                     const purchaseResult = await client.query(
-                        `INSERT INTO purchases (salon_id, supplier_id, purchase_number, purchase_date, created_by)
-                         VALUES ($1, $2, $3, COALESCE($4, CURRENT_DATE), $5)
+                        `INSERT INTO purchases (salon_id, supplier_id, purchase_number, purchase_date, created_by, order_id)
+                         VALUES ($1, $2, $3, COALESCE($4, CURRENT_DATE), $5, $6)
                          RETURNING *`,
-                        [salonId, data.supplier_id, purchaseNumber, data.purchase_date ?? null, createdBy],
+                        [salonId, data.supplier_id, purchaseNumber, data.purchase_date ?? null, createdBy, data.order_id ?? null],
                     );
                     await client.query("RELEASE SAVEPOINT purchase_insert_attempt");
                     purchase = purchaseResult.rows[0];

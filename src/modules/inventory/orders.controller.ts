@@ -4,7 +4,7 @@ import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { uploadAvatarToS3 } from "../utils/avatar.upload";
 import { ordersRepository } from "./orders.repository";
-import { CreateOrderDTO } from "./orders.types";
+import { CreateOrderDTO, ReceiveOrderDTO } from "./orders.types";
 
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string } };
 
@@ -58,6 +58,28 @@ export const ordersController = {
                 return;
             }
             sendSuccess(res, 200, order);
+        } catch (err) { next(err); }
+    },
+
+    async receive(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const salonId = getSalonId(req);
+            const userId = req.user?.userId;
+            if (!userId) throw new AppError(401, "Authentication required", "NO_USER");
+
+            const body = req.body as ReceiveOrderDTO;
+            logger.info("POST /inventory/orders/:id/receive called", { salonId, userId, orderId: req.params.id });
+
+            const order = await ordersRepository.receive(String(req.params.id), body, salonId, userId);
+            sendSuccess(res, 200, order, "Order received successfully");
+        } catch (err) { next(err); }
+    },
+
+    async cancel(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const salonId = getSalonId(req);
+            const order = await ordersRepository.cancel(String(req.params.id), salonId);
+            sendSuccess(res, 200, order, "Order cancelled");
         } catch (err) { next(err); }
     },
 

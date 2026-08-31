@@ -25,7 +25,7 @@ import {
 } from "./inventory.validator";
 import { validateCreatePurchase } from "./purchases.validator";
 import { validateCreateSupplierPayment } from "./supplier-payments.validator";
-import { validateCreateOrder } from "./orders.validator";
+import { validateCreateOrder, validateReceiveOrder } from "./orders.validator";
 import {
     validateCreateProductAudit,
     validateAddAuditItems,
@@ -167,7 +167,7 @@ router.get(
     purchasesController.getById
 );
 
-// ─── Orders (purchase orders — a document only, no stock movement) ──────────
+// ─── Orders (purchase orders — receiving against one links to Purchases) ───
 // Registered ahead of /stock-movements for the same "more specific first"
 // reason as Purchases above.
 
@@ -213,6 +213,23 @@ router.get(
     roleMiddleware("salon_owner", "admin", "staff"),
     viewInventory,
     ordersController.getById
+);
+
+router.post(
+    "/orders/:id/receive",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    manageInventory,
+    validateReceiveOrder,
+    ordersController.receive
+);
+
+router.post(
+    "/orders/:id/cancel",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    manageInventory,
+    ordersController.cancel
 );
 
 // ─── Stock Movements ──────────────────────────────────────────────────────────
@@ -285,6 +302,11 @@ router.post(
 );
 
 // ─── Stock Reconciliation ─────────────────────────────────────────────────────
+// Read-only now — its editable "Update All"/per-row save screen was replaced
+// by Consumable Inventory's Adjust Stock action (see below). This GET is kept
+// only because the Consumable Usage report still reads it for back-bar
+// consumption totals; the old save endpoints had no remaining caller and were
+// removed.
 
 // GET  /inventory/stock-reconciliation?branch_id=&search=&category_id=
 router.get(
@@ -293,22 +315,6 @@ router.get(
     roleMiddleware("salon_owner", "admin", "staff"),
     viewInventory,
     stockReconciliationController.list
-);
-
-// POST /inventory/stock-reconciliation  (batch save — Update All)
-router.post(
-    "/stock-reconciliation",
-    authMiddleware,
-    roleMiddleware("salon_owner", "admin"),
-    stockReconciliationController.saveAll
-);
-
-// PATCH /inventory/stock-reconciliation/:product_id  (single row save)
-router.patch(
-    "/stock-reconciliation/:product_id",
-    authMiddleware,
-    roleMiddleware("salon_owner", "admin"),
-    stockReconciliationController.saveRow
 );
 
 // ─── Consumable Inventory (dedicated page — replaces Stock Reconciliation's

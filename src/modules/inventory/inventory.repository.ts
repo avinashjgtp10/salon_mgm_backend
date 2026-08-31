@@ -2,7 +2,7 @@ import pool from "../../config/database";
 import {
     Supplier, CreateSupplierBody, UpdateSupplierBody, SupplierWithBalance,
     StockMovement, CreateStockMovementBody, ListStockMovementsFilters,
-    StockReconciliationRow, ReconciliationItemBody, SaveConsumableUsageBody,
+    StockReconciliationRow, SaveConsumableUsageBody,
 } from "./inventory.types";
 
 // ─── Suppliers ────────────────────────────────────────────────────────────────
@@ -315,137 +315,6 @@ export const stockReconciliationRepository = {
         );
         return rows;
     },
-
-    /**
-     * Upsert a single product's reconciliation row.
-     * Uses ON CONFLICT to update if the row already exists.
-     */
-    async upsertRow(
-        branchId: string,
-        salonId: string,
-        item: ReconciliationItemBody,
-        userId: string
-    ): Promise<StockReconciliationRow | null> {
-        const client = await pool.connect();
-        try {
-            await client.query("BEGIN");
-
-            // Save reconciliation adjustments
-            await client.query(
-                `INSERT INTO stock_reconciliation
-                   (salon_id, branch_id, product_id, adjust_stock, adjust_consumable, remark, reconciled_by, updated_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-                 ON CONFLICT (branch_id, product_id)
-                 DO UPDATE SET
-                   adjust_stock      = EXCLUDED.adjust_stock,
-                   adjust_consumable = EXCLUDED.adjust_consumable,
-                   remark            = EXCLUDED.remark,
-                   reconciled_by     = EXCLUDED.reconciled_by,
-                   updated_at        = NOW()`,
-                [salonId, branchId, item.product_id, item.adjust_stock, item.adjust_consumable, item.remark ?? null, userId]
-            );
-
-            // Write the physically-counted qty back to actual stock. When
-            // bottle-tracked, `item.adjust_stock` is a BOTTLE COUNT (what
-            // the reconciliation UI now displays/collects) — convert back to
-            // the raw volume products.amount actually stores, using the
-            // product's own bottle_size so this stays correct without a
-            // separate read first.
-            await client.query(
-                `UPDATE products
-                 SET amount = CASE WHEN bottle_size IS NOT NULL AND bottle_size > 0
-                                    THEN $1::numeric * bottle_size
-                                    ELSE $1::numeric END,
-                     updated_at = NOW()
-                 WHERE id = $2 AND salon_id = $3`,
-                [item.adjust_stock, item.product_id, salonId]
-            );
-
-            await client.query("COMMIT");
-        } catch (err) {
-            await client.query("ROLLBACK");
-            throw err;
-        } finally {
-            client.release();
-        }
-
-        // Return the merged row so the frontend can update its local state
-        const { rows } = await pool.query(
-            `SELECT
-               p.id                                                AS product_id,
-               COALESCE(c.name, '')                                AS category_name,
-               p.name                                              AS item_name,
-               CASE WHEN p.bottle_size IS NOT NULL AND p.bottle_size > 0
-                    THEN CEIL(COALESCE(p.amount, 0) / p.bottle_size)
-                    ELSE COALESCE(p.amount, 0) END                AS actual_stock,
-               $3::numeric                                         AS adjust_stock,
-               $3::numeric - (CASE WHEN p.bottle_size IS NOT NULL AND p.bottle_size > 0
-                                   THEN CEIL(COALESCE(p.amount, 0) / p.bottle_size)
-                                   ELSE COALESCE(p.amount, 0) END) AS stock_difference,
-               ROUND(COALESCE(p.amount,0)*COALESCE(p.retail_price::numeric,0),2) AS stock_value,
-               COALESCE(SUM(CASE WHEN cu.direction = 'return' THEN -cu.qty ELSE cu.qty END), 0) AS actual_consumable,
-               $4::numeric                                         AS adjust_consumable,
-               COALESCE(p.measure_unit,'—')                        AS unit,
-               $4::numeric - COALESCE(SUM(CASE WHEN cu.direction = 'return' THEN -cu.qty ELSE cu.qty END), 0) AS consumable_difference,
-               COALESCE($5,'')                                     AS remark
-             FROM products p
-             LEFT JOIN service_categories c ON c.id = p.category_id
-             LEFT JOIN consumable_usage cu ON cu.product_id = p.id AND cu.branch_id = $2
-             WHERE p.id = $1 AND p.salon_id = $6
-             GROUP BY p.id, c.name, p.amount, p.bottle_size, p.retail_price, p.measure_unit`,
-            [item.product_id, branchId, item.adjust_stock, item.adjust_consumable, item.remark ?? null, salonId]
-        );
-        return rows[0] || null;
-    },
-
-    /**
-     * Batch upsert for "Update All" — wraps all items in a single transaction.
-     */
-    async upsertBatch(
-        branchId: string,
-        salonId: string,
-        items: ReconciliationItemBody[],
-        userId: string
-    ): Promise<number> {
-        const client = await pool.connect();
-        try {
-            await client.query("BEGIN");
-            for (const item of items) {
-                await client.query(
-                    `INSERT INTO stock_reconciliation
-                       (salon_id, branch_id, product_id, adjust_stock, adjust_consumable, remark, reconciled_by, updated_at)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-                     ON CONFLICT (branch_id, product_id)
-                     DO UPDATE SET
-                       adjust_stock      = EXCLUDED.adjust_stock,
-                       adjust_consumable = EXCLUDED.adjust_consumable,
-                       remark            = EXCLUDED.remark,
-                       reconciled_by     = EXCLUDED.reconciled_by,
-                       updated_at        = NOW()`,
-                    [salonId, branchId, item.product_id, item.adjust_stock, item.adjust_consumable, item.remark ?? null, userId]
-                );
-
-                // Write the physically-counted qty back to actual stock —
-                // same bottle-count-to-volume conversion as upsertRow() above.
-                await client.query(
-                    `UPDATE products
-                     SET amount = CASE WHEN bottle_size IS NOT NULL AND bottle_size > 0
-                                        THEN $1::numeric * bottle_size
-                                        ELSE $1::numeric END,
-                         updated_at = NOW()
-                     WHERE id = $2 AND salon_id = $3`,
-                    [item.adjust_stock, item.product_id, salonId]
-                );
-            }
-            await client.query("COMMIT");
-            return items.length;
-        } catch (err) {
-            await client.query("ROLLBACK");
-            throw err;
-        } finally {
-            client.release();
-        }
-    },
 };
 
 // ─── Consumable Usage ─────────────────────────────────────────────────────────
@@ -632,6 +501,17 @@ export const stockTakeRepository = {
                         ]
                     );
                     movements.push(rows[0]);
+
+                    // The counted quantity is now the source of truth for this
+                    // product — without this, completing a stocktake logged a
+                    // movement but never actually corrected what Product
+                    // Inventory's "Available" column shows (products.amount),
+                    // which is what every other stock-writing flow (Purchase,
+                    // Add Stock, appointment consumption) updates directly.
+                    await client.query(
+                        `UPDATE products SET amount = $1, updated_at = NOW() WHERE id = $2 AND salon_id = $3`,
+                        [item.actual_qty, item.product_id, params.salonId]
+                    );
                 }
             }
 

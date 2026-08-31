@@ -100,6 +100,37 @@ export const validateCreateOrder = (
     }
 };
 
+// ─── Receive Order validator ────────────────────────────────────────────────────
+export const validateReceiveOrder = (
+    req: Request,
+    _res: Response,
+    next: NextFunction
+): void => {
+    try {
+        const b = req.body;
+
+        if (!isOptionalDate(b.purchase_date)) {
+            throw new AppError(400, "purchase_date must be in YYYY-MM-DD format", "VALIDATION_ERROR");
+        }
+        if (!Array.isArray(b.items) || b.items.length === 0) {
+            throw new AppError(400, "items must be a non-empty array", "VALIDATION_ERROR");
+        }
+        for (let i = 0; i < b.items.length; i++) {
+            const item = b.items[i];
+            if (!isUUID(item.order_item_id)) {
+                throw new AppError(400, `items[${i}].order_item_id must be a UUID`, "VALIDATION_ERROR");
+            }
+            if (typeof item.received_qty !== "number" || !Number.isFinite(item.received_qty) || item.received_qty < 0) {
+                throw new AppError(400, `items[${i}].received_qty must be a non-negative number`, "VALIDATION_ERROR");
+            }
+        }
+
+        return next();
+    } catch (err) {
+        return next(err);
+    }
+};
+
 // ─── List Orders validator ─────────────────────────────────────────────────────
 export const validateListOrders = (
     req: Request,
