@@ -92,10 +92,9 @@ async function applyMembershipDiscountForBooking(
     const percentageMembership = await clientMembershipsRepository.findActivePercentageForClient(clientId, salonId);
     if (percentageMembership) {
       const appliesTo = percentageMembership.appliesTo;
-      const categoryIds = percentageMembership.categoryIds;
       const eligible = [
-        ...(appliesTo !== 'products' ? serviceItems.filter((i) => !i.isPackageService && i.amount > 0 && matchesCategoryRestriction(i, categoryIds, percentageMembership.serviceIds)) : []),
-        ...(appliesTo !== 'services' ? productItems.filter((i) => i.amount > 0 && matchesCategoryRestriction(i, categoryIds, percentageMembership.productIds)) : []),
+        ...(appliesTo !== 'products' ? serviceItems.filter((i) => !i.isPackageService && i.amount > 0 && matchesCategoryRestriction(i, percentageMembership.serviceCategoryIds, percentageMembership.serviceIds)) : []),
+        ...(appliesTo !== 'services' ? productItems.filter((i) => i.amount > 0 && matchesCategoryRestriction(i, percentageMembership.productCategoryIds, percentageMembership.productIds)) : []),
       ];
       if (eligible.length) {
         const result = await clientMembershipsRepository.deductDiscountBalanceForBooking(
@@ -117,8 +116,8 @@ async function applyMembershipDiscountForBooking(
     const loyalty = await membershipsRepository.findLoyaltyEligibility(clientId, salonId);
     if (loyalty?.eligible) {
       const eligible = [
-        ...(loyalty.appliesTo !== 'products' ? serviceItems.filter((i) => !i.isPackageService && i.amount > 0 && matchesCategoryRestriction(i, loyalty.categoryIds, loyalty.serviceIds)) : []),
-        ...(loyalty.appliesTo !== 'services' ? productItems.filter((i) => i.amount > 0 && matchesCategoryRestriction(i, loyalty.categoryIds, loyalty.productIds)) : []),
+        ...(loyalty.appliesTo !== 'products' ? serviceItems.filter((i) => !i.isPackageService && i.amount > 0 && matchesCategoryRestriction(i, loyalty.serviceCategoryIds, loyalty.serviceIds)) : []),
+        ...(loyalty.appliesTo !== 'services' ? productItems.filter((i) => i.amount > 0 && matchesCategoryRestriction(i, loyalty.productCategoryIds, loyalty.productIds)) : []),
       ];
       const { total: loyaltyTotal, discounts } = allocateMembershipDiscount(eligible.map((i) => i.amount), loyalty.discountPercent, Infinity);
       total += loyaltyTotal;

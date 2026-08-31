@@ -136,18 +136,19 @@ export async function resolveMembershipDiscount(
   // mid-bill runs out at the identical row in both the preview and the charge.
   const allocate = (
     percent: number, balance: number, appliesTo: MembershipAppliesTo,
-    categoryIds: string[], serviceIds: string[] = [], productIds: string[] = [],
+    serviceCategoryIds: string[], productCategoryIds: string[],
+    serviceIds: string[] = [], productIds: string[] = [],
   ): MembershipDiscountPreview => {
-    const covers = (r: LineItem, itemIds: string[]) => {
+    const covers = (r: LineItem, categoryIds: string[], itemIds: string[]) => {
       if (!categoryIds.length && !itemIds.length) return true;
       return (!!r.categoryId && categoryIds.includes(r.categoryId)) || (!!r.itemId && itemIds.includes(r.itemId));
     };
     const serviceAmounts = appliesTo === 'products'
       ? serviceRows.map(() => 0)
-      : serviceRows.map((r) => (r.isPackageService || !covers(r, serviceIds) ? 0 : (r.total ?? r.price * (r.qty || 1))));
+      : serviceRows.map((r) => (r.isPackageService || !covers(r, serviceCategoryIds, serviceIds) ? 0 : (r.total ?? r.price * (r.qty || 1))));
     const productAmounts = appliesTo === 'services'
       ? productRows.map(() => 0)
-      : productRows.map((r) => (!covers(r, productIds) ? 0 : (r.total ?? r.price * (r.qty || 1))));
+      : productRows.map((r) => (!covers(r, productCategoryIds, productIds) ? 0 : (r.total ?? r.price * (r.qty || 1))));
     const { total, discounts } = allocateMembershipDiscount([...serviceAmounts, ...productAmounts], percent, balance);
     return {
       total,
@@ -175,7 +176,8 @@ export async function resolveMembershipDiscount(
       percentageMembership.discountPercent ?? 0,
       percentageMembership.discountBalanceRemaining,
       percentageMembership.appliesTo,
-      percentageMembership.categoryIds,
+      percentageMembership.serviceCategoryIds,
+      percentageMembership.productCategoryIds,
       percentageMembership.serviceIds,
       percentageMembership.productIds,
     ));
@@ -183,7 +185,11 @@ export async function resolveMembershipDiscount(
 
   // Loyalty is uncapped once unlocked, so there is no balance to bound it.
   if (loyalty?.eligible) {
-    previews.push(allocate(loyalty.discountPercent, Infinity, loyalty.appliesTo, loyalty.categoryIds, loyalty.serviceIds, loyalty.productIds));
+    previews.push(allocate(
+      loyalty.discountPercent, Infinity, loyalty.appliesTo,
+      loyalty.serviceCategoryIds, loyalty.productCategoryIds,
+      loyalty.serviceIds, loyalty.productIds,
+    ));
   }
 
   if (!previews.length) return empty();
@@ -199,16 +205,29 @@ export async function resolveMembershipDiscount(
 export const pricingService = {
   async calculateTotals(salonId: string, body: CalculateTotalsBody): Promise<CalculateTotalsResponse> {
     // The frontend sends serviceRows/productRows as its own ServiceItem[]/
-    // ProductItem[] row shapes, which already carry the real catalog id
-    // under service_id/productId (inconsistent casing between the two, not
+    // ProductItem[] row shapes, which carry the real catalog id under
+    // service_id/productId (inconsistent casing between the two, not
     // itemId) — normalize once here so every consumer below can filter by a
     // single itemId field, mirroring how categoryId already arrives
     // pre-populated on these rows. Every remaining use of
     // body.serviceRows/body.productRows in this function must go through
     // these normalized consts instead, or itemId silently goes missing for
     // whichever site skips it.
-    const serviceRows: LineItem[] = (body.serviceRows ?? []).map((r: any) => ({ ...r, itemId: r.itemId ?? r.service_id }));
-    const productRows: LineItem[] = (body.productRows ?? []).map((r: any) => ({ ...r, itemId: r.itemId ?? r.productId }));
+    //
+    // A row a client just picked from the catalog but hasn't saved yet only
+    // has the catalog id under the row's own `id` field — ServiceRow.tsx's
+    // selectService() writes `onChange(row.tempId, "id", service.id)`, never
+    // service_id (that field is only populated once the appointment is
+    // saved and reloaded — see useAppointment.ts's svcTypeId/product_id,
+    // which fall back to row.id/p.id the same way). Without this fallback,
+    // an item-restricted membership (serviceIds/productIds, as opposed to a
+    // whole-category restriction) never matched ANY row on a bill that
+    // hadn't been saved+reloaded yet — the live Quick Sale/Calendar preview
+    // showed the benefit as not applying even though the real charge (which
+    // reads the saved appointment's already-normalized service_id) would
+    // have applied it correctly.
+    const serviceRows: LineItem[] = (body.serviceRows ?? []).map((r: any) => ({ ...r, itemId: r.itemId ?? r.service_id ?? r.id }));
+    const productRows: LineItem[] = (body.productRows ?? []).map((r: any) => ({ ...r, itemId: r.itemId ?? r.productId ?? r.id }));
     const actualAmounts: BucketAmounts = {
       service: rowsTotal(serviceRows),
       packages: rowsTotal(body.packageRows ?? []),

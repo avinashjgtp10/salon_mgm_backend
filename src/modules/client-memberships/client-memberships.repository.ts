@@ -24,20 +24,23 @@ import { AppError } from "../../middleware/error.middleware";
 // confirming the bucket is actually covered (an empty `memberships` list
 // would otherwise resolve to [] rather than the correct "not covered").
 export function resolveCategoryRestriction(
-  memberships: { appliesTo: MembershipAppliesTo; categoryIds: string[]; serviceIds?: string[]; productIds?: string[] }[],
+  memberships: { appliesTo: MembershipAppliesTo; serviceCategoryIds: string[]; productCategoryIds: string[]; serviceIds?: string[]; productIds?: string[] }[],
   bucket: 'service' | 'product',
 ): string[] | null {
   const excludeSide = bucket === 'service' ? 'products' : 'services';
   const covering = memberships.filter((m) => m.appliesTo !== excludeSide);
+  const catsOf = (m: typeof covering[number]) => (bucket === 'service' ? m.serviceCategoryIds : m.productCategoryIds) ?? [];
   const itemsOf = (m: typeof covering[number]) => (bucket === 'service' ? m.serviceIds : m.productIds) ?? [];
-  // Unrestricted only when a covering membership has BOTH lists empty — a
-  // membership restricted to specific services only (empty categoryIds,
-  // non-empty serviceIds) is still restricted, not unrestricted. Checking
-  // categoryIds alone here would silently defeat the whole item-restriction
-  // feature: it would mark the pool unrestricted before serviceIds is ever
-  // consulted.
-  if (covering.some((m) => !m.categoryIds.length && !itemsOf(m).length)) return null;
-  return Array.from(new Set(covering.flatMap((m) => m.categoryIds)));
+  // Unrestricted only when a covering membership has BOTH lists empty (for
+  // THIS bucket) — a membership restricted to specific services only (empty
+  // category ids, non-empty serviceIds) is still restricted, not
+  // unrestricted. Checking category ids alone here would silently defeat the
+  // whole item-restriction feature: it would mark the pool unrestricted
+  // before serviceIds is ever consulted. Each side reads its OWN category id
+  // list — a category valid for both services and products can be picked for
+  // one without implicitly restricting the other.
+  if (covering.some((m) => !catsOf(m).length && !itemsOf(m).length)) return null;
+  return Array.from(new Set(covering.flatMap(catsOf)));
 }
 
 // Sibling of resolveCategoryRestriction, same pooling contract, for the
@@ -45,13 +48,14 @@ export function resolveCategoryRestriction(
 // joint-unrestricted trigger, so this and resolveCategoryRestriction always
 // return null together and callers can check either one's null-ness.
 export function resolveItemRestriction(
-  memberships: { appliesTo: MembershipAppliesTo; categoryIds: string[]; serviceIds?: string[]; productIds?: string[] }[],
+  memberships: { appliesTo: MembershipAppliesTo; serviceCategoryIds: string[]; productCategoryIds: string[]; serviceIds?: string[]; productIds?: string[] }[],
   bucket: 'service' | 'product',
 ): string[] | null {
   const excludeSide = bucket === 'service' ? 'products' : 'services';
   const covering = memberships.filter((m) => m.appliesTo !== excludeSide);
+  const catsOf = (m: typeof covering[number]) => (bucket === 'service' ? m.serviceCategoryIds : m.productCategoryIds) ?? [];
   const itemsOf = (m: typeof covering[number]) => (bucket === 'service' ? m.serviceIds : m.productIds) ?? [];
-  if (covering.some((m) => !m.categoryIds.length && !itemsOf(m).length)) return null;
+  if (covering.some((m) => !catsOf(m).length && !itemsOf(m).length)) return null;
   return Array.from(new Set(covering.flatMap(itemsOf)));
 }
 
@@ -244,7 +248,8 @@ function toClientMembership(row: ClientMembershipRow, log: UsageLogRow[] = []): 
     pricePaid:          row.price_paid ? parseFloat(row.price_paid) : undefined,
     membershipWalletBalance: Number(row.membership_wallet_balance) || 0,
     appliesTo:          row.applies_to ?? 'services',
-    categoryIds:        row.category_ids ?? [],
+    serviceCategoryIds: row.service_category_ids ?? [],
+    productCategoryIds: row.product_category_ids ?? [],
     serviceIds:         row.service_ids ?? [],
     productIds:         row.product_ids ?? [],
     description:        row.description ?? undefined,
@@ -395,7 +400,7 @@ export const clientMembershipsRepository = {
     // always funded as (catalog price + bonusCredit) no matter which of the
     // several sell flows created this row.
     const memRes = await pool.query(
-      `SELECT valid_for, price, description, pricing_type, discount_percent, discount_balance, applies_to, category_ids, service_ids, product_ids
+      `SELECT valid_for, price, description, pricing_type, discount_percent, discount_balance, applies_to, service_category_ids, product_category_ids, service_ids, product_ids
        FROM memberships WHERE id = $1`,
       [dto.membershipId],
     );
@@ -416,7 +421,8 @@ export const clientMembershipsRepository = {
     }
     const discountPercent = memRow?.discount_percent ?? null;
     const appliesTo = memRow?.applies_to ?? 'services';
-    const categoryIds = memRow?.category_ids?.length ? memRow.category_ids : null;
+    const serviceCategoryIds = memRow?.service_category_ids?.length ? memRow.service_category_ids : null;
+    const productCategoryIds = memRow?.product_category_ids?.length ? memRow.product_category_ids : null;
     const serviceIds = memRow?.service_ids?.length ? memRow.service_ids : null;
     const productIds = memRow?.product_ids?.length ? memRow.product_ids : null;
 
@@ -457,9 +463,9 @@ export const clientMembershipsRepository = {
         (id, salon_id, client_id, client_name, mobile, email,
          membership_id, membership_name, colour, total_sessions, used_sessions,
          expires_at, end_date, status, price_paid, membership_wallet_balance, appointment_id,
-         pricing_type, discount_percent, discount_balance_remaining, applies_to, category_ids, description, staff_id,
+         pricing_type, discount_percent, discount_balance_remaining, applies_to, service_category_ids, product_category_ids, description, staff_id,
          service_ids, product_ids)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$11,$14,'active',$12,$13,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$11,$14,'active',$12,$13,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
        RETURNING *`,
       [
         id, salonId, dto.clientId, clientName, mobile, email,
@@ -479,7 +485,8 @@ export const clientMembershipsRepository = {
         discountPercent,
         discountBalance,
         appliesTo,
-        categoryIds,
+        serviceCategoryIds,
+        productCategoryIds,
         description,
         dto.staffId ?? null,
         serviceIds,
@@ -674,7 +681,7 @@ export const clientMembershipsRepository = {
     serviceItemIds: string[] | null; productItemIds: string[] | null;
   }> {
     const { rows } = await pool.query(
-      `SELECT applies_to, category_ids, service_ids, product_ids FROM client_memberships
+      `SELECT applies_to, service_category_ids, product_category_ids, service_ids, product_ids FROM client_memberships
        WHERE client_id = $1 AND salon_id = $2 AND status = 'active' AND membership_wallet_balance > 0`,
       [clientId, salonId],
     );
@@ -687,7 +694,8 @@ export const clientMembershipsRepository = {
     }
     const memberships = rows.map((r) => ({
       appliesTo: (r.applies_to ?? 'services') as MembershipAppliesTo,
-      categoryIds: (r.category_ids ?? []) as string[],
+      serviceCategoryIds: (r.service_category_ids ?? []) as string[],
+      productCategoryIds: (r.product_category_ids ?? []) as string[],
       serviceIds: (r.service_ids ?? []) as string[],
       productIds: (r.product_ids ?? []) as string[],
     }));
