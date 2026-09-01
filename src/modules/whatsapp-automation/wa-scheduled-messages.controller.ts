@@ -31,18 +31,26 @@ export const waScheduledMessagesController = {
   async list(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const salonId   = await resolveOwnedSalonId(req)
-      const status    = req.query.status    as string | undefined
-      const eventType = req.query.eventType as string | undefined
+      // Express parses repeated query keys (status=A&status=B, which is how
+      // axios serializes an array `params` value) into a real array already —
+      // a single checkbox still arrives as a plain string, so both are
+      // normalized to string[] here.
+      const toArray = (v: unknown): string[] | undefined =>
+        v === undefined ? undefined : (Array.isArray(v) ? v as string[] : [v as string])
+      const status    = toArray(req.query.status)
+      const eventType = toArray(req.query.eventType)
       const clientId  = req.query.clientId  as string | undefined
       const dateFrom  = req.query.dateFrom  as string | undefined
       const dateTo    = req.query.dateTo    as string | undefined
       const search    = req.query.search    as string | undefined
 
-      if (status && !VALID_STATUSES.includes(status as ScheduledMessageStatus)) {
-        return next(new AppError(400, `Invalid status: ${status}`, 'VALIDATION_ERROR'))
+      const invalidStatus = status?.find(s => !VALID_STATUSES.includes(s as ScheduledMessageStatus))
+      if (invalidStatus) {
+        return next(new AppError(400, `Invalid status: ${invalidStatus}`, 'VALIDATION_ERROR'))
       }
-      if (eventType && !SCHEDULABLE_EVENTS.includes(eventType as AutomationEventType)) {
-        return next(new AppError(400, `Invalid eventType: ${eventType}`, 'VALIDATION_ERROR'))
+      const invalidEventType = eventType?.find(e => !SCHEDULABLE_EVENTS.includes(e as AutomationEventType))
+      if (invalidEventType) {
+        return next(new AppError(400, `Invalid eventType: ${invalidEventType}`, 'VALIDATION_ERROR'))
       }
 
       const rawPage  = parseInt(req.query.page  as string)
@@ -52,8 +60,8 @@ export const waScheduledMessagesController = {
 
       const result = await waScheduledMessagesService.list({
         salonId,
-        status:    status    as ScheduledMessageStatus | undefined,
-        eventType: eventType as AutomationEventType    | undefined,
+        status:    status    as ScheduledMessageStatus[] | undefined,
+        eventType: eventType as AutomationEventType[]    | undefined,
         clientId, dateFrom, dateTo, search, page, limit,
       })
       sendSuccess(res, 200, result, 'Scheduled messages fetched')
