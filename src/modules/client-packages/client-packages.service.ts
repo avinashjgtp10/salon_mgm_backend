@@ -370,6 +370,14 @@ export const clientPackagesService = {
       (async () => {
         const salon = await salonsRepository.findById(salonId);
         const svc = updated.services.find((s) => s.serviceId === dto.serviceId);
+        // Full remaining-sessions breakdown across every service still left in
+        // this package (not just the one just redeemed) — "ServiceName-Count"
+        // per service, comma-separated; a service fully used up (0 left) drops
+        // out of the list entirely rather than cluttering it with zeroes.
+        const remainingBreakdown = updated.services
+          .filter((s) => s.remainingSessions > 0)
+          .map((s) => `${s.serviceName}-${s.remainingSessions}`)
+          .join(",") || "None";
         whatsappAutomationService.trigger({
           salonId,
           eventType:     "package_session_used",
@@ -382,6 +390,7 @@ export const clientPackagesService = {
             "3": updated.packageName,
             "4": String(svc?.remainingSessions ?? 0),
             "5": salon?.business_name ?? "our salon",
+            "6": remainingBreakdown,
           },
           referenceId:   `${updated.id}:${dto.serviceId}:${(svc?.completedSessions ?? 0)}`,
           referenceType: "package",

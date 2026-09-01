@@ -213,8 +213,17 @@ export const waScheduledMessagesRepository = {
     const values: any[] = [filters.salonId]
     let idx = 2
 
-    if (filters.status)    { conditions.push(`status = $${idx++}`);     values.push(filters.status) }
-    if (filters.eventType) { conditions.push(`event_type = $${idx++}`); values.push(filters.eventType) }
+    // Both accept a single value or an array — a checkbox filter with several
+    // boxes ticked (e.g. Scheduled + Failed) must OR them together, not
+    // silently collapse to whichever was picked last.
+    if (filters.status) {
+      const statuses = Array.isArray(filters.status) ? filters.status : [filters.status]
+      if (statuses.length) { conditions.push(`status = ANY($${idx++}::text[])`); values.push(statuses) }
+    }
+    if (filters.eventType) {
+      const eventTypes = Array.isArray(filters.eventType) ? filters.eventType : [filters.eventType]
+      if (eventTypes.length) { conditions.push(`event_type = ANY($${idx++}::text[])`); values.push(eventTypes) }
+    }
     if (filters.clientId)  { conditions.push(`client_id = $${idx++}`);  values.push(filters.clientId) }
     if (filters.dateFrom)  { conditions.push(`scheduled_at >= $${idx++}::date`); values.push(filters.dateFrom) }
     if (filters.dateTo)    { conditions.push(`scheduled_at < ($${idx++}::date + interval '1 day')`); values.push(filters.dateTo) }

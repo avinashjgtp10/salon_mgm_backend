@@ -95,8 +95,11 @@ export const campaignsService = {
     }
   },
 
-  // ── Resend — relaunches the same campaign to its full original contact list ──
-  async resend(id: string, salonId: string) {
+  // ── Resend — relaunches the same campaign to its full original contact list,
+  // optionally overriding the template's {{n}} variable values (e.g. an
+  // updated discount/coupon) for this resend only — the original campaign's
+  // own rows and contacts are never touched, this always creates a new one ──
+  async resend(id: string, salonId: string, variables?: Record<string, string>) {
     const campaign = await this.getById(id, salonId)
     if (['SENDING', 'RUNNING', 'SCHEDULED'].includes(campaign.status)) {
       throw new AppError(400, 'Campaign is still in progress — wait for it to finish (or pause it) before resending', 'CAMPAIGN_IN_PROGRESS')
@@ -114,11 +117,32 @@ export const campaignsService = {
     const client = await pool.connect()
     try {
       await client.query('BEGIN')
+
+      // Cluster-wide mutex on this source campaign id, held only for this
+      // transaction — closes the double-click race that a plain read-check-
+      // write left open (two near-simultaneous Resend clicks could otherwise
+      // both pass every check above and each create their own duplicate
+      // resend campaign). The loser gets a clear 409 instead of a silent
+      // duplicate send; released automatically on COMMIT/ROLLBACK.
+      const { rows: lockRows } = await client.query(
+        `SELECT pg_try_advisory_xact_lock(hashtext($1)) AS locked`, [id]
+      )
+      if (!lockRows[0].locked) {
+        throw new AppError(409, 'A resend for this campaign is already in progress', 'RESEND_IN_PROGRESS')
+      }
+
+      // Edited variable values (if any) apply uniformly to every contact,
+      // overriding whatever was stored on the original — a resend's whole
+      // point is a salon-wide offer/discount/coupon change, not per-contact.
+      const contactsToInsert = variables && Object.keys(variables).length > 0
+        ? contacts.map(c => ({ ...c, variables: { ...c.variables, ...variables } }))
+        : contacts
+
       const newCampaignId = await campaignsRepository.create(
         salonId, campaign.template_id, `${campaign.name} (Resend)`, campaign.batch_size,
-        contacts.length, null
+        contactsToInsert.length, null
       )
-      await campaignsRepository.bulkInsertContacts(newCampaignId, contacts)
+      await campaignsRepository.bulkInsertContacts(newCampaignId, contactsToInsert)
       await client.query('COMMIT')
 
       await queueCampaignBatches(newCampaignId, salonId, campaign.batch_size)

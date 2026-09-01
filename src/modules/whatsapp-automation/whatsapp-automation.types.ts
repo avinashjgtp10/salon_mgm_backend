@@ -287,8 +287,8 @@ export type UpsertScheduledParams = {
 
 export type ListScheduledMessagesFilters = {
   salonId:    string
-  status?:    ScheduledMessageStatus
-  eventType?: AutomationEventType
+  status?:    ScheduledMessageStatus | ScheduledMessageStatus[]
+  eventType?: AutomationEventType | AutomationEventType[]
   clientId?:  string
   dateFrom?:  string
   dateTo?:    string
