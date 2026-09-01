@@ -236,8 +236,17 @@ export const waScheduledMessagesRepository = {
     const where = conditions.join(' AND ')
 
     const countRes = await pool.query(`SELECT COUNT(*) FROM wa_scheduled_messages WHERE ${where}`, values)
+    // What's coming up first (soonest due at the very top — today before
+    // next week), then what's already happened last (most recent first —
+    // yesterday before last month). A plain chronological sort would bury
+    // today's due-soon rows under anything scheduled further in the future.
     const dataRes  = await pool.query(
-      `SELECT * FROM wa_scheduled_messages WHERE ${where} ORDER BY scheduled_at DESC LIMIT $${idx} OFFSET $${idx + 1}`,
+      `SELECT * FROM wa_scheduled_messages WHERE ${where}
+       ORDER BY
+         CASE WHEN scheduled_at >= NOW() THEN 0 ELSE 1 END,
+         CASE WHEN scheduled_at >= NOW() THEN scheduled_at END ASC,
+         CASE WHEN scheduled_at <  NOW() THEN scheduled_at END DESC
+       LIMIT $${idx} OFFSET $${idx + 1}`,
       [...values, limit, offset]
     )
 

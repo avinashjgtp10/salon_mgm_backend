@@ -87,6 +87,13 @@ import path from "path";
 
 const app: Application = express();
 app.set("trust proxy", 1);
+// Express 5 defaults to the built-in 'simple' query parser, which doesn't
+// understand bracket-notation arrays (status[]=A&status[]=B) — axios's
+// default array serialization uses exactly that format. 'extended' restores
+// the qs-based parser (Express 4's old default) so any endpoint that accepts
+// an array query param (multi-select filters, etc.) actually receives it as
+// an array instead of a literal "key[]" string that's silently ignored.
+app.set("query parser", "extended");
 
 // Bootstrap package-template tables (idempotent)
 ensurePackageTemplateTables().catch(err =>
