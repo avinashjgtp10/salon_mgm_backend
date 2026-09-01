@@ -223,6 +223,10 @@ export const ordersRepository = {
             values.push(`%${filters.search}%`);
             idx++;
         }
+        if (filters.status) {
+            conditions.push(`o.status = $${idx++}`);
+            values.push(filters.status);
+        }
 
         const where = `WHERE ${conditions.join(" AND ")}`;
         const page = Math.max(1, filters.page ?? 1);
@@ -331,6 +335,99 @@ export const ordersRepository = {
             const anyReceived = refreshedItems.some((r) => Number(r.received_qty) > 0);
             const newStatus = fullyReceived ? "received" : anyReceived ? "partially_received" : order.status;
             await client.query(`UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2`, [newStatus, orderId]);
+            await client.query("COMMIT");
+        } catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        } finally {
+            client.release();
+        }
+
+        return (await this.getById(orderId, salonId))!;
+    },
+
+    /**
+     * Corrects a mis-entered received_qty on one order line after the fact
+     * (e.g. typed 10 when only 8 actually arrived). Does NOT touch the
+     * Purchase/purchase_items rows already created by receive() — those stay
+     * as the historical record of what was recorded on which date. Instead
+     * this applies the delta directly to products.amount (so stock ends up
+     * correct) and logs one 'adjustment' stock_movements row for the audit
+     * trail, then re-derives the order's status the same way receive() does.
+     */
+    async correctReceivedQty(orderId: string, orderItemId: string, newReceivedQty: number, salonId: string, createdBy: string): Promise<Order> {
+        const order = await this.getById(orderId, salonId);
+        if (!order) throw new AppError(404, "Order not found", "ORDER_NOT_FOUND");
+        if (order.status === "cancelled") throw new AppError(400, "Cannot edit a cancelled order", "ORDER_CANCELLED");
+
+        const orderItem = (order.items ?? []).find((i) => i.id === orderItemId);
+        if (!orderItem) throw new AppError(404, "Order item not found on this order", "ORDER_ITEM_NOT_FOUND");
+        if (newReceivedQty > Number(orderItem.qty) + 0.001) {
+            throw new AppError(400, `received_qty cannot exceed the ordered quantity (${orderItem.qty})`, "VALIDATION_ERROR");
+        }
+
+        const delta = newReceivedQty - Number(orderItem.received_qty);
+        if (Math.abs(delta) < 0.001) {
+            return order;
+        }
+
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+
+            const { rows: prodRows } = await client.query(
+                `SELECT id, COALESCE(amount, 0)::float8 AS amount, bottle_size
+                   FROM products WHERE id = $1 AND salon_id = $2 FOR UPDATE`,
+                [orderItem.product_id, salonId],
+            );
+            if (!prodRows.length) throw new AppError(404, "Product not found", "PRODUCT_NOT_FOUND");
+
+            const bottleSize = Number(prodRows[0].bottle_size) || 0;
+            const baseUnitsPerPack = bottleSize > 0 ? bottleSize : 1;
+            const beforeBase = Number(prodRows[0].amount) || 0;
+            const deltaBase = delta * baseUnitsPerPack;
+            const afterBase = beforeBase + deltaBase;
+            if (afterBase < 0) {
+                throw new AppError(400, "This correction would take stock below zero", "VALIDATION_ERROR");
+            }
+
+            await client.query(
+                `UPDATE products SET amount = $1, updated_at = NOW() WHERE id = $2 AND salon_id = $3`,
+                [afterBase, orderItem.product_id, salonId],
+            );
+
+            await client.query(
+                `INSERT INTO stock_movements
+                   (product_id, movement_type, quantity, unit_price, total_amount,
+                    supplier_id, notes, created_by, before_stock, after_stock)
+                 VALUES ($1, 'adjustment', $2, $3, $4, $5, $6, $7, $8, $9)`,
+                [
+                    orderItem.product_id,
+                    Math.abs(delta),
+                    Number(orderItem.cost_price),
+                    Math.abs(delta) * Number(orderItem.cost_price),
+                    order.supplier_id,
+                    `Correction of received qty on order ${order.order_number}`,
+                    createdBy,
+                    beforeBase / baseUnitsPerPack,
+                    afterBase / baseUnitsPerPack,
+                ],
+            );
+
+            await client.query(
+                `UPDATE order_items SET received_qty = $1 WHERE id = $2`,
+                [newReceivedQty, orderItemId],
+            );
+
+            const { rows: refreshedItems } = await client.query(
+                `SELECT qty, received_qty FROM order_items WHERE order_id = $1`,
+                [orderId],
+            );
+            const fullyReceived = refreshedItems.every((r) => Number(r.received_qty) >= Number(r.qty) - 0.001);
+            const anyReceived = refreshedItems.some((r) => Number(r.received_qty) > 0);
+            const newStatus = fullyReceived ? "received" : anyReceived ? "partially_received" : "sent";
+            await client.query(`UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2`, [newStatus, orderId]);
+
             await client.query("COMMIT");
         } catch (err) {
             await client.query("ROLLBACK");

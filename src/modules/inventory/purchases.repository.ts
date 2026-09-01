@@ -67,26 +67,14 @@ export const purchasesRepository = {
         purchase: Purchase;
         updatedProducts: ProductInventoryRow[];
     }> {
-        // Same product added twice on one purchase (defensive — the UI
-        // shouldn't allow it, but a duplicate would otherwise take two
-        // separate row locks on the same product and self-deadlock).
-        const byProduct = new Map<string, { quantity: number; purchase_price: number; expiry_date: string | null }>();
-        for (const item of data.items) {
-            const existing = byProduct.get(item.product_id);
-            if (existing) {
-                existing.quantity += item.quantity;
-                // Later line's price/expiry wins — same "last one typed wins"
-                // posture as everywhere else duplicate input silently merges.
-                existing.purchase_price = item.purchase_price;
-                existing.expiry_date = item.expiry_date ?? existing.expiry_date;
-            } else {
-                byProduct.set(item.product_id, {
-                    quantity: item.quantity,
-                    purchase_price: item.purchase_price,
-                    expiry_date: item.expiry_date ?? null,
-                });
-            }
-        }
+        // The same product can appear on more than one line (different batch/
+        // expiry/price per delivery) — each line stays its own purchase_items
+        // + stock_movements row so that history isn't lost. Only the row LOCK
+        // is deduplicated per product (sorted, so two concurrent purchases
+        // touching the same products always lock in the same order and can't
+        // deadlock each other) — quantities from every line for that product
+        // are then applied to products.amount in sequence.
+        const productIds = Array.from(new Set(data.items.map((i) => i.product_id))).sort();
 
         const client = await pool.connect();
         try {
@@ -126,7 +114,13 @@ export const purchasesRepository = {
             let totalAmount = 0;
             const items: PurchaseItem[] = [];
 
-            for (const [productId, line] of byProduct) {
+            // before/afterBase tracks each product's running stock (in base
+            // units) across however many lines it appears on in this purchase,
+            // so a second line for the same product continues from the first
+            // line's result instead of overwriting it.
+            const runningBase = new Map<string, { amount: number; baseUnitsPerPack: number }>();
+
+            for (const productId of productIds) {
                 const { rows: prodRows } = await client.query(
                     `SELECT id, COALESCE(amount, 0)::float8 AS amount, bottle_size
                        FROM products
@@ -137,16 +131,23 @@ export const purchasesRepository = {
                 if (!prodRows.length) {
                     throw new Error(`Product not found in this salon: ${productId}`);
                 }
-
                 const bottleSize = Number(prodRows[0].bottle_size) || 0;
-                const baseUnitsPerPack = bottleSize > 0 ? bottleSize : 1;
-                const beforeBase = Number(prodRows[0].amount) || 0;
-                const addedBase = line.quantity * baseUnitsPerPack;
+                runningBase.set(productId, {
+                    amount: Number(prodRows[0].amount) || 0,
+                    baseUnitsPerPack: bottleSize > 0 ? bottleSize : 1,
+                });
+            }
+
+            for (const line of data.items) {
+                const running = runningBase.get(line.product_id)!;
+                const beforeBase = running.amount;
+                const addedBase = line.quantity * running.baseUnitsPerPack;
                 const afterBase = beforeBase + addedBase;
+                running.amount = afterBase;
 
                 await client.query(
                     `UPDATE products SET amount = $1, updated_at = NOW() WHERE id = $2 AND salon_id = $3`,
-                    [afterBase, productId, salonId],
+                    [afterBase, line.product_id, salonId],
                 );
 
                 const lineTotal = line.quantity * line.purchase_price;
@@ -159,15 +160,15 @@ export const purchasesRepository = {
                      VALUES ($1, 'in', $2, $3, $4, $5, $6, $7, $8, $9)
                      RETURNING id`,
                     [
-                        productId,
+                        line.product_id,
                         line.quantity,
                         line.purchase_price,
                         lineTotal,
                         data.supplier_id,
                         `Purchase ${purchase.purchase_number}`,
                         createdBy,
-                        beforeBase / baseUnitsPerPack,
-                        afterBase / baseUnitsPerPack,
+                        beforeBase / running.baseUnitsPerPack,
+                        afterBase / running.baseUnitsPerPack,
                     ],
                 );
 
@@ -176,7 +177,7 @@ export const purchasesRepository = {
                        (purchase_id, product_id, quantity, purchase_price, total_price, expiry_date, stock_movement_id)
                      VALUES ($1, $2, $3, $4, $5, $6, $7)
                      RETURNING *`,
-                    [purchase.id, productId, line.quantity, line.purchase_price, lineTotal, line.expiry_date, mvRows[0].id],
+                    [purchase.id, line.product_id, line.quantity, line.purchase_price, lineTotal, line.expiry_date ?? null, mvRows[0].id],
                 );
                 items.push(itemRows[0]);
             }
@@ -190,7 +191,7 @@ export const purchasesRepository = {
             await client.query("COMMIT");
 
             const updatedProducts = await productInventoryRepository.getRowsByProductIds(
-                Array.from(byProduct.keys()),
+                productIds,
                 salonId,
             );
 
