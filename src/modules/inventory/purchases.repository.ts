@@ -218,6 +218,14 @@ export const purchasesRepository = {
             conditions.push(`pu.supplier_id = $${idx++}`);
             values.push(filters.supplier_id);
         }
+        if (filters.date_from) {
+            conditions.push(`pu.purchase_date >= $${idx++}`);
+            values.push(filters.date_from);
+        }
+        if (filters.date_to) {
+            conditions.push(`pu.purchase_date <= $${idx++}`);
+            values.push(filters.date_to);
+        }
 
         const where = `WHERE ${conditions.join(" AND ")}`;
         const page = Math.max(1, filters.page ?? 1);

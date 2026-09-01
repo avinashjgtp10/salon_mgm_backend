@@ -55,6 +55,8 @@ export interface CreatePurchaseDTO {
 export interface ListPurchaseFilters {
     search?: string;
     supplier_id?: string;
+    date_from?: string;
+    date_to?: string;
     page?: number;
     limit?: number;
 }
