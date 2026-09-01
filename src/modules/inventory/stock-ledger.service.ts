@@ -1,6 +1,7 @@
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { stockLedgerRepository } from "./stock-ledger.repository";
+import { appointmentConsumablesService } from "./inventory.service";
 import {
     CreateStockLedgerEntryBody,
     UpdateStockLedgerEntryBody,
@@ -70,5 +71,45 @@ export const stockLedgerService = {
         await getOwned(id, salonId);
         const deleted = await stockLedgerRepository.delete(id, salonId);
         if (!deleted) throw new AppError(404, "Stock ledger entry not found", "NOT_FOUND");
+    },
+
+    // Called fire-and-forget from every checkout path right where
+    // commissionCalculationService.calculateForSale already is (see
+    // sales.service.ts#checkout and both branches of
+    // appointments.service.ts#checkout) — a completed sale's retail product
+    // lines (item_type='product') should deduct stock and appear in the
+    // Stock Ledger the same way a Purchase does, which nothing did before
+    // this. Never throws: a stock-ledger failure must not be able to surface
+    // as a checkout failure after payment has already been taken, so this
+    // logs and swallows internally — callers can still .catch(() => {}) as
+    // a second guard, matching the existing double-guard convention.
+    async deductForSale(params: {
+        salonId: string;
+        branchId: string | null;
+        saleId: string;
+        invoiceNumber: string | null;
+        createdBy: string | null;
+        items: { item_type: string; item_id: string | null; quantity: number }[];
+    }): Promise<void> {
+        try {
+            const productItems = params.items
+                .filter((i) => i.item_type === "product" && i.item_id)
+                .map((i) => ({ product_id: i.item_id as string, quantity: Number(i.quantity) || 0 }))
+                .filter((i) => i.quantity > 0);
+            if (!productItems.length) return;
+
+            const branchId = params.branchId ?? await appointmentConsumablesService.resolveBranchId(params.salonId, null);
+            if (!branchId) {
+                logger.warn("stockLedgerService.deductForSale: no branch resolvable, skipping", { saleId: params.saleId });
+                return;
+            }
+
+            await stockLedgerRepository.deductForSale(
+                { salonId: params.salonId, branchId, saleId: params.saleId, invoiceNumber: params.invoiceNumber, items: productItems },
+                params.createdBy,
+            );
+        } catch (err: any) {
+            logger.error("stockLedgerService.deductForSale failed", { saleId: params.saleId, error: err?.message ?? err });
+        }
     },
 };

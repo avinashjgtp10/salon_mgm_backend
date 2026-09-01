@@ -7,6 +7,7 @@ import { salesRepository } from "../sales/sales.repository";
 import type { SaleItem } from "../sales/sales.types";
 import { productsRepository } from "../products/products.repository";
 import { appointmentConsumablesService } from "../inventory/inventory.service";
+import { stockLedgerService } from "../inventory/stock-ledger.service";
 import { tipCalculationService } from "../tips/tipCalculation.service";
 import { consumableInventoryRepository } from "../inventory/consumable-inventory.repository";
 import { resolveConversionRatio, FAMILY_MESSAGE } from "../inventory/unit-families";
@@ -1251,6 +1252,19 @@ export const appointmentsService = {
             await tipCalculationService.reverseForSale(preExistingSale.id).catch(() => {});
             tipCalculationService.earnForSale(preExistingSale.id, existing.salon_id).catch(() => {});
 
+            // ── Stock Ledger: deduct retail product lines (fire-and-forget) ──
+            // deductForSale is idempotent per sale_id, so a re-entered checkout
+            // here (same guard as the commission reverse/recalc above) safely
+            // no-ops instead of double-deducting.
+            stockLedgerService.deductForSale({
+                salonId:       existing.salon_id,
+                branchId:      existing.branch_id ?? null,
+                saleId:        preExistingSale.id,
+                invoiceNumber: preExistingSale.invoice_number,
+                createdBy:     requesterUserId,
+                items:         saleItems.map((i) => ({ item_type: i.item_type, item_id: i.item_id, quantity: Number(i.quantity) || 0 })),
+            }).catch(() => {});
+
             // Auto-mark attendance (fire-and-forget)
             if (existing.staff_id) {
                 attendanceService.autoMarkFromAppointment({
@@ -1517,6 +1531,16 @@ export const appointmentsService = {
             packageItemIds:  new Set((existing.package_items ?? []).map(p => p.package_id)),
         }).catch(() => {});
         tipCalculationService.earnForSale(sale.id, existing.salon_id).catch(() => {});
+
+        // ── Stock Ledger: deduct retail product lines (fire-and-forget) ──────
+        stockLedgerService.deductForSale({
+            salonId:       existing.salon_id,
+            branchId:      existing.branch_id ?? null,
+            saleId:        sale.id,
+            invoiceNumber: sale.invoice_number,
+            createdBy:     requesterUserId,
+            items:         items.map((i: any) => ({ item_type: i.item_type, item_id: i.item_id, quantity: Number(i.quantity) || 0 })),
+        }).catch(() => {});
 
         // ── Auto-mark attendance for the staff member (fire-and-forget) ───────
         if (existing.staff_id) {
