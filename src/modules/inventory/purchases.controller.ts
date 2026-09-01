@@ -61,6 +61,8 @@ export const purchasesController = {
                 {
                     search: (req.query.search as string) || undefined,
                     supplier_id: (req.query.supplier_id as string) || undefined,
+                    date_from: (req.query.date_from as string) || undefined,
+                    date_to: (req.query.date_to as string) || undefined,
                     page: asPositiveInt(req.query.page, 1),
                     limit: asPositiveInt(req.query.limit, 20),
                 },
