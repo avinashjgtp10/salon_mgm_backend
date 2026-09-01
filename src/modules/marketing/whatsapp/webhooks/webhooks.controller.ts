@@ -22,6 +22,12 @@ export const webhooksController = {
   // Salon identified by phone_number_id in the payload
   handleGlobal(req: Request, res: Response) {
     res.status(200).json({ success: true })
+    // Logged unconditionally, before any parsing/processing — this is the one
+    // line that proves Meta is calling us at all. Everything downstream only
+    // logs on specific branches (FAILED status, capability updates), so a
+    // silent delivery mystery with zero webhook log lines is otherwise
+    // indistinguishable from "Meta never called us".
+    logger.info('📩 [WEBHOOK] Incoming payload', { body: req.body })
     void webhooksService.handleWebhook(req.body).catch(err =>
       logger.error('handleGlobal: webhook processing failed', { err })
     )
@@ -42,6 +48,7 @@ export const webhooksController = {
   // ── Per-salon handle — backward compat ───────────────────────────────────
   handle(req: Request, res: Response) {
     res.status(200).json({ success: true })
+    logger.info('📩 [WEBHOOK] Incoming payload (per-salon)', { salonId: req.params.salonId, body: req.body })
     const body = { ...req.body, _salonId: req.params.salonId }
     void webhooksService.handleWebhook(body).catch(err =>
       logger.error('handle: webhook processing failed', { err })

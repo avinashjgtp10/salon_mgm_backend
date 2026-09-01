@@ -24,9 +24,9 @@ import {
     validateCreateStockMovement,
     validateStockTake,
 } from "./inventory.validator";
-import { validateCreatePurchase } from "./purchases.validator";
+import { validateCreatePurchase, validateListPurchases } from "./purchases.validator";
 import { validateCreateSupplierPayment } from "./supplier-payments.validator";
-import { validateCreateOrder, validateReceiveOrder } from "./orders.validator";
+import { validateCreateOrder, validateReceiveOrder, validateCorrectReceivedQty } from "./orders.validator";
 import {
     validateCreateProductAudit,
     validateAddAuditItems,
@@ -161,6 +161,7 @@ router.get(
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
     viewInventory,
+    validateListPurchases,
     purchasesController.list
 );
 
@@ -227,6 +228,17 @@ router.post(
     manageInventory,
     validateReceiveOrder,
     ordersController.receive
+);
+
+// Corrects a mis-entered received_qty after the fact — see
+// ordersRepository.correctReceivedQty for what this does/doesn't touch.
+router.post(
+    "/orders/:id/items/:itemId/correct-received",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    manageInventory,
+    validateCorrectReceivedQty,
+    ordersController.correctReceivedQty
 );
 
 router.post(

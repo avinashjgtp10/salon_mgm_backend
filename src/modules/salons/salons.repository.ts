@@ -145,10 +145,13 @@ const SALON_CLEAR_DATA_TABLES = [
   // direction (deleting a staff row never deletes its linked login).
   "staff",
 
-  // Legacy/duplicate subscriptions table (has salon_id, no FK to salons —
-  // distinct from salon_subscriptions/billing_subscriptions, which are
-  // deliberately preserved below as the active-plan/billing state).
-  "subscriptions",
+  // `subscriptions` (Razorpay-hosted flow) deliberately NOT cleared — despite
+  // the name, it's the CURRENT active-plan table subscription.middleware.ts
+  // checks first (billing_subscriptions is only its legacy/manual fallback).
+  // A prior version of this list deleted it, which silently revoked the
+  // salon's active subscription — locking the account out with
+  // SUBSCRIPTION_REQUIRED until a new one was created. Preserved here the
+  // same way salon_subscriptions/billing_subscriptions already are.
 
   // Cash management
   "cash_management_expenses", "cash_management",
@@ -221,6 +224,19 @@ export async function clearSalonData(client: PoolClient, salonId: string): Promi
     const whereClause = colNames.map((c: string) => `${c} = $1`).join(" OR ");
     await client.query(`DELETE FROM ${table} WHERE ${whereClause}`, [salonId]);
   }
+
+  // The invoice/enquiry/purchase numbers above (sales.repository.ts,
+  // enquiries.repository.ts, purchases.repository.ts) aren't derived from
+  // the deleted rows — each is a running counter column on the salons row
+  // itself (next_invoice_seq/next_enquiry_seq/next_purchase_seq), so wiping
+  // the rows above left new records continuing from the old high number
+  // instead of restarting at 1, same DEFAULT every salon starts at.
+  await client.query(
+    `UPDATE salons
+     SET next_invoice_seq = 1, next_enquiry_seq = 1, next_purchase_seq = 1
+     WHERE id = $1`,
+    [salonId]
+  );
 
   return true;
 }

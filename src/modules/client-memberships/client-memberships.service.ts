@@ -13,6 +13,7 @@ import type {
 import logger from '../../config/logger';
 import { sendPurchaseReceipt } from '../sales/receipt-send.helper';
 import { whatsappAutomationService } from '../whatsapp-automation/whatsapp-automation.service';
+import { waScheduledMessagesService } from '../whatsapp-automation/wa-scheduled-messages.service';
 import { salonsRepository } from '../salons/salons.repository';
 import type { Sale, SaleItem } from '../sales/sales.types';
 
@@ -197,6 +198,17 @@ export const clientMembershipsService = {
     }
 
     notifyMembershipPurchased(membership, true, invoiceNumber).catch(() => {});
+
+    // ── Scheduled Templates: membership_expiring_7d / membership_expiring_24h ──
+    if (membership.mobile && membership.expiresAt) {
+      waScheduledMessagesService.scheduleMembershipExpiry({
+        salonId, clientId: dto.clientId, phone: membership.mobile, countryCode: null,
+        membershipId: membership.id, membershipName: membership.membershipName,
+        clientName: membership.clientName ?? 'Valued Customer', expiryDate: membership.expiresAt,
+        remainingBalance: membership.membershipWalletBalance,
+      }).catch((err: any) => logger.error('[wa-scheduled] membership expiry schedule failed:', err?.message ?? err));
+    }
+
     return membership;
   },
 
@@ -242,7 +254,10 @@ export const clientMembershipsService = {
   },
 
   async cancel(id: string, salonId: string) {
-    return clientMembershipsRepository.cancel(id, salonId);
+    const result = await clientMembershipsRepository.cancel(id, salonId);
+    waScheduledMessagesService.cancelForReference('membership', id)
+      .catch((err: any) => logger.error('[wa-scheduled] cancel-on-cancel failed:', err?.message ?? err));
+    return result;
   },
 
   // Automatic wallet redemption at checkout: draws from ALL of the client's
@@ -549,10 +564,20 @@ export const clientMembershipsService = {
       const existing = await clientMembershipsRepository.findActiveByClientAndMembership(clientId, membershipId, salonId);
       if (existing) {
         logger.info(`[client-memberships/auto-create] already active (id=${existing.id}) — renewing instead of creating a duplicate`);
-        await clientMembershipsRepository.renew(existing.id, salonId, {
+        const renewed = await clientMembershipsRepository.renew(existing.id, salonId, {
           membershipId, pricePaid, totalSessions, staffId, saleId,
         });
         logger.info(`[client-memberships/auto-create] RENEWED — client=${clientId}, membership=${membershipName}`);
+        // Reschedule (or create, if the original never got one) expiry
+        // reminders against the new expiry date, not the old one.
+        if (renewed.mobile && renewed.expiresAt) {
+          waScheduledMessagesService.scheduleMembershipExpiry({
+            salonId, clientId, phone: renewed.mobile, countryCode: null,
+            membershipId: renewed.id, membershipName: renewed.membershipName,
+            clientName: renewed.clientName ?? 'Valued Customer', expiryDate: renewed.expiresAt,
+            remainingBalance: renewed.membershipWalletBalance,
+          }).catch((err: any) => logger.error('[wa-scheduled] membership expiry reschedule-on-renew failed:', err?.message ?? err));
+        }
         return;
       }
       const created = await clientMembershipsRepository.create(salonId, {
@@ -570,6 +595,16 @@ export const clientMembershipsService = {
         await clientMembershipsRepository.setSaleId(created.id, salonId, saleId);
       }
       logger.info(`[client-memberships/auto-create] SUCCESS — client=${clientId}, membership=${membershipName}`);
+
+      // ── Scheduled Templates: membership_expiring_7d / membership_expiring_24h ──
+      if (created.mobile && created.expiresAt) {
+        waScheduledMessagesService.scheduleMembershipExpiry({
+          salonId, clientId, phone: created.mobile, countryCode: null,
+          membershipId: created.id, membershipName: created.membershipName,
+          clientName: created.clientName ?? 'Valued Customer', expiryDate: created.expiresAt,
+          remainingBalance: created.membershipWalletBalance,
+        }).catch((err: any) => logger.error('[wa-scheduled] membership expiry schedule failed:', err?.message ?? err));
+      }
       // No confirmation message here — the calling checkout flow (sales/
       // payments) already sent one covering this whole sale, membership
       // line included (bill_receipt for Quick Sale, payment_received for

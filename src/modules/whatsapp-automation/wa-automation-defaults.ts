@@ -117,7 +117,7 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         label: "Package Session Used",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{customer_name}},\nYour {{service_name}} service has been successfully redeemed from your {{package_name}}.\nSession Used: 1\nSessions Remaining: {{remaining_sessions}}\nThank you for visiting {{salon_name}} — we appreciate you!",
+        bodyText: "Hi {{customer_name}},\nYour {{service_name}} service has been successfully redeemed from your {{package_name}}.\nSession Used: 1\nSessions Remaining: {{remaining_sessions}}\nServices Remaining: {{remaining_services_breakdown}}\nThank you for visiting {{salon_name}} — we appreciate you!",
     },
     membership_session_used: {
         label: "Membership Session Used",
@@ -191,7 +191,7 @@ export const EVENT_VARIABLE_NAMES: Record<DefaultPurchaseEventType, string[]> = 
     package_expiring_24h:    ["customer_name", "package_name", "remaining_sessions", "expiry_date"],
     membership_expiring_7d:  ["customer_name", "membership_name", "expiry_date", "remaining_balance"],
     membership_expiring_24h: ["customer_name", "membership_name", "remaining_balance", "expiry_date"],
-    package_session_used:    ["customer_name", "service_name", "package_name", "remaining_sessions", "salon_name"],
+    package_session_used:    ["customer_name", "service_name", "package_name", "remaining_sessions", "salon_name", "remaining_services_breakdown"],
     membership_session_used: ["customer_name", "service_name", "amount_used", "remaining_balance", "salon_name"],
     package_appointment_reminder_24h: ["customer_name", "salon_name", "appointment_date", "appointment_time", "service_name", "package_name"],
     service_reminder_24h:             ["customer_name", "salon_name", "appointment_date", "appointment_time", "service_name", "staff_name"],

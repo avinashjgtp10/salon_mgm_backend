@@ -391,6 +391,10 @@ export const authService = {
 
     await authRepository.markOtpUsed(latest.id);
     await authRepository.markUserVerified(user.id);
+    // Keep the same short-lived, email-bound proof used by the
+    // pre-registration flow so public flows (such as demo requests) can
+    // enforce that this specific OTP verification just occurred.
+    await redis.set(`otp:email:verified:${email}`, "1", "EX", 30 * 60);
 
     logger.info("[authService.verifyEmailOtp] Email verified successfully", { email, userId: user.id });
     return { message: "Email verified successfully", success: true };

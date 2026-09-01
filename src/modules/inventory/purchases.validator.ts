@@ -56,6 +56,9 @@ export const validateCreatePurchase = (
 };
 
 // ─── List Purchases validator ──────────────────────────────────────────────────
+// Matches every query param purchasesController.list actually reads (see
+// ListPurchaseFilters) — was previously defined but never wired to the
+// route, so none of these were checked at all.
 export const validateListPurchases = (
     req: Request,
     _res: Response,
@@ -64,6 +67,15 @@ export const validateListPurchases = (
     try {
         if (!isOptionalString(req.query.search)) {
             throw new AppError(400, "search must be a string", "VALIDATION_ERROR");
+        }
+        if (req.query.supplier_id !== undefined && !isUUID(req.query.supplier_id)) {
+            throw new AppError(400, "supplier_id must be a UUID", "VALIDATION_ERROR");
+        }
+        if (!isOptionalDate(req.query.date_from)) {
+            throw new AppError(400, "date_from must be in YYYY-MM-DD format", "VALIDATION_ERROR");
+        }
+        if (!isOptionalDate(req.query.date_to)) {
+            throw new AppError(400, "date_to must be in YYYY-MM-DD format", "VALIDATION_ERROR");
         }
         return next();
     } catch (err) {

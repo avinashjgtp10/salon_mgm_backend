@@ -31,7 +31,10 @@ router.patch('/templates/:eventType/toggle', roleMiddleware('admin'), whatsappAu
 
 // ── Manual Job Trigger (Admin Only) ──────────────────────────────────────────
 // POST /api/v1/wa-automation/run-job/:jobName
-// jobName: birthday | pending-payment | membership-renewal | we-miss-you-30 | we-miss-you-60 | we-miss-you-90 | new-year | appointment-reminder | appointment-reminder-1h | package-expiring | package-appointment-reminder-2d | package-appointment-reminder-1d
+// jobName: scheduled-due-tick | scheduled-group-b-preview
+// (package/membership expiry, appointment reminders, birthday, we-miss-you,
+// new-year, and pending-payment all moved to Scheduled Templates — see
+// wa-scheduled-messages.routes.ts for their own list/action endpoints)
 router.post('/run-job/:jobName', roleMiddleware('admin'), whatsappAutomationController.runJob)
 
 export default router

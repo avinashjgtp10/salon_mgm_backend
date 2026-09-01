@@ -55,6 +55,7 @@ import botQuestionsRoutes from "./modules/bot/bot-questions.routes";
 import aiEngineRoutes from "./modules/ai-engine/ai-engine.routes";
 import { ensureTable as ensureAiEngineTables } from "./modules/ai-engine/ai-engine.repository";
 import waAutomationRoutes from "./modules/whatsapp-automation/whatsapp-automation.routes";
+import waScheduledMessagesRoutes from "./modules/whatsapp-automation/wa-scheduled-messages.routes";
 import waPurchaseTemplatesRoutes from "./modules/whatsapp-automation/wa-purchase-templates.routes";
 import attendanceRoutes from "./modules/attendance/attendance.routes";
 import { deviceApiRouter, admsRouter } from "./modules/device/device.routes";
@@ -86,6 +87,13 @@ import path from "path";
 
 const app: Application = express();
 app.set("trust proxy", 1);
+// Express 5 defaults to the built-in 'simple' query parser, which doesn't
+// understand bracket-notation arrays (status[]=A&status[]=B) — axios's
+// default array serialization uses exactly that format. 'extended' restores
+// the qs-based parser (Express 4's old default) so any endpoint that accepts
+// an array query param (multi-select filters, etc.) actually receives it as
+// an array instead of a literal "key[]" string that's silently ignored.
+app.set("query parser", "extended");
 
 // Bootstrap package-template tables (idempotent)
 ensurePackageTemplateTables().catch(err =>
@@ -281,6 +289,7 @@ app.use("/api/v1/reports", legacyReportsRoutes);
 app.use("/api/v1/cash-management", cashManagementRoutes);
 app.use("/api/v1/wa-automation", waAutomationRoutes);
 app.use("/api/v1/wa-automation/purchase-templates", waPurchaseTemplatesRoutes);
+app.use("/api/v1/wa-automation/scheduled", waScheduledMessagesRoutes);
 app.use("/api/v1/attendance", attendanceRoutes);
 app.use("/api/v1/devices", deviceApiRouter);
 app.use("/api/v1/package-templates", packageTemplatesRoutes);

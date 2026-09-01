@@ -15,6 +15,7 @@ import { membershipsRepository } from "../memberships/memberships.repository";
 import { clientMembershipsService } from "../client-memberships/client-memberships.service";
 import { sendPurchaseReceipt } from "./receipt-send.helper";
 import { clientPackagesService } from "../client-packages/client-packages.service";
+import { stockLedgerService } from "../inventory/stock-ledger.service";
 
 export const salesService = {
 
@@ -190,6 +191,16 @@ export const salesService = {
             items,
         }).catch(() => {}); // already safe internally, double-guard here
         tipCalculationService.earnForSale(sale.id, sale.salon_id).catch(() => {});
+
+        // ── Stock Ledger: deduct retail product lines (fire-and-forget) ──────
+        stockLedgerService.deductForSale({
+            salonId:       sale.salon_id,
+            branchId:      null,
+            saleId:        sale.id,
+            invoiceNumber: sale.invoice_number,
+            createdBy:     params.requesterUserId,
+            items:         items.map((i) => ({ item_type: i.item_type, item_id: i.item_id, quantity: Number(i.quantity) || 0 })),
+        }).catch(() => {});
 
         // service_purchased / product_purchased (retired): used to fire one text
         // per item type present in a Quick Sale cart — fully redundant with the
