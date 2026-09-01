@@ -99,8 +99,15 @@ export interface ReceiveOrderDTO {
     purchase_date?: string;
 }
 
+// Corrects a mis-entered received_qty after the fact — this is the NEW
+// running total for the line, not a delta (unlike ReceiveOrderItemDTO).
+export interface CorrectReceivedQtyDTO {
+    received_qty: number;
+}
+
 export interface ListOrderFilters {
     search?: string;
+    status?: OrderStatus;
     page?: number;
     limit?: number;
 }
