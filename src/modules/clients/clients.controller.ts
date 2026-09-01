@@ -503,6 +503,7 @@ export const clientsController = {
 
             const WHERE = `
                 WHERE c.salon_id = $1
+                  AND c.is_active = true
                   AND ($2 = '' OR (c.full_name ILIKE $2 OR c.phone_number ILIKE $2 OR c.email ILIKE $2))
                   AND ($3 = '' OR $3 = ANY(COALESCE(ad.service_ids, '{}'::text[])))
                   AND ($4 = '' OR $4 = ANY(COALESCE(ad.staff_ids,   '{}'::text[])))
