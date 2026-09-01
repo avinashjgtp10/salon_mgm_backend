@@ -17,10 +17,12 @@ const SELECT_WITH_JOINS = `
            p.measure_unit AS measure_unit,
            p.bottle_size AS bottle_size,
            sc.name AS category,
+           sup.name AS supplier_name,
            NULLIF(TRIM(CONCAT(u.first_name, ' ', COALESCE(u.last_name, ''))), '') AS created_by_name
     FROM stock_ledger sl
     JOIN products p ON p.id = sl.product_id
     LEFT JOIN service_categories sc ON sc.id = p.category_id
+    LEFT JOIN suppliers sup ON sup.id = sl.supplier_id
     LEFT JOIN users u ON u.id = sl.created_by`;
 
 export const stockLedgerRepository = {
@@ -138,21 +140,20 @@ export const stockLedgerRepository = {
             );
             if (!prodRows.length) throw new Error("Product not found in this salon");
 
-            const isInType = ["opening_stock", "purchase", "return", "adjustment_in", "transfer_in"]
-                .includes(data.transaction_type);
+            const isInType = STOCK_LEDGER_IN_TYPES.includes(data.transaction_type);
             const signedQty = isInType ? Math.abs(data.quantity) : -Math.abs(data.quantity);
             const balanceAfter = parseFloat(prodRows[0].amount) + signedQty;
 
             const { rows } = await client.query(
                 `INSERT INTO stock_ledger (
                     salon_id, branch_id, product_id, transaction_type,
-                    reference, quantity, unit_cost, balance_after, reason, notes, created_by
-                 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                    reference, quantity, unit_cost, balance_after, reason, notes, created_by, supplier_id
+                 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
                  RETURNING *`,
                 [
                     salonId, data.branch_id, data.product_id, data.transaction_type,
                     data.reference ?? null, signedQty, data.unit_cost ?? null,
-                    balanceAfter, data.reason ?? null, data.notes ?? null, createdBy,
+                    balanceAfter, data.reason ?? null, data.notes ?? null, createdBy, data.supplier_id ?? null,
                 ]
             );
 
@@ -181,6 +182,7 @@ export const stockLedgerRepository = {
         if (data.reference !== undefined) { sets.push(`reference = $${idx++}`); values.push(data.reference); }
         if (data.reason !== undefined) { sets.push(`reason = $${idx++}`); values.push(data.reason); }
         if (data.notes !== undefined) { sets.push(`notes = $${idx++}`); values.push(data.notes); }
+        if (data.supplier_id !== undefined) { sets.push(`supplier_id = $${idx++}`); values.push(data.supplier_id || null); }
         if (sets.length === 0) return this.findById(id, salonId);
 
         sets.push(`updated_at = NOW()`);
@@ -206,5 +208,155 @@ export const stockLedgerRepository = {
             [id, salonId]
         );
         return (rowCount ?? 0) > 0;
+    },
+
+    // Writes one 'sale' ledger row + products.amount deduction per retail
+    // product line in a completed sale — see stockDeductionService.deductForSale
+    // for the fire-and-forget call sites (every checkout path). `reference`
+    // is the human-readable invoice number (what the "Reference" field shows
+    // everywhere else in this table — a Purchase Order number, a manual
+    // entry's typed reference, etc), NOT the sale's raw UUID. The UUID still
+    // needs to be tracked somewhere for idempotency (a re-entered checkout —
+    // see appointments.service.ts's pre-existing-sale branch — must not
+    // deduct stock twice), so it's tucked into `notes` instead, a column
+    // nothing in the UI currently renders. Skipping (not reversing) on a
+    // repeat call is the safer default: a wrong SKIP just leaves an
+    // already-correct balance alone, while a wrong double-deduct silently
+    // corrupts stock.
+    async deductForSale(
+        params: { salonId: string; branchId: string; saleId: string; invoiceNumber: string | null; items: { product_id: string; quantity: number }[] },
+        createdBy: string | null,
+    ): Promise<void> {
+        const { salonId, branchId, saleId, invoiceNumber, items } = params;
+        if (!items.length) return;
+
+        const idempotencyTag = `sale_id:${saleId}`;
+        const displayReference = invoiceNumber || "Sale";
+
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+
+            const { rows: existing } = await client.query(
+                `SELECT 1 FROM stock_ledger
+                  WHERE salon_id = $1 AND transaction_type = 'sale' AND notes = $2
+                  LIMIT 1`,
+                [salonId, idempotencyTag],
+            );
+            if (existing.length) {
+                await client.query("ROLLBACK");
+                return;
+            }
+
+            for (const item of items) {
+                if (!(item.quantity > 0)) continue;
+
+                const { rows: prodRows } = await client.query(
+                    `SELECT id, COALESCE(amount, 0) AS amount FROM products
+                      WHERE id = $1 AND salon_id = $2
+                      FOR UPDATE`,
+                    [item.product_id, salonId],
+                );
+                if (!prodRows.length) continue; // product deleted/not found — nothing to deduct
+
+                const signedQty = -Math.abs(item.quantity);
+                const balanceAfter = parseFloat(prodRows[0].amount) + signedQty;
+
+                await client.query(
+                    `INSERT INTO stock_ledger (
+                        salon_id, branch_id, product_id, transaction_type,
+                        reference, quantity, balance_after, notes, created_by
+                     ) VALUES ($1,$2,$3,'sale',$4,$5,$6,$7,$8)`,
+                    [salonId, branchId, item.product_id, displayReference, signedQty, balanceAfter, idempotencyTag, createdBy],
+                );
+
+                await client.query(
+                    `UPDATE products SET amount = $1, updated_at = NOW() WHERE id = $2`,
+                    [balanceAfter, item.product_id],
+                );
+            }
+
+            await client.query("COMMIT");
+        } catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        } finally {
+            client.release();
+        }
+    },
+
+    // Finds every retail product, across every salon, whose ENTIRE stock has
+    // expired — see expiryWriteOffScheduler for why "entire": expiry is
+    // tracked per purchase batch (purchase_items.expiry_date), but
+    // products.amount is one pooled total with no per-batch breakdown, so a
+    // product with a mix of expired and still-good batches can't be safely
+    // auto-deducted (would wipe out the still-good portion too). A product
+    // is only "entire stock expired" when its LATEST batch's expiry_date has
+    // passed — falling back to the product's own manual expiry_date when it
+    // has no purchase history, same COALESCE product-inventory.repository.ts
+    // uses for its own 'expired' status label.
+    async findFullyExpiredProducts(): Promise<{ id: string; salon_id: string; amount: number }[]> {
+        const { rows } = await pool.query(
+            `SELECT p.id, p.salon_id, COALESCE(p.amount, 0)::float8 AS amount
+               FROM products p
+               LEFT JOIN (
+                 SELECT pi.product_id, MAX(pi.expiry_date) AS latest_expiry
+                   FROM purchase_items pi
+                   JOIN purchases pu ON pu.id = pi.purchase_id
+                  WHERE pi.expiry_date IS NOT NULL
+                  GROUP BY pi.product_id
+               ) expiry_agg ON expiry_agg.product_id = p.id
+              WHERE COALESCE(p.product_type, 'retail') IN ('retail', 'both')
+                AND COALESCE(p.is_active, TRUE) = TRUE
+                AND COALESCE(p.amount, 0) > 0
+                AND COALESCE(expiry_agg.latest_expiry, p.expiry_date) < CURRENT_DATE`,
+        );
+        return rows;
+    },
+
+    // Writes off one product's full remaining stock as expired — one
+    // stock_ledger 'expired' row + products.amount → 0. Idempotent per
+    // product via the caller's daily sweep window (see
+    // expiryWriteOffScheduler): once amount hits 0 here, this product no
+    // longer matches findFullyExpiredProducts' `amount > 0` filter, so a
+    // re-run never double-writes-off the same batch.
+    async writeOffExpiredProduct(
+        params: { salonId: string; branchId: string; productId: string; amount: number },
+    ): Promise<void> {
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+
+            const { rows: prodRows } = await client.query(
+                `SELECT id, COALESCE(amount, 0) AS amount FROM products
+                  WHERE id = $1 AND salon_id = $2
+                  FOR UPDATE`,
+                [params.productId, params.salonId],
+            );
+            if (!prodRows.length) { await client.query("ROLLBACK"); return; }
+
+            const currentAmount = parseFloat(prodRows[0].amount);
+            if (currentAmount <= 0) { await client.query("ROLLBACK"); return; }
+
+            await client.query(
+                `INSERT INTO stock_ledger (
+                    salon_id, branch_id, product_id, transaction_type,
+                    reference, quantity, balance_after, reason
+                 ) VALUES ($1,$2,$3,'expired',$4,$5,0,$6)`,
+                [params.salonId, params.branchId, params.productId, "Auto write-off (all batches expired)", -currentAmount, "Expired"],
+            );
+
+            await client.query(
+                `UPDATE products SET amount = 0, updated_at = NOW() WHERE id = $1`,
+                [params.productId],
+            );
+
+            await client.query("COMMIT");
+        } catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        } finally {
+            client.release();
+        }
     },
 };

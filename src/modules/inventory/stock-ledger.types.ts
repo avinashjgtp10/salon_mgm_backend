@@ -15,16 +15,21 @@ export type StockLedgerTransactionType =
     | "adjustment_in"
     | "adjustment_out"
     | "transfer_in"
-    | "transfer_out";
+    | "transfer_out"
+    | "sample"
+    | "lost"
+    | "internal_use";
 
 export const STOCK_LEDGER_TRANSACTION_TYPES: StockLedgerTransactionType[] = [
     "opening_stock", "purchase", "usage", "sale", "return",
     "damage", "expired", "adjustment_in", "adjustment_out",
-    "transfer_in", "transfer_out",
+    "transfer_in", "transfer_out", "sample", "lost", "internal_use",
 ];
 
 // Transaction types that add to stock — quantity is stored positive for
 // these, negative for every other type. Drives the ledger's In/Out columns.
+// sample/lost/internal_use all consume stock, so they're stock-out like
+// usage/damage/expired — none of them add to it.
 export const STOCK_LEDGER_IN_TYPES: StockLedgerTransactionType[] = [
     "opening_stock", "purchase", "return", "adjustment_in", "transfer_in",
 ];
@@ -45,6 +50,16 @@ export type StockLedgerEntry = {
     balance_after: number;
     reason: string | null;
     notes: string | null;
+    /** Which supplier this stock actually came from, when known — set only
+     *  when the person recording it (typically an Add Stock "Purchase Stock"
+     *  entry) explicitly picked one. NULL for everything else: Client
+     *  Return, Branch Transfer, Opening Stock, adjustments, sales, expiry
+     *  write-offs. Purely a display/attribution field on the ledger itself —
+     *  does NOT feed Purchase History or supplier balances, which stay
+     *  sourced from purchases/purchase_items only (see
+     *  Migration/add_stock_ledger_supplier.sql). */
+    supplier_id: string | null;
+    supplier_name: string | null;
     created_by: string | null;
     created_by_name: string | null;
     created_at: string;
@@ -61,12 +76,15 @@ export type CreateStockLedgerEntryBody = {
     unit_cost?: number;
     reason?: string;
     notes?: string;
+    supplier_id?: string;
 };
 
 export type UpdateStockLedgerEntryBody = {
     reference?: string;
     reason?: string;
     notes?: string;
+    /** Pass "" (empty string) to clear a previously-set supplier. */
+    supplier_id?: string;
 };
 
 export type ListStockLedgerFilters = {
