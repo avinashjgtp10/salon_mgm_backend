@@ -23,7 +23,7 @@ const AUDIT_SELECT = `
 // resolved live via this join (never denormalized onto the row), so a later
 // rename in the catalog is reflected instead of frozen at add-time.
 const ITEM_SELECT = `
-  SELECT pai.*, p.name AS product_name, p.sku, sc.name AS category
+  SELECT pai.*, p.name AS product_name, p.sku, p.measure_unit, sc.name AS category
     FROM product_audit_items pai
     JOIN products p ON p.id = pai.product_id
     LEFT JOIN service_categories sc ON sc.id = p.category_id
@@ -159,7 +159,7 @@ export const productAuditRepository = {
             await client.query("BEGIN");
 
             const { rows: prodRows } = await client.query(
-                `SELECT p.id, p.name, p.sku, sc.name AS category, (${STOCK_IN_PACKS})::float8 AS system_qty
+                `SELECT p.id, p.name, p.sku, p.measure_unit, sc.name AS category, (${STOCK_IN_PACKS})::float8 AS system_qty
                    FROM products p
                    LEFT JOIN service_categories sc ON sc.id = p.category_id
                   WHERE p.id = ANY($1::uuid[]) AND p.salon_id = $2`,
@@ -179,7 +179,7 @@ export const productAuditRepository = {
                     [auditId, p.id, p.system_qty],
                 );
                 if (rows[0]) {
-                    inserted.push({ ...rows[0], product_name: p.name, sku: p.sku, category: p.category });
+                    inserted.push({ ...rows[0], product_name: p.name, sku: p.sku, category: p.category, measure_unit: p.measure_unit });
                 }
             }
 

@@ -15,6 +15,7 @@ export type ProductAuditItem = {
     product_id: string;
     product_name: string;
     sku: string | null;
+    measure_unit: string | null;
     category: string | null;
     system_qty: number;
     physical_qty: number | null;
