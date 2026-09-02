@@ -1,7 +1,11 @@
 // Product Audit — count physical stock against system quantities and
-// reconcile differences. Deliberately read-only against products.amount:
-// this module never writes stock (unlike stockTakeService.process), so it
-// can be reviewed/rejected/reopened freely without touching real inventory.
+// reconcile differences. Read-only against products.amount right up until
+// approval: an audit can be freely edited/submitted/rejected/reopened
+// without touching real inventory, but productAuditService.approve() (see
+// product-audit.repository.ts#approveWithAdjustments) is the one moment a
+// physical count becomes the official stock — it applies every item's
+// variance to products.amount and writes matching Stock Ledger entries,
+// atomically with the status flip to 'complete'.
 
 export type ProductAuditStatus = "in_progress" | "pending_review" | "complete" | "rejected";
 

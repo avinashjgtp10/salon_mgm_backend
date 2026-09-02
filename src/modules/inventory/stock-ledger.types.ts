@@ -18,12 +18,15 @@ export type StockLedgerTransactionType =
     | "transfer_out"
     | "sample"
     | "lost"
-    | "internal_use";
+    | "internal_use"
+    | "audit_adjustment_in"
+    | "audit_adjustment_out";
 
 export const STOCK_LEDGER_TRANSACTION_TYPES: StockLedgerTransactionType[] = [
     "opening_stock", "purchase", "usage", "sale", "return",
     "damage", "expired", "adjustment_in", "adjustment_out",
     "transfer_in", "transfer_out", "sample", "lost", "internal_use",
+    "audit_adjustment_in", "audit_adjustment_out",
 ];
 
 // Transaction types that add to stock — quantity is stored positive for
@@ -32,7 +35,15 @@ export const STOCK_LEDGER_TRANSACTION_TYPES: StockLedgerTransactionType[] = [
 // usage/damage/expired — none of them add to it.
 export const STOCK_LEDGER_IN_TYPES: StockLedgerTransactionType[] = [
     "opening_stock", "purchase", "return", "adjustment_in", "transfer_in",
+    "audit_adjustment_in",
 ];
+
+// audit_adjustment_in/out are written only by
+// product-audit.repository.ts#approveWithAdjustments when an approved audit's
+// physical count differs from system stock — never offered as a manual entry
+// choice (see ADJUSTMENT_TXN_TYPES on the frontend), so these rows always
+// trace back to a real audit via their `notes` (audit_id:<id>) and
+// `reference` (Audit: <name>).
 
 export type StockLedgerEntry = {
     id: string;
