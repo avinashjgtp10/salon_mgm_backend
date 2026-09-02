@@ -1,16 +1,26 @@
 import { AppError } from "../../middleware/error.middleware";
+import redis from "../../config/redis";
 import { demoRequestsRepository } from "./demo-requests.repository";
 import { CreateDemoRequestBody, DemoRequestStatus } from "./demo-requests.types";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const ALLOWED_STATUSES: DemoRequestStatus[] = ["new", "contacted", "converted", "closed"];
+const ALLOWED_STATUSES: DemoRequestStatus[] = ["new", "contacted", "converted", "closed", "lost", "unqualified"];
 
 export const demoRequestsService = {
     async create(body: CreateDemoRequestBody) {
         const name = (body.name ?? "").trim();
-        const email = (body.email ?? "").trim();
+        const email = (body.email ?? "").trim().toLowerCase();
         if (!name) throw new AppError(400, "Name is required", "VALIDATION_ERROR");
         if (!EMAIL_RE.test(email)) throw new AppError(400, "A valid email is required", "VALIDATION_ERROR");
+
+        const emailVerified = await redis.get(`otp:email:verified:${email}`);
+        if (emailVerified !== "1") {
+            throw new AppError(
+                403,
+                "Email verification is required before requesting a demo",
+                "EMAIL_VERIFICATION_REQUIRED",
+            );
+        }
 
         return demoRequestsRepository.create({
             name,

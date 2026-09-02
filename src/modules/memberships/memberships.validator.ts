@@ -9,7 +9,7 @@ const APPLIES_TO_VALUES = ["services", "products", "both"];
 const validatePricingFields = (body: any) => {
   const {
     pricingType, discountPercent, discountBalance,
-    loyaltyTiers, appliesTo, categoryIds,
+    loyaltyTiers, appliesTo, serviceCategoryIds, productCategoryIds, serviceIds, productIds,
   } = body;
 
   if (pricingType !== undefined && !PRICING_TYPES.includes(pricingType))
@@ -19,9 +19,26 @@ const validatePricingFields = (body: any) => {
     throw new AppError(400, `appliesTo must be one of: ${APPLIES_TO_VALUES.join(", ")}`, "VALIDATION_ERROR");
 
   // Optional narrowing of appliesTo — empty/omitted means unrestricted.
-  if (categoryIds !== undefined && categoryIds !== null) {
-    if (!Array.isArray(categoryIds) || categoryIds.some((c: unknown) => typeof c !== "string" || !c))
-      throw new AppError(400, "categoryIds must be an array of category id strings", "VALIDATION_ERROR");
+  // Independent per side (see memberships.types.ts) — a category picked for
+  // services must never silently also apply to products, or vice versa.
+  if (serviceCategoryIds !== undefined && serviceCategoryIds !== null) {
+    if (!Array.isArray(serviceCategoryIds) || serviceCategoryIds.some((c: unknown) => typeof c !== "string" || !c))
+      throw new AppError(400, "serviceCategoryIds must be an array of category id strings", "VALIDATION_ERROR");
+  }
+  if (productCategoryIds !== undefined && productCategoryIds !== null) {
+    if (!Array.isArray(productCategoryIds) || productCategoryIds.some((c: unknown) => typeof c !== "string" || !c))
+      throw new AppError(400, "productCategoryIds must be an array of category id strings", "VALIDATION_ERROR");
+  }
+
+  // Further, additive narrowing to specific services/products — see
+  // serviceIds/productIds on CreateMembershipDTO.
+  if (serviceIds !== undefined && serviceIds !== null) {
+    if (!Array.isArray(serviceIds) || serviceIds.some((c: unknown) => typeof c !== "string" || !c))
+      throw new AppError(400, "serviceIds must be an array of service id strings", "VALIDATION_ERROR");
+  }
+  if (productIds !== undefined && productIds !== null) {
+    if (!Array.isArray(productIds) || productIds.some((c: unknown) => typeof c !== "string" || !c))
+      throw new AppError(400, "productIds must be an array of product id strings", "VALIDATION_ERROR");
   }
 
   if (discountPercent !== undefined && discountPercent !== null &&

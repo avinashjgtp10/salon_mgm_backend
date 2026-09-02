@@ -5,14 +5,14 @@ import {
 } from "./products.types";
 
 const PRODUCT_COLUMNS = `id, name, barcode, brand_id, category_id, supplier_id, measure_unit, product_type, size, amount, bottle_size, qty_alert,
-    short_description, description, supply_price, retail_sales_enabled,
-    retail_price, markup_percentage, tax_type, custom_tax_rate, hsn_sac,
-    team_commission_enabled, team_commission_rate, expiry_date, is_active, created_at, updated_at`;
+    short_description, description, remark, lot_number, supply_price, retail_sales_enabled,
+    retail_price, markup_percentage, tax_type, custom_tax_rate, tax_group, hsn_sac,
+    team_commission_enabled, team_commission_rate, expiry_date, is_active, is_public, created_at, updated_at`;
 
 const PRODUCT_COLUMNS_P = `p.id, p.name, p.barcode, p.brand_id, p.category_id, p.supplier_id, p.measure_unit, p.product_type, p.size, p.amount, p.bottle_size, p.qty_alert,
-    p.short_description, p.description, p.supply_price, p.retail_sales_enabled,
-    p.retail_price, p.markup_percentage, p.tax_type, p.custom_tax_rate, p.hsn_sac,
-    p.team_commission_enabled, p.team_commission_rate, p.expiry_date, p.is_active, p.created_at, p.updated_at`;
+    p.short_description, p.description, p.remark, p.lot_number, p.supply_price, p.retail_sales_enabled,
+    p.retail_price, p.markup_percentage, p.tax_type, p.custom_tax_rate, p.tax_group, p.hsn_sac,
+    p.team_commission_enabled, p.team_commission_rate, p.expiry_date, p.is_active, p.is_public, p.created_at, p.updated_at`;
 
 // ─── Products Repository ──────────────────────────────────────────────────────
 
@@ -202,19 +202,20 @@ export const productsRepository = {
             `INSERT INTO products (
         salon_id,
         name, barcode, brand_id, category_id, supplier_id, measure_unit, product_type, size, amount, bottle_size, qty_alert,
-        short_description, description,
+        short_description, description, remark, lot_number,
         supply_price, retail_sales_enabled, retail_price, markup_percentage,
-        tax_type, custom_tax_rate, hsn_sac, team_commission_enabled, team_commission_rate, expiry_date
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24) RETURNING ${PRODUCT_COLUMNS}`,
+        tax_type, custom_tax_rate, tax_group, hsn_sac, team_commission_enabled, team_commission_rate, expiry_date, is_public
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28) RETURNING ${PRODUCT_COLUMNS}`,
             [
                 salonId,
                 data.name, data.barcode ?? null, data.brand_id ?? null, data.category_id ?? null, data.supplier_id ?? null,
                 data.measure_unit ?? "ml", data.product_type ?? "retail", data.size ?? null, data.amount ?? 0, data.bottle_size ?? null, data.qty_alert ?? null,
-                data.short_description ?? null, data.description ?? null,
+                data.short_description ?? null, data.description ?? null, data.remark ?? null, data.lot_number ?? null,
                 data.supply_price ?? 0, data.retail_sales_enabled ?? true,
                 data.retail_price ?? null, data.markup_percentage ?? null,
-                data.tax_type ?? "no_tax", data.custom_tax_rate ?? null, data.hsn_sac ?? null,
+                data.tax_type ?? "no_tax", data.custom_tax_rate ?? null, data.tax_group ?? null, data.hsn_sac ?? null,
                 data.team_commission_enabled ?? false, data.team_commission_rate ?? null, data.expiry_date ?? null,
+                data.is_public ?? true,
             ]
         );
         return rows[0];

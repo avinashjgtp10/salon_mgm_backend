@@ -13,10 +13,12 @@ import { blockedTimesRepository } from "../blocked_times/blocked_times.repositor
 
 import { authRepository } from "../auth/auth.repository";
 import bcrypt from "bcrypt";
+import { randomUUID } from "crypto";
 import { staffInvitationRepository } from "./staffInvitation.repository";
 import { salonsRepository } from "../salons/salons.repository";
 import { authService } from "../auth/auth.service";
 import { commissionCalculationService } from "../commission/commissionCalculation.service";
+import { tipCalculationService } from "../tips/tipCalculation.service";
 import {
     Staff, StaffAddress, StaffEmergencyContact, StaffLeave, StaffSchedule,
     StaffWageSettings, StaffCommissionSettings, StaffPayRunSettings,
@@ -109,15 +111,37 @@ export const staffService = {
                 await staffRepository.activateDirectly(staff.id);
                 console.log("[DEBUG] staffService.create - user account created and staff activated:", user.id);
             } else {
-                console.log("[DEBUG] staffService.create - Step 3: Creating invitation...");
+                console.log("[DEBUG] staffService.create - Step 3: Linking a user account up front...");
+                // staff.user_id is populated immediately, even before the invite is
+                // accepted — otherwise anything keyed on user_id (e.g. the audit
+                // auditor picker) sits empty for any staff who hasn't opened their
+                // invite email yet, which may be never (e.g. QA, where invite
+                // emails often go nowhere). If `existingUser` (looked up above) is
+                // a real account, we just link it. Otherwise the new account is
+                // inert until acceptInvitation sets a real password: unverified,
+                // no onboarding, and a random bcrypt hash nobody knows.
+                let inviteUser = existingUser;
+                if (!inviteUser) {
+                    const placeholderHash = await bcrypt.hash(randomUUID(), 10);
+                    inviteUser = await authRepository.createUser({
+                        email: staff.email,
+                        first_name: body.first_name,
+                        last_name: body.last_name ?? null,
+                        password_hash: placeholderHash,
+                        role: "staff",
+                    } as any);
+                }
+                await staffRepository.linkUserToStaff(staff.id, inviteUser.id, body.first_name, body.last_name);
+
+                console.log("[DEBUG] staffService.create - Step 4: Creating invitation...");
                 const invitation = await staffInvitationRepository.create(staff.id, staff.email);
                 console.log("[DEBUG] staffService.create - invitation created:", invitation?.id);
 
-                console.log("[DEBUG] staffService.create - Step 4: Resolving salon name...");
+                console.log("[DEBUG] staffService.create - Step 5: Resolving salon name...");
                 const salon = await salonsRepository.findById(salonId);
                 const salonName = salon?.business_name ?? "Our Salon";
 
-                console.log("[DEBUG] staffService.create - Step 5: Sending invitation email...");
+                console.log("[DEBUG] staffService.create - Step 6: Sending invitation email...");
                 emailService.sendStaffInvitation({
                     to: staff.email,
                     token: invitation.token,
@@ -565,6 +589,16 @@ export const staffInvitationService = {
                     password_hash: passwordHash,
                     role: 'staff',
                 } as any);
+            } else if (!user.is_verified) {
+                // Never verified — either the placeholder account staffService.create
+                // links up front now (see there), or an old abandoned signup. Either
+                // way nobody has proven they know its current password, so it's safe
+                // to set the one just chosen here.
+                logger.info("acceptInvitation: unverified user exists — setting chosen password", { email: invitation.email, userId: user.id });
+                const passwordHash = await bcrypt.hash(body.password, 10);
+                await authRepository.updatePassword(user.id, passwordHash);
+                await authRepository.updateUserRole(user.id, 'staff');
+                user = { ...user, role: 'staff' };
             } else {
                 logger.info("acceptInvitation: user already exists — updating role to staff", { email: invitation.email, userId: user.id });
                 await authRepository.updateUserRole(user.id, 'staff');
@@ -763,6 +797,7 @@ export const staffCommissionsService = {
     async exportCommissions(salonId: string, month?: string) {
         return commissionCalculationService.exportBySalon(salonId, month);
     },
+
     async list(staffId: string, salonId: string): Promise<StaffCommissionSettings[]> {
         await _ensureStaff(staffId, salonId);
         return staffCommissionsRepository.listByStaffId(staffId);
@@ -785,6 +820,35 @@ export const staffCommissionsService = {
         slabs: { revenue_target: number; commission_kind: string; commission_value: number }[]
     ) {
         return staffCommissionsRepository.bulkUpsert(salonId, staffIds, data, slabs);
+    },
+};
+
+// ─── Tip Settle ───────────────────────────────────────────────────────────────
+// Thin delegation to tipCalculationService, same shape as staffCommissionsService
+// above — tip_earned rows are created automatically at checkout (see
+// tipCalculationService.earnForSale, hooked into appointments.service.ts /
+// sales.service.ts alongside the existing commission calculation), so there's
+// no upsert/config surface here, only summary/settle/history.
+
+export const staffTipsService = {
+    async getSalonSummary(salonId: string, startDate?: string, endDate?: string, staffIds?: string[]) {
+        return tipCalculationService.getSalonSummary(salonId, startDate, endDate, staffIds);
+    },
+
+    async getEarnedBySalon(salonId: string, startDate?: string, endDate?: string, staffIds?: string[], status?: string) {
+        return tipCalculationService.getEarnedBySalon(salonId, startDate, endDate, staffIds, status);
+    },
+
+    async markStaffTipPaid(salonId: string, staffId: string) {
+        return tipCalculationService.markStaffPaid(salonId, staffId);
+    },
+
+    async settleStaffTip(salonId: string, staffId: string, amount: number, paymentMethod?: string | null, settledBy?: string | null) {
+        return tipCalculationService.settleStaffTip(salonId, staffId, amount, paymentMethod, settledBy);
+    },
+
+    async getSettlementHistory(salonId: string, staffId: string, limit?: number) {
+        return tipCalculationService.getSettlementHistory(salonId, staffId, limit);
     },
 };
 

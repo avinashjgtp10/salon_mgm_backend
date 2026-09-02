@@ -12,6 +12,7 @@ import { startWaLimitSyncScheduler, stopWaLimitSyncScheduler } from './modules/m
 import { startNoShowScheduler, stopNoShowScheduler } from './modules/appointments/appointments.scheduler'
 import { startPushReceiptScheduler, stopPushReceiptScheduler } from './modules/notifications/pushNotification.service'
 import { startBotQuestionsCleanupScheduler, stopBotQuestionsCleanupScheduler } from './modules/bot/bot-questions-cleanup.scheduler'
+import { startExpiryWriteOffScheduler, stopExpiryWriteOffScheduler } from './modules/inventory/expiry-write-off.scheduler'
 
 const PORT = config.port
 
@@ -54,6 +55,9 @@ httpServer.listen(PORT, () => {
 
   // Purge bot_questions rows older than 30 days (Super Admin retention policy)
   startBotQuestionsCleanupScheduler()
+
+  // Write off retail products whose entire stock has expired
+  startExpiryWriteOffScheduler()
 })
 
 // Graceful shutdown
@@ -65,6 +69,7 @@ process.on('SIGTERM', () => {
   stopNoShowScheduler()
   stopPushReceiptScheduler()
   stopBotQuestionsCleanupScheduler()
+  stopExpiryWriteOffScheduler()
   httpServer.close(() => {
     logger.info('HTTP server closed')
     db.end()

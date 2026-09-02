@@ -55,6 +55,7 @@ import botQuestionsRoutes from "./modules/bot/bot-questions.routes";
 import aiEngineRoutes from "./modules/ai-engine/ai-engine.routes";
 import { ensureTable as ensureAiEngineTables } from "./modules/ai-engine/ai-engine.repository";
 import waAutomationRoutes from "./modules/whatsapp-automation/whatsapp-automation.routes";
+import waScheduledMessagesRoutes from "./modules/whatsapp-automation/wa-scheduled-messages.routes";
 import waPurchaseTemplatesRoutes from "./modules/whatsapp-automation/wa-purchase-templates.routes";
 import attendanceRoutes from "./modules/attendance/attendance.routes";
 import { deviceApiRouter, admsRouter } from "./modules/device/device.routes";
@@ -65,11 +66,10 @@ import { ensureTable as ensureClientMembershipsTables } from "./modules/client-m
 import ewalletRoutes from "./modules/ewallet/ewallet.routes";
 import rewardPointsRoutes from "./modules/reward-points/reward-points.routes";
 import referralRoutes from "./modules/referral/referral.routes";
-import clientNotesRoutes from "./modules/client-notes/client-notes.routes";
 import { ensureTable as ensureClientNotesTable } from "./modules/client-notes/client-notes.repository";
-import clientCommunicationRoutes from "./modules/client-communication/client-communication.routes";
 import { ensureTable as ensurePaymentsTables } from "./modules/payments/payments.repository";
 import { ensureTable as ensureAppointmentsTables } from "./modules/appointments/appointments.repository";
+import { ensureTable as ensureTipTables } from "./modules/tips/tipCalculation.service";
 import cashManagementRoutes from "./modules/cash-management/cash-management.routes";
 import { ensureCashManagementTables } from "./modules/cash-management/cash-management.repository";
 import superAdminRoutes from "./modules/super-admin/super-admin.routes";
@@ -89,6 +89,13 @@ import path from "path";
 
 const app: Application = express();
 app.set("trust proxy", 1);
+// Express 5 defaults to the built-in 'simple' query parser, which doesn't
+// understand bracket-notation arrays (status[]=A&status[]=B) — axios's
+// default array serialization uses exactly that format. 'extended' restores
+// the qs-based parser (Express 4's old default) so any endpoint that accepts
+// an array query param (multi-select filters, etc.) actually receives it as
+// an array instead of a literal "key[]" string that's silently ignored.
+app.set("query parser", "extended");
 
 // Bootstrap package-template tables (idempotent)
 ensurePackageTemplateTables().catch(err =>
@@ -125,10 +132,18 @@ ensureBranchOwnerTables().catch(err =>
   logger.warn("branch-owner table init warning:", err?.message ?? err),
 );
 
+// Bootstrap tip_earned/tip_settlements tables (idempotent) — Tip Settle
+ensureTipTables().catch(err =>
+  logger.warn("tip tables init warning:", err?.message ?? err),
+);
+
 // Bootstrap ai-engine (LUNOX) tables (idempotent)
 ensureAiEngineTables().catch(err =>
   logger.warn("ai-engine table init warning:", err?.message ?? err),
 );
+
+// purchases/purchase_items/salons.next_purchase_seq: NOT auto-run here — see
+// Migration/create_purchases_tables.sql, run by hand per environment.
 
 // Security middleware
 app.use(helmet());
@@ -243,8 +258,6 @@ app.use("/api/v1/staff", staffRoutes);
 app.use("/api/v1/commission-rules", commissionRulesRoutes);
 app.use("/api/v1/payroll", payrollRoutes);
 app.use("/api/v1/clients", clientsRoutes);
-app.use("/api/v1/clients", clientNotesRoutes);
-app.use("/api/v1/clients", clientCommunicationRoutes);
 app.use("/api/v1/services", servicesRoutes);
 app.use("/api/v1/marketplace", marketplaceRoutes);
 app.use("/api/v1/memberships", membershipsRoutes);
@@ -283,6 +296,7 @@ app.use("/api/v1/reports", legacyReportsRoutes);
 app.use("/api/v1/cash-management", cashManagementRoutes);
 app.use("/api/v1/wa-automation", waAutomationRoutes);
 app.use("/api/v1/wa-automation/purchase-templates", waPurchaseTemplatesRoutes);
+app.use("/api/v1/wa-automation/scheduled", waScheduledMessagesRoutes);
 app.use("/api/v1/attendance", attendanceRoutes);
 app.use("/api/v1/devices", deviceApiRouter);
 app.use("/api/v1/package-templates", packageTemplatesRoutes);
@@ -298,7 +312,6 @@ app.use("/api/v1/notifications", notificationsRoutes);
 app.use("/api/v1/deployment-announcements", deploymentAnnouncementsRoutes);
 app.use("/api/v1/enquiries", enquiriesRoutes);
 
-// Swagger Documentation
 const swaggerDocument = require(path.join(__dirname, "../docs/api/swagger-gen.json"));
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 

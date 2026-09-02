@@ -253,6 +253,8 @@ import {
     PurchaseVsSalesReportResponse,
     ClientRevenueReportFilters,
     ClientRevenueReportResponse,
+    AllClientsReportFilters,
+    AllClientsReportResponse,
     CustomerFrequencyReportFilters,
     CustomerFrequencyReportResponse,
     LostCustomersReportFilters,
@@ -261,6 +263,8 @@ import {
     ReferralReportResponse,
     PaymentCollectionReportFilters,
     PaymentCollectionReportResponse,
+    PendingPaymentReportFilters,
+    PendingPaymentReportResponse,
     CashManagementReportFilters,
     CashManagementReportResponse,
     MembershipHistoryReportFilters,
@@ -1589,6 +1593,28 @@ async getClientRevenueReport(
 },
 
 // ======================================================
+// ALL CLIENTS REPORT (independent report API)
+// ======================================================
+
+async getAllClientsReport(
+    salonId: string,
+    filters: AllClientsReportFilters
+): Promise<AllClientsReportResponse> {
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
+        reportsRepository.getAllClientsReportStats(salonId, filters),
+        reportsRepository.getAllClientsReportRows(salonId, filters),
+        reportsRepository.getAllClientsFiltersAvailable(salonId),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+        filters_available: filtersAvailable,
+    };
+},
+
+// ======================================================
 // CUSTOMER FREQUENCY REPORT (independent report API)
 // ======================================================
 
@@ -1722,6 +1748,28 @@ async getPaymentCollectionReport(
         reportsRepository.getPaymentCollectionReportStats(salonId, filters),
         reportsRepository.getPaymentCollectionReportRows(salonId, filters),
         reportsRepository.getPaymentCollectionFiltersAvailable(salonId),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+        filters_available: filtersAvailable,
+    };
+},
+
+// ======================================================
+// PENDING PAYMENT REPORT (independent report API)
+// ======================================================
+
+async getPendingPaymentReport(
+    salonId: string,
+    filters: PendingPaymentReportFilters
+): Promise<PendingPaymentReportResponse> {
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
+        reportsRepository.getPendingPaymentReportStats(salonId, filters),
+        reportsRepository.getPendingPaymentReportRows(salonId, filters),
+        reportsRepository.getPendingPaymentFiltersAvailable(salonId),
     ]);
 
     return {

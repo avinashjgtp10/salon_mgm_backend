@@ -195,8 +195,27 @@ export const templatesService = {
         template.meta_template_id,
         meta.rejected_reason ?? null
       )
-    } catch {
-      return templatesRepository.updateStatus(id, 'APPROVED')
+    } catch (err: any) {
+      // Meta returning "this object doesn't exist" means the template was
+      // deleted on Meta's side (directly in Business Manager, or by Meta
+      // itself) — surface that as REJECTED so campaigns stop being launched
+      // against a template that will fail every single send with 132001
+      // ("Template name does not exist in the translation"). Previously this
+      // blindly forced status back to APPROVED on ANY error (including this
+      // one), which is exactly backwards — it hid the deletion instead of
+      // catching it.
+      const status  = err?.response?.status
+      const message = String(err?.response?.data?.error?.message ?? '').toLowerCase()
+      const isDeleted = status === 404 || status === 400 && message.includes('does not exist')
+      if (isDeleted) {
+        return templatesRepository.updateStatus(
+          id, 'REJECTED', null,
+          'Deleted on Meta’s side — recreate this template to use it in a campaign again.'
+        )
+      }
+      // A genuinely transient failure (network blip, auth hiccup) — leave
+      // the template's current status untouched rather than guessing.
+      return template
     }
   },
 

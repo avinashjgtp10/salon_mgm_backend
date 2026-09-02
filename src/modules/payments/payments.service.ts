@@ -17,11 +17,10 @@ import { CreatePaymentBody, Payment } from './payments.types';
 import type { Appointment, AppointmentServiceConsumableRecord } from '../appointments/appointments.types';
 import { appointmentConsumablesService } from '../inventory/inventory.service';
 import logger from '../../config/logger';
+import { sendPurchaseReceipt } from '../sales/receipt-send.helper';
 import { whatsappAutomationService } from '../whatsapp-automation/whatsapp-automation.service';
-import { sendReceiptDocument } from '../sales/receipt-whatsapp.service';
+import { whatsappAutomationRepository } from '../whatsapp-automation/whatsapp-automation.repository';
 import { salonsRepository } from '../salons/salons.repository';
-import { branchesRepository } from '../branches/branches.repository';
-import { staffService } from '../staff/staff.service';
 import { clientsRepository } from '../clients/clients.repository';
 import { getIO } from '../../config/socket';
 import { getActiveTaxes } from '../settings/tax.util';
@@ -39,9 +38,14 @@ interface DiscountEligibleItem {
 
 // Optional narrowing of appliesTo to specific categories — empty/undefined
 // means unrestricted, preserving today's behavior for every plan that
-// doesn't use this feature.
-function matchesCategoryRestriction(item: DiscountEligibleItem, categoryIds: string[] | undefined): boolean {
-  return !categoryIds?.length || (!!item.categoryId && categoryIds.includes(item.categoryId));
+// doesn't use this feature. itemIds is a further, additive narrowing to
+// specific services/products — a row matches if EITHER its category is in
+// categoryIds OR its own id is in itemIds; only jointly empty means
+// unrestricted.
+function matchesCategoryRestriction(item: DiscountEligibleItem, categoryIds: string[] | undefined, itemIds: string[] | undefined = []): boolean {
+  if (!categoryIds?.length && !itemIds?.length) return true;
+  return (!!categoryIds?.length && !!item.categoryId && categoryIds.includes(item.categoryId))
+      || (!!itemIds?.length && !!item.itemId && itemIds.includes(item.itemId));
 }
 
 interface MembershipDiscountResult {
@@ -88,10 +92,9 @@ async function applyMembershipDiscountForBooking(
     const percentageMembership = await clientMembershipsRepository.findActivePercentageForClient(clientId, salonId);
     if (percentageMembership) {
       const appliesTo = percentageMembership.appliesTo;
-      const categoryIds = percentageMembership.categoryIds;
       const eligible = [
-        ...(appliesTo !== 'products' ? serviceItems.filter((i) => !i.isPackageService && i.amount > 0 && matchesCategoryRestriction(i, categoryIds)) : []),
-        ...(appliesTo !== 'services' ? productItems.filter((i) => i.amount > 0 && matchesCategoryRestriction(i, categoryIds)) : []),
+        ...(appliesTo !== 'products' ? serviceItems.filter((i) => !i.isPackageService && i.amount > 0 && matchesCategoryRestriction(i, percentageMembership.serviceCategoryIds, percentageMembership.serviceIds)) : []),
+        ...(appliesTo !== 'services' ? productItems.filter((i) => i.amount > 0 && matchesCategoryRestriction(i, percentageMembership.productCategoryIds, percentageMembership.productIds)) : []),
       ];
       if (eligible.length) {
         const result = await clientMembershipsRepository.deductDiscountBalanceForBooking(
@@ -113,8 +116,8 @@ async function applyMembershipDiscountForBooking(
     const loyalty = await membershipsRepository.findLoyaltyEligibility(clientId, salonId);
     if (loyalty?.eligible) {
       const eligible = [
-        ...(loyalty.appliesTo !== 'products' ? serviceItems.filter((i) => !i.isPackageService && i.amount > 0 && matchesCategoryRestriction(i, loyalty.categoryIds)) : []),
-        ...(loyalty.appliesTo !== 'services' ? productItems.filter((i) => i.amount > 0 && matchesCategoryRestriction(i, loyalty.categoryIds)) : []),
+        ...(loyalty.appliesTo !== 'products' ? serviceItems.filter((i) => !i.isPackageService && i.amount > 0 && matchesCategoryRestriction(i, loyalty.serviceCategoryIds, loyalty.serviceIds)) : []),
+        ...(loyalty.appliesTo !== 'services' ? productItems.filter((i) => i.amount > 0 && matchesCategoryRestriction(i, loyalty.productCategoryIds, loyalty.productIds)) : []),
       ];
       const { total: loyaltyTotal, discounts } = allocateMembershipDiscount(eligible.map((i) => i.amount), loyalty.discountPercent, Infinity);
       total += loyaltyTotal;
@@ -493,11 +496,24 @@ export const paymentsService = {
                 // services-only, products-only, or both; services are no
                 // longer unconditionally eligible the way they used to be
                 // before "products only" existed as an option.
-                const { coversServices, coversProducts, serviceCategoryIds, productCategoryIds } =
+                const { coversServices, coversProducts, serviceCategoryIds, productCategoryIds, serviceItemIds, productItemIds } =
                   await clientMembershipsService.getWalletCoverage(data.salon_id, data.client_id);
+                // Additive: a row is covered if its category is in the
+                // *CategoryIds list OR its own id is in the *ItemIds list —
+                // only jointly empty means unrestricted. See
+                // resolveCategoryRestriction/resolveItemRestriction in
+                // client-memberships.repository.ts.
+                const coversServiceRow = (s: { category_id?: string | null; service_id?: string | null }) =>
+                  (!serviceCategoryIds?.length && !serviceItemIds?.length)
+                  || (!!serviceCategoryIds?.length && !!s.category_id && serviceCategoryIds.includes(s.category_id))
+                  || (!!serviceItemIds?.length && !!s.service_id && serviceItemIds.includes(s.service_id));
+                const coversProductRow = (p: { category_id?: string | null; product_id?: string | null }) =>
+                  (!productCategoryIds?.length && !productItemIds?.length)
+                  || (!!productCategoryIds?.length && !!p.category_id && productCategoryIds.includes(p.category_id))
+                  || (!!productItemIds?.length && !!p.product_id && productItemIds.includes(p.product_id));
                 const itemsForWallet = [
                   ...(coversServices ? (appt.services || [])
-                    .filter(s => !serviceCategoryIds?.length || (s.category_id && serviceCategoryIds.includes(s.category_id)))
+                    .filter(coversServiceRow)
                     .map(s => ({
                       serviceId:   s.service_id,
                       serviceName: s.name,
@@ -505,7 +521,7 @@ export const paymentsService = {
                     })) : []),
                   ...(coversProducts ? (appt.product_items || [])
                     .filter(p => !!p.product_id)
-                    .filter(p => !productCategoryIds?.length || (p.category_id && productCategoryIds.includes(p.category_id)))
+                    .filter(coversProductRow)
                     .map(p => ({
                       serviceId:   p.product_id as string,
                       serviceName: p.name,
@@ -745,6 +761,14 @@ export const paymentsService = {
           // in this system, so a frontend-sent amount above the remaining due (e.g. a POS
           // cash/split entry typo) must never be persisted as-is, or reports/KPIs downstream
           // silently show paid > billed for that transaction.
+          //
+          // Capped at effectiveBill only — tip is deliberately NOT part of this ceiling.
+          // The client may hand over bill+tip in one swipe (see receipt-html.template.ts's
+          // printed Grand Total), but paid_amount/due_amount only ever settle the bill
+          // portion; tip is tracked and settled entirely separately via tip_amount +
+          // tipCalculationService (Tip Settle), never through payments.paid_amount. This
+          // keeps every dashboard/report/client-spend figure that reads paid_amount
+          // tip-free by construction, instead of needing to subtract tip back out everywhere.
           const requestedPaid = Math.max(0, (
             data.paid_amount != null ? Number(data.paid_amount)
             : data.net_amount  != null ? Number(data.net_amount)
@@ -821,12 +845,13 @@ export const paymentsService = {
     // Run both on one transaction so a ledger failure rolls back the
     // payment instead of being silently swallowed.
     let payment: Payment;
+    let rewardPointsRemainingAfterRedeem: number | null = null;
     if (data.client_id && rewardPointsRedeemedActual > 0) {
       const txClient = await pool.connect();
       try {
         await txClient.query('BEGIN');
         payment = await paymentsRepository.create(data, txClient);
-        await rewardPointsRepository.applyLedgerEntry({
+        rewardPointsRemainingAfterRedeem = await rewardPointsRepository.applyLedgerEntry({
           clientId: data.client_id,
           salonId: data.salon_id,
           type: 'redeem',
@@ -842,6 +867,32 @@ export const paymentsService = {
       } finally {
         txClient.release();
       }
+
+      // ── WhatsApp Automation: Reward Points Used ─────────────────────────
+      // Fired outside the transaction — network I/O has no business holding
+      // a DB transaction open, and the redemption itself is already durably
+      // committed by this point regardless of whether the notification send
+      // succeeds.
+      const spender = await clientsRepository.findById(data.client_id, data.salon_id);
+      if (spender?.phone_number) {
+        const salon = await salonsRepository.findById(data.salon_id);
+        whatsappAutomationService.trigger({
+          salonId:       data.salon_id,
+          eventType:     'reward_points_used',
+          clientId:      data.client_id,
+          phone:         spender.phone_number,
+          countryCode:   spender.phone_country_code ?? null,
+          variables: {
+            '1': spender.full_name ?? 'Valued Customer',
+            '2': String(rewardPointsRedeemedActual),
+            '3': salon?.business_name ?? 'our salon',
+            '4': String(rewardPointsRemainingAfterRedeem ?? 0),
+          },
+          referenceId:   payment.id,
+          referenceType: 'payment',
+          dedupeByReference: true,
+        }).catch(() => {});
+      }
     } else {
       payment = await paymentsRepository.create(data);
     }
@@ -849,7 +900,7 @@ export const paymentsService = {
     // ── eWallet: actually deduct the real balance now that the payment row exists ──
     if (data.client_id && ewalletUsedActual > 0) {
       try {
-        await ewalletRepository.applyLedgerEntry({
+        const remainingBalance = await ewalletRepository.applyLedgerEntry({
           clientId: data.client_id,
           salonId: data.salon_id,
           type: 'redeem',
@@ -858,6 +909,28 @@ export const paymentsService = {
           sourceId: payment.id,
           note: `Used for ₹${ewalletUsedActual.toFixed(2)} payment`,
         });
+
+        // ── WhatsApp Automation: eWallet Used ──────────────────────────────
+        const spender = await clientsRepository.findById(data.client_id, data.salon_id);
+        if (spender?.phone_number) {
+          const salon = await salonsRepository.findById(data.salon_id);
+          whatsappAutomationService.trigger({
+            salonId:       data.salon_id,
+            eventType:     'ewallet_used',
+            clientId:      data.client_id,
+            phone:         spender.phone_number,
+            countryCode:   spender.phone_country_code ?? null,
+            variables: {
+              '1': spender.full_name ?? 'Valued Customer',
+              '2': ewalletUsedActual.toFixed(2),
+              '3': salon?.business_name ?? 'our salon',
+              '4': remainingBalance.toFixed(2),
+            },
+            referenceId:   payment.id,
+            referenceType: 'payment',
+            dedupeByReference: true,
+          }).catch(() => {});
+        }
       } catch (err: any) {
         logger.warn('[payments] ewallet redeem ledger write failed:', err?.message ?? err);
       }
@@ -870,7 +943,7 @@ export const paymentsService = {
     // payment row exists — mirrors the eWallet redeem block above exactly.
     if (data.client_id && referralCreditUsedActual > 0) {
       try {
-        await referralRepository.applyLedgerEntry({
+        const remainingBalance = await referralRepository.applyLedgerEntry({
           clientId: data.client_id,
           salonId: data.salon_id,
           type: 'redeem',
@@ -879,6 +952,28 @@ export const paymentsService = {
           sourceId: payment.id,
           note: `Used ₹${referralCreditUsedActual.toFixed(2)} referral credit for payment`,
         });
+
+        // ── WhatsApp Automation: Referral Credit Used ──────────────────────
+        const spender = await clientsRepository.findById(data.client_id, data.salon_id);
+        if (spender?.phone_number) {
+          const salon = await salonsRepository.findById(data.salon_id);
+          whatsappAutomationService.trigger({
+            salonId:       data.salon_id,
+            eventType:     'referral_credit_used',
+            clientId:      data.client_id,
+            phone:         spender.phone_number,
+            countryCode:   spender.phone_country_code ?? null,
+            variables: {
+              '1': spender.full_name ?? 'Valued Customer',
+              '2': referralCreditUsedActual.toFixed(2),
+              '3': salon?.business_name ?? 'our salon',
+              '4': remainingBalance.toFixed(2),
+            },
+            referenceId:   payment.id,
+            referenceType: 'payment',
+            dedupeByReference: true,
+          }).catch(() => {});
+        }
       } catch (err: any) {
         logger.warn('[payments] referral credit redeem ledger write failed:', err?.message ?? err);
       }
@@ -911,7 +1006,7 @@ export const paymentsService = {
         if (config.active && config.spend_amount > 0) {
           const pointsEarned = Math.floor((Number(data.net_amount) / config.spend_amount) * config.points_earned);
           if (pointsEarned > 0) {
-            await rewardPointsRepository.applyLedgerEntry({
+            const newBalance = await rewardPointsRepository.applyLedgerEntry({
               clientId: data.client_id,
               salonId: data.salon_id,
               type: 'earn',
@@ -920,6 +1015,28 @@ export const paymentsService = {
               sourceId: payment.id,
               note: `Earned on ₹${Number(data.net_amount).toFixed(2)} payment`,
             });
+
+            // ── WhatsApp Automation: Reward Points Earned ────────────────────
+            const earner = await clientsRepository.findById(data.client_id, data.salon_id);
+            if (earner?.phone_number) {
+              const salon = await salonsRepository.findById(data.salon_id);
+              whatsappAutomationService.trigger({
+                salonId:       data.salon_id,
+                eventType:     'reward_points_earned',
+                clientId:      data.client_id,
+                phone:         earner.phone_number,
+                countryCode:   earner.phone_country_code ?? null,
+                variables: {
+                  '1': earner.full_name ?? 'Valued Customer',
+                  '2': String(pointsEarned),
+                  '3': salon?.business_name ?? 'our salon',
+                  '4': String(newBalance),
+                },
+                referenceId:   payment.id,
+                referenceType: 'payment',
+                dedupeByReference: true,
+              }).catch(() => {});
+            }
           }
         }
       } catch (err: any) {
@@ -947,7 +1064,7 @@ export const paymentsService = {
           if (config.active && billAmount >= config.min_bill_amount) {
             if (config.referrer_reward_amount > 0) {
               // Own dedicated referral balance now — no longer eWallet money.
-              await referralRepository.applyLedgerEntry({
+              const newReferralBalance = await referralRepository.applyLedgerEntry({
                 clientId: referredClient.referred_by_client_id,
                 salonId: data.salon_id,
                 type: 'earn',
@@ -956,6 +1073,29 @@ export const paymentsService = {
                 sourceId: data.client_id,
                 note: 'Referral reward for referring a new customer',
               });
+
+              // ── WhatsApp Automation: Referral Reward Credited ──────────────
+              const referrer = await clientsRepository.findById(referredClient.referred_by_client_id, data.salon_id);
+              if (referrer?.phone_number) {
+                const salon = await salonsRepository.findById(data.salon_id);
+                whatsappAutomationService.trigger({
+                  salonId:       data.salon_id,
+                  eventType:     'referral_reward',
+                  clientId:      referredClient.referred_by_client_id,
+                  phone:         referrer.phone_number,
+                  countryCode:   referrer.phone_country_code ?? null,
+                  variables: {
+                    '1': referrer.full_name ?? 'Valued Customer',
+                    '2': referredClient.full_name ?? 'your referral',
+                    '3': salon?.business_name ?? 'our salon',
+                    '4': String(config.referrer_reward_amount),
+                    '5': String(newReferralBalance),
+                  },
+                  referenceId:   data.client_id,
+                  referenceType: 'client',
+                  dedupeByReference: true,
+                }).catch(() => {});
+              }
             }
             await clientsRepository.markReferralRewarded(data.client_id);
           }
@@ -1173,84 +1313,45 @@ export const paymentsService = {
         // (POST /api/v1/appointments/:id/checkout) to avoid double-completion
         // appointment.payment_status is updated above — that's all payments handles here
 
-        // ── WhatsApp Automation: Purchase confirmation (per item type) ──────
-        // Skip entirely on idempotent reuse — an existing sale means these
-        // events already fired the first time this appointment was paid.
+        // ── WhatsApp: PDF purchase receipt ──────────────────────────────────
+        // Skip entirely on idempotent reuse — an existing sale means this
+        // already fired the first time this appointment was paid.
         if (!wasIdempotentReuse) {
           const enrichedSale = sale;
           if (enrichedSale && data.client_id && (enrichedSale as any).client_phone) {
-            const presentTypes = new Set(saleItemsForEvents.map((i) => i.item_type));
-            const purchaseEvents: Array<{ eventType: 'service_purchased' | 'product_purchased'; itemType: 'service' | 'product' }> = [
-              { eventType: 'service_purchased', itemType: 'service' },
-              { eventType: 'product_purchased', itemType: 'product' },
-            ];
-
-            // membership_purchased is NOT fired here — that's centralized in
-            // clientMembershipsService.autoCreateFromPayment(), called below
-            // for this same sale's membership_items, so it's never double-fired.
-            for (const { eventType, itemType } of purchaseEvents) {
-              if (!presentTypes.has(itemType)) continue;
-              const itemName = saleItemsForEvents.find((i) => i.item_type === itemType)?.name ?? 'your purchase';
-              whatsappAutomationService.trigger({
-                salonId:       data.salon_id,
-                eventType,
-                clientId:      data.client_id,
-                phone:         (enrichedSale as any).client_phone,
-                countryCode:   (enrichedSale as any).client_phone_code ?? null,
-                variables: {
-                  '1': (enrichedSale as any).client_name ?? 'Valued Customer',
-                  '2': (enrichedSale as any).salon_name   ?? 'our salon',
-                  '3': itemName,
-                },
-                referenceId:   enrichedSale.id,
-                referenceType: 'invoice',
-                dedupeByReference: true,
-              }).catch(() => {});
-            }
-
             // PDF receipt as a WhatsApp document attachment — best-effort, only
             // deliverable within 24h of the customer's last message. Failure here
             // is expected outside that window and never blocks the triggers above.
+            //
+            // Guarded against appointments.service.ts checkout()'s own
+            // "safety net" send for the same sale (its preExistingSale branch
+            // fires right after this same payment flow, for the standard
+            // pay-then-checkout two-step) — whichever of the two actually
+            // runs first wins the guard and sends; the other silently skips
+            // instead of both firing and the client getting two PDFs.
             (async () => {
-              const [salonRecord, branches, staffList, clientRecord] = await Promise.all([
-                salonsRepository.findById(data.salon_id),
-                branchesRepository.listBySalonId(data.salon_id),
-                staffService.list(data.salon_id, { is_active: true, limit: 100 } as any),
-                data.client_id ? clientsRepository.findById(data.client_id, data.salon_id) : Promise.resolve(null),
-              ]);
-              const saleItems = saleItemsForEvents;
+              const won = await whatsappAutomationRepository.guardInsertIfNotExists(`receipt-pdf-auto:${enrichedSale.id}`);
+              console.log(`[BILL_RECEIPT] payments.service.ts guard won=${won} saleId=${enrichedSale.id}`);
+              if (!won) return;
 
-              const branch = branches.find((b) => b.is_main) ?? branches[0] ?? null;
-              const salonAddress = branch
-                ? [branch.address_line1, branch.address_line2, branch.city, branch.state, branch.pincode].filter(Boolean).join(", ")
-                : null;
+              const clientRecord = data.client_id ? await clientsRepository.findById(data.client_id, data.salon_id) : null;
 
-              const staffNames: Record<string, string> = {};
-              for (const s of staffList.data as any[]) {
-                staffNames[s.id] = [s.first_name, s.last_name].filter(Boolean).join(" ").trim() || s.email;
-              }
-
-              await sendReceiptDocument({
+              // bill_receipt-aware — sends the real Meta document-header
+              // template (PDF + itemized caption, no 24h-window limit) when
+              // the salon has one APPROVED, falling back to the old plain
+              // PDF-only send otherwise. Previously called sendReceiptDocument
+              // directly here, which never checked for bill_receipt at all —
+              // since this call almost always wins the guard race against
+              // appointments.service.ts checkout()'s own (correct) call, every
+              // receipt was silently going out as a bare PDF with no caption.
+              await sendPurchaseReceipt({
                 salonId: data.salon_id,
                 phone: (enrichedSale as any).client_phone,
                 countryCode: (enrichedSale as any).client_phone_code ?? null,
-                salon: {
-                  business_name: salonRecord?.business_name ?? (enrichedSale as any).salon_name ?? "our salon",
-                  logo_url: (salonRecord as any)?.logo_url ?? null,
-                  email: salonRecord?.email ?? null,
-                  phone: salonRecord?.phone ?? null,
-                  website_url: salonRecord?.website_url ?? null,
-                  gst_number: salonRecord?.gst_number ?? null,
-                },
-                salonAddress,
-                client: {
-                  name: clientRecord?.full_name ?? (enrichedSale as any).client_name ?? "Valued Customer",
-                  phone: clientRecord?.phone_number ?? (enrichedSale as any).client_phone ?? null,
-                  email: clientRecord?.email ?? null,
-                },
+                clientId: data.client_id ?? null,
+                clientName: clientRecord?.full_name ?? (enrichedSale as any).client_name ?? "Valued Customer",
                 sale: enrichedSale,
-                items: saleItems,
-                staffNames,
+                items: saleItemsForEvents,
                 appointment: appt
                   ? {
                         id: appt.id,

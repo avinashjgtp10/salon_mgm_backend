@@ -2,6 +2,7 @@ import AWS from "aws-sdk";
 import path from "path";
 import fs from "fs";
 import logger from "../../config/logger";
+import config from "../../config/env";
 
 // ── S3 client ─────────────────────────────────────────────────────────────────
 const s3 = new AWS.S3({
@@ -17,13 +18,18 @@ const s3 = new AWS.S3({
 const BUCKET = process.env.AWS_S3_BUCKET || "";
 
 // ── Upload a file (from disk path) to S3 ─────────────────────────────────────
+// `keyPrefix` defaults to "avatars" for existing callers (clients.controller
+// passes just a bare id/key expecting that folder); pass a different prefix
+// (e.g. "order-signatures") to reuse this same upload+fallback logic for
+// other per-salon image uploads without dumping them into the avatars folder.
 export async function uploadAvatarToS3(
   filePath: string,
   userId: string,
   mimetype: string,
+  keyPrefix: string = "avatars",
 ): Promise<string> {
   const ext = path.extname(filePath);
-  const key = `avatars/${userId}${ext}`;
+  const key = `${keyPrefix}/${userId}${ext}`;
 
   logger.info("[avatarUpload] Uploading avatar to S3", { key, BUCKET });
 
@@ -31,7 +37,7 @@ export async function uploadAvatarToS3(
     // Fallback: serve from local /uploads directory when S3 is not configured
     logger.warn("[avatarUpload] AWS_S3_BUCKET not set — serving file locally");
     const filename = path.basename(filePath);
-    const localUrl = `${process.env.APP_BASE_URL || ""}/uploads/${filename}`;
+    const localUrl = `${config.publicBaseUrl}/uploads/${filename}`;
     return localUrl;
   }
 

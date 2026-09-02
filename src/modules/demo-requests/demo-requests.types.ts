@@ -1,4 +1,4 @@
-export type DemoRequestStatus = "new" | "contacted" | "converted" | "closed";
+export type DemoRequestStatus = "new" | "contacted" | "converted" | "closed" | "lost" | "unqualified";
 
 export type DemoRequest = {
     id: string;

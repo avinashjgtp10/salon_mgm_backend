@@ -189,6 +189,18 @@ router.post(
 );
 
 // ======================================================
+// ALL CLIENTS REPORT (independent report API)
+// Reads clients directly — never calls the Appointment API/service. Pure
+// client-profile listing, no revenue/visit figures.
+// ======================================================
+
+router.post(
+    "/all-clients",
+    ...guard,
+    reportsController.getAllClientsReport
+);
+
+// ======================================================
 // CUSTOMER FREQUENCY REPORT (independent report API)
 // Reads clients/sales directly — never calls the Appointment API/service.
 // ======================================================
@@ -259,6 +271,19 @@ router.post(
     "/payment-collection",
     ...guard,
     reportsController.getPaymentCollectionReport
+);
+
+// ======================================================
+// PENDING PAYMENT REPORT (independent report API)
+// Reads appointments + payments directly (never sales — an unpaid bill has
+// no sales row at all). Shares Payment Collection's underlying aggregation,
+// scoped to due_amount > 0.
+// ======================================================
+
+router.post(
+    "/pending-payment",
+    ...guard,
+    reportsController.getPendingPaymentReport
 );
 
 // ======================================================

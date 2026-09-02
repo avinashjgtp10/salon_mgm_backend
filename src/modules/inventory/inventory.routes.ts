@@ -2,6 +2,7 @@ import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { requirePermission } from "../../middleware/permission.middleware";
+import { uploadMiddleware } from "../../middleware/upload.middleware";
 import {
     suppliersController,
     stockMovementsController,
@@ -12,12 +13,31 @@ import {
 } from "./inventory.controller";
 import { consumableInventoryController } from "./consumable-inventory.controller";
 import { productInventoryController } from "./product-inventory.controller";
+import { purchasesController } from "./purchases.controller";
+import { supplierPaymentsController } from "./supplier-payments.controller";
+import { ordersController } from "./orders.controller";
+import { productAuditController } from "./product-audit.controller";
+import { stockLedgerController } from "./stock-ledger.controller";
 import {
     validateCreateSupplier,
     validateUpdateSupplier,
     validateCreateStockMovement,
     validateStockTake,
 } from "./inventory.validator";
+import { validateCreatePurchase, validateListPurchases } from "./purchases.validator";
+import { validateCreateSupplierPayment } from "./supplier-payments.validator";
+import { validateCreateOrder, validateReceiveOrder, validateCorrectReceivedQty } from "./orders.validator";
+import {
+    validateCreateProductAudit,
+    validateAddAuditItems,
+    validateUpdateAuditItem,
+    validateRejectAudit,
+    validateApproveAudit,
+} from "./product-audit.validator";
+import {
+    validateCreateStockLedgerEntry,
+    validateUpdateStockLedgerEntry,
+} from "./stock-ledger.validator";
 
 const router = Router();
 const viewInventory = requirePermission("view_inventory");
@@ -65,6 +85,24 @@ router.delete(
     suppliersController.delete
 );
 
+// Payouts are a money-movement action, so restricted to owner/admin like
+// supplier create/update/delete — not opened up to staff via viewInventory.
+router.post(
+    "/suppliers/:id/payments",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin"),
+    validateCreateSupplierPayment,
+    supplierPaymentsController.create
+);
+
+router.get(
+    "/suppliers/:id/payments",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    supplierPaymentsController.list
+);
+
 // ─── Product Inventory (retail stock) ─────────────────────────────────────────
 // Registered ahead of the generic /stock-movements routes so these more
 // specific paths are matched first.
@@ -101,6 +139,132 @@ router.post(
     roleMiddleware("salon_owner", "admin", "staff"),
     stockAdjustment,
     productInventoryController.stockIn
+);
+
+// ─── Purchases (supplier deliveries — multi-product, adds stock) ─────────────
+// Registered ahead of /stock-movements for the same "more specific first"
+// reason as the block above. A Purchase adds stock exactly like Add Stock
+// does, so it sits behind the same stock_adjustment permission, not
+// manage_inventory — a staff member who can Add Stock must also be able to
+// record a Purchase.
+router.post(
+    "/product-inventory/purchases",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    stockAdjustment,
+    validateCreatePurchase,
+    purchasesController.create
+);
+
+router.get(
+    "/product-inventory/purchases",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    validateListPurchases,
+    purchasesController.list
+);
+
+router.get(
+    "/product-inventory/purchases/:id",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    purchasesController.getById
+);
+
+// ─── Orders (purchase orders — receiving against one links to Purchases) ───
+// Registered ahead of /stock-movements for the same "more specific first"
+// reason as Purchases above.
+
+// Signature upload/gallery must be registered BEFORE /orders/:id or Express
+// would match "upload-signature"/"signatures" as the :id param.
+router.post(
+    "/orders/upload-signature",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    manageInventory,
+    uploadMiddleware.single("signature"),
+    ordersController.uploadSignature
+);
+
+router.get(
+    "/orders/signatures",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    ordersController.listSignatures
+);
+
+router.post(
+    "/orders",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    manageInventory,
+    validateCreateOrder,
+    ordersController.create
+);
+
+router.get(
+    "/orders",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    ordersController.list
+);
+
+router.get(
+    "/orders/:id",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    ordersController.getById
+);
+
+router.post(
+    "/orders/:id/receive",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    manageInventory,
+    validateReceiveOrder,
+    ordersController.receive
+);
+
+// Corrects a mis-entered received_qty after the fact — see
+// ordersRepository.correctReceivedQty for what this does/doesn't touch.
+router.post(
+    "/orders/:id/items/:itemId/correct-received",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    manageInventory,
+    validateCorrectReceivedQty,
+    ordersController.correctReceivedQty
+);
+
+router.post(
+    "/orders/:id/cancel",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    manageInventory,
+    ordersController.cancel
+);
+
+// POST, not DELETE — see ordersController.delete for why.
+router.post(
+    "/orders/:id/delete",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin"),
+    ordersController.delete
+);
+
+// POST, not PUT/PATCH — see ordersController.update for why.
+router.post(
+    "/orders/:id/update",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    manageInventory,
+    validateCreateOrder,
+    ordersController.update
 );
 
 // ─── Stock Movements ──────────────────────────────────────────────────────────
@@ -173,6 +337,11 @@ router.post(
 );
 
 // ─── Stock Reconciliation ─────────────────────────────────────────────────────
+// Read-only now — its editable "Update All"/per-row save screen was replaced
+// by Consumable Inventory's Adjust Stock action (see below). This GET is kept
+// only because the Consumable Usage report still reads it for back-bar
+// consumption totals; the old save endpoints had no remaining caller and were
+// removed.
 
 // GET  /inventory/stock-reconciliation?branch_id=&search=&category_id=
 router.get(
@@ -181,22 +350,6 @@ router.get(
     roleMiddleware("salon_owner", "admin", "staff"),
     viewInventory,
     stockReconciliationController.list
-);
-
-// POST /inventory/stock-reconciliation  (batch save — Update All)
-router.post(
-    "/stock-reconciliation",
-    authMiddleware,
-    roleMiddleware("salon_owner", "admin"),
-    stockReconciliationController.saveAll
-);
-
-// PATCH /inventory/stock-reconciliation/:product_id  (single row save)
-router.patch(
-    "/stock-reconciliation/:product_id",
-    authMiddleware,
-    roleMiddleware("salon_owner", "admin"),
-    stockReconciliationController.saveRow
 );
 
 // ─── Consumable Inventory (dedicated page — replaces Stock Reconciliation's
@@ -289,6 +442,101 @@ router.put(
     consumableInventoryController.replaceUnitConversions
 );
 
+// ─── Product Audit (mock-adjacent workflow — read-only against real stock;
+// see product-audit.repository.ts) ────────────────────────────────────────────
+
+router.post(
+    "/product-audits",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    manageInventory,
+    validateCreateProductAudit,
+    productAuditController.create
+);
+
+router.get(
+    "/product-audits",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    productAuditController.list
+);
+
+router.get(
+    "/product-audits/:id",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    productAuditController.getById
+);
+
+router.delete(
+    "/product-audits/:id",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin"),
+    productAuditController.delete
+);
+
+router.post(
+    "/product-audits/:id/items",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    manageInventory,
+    validateAddAuditItems,
+    productAuditController.addItems
+);
+
+router.delete(
+    "/product-audits/:id/items/:itemId",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    manageInventory,
+    productAuditController.removeItem
+);
+
+router.patch(
+    "/product-audits/:id/items/:itemId",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    manageInventory,
+    validateUpdateAuditItem,
+    productAuditController.updateItem
+);
+
+router.post(
+    "/product-audits/:id/submit",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    manageInventory,
+    productAuditController.submitForReview
+);
+
+// Approve/reject are review actions — restricted to owner/admin, unlike the
+// count-entry endpoints above which staff can also perform.
+router.post(
+    "/product-audits/:id/approve",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin"),
+    validateApproveAudit,
+    productAuditController.approve
+);
+
+router.post(
+    "/product-audits/:id/reject",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin"),
+    validateRejectAudit,
+    productAuditController.reject
+);
+
+router.post(
+    "/product-audits/:id/reopen",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    manageInventory,
+    productAuditController.reopen
+);
+
 // ─── Consumable Usage (from Calendar appointments) ────────────────────────────
 
 // POST /inventory/consumable-usage
@@ -298,6 +546,70 @@ router.post(
     roleMiddleware("salon_owner", "admin", "staff"),
     manageInventory,
     consumableUsageController.save
+);
+
+// ─── Stock Ledger — full movement history per product, one row per
+// transaction with the running balance already applied (see
+// stock-ledger.repository.ts / Migration/create_stock_ledger_table.sql) ───────
+
+router.post(
+    "/stock-ledger",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    stockAdjustment,
+    validateCreateStockLedgerEntry,
+    stockLedgerController.create
+);
+
+router.get(
+    "/stock-ledger",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    stockLedgerController.list
+);
+
+// POST /inventory/stock-ledger/list — same as GET /stock-ledger above, but
+// filters travel in the JSON body (report-style) instead of the query string.
+router.post(
+    "/stock-ledger/list",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    stockLedgerController.search
+);
+
+router.get(
+    "/stock-ledger/:id",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    stockLedgerController.getById
+);
+
+router.get(
+    "/stock-ledger/product/:productId/timeline",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    stockLedgerController.getTimelineForProduct
+);
+
+router.put(
+    "/stock-ledger/:id",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    manageInventory,
+    validateUpdateStockLedgerEntry,
+    stockLedgerController.update
+);
+
+router.delete(
+    "/stock-ledger/:id",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin"),
+    manageInventory,
+    stockLedgerController.delete
 );
 
 export default router;

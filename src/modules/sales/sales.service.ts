@@ -3,19 +3,19 @@ import PDFDocument from "pdfkit";
 import { AppError } from "../../middleware/error.middleware";
 import logger from "../../config/logger";
 import { commissionCalculationService } from "../commission/commissionCalculation.service";
+import { tipCalculationService } from "../tips/tipCalculation.service";
 import { salesRepository } from "./sales.repository";
 import { Sale, SaleItem, CreateSaleBody, UpdateSaleBody, CheckoutSaleBody } from "./sales.types";
 import { paymentsRepository } from "../payments/payments.repository";
 import { appointmentsRepository } from "../appointments/appointments.repository";
 import { staffRepository } from "../staff/staff.repository";
 import { servicesRepository } from "../services/services.repository";
-import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
 import { notificationsService } from "../notifications/notifications.service";
 import { membershipsRepository } from "../memberships/memberships.repository";
 import { clientMembershipsService } from "../client-memberships/client-memberships.service";
 import { sendPurchaseReceipt } from "./receipt-send.helper";
-import { notifyAppointmentCompleted } from "../appointments/appointment-completed.helper";
 import { clientPackagesService } from "../client-packages/client-packages.service";
+import { stockLedgerService } from "../inventory/stock-ledger.service";
 
 export const salesService = {
 
@@ -51,27 +51,6 @@ export const salesService = {
                 error: err,
             });
         });
-
-        // ── WhatsApp Automation: Invoice Generated ────────────────────────────
-        // Only fire when there's a real client (not walk-in) and it's a proper sale
-        if (sale.client_id && (sale as any).client_phone) {
-            whatsappAutomationService.trigger({
-                salonId:       sale.salon_id,
-                eventType:     "invoice_generated",
-                clientId:      sale.client_id,
-                phone:         (sale as any).client_phone,
-                countryCode:   (sale as any).client_phone_code ?? null,
-                variables: {
-                    "1": (sale as any).client_name  ?? "Valued Customer",
-                    "2": sale.invoice_number ?? "",
-                    "3": String(sale.total_amount   ?? "0"),
-                    "4": (sale as any).salon_name   ?? "our salon",
-                },
-                referenceId:   sale.id,
-                referenceType: "invoice",
-                dedupeByReference: true,
-            }).catch(() => {});
-        }
 
         return { sale, items };
     },
@@ -118,9 +97,10 @@ export const salesService = {
         const sale = await salesRepository.update(id, patch);
         const updatedItems = await salesRepository.findItemsBySaleId(id);
 
-        // Reverse pending commissions when a sale is cancelled or refunded
+        // Reverse pending commissions/tips when a sale is cancelled or refunded
         if (patch.status && ["cancelled", "refunded"].includes(patch.status)) {
             commissionCalculationService.reverseForSale(id).catch(() => {});
+            tipCalculationService.reverseForSale(id).catch(() => {});
         }
 
         return { sale, items: updatedItems };
@@ -185,10 +165,6 @@ export const salesService = {
             try {
                 const apptStatus = saleDueAmount > 0 ? "partial" : "paid";
                 await appointmentsRepository.updateStatus(sale.appointment_id, apptStatus);
-                // Only a fully-paid checkout should trigger the thank-you/review-request message.
-                if (apptStatus === "paid") {
-                    notifyAppointmentCompleted(sale.appointment_id).catch(() => {});
-                }
             } catch (error) {
                 logger.error("Failed to update appointment status after checkout:", { appointmentId: sale.appointment_id, error })
             }
@@ -214,44 +190,28 @@ export const salesService = {
             fallbackStaffId: sale.staff_id       ?? null,
             items,
         }).catch(() => {}); // already safe internally, double-guard here
+        tipCalculationService.earnForSale(sale.id, sale.salon_id).catch(() => {});
 
-        // ── WhatsApp Automation: Purchase confirmation (per item type) ─────────
-        // service_purchased / product_purchased fire once each if that item type
-        // is present — a mixed sale (e.g. one service + one product) intentionally
-        // sends one text per type, not a single combined message. Membership items
-        // are NOT fired here — that's centralized in clientMembershipsService
-        // .autoCreateFromPayment() below, the single call site every membership
-        // purchase path (QuickSale, calendar) already funnels through.
+        // ── Stock Ledger: deduct retail product lines (fire-and-forget) ──────
+        stockLedgerService.deductForSale({
+            salonId:       sale.salon_id,
+            branchId:      null,
+            saleId:        sale.id,
+            invoiceNumber: sale.invoice_number,
+            createdBy:     params.requesterUserId,
+            items:         items.map((i) => ({ item_type: i.item_type, item_id: i.item_id, quantity: Number(i.quantity) || 0 })),
+        }).catch(() => {});
+
+        // service_purchased / product_purchased (retired): used to fire one text
+        // per item type present in a Quick Sale cart — fully redundant with the
+        // bill_receipt PDF+text right below, which already itemizes everything
+        // in the sale regardless of type. Removed rather than left dark; see
+        // whatsapp-automation.types.ts for the event-type retirement.
+
+        // ── WhatsApp: PDF purchase receipt ──────────────────────────────────
         if (sale.client_id && (sale as any).client_phone) {
-            const presentTypes = new Set(items.map((i) => i.item_type));
-            const purchaseEvents: Array<{ eventType: "service_purchased" | "product_purchased"; itemType: "service" | "product" }> = [
-                { eventType: "service_purchased", itemType: "service" },
-                { eventType: "product_purchased", itemType: "product" },
-            ];
-
-            for (const { eventType, itemType } of purchaseEvents) {
-                if (!presentTypes.has(itemType)) continue;
-                const itemName = items.find((i) => i.item_type === itemType)?.name ?? "your purchase";
-                whatsappAutomationService.trigger({
-                    salonId:       sale.salon_id,
-                    eventType,
-                    clientId:      sale.client_id,
-                    phone:         (sale as any).client_phone,
-                    countryCode:   (sale as any).client_phone_code ?? null,
-                    variables: {
-                        "1": (sale as any).client_name ?? "Valued Customer",
-                        "2": (sale as any).salon_name   ?? "our salon",
-                        "3": itemName,
-                    },
-                    referenceId:   sale.id,
-                    referenceType: "invoice",
-                    dedupeByReference: true,
-                }).catch(() => {});
-            }
-
             // PDF receipt as a WhatsApp document attachment — best-effort, only
-            // deliverable within 24h of the customer's last message. Failure here
-            // is expected outside that window and never blocks the triggers above.
+            // deliverable within 24h of the customer's last message.
             sendPurchaseReceipt({
                 salonId:     sale.salon_id,
                 phone:       (sale as any).client_phone,
@@ -262,7 +222,9 @@ export const salesService = {
                 items,
                 appointment: null,
                 paidAmount:  body.amount_paid,
-                dueAmount:   Math.max(0, parseFloat(sale.total_amount) - body.amount_paid),
+                // total_amount is revenue (tip-exclusive); the client's actual bill —
+                // and what's actually owed if underpaid — includes tip on top of it.
+                dueAmount:   Math.max(0, parseFloat(sale.total_amount) + (parseFloat(sale.tip_amount) || 0) - body.amount_paid),
                 couponCode:  null,
             }).catch(() => {});
         }

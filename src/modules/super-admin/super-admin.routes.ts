@@ -38,6 +38,7 @@ router.patch("/salons/:id/status",          superAdminController.setSalonStatus)
 router.patch("/salons/:id/onboarding",      superAdminController.forceOnboarding);
 router.post("/salons/:id/impersonate",      superAdminController.impersonateSalon);
 router.delete("/salons/:id",               superAdminController.deleteSalon);
+router.post("/salons/:id/clear-data",       superAdminController.clearSalonData);
 
 // Demo Inquiries (landing page "Schedule a Free Demo" submissions)
 router.get("/demo-requests",                superAdminController.getAllDemoRequests);

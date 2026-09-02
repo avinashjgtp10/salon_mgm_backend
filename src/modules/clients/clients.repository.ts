@@ -246,7 +246,9 @@ export const clientsRepository = {
         preferred_language,occupation,country,avatar_url,
         email_notifications,sms_notifications,whatsapp_notifications,
         email_marketing,sms_marketing,whatsapp_marketing,
-        referral_code,referral_reward_status
+        referral_code,referral_reward_status,
+        state,pincode,gst_number,client_code,identification_number,
+        credit_limit,credit_duration_days,lead_source,source_description,has_whatsapp
       ) VALUES (
         $1,$2,$3,$4,
         $5,$6,$7,
@@ -257,7 +259,9 @@ export const clientsRepository = {
         $19,$20,$21,$22,
         $23,$24,$25,
         $26,$27,$28,
-        $29,$30
+        $29,$30,
+        $31,$32,$33,$34,$35,
+        $36,$37,$38,$39,$40
       ) RETURNING *`,
             [
                 salonId,
@@ -290,6 +294,16 @@ export const clientsRepository = {
                 body.whatsapp_marketing ?? false,
                 referral.code,
                 referral.rewardStatus,
+                body.state ?? null,
+                body.pincode ?? null,
+                body.gst_number ?? null,
+                body.client_code ?? null,
+                body.identification_number ?? null,
+                body.credit_limit ?? 0,
+                body.credit_duration_days ?? 0,
+                body.lead_source ?? null,
+                body.source_description ?? null,
+                body.has_whatsapp ?? true,
             ]
         );
 
@@ -443,6 +457,16 @@ export const clientsRepository = {
             else if (k === "email_marketing") add("email_marketing", patch.email_marketing ?? false);
             else if (k === "sms_marketing") add("sms_marketing", patch.sms_marketing ?? false);
             else if (k === "whatsapp_marketing") add("whatsapp_marketing", patch.whatsapp_marketing ?? false);
+            else if (k === "state") add("state", patch.state ?? null);
+            else if (k === "pincode") add("pincode", patch.pincode ?? null);
+            else if (k === "gst_number") add("gst_number", patch.gst_number ?? null);
+            else if (k === "client_code") add("client_code", patch.client_code ?? null);
+            else if (k === "identification_number") add("identification_number", patch.identification_number ?? null);
+            else if (k === "credit_limit") add("credit_limit", patch.credit_limit ?? 0);
+            else if (k === "credit_duration_days") add("credit_duration_days", patch.credit_duration_days ?? 0);
+            else if (k === "lead_source") add("lead_source", patch.lead_source ?? null);
+            else if (k === "source_description") add("source_description", patch.source_description ?? null);
+            else if (k === "has_whatsapp") add("has_whatsapp", patch.has_whatsapp ?? true);
         }
 
         if (full_name !== undefined) add("full_name", full_name);

@@ -47,6 +47,9 @@ import {
     ProductMovementReportStats,
     ClientRevenueReportRow,
     ClientRevenueReportStats,
+    AllClientsReportRow,
+    AllClientsReportStats,
+    AllClientsFiltersAvailable,
     CustomerFrequencyReportRow,
     CustomerFrequencyReportStats,
     LostCustomersReportRow,
@@ -56,6 +59,9 @@ import {
     PaymentCollectionReportRow,
     PaymentCollectionReportStats,
     PaymentCollectionFiltersAvailable,
+    PendingPaymentReportRow,
+    PendingPaymentReportStats,
+    PendingPaymentFiltersAvailable,
     MembershipHistoryReportRow,
     MembershipHistoryReportStats,
     MembershipHistoryFiltersAvailable,
@@ -457,7 +463,12 @@ const APPOINTMENT_BASE_CTES = `
                     + COALESCE(a.ex_charges::numeric, 0)
                   ) * COALESCE(a.gst_percent::numeric, 0) / 100
                 )
-                + COALESCE(a.tip_amount::numeric, 0)
+                -- tip_amount deliberately excluded — never part of the bill
+                -- total/revenue, same rule pricing.engine.ts's withCharges
+                -- and sales.repository.ts's total now both enforce
+                -- unconditionally. This fallback previously added it
+                -- unconditionally too, inconsistent with even the old
+                -- "Add Tip to Salon" toggle everywhere else.
             END
           ),
           2
@@ -500,7 +511,7 @@ const SERVICE_REMINDER_BASE_CTES = `
     FROM wa_automation_logs l
     WHERE
       l.salon_id = $1
-      AND l.event_type IN ('appointment_reminder_24h', 'appointment_reminder_1h')
+      AND l.event_type IN ('service_reminder_24h', 'package_appointment_reminder_24h')
       AND DATE(COALESCE(l.sent_at, l.created_at)) >= $2
       AND DATE(COALESCE(l.sent_at, l.created_at)) <= $3
   ),
@@ -2985,6 +2996,7 @@ async getProductRetailReportRows(
       s.invoice_number AS invoice_no,
       s.client_id,
       c.full_name AS client_name,
+      c.phone_number AS client_phone,
       st.id AS staff_id,
       NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
       si.item_id AS product_id,
@@ -3035,6 +3047,7 @@ async getProductRetailReportRows(
     invoice_no: row.invoice_no,
     client_id: row.client_id,
     client_name: row.client_name,
+    client_phone: row.client_phone,
     staff_id: row.staff_id,
     staff_name: row.staff_name,
     product_id: row.product_id,
@@ -3361,6 +3374,7 @@ async getServiceSaleReportRows(
       s.invoice_number AS invoice_no,
       s.client_id,
       c.full_name AS client_name,
+      c.phone_number AS client_phone,
       st.id AS staff_id,
       NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
       si.item_id AS service_id,
@@ -3408,6 +3422,7 @@ async getServiceSaleReportRows(
     invoice_no: row.invoice_no,
     client_id: row.client_id,
     client_name: row.client_name,
+    client_phone: row.client_phone,
     staff_id: row.staff_id,
     staff_name: row.staff_name,
     service_id: row.service_id,
@@ -4125,6 +4140,10 @@ _buildProductInventoryWhere(
     search?: string; category_id?: string; category_ids?: string[]; brand_id?: string; brand_ids?: string[];
     stock_status?: "in_stock" | "low_stock" | "out_of_stock";
     date_from?: string; date_to?: string;
+    // Separate from date_from/date_to above (which filter p.created_at, the
+    // "Date Added" column) — these filter p.expiry_date instead, so both
+    // date filters can be applied together without conflicting.
+    expiry_from?: string; expiry_to?: string;
   }
 ): { where: string; values: any[]; nextIndex: number } {
   const values: any[] = [salonId];
@@ -4170,6 +4189,14 @@ _buildProductInventoryWhere(
     where.push(`p.created_at < ($${idx++}::date + interval '1 day')`);
     values.push(filters.date_to);
   }
+  if (filters.expiry_from) {
+    where.push(`p.expiry_date >= $${idx++}::date`);
+    values.push(filters.expiry_from);
+  }
+  if (filters.expiry_to) {
+    where.push(`p.expiry_date < ($${idx++}::date + interval '1 day')`);
+    values.push(filters.expiry_to);
+  }
 
   return { where: where.join(" AND "), values, nextIndex: idx };
 },
@@ -4180,6 +4207,7 @@ async getProductInventoryReportStats(
     search?: string; category_id?: string; category_ids?: string[]; brand_id?: string; brand_ids?: string[];
     stock_status?: "in_stock" | "low_stock" | "out_of_stock";
     date_from?: string; date_to?: string;
+    expiry_from?: string; expiry_to?: string;
   }
 ): Promise<ProductInventoryReportStats> {
   const { where, values } = this._buildProductInventoryWhere(salonId, filters);
@@ -4210,6 +4238,7 @@ async getProductInventoryReportRows(
     search?: string; category_id?: string; category_ids?: string[]; brand_id?: string; brand_ids?: string[];
     stock_status?: "in_stock" | "low_stock" | "out_of_stock";
     date_from?: string; date_to?: string;
+    expiry_from?: string; expiry_to?: string;
     page?: number; limit?: number; is_export?: boolean;
   }
 ): Promise<{
@@ -5420,6 +5449,260 @@ async getClientRevenueReportRows(
 },
 
 // ======================================================
+// ALL CLIENTS REPORT (independent report API)
+// POST /api/report/all-clients — pure client-profile listing, deliberately
+// carrying NO revenue/visit figures (that's Client Revenue's job). Reads
+// clients directly, never the Appointment API. Filter semantics (birth
+// month, spend range, has_membership/has_package, last-visit range,
+// customer_type) intentionally mirror clientsRepository's own
+// _buildCampaignFilterSql so "has an active membership" etc. can never mean
+// something different here than it does for campaign targeting — but this
+// report does NOT reuse that function directly, since it hard-requires
+// is_active=true and a non-blank phone (both wrong for a general listing
+// that must also surface blocked clients via its own status filter).
+// ======================================================
+
+_buildAllClientsWhere(
+  salonId: string,
+  filters: {
+    search?: string; genders?: string[]; client_source?: string;
+    birth_month?: number; joined_from?: string; joined_to?: string;
+    total_spend_min?: number; total_spend_max?: number;
+    has_membership?: boolean; has_package?: boolean;
+    last_visit_from?: string; last_visit_to?: string;
+    customer_type?: "new" | "repetitive"; status?: "active" | "blocked";
+  }
+): { joinSql: string; where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["c.salon_id = $1"];
+  const joins: string[] = [];
+  let idx = 2;
+
+  if (filters.status === "active") where.push("c.is_active = true AND c.is_blocked = false");
+  else if (filters.status === "blocked") where.push("c.is_blocked = true");
+
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+      OR COALESCE(c.email, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+  if (filters.genders && filters.genders.length > 0) {
+    where.push(`LOWER(c.gender) = ANY($${idx++}::text[])`);
+    values.push(filters.genders.map(g => g.toLowerCase()));
+  }
+  if (filters.client_source && filters.client_source !== "all") {
+    where.push(`c.client_source = $${idx++}`);
+    values.push(filters.client_source);
+  }
+  if (filters.birth_month) {
+    // Same CASE-guarded parse as _buildCampaignFilterSql: malformed
+    // birthday_day_month values (a full date instead of "MM-DD") must parse
+    // to NULL per-row rather than throwing and aborting the whole query.
+    where.push(`
+      EXTRACT(MONTH FROM (
+        CASE WHEN c.birthday_day_month ~ '^\\d{2}-\\d{2}$'
+             THEN TO_DATE(c.birthday_day_month, 'MM-DD')
+             ELSE NULL
+        END
+      )) = $${idx++}
+    `);
+    values.push(filters.birth_month);
+  }
+  if (filters.joined_from) { where.push(`c.created_at::date >= $${idx++}::date`); values.push(filters.joined_from); }
+  if (filters.joined_to)   { where.push(`c.created_at::date <= $${idx++}::date`); values.push(filters.joined_to); }
+
+  if (filters.has_membership === true) {
+    where.push(`EXISTS (SELECT 1 FROM client_memberships cm WHERE cm.client_id = c.id AND LOWER(cm.status) = 'active')`);
+  } else if (filters.has_membership === false) {
+    where.push(`NOT EXISTS (SELECT 1 FROM client_memberships cm WHERE cm.client_id = c.id AND LOWER(cm.status) = 'active')`);
+  }
+  if (filters.has_package === true) {
+    where.push(`EXISTS (SELECT 1 FROM client_packages cp WHERE cp.client_id = c.id AND LOWER(cp.status) = 'active')`);
+  } else if (filters.has_package === false) {
+    where.push(`NOT EXISTS (SELECT 1 FROM client_packages cp WHERE cp.client_id = c.id AND LOWER(cp.status) = 'active')`);
+  }
+
+  // Spend range / last-visit range / customer_type all read off the same
+  // computed join — pulled in once, only when any of those three filters
+  // is actually in play.
+  if (
+    filters.total_spend_min != null || filters.total_spend_max != null ||
+    filters.last_visit_from || filters.last_visit_to || filters.customer_type
+  ) {
+    joins.push(`
+      LEFT JOIN (
+        SELECT client_id,
+               MAX(scheduled_at) FILTER (WHERE status = 'paid') AS last_visit_at,
+               COUNT(*)          FILTER (WHERE status = 'paid') AS completed_count
+        FROM appointments
+        WHERE salon_id = $1 AND deleted_at IS NULL
+        GROUP BY client_id
+      ) av ON av.client_id = c.id
+    `);
+  }
+  if (filters.total_spend_min != null || filters.total_spend_max != null) {
+    joins.push(`
+      LEFT JOIN (
+        SELECT client_id, COALESCE(SUM(amount), 0) AS total_spend
+        FROM (
+          SELECT s.client_id, s.total_amount AS amount
+          FROM sales s
+          LEFT JOIN appointments a ON a.id = s.appointment_id
+          WHERE s.salon_id = $1
+            AND s.status = 'completed'
+            AND s.client_id IS NOT NULL
+            AND (a.id IS NULL OR (a.status IN ('paid', 'partial') AND a.deleted_at IS NULL))
+          UNION ALL
+          SELECT p.client_id, GREATEST(0, p.paid_amount - COALESCE(p.ewallet_used, 0) - COALESCE(p.membership_wallet_used, 0)) AS amount
+          FROM payments p
+          JOIN appointments a ON a.id = p.appointment_id
+          WHERE p.salon_id = $1
+            AND p.status = 'partial'
+            AND p.client_id IS NOT NULL
+            AND a.deleted_at IS NULL
+            AND a.status NOT IN ('cancelled', 'no-show')
+            AND NOT EXISTS (
+              SELECT 1 FROM sales s2
+              WHERE s2.appointment_id = p.appointment_id AND s2.status = 'completed'
+            )
+        ) combined
+        GROUP BY client_id
+      ) ps ON ps.client_id = c.id
+    `);
+    if (filters.total_spend_min != null) { where.push(`COALESCE(ps.total_spend, 0) >= $${idx++}`); values.push(filters.total_spend_min); }
+    if (filters.total_spend_max != null) { where.push(`COALESCE(ps.total_spend, 0) <= $${idx++}`); values.push(filters.total_spend_max); }
+  }
+  if (filters.last_visit_from) { where.push(`av.last_visit_at::date >= $${idx++}::date`); values.push(filters.last_visit_from); }
+  if (filters.last_visit_to)   { where.push(`av.last_visit_at::date <= $${idx++}::date`); values.push(filters.last_visit_to); }
+  if (filters.customer_type === "new") where.push(`COALESCE(av.completed_count, 0) = 0`);
+  else if (filters.customer_type === "repetitive") where.push(`COALESCE(av.completed_count, 0) > 0`);
+
+  return { joinSql: joins.join("\n"), where: where.join(" AND "), values, nextIndex: idx };
+},
+
+async getAllClientsReportStats(
+  salonId: string,
+  filters: {
+    search?: string; genders?: string[]; client_source?: string;
+    birth_month?: number; joined_from?: string; joined_to?: string;
+    total_spend_min?: number; total_spend_max?: number;
+    has_membership?: boolean; has_package?: boolean;
+    last_visit_from?: string; last_visit_to?: string;
+    customer_type?: "new" | "repetitive"; status?: "active" | "blocked";
+  }
+): Promise<AllClientsReportStats> {
+  const { joinSql, where, values } = this._buildAllClientsWhere(salonId, filters);
+  const query = `
+    SELECT
+      COUNT(*)::int                                                                       AS total_clients,
+      COUNT(*) FILTER (WHERE c.is_active = true AND c.is_blocked = false)::int             AS active_clients,
+      COUNT(*) FILTER (WHERE c.is_blocked = true)::int                                     AS blocked_clients,
+      COUNT(*) FILTER (WHERE c.created_at >= date_trunc('month', CURRENT_DATE))::int        AS new_this_month
+    FROM clients c
+    ${joinSql}
+    WHERE ${where}
+  `;
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  return {
+    total_clients: Number(r.total_clients ?? 0),
+    active_clients: Number(r.active_clients ?? 0),
+    blocked_clients: Number(r.blocked_clients ?? 0),
+    new_this_month: Number(r.new_this_month ?? 0),
+  };
+},
+
+async getAllClientsReportRows(
+  salonId: string,
+  filters: {
+    search?: string; genders?: string[]; client_source?: string;
+    birth_month?: number; joined_from?: string; joined_to?: string;
+    total_spend_min?: number; total_spend_max?: number;
+    has_membership?: boolean; has_package?: boolean;
+    last_visit_from?: string; last_visit_to?: string;
+    customer_type?: "new" | "repetitive"; status?: "active" | "blocked";
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: AllClientsReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { joinSql, where, values, nextIndex } = this._buildAllClientsWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    SELECT
+      c.id AS client_id,
+      COALESCE(NULLIF(TRIM(c.full_name), ''), 'Unnamed Client') AS client_name,
+      COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS contact,
+      NULLIF(TRIM(c.email), '') AS email,
+      NULLIF(TRIM(c.gender), '') AS gender,
+      c.birthday_day_month AS birthday,
+      NULLIF(TRIM(c.address), '') AS address,
+      NULLIF(TRIM(c.client_source), '') AS client_source,
+      CASE WHEN c.is_blocked = true THEN 'Blocked' ELSE 'Active' END AS status,
+      TO_CHAR(c.created_at, 'YYYY-MM-DD') AS joined_date,
+      COUNT(*) OVER() AS total_count
+    FROM clients c
+    ${joinSql}
+    WHERE ${where}
+    ORDER BY c.created_at DESC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: AllClientsReportRow[] = rows.map((row: any) => ({
+    client_id: row.client_id,
+    client_name: row.client_name,
+    contact: row.contact,
+    email: row.email,
+    gender: row.gender,
+    birthday: row.birthday,
+    address: row.address,
+    client_source: row.client_source,
+    status: row.status,
+    joined_date: row.joined_date,
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// Filter dropdown options for the All Clients report — client_source
+// values actually present on this salon's clients, not a hardcoded list.
+async getAllClientsFiltersAvailable(salonId: string): Promise<AllClientsFiltersAvailable> {
+  const { rows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT client_source AS id, client_source AS label
+     FROM clients
+     WHERE salon_id = $1 AND client_source IS NOT NULL AND TRIM(client_source) <> ''
+     ORDER BY client_source ASC`,
+    [salonId]
+  ));
+  return {
+    client_sources: rows.map((r: any) => ({ id: r.id, label: r.label })),
+  };
+},
+
+// ======================================================
 // CUSTOMER FREQUENCY REPORT (independent report API)
 // POST /api/report/customer-frequency — reads clients/sales directly, never
 // the Appointment API. One row per registered client (LEFT JOIN sales, same
@@ -6109,6 +6392,8 @@ _REFERRAL_AGG(where: string, startDateIdx: number | null, endDateIdx: number | n
         r.id   AS referrer_client_id,
         COALESCE(NULLIF(TRIM(r.full_name), ''), 'Walk-in') AS referrer_name,
         COALESCE(NULLIF(TRIM(c.full_name), ''), 'Walk-in') AS referred_name,
+        r.phone_number AS referrer_phone,
+        c.phone_number AS referred_phone,
         -- clients.created_at is a naive timestamp (unlike sales.created_at,
         -- which is timestamptz), and the session runs at UTC — so it must be
         -- stamped AT TIME ZONE 'UTC' first to become an instant, then
@@ -6259,6 +6544,7 @@ async getReferralReportRows(
     ${this._REFERRAL_AGG(where, startDateIdx, endDateIdx, staffIdsIdx)}
     SELECT
       referred_client_id, referrer_client_id, referrer_name, referred_name,
+      referrer_phone, referred_phone,
       referral_date, first_visit, total_visits, revenue_generated,
       reward_earned, reward_status, staff_name,
       COUNT(*) OVER() AS total_count
@@ -6274,6 +6560,8 @@ async getReferralReportRows(
     referrer_client_id: row.referrer_client_id,
     referrer_name: row.referrer_name,
     referred_name: row.referred_name,
+    referrer_phone: row.referrer_phone,
+    referred_phone: row.referred_phone,
     referral_date: row.referral_date,
     first_visit: row.first_visit,
     total_visits: Number(row.total_visits ?? 0),
@@ -6398,18 +6686,13 @@ _PAYMENT_COLLECTION_AGG(
         --      membership discount), GST applied on that taxable base, plus
         --      extra charges. Falls back to the payment's net_amount only if
         --      the appointment has no items at all.
-        COALESCE(
-          sl.total_amount::numeric,
-          NULLIF(unb.price, 0),
-          latest.net_amount,
-          0
-        ) AS total_amount,
+        corrected.total_amount AS total_amount,
         -- Same as Sales Summary: paid comes from the payment rows whenever the
         -- bill is tied to an appointment (always true here).
         COALESCE(agg.paid_amount, 0)   AS paid_amount,
-        GREATEST(COALESCE(latest.due_amount, 0), 0) AS due_amount,
+        GREATEST(corrected.total_amount - COALESCE(agg.paid_amount, 0), 0) AS due_amount,
         COALESCE(NULLIF(TRIM(latest.payment_method), ''), '—') AS payment_method,
-        CASE WHEN latest.due_amount > 0 THEN 'partial' ELSE 'paid' END AS payment_status,
+        CASE WHEN corrected.total_amount - COALESCE(agg.paid_amount, 0) > 0.5 THEN 'partial' ELSE 'paid' END AS payment_status,
         COALESCE(
           NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), ''),
           '—'
@@ -6503,6 +6786,27 @@ _PAYMENT_COLLECTION_AGG(
           ) src
         ) it
       ) unb ON TRUE
+      -- The bill actually owed right now. sl.total_amount is a snapshot taken
+      -- the moment the bill was first fully settled — editing a paid/partial
+      -- appointment afterwards (add a service, bump a price) updates the
+      -- appointment's own line items but nothing ever writes that change back
+      -- onto the old sales row (salesRepository.update() is never called) or
+      -- onto a fresh payments row (no payment has happened yet). So a
+      -- reopened appointment (a.status = 'partial') must use the LIVE
+      -- reconstruction from its current items instead of trusting the stale
+      -- sales snapshot — otherwise the extra amount owed never surfaces here
+      -- even though the calendar (which always computes live) already shows
+      -- it. A currently-'paid' appointment has no such gap: its sales row IS
+      -- the live truth, so it's used unchanged.
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(
+          CASE WHEN a.status::text = 'partial' THEN NULLIF(unb.price, 0) END,
+          sl.total_amount::numeric,
+          NULLIF(unb.price, 0),
+          latest.net_amount,
+          0
+        ) AS total_amount
+      ) corrected ON TRUE
       WHERE ${where}
     ),
     filtered AS (
@@ -6726,6 +7030,179 @@ async getPaymentCollectionFiltersAvailable(salonId: string): Promise<PaymentColl
        AND a.deleted_at IS NULL
        AND a.status::text NOT IN ('cancelled', 'deleted', 'no-show')
        AND EXISTS (SELECT 1 FROM payments p WHERE p.appointment_id = a.id AND p.status <> 'refunded')
+     ORDER BY label ASC`,
+    [salonId]
+  ));
+
+  return {
+    payment_methods: methodRows
+      .filter((r: any) => r.id && r.label)
+      .map((r: any) => ({ id: r.id, label: r.label })),
+    staff: staffRows
+      .filter((r: any) => r.label)
+      .map((r: any) => ({ id: String(r.id), label: r.label })),
+  };
+},
+
+// ======================================================
+// PENDING PAYMENT REPORT (independent report API)
+// POST /api/report/pending-payment — one row per bill still carrying a due
+// balance (partial or unpaid). Reads appointments + payments directly, never
+// sales, for the same reason as Payment Collection above. Shares that
+// report's _buildPaymentCollectionWhere/_PAYMENT_COLLECTION_AGG so the two
+// reports can never disagree on what a given bill's due/paid amounts are —
+// this one just narrows to due_amount > 0.
+// ======================================================
+
+async getPendingPaymentReportStats(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string; staff_ids?: string[];
+    payment_methods?: string[];
+  }
+): Promise<PendingPaymentReportStats> {
+  const { where, values, nextIndex } = this._buildPaymentCollectionWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const extraValues: any[] = [];
+  let startDateIdx: number | null = null;
+  let endDateIdx: number | null = null;
+  let methodIdx: number | null = null;
+  if (filters.start_date) { startDateIdx = idx++; extraValues.push(filters.start_date); }
+  if (filters.end_date)   { endDateIdx   = idx++; extraValues.push(filters.end_date); }
+  if (filters.payment_methods?.length) { methodIdx = idx++; extraValues.push(filters.payment_methods.map(m => m.toLowerCase())); }
+
+  const query = `
+    ${this._PAYMENT_COLLECTION_AGG(where, startDateIdx, endDateIdx, null, methodIdx)}
+    SELECT
+      COALESCE(SUM(due_amount), 0)     AS total_pending_amount,
+      COUNT(*)::int                    AS total_pending_transactions,
+      COUNT(DISTINCT client_id) FILTER (WHERE client_id IS NOT NULL)::int AS total_customers_with_due,
+      MIN(payment_date)                AS oldest_pending_payment_date
+    FROM filtered
+    WHERE due_amount > 0
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...extraValues]));
+  const r = rows[0] ?? {};
+  const totalPending = Math.round(Number(r.total_pending_amount ?? 0));
+  const pendingTxns = Number(r.total_pending_transactions ?? 0);
+  return {
+    total_pending_amount: totalPending,
+    total_pending_transactions: pendingTxns,
+    total_customers_with_due: Number(r.total_customers_with_due ?? 0),
+    average_pending_amount: pendingTxns > 0 ? Math.round(totalPending / pendingTxns) : 0,
+    oldest_pending_payment_date: r.oldest_pending_payment_date ?? null,
+  };
+},
+
+async getPendingPaymentReportRows(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; search?: string; staff_ids?: string[];
+    payment_methods?: string[]; page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: PendingPaymentReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildPaymentCollectionWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const extraValues: any[] = [];
+  let startDateIdx: number | null = null;
+  let endDateIdx: number | null = null;
+  let methodIdx: number | null = null;
+  if (filters.start_date) { startDateIdx = idx++; extraValues.push(filters.start_date); }
+  if (filters.end_date)   { endDateIdx   = idx++; extraValues.push(filters.end_date); }
+  if (filters.payment_methods?.length) { methodIdx = idx++; extraValues.push(filters.payment_methods.map(m => m.toLowerCase())); }
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    ${this._PAYMENT_COLLECTION_AGG(where, startDateIdx, endDateIdx, null, methodIdx)}
+    SELECT
+      appointment_id, client_id, payment_date, customer_name, contact,
+      invoice_number, total_amount, paid_amount, due_amount,
+      payment_method, staff_name,
+      GREATEST(0, (CURRENT_DATE - payment_date::date))::int AS days_pending,
+      COUNT(*) OVER() AS total_count
+    FROM filtered
+    WHERE due_amount > 0
+    ORDER BY due_amount DESC, payment_date ASC NULLS LAST, customer_name ASC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...extraValues, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: PendingPaymentReportRow[] = rows.map((row: any) => ({
+    appointment_id: row.appointment_id,
+    client_id: row.client_id,
+    bill_date: row.payment_date,
+    customer_name: row.customer_name,
+    contact: row.contact,
+    invoice_number: row.invoice_number,
+    total_amount: Math.round(Number(row.total_amount ?? 0)),
+    paid_amount: Math.round(Number(row.paid_amount ?? 0)),
+    due_amount: Math.round(Number(row.due_amount ?? 0)),
+    payment_method: row.payment_method,
+    staff_name: row.staff_name,
+    days_pending: Number(row.days_pending ?? 0),
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// Filter dropdown options for the Pending Payment report — scoped to bills
+// that currently carry a due balance, so a method/staff that only ever
+// shows up on fully-paid bills is never offered (it would return an empty
+// table if selected). Same de-duplication convention as
+// getPaymentCollectionFiltersAvailable.
+async getPendingPaymentFiltersAvailable(salonId: string): Promise<PendingPaymentFiltersAvailable> {
+  const { rows: methodRows } = await safeQuery(() => pool.query(
+    `WITH latest AS (
+       SELECT DISTINCT ON (a.id) TRIM(p.payment_method) AS method, p.due_amount
+       FROM appointments a
+       JOIN payments p ON p.appointment_id = a.id AND p.status <> 'refunded'
+       WHERE a.salon_id = $1
+         AND a.deleted_at IS NULL
+         AND a.status::text NOT IN ('cancelled', 'deleted', 'no-show')
+       ORDER BY a.id, p.created_at DESC
+     )
+     SELECT DISTINCT ON (LOWER(method))
+       LOWER(method) AS id,
+       method        AS label
+     FROM latest
+     WHERE NULLIF(method, '') IS NOT NULL AND due_amount > 0
+     ORDER BY LOWER(method) ASC, (LEFT(method, 1) = UPPER(LEFT(method, 1))) DESC, method ASC`,
+    [salonId]
+  ));
+
+  const { rows: staffRows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT st.id,
+       TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))) AS label
+     FROM appointments a
+     JOIN staff st ON st.id = a.staff_id
+     WHERE a.salon_id = $1
+       AND a.deleted_at IS NULL
+       AND a.status::text NOT IN ('cancelled', 'deleted', 'no-show')
+       AND EXISTS (
+         SELECT 1 FROM payments p
+         WHERE p.appointment_id = a.id AND p.status <> 'refunded' AND p.due_amount > 0
+       )
      ORDER BY label ASC`,
     [salonId]
   ));
@@ -7883,6 +8360,7 @@ async getPackageSaleReportRows(
       TO_CHAR(cp.created_date AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS date,
       cp.client_id,
       cp.client_name,
+      cp.mobile AS client_phone,
       cp.package_name,
       TO_CHAR(cp.expiry_date, 'YYYY-MM-DD') AS expiry_date,
       cp.total_amount,
@@ -7911,6 +8389,7 @@ async getPackageSaleReportRows(
     date: row.date,
     client_id: row.client_id,
     client_name: row.client_name,
+    client_phone: row.client_phone ?? null,
     package_name: row.package_name,
     expiry_date: row.expiry_date ?? null,
     total_amount: Number(row.total_amount ?? 0),
@@ -8200,6 +8679,7 @@ async getPackageHistoryReportRows(
       TO_CHAR(h.session_date AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS date,
       cp.client_id,
       cp.client_name,
+      cp.mobile AS client_phone,
       cp.package_name,
       cps.service_name,
       h.session_no,
@@ -8226,6 +8706,7 @@ async getPackageHistoryReportRows(
     date: row.date,
     client_id: row.client_id,
     client_name: row.client_name,
+    client_phone: row.client_phone ?? null,
     package_name: row.package_name,
     service_name: row.service_name,
     session_no: Number(row.session_no ?? 0),
@@ -8394,6 +8875,7 @@ _MEMBERSHIP_HISTORY_SOURCE: `
       cm.salon_id,
       cm.client_id,
       cm.client_name,
+      cm.mobile        AS client_phone,
       cm.membership_name,
       cm.pricing_type,
       cm.purchased_at,
@@ -8420,6 +8902,7 @@ _MEMBERSHIP_HISTORY_SOURCE: `
       pay.salon_id,
       pay.client_id,
       COALESCE(NULLIF(TRIM(c.full_name), ''), 'Walk-in') AS client_name,
+      c.phone_number                                     AS client_phone,
       COALESCE(lm.name, 'Loyalty')                       AS membership_name,
       'loyalty'        AS pricing_type,
       NULL::timestamptz AS purchased_at,
@@ -8617,6 +9100,7 @@ async getMembershipHistoryReportRows(
       TO_CHAR(ul.purchased_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS start_date,
       ul.client_id,
       COALESCE(NULLIF(TRIM(ul.client_name), ''), 'Walk-in') AS client_name,
+      ul.client_phone,
       COALESCE(NULLIF(TRIM(ul.membership_name), ''), '—') AS membership_name,
       COALESCE(NULLIF(TRIM(ul.pricing_type), ''), 'value') AS membership_type,
       COALESCE(NULLIF(TRIM(ul.service_name), ''), '—') AS service_name,
@@ -8646,6 +9130,7 @@ async getMembershipHistoryReportRows(
     start_date: row.start_date ?? null,
     client_id: row.client_id ? String(row.client_id) : null,
     client_name: row.client_name,
+    client_phone: row.client_phone ?? null,
     membership_name: row.membership_name,
     membership_type: row.membership_type,
     service_name: row.service_name,
@@ -8853,6 +9338,7 @@ async getMemberSaleReportRows(
       TO_CHAR(cm.expires_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS expiry_date,
       s.invoice_number,
       cm.client_name,
+      cm.mobile AS client_phone,
       NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
       cm.membership_name,
       cm.pricing_type,
@@ -8886,6 +9372,7 @@ async getMemberSaleReportRows(
     expiry_date: row.expiry_date ?? null,
     invoice_number: row.invoice_number,
     client_name: row.client_name,
+    client_phone: row.client_phone ?? null,
     staff_name: row.staff_name ?? "—",
     membership_name: row.membership_name,
     pricing_type: row.pricing_type,
@@ -17982,12 +18469,20 @@ async getClientRatingReportRows(
       st.id AS staff_id,
       NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
       r.rating,
-      r.staff_rating,
-      r.service_rating,
-      r.ambience_rating,
+      r.improvement_tags,
       r.review_text,
       r.created_at AS review_date,
       r.source,
+      COALESCE((
+        SELECT json_agg(json_build_object(
+          'service_name', sr.service_name,
+          'staff_name',   sr.staff_name,
+          'rating',       sr.rating,
+          'comment',      sr.comment
+        ) ORDER BY sr.created_at)
+        FROM review_service_ratings sr
+        WHERE sr.review_id = r.id
+      ), '[]'::json) AS service_ratings,
       COALESCE((
         SELECT SUM(s.total_amount::numeric)
         FROM sales s
@@ -18014,9 +18509,8 @@ async getClientRatingReportRows(
     staff_id: row.staff_id,
     staff_name: row.staff_name ?? "—",
     rating: Number(row.rating ?? 0),
-    staff_rating: row.staff_rating !== null && row.staff_rating !== undefined ? Number(row.staff_rating) : null,
-    service_rating: row.service_rating !== null && row.service_rating !== undefined ? Number(row.service_rating) : null,
-    ambience_rating: row.ambience_rating !== null && row.ambience_rating !== undefined ? Number(row.ambience_rating) : null,
+    improvement_tags: row.improvement_tags ?? [],
+    service_ratings: row.service_ratings ?? [],
     review_text: row.review_text,
     review_date: row.review_date,
     source: row.source,

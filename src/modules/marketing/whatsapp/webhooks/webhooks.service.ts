@@ -190,6 +190,12 @@ export const webhooksService = {
     const errorCode = status.errors?.[0]?.code?.toString() ?? null
     const errorMsg  = status.errors?.[0]?.title            ?? null
 
+    // Logged for every status, not just FAILED — a SENT/DELIVERED/READ update
+    // previously left no trace at all, so there was no way to tell "webhook
+    // never arrived" apart from "webhook arrived but was a status we don't
+    // specially log".
+    logger.info(`📶 [WEBHOOK] status=${type} wamid=${wamid}`, { errorCode, errorMsg })
+
     if (type === 'FAILED') {
       logger.error('📛 Webhook FAILED payload:', {
         wamid, errorCode, errorMsg,
@@ -211,7 +217,8 @@ export const webhooksService = {
         timestamp instanceof Date && !isNaN(timestamp.getTime())
       ) {
         try {
-          await whatsappAutomationService.handleDeliveryStatus(wamid, type, timestamp)
+          const matched = await whatsappAutomationService.handleDeliveryStatus(wamid, type, timestamp)
+          logger.info(`[WA-AUTO] handleDeliveryStatus ${matched ? 'matched a log row' : 'found NO matching log row'} for wamid=${wamid}`)
         } catch (err: any) {
           logger.warn('[WA-AUTO] handleDeliveryStatus error:', err?.message)
         }
@@ -235,16 +242,5 @@ export const webhooksService = {
     }
 
     await webhooksRepository.refreshCampaignCounts(contact.campaign_id)
-  },
-
-  async getRecentEvents(
-    salonId: string,
-    opts: { campaignId?: string; status?: string; page?: number; limit?: number } = {}
-  ) {
-    return webhooksRepository.getRecentEvents(salonId, opts)
-  },
-
-  async getEventStatusCounts(salonId: string, campaignId?: string) {
-    return webhooksRepository.getEventStatusCounts(salonId, campaignId)
   },
 }

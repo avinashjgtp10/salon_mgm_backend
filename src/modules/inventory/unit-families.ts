@@ -57,3 +57,31 @@ export function findCompatibleUnit(baseUnit: string, unitName: string): Compatib
   const needle = unitName.trim().toLowerCase();
   return getCompatibleUnits(baseUnit).find((u) => u.name.toLowerCase() === needle) ?? null;
 }
+
+// How many base-unit units does 1 `enteredUnit` equal, for a product whose
+// base unit is `baseUnit` and whose product-specific packaging sizes are
+// `productConversions` (its product_unit_conversions rows)? Returns null —
+// never a guessed ratio — when the unit can't be resolved: either it's
+// outside baseUnit's measurement family entirely (e.g. ml -> pcs, rejected
+// by findCompatibleUnit), or it's a packaging unit (Bottle, Tube, ...) this
+// specific product has never had configured. Callers must treat null as a
+// hard rejection, not a silent 1:1 fallback — that fallback is exactly the
+// bug this function exists to close (a "1 L" entry silently deducted as if
+// it were "1 ml").
+export function resolveConversionRatio(
+  baseUnit: string,
+  enteredUnit: string | null | undefined,
+  productConversions: { unit_name: string; conversion_to_base: number }[]
+): number | null {
+  const entered = (enteredUnit ?? "").trim();
+  if (!entered || entered.toLowerCase() === baseUnit.trim().toLowerCase()) return 1;
+
+  const compatible = findCompatibleUnit(baseUnit, entered);
+  if (!compatible) return null;
+  if (compatible.fixedRatio !== undefined) return compatible.fixedRatio;
+
+  const match = productConversions.find(
+    (c) => c.unit_name.trim().toLowerCase() === entered.toLowerCase()
+  );
+  return match ? Number(match.conversion_to_base) : null;
+}

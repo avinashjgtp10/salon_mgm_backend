@@ -6,6 +6,9 @@ import { requirePermission } from "../../middleware/permission.middleware";
 import { uploadMiddleware } from "../../middleware/upload.middleware";
 import { clientsController } from "./clients.controller";
 import { upload } from "./clients.upload";
+import { clientNotesController } from "../client-notes/client-notes.controller";
+import { clientCommunicationController } from "../client-communication/client-communication.controller";
+import { reviewsController } from "../reviews/reviews.controller";
 import {
     validateCreateClient,
     validateUpdateClient,
@@ -72,9 +75,31 @@ router.get(
 // Referral-code lookup (for the "Referred by" field) — must be BEFORE /:clientId
 router.get("/referral/:code", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), clientsController.lookupReferralCode);
 
+// Client profile lookup (packages/memberships/history/loyalty in one call) via
+// POST body instead of a GET query string — must be BEFORE /:clientId
+router.post(
+    "/:clientId/details",
+    authMiddleware,
+    ownerAdminStaff,
+    requirePermission("view_clients"),
+    clientsController.getByIdDetails
+);
+
 // GET / PATCH / DELETE by id
 router.get("/:clientId", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), clientsController.getById);
 router.patch("/:clientId", authMiddleware, ownerAdminStaff, requirePermission("edit_clients"), validateUpdateClient, clientsController.update);
 router.delete("/:clientId", authMiddleware, ownerAdminStaff, requirePermission("delete_clients"), clientsController.remove);
+
+// NOTES
+router.get("/:clientId/notes", authMiddleware, ownerAdminStaff, clientNotesController.list);
+router.post("/:clientId/notes", authMiddleware, ownerAdminStaff, clientNotesController.create);
+router.patch("/:clientId/notes/:id", authMiddleware, ownerAdminStaff, clientNotesController.update);
+router.delete("/:clientId/notes/:id", authMiddleware, ownerAdminStaff, clientNotesController.delete);
+
+// COMMUNICATIONS
+router.get("/:clientId/communications", authMiddleware, ownerAdminStaff, clientCommunicationController.list);
+
+// FEEDBACK & REVIEW
+router.get("/:clientId/reviews", authMiddleware, ownerAdminStaff, reviewsController.listForClient);
 
 export default router;

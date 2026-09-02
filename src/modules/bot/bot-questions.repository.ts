@@ -12,8 +12,8 @@ const GROQ_FAILURE_STRINGS = [
 ];
 
 const UNANSWERED_SQL = `(
-  source = 'error'
-  OR (source = 'groq' AND (answer IS NULL OR answer = ANY($ANSWERED_PARAM::text[])))
+  bq.source = 'error'
+  OR (bq.source = 'groq' AND (bq.answer IS NULL OR bq.answer = ANY($ANSWERED_PARAM::text[])))
 )`;
 
 export const botQuestionsRepository = {
@@ -42,7 +42,7 @@ export const botQuestionsRepository = {
     let idx = 1;
 
     if (filters.source) {
-      conditions.push(`source = $${idx++}`);
+      conditions.push(`bq.source = $${idx++}`);
       values.push(filters.source);
     }
 
@@ -55,7 +55,7 @@ export const botQuestionsRepository = {
     }
 
     if (filters.search) {
-      conditions.push(`question ILIKE $${idx++}`);
+      conditions.push(`bq.question ILIKE $${idx++}`);
       values.push(`%${filters.search}%`);
     }
 
@@ -65,12 +65,18 @@ export const botQuestionsRepository = {
     const offset = (page - 1) * limit;
 
     const { rows } = await pool.query(
-      `SELECT * FROM bot_questions ${where} ORDER BY created_at DESC LIMIT $${idx++} OFFSET $${idx++}`,
+      `SELECT bq.*,
+              COALESCE(NULLIF(s.business_name, ''), NULLIF(TRIM(CONCAT(u.first_name, ' ', COALESCE(u.last_name, ''))), '')) AS salon_name
+       FROM bot_questions bq
+       LEFT JOIN salons s ON s.id = bq.salon_id
+       LEFT JOIN users u ON u.id = s.owner_id
+       ${where}
+       ORDER BY bq.created_at DESC LIMIT $${idx++} OFFSET $${idx++}`,
       [...values, limit, offset]
     );
 
     const { rows: countRows } = await pool.query(
-      `SELECT COUNT(*)::int AS total FROM bot_questions ${where}`,
+      `SELECT COUNT(*)::int AS total FROM bot_questions bq ${where}`,
       values
     );
 
@@ -103,11 +109,11 @@ export const botQuestionsRepository = {
     const { rows } = await pool.query(
       `SELECT
          COUNT(*)::int AS total,
-         COUNT(*) FILTER (WHERE source = 'predefined')::int AS predefined,
-         COUNT(*) FILTER (WHERE source = 'groq')::int AS groq,
+         COUNT(*) FILTER (WHERE bq.source = 'predefined')::int AS predefined,
+         COUNT(*) FILTER (WHERE bq.source = 'groq')::int AS groq,
          COUNT(*) FILTER (WHERE NOT ${UNANSWERED_SQL.replace("$ANSWERED_PARAM", "$1")})::int AS answered,
          COUNT(*) FILTER (WHERE ${UNANSWERED_SQL.replace("$ANSWERED_PARAM", "$1")})::int AS unanswered
-       FROM bot_questions`,
+       FROM bot_questions bq`,
       [GROQ_FAILURE_STRINGS]
     );
     return rows[0];

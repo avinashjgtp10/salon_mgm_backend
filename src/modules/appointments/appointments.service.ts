@@ -7,11 +7,17 @@ import { salesRepository } from "../sales/sales.repository";
 import type { SaleItem } from "../sales/sales.types";
 import { productsRepository } from "../products/products.repository";
 import { appointmentConsumablesService } from "../inventory/inventory.service";
+import { stockLedgerService } from "../inventory/stock-ledger.service";
+import { tipCalculationService } from "../tips/tipCalculation.service";
+import { consumableInventoryRepository } from "../inventory/consumable-inventory.repository";
+import { resolveConversionRatio, FAMILY_MESSAGE } from "../inventory/unit-families";
+import type { UnitConversion } from "../inventory/consumable-inventory.types";
 import { commissionCalculationService } from "../commission/commissionCalculation.service";
 import { blockedTimesRepository } from "../blocked_times/blocked_times.repository";
 import { recordTransaction } from "../transactions/transaction-recorder.service";
 import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
 import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
+import { waScheduledMessagesService } from "../whatsapp-automation/wa-scheduled-messages.service";
 import { attendanceService } from "../attendance/attendance.service";
 import { notificationsService } from "../notifications/notifications.service";
 import { emailService } from "../utils/email.service";
@@ -22,7 +28,6 @@ import { staffService } from "../staff/staff.service";
 import { clientsRepository } from "../clients/clients.repository";
 import { sendReceiptDocument } from "../sales/receipt-whatsapp.service";
 import { sendPurchaseReceipt, getPurchaseReceiptPdf } from "../sales/receipt-send.helper";
-import { notifyAppointmentCompleted } from "./appointment-completed.helper";
 import { computeBillTotals, rowsTotal, normalizeDiscountAppliesTo, ActiveTaxRow } from "../pricing/pricing.engine";
 import { getActiveTaxes } from "../settings/tax.util";
 import { paymentsRepository } from "../payments/payments.repository";
@@ -153,7 +158,11 @@ function needsTaxBackfill(appt: Appointment): boolean {
 function backfillTaxBreakdown(appt: Appointment, activeTaxes: ActiveTaxRow[]): Appointment {
     if (!needsTaxBackfill(appt)) return appt;
     const result = computeAppointmentTotals(appt, activeTaxes);
-    return { ...appt, tax_breakdown: result.taxBreakdown, computed_grand_total: result.grandTotal };
+    // result.grandTotal is the pure revenue figure (tip excluded, matches
+    // sales.total_amount) — computed_grand_total is display-only (calendar
+    // tooltip/chip, never written back), so tip is added back on for the
+    // same reason pricing.service.ts's preview response does.
+    return { ...appt, tax_breakdown: result.taxBreakdown, computed_grand_total: result.grandTotal + (Number(appt.tip_amount) || 0) };
 }
 
 // Once an appointment has a linked, paid sale, its real per-item GST lives on
@@ -254,11 +263,18 @@ function deriveDisplayStatus(appt: Appointment): Appointment {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+// DD-MM-YYYY — matches the frontend's app-wide standard date format (see
+// src/utils/dateFormat.ts's formatDateDDMMYYYY on the frontend), used here so
+// notification text (e.g. "New Appointment Booked") reads the same way.
 function formatDate(dateStr: string): string {
-    return new Date(dateStr).toLocaleDateString("en-IN", {
+    const parts = new Intl.DateTimeFormat("en-GB", {
         timeZone: "Asia/Kolkata",
-        day: "2-digit", month: "short", year: "numeric",
-    });
+        day: "2-digit", month: "2-digit", year: "numeric",
+    }).formatToParts(new Date(dateStr));
+    const day = parts.find(p => p.type === "day")?.value ?? "";
+    const month = parts.find(p => p.type === "month")?.value ?? "";
+    const year = parts.find(p => p.type === "year")?.value ?? "";
+    return `${day}-${month}-${year}`;
 }
 
 function formatTime(dateStr: string): string {
@@ -286,13 +302,58 @@ function assignServiceRowIds(services?: IncomingAppointmentServiceItem[]): void 
     }
 }
 
+// Looks up, once per flattenServiceConsumables() call, every distinct
+// product referenced by services[].consumables[]: its base unit
+// (products.measure_unit) and its configured packaging conversions
+// (product_unit_conversions) — the two things resolveConversionRatio needs
+// to turn "1 Bottle" into a base-unit amount. One query pair per distinct
+// product (typically 1-5 per appointment), not per consumable row.
+async function buildUnitConversionContext(
+    services: IncomingAppointmentServiceItem[] | undefined,
+    salonId: string
+): Promise<Map<string, { baseUnit: string; conversions: UnitConversion[] }>> {
+    const productIds = new Set<string>();
+    for (const s of services ?? []) {
+        for (const c of s.consumables ?? []) {
+            if (c.product_id) productIds.add(c.product_id);
+        }
+    }
+    const context = new Map<string, { baseUnit: string; conversions: UnitConversion[] }>();
+    await Promise.all(
+        Array.from(productIds).map(async (id) => {
+            const [product, conversions] = await Promise.all([
+                productsRepository.findById(id, salonId),
+                consumableInventoryRepository.getUnitConversions(id),
+            ]);
+            if (product) context.set(id, { baseUnit: product.measure_unit ?? "", conversions });
+        })
+    );
+    return context;
+}
+
 // Flattens services[].consumables[] into one row per (service_row_id,
 // product_id), ready for appointment_service_consumables. Must run AFTER
 // assignServiceRowIds so every row has a stable id to key off. actual_qty
 // defaults to the configured qty when the caller hasn't touched it yet.
+//
+// Unit Conversion: standard_qty/actual_qty stored here are ALWAYS base-unit
+// amounts — inventory is deducted in the base unit only (see
+// appointmentConsumablesService.collectServiceRowItems, which trusts
+// actual_qty as-is with no conversion of its own). When a consumable was
+// logged in a display unit other than the product's base unit (e.g. "1
+// Bottle" on an ml-based product), what the caller sent is converted here,
+// once, at ingestion — the raw entered amount is preserved separately as
+// entered_qty for audit/history display. A unit that can't be resolved for
+// this specific product (wrong measurement family, or a packaging unit this
+// product has never had configured) is rejected outright: this can only be
+// reached by bypassing the picker UI (which only ever offers resolvable
+// units), so failing the whole request here — before anything is written —
+// is correct, not overly strict; silently falling back to a 1:1 ratio is
+// exactly the bug this replaces (a "1 L" entry deducted as if it were "1 ml").
 function flattenServiceConsumables(
     services: IncomingAppointmentServiceItem[] | undefined,
-    branchId: string | null
+    branchId: string | null,
+    unitContext: Map<string, { baseUnit: string; conversions: UnitConversion[] }>
 ): AppointmentServiceConsumableRecord[] {
     if (!services) return [];
     const rows: AppointmentServiceConsumableRecord[] = [];
@@ -300,14 +361,31 @@ function flattenServiceConsumables(
         if (!s.id || !s.consumables?.length) continue;
         for (const c of s.consumables) {
             if (!c.product_id) continue;
-            const standardQty = Number(c.qty) || 0;
-            const actualQty = c.actual_qty !== undefined && c.actual_qty !== null ? Number(c.actual_qty) : standardQty;
+            const enteredStandardQty = Number(c.qty) || 0;
+            const enteredActualQty = c.actual_qty !== undefined && c.actual_qty !== null ? Number(c.actual_qty) : enteredStandardQty;
+
+            let ratio = 1;
+            const productCtx = unitContext.get(c.product_id);
+            if (productCtx && c.unit) {
+                const resolved = resolveConversionRatio(productCtx.baseUnit, c.unit, productCtx.conversions);
+                if (resolved === null) {
+                    throw new AppError(
+                        400,
+                        `${FAMILY_MESSAGE} ("${c.unit}" is not a configured unit for this product.)`,
+                        "INVALID_UNIT_CONVERSION",
+                        { unit_name: c.unit, product_id: c.product_id }
+                    );
+                }
+                ratio = resolved;
+            }
+
             rows.push({
                 service_row_id: s.id,
                 service_id: s.service_id ?? null,
                 product_id: c.product_id,
-                standard_qty: standardQty,
-                actual_qty: actualQty,
+                standard_qty: enteredStandardQty * ratio,
+                actual_qty: enteredActualQty * ratio,
+                entered_qty: enteredActualQty,
                 unit: c.unit ?? null,
                 branch_id: branchId,
                 staff_id: s.staff_id ?? null,
@@ -453,7 +531,8 @@ export const appointmentsService = {
         let consumableRows: AppointmentServiceConsumableRecord[] = [];
         if (body.services?.some((s) => s.consumables?.length)) {
             const branchId = await appointmentConsumablesService.resolveBranchId(body.salon_id, body.branch_id ?? null);
-            consumableRows = flattenServiceConsumables(body.services, branchId);
+            const unitContext = await buildUnitConversionContext(body.services, body.salon_id);
+            consumableRows = flattenServiceConsumables(body.services, branchId, unitContext);
         }
         body.services = stripConsumables(body.services) as typeof body.services;
 
@@ -503,8 +582,11 @@ export const appointmentsService = {
         });
 
         // ── WhatsApp Automation: Appointment Confirmation ─────────────────────
-        // Dedup check — NEVER send confirmation twice for the same appointment
-        if (appointment.client_id) {
+        // Calendar only — a Quick Sale appointment is booked and paid in the
+        // same transaction, so there's no future visit to "confirm"; it gets
+        // bill_receipt from checkout() instead. Dedup check — NEVER send
+        // confirmation twice for the same appointment.
+        if (appointment.client_id && body.source !== "quick_sale") {
             try {
                 if (full && (full as any).client_phone) {
                     const alreadySent = await whatsappAutomationRepository.logExistsForReference(
@@ -521,9 +603,10 @@ export const appointmentsService = {
                             variables: {
                                 "1": full.client_name                      ?? "Valued Customer",
                                 "2": (full as any).salon_name              ?? "our salon",
-                                "3": full.services?.[0]?.name ?? full.title ?? "your service",
-                                "4": formatDate(full.scheduled_at),
-                                "5": formatTime(full.scheduled_at),
+                                "3": formatDate(full.scheduled_at),
+                                "4": formatTime(full.scheduled_at),
+                                "5": full.services?.[0]?.name ?? full.title ?? "your service",
+                                "6": full.staff_name ?? "our team",
                             },
                             referenceId:   full.id,
                             referenceType: "appointment",
@@ -533,7 +616,28 @@ export const appointmentsService = {
                 }
             } catch (err: any) {
                 // Never block core flow — but log so a real bug here isn't invisible.
-                logger.error("[WA-AUTO] appointment notification trigger failed:", err?.message ?? err);
+                logger.error("[WA-AUTO] appointment_confirmation trigger failed:", err?.message ?? err);
+            }
+        }
+
+        // ── Scheduled Templates: service_reminder_24h ─────────────────────────
+        // Package-linked appointments (booked via scheduleServicesForPackage in
+        // client-packages.service.ts) get package_appointment_reminder_24h
+        // instead, scheduled separately at that call site — skip here so the
+        // client isn't scheduled two reminders for the same visit, mirroring
+        // getAppointmentsForReminder24h()'s own exclusion of package-linked rows.
+        if (full && (full as any).client_phone) {
+            const isPackageLinked = (full.services ?? []).some((s: any) => s.is_package_service);
+            if (!isPackageLinked) {
+                waScheduledMessagesService.scheduleAppointmentReminder({
+                    salonId: full.salon_id, clientId: full.client_id,
+                    phone: (full as any).client_phone, countryCode: (full as any).client_phone_code ?? null,
+                    appointmentId: full.id, scheduledAt: full.scheduled_at,
+                    clientName: full.client_name ?? "Valued Customer",
+                    salonName: (full as any).salon_name ?? "our salon",
+                    serviceName: full.services?.[0]?.name ?? full.title ?? "your service",
+                    staffName: full.staff_name ?? "our team",
+                }).catch((err: any) => logger.error("[wa-scheduled] service_reminder_24h schedule failed:", err?.message ?? err));
             }
         }
 
@@ -705,7 +809,8 @@ export const appointmentsService = {
             const branchId = wasFirstTimePaid || hadPriorDeduction
                 ? await appointmentConsumablesService.resolveBranchId(existing.salon_id, existing.branch_id)
                 : null;
-            newConsumableRows = flattenServiceConsumables(patch.services as IncomingAppointmentServiceItem[], branchId);
+            const unitContext = await buildUnitConversionContext(patch.services as IncomingAppointmentServiceItem[], existing.salon_id);
+            newConsumableRows = flattenServiceConsumables(patch.services as IncomingAppointmentServiceItem[], branchId, unitContext);
             patch = { ...patch, services: stripConsumables(patch.services as IncomingAppointmentServiceItem[]) as typeof patch.services };
 
             if (wasFirstTimePaid && branchId) {
@@ -833,7 +938,30 @@ export const appointmentsService = {
         // reassignment, or LUNOX's modifyAppointmentServices changing what's
         // booked/its duration) never did, so any of these silently required a
         // manual page refresh to appear correctly.
-        if (patch.scheduled_at || patch.staff_id || patch.services || patch.duration_minutes) {
+        //
+        // scheduled_at/staff_id are checked for an actual value change, not
+        // just presence in the patch — the frontend's save() always resends
+        // both on every save (it serializes current UI state wholesale, it
+        // doesn't track which fields were actually touched), so a
+        // presence-only check fired this push on every single save — e.g.
+        // completing payment on an unedited booking — reading to staff as
+        // "appointment rescheduled" when nothing had.
+        //
+        // duration_minutes/services are deliberately NOT part of this
+        // trigger (they used to be, presence-only, which is the same bug):
+        // a real content edit to services always changes the appointment's
+        // total/duration/staff too, which already fires this via the checks
+        // below, so the coverage lost is negligible. A duration/services
+        // comparison here would need real value-equality, and services in
+        // particular is a computed array (fresh timestamps, differing key
+        // shape between patch and existing) that can't be compared with
+        // JSON.stringify — that was tried and still false-positived on
+        // every save, since the two sides are never byte-identical even
+        // when nothing changed.
+        const scheduledAtChanged = !!patch.scheduled_at &&
+            new Date(patch.scheduled_at).getTime() !== new Date(existing.scheduled_at).getTime();
+        const staffChanged = !!patch.staff_id && patch.staff_id !== existing.staff_id;
+        if (scheduledAtChanged || staffChanged) {
             notificationsService.create({
                 salon_id: existing.salon_id,
                 type:     "appointment",
@@ -858,40 +986,42 @@ export const appointmentsService = {
         if (patch.scheduled_at && new Date(patch.scheduled_at).getTime() !== new Date(existing.scheduled_at).getTime()) {
             clientPackagesService.rescheduleForAppointment(appointmentId, patch.scheduled_at)
                 .catch((err: any) => logger.error("[client-packages] rescheduleForAppointment failed:", err?.message ?? err));
+            // service_reminder_24h (the non-package-linked reminder) — the
+            // package-linked one is handled inside rescheduleForAppointment above.
+            const newReminderAt = new Date(new Date(patch.scheduled_at).getTime() - 24 * 3600_000);
+            waScheduledMessagesService.rescheduleForReference('appointment', appointmentId, 'service_reminder_24h', newReminderAt)
+                .catch((err: any) => logger.error("[wa-scheduled] reschedule-on-move failed:", err?.message ?? err));
         }
 
         // ── WhatsApp Automation: Appointment Rescheduled ──────────────────────
         // Only fire if scheduled_at actually changed
-        if (patch.scheduled_at && existing.client_id) {
+        if (patch.scheduled_at && new Date(patch.scheduled_at).getTime() !== new Date(existing.scheduled_at).getTime() && existing.client_id) {
             try {
                 const full = await appointmentsRepository.findById(appointmentId);
                 if (full && (full as any).client_phone) {
-                    const alreadySent = await whatsappAutomationRepository.logExistsForReference(
-                        full.id,
-                        'appointment_rescheduled'
-                    )
-                    if (!alreadySent) {
-                        whatsappAutomationService.trigger({
-                            salonId:       full.salon_id,
-                            eventType:     "appointment_rescheduled",
-                            clientId:      full.client_id,
-                            phone:         (full as any).client_phone,
-                            countryCode:   (full as any).client_phone_code ?? null,
-                            variables: {
-                                "1": full.client_name         ?? "Valued Customer",
-                                "2": (full as any).salon_name ?? "our salon",
-                                "3": formatDate(full.scheduled_at),
-                                "4": formatTime(full.scheduled_at),
-                            },
-                            referenceId:   full.id,
-                            referenceType: "appointment",
-                            dedupeByReference: true,
-                        }).catch(() => {});
-                    }
+                    whatsappAutomationService.trigger({
+                        salonId:       full.salon_id,
+                        eventType:     "appointment_rescheduled",
+                        clientId:      full.client_id,
+                        phone:         (full as any).client_phone,
+                        countryCode:   (full as any).client_phone_code ?? null,
+                        variables: {
+                            "1": full.client_name         ?? "Valued Customer",
+                            "2": (full as any).salon_name ?? "our salon",
+                            "3": formatDate(existing.scheduled_at),
+                            "4": formatTime(existing.scheduled_at),
+                            "5": formatDate(full.scheduled_at),
+                            "6": formatTime(full.scheduled_at),
+                            "7": full.services?.[0]?.name ?? full.title ?? "your service",
+                            "8": full.staff_name ?? "our team",
+                        },
+                        referenceId:   `${full.id}:${full.scheduled_at}`,
+                        referenceType: "appointment",
+                        dedupeByReference: true,
+                    }).catch(() => {});
                 }
             } catch (err: any) {
-                // Never block core flow — but log so a real bug here isn't invisible.
-                logger.error("[WA-AUTO] appointment notification trigger failed:", err?.message ?? err);
+                logger.error("[WA-AUTO] appointment_rescheduled trigger failed:", err?.message ?? err);
             }
         }
 
@@ -915,6 +1045,10 @@ export const appointmentsService = {
         // created by the package-sale scheduling flow.
         clientPackagesService.cancelScheduleForAppointment(params.appointmentId)
             .catch((err: any) => logger.error("[client-packages] cancelScheduleForAppointment failed:", err?.message ?? err));
+        // service_reminder_24h (the non-package-linked reminder) — the
+        // package-linked one is handled inside cancelScheduleForAppointment above.
+        waScheduledMessagesService.cancelForReference('appointment', params.appointmentId, 'service_reminder_24h')
+            .catch((err: any) => logger.error("[wa-scheduled] cancel-on-cancel failed:", err?.message ?? err));
 
         // Restore stock for cancelled appointment products (fire-and-forget)
         const cancelledProducts = (existing.product_items ?? []).filter(p => p.product_id);
@@ -956,6 +1090,7 @@ export const appointmentsService = {
                     "2": (existing as any).salon_name ?? "our salon",
                     "3": formatDate(existing.scheduled_at),
                     "4": formatTime(existing.scheduled_at),
+                    "5": existing.services?.[0]?.name ?? existing.title ?? "your service",
                 },
                 referenceId:   existing.id,
                 referenceType: "appointment",
@@ -1114,6 +1249,21 @@ export const appointmentsService = {
                 items:           saleItems,
                 packageItemIds:  new Set((existing.package_items ?? []).map(p => p.package_id)),
             }).catch(() => {});
+            await tipCalculationService.reverseForSale(preExistingSale.id).catch(() => {});
+            tipCalculationService.earnForSale(preExistingSale.id, existing.salon_id).catch(() => {});
+
+            // ── Stock Ledger: deduct retail product lines (fire-and-forget) ──
+            // deductForSale is idempotent per sale_id, so a re-entered checkout
+            // here (same guard as the commission reverse/recalc above) safely
+            // no-ops instead of double-deducting.
+            stockLedgerService.deductForSale({
+                salonId:       existing.salon_id,
+                branchId:      existing.branch_id ?? null,
+                saleId:        preExistingSale.id,
+                invoiceNumber: preExistingSale.invoice_number,
+                createdBy:     requesterUserId,
+                items:         saleItems.map((i) => ({ item_type: i.item_type, item_id: i.item_id, quantity: Number(i.quantity) || 0 })),
+            }).catch(() => {});
 
             // Auto-mark attendance (fire-and-forget)
             if (existing.staff_id) {
@@ -1136,47 +1286,45 @@ export const appointmentsService = {
                 .redeemForAppointmentIfScheduled(existing.salon_id, appointmentId, existing.staff_name ?? "Staff")
                 .catch((err: any) => logger.error("[client-packages] redemption on checkout failed:", err?.message ?? err));
 
-            // ── WhatsApp Automation: Thank You + Review Request (fire-and-forget) ──
-            notifyAppointmentCompleted(appointmentId).catch(() => {});
-
-            // ── WhatsApp Automation: Purchase confirmation + PDF receipt (fallback) ──
+            // ── WhatsApp: PDF purchase receipt (fallback) ──────────────────────
             // payments.service.ts already fires this at payment-creation time when it
-            // auto-creates the sale — this is a dedup-guarded safety net for when that
-            // didn't happen (e.g. no client phone on file yet at payment time), so
-            // completing the appointment doesn't silently leave the customer with only
-            // the plain booking confirmation and no purchase text/PDF.
+            // auto-creates the sale — this is a safety net for when that didn't happen
+            // (e.g. no client phone on file yet at payment time). Guarded against
+            // payments.service.ts's own send actually having gone through for
+            // this exact sale (the standard pay-then-checkout two-step call
+            // order) — without this both fired unconditionally and the client
+            // got the same PDF twice, only one copy carrying the bill_receipt
+            // caption (whichever call happened to build it).
             if (existing.client_id && (existing as any).client_phone) {
+                // ── WhatsApp Automation: Payment Received ──────────────────────
+                // Calendar only — Quick Sale's bill_receipt below already
+                // covers this (there's no separate "booking" to distinguish
+                // from "payment" when both happen in the same transaction).
+                if (existing.source !== "quick_sale") {
+                    whatsappAutomationService.trigger({
+                        salonId:       existing.salon_id,
+                        eventType:     'payment_received',
+                        clientId:      existing.client_id,
+                        phone:         (existing as any).client_phone,
+                        countryCode:   (existing as any).client_phone_code ?? null,
+                        variables: {
+                            '1': existing.client_name             ?? 'Valued Customer',
+                            '2': String(preExistingSale.total_amount ?? '0'),
+                            '3': (existing as any).salon_name ?? 'our salon',
+                            '4': formatDate(existing.scheduled_at),
+                            '5': formatTime(existing.scheduled_at),
+                        },
+                        referenceId:   preExistingSale.id,
+                        referenceType: 'invoice',
+                        dedupeByReference: true,
+                    }).catch(() => {});
+                }
+
                 (async () => {
                     try {
-                        const alreadySent =
-                            (await whatsappAutomationRepository.logExistsForReference(preExistingSale.id, "service_purchased")) ||
-                            (await whatsappAutomationRepository.logExistsForReference(preExistingSale.id, "product_purchased"));
-                        if (alreadySent) return;
-
-                        const presentTypes = new Set(saleItems.map((i) => i.item_type));
-                        const purchaseEvents: Array<{ eventType: "service_purchased" | "product_purchased"; itemType: "service" | "product" }> = [
-                            { eventType: "service_purchased", itemType: "service" },
-                            { eventType: "product_purchased", itemType: "product" },
-                        ];
-                        for (const { eventType, itemType } of purchaseEvents) {
-                            if (!presentTypes.has(itemType)) continue;
-                            const itemName = saleItems.find((i) => i.item_type === itemType)?.name ?? "your purchase";
-                            whatsappAutomationService.trigger({
-                                salonId:       existing.salon_id,
-                                eventType,
-                                clientId:      existing.client_id!,
-                                phone:         (existing as any).client_phone,
-                                countryCode:   (existing as any).client_phone_code ?? null,
-                                variables: {
-                                    "1": existing.client_name         ?? "Valued Customer",
-                                    "2": (existing as any).salon_name ?? "our salon",
-                                    "3": itemName,
-                                },
-                                referenceId:   preExistingSale.id,
-                                referenceType: "invoice",
-                                dedupeByReference: true,
-                            }).catch(() => {});
-                        }
+                        const won = await whatsappAutomationRepository.guardInsertIfNotExists(`receipt-pdf-auto:${preExistingSale.id}`);
+                        console.log(`[BILL_RECEIPT] appointments.service.ts checkout() preExistingSale branch — guard won=${won} saleId=${preExistingSale.id}`);
+                        if (!won) return;
 
                         await sendPurchaseReceipt({
                             salonId:     existing.salon_id,
@@ -1193,7 +1341,9 @@ export const appointmentsService = {
                                 status:          "paid",
                                 notes:           existing.notes,
                             },
-                            paidAmount:  Number(preExistingSale.total_amount ?? 0),
+                            // Fully-settled sale — total_amount is revenue (tip-exclusive);
+                            // what the client actually paid includes tip on top of it.
+                            paidAmount:  Number(preExistingSale.total_amount ?? 0) + Number(preExistingSale.tip_amount ?? 0),
                             dueAmount:   0,
                             couponCode:  null,
                         });
@@ -1237,6 +1387,22 @@ export const appointmentsService = {
                     });
                 } catch (err: any) { logger.error("[email] newPayment (preexisting) failed:", err?.message ?? err); }
             })();
+
+            // ── Push Notification: Payment Complete (to salon staff) ──────────
+            // Same pattern as "New Appointment Booked" — a calendar-facing push
+            // so staff know a bill was just settled without needing to refresh.
+            notificationsService.create({
+                salon_id: existing.salon_id,
+                type:     "payment",
+                title:    "Payment Complete",
+                body:     `${existing.client_name ?? "Walk-in"} — ₹${preExistingSale.total_amount ?? 0}`,
+                event_key: "newPayment",
+                scheduled_at: existing.scheduled_at,
+            }).catch((err: any) => {
+                logger.error("Payment complete notification failed", {
+                    appointmentId, salonId: existing.salon_id, message: err?.message,
+                });
+            });
 
             return { appointment: completedAppt, saleId: preExistingSale.id };
         }
@@ -1364,6 +1530,17 @@ export const appointmentsService = {
             items,
             packageItemIds:  new Set((existing.package_items ?? []).map(p => p.package_id)),
         }).catch(() => {});
+        tipCalculationService.earnForSale(sale.id, existing.salon_id).catch(() => {});
+
+        // ── Stock Ledger: deduct retail product lines (fire-and-forget) ──────
+        stockLedgerService.deductForSale({
+            salonId:       existing.salon_id,
+            branchId:      existing.branch_id ?? null,
+            saleId:        sale.id,
+            invoiceNumber: sale.invoice_number,
+            createdBy:     requesterUserId,
+            items:         items.map((i: any) => ({ item_type: i.item_type, item_id: i.item_id, quantity: Number(i.quantity) || 0 })),
+        }).catch(() => {});
 
         // ── Auto-mark attendance for the staff member (fire-and-forget) ───────
         if (existing.staff_id) {
@@ -1376,7 +1553,9 @@ export const appointmentsService = {
         }
 
         // ── WhatsApp Automation: Payment Received ─────────────────────────────
-        if (existing.client_id && (existing as any).client_phone) {
+        // Calendar only — see the matching comment on the preExistingSale
+        // branch above.
+        if (existing.client_id && (existing as any).client_phone && existing.source !== "quick_sale") {
             whatsappAutomationService.trigger({
                 salonId:       existing.salon_id,
                 eventType:     'payment_received',
@@ -1386,7 +1565,9 @@ export const appointmentsService = {
                 variables: {
                     '1': existing.client_name         ?? 'Valued Customer',
                     '2': String(sale.total_amount     ?? '0'),
-                    '3': sale.invoice_number ?? '',
+                    '3': (existing as any).salon_name ?? 'our salon',
+                    '4': formatDate(existing.scheduled_at),
+                    '5': formatTime(existing.scheduled_at),
                 },
                 referenceId:   sale.id,
                 referenceType: 'invoice',
@@ -1442,7 +1623,9 @@ export const appointmentsService = {
                         status: existing.status,
                         notes: existing.notes,
                     },
-                    paidAmount: Number(sale.total_amount) || 0,
+                    // Fully-settled sale — total_amount is revenue (tip-exclusive); what
+                    // the client actually paid includes tip on top of it.
+                    paidAmount: (Number(sale.total_amount) || 0) + (Number(sale.tip_amount) || 0),
                     dueAmount: 0,
                     couponCode: null,
                 });
@@ -1487,6 +1670,20 @@ export const appointmentsService = {
                 logger.info(`[email] newPayment sent to ${ownerEmail}`);
             } catch (err: any) { logger.error("[email] newPayment (checkout) failed:", err?.message ?? err); }
         })();
+
+        // ── Push Notification: Payment Complete (to salon staff) ──────────────
+        notificationsService.create({
+            salon_id: existing.salon_id,
+            type:     "payment",
+            title:    "Payment Complete",
+            body:     `${existing.client_name ?? "Walk-in"} — ₹${sale.total_amount ?? 0}`,
+            event_key: "newPayment",
+            scheduled_at: existing.scheduled_at,
+        }).catch((err: any) => {
+            logger.error("Payment complete notification failed", {
+                appointmentId, salonId: existing.salon_id, message: err?.message,
+            });
+        });
 
         return { appointment, saleId: sale.id };
     },

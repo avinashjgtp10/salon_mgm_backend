@@ -104,7 +104,8 @@ export const clientsController = {
         try {
             const salonId = getSalonId(req);
             const body = req.body as CreateClientBody;
-            const created = await clientsService.create(body, salonId);
+            const include = req.query.include ? String(req.query.include) : undefined;
+            const created = await clientsService.create(body, salonId, include);
             return sendSuccess(res, 201, created, "Client created successfully");
         } catch (e) { return next(e); }
     },
@@ -152,6 +153,26 @@ export const clientsController = {
             if (!clientId) throw new AppError(400, "clientId is required", "VALIDATION_ERROR");
             if (!isValidUUID(clientId)) throw new AppError(400, "Invalid clientId format", "VALIDATION_ERROR");
             const include = req.query.include ? String(req.query.include) : "";
+            const data = await clientsService.getById(clientId, salonId, include);
+            return sendSuccess(res, 200, data, "Client fetched successfully");
+        } catch (e) { return next(e); }
+    },
+
+    // POST /api/v1/clients/:clientId/details
+    // Lookup for an ALREADY-KNOWN client id, with the include list carried in
+    // the body instead of a query string — same data clientsService.getById
+    // already assembles for GET /:clientId?include=..., just reached via POST
+    // for callers (Quick Sale / booking client-selection) whose include list
+    // is fixed and who prefer a body over a query string. Not a create: no
+    // duplicate-phone/email checks run here, because nothing is being created.
+    async getByIdDetails(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const salonId = getSalonId(req);
+            const clientId = String(req.params.clientId || "").trim();
+            if (!clientId) throw new AppError(400, "clientId is required", "VALIDATION_ERROR");
+            if (!isValidUUID(clientId)) throw new AppError(400, "Invalid clientId format", "VALIDATION_ERROR");
+            const includeBody = (req.body as any)?.include;
+            const include = Array.isArray(includeBody) ? includeBody.join(",") : String(includeBody || "");
             const data = await clientsService.getById(clientId, salonId, include);
             return sendSuccess(res, 200, data, "Client fetched successfully");
         } catch (e) { return next(e); }
@@ -482,6 +503,7 @@ export const clientsController = {
 
             const WHERE = `
                 WHERE c.salon_id = $1
+                  AND c.is_active = true
                   AND ($2 = '' OR (c.full_name ILIKE $2 OR c.phone_number ILIKE $2 OR c.email ILIKE $2))
                   AND ($3 = '' OR $3 = ANY(COALESCE(ad.service_ids, '{}'::text[])))
                   AND ($4 = '' OR $4 = ANY(COALESCE(ad.staff_ids,   '{}'::text[])))
