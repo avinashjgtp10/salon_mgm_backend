@@ -14,6 +14,7 @@ import { inventoryTransactionsRepository } from "./inventory-transactions.reposi
 import { AppointmentServiceConsumableRow, InventoryTransactionItem } from "./inventory-transactions.types";
 import {
     Supplier,
+    SupplierWithBalance,
     CreateSupplierBody,
     UpdateSupplierBody,
     StockMovement,
@@ -25,8 +26,6 @@ import {
     CreateStocktakeBody,
     StocktakeStatus,
     StockReconciliationRow,
-    SaveReconciliationBody,
-    SaveReconciliationRowBody,
     SaveConsumableUsageBody,
 } from "./inventory.types";
 
@@ -46,14 +45,14 @@ export const suppliersService = {
         return created;
     },
 
-    async getById(id: string, salonId: string): Promise<Supplier> {
-        const supplier = await suppliersRepository.findById(id, salonId);
+    async getById(id: string, salonId: string): Promise<SupplierWithBalance> {
+        const supplier = await suppliersRepository.findByIdWithBalance(id, salonId);
         if (!supplier) throw new AppError(404, "Supplier not found", "NOT_FOUND");
         return supplier;
     },
 
-    async listAll(salonId: string): Promise<Supplier[]> {
-        return suppliersRepository.listAll(salonId);
+    async listAll(salonId: string): Promise<SupplierWithBalance[]> {
+        return suppliersRepository.listAllWithBalance(salonId);
     },
 
     async update(params: {
@@ -164,6 +163,13 @@ export const stockTakeService = {
         const movements = await stockTakeRepository.process({
             stocktake_id: body.stocktake_id, branch_id: body.branch_id, notes: body.notes, items: body.items, created_by: requesterUserId, salonId,
         });
+        // Processing IS completing the stocktake — without this it stayed
+        // "In progress" forever (nothing else ever advanced its status), so
+        // StocktakesListPage's Completed filter/column never had anything to show.
+        if (body.stocktake_id) {
+            await stocktakesRepository.updateStatus(body.stocktake_id, "Completed", salonId).catch((err) =>
+                logger.warn("Failed to mark stocktake Completed (non-fatal)", { stocktakeId: body.stocktake_id, message: err?.message }));
+        }
         logger.info("stockTakeService.process success", { processed: body.items.length, movementsCreated: movements.length });
         return { processed: body.items.length, movements };
     },
@@ -182,40 +188,6 @@ export const stockReconciliationService = {
         if (!branchId) throw new AppError(400, "branch_id is required", "VALIDATION_ERROR");
         logger.info("stockReconciliationService.list called", { branchId, salonId });
         return stockReconciliationRepository.list(branchId, salonId, search, categoryId);
-    },
-
-    async saveAll(params: {
-        requesterUserId: string;
-        salonId: string;
-        body: SaveReconciliationBody;
-    }): Promise<{ processed: number }> {
-        const { requesterUserId, salonId, body } = params;
-        if (!body.branch_id) throw new AppError(400, "branch_id is required", "VALIDATION_ERROR");
-        if (!body.items?.length) throw new AppError(400, "items array is required", "VALIDATION_ERROR");
-        logger.info("stockReconciliationService.saveAll called", { branchId: body.branch_id, count: body.items.length });
-        const processed = await stockReconciliationRepository.upsertBatch(body.branch_id, salonId, body.items, requesterUserId);
-        logger.info("stockReconciliationService.saveAll success", { processed });
-        return { processed };
-    },
-
-    async saveRow(params: {
-        requesterUserId: string;
-        salonId: string;
-        body: SaveReconciliationRowBody;
-    }): Promise<StockReconciliationRow> {
-        const { requesterUserId, salonId, body } = params;
-        if (!body.branch_id) throw new AppError(400, "branch_id is required", "VALIDATION_ERROR");
-        if (!body.product_id) throw new AppError(400, "product_id is required", "VALIDATION_ERROR");
-        logger.info("stockReconciliationService.saveRow called", { productId: body.product_id, branchId: body.branch_id });
-        const row = await stockReconciliationRepository.upsertRow(body.branch_id, salonId, {
-            product_id: body.product_id,
-            adjust_stock: body.adjust_stock,
-            adjust_consumable: body.adjust_consumable,
-            remark: body.remark,
-        }, requesterUserId);
-        if (!row) throw new AppError(404, "Product not found", "NOT_FOUND");
-        logger.info("stockReconciliationService.saveRow success", { productId: body.product_id });
-        return row;
     },
 };
 

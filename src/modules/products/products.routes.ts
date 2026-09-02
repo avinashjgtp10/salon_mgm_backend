@@ -12,6 +12,7 @@ import {
     validateUpdateBrand,
     validateReorderPhotos,
     validateListQuery,
+    validateSearchBody,
 } from "./products.validator";
 
 const router = Router();
@@ -37,6 +38,7 @@ router.get("/export/pdf", authMiddleware, ownerAdminStaff, viewProducts, product
 router.post("/import", authMiddleware, ownerAdminStaff, createProducts, importUpload.single("file"), productsController.importProducts);
 
 router.get("/", authMiddleware, ownerAdminStaff, viewProducts, validateListQuery, productsController.list);
+router.post("/search", authMiddleware, ownerAdminStaff, viewProducts, validateSearchBody, productsController.search);
 router.get("/:id", authMiddleware, ownerAdminStaff, viewProducts, productsController.getById);
 router.post("/", authMiddleware, ownerAdminStaff, createProducts, uploadMiddleware.array("photos", 5), validateCreateProduct, productsController.create);
 router.patch("/:id", authMiddleware, ownerAdminStaff, createProducts, validateUpdateProduct, productsController.update);

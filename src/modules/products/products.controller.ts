@@ -38,6 +38,24 @@ const parseListFilters = (req: AuthRequest) => {
     };
 };
 
+// Same shape as parseListFilters, sourced from a JSON body instead of query
+// params — used by POST /products/search.
+const parseSearchFilters = (req: AuthRequest) => {
+    const { search, category_id, brand_id, product_type, retail_sales_enabled, min_price, max_price, stock, sort_by, sort_order } = req.body ?? {};
+    return {
+        search: search as string | undefined,
+        category_id: category_id as string | undefined,
+        brand_id: brand_id as string | undefined,
+        product_type: product_type as "retail" | "consumable" | "both" | undefined,
+        retail_sales_enabled: typeof retail_sales_enabled === "boolean" ? retail_sales_enabled : undefined,
+        min_price: min_price !== undefined ? Number(min_price) : undefined,
+        max_price: max_price !== undefined ? Number(max_price) : undefined,
+        stock: stock as "all" | "low" | "out_of_stock" | undefined,
+        sort_by: sort_by as string | undefined,
+        sort_order: sort_order as "ASC" | "DESC" | undefined,
+    };
+};
+
 // ─── Products Controller ──────────────────────────────────────────────────────
 
 export const productsController = {
@@ -66,6 +84,35 @@ export const productsController = {
             return sendSuccess(res, 200, result, "Products fetched successfully");
         } catch (err) {
             logger.error("GET /products error", { err });
+            return next(err);
+        }
+    },
+
+    // POST /api/v1/products/search
+    async search(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            logger.info("POST /products/search called", {
+                requesterUserId: req.user?.userId, requesterRole: req.user?.role,
+                path: req.originalUrl, method: req.method,
+            });
+            const { page, limit, pageSize } = req.body ?? {};
+            const salonId = await getSalonId(req);
+            const resolvedLimit = pageSize !== undefined
+                ? Number(pageSize)
+                : limit !== undefined ? Number(limit) : undefined;
+            const result = await productsService.list({
+                requesterUserId: req.user?.userId ?? "anonymous",
+                requesterRole: req.user?.role,
+                salonId,
+                filters: {
+                    ...parseSearchFilters(req),
+                    page: page !== undefined ? Number(page) : undefined,
+                    limit: resolvedLimit,
+                },
+            });
+            return sendSuccess(res, 200, result, "Products fetched successfully");
+        } catch (err) {
+            logger.error("POST /products/search error", { err });
             return next(err);
         }
     },

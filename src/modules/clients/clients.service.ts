@@ -10,6 +10,8 @@ import { paymentsRepository } from "../payments/payments.repository";
 import { clientPackagesService } from "../client-packages/client-packages.service";
 import { clientMembershipsService } from "../client-memberships/client-memberships.service";
 import { membershipsService } from "../memberships/memberships.service";
+import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
+import { waScheduledMessagesService } from "../whatsapp-automation/wa-scheduled-messages.service";
 import pool from "../../config/database";
 import logger from "../../config/logger";
 import {
@@ -74,7 +76,7 @@ async function attachExtendedProfile(
     salonId: string,
     includeSet: Set<string>,
 ): Promise<void> {
-    const [packagesRes, membershipsRes, apptStatsRes, revenueRes, loyaltyRes] = await Promise.all([
+    const [packagesRes, membershipsRes, apptStatsRes, revenueRes, loyaltyRes, staffAlertRes] = await Promise.all([
         includeSet.has("packages")
             ? clientPackagesService.list(salonId, { clientId, limit: 500 })
             : Promise.resolve(null),
@@ -108,6 +110,29 @@ async function attachExtendedProfile(
         includeSet.has("loyalty")
             ? membershipsService.getLoyaltyEligibility(clientId, salonId)
             : Promise.resolve(null),
+        // Latest non-empty staff_alert and notes, picked independently — an
+        // alert set two visits ago can still be the current one even if the
+        // most recent visit's own notes field happens to be empty, so this
+        // isn't just "read the latest appointment's two columns".
+        //
+        // Ordered by updated_at (when the field was actually typed/saved),
+        // NOT scheduled_at (when the visit itself is booked for) — every
+        // appointment save sets updated_at = NOW() (see
+        // appointments.repository.ts's update()), so this reflects "whichever
+        // alert staff entered most recently" rather than "whichever
+        // appointment happens to be scheduled furthest in the future", which
+        // could surface a stale alert over one just entered on an earlier-
+        // dated visit.
+        includeSet.has("staffAlert")
+            ? pool.query(
+                `SELECT
+                    (SELECT staff_alert  FROM appointments WHERE client_id = $1 AND salon_id = $2 AND deleted_at IS NULL AND staff_alert IS NOT NULL AND staff_alert <> '' ORDER BY updated_at DESC LIMIT 1) AS staff_alert,
+                    (SELECT updated_at   FROM appointments WHERE client_id = $1 AND salon_id = $2 AND deleted_at IS NULL AND staff_alert IS NOT NULL AND staff_alert <> '' ORDER BY updated_at DESC LIMIT 1) AS staff_alert_at,
+                    (SELECT notes        FROM appointments WHERE client_id = $1 AND salon_id = $2 AND deleted_at IS NULL AND notes IS NOT NULL AND notes <> '' ORDER BY updated_at DESC LIMIT 1) AS notes,
+                    (SELECT updated_at   FROM appointments WHERE client_id = $1 AND salon_id = $2 AND deleted_at IS NULL AND notes IS NOT NULL AND notes <> '' ORDER BY updated_at DESC LIMIT 1) AS notes_at`,
+                [clientId, salonId],
+            )
+            : Promise.resolve(null),
     ]);
 
     if (packagesRes) result.packages = packagesRes.items;
@@ -122,6 +147,11 @@ async function attachExtendedProfile(
         };
     }
     if (includeSet.has("loyalty")) result.loyalty_eligibility = loyaltyRes ?? null;
+    if (includeSet.has("staffAlert")) {
+        const row = staffAlertRes?.rows[0] ?? {};
+        result.latest_staff_alert = row.staff_alert ? { text: row.staff_alert, date: row.staff_alert_at } : null;
+        result.latest_notes = row.notes ? { text: row.notes, date: row.notes_at } : null;
+    }
 }
 
 export const clientsService = {
@@ -195,6 +225,52 @@ export const clientsService = {
             });
         });
 
+        // ── WhatsApp Automation: New Client Welcome ───────────────────────────
+        if (created.phone_number) {
+            (async () => {
+                try {
+                    const salon = await salonsRepository.findById(salonId);
+                    whatsappAutomationService.trigger({
+                        salonId,
+                        eventType:     "client_welcome",
+                        clientId:      created.id,
+                        phone:         created.phone_number!,
+                        countryCode:   created.phone_country_code ?? null,
+                        variables: {
+                            "1": `${created.first_name} ${created.last_name ?? ""}`.trim() || "there",
+                            "2": salon?.business_name ?? "our salon",
+                        },
+                        referenceId:   created.id,
+                        referenceType: "client",
+                        dedupeByReference: true,
+                    }).catch(() => {});
+                } catch (err: any) {
+                    logger.error("[WA-AUTO] client_welcome trigger failed:", err?.message ?? err);
+                }
+            })();
+        }
+
+        // ── Scheduled Templates: birthday_wishes ──────────────────────────────
+        // Self-perpetuating after the first send — see wa-scheduled-messages.
+        // service.ts's executeScheduledRow(), which re-schedules +1 year on
+        // every successful send, so this is the only place a birthday row is
+        // ever created from scratch.
+        if (created.phone_number && created.birthday_day_month) {
+            (async () => {
+                try {
+                    const salon = await salonsRepository.findById(salonId);
+                    await waScheduledMessagesService.scheduleBirthday({
+                        salonId, clientId: created.id, phone: created.phone_number!, countryCode: created.phone_country_code ?? null,
+                        fullName: `${created.first_name} ${created.last_name ?? ""}`.trim() || "there",
+                        salonName: salon?.business_name ?? "our salon",
+                        birthdayDayMonth: created.birthday_day_month!,
+                    });
+                } catch (err: any) {
+                    logger.error("[wa-scheduled] birthday_wishes schedule failed:", err?.message ?? err);
+                }
+            })();
+        }
+
         // ── Email: New Client (to salon owner) ────────────────────────────────
         ;(async () => {
             try {
@@ -259,7 +335,7 @@ export const clientsService = {
         // /clients/:id/history, and /memberships/loyalty-eligibility right
         // after. Each sub-fetch runs only when actually requested, and all
         // requested ones run concurrently.
-        if (includeSet.has("packages") || includeSet.has("memberships") || includeSet.has("history") || includeSet.has("loyalty")) {
+        if (includeSet.has("packages") || includeSet.has("memberships") || includeSet.has("history") || includeSet.has("loyalty") || includeSet.has("staffAlert")) {
             await attachExtendedProfile(result, clientId, salonId, includeSet);
         }
 
@@ -316,6 +392,27 @@ export const clientsService = {
         if (patch.emergency_contacts) await clientsRepository.replaceUpsertEmergencyContacts(clientId, patch.emergency_contacts);
 
         const withRel = await clientsRepository.getByIdWithRelations(updated.id, salonId);
+
+        // A birthday added/changed after the client's own creation (it wasn't
+        // required at signup) needs its own schedule row too — create()'s own
+        // hook only fires once, at creation, so without this a client who adds
+        // their birthday later would never get one.
+        if (patch.birthday_day_month && withRel?.phone_number) {
+            (async () => {
+                try {
+                    const salon = await salonsRepository.findById(salonId);
+                    await waScheduledMessagesService.scheduleBirthday({
+                        salonId, clientId, phone: withRel.phone_number!, countryCode: withRel.phone_country_code ?? null,
+                        fullName: `${withRel.first_name} ${withRel.last_name ?? ""}`.trim() || "there",
+                        salonName: salon?.business_name ?? "our salon",
+                        birthdayDayMonth: patch.birthday_day_month!,
+                    });
+                } catch (err: any) {
+                    logger.error("[wa-scheduled] birthday_wishes reschedule-on-edit failed:", err?.message ?? err);
+                }
+            })();
+        }
+
         return withRel as ClientWithRelations;
     },
 
@@ -325,6 +422,8 @@ export const clientsService = {
 
         if (hard) await clientsRepository.hardDelete(clientId, salonId);
         else await clientsRepository.softDelete(clientId, salonId);
+        waScheduledMessagesService.cancelForReference('client', clientId)
+            .catch((err: any) => logger.error("[wa-scheduled] cancel-on-delete failed:", err?.message ?? err));
     },
 
     async blockClients(ids: string[], reason: string, salonId: string): Promise<void> {
@@ -365,29 +464,96 @@ export const clientsService = {
             return out;
         };
 
+        // Blank cell → undefined (caller applies the Add Client form's own
+        // default for that field); anything else is read the same way a
+        // spreadsheet author would type it — yes/y/true/1 or no/n/false/0.
+        const toBool = (v: any): boolean | undefined => {
+            if (v === undefined || v === null || String(v).trim() === "") return undefined;
+            const s = String(v).trim().toLowerCase();
+            if (["true", "yes", "y", "1"].includes(s)) return true;
+            if (["false", "no", "n", "0"].includes(s)) return false;
+            return undefined;
+        };
+
+        // Same day/month/year split AddClientPage.tsx makes from its native date
+        // input's "YYYY-MM-DD" value — accepts that or the more common
+        // spreadsheet format "DD-MM-YYYY" (also "DD/MM/YYYY"), so an imported
+        // date lands on birthday_day_month/birthday_year exactly the way a
+        // manual Add/Edit save would populate them. `iso` is only used locally
+        // here (e.g. the "birthday can't be in the future" check).
+        const splitDate = (raw: any): { dayMonth: string | null; year: number | null; iso: string | null } => {
+            const s = String(raw ?? "").trim();
+            if (!s) return { dayMonth: null, year: null, iso: null };
+            const iso = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(s);
+            const dmy = /^(\d{1,2})-(\d{1,2})-(\d{4})$/.exec(s) || /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s);
+            let y: number, m: number, d: number;
+            if (iso) { y = Number(iso[1]); m = Number(iso[2]); d = Number(iso[3]); }
+            else if (dmy) { d = Number(dmy[1]); m = Number(dmy[2]); y = Number(dmy[3]); }
+            else return { dayMonth: null, year: null, iso: null };
+            if (m < 1 || m > 12 || d < 1 || d > 31) return { dayMonth: null, year: null, iso: null };
+            const mm = String(m).padStart(2, "0");
+            const dd = String(d).padStart(2, "0");
+            return { dayMonth: `${mm}-${dd}`, year: y, iso: `${y}-${mm}-${dd}` };
+        };
+
+        const GSTIN_FORMAT_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
+        const EMAIL_FORMAT_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        const today = new Date().toISOString().slice(0, 10);
+
+        // Every field the Client Add/Edit form (AddClientPage.tsx) can save —
+        // an import row can populate anything that form can, not just the
+        // original name/phone/gender/birthday subset.
         const toBody = (raw: any): CreateClientBody => {
             const r = normalizeRow(raw);
             const phoneVal = r.mobile ?? r.phone_number ?? r.mobile_number ?? r.phone ?? null;
+            const additionalPhoneVal =
+                r.additionalmobile ?? r.additional_mobile ?? r.additionalphone ?? r.additional_phone ?? r.additional_phone_number ?? null;
+            const birthday = splitDate(r.birthday ?? r.dob ?? r.date_of_birth);
+            const anniversary = splitDate(r.anniversary);
+            const gst = r.gstnumber ?? r.gst_number;
+            const zip = r.zipcode ?? r.zip_code ?? r.pincode;
+            const creditLimitRaw = r.creditlimit ?? r.credit_limit;
+            const creditDurationRaw = r.creditduration ?? r.credit_duration ?? r.credit_duration_days;
+
             return {
                 first_name: String(r.firstname ?? r.first_name ?? "").trim(),
-                last_name: String(r.lastname ?? r.last_name ?? "").trim(),
+                last_name: (r.lastname ?? r.last_name) ? String(r.lastname ?? r.last_name).trim() : null,
                 email: r.email ? String(r.email).trim() : null,
-                phone_country_code: r.phone_country_code ?? null,
-                phone_number: phoneVal != null && String(phoneVal).trim()
-                    ? String(phoneVal).trim()
-                    : null,
+                phone_country_code: "+91",
+                phone_number: phoneVal != null && String(phoneVal).trim() ? String(phoneVal).trim() : null,
                 additional_email: null,
-                additional_phone_country_code: null,
-                additional_phone_number: null,
-                birthday_day_month: r.birthday ? String(r.birthday).trim() : null,
-                birthday_year: null,
-                client_source: null,
+                additional_phone_country_code: additionalPhoneVal ? "+91" : null,
+                additional_phone_number: additionalPhoneVal ? String(additionalPhoneVal).trim() : null,
+                birthday_day_month: birthday.dayMonth,
+                birthday_year: birthday.year,
+                anniversary: anniversary.iso,
+                gender: r.gender ? String(r.gender).trim() : null,
+                pronouns: null,
+                address: (r.address) ? String(r.address).trim() : null,
+                state: r.state ? String(r.state).trim() : null,
+                pincode: zip ? String(zip).trim() : null,
+                gst_number: gst ? String(gst).trim().toUpperCase() : null,
+                client_code: (r.clientcode ?? r.client_code) ? String(r.clientcode ?? r.client_code).trim() : null,
+                identification_number: (r.identificationnumber ?? r.identification_number)
+                    ? String(r.identificationnumber ?? r.identification_number).trim() : null,
+                credit_limit: creditLimitRaw !== undefined && String(creditLimitRaw).trim() !== "" ? Number(creditLimitRaw) : 0,
+                credit_duration_days: creditDurationRaw !== undefined && String(creditDurationRaw).trim() !== "" ? Number(creditDurationRaw) : 0,
+                lead_source: (r.leadsource ?? r.lead_source) ? String(r.leadsource ?? r.lead_source).trim() : null,
+                source_description: (r.sourcedescription ?? r.source_description)
+                    ? String(r.sourcedescription ?? r.source_description).trim() : null,
+                has_whatsapp: toBool(r.haswhatsapp ?? r.has_whatsapp) ?? true,
+                client_source: (r.clientsource ?? r.client_source) ? String(r.clientsource ?? r.client_source).trim() : null,
+                referred_by_code: (r.referredbycode ?? r.referred_by_code) ? String(r.referredbycode ?? r.referred_by_code).trim() : null,
                 preferred_language: null,
                 occupation: null,
                 country: null,
-                gender: r.gender ? String(r.gender).trim() : null,
-                pronouns: null,
                 avatar_url: null,
+                sms_marketing: toBool(r.smsmarketing ?? r.sms_marketing) ?? true,
+                email_marketing: toBool(r.emailmarketing ?? r.email_marketing) ?? true,
+                whatsapp_marketing: toBool(r.whatsappmarketing ?? r.whatsapp_marketing) ?? true,
+                sms_notifications: toBool(r.smsnotifications ?? r.sms_notifications) ?? true,
+                email_notifications: toBool(r.emailnotifications ?? r.email_notifications) ?? true,
+                whatsapp_notifications: toBool(r.whatsappnotifications ?? r.whatsapp_notifications) ?? false,
             };
         };
 
@@ -399,22 +565,26 @@ export const clientsService = {
             const rowNum = i + 1;
             try {
                 const body = normalizeCreateBody(toBody(params.rows[i]));
+                // Reassembled from the already-split fields rather than re-parsing
+                // the raw cell — same value toBody's splitDate produced.
+                const birthdayIso = body.birthday_day_month && body.birthday_year
+                    ? `${body.birthday_year}-${body.birthday_day_month}`
+                    : null;
 
+                // ── Required fields — same rule as AddClientPage.tsx's handleSave ──
                 if (!body.first_name) {
                     result.skipped += 1;
-                    result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: "first_name is required" });
+                    result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: "First name is required" });
                     continue;
                 }
                 if (!body.phone_number) {
                     result.skipped += 1;
-                    result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: "mobile number is required" });
+                    result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: "Phone number is required" });
                     continue;
                 }
-                // Mirror the manual Add Client form's rule (frontend
-                // AddClientPage.tsx: /^\d{10}$/) — imports must not be a side
-                // door for malformed numbers. Excel-style separators
-                // (spaces, dashes, parens, dots) are tolerated, but after
-                // stripping them the number must be exactly 10 digits.
+                // Excel-style separators (spaces, dashes, parens, dots) are
+                // tolerated, but after stripping them the number must be
+                // exactly 10 digits — same /^\d{10}$/ the Add Client form applies.
                 const phoneDigits = String(body.phone_number).replace(/[\s\-().]/g, "");
                 if (!/^\d{10}$/.test(phoneDigits)) {
                     result.skipped += 1;
@@ -424,7 +594,48 @@ export const clientsService = {
                 body.phone_number = phoneDigits;
                 if (!body.gender) {
                     result.skipped += 1;
-                    result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: "gender is required" });
+                    result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: "Gender is required" });
+                    continue;
+                }
+
+                // ── Optional fields — validated only when present, same as the form ──
+                if (body.email && !EMAIL_FORMAT_RE.test(body.email)) {
+                    result.skipped += 1;
+                    result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: `Invalid email "${body.email}". Enter a valid email address.` });
+                    continue;
+                }
+                if (birthdayIso && birthdayIso > today) {
+                    result.skipped += 1;
+                    result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: "Birthday cannot be in the future" });
+                    continue;
+                }
+                if (body.gst_number && !GSTIN_FORMAT_RE.test(body.gst_number)) {
+                    result.skipped += 1;
+                    result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: `Invalid GST number "${body.gst_number}". Enter a valid 15-character GSTIN.` });
+                    continue;
+                }
+                if (body.additional_phone_number) {
+                    const additionalDigits = String(body.additional_phone_number).replace(/[\s\-().]/g, "");
+                    if (!/^\d{10}$/.test(additionalDigits)) {
+                        result.skipped += 1;
+                        result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: `Invalid additional mobile number "${body.additional_phone_number}". Enter a valid 10-digit number.` });
+                        continue;
+                    }
+                    body.additional_phone_number = additionalDigits;
+                    if (additionalDigits === body.phone_number) {
+                        result.skipped += 1;
+                        result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: "Additional mobile must be different from the primary mobile" });
+                        continue;
+                    }
+                }
+                if (body.credit_limit != null && (!Number.isFinite(body.credit_limit) || body.credit_limit < 0)) {
+                    result.skipped += 1;
+                    result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: "Credit limit must be a number >= 0" });
+                    continue;
+                }
+                if (body.credit_duration_days != null && (!Number.isInteger(body.credit_duration_days) || body.credit_duration_days < 0)) {
+                    result.skipped += 1;
+                    result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: "Credit duration must be a whole number of days >= 0" });
                     continue;
                 }
 
@@ -455,16 +666,41 @@ export const clientsService = {
                 if (existing) {
                     // Duplicate found in DB — always skip regardless of mode
                     result.skipped += 1;
+                    result.errors.push({ row: rowNum, code: "DUPLICATE_ENTRY", message: `A client with this phone number or email already exists (${existing.full_name}) — row skipped` });
                     continue;
                 }
 
+                // A referred_by_code only resolves at creation time, same as
+                // the Add Client form — an unknown code fails the row rather
+                // than silently importing without the referral link.
+                let referredByClientId: string | null = null;
+                if (body.referred_by_code && body.referred_by_code.trim()) {
+                    const code = body.referred_by_code.trim().toUpperCase();
+                    const referrer = await clientsRepository.findByReferralCode(code, params.salonId);
+                    if (!referrer) {
+                        result.skipped += 1;
+                        result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: `Invalid referral code "${code}"` });
+                        continue;
+                    }
+                    referredByClientId = referrer.id;
+                }
+                body.referred_by_client_id = referredByClientId;
+
                 if (!params.dry_run) {
                     const referralCode = await generateUniqueReferralCode(body.first_name, params.salonId);
-                    await clientsRepository.create(body, params.salonId, { code: referralCode, rewardStatus: null });
+                    // clientsRepository.create() directly (not clientsService.create())
+                    // — deliberately skips the New-Client notification and WhatsApp
+                    // welcome message that path fires per client, which would
+                    // otherwise blast every existing customer in a bulk CSV import.
+                    await clientsRepository.create(body, params.salonId, {
+                        code: referralCode,
+                        rewardStatus: referredByClientId ? "pending" : null,
+                    });
                 }
                 result.imported += 1;
             } catch (e: any) {
-                result.errors.push({ row: rowNum, code: "IMPORT_ERROR", message: e?.message || "Unknown error" });
+                result.skipped += 1;
+                result.errors.push({ row: rowNum, code: e?.code || "IMPORT_ERROR", message: e?.message || "Unknown error" });
             }
         }
 

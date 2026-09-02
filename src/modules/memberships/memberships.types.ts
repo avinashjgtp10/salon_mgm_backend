@@ -54,9 +54,16 @@ export interface LoyaltyEligibility {
    *  that only ever cared about "the rate to apply" need no changes. */
   discountPercent: number;
   appliesTo:       MembershipAppliesTo;
-  /** Optional narrowing of appliesTo to specific categories — empty/undefined
-   *  means unrestricted (every category within appliesTo's scope). */
-  categoryIds:     string[];
+  /** Optional narrowing of appliesTo to specific service_categories rows —
+   *  independent per side (a category tagged 'both' can be picked for
+   *  services without implicitly also restricting products, and vice versa)
+   *  — empty/undefined means unrestricted on that side. */
+  serviceCategoryIds: string[];
+  productCategoryIds: string[];
+  /** Further narrowing to specific services/products within (or independent
+   *  of) the category ids above — additive, empty means no individual-item narrowing. */
+  serviceIds:      string[];
+  productIds:      string[];
 }
 
 // all other interfaces stay the same
@@ -82,8 +89,15 @@ export interface CreateMembershipDTO {
   /** Defaults to 'services' server-side when omitted, matching the old boolean's default. */
   appliesTo?:             MembershipAppliesTo;
   /** Optional narrowing of appliesTo to specific service_categories rows —
-   *  empty/omitted means unrestricted (every category within appliesTo's scope). */
-  categoryIds?:           string[];
+   *  independent per side (see ClientMembership's matching fields) —
+   *  empty/omitted means unrestricted on that side. */
+  serviceCategoryIds?:    string[];
+  productCategoryIds?:    string[];
+  /** Further narrowing to specific services/products within (or independent
+   *  of) the category ids above — additive, empty/omitted means no
+   *  individual-item narrowing. */
+  serviceIds?:            string[];
+  productIds?:            string[];
   pricingType?:           MembershipPricingType;
   discountPercent?:       number;
   /** 'percentage' only — the depleting pool of discount this plan may hand out. */
@@ -116,7 +130,10 @@ export interface MembershipRow {
   enable_online_redemption: boolean;
   terms_and_conditions:     string | null;
   applies_to:               MembershipAppliesTo;
-  category_ids:             string[] | null;
+  service_category_ids:     string[] | null;
+  product_category_ids:     string[] | null;
+  service_ids:              string[] | null;
+  product_ids:              string[] | null;
   pricing_type:             MembershipPricingType;
   discount_percent:         string | null;
   discount_balance:         string | null;

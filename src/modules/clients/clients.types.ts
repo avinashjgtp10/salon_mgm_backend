@@ -24,6 +24,21 @@ export type Client = {
     pronouns: string | null;
 
     address: string | null;
+    state: string | null;
+    pincode: string | null;
+
+    // ── Business / identification (New Client form, DINGG parity) ──────────
+    gst_number: string | null;
+    client_code: string | null;
+    identification_number: string | null;
+    credit_limit: string;        // pg numeric returns string
+    credit_duration_days: number;
+    lead_source: string | null;
+    source_description: string | null;
+    // Capability flag ("does this number have WhatsApp") — distinct from
+    // whatsapp_marketing/whatsapp_notifications below, which are consent to
+    // RECEIVE messages on it, not whether it can receive them at all.
+    has_whatsapp: boolean;
 
     client_source: string | null;
     referred_by_client_id: string | null;
@@ -118,6 +133,12 @@ export type ClientWithRelations = Client & {
         total_revenue: number;
     };
     loyalty_eligibility?: unknown | null;
+    // ?include=staffAlert — the most recent appointment (by scheduled_at) that
+    // carries a non-empty staff_alert/notes, independently for each (an alert
+    // set two visits ago can still be the current one even if the latest
+    // visit's own notes field is empty). Null when the client has none.
+    latest_staff_alert?: { text: string; date: string } | null;
+    latest_notes?: { text: string; date: string } | null;
 };
 
 export type CreateClientAddressInput = Omit<ClientAddress, "id" | "client_id" | "created_at" | "updated_at">;
@@ -147,6 +168,17 @@ export type CreateClientBody = {
     pronouns?: string | null;
 
     address?: string | null;
+    state?: string | null;
+    pincode?: string | null;
+
+    gst_number?: string | null;
+    client_code?: string | null;
+    identification_number?: string | null;
+    credit_limit?: number | null;
+    credit_duration_days?: number | null;
+    lead_source?: string | null;
+    source_description?: string | null;
+    has_whatsapp?: boolean;
 
     client_source?: string | null;
     referred_by_client_id?: string | null;

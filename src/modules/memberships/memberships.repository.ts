@@ -33,7 +33,10 @@ function toMembership(row: MembershipRow): Membership {
     enableOnlineRedemption: row.enable_online_redemption,
     termsAndConditions: row.terms_and_conditions ?? undefined,
     appliesTo: row.applies_to,
-    categoryIds: row.category_ids ?? undefined,
+    serviceCategoryIds: row.service_category_ids ?? undefined,
+    productCategoryIds: row.product_category_ids ?? undefined,
+    serviceIds: row.service_ids ?? undefined,
+    productIds: row.product_ids ?? undefined,
     pricingType: row.pricing_type,
     discountPercent: row.discount_percent ? parseFloat(row.discount_percent) : undefined,
     discountBalance: row.discount_balance ? parseFloat(row.discount_balance) : undefined,
@@ -155,7 +158,7 @@ export const membershipsRepository = {
     salonId: string,
   ): Promise<LoyaltyEligibility | null> {
     const { rows: planRows } = await pool.query(
-      `SELECT id, name, description, loyalty_tiers, applies_to, category_ids
+      `SELECT id, name, description, loyalty_tiers, applies_to, service_category_ids, product_category_ids, service_ids, product_ids
        FROM memberships
        WHERE salon_id = $1 AND pricing_type = 'loyalty'
          AND jsonb_typeof(loyalty_tiers) = 'array' AND jsonb_array_length(loyalty_tiers) > 0`,
@@ -202,7 +205,10 @@ export const membershipsRepository = {
         nextTier,
         discountPercent: currentTier?.discountPercent ?? 0,
         appliesTo: p.applies_to ?? 'services',
-        categoryIds: p.category_ids ?? [],
+        serviceCategoryIds: p.service_category_ids ?? [],
+        productCategoryIds: p.product_category_ids ?? [],
+        serviceIds: p.service_ids ?? [],
+        productIds: p.product_ids ?? [],
       };
     });
 
@@ -229,9 +235,9 @@ export const membershipsRepository = {
           (id, salon_id, name, description, session_type, number_of_sessions,
            valid_for, price, tax_rate, colour,
            enable_online_sales, enable_online_redemption, terms_and_conditions,
-           applies_to, category_ids, pricing_type, discount_percent,
-           discount_balance, loyalty_tiers)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::jsonb)`,
+           applies_to, service_category_ids, product_category_ids, pricing_type, discount_percent,
+           discount_balance, loyalty_tiers, service_ids, product_ids)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20::jsonb,$21,$22)`,
         [
           membershipId, salonId, data.name, data.description ?? null,
           data.sessionType, data.numberOfSessions ?? null,
@@ -239,10 +245,13 @@ export const membershipsRepository = {
           data.colour, data.enableOnlineSales,
           data.enableOnlineRedemption, data.termsAndConditions ?? null,
           data.appliesTo ?? 'services',
-          data.categoryIds?.length ? data.categoryIds : null,
+          data.serviceCategoryIds?.length ? data.serviceCategoryIds : null,
+          data.productCategoryIds?.length ? data.productCategoryIds : null,
           data.pricingType ?? 'value', data.discountPercent ?? null,
           data.discountBalance ?? null,
           data.loyaltyTiers ? JSON.stringify(data.loyaltyTiers) : null,
+          data.serviceIds?.length ? data.serviceIds : null,
+          data.productIds?.length ? data.productIds : null,
         ]
       );
       await _linkServices(client, membershipId, data.includedServices);
@@ -271,7 +280,10 @@ export const membershipsRepository = {
         enableOnlineRedemption: "enable_online_redemption",
         termsAndConditions: "terms_and_conditions",
         appliesTo: "applies_to",
-        categoryIds: "category_ids",
+        serviceCategoryIds: "service_category_ids",
+        productCategoryIds: "product_category_ids",
+        serviceIds: "service_ids",
+        productIds: "product_ids",
         pricingType: "pricing_type",
         discountPercent: "discount_percent",
         discountBalance: "discount_balance",
@@ -284,7 +296,7 @@ export const membershipsRepository = {
         if (key in data) {
           const cast = key === "loyaltyTiers" ? "::jsonb" : "";
           let raw = (data as any)[key] ?? null;
-          if (key === "categoryIds" && Array.isArray(raw) && raw.length === 0) raw = null;
+          if ((key === "serviceCategoryIds" || key === "productCategoryIds" || key === "serviceIds" || key === "productIds") && Array.isArray(raw) && raw.length === 0) raw = null;
           fields.push(`${col} = $${idx++}${cast}`);
           values.push(key === "loyaltyTiers" && raw ? JSON.stringify(raw) : raw);
         }

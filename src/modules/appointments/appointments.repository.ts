@@ -274,7 +274,7 @@ export const appointmentsRepository = {
                 title, notes, staff_alert, status,
                 scheduled_at, duration_minutes,
                 ends_at,
-                colour, created_by,
+                colour, created_by, source,
                 services, package_items, product_items, membership_items,
                 discount_value, discount_type, discount_applies_to, ex_charges, tip_amount, tip_added_to_salon, tip_breakdown, gst_percent,
                 apply_membership_wallet, include_gst
@@ -284,7 +284,7 @@ export const appointmentsRepository = {
                 $6, $7, $8, $9,
                 $10, $11,
                 ($10::timestamptz + ($11::integer * INTERVAL '1 minute')),
-                $12, $13,
+                $12, $13, $28,
                 $14::jsonb, $15::jsonb, $16::jsonb, $17::jsonb,
                 $18, $19, $20::jsonb, $21, $22, $23, $24::jsonb, $25,
                 $26, $27
@@ -322,6 +322,7 @@ export const appointmentsRepository = {
                 data.gst_percent        ?? 0,
                 data.apply_membership_wallet ?? false,
                 data.include_gst        ?? true,
+                data.source             ?? "calendar",
             ]
         );
         return rows[0];

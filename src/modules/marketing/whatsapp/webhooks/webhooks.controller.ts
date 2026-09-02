@@ -1,9 +1,6 @@
 import { Request, Response, NextFunction } from 'express'
-import { sendSuccess } from '../../../utils/response.util'
 import { webhooksService } from './webhooks.service'
 import logger from '../../../../config/logger'
-
-type AuthRequest = Request & { user?: { userId: string; salonId?: string; role?: string } }
 
 export const webhooksController = {
 
@@ -25,6 +22,12 @@ export const webhooksController = {
   // Salon identified by phone_number_id in the payload
   handleGlobal(req: Request, res: Response) {
     res.status(200).json({ success: true })
+    // Logged unconditionally, before any parsing/processing — this is the one
+    // line that proves Meta is calling us at all. Everything downstream only
+    // logs on specific branches (FAILED status, capability updates), so a
+    // silent delivery mystery with zero webhook log lines is otherwise
+    // indistinguishable from "Meta never called us".
+    logger.info('📩 [WEBHOOK] Incoming payload', { body: req.body })
     void webhooksService.handleWebhook(req.body).catch(err =>
       logger.error('handleGlobal: webhook processing failed', { err })
     )
@@ -45,25 +48,10 @@ export const webhooksController = {
   // ── Per-salon handle — backward compat ───────────────────────────────────
   handle(req: Request, res: Response) {
     res.status(200).json({ success: true })
+    logger.info('📩 [WEBHOOK] Incoming payload (per-salon)', { salonId: req.params.salonId, body: req.body })
     const body = { ...req.body, _salonId: req.params.salonId }
     void webhooksService.handleWebhook(body).catch(err =>
       logger.error('handle: webhook processing failed', { err })
     )
-  },
-
-  async getEvents(req: AuthRequest, res: Response, next: NextFunction) {
-    try {
-      const salonId = req.user?.salonId
-      if (!salonId) return res.status(400).json({ error: 'salonId missing from token' })
-      const campaignId = req.query.campaignId as string | undefined
-      const status     = req.query.status as string | undefined
-      const page       = Math.max(1, parseInt(String(req.query.page  || '1'),  10) || 1)
-      const limit      = Math.min(100, Math.max(1, parseInt(String(req.query.limit || '10'), 10) || 10))
-      const [{ events, total }, statusCounts] = await Promise.all([
-        webhooksService.getRecentEvents(salonId, { campaignId, status, page, limit }),
-        webhooksService.getEventStatusCounts(salonId, campaignId),
-      ])
-      return sendSuccess(res, 200, { events, total, page, limit, statusCounts }, 'Webhook events fetched successfully')
-    } catch (e) { return next(e) }
   },
 }

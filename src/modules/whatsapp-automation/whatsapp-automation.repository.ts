@@ -74,9 +74,11 @@ export const whatsappAutomationRepository = {
     return rows[0]
   },
 
-  // ── Salon Purchase Templates (salon-owner editable, Meta-submitted) ────────
-  // One row per (salon_id, event_type) for the 4 PURCHASE_EVENTS — lazily
-  // seeded from DEFAULT_PURCHASE_TEMPLATES on first access.
+  // ── Salon Purchase Templates (salon-owner editable, Meta-submitted*) ───────
+  // *Except CAPTION_ONLY_EVENTS (bill_receipt), which is stored the same way
+  // but never submitted — its body_text is read directly, status is ignored.
+  // One row per (salon_id, event_type) — lazily seeded from
+  // DEFAULT_PURCHASE_TEMPLATES on first access.
   async findOrSeedSalonPurchaseTemplate(salonId: string, eventType: AutomationEventType): Promise<AutomationTemplate> {
     const { rows } = await pool.query(
       `SELECT * FROM wa_automation_templates WHERE salon_id = $1 AND event_type = $2`,
@@ -184,6 +186,126 @@ export const whatsappAutomationRepository = {
        WHERE salon_id = $3 AND event_type = $4
        RETURNING *`,
       [status, rejectionReason, salonId, eventType]
+    )
+    if (!rows[0]) throw new Error(`Salon template not found for eventType=${eventType}`)
+    return rows[0]
+  },
+
+  // ── Pending resubmission (zero-downtime edit-while-live) ────────────────
+  // Used whenever a salon edits/resubmits a template that already has an
+  // APPROVED live version — the columns above (body_text/template_name/
+  // meta_template_id/status) are left completely untouched so trigger()
+  // keeps sending the live version the whole time. See wa-purchase-templates
+  // .service.ts for which of these vs. the methods above get called.
+
+  async upsertPendingBodyText(salonId: string, eventType: AutomationEventType, bodyText: string): Promise<AutomationTemplate> {
+    const { rows } = await pool.query(
+      `UPDATE wa_automation_templates
+       SET pending_body_text = $1, updated_at = NOW()
+       WHERE salon_id = $2 AND event_type = $3
+       RETURNING *`,
+      [bodyText, salonId, eventType]
+    )
+    if (!rows[0]) throw new Error(`Salon template not found for eventType=${eventType}`)
+    return rows[0]
+  },
+
+  // status 'APPROVED' here means Meta instant-approved the resubmission —
+  // promotes straight to live rather than parking in pending_* at all.
+  async markPendingSubmitted(
+    salonId: string,
+    eventType: AutomationEventType,
+    templateName: string,
+    metaTemplateId: string | undefined,
+    status: 'PENDING' | 'APPROVED'
+  ): Promise<AutomationTemplate> {
+    if (status === 'APPROVED') {
+      return whatsappAutomationRepository.promotePendingTemplate(salonId, eventType, templateName, metaTemplateId)
+    }
+    const { rows } = await pool.query(
+      `UPDATE wa_automation_templates
+       SET pending_template_name = $1,
+           pending_meta_template_id = $2,
+           pending_status = 'PENDING',
+           pending_rejection_reason = NULL,
+           updated_at = NOW()
+       WHERE salon_id = $3 AND event_type = $4
+       RETURNING *`,
+      [templateName, metaTemplateId ?? null, salonId, eventType]
+    )
+    if (!rows[0]) throw new Error(`Salon template not found for eventType=${eventType}`)
+    return rows[0]
+  },
+
+  // The swap: copies the in-flight pending candidate into the live columns
+  // (now-approved) and clears the pending_* columns. Called either straight
+  // from submission (Meta instant-approved) or from a later sync once Meta
+  // approves an initially-PENDING resubmission.
+  async promotePendingTemplate(
+    salonId: string,
+    eventType: AutomationEventType,
+    // Only passed on the instant-approve-at-submit path — the sync path
+    // already has these values sitting in pending_template_name/
+    // pending_meta_template_id and copies from there instead.
+    templateName?: string,
+    metaTemplateId?: string,
+  ): Promise<AutomationTemplate> {
+    const { rows } = await pool.query(
+      `UPDATE wa_automation_templates
+       SET body_text = pending_body_text,
+           template_name = COALESCE($1, pending_template_name),
+           meta_template_id = COALESCE($2, pending_meta_template_id),
+           status = 'APPROVED',
+           rejection_reason = NULL,
+           approved_at = NOW(),
+           pending_body_text = NULL,
+           pending_status = NULL,
+           pending_template_name = NULL,
+           pending_meta_template_id = NULL,
+           pending_rejection_reason = NULL,
+           updated_at = NOW()
+       WHERE salon_id = $3 AND event_type = $4
+       RETURNING *`,
+      [templateName ?? null, metaTemplateId ?? null, salonId, eventType]
+    )
+    if (!rows[0]) throw new Error(`Salon template not found for eventType=${eventType}`)
+    return rows[0]
+  },
+
+  async updatePendingSyncedStatus(
+    salonId: string,
+    eventType: AutomationEventType,
+    status: 'PENDING' | 'REJECTED',
+    rejectionReason: string | null
+  ): Promise<AutomationTemplate> {
+    const { rows } = await pool.query(
+      `UPDATE wa_automation_templates
+       SET pending_status = $1::varchar,
+           pending_rejection_reason = $2,
+           updated_at = NOW()
+       WHERE salon_id = $3 AND event_type = $4
+       RETURNING *`,
+      [status, rejectionReason, salonId, eventType]
+    )
+    if (!rows[0]) throw new Error(`Salon template not found for eventType=${eventType}`)
+    return rows[0]
+  },
+
+  // Dismiss a rejected pending resubmission — clears the pending_* tracking
+  // columns (but PRESERVES pending_body_text, so the salon's edited wording
+  // survives) so they can resubmit fresh. The live template is untouched and
+  // keeps sending the whole time; there's nothing to "reset" on its side.
+  async resetPendingForResubmission(salonId: string, eventType: AutomationEventType): Promise<AutomationTemplate> {
+    const { rows } = await pool.query(
+      `UPDATE wa_automation_templates
+       SET pending_status = NULL,
+           pending_template_name = NULL,
+           pending_meta_template_id = NULL,
+           pending_rejection_reason = NULL,
+           updated_at = NOW()
+       WHERE salon_id = $1 AND event_type = $2
+       RETURNING *`,
+      [salonId, eventType]
     )
     if (!rows[0]) throw new Error(`Salon template not found for eventType=${eventType}`)
     return rows[0]
@@ -360,6 +482,20 @@ export const whatsappAutomationRepository = {
     return rows.length > 0
   },
 
+  // Used by wa-scheduled-messages.service.ts's executeScheduledRow() — trigger()
+  // never throws or returns whether it actually sent, so the executor reads
+  // back the log trigger() just wrote (keyed by the same referenceId/
+  // referenceType it passed in) to learn the real outcome.
+  async findLatestByReference(referenceId: string, referenceType: string): Promise<AutomationLog | null> {
+    const { rows } = await pool.query(
+      `SELECT * FROM wa_automation_logs
+       WHERE reference_id = $1 AND reference_type = $2
+       ORDER BY created_at DESC LIMIT 1`,
+      [referenceId, referenceType]
+    )
+    return rows[0] ?? null
+  },
+
   async listLogs(filters: ListAutomationLogsFilters): Promise<{ data: AutomationLog[]; total: number }> {
     const page   = Math.max(1, parseInt(String(filters.page  ?? 1))  || 1)
     const limit  = Math.min(100, Math.max(1, parseInt(String(filters.limit ?? 20)) || 20))
@@ -414,212 +550,6 @@ export const whatsappAutomationRepository = {
   },
 
   // ── Scheduler Queries ─────────────────────────────────────────────────────
-
-  // Appointments in a 2-hour window around exactly 24h from now
-  async getAppointmentsForReminder(): Promise<Array<{
-    appointment_id:         string
-    salon_id:               string
-    client_id:              string | null
-    phone_number:           string | null
-    phone_country_code:     string | null
-    client_name:            string | null
-    salon_name:             string | null
-    scheduled_at:           string
-    service_name:           string | null
-    whatsapp_notifications: boolean
-  }>> {
-    const { rows } = await pool.query(
-      `SELECT
-         a.id                    AS appointment_id,
-         a.salon_id,
-         a.client_id,
-         c.phone_number,
-         c.phone_country_code,
-         c.full_name             AS client_name,
-         s.business_name AS salon_name,
-         a.scheduled_at,
-         (a.services->0->>'name') AS service_name,
-         c.whatsapp_notifications
-       FROM appointments a
-       LEFT JOIN clients c ON c.id = a.client_id
-       LEFT JOIN salons  s ON s.id = a.salon_id
-       WHERE a.status IN ('booked','partial')
-         AND a.deleted_at IS NULL
-         AND a.scheduled_at BETWEEN NOW() + INTERVAL '23 hours 30 minutes'
-                                AND NOW() + INTERVAL '24 hours 30 minutes'
-         AND c.phone_number           IS NOT NULL
-         AND c.whatsapp_notifications = TRUE
-         AND NOT EXISTS (
-           SELECT 1 FROM wa_automation_logs l
-           WHERE l.reference_id = a.id::text
-             AND l.event_type   = 'appointment_reminder_24h'
-             AND l.status NOT IN ('FAILED','SKIPPED')
-         )
-         -- Appointments booked out of a package sale get their own
-         -- package-aware reminders (package_appointment_reminder_2d/_1d),
-         -- which name the package and say it's already paid for. Without
-         -- this the client would get BOTH that and this generic one for the
-         -- same visit.
-         AND NOT EXISTS (
-           SELECT 1 FROM client_package_service_schedules ps
-           WHERE ps.appointment_id = a.id
-             AND ps.status = 'Scheduled'
-         )`
-    )
-    return rows
-  },
-
-  // Appointments in a tight window around exactly 1 hour from now
-  async getAppointmentsForReminder1h(): Promise<Array<{
-    appointment_id:         string
-    salon_id:               string
-    client_id:              string | null
-    phone_number:           string | null
-    phone_country_code:     string | null
-    client_name:            string | null
-    salon_name:             string | null
-    scheduled_at:           string
-    service_name:           string | null
-    whatsapp_notifications: boolean
-  }>> {
-    const { rows } = await pool.query(
-      `SELECT
-         a.id                    AS appointment_id,
-         a.salon_id,
-         a.client_id,
-         c.phone_number,
-         c.phone_country_code,
-         c.full_name             AS client_name,
-         s.business_name AS salon_name,
-         a.scheduled_at,
-         (a.services->0->>'name') AS service_name,
-         c.whatsapp_notifications
-       FROM appointments a
-       LEFT JOIN clients c ON c.id = a.client_id
-       LEFT JOIN salons  s ON s.id = a.salon_id
-       WHERE a.status IN ('booked','partial')
-         AND a.deleted_at IS NULL
-         AND a.scheduled_at BETWEEN NOW() + INTERVAL '50 minutes'
-                                AND NOW() + INTERVAL '70 minutes'
-         AND c.phone_number           IS NOT NULL
-         AND c.whatsapp_notifications = TRUE
-         AND NOT EXISTS (
-           SELECT 1 FROM wa_automation_logs l
-           WHERE l.reference_id = a.id::text
-             AND l.event_type   = 'appointment_reminder_1h'
-             AND l.status NOT IN ('FAILED','SKIPPED')
-         )
-         -- See getAppointmentsForReminder() — package-linked appointments
-         -- are reminded by their own package-aware jobs instead.
-         AND NOT EXISTS (
-           SELECT 1 FROM client_package_service_schedules ps
-           WHERE ps.appointment_id = a.id
-             AND ps.status = 'Scheduled'
-         )`
-    )
-    return rows
-  },
-
-  // Appointments booked out of a package sale, landing exactly `daysBefore`
-  // days from today (IST). Date-based rather than the hour-window form the
-  // generic 24h/1h sweeps use, because these are "2 days before"/"1 day
-  // before" reminders — they're fired once from the 9AM IST daily block, not
-  // relative to the appointment's own time of day.
-  //
-  // The dedup key is `<appointmentId>:<scheduled date>`, NOT the bare
-  // appointment id every other sweep uses. That's deliberate: rescheduling
-  // keeps the same appointment id, so a bare-id guard would treat the new
-  // date as "already reminded" and the client would silently never hear
-  // about the moved appointment. Keying on the date means a reschedule
-  // legitimately earns a fresh reminder.
-  async getPackageAppointmentsForReminder(daysBefore: number): Promise<Array<{
-    appointment_id:         string
-    salon_id:               string
-    client_id:              string | null
-    phone_number:           string | null
-    phone_country_code:     string | null
-    client_name:            string | null
-    salon_name:             string | null
-    scheduled_at:           string
-    scheduled_date:         string
-    service_name:           string | null
-    staff_name:             string | null
-    package_name:           string | null
-  }>> {
-    const { rows } = await pool.query(
-      `SELECT
-         a.id                     AS appointment_id,
-         a.salon_id,
-         a.client_id,
-         c.phone_number,
-         c.phone_country_code,
-         c.full_name              AS client_name,
-         s.business_name          AS salon_name,
-         a.scheduled_at,
-         to_char((a.scheduled_at AT TIME ZONE 'Asia/Kolkata')::date, 'YYYY-MM-DD') AS scheduled_date,
-         cps.service_name,
-         NULLIF(TRIM(CONCAT(st.first_name, ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
-         cp.package_name
-       FROM client_package_service_schedules ps
-       JOIN appointments a            ON a.id  = ps.appointment_id
-       JOIN client_package_services cps ON cps.id = ps.client_package_service_id
-       JOIN client_packages cp        ON cp.id  = ps.client_package_id
-       LEFT JOIN clients c            ON c.id   = a.client_id
-       LEFT JOIN salons  s            ON s.id   = a.salon_id
-       LEFT JOIN staff   st           ON st.id  = ps.staff_id
-       WHERE ps.status = 'Scheduled'
-         AND a.status IN ('booked','partial')
-         AND a.deleted_at IS NULL
-         AND (a.scheduled_at AT TIME ZONE 'Asia/Kolkata')::date
-             = ((NOW() AT TIME ZONE 'Asia/Kolkata')::date + ($1::int))
-         AND c.phone_number           IS NOT NULL
-         AND c.whatsapp_notifications = TRUE
-         AND NOT EXISTS (
-           SELECT 1 FROM wa_automation_logs l
-           WHERE l.reference_id = a.id::text || ':' ||
-                 to_char((a.scheduled_at AT TIME ZONE 'Asia/Kolkata')::date, 'YYYY-MM-DD')
-             AND l.event_type   = $2
-             AND l.status NOT IN ('FAILED','SKIPPED')
-         )`,
-      [daysBefore, daysBefore === 2 ? 'package_appointment_reminder_2d' : 'package_appointment_reminder_1d']
-    )
-    return rows
-  },
-
-  // Packages expiring in exactly 7 days (IST) — mirrors getMembershipsExpiringIn7Days
-  async getPackagesExpiringIn7Days(): Promise<Array<{
-    package_id:             string
-    client_id:              string
-    salon_id:               string
-    phone_number:           string | null
-    phone_country_code:     string | null
-    client_name:            string | null
-    package_name:           string
-    expiry_date:            string
-    whatsapp_notifications: boolean
-  }>> {
-    const { rows } = await pool.query(
-      `SELECT
-         cp.id               AS package_id,
-         cp.client_id,
-         cp.salon_id,
-         cp.mobile           AS phone_number,
-         c.phone_country_code,
-         cp.client_name,
-         cp.package_name,
-         cp.expiry_date,
-         c.whatsapp_notifications
-       FROM client_packages cp
-       LEFT JOIN clients c ON c.id = cp.client_id
-       WHERE cp.status       = 'Active'
-         AND cp.expiry_date IS NOT NULL
-         AND (cp.expiry_date)::date
-             = ((NOW() AT TIME ZONE 'Asia/Kolkata') + INTERVAL '7 days')::date
-         AND cp.mobile                IS NOT NULL
-         AND c.whatsapp_notifications = TRUE`
-    )
-    return rows
-  },
 
   // Clients with birthday today — IST date comparison
   async getClientsBirthday(): Promise<Array<{
@@ -691,8 +621,9 @@ export const whatsappAutomationRepository = {
     return rows
   },
 
-  // Memberships expiring in exactly 7 days (IST)
-  async getMembershipsExpiringIn7Days(): Promise<Array<{
+  // Memberships expiring in exactly `daysBefore` days (IST) — 7 for the
+  // membership_expiring_7d trigger, 1 for membership_expiring_24h.
+  async getMembershipsExpiringIn(daysBefore: 7 | 1): Promise<Array<{
     membership_id:          string
     client_id:              string
     salon_id:               string
@@ -701,6 +632,7 @@ export const whatsappAutomationRepository = {
     client_name:            string | null
     membership_name:        string
     expiry_date:            string
+    remaining_balance:      string
     whatsapp_notifications: boolean
   }>> {
     const { rows } = await pool.query(
@@ -713,15 +645,170 @@ export const whatsappAutomationRepository = {
          c.full_name         AS client_name,
          m.name              AS membership_name,
          cm.end_date         AS expiry_date,
+         cm.membership_wallet_balance AS remaining_balance,
          c.whatsapp_notifications
        FROM client_memberships cm
        JOIN memberships m ON m.id = cm.membership_id
        JOIN clients     c ON c.id = cm.client_id
        WHERE cm.status      = 'active'
          AND (cm.end_date AT TIME ZONE 'Asia/Kolkata')::date
-             = ((NOW() AT TIME ZONE 'Asia/Kolkata') + INTERVAL '7 days')::date
+             = ((NOW() AT TIME ZONE 'Asia/Kolkata') + ($1 || ' days')::INTERVAL)::date
          AND c.phone_number           IS NOT NULL
-         AND c.whatsapp_notifications = TRUE`
+         AND c.whatsapp_notifications = TRUE`,
+      [daysBefore]
+    )
+    return rows
+  },
+
+  // Packages expiring in exactly `daysBefore` days (IST) — 7 for
+  // package_expiring_7d, 1 for package_expiring_24h.
+  async getPackagesExpiringIn(daysBefore: 7 | 1): Promise<Array<{
+    package_id:             string
+    client_id:              string
+    salon_id:               string
+    phone_number:           string | null
+    phone_country_code:     string | null
+    client_name:            string | null
+    package_name:           string
+    expiry_date:            string
+    remaining_sessions:     number
+    whatsapp_notifications: boolean
+  }>> {
+    const { rows } = await pool.query(
+      `SELECT
+         cp.id               AS package_id,
+         cp.client_id,
+         cp.salon_id,
+         cp.mobile           AS phone_number,
+         c.phone_country_code,
+         cp.client_name,
+         cp.package_name,
+         cp.expiry_date,
+         COALESCE((
+           SELECT SUM(cps.total_sessions - cps.completed_sessions) FROM client_package_services cps
+           WHERE cps.client_package_id = cp.id
+         ), 0) AS remaining_sessions,
+         c.whatsapp_notifications
+       FROM client_packages cp
+       LEFT JOIN clients c ON c.id = cp.client_id
+       WHERE cp.status       = 'Active'
+         AND cp.expiry_date IS NOT NULL
+         AND (cp.expiry_date)::date
+             = ((NOW() AT TIME ZONE 'Asia/Kolkata') + ($1 || ' days')::INTERVAL)::date
+         AND cp.mobile                IS NOT NULL
+         AND c.whatsapp_notifications = TRUE`,
+      [daysBefore]
+    )
+    return rows
+  },
+
+  // Package-linked appointments landing exactly tomorrow (IST) — for
+  // package_appointment_reminder_24h. Dedup key is `<appointmentId>:<date>`
+  // (not the bare appointment id) so a reschedule earns a fresh reminder.
+  async getPackageAppointmentsForReminder24h(): Promise<Array<{
+    appointment_id:         string
+    salon_id:               string
+    client_id:              string | null
+    phone_number:           string | null
+    phone_country_code:     string | null
+    client_name:            string | null
+    salon_name:             string | null
+    scheduled_at:           string
+    scheduled_date:         string
+    service_name:           string | null
+    staff_name:             string | null
+    package_name:           string | null
+  }>> {
+    const { rows } = await pool.query(
+      `SELECT
+         a.id                     AS appointment_id,
+         a.salon_id,
+         a.client_id,
+         c.phone_number,
+         c.phone_country_code,
+         c.full_name              AS client_name,
+         s.business_name          AS salon_name,
+         a.scheduled_at,
+         to_char((a.scheduled_at AT TIME ZONE 'Asia/Kolkata')::date, 'YYYY-MM-DD') AS scheduled_date,
+         cps.service_name,
+         NULLIF(TRIM(CONCAT(st.first_name, ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
+         cp.package_name
+       FROM client_package_service_schedules ps
+       JOIN appointments a            ON a.id  = ps.appointment_id
+       JOIN client_package_services cps ON cps.id = ps.client_package_service_id
+       JOIN client_packages cp        ON cp.id  = ps.client_package_id
+       LEFT JOIN clients c            ON c.id   = a.client_id
+       LEFT JOIN salons  s            ON s.id   = a.salon_id
+       LEFT JOIN staff   st           ON st.id  = ps.staff_id
+       WHERE ps.status = 'Scheduled'
+         AND a.status IN ('booked','partial')
+         AND a.deleted_at IS NULL
+         AND (a.scheduled_at AT TIME ZONE 'Asia/Kolkata')::date
+             = ((NOW() AT TIME ZONE 'Asia/Kolkata')::date + 1)
+         AND c.phone_number           IS NOT NULL
+         AND c.whatsapp_notifications = TRUE
+         AND NOT EXISTS (
+           SELECT 1 FROM wa_automation_logs l
+           WHERE l.reference_id = a.id::text || ':' ||
+                 to_char((a.scheduled_at AT TIME ZONE 'Asia/Kolkata')::date, 'YYYY-MM-DD')
+             AND l.event_type   = 'package_appointment_reminder_24h'
+             AND l.status NOT IN ('FAILED','SKIPPED')
+         )`
+    )
+    return rows
+  },
+
+  // Generic (non-package-linked) appointments landing exactly tomorrow (IST) —
+  // for service_reminder_24h. Package-linked appointments are excluded here
+  // (they get package_appointment_reminder_24h instead) so nobody is reminded
+  // twice for one visit.
+  async getAppointmentsForReminder24h(): Promise<Array<{
+    appointment_id:         string
+    salon_id:               string
+    client_id:              string | null
+    phone_number:           string | null
+    phone_country_code:     string | null
+    client_name:            string | null
+    salon_name:             string | null
+    scheduled_at:           string
+    service_name:           string | null
+    staff_name:             string | null
+    whatsapp_notifications: boolean
+  }>> {
+    const { rows } = await pool.query(
+      `SELECT
+         a.id                    AS appointment_id,
+         a.salon_id,
+         a.client_id,
+         c.phone_number,
+         c.phone_country_code,
+         c.full_name             AS client_name,
+         s.business_name AS salon_name,
+         a.scheduled_at,
+         (a.services->0->>'name') AS service_name,
+         NULLIF(TRIM(CONCAT(st.first_name, ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
+         c.whatsapp_notifications
+       FROM appointments a
+       LEFT JOIN clients c ON c.id = a.client_id
+       LEFT JOIN salons  s ON s.id = a.salon_id
+       LEFT JOIN staff   st ON st.id = a.staff_id
+       WHERE a.status IN ('booked','partial')
+         AND a.deleted_at IS NULL
+         AND (a.scheduled_at AT TIME ZONE 'Asia/Kolkata')::date
+             = ((NOW() AT TIME ZONE 'Asia/Kolkata')::date + 1)
+         AND c.phone_number           IS NOT NULL
+         AND c.whatsapp_notifications = TRUE
+         AND NOT EXISTS (
+           SELECT 1 FROM wa_automation_logs l
+           WHERE l.reference_id = a.id::text
+             AND l.event_type   = 'service_reminder_24h'
+             AND l.status NOT IN ('FAILED','SKIPPED')
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM client_package_service_schedules ps
+           WHERE ps.appointment_id = a.id
+             AND ps.status = 'Scheduled'
+         )`
     )
     return rows
   },

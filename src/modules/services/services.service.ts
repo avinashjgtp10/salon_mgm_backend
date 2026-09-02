@@ -245,7 +245,8 @@ export const servicesService = {
   // ─── Import ───────────────────────────────────────────────────────────────────
   async importServices(params: { rows: any[]; salonId: string }) {
     const { rows, salonId } = params;
-    const result = { total_rows: rows.length, imported: 0, skipped: 0, errors: [] as string[] };
+    type ImportRowIssue = string | { row: number; name: string; status: "skipped" | "failed"; reason: string };
+    const result = { total_rows: rows.length, imported: 0, skipped: 0, errors: [] as ImportRowIssue[] };
 
     // ── Column validation ─────────────────────────────────────────────────────
     // Checked against the header row before touching any data row — a file
@@ -305,10 +306,12 @@ export const servicesService = {
       }
     }
 
-    // Get existing categories to match by name
+    // Get existing categories to match by name — scoped to categories usable
+    // for services (type 'service' or 'both'), so a product-only category
+    // sharing the same name is never silently reused here.
     const db = pool;
     const catRows = await db.query(
-      "SELECT id, name FROM service_categories WHERE salon_id = $1",
+      "SELECT id, name FROM service_categories WHERE salon_id = $1 AND type IN ('service', 'both')",
       [salonId]
     );
     const categoryMap: Record<string, string> = {};
@@ -334,7 +337,7 @@ export const servicesService = {
           // Create category
           try {
             const newCat = await db.query(
-              "INSERT INTO service_categories (salon_id, name) VALUES ($1, $2) RETURNING id",
+              "INSERT INTO service_categories (salon_id, name, type) VALUES ($1, $2, 'service') RETURNING id",
               [salonId, catName]
             );
             category_id = newCat.rows[0].id;
@@ -364,6 +367,19 @@ export const servicesService = {
         commission_enabled: ["yes", "true", "1"].includes(String(r.Commission ?? r.commission_enabled ?? "no").toLowerCase()),
         resource_required: ["yes", "true", "1"].includes(String(r["Resource Required"] ?? r.resource_required ?? "no").toLowerCase()),
       };
+
+      // Re-importing the same file (or a file with rows that already exist)
+      // must not create a duplicate row — match on the same fields the
+      // single-service create/update endpoints already dedupe on (Name +
+      // Duration + Price), plus Category, since an import row additionally
+      // carries a category and two same-priced services in different
+      // categories are legitimately different offerings.
+      const duplicate = await servicesRepository.findDuplicate(name, body.duration ?? 30, body.price ?? 0, salonId);
+      if (duplicate && ((duplicate as any).category_id ?? null) === (category_id ?? null)) {
+        result.skipped++;
+        result.errors.push({ row: rowNum, name, status: "skipped", reason: "Duplicate Service Name" });
+        continue;
+      }
 
       try {
         await servicesRepository.create(body, salonId);

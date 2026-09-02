@@ -5,7 +5,12 @@
 // without a redesign. Retail's existing productsRepository.deductStock/
 // restoreStock is NOT migrated onto this yet (deliberately out of scope).
 
-export type InventoryTransactionReason = "consumable_usage" | "retail_sale" | "waste" | "adjustment";
+// retail_sale and waste were defined but never wired to any code path —
+// retail product sales deduct products.amount directly in
+// appointments.service.ts without going through this ledger at all (see
+// products.repository.ts deductStock/restoreStock), and nothing ever wrote a
+// "waste" reason. Only these two are ever actually used.
+export type InventoryTransactionReason = "consumable_usage" | "adjustment";
 
 export type InventoryTransactionReferenceType = "appointment_complete" | "appointment_adjustment" | "manual";
 

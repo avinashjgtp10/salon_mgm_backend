@@ -1,6 +1,4 @@
 import { Router } from 'express'
-import { authMiddleware } from '../../../../middleware/auth.middleware'
-import { roleMiddleware } from '../../../../middleware/role.middleware'
 import { webhooksController } from './webhooks.controller'
 
 const router = Router()
@@ -21,13 +19,5 @@ router.post('/', webhooksController.handleGlobal)
 // ── Per-salon endpoints — kept for backward compatibility ─────────────────────
 router.get('/:salonId/meta',  webhooksController.verify)
 router.post('/:salonId/meta', webhooksController.handle)
-
-// ── Private — frontend polling ────────────────────────────────────────────────
-router.get(
-  '/events',
-  authMiddleware,
-  roleMiddleware('salon_owner', 'admin'),
-  webhooksController.getEvents
-)
 
 export default router

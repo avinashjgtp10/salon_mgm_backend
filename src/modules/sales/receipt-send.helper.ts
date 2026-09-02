@@ -5,7 +5,34 @@ import { staffRepository } from "../staff/staff.repository";
 import { clientsRepository } from "../clients/clients.repository";
 import { sendReceiptDocument } from "./receipt-whatsapp.service";
 import { renderReceiptPdf } from "./receipt-pdf.service";
+import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
+import { sendBillReceiptTemplateMessage } from "../whatsapp-automation/wa-bill-receipt-template.helper";
+import { generateFeedbackToken } from "../reviews/feedback-token.util";
 import logger from "../../config/logger";
+
+// Dedicated production domain for the public feedback form (points at the
+// same frontend deployment/route, just its own subdomain) — no longer tied
+// to FRONTEND_URL/APP_BASE_URL, which stay pointed at the dev ngrok tunnel.
+const FEEDBACK_BASE_URL = "https://feedback.salonox.com";
+
+// Only buildable when this bill is tied to a real appointment, since the
+// public feedback form is built entirely around an appointment's service
+// list (see reviews.service.ts). A true walk-in Quick Sale has nothing to
+// attach a feedback link to — gets a fallback line instead (see below).
+function buildFeedbackLink(appointmentId: string): string {
+    return `${FEEDBACK_BASE_URL}/feedback/${appointmentId}.${generateFeedbackToken(appointmentId)}`;
+}
+
+// Meta rejects a newline character inside a single template parameter's
+// value (error 132018, "issue with the parameters in your template") — this
+// has to render as one flat line, unlike a freeform caption which allows
+// multi-line text freely.
+function buildItemsBlock(items: SaleItem[], paidAmount: number, dueAmount: number): string {
+    const lines = items.map((i) => `${i.name} — ₹${Number(i.total_price).toFixed(0)}`);
+    lines.push(`Total Paid: ₹${paidAmount.toFixed(0)}`);
+    if (dueAmount > 0) lines.push(`Due: ₹${dueAmount.toFixed(0)}`);
+    return lines.join(", ");
+}
 
 type ReceiptContextParams = {
     salonId: string;
@@ -77,15 +104,56 @@ async function gatherReceiptContext(params: ReceiptContextParams) {
     };
 }
 
-// Fire-and-forget by design (matches sendReceiptDocument itself): never
-// throws, never blocks the caller's sale. Sends the PDF as a WhatsApp
-// document via the Meta Business Cloud API — requires the salon to have
-// WhatsApp connected and only delivers within Meta's 24h messaging window.
+// Fire-and-forget by design: never throws, never blocks the caller's sale.
+// bill_receipt is a real Meta document-header template — sent whenever the
+// salon has an APPROVED copy (guaranteed delivery, no 24h-window limit).
+// Otherwise falls back to the original plain PDF-only freeform send (works
+// only within Meta's 24h customer-session window), same as before bill_receipt
+// existed as a trigger — so a salon still mid-approval isn't left with nothing.
 export async function sendPurchaseReceipt(params: ReceiptContextParams): Promise<{ sent: boolean; reason?: string }> {
+    console.log(`[BILL_RECEIPT] sendPurchaseReceipt CALLED — salonId=${params.salonId} saleId=${params.sale?.id} phone=${params.phone}`);
     try {
         const ctx = await gatherReceiptContext(params);
-        return await sendReceiptDocument(ctx);
+        const billTemplate = await whatsappAutomationRepository.findTemplate("bill_receipt", params.salonId);
+        console.log(`[BILL_RECEIPT] findTemplate result — found=${!!billTemplate} status=${billTemplate?.status} template_name=${billTemplate?.template_name} meta_template_id=${billTemplate?.meta_template_id}`);
+
+        if (billTemplate) {
+            const pdfBuffer = await renderReceiptPdf(ctx);
+            console.log(`[BILL_RECEIPT] renderReceiptPdf result — bytes=${pdfBuffer.length}`);
+
+            const appointmentId = params.appointment?.id ?? null;
+            const feedbackLine = appointmentId
+                ? `We'd love to hear your feedback: ${buildFeedbackLink(appointmentId)}`
+                : "We'd love to hear your feedback — just reply to this message!";
+            const invoiceLabel = ctx.sale.invoice_number ?? ctx.sale.id.slice(0, 8).toUpperCase();
+            console.log(`[BILL_RECEIPT] feedbackLine=${feedbackLine}`);
+
+            const result = await sendBillReceiptTemplateMessage({
+                salonId:      params.salonId,
+                phone:        params.phone,
+                countryCode:  params.countryCode,
+                templateName: billTemplate.template_name,
+                language:     billTemplate.language,
+                pdfBuffer,
+                pdfFilename:  `Receipt-${invoiceLabel}.pdf`,
+                variables: {
+                    "1": ctx.client.name,
+                    "2": ctx.salon.business_name,
+                    "3": buildItemsBlock(params.items, params.paidAmount, params.dueAmount ?? 0),
+                    "4": feedbackLine,
+                },
+            });
+            console.log(`[BILL_RECEIPT] sendBillReceiptTemplateMessage result:`, result);
+            return result;
+        }
+
+        console.log(`[BILL_RECEIPT] no APPROVED bill_receipt template — falling back to plain PDF (sendReceiptDocument)`);
+        logger.info(`[WA-TRACE] bill_receipt not yet APPROVED for salon=${params.salonId} — falling back to plain PDF`);
+        const fallbackResult = await sendReceiptDocument(ctx);
+        console.log(`[BILL_RECEIPT] sendReceiptDocument (fallback) result:`, fallbackResult);
+        return fallbackResult;
     } catch (err: any) {
+        console.log(`[BILL_RECEIPT] EXCEPTION:`, err?.response?.data ?? err?.message ?? err);
         // Best-effort — sendReceiptDocument already swallows its own errors;
         // this catches failures in the gathering step above (e.g. a bad salonId).
         logger.warn(`[WA-TRACE] PDF-BILL prep FAILED — sale=${params.sale?.id} salon=${params.salonId} — ${err?.message ?? err}`);

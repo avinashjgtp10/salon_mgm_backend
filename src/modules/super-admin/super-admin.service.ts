@@ -257,6 +257,13 @@ export const superAdminService = {
     return { success: true };
   },
 
+  async clearSalonData(id: string) {
+    if (!id) throw new AppError(400, "Salon ID required", "VALIDATION_ERROR");
+    const cleared = await superAdminRepository.clearSalonData(id);
+    if (!cleared) throw new AppError(404, "Salon not found", "NOT_FOUND");
+    return { success: true };
+  },
+
   async getAllUsers(search?: string, role?: string, minLogins?: number) {
     return superAdminRepository.getAllUsers(search, role, minLogins);
   },

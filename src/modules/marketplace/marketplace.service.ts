@@ -4,6 +4,7 @@ import {
   marketplaceProfileRepo, marketplaceLocationRepo,
   marketplaceWorkingHoursRepo, marketplaceImagesRepo, marketplaceFeaturesRepo,
 } from "./marketplace.repository";
+import { salonsRepository } from "../salons/salons.repository";
 import {
   Amenity, Highlight, Value,
   MarketplaceProfile, MarketplaceProfileFull, WorkingHoursDay,
@@ -179,6 +180,9 @@ export const marketplaceService = {
     }
     const updated = await marketplaceProfileRepo.updateLogo(salonId, logoUrl);
     if (!updated) throw new AppError(500, "Failed to save logo", "INTERNAL_ERROR");
+    // Business Settings reads salons.logo_url, not the marketplace profile —
+    // keep the two in sync so the logo shows up there too.
+    await salonsRepository.update(salonId, { logo_url: logoUrl });
     return updated;
   },
 
