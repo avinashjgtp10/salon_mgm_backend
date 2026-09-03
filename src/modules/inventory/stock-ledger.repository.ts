@@ -7,6 +7,7 @@ import {
     StockLedgerSummary,
     STOCK_LEDGER_IN_TYPES,
 } from "./stock-ledger.types";
+import { inventoryAlertsService } from "./inventory-alerts.service";
 
 // Shared SELECT list + joins so list/findById/getTimeline all project the
 // same shape — product name/category for display, created_by resolved to a
@@ -164,6 +165,10 @@ export const stockLedgerRepository = {
 
             await client.query("COMMIT");
 
+            inventoryAlertsService
+                .checkAndNotify([data.product_id], salonId)
+                .catch(() => { /* logged internally, never blocks the caller */ });
+
             const created = await this.findById(rows[0].id, salonId);
             return created as StockLedgerEntry;
         } catch (err) {
@@ -284,6 +289,9 @@ export const stockLedgerRepository = {
             }
 
             await client.query("COMMIT");
+            inventoryAlertsService
+                .checkAndNotify(items.map((i) => i.product_id), salonId)
+                .catch(() => { /* logged internally, never blocks the caller */ });
         } catch (err) {
             await client.query("ROLLBACK");
             throw err;
@@ -359,6 +367,9 @@ export const stockLedgerRepository = {
             );
 
             await client.query("COMMIT");
+            inventoryAlertsService
+                .checkAndNotify([params.productId], params.salonId)
+                .catch(() => { /* logged internally, never blocks the caller */ });
         } catch (err) {
             await client.query("ROLLBACK");
             throw err;

@@ -2,6 +2,7 @@ import pool from "../../config/database";
 import { AppError } from "../../middleware/error.middleware";
 import { CreateOrderDTO, ListOrderFilters, Order, OrderItem, OrderSignature, ReceiveOrderDTO } from "./orders.types";
 import { purchasesRepository } from "./purchases.repository";
+import { inventoryAlertsService } from "./inventory-alerts.service";
 
 // Schema (orders, order_items, order_signatures, salons.next_order_seq) is
 // NOT self-migrated from here — per project policy, schema changes are never
@@ -454,6 +455,10 @@ export const ordersRepository = {
         } finally {
             client.release();
         }
+
+        inventoryAlertsService
+            .checkAndNotify([orderItem.product_id], salonId)
+            .catch(() => { /* logged internally, never blocks the caller */ });
 
         return (await this.getById(orderId, salonId))!;
     },

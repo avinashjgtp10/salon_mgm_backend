@@ -14,6 +14,9 @@ type CreateNotificationData = {
   body?: string;
   event_key?: string;
   scheduled_at?: string;
+  product_id?: string;
+  branch_id?: string;
+  alert_status?: string;
 };
 
 type CreateNotificationOptions = {
@@ -54,7 +57,15 @@ export const notificationsService = {
       });
     }
 
-    const notification = await notificationsRepository.create(data);
+    const notification = await notificationsRepository.create({
+      salon_id: data.salon_id,
+      type: data.type,
+      title: data.title,
+      body: data.body,
+      product_id: data.product_id,
+      branch_id: data.branch_id,
+      alert_status: data.alert_status,
+    });
     logger.info("Notification DB row created", {
       notificationId: notification.id,
       salonId: notification.salon_id,
