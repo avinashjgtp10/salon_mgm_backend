@@ -99,6 +99,64 @@ export const suppliersRepository = {
         return rows;
     },
 
+    // Real server-side pagination (COUNT + LIMIT/OFFSET) for the Suppliers
+    // list page — listAllWithBalance above loads every supplier at once and
+    // paginates client-side, which is what this replaces.
+    async listPaginatedWithBalance(
+        salonId: string,
+        page: number,
+        limit: number,
+        filters?: { search?: string; city?: string; state?: string },
+    ): Promise<{ data: SupplierWithBalance[]; total: number }> {
+        const conditions: string[] = [`s.salon_id = $1`];
+        const values: unknown[] = [salonId];
+        let idx = 2;
+
+        if (filters?.search) {
+            conditions.push(`(s.name ILIKE $${idx} OR s.first_name ILIKE $${idx} OR s.last_name ILIKE $${idx} OR s.email ILIKE $${idx})`);
+            values.push(`%${filters.search}%`);
+            idx++;
+        }
+        if (filters?.city) { conditions.push(`s.city = $${idx++}`); values.push(filters.city); }
+        if (filters?.state) { conditions.push(`s.state = $${idx++}`); values.push(filters.state); }
+
+        const where = `WHERE ${conditions.join(" AND ")}`;
+        const safePage = Math.max(1, page);
+        const safeLimit = Math.min(100, Math.max(1, limit));
+        const offset = (safePage - 1) * safeLimit;
+
+        const countRes = await pool.query(`SELECT COUNT(*)::int AS total FROM suppliers s ${where}`, values);
+        const total = countRes.rows[0]?.total ?? 0;
+
+        const { rows } = await pool.query(
+            `SELECT s.*, ${BALANCE_COLUMNS}
+               FROM suppliers s
+               ${BALANCE_JOINS}
+              ${where}
+              ORDER BY s.created_at DESC
+              LIMIT $${idx} OFFSET $${idx + 1}`,
+            [...values, safeLimit, offset],
+        );
+        return { data: rows, total };
+    },
+
+    // Distinct city/state values across EVERY supplier (not just the current
+    // page) — backs the City/State filter dropdown's own option list, which
+    // needs the full set regardless of which page is currently loaded.
+    async listDistinctLocations(salonId: string): Promise<{ cities: string[]; states: string[] }> {
+        const { rows } = await pool.query(
+            `SELECT DISTINCT city, state FROM suppliers WHERE salon_id = $1 AND (city IS NOT NULL OR state IS NOT NULL)`,
+            [salonId],
+        );
+        const cities = new Set<string>();
+        const states = new Set<string>();
+        for (const r of rows) {
+            if (r.city?.trim()) cities.add(r.city.trim());
+            if (r.state?.trim()) states.add(r.state.trim());
+        }
+        return { cities: Array.from(cities).sort(), states: Array.from(states).sort() };
+    },
+
     async findByName(name: string, salonId: string): Promise<Supplier | null> {
         const { rows } = await pool.query(
             `SELECT * FROM suppliers WHERE LOWER(name) = LOWER($1) AND salon_id = $2`,

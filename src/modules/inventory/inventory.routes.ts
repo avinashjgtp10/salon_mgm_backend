@@ -62,6 +62,22 @@ router.get(
     suppliersController.list
 );
 
+router.post(
+    "/suppliers/list",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    suppliersController.listPost
+);
+
+router.get(
+    "/suppliers/locations",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    suppliersController.listLocations
+);
+
 router.get(
     "/suppliers/:id",
     authMiddleware,
