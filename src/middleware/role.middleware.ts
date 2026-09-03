@@ -3,7 +3,7 @@
 import { Request, Response, NextFunction } from "express";
 import { AppError } from "./error.middleware";
 
-export type Role = "admin" | "salon_owner" | "staff" | "client" | "super_admin";
+export type Role = "admin" | "salon_owner" | "staff" | "client" | "super_admin" | "branch_owner";
 
 export type AuthRequest = Request & {
   user?: {

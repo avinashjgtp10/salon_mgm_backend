@@ -279,6 +279,36 @@ export const superAdminController = {
     } catch (err) { return next(err); }
   },
 
+  // ── BRANCH OWNER SALON ASSIGNMENT ────────────────────────────────────────────
+
+  async getBranchOwnerSalons(req: Request, res: Response, next: NextFunction) {
+    try {
+      const id = String(req.params.id);
+      const data = await superAdminService.getBranchOwnerSalons(id);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
+  async assignBranchOwnerSalons(req: Request & { user?: { userId: string } }, res: Response, next: NextFunction) {
+    try {
+      const id = String(req.params.id);
+      const { salonIds } = req.body;
+      const assignedBy = req.user?.userId;
+      if (!assignedBy) return res.status(401).json({ success: false, error: { message: "Unauthorized" } });
+      const data = await superAdminService.assignSalonsToBranchOwner(id, salonIds, assignedBy);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
+  async unassignBranchOwnerSalon(req: Request, res: Response, next: NextFunction) {
+    try {
+      const id = String(req.params.id);
+      const salonId = String(req.params.salonId);
+      const data = await superAdminService.unassignSalonFromBranchOwner(id, salonId);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
   // ── PAYMENTS ──────────────────────────────────────────────────────────────────
 
   async getAllPayments(req: Request, res: Response, next: NextFunction) {

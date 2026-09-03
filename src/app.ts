@@ -74,6 +74,8 @@ import { ensureTable as ensureTipTables } from "./modules/tips/tipCalculation.se
 import cashManagementRoutes from "./modules/cash-management/cash-management.routes";
 import { ensureCashManagementTables } from "./modules/cash-management/cash-management.repository";
 import superAdminRoutes from "./modules/super-admin/super-admin.routes";
+import branchOwnerRoutes from "./modules/branch-owner/branch-owner.routes";
+import { ensureBranchOwnerTables } from "./modules/branch-owner/branch-owner.repository";
 import demoRequestsRoutes from "./modules/demo-requests/demo-requests.routes";
 import supportRoutes from "./modules/support/support.routes";
 import notificationsRoutes from "./modules/notifications/notifications.routes";
@@ -124,6 +126,11 @@ ensureAppointmentsTables().catch(err =>
 // Bootstrap cash-management tables (idempotent)
 ensureCashManagementTables().catch(err =>
   logger.warn("cash-management table init warning:", err?.message ?? err),
+);
+
+// Bootstrap branch-owner tables (idempotent)
+ensureBranchOwnerTables().catch(err =>
+  logger.warn("branch-owner table init warning:", err?.message ?? err),
 );
 
 // Bootstrap tip_earned/tip_settlements tables (idempotent) — Tip Settle
@@ -300,6 +307,7 @@ app.use("/api/v1/ewallet", ewalletRoutes);
 app.use("/api/v1/reward-points", rewardPointsRoutes);
 app.use("/api/v1/referral", referralRoutes);
 app.use("/api/v1/super-admin", superAdminRoutes);
+app.use("/api/v1/branch-owner", branchOwnerRoutes);
 app.use("/api/v1/demo-requests", demoRequestsRoutes);
 app.use("/api/v1/support", supportRoutes);
 app.use("/api/v1/notifications", notificationsRoutes);
