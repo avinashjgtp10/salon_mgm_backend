@@ -2,18 +2,73 @@ import pool, { safeQuery } from "../../config/database";
 
 export const branchOwnerRepository = {
 
+  // Per-salon breakdown for the "My Salons" table — same revenue convention
+  // (completed sale, or an open partial deposit with no completed sale yet)
+  // as getSummary() in salon-dashboard.repository.ts and the aggregate
+  // version of this query in getDashboardStats() above, just grouped by
+  // salon here instead of summed across all of them.
   async getMySalons(branchOwnerId: string) {
     const { rows } = await pool.query(`
       SELECT
         s.id,
+        s.owner_id,
         COALESCE(s.business_name, s.slug, 'Unnamed')                                    AS name,
+        s.city                                                                           AS location,
         u.email                                                                           AS owner_email,
         TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,'')))                         AS owner_name,
         CASE WHEN s.is_active THEN 'active' ELSE 'inactive' END                         AS status,
-        s.created_at
+        s.created_at,
+        COALESCE(staff_counts.staff_count, 0)                                            AS staff_count,
+        COALESCE(client_counts.client_count, 0)                                          AS client_count,
+        COALESCE(appt_counts.appointments_today, 0)                                      AS appointments_today,
+        COALESCE(revenue.revenue_today, 0)                                               AS revenue_today
       FROM branch_owner_salons bos
       JOIN salons s ON s.id = bos.salon_id
       LEFT JOIN users u ON u.id = s.owner_id
+      LEFT JOIN (
+        SELECT salon_id, COUNT(*)::int AS staff_count
+        FROM staff
+        WHERE is_active = true
+        GROUP BY salon_id
+      ) staff_counts ON staff_counts.salon_id = s.id
+      LEFT JOIN (
+        SELECT salon_id, COUNT(DISTINCT client_id)::int AS client_count
+        FROM (
+          SELECT salon_id, client_id FROM appointments WHERE client_id IS NOT NULL AND deleted_at IS NULL
+          UNION
+          SELECT salon_id, client_id FROM sales WHERE client_id IS NOT NULL
+        ) visited
+        GROUP BY salon_id
+      ) client_counts ON client_counts.salon_id = s.id
+      LEFT JOIN (
+        SELECT salon_id, COUNT(*)::int AS appointments_today
+        FROM appointments
+        WHERE deleted_at IS NULL AND status NOT IN ('cancelled', 'no-show')
+          AND DATE(scheduled_at) = CURRENT_DATE
+        GROUP BY salon_id
+      ) appt_counts ON appt_counts.salon_id = s.id
+      LEFT JOIN (
+        SELECT salon_id, SUM(amount)::numeric AS revenue_today
+        FROM (
+          SELECT sa.salon_id, ROUND(sa.total_amount) AS amount, sa.created_at AS event_at
+          FROM sales sa
+          LEFT JOIN appointments a ON a.id = sa.appointment_id
+          WHERE sa.status = 'completed'
+            AND (a.id IS NULL OR (a.status IN ('paid', 'partial') AND a.deleted_at IS NULL))
+          UNION ALL
+          SELECT p.salon_id, p.paid_amount AS amount, p.created_at AS event_at
+          FROM payments p
+          JOIN appointments a ON a.id = p.appointment_id
+          WHERE p.status = 'partial'
+            AND a.deleted_at IS NULL
+            AND a.status NOT IN ('cancelled', 'no-show')
+            AND NOT EXISTS (
+              SELECT 1 FROM sales s2 WHERE s2.appointment_id = p.appointment_id AND s2.status = 'completed'
+            )
+        ) revenue_events
+        WHERE DATE(event_at) = CURRENT_DATE
+        GROUP BY salon_id
+      ) revenue ON revenue.salon_id = s.id
       WHERE bos.branch_owner_id = $1
       ORDER BY s.created_at DESC
     `, [branchOwnerId]);
@@ -144,6 +199,107 @@ export const branchOwnerRepository = {
     };
   },
 
+  // Day-by-day revenue for the dashboard's trend chart — same revenue_events
+  // convention (completed sale, or an open partial deposit with no completed
+  // sale yet) as getDashboardStats(), just bucketed by day over the trailing
+  // window instead of summed into one total. generate_series fills in days
+  // with zero revenue so the chart doesn't skip gaps.
+  async getRevenueTrend(branchOwnerId: string, days = 14) {
+    const { rows } = await pool.query<{ day: string; revenue: string }>(`
+      WITH my_salons AS (
+        SELECT salon_id FROM branch_owner_salons WHERE branch_owner_id = $1
+      ),
+      sales_rows AS (
+        SELECT s.created_at AS event_at, ROUND(s.total_amount) AS amount
+        FROM sales s
+        LEFT JOIN appointments a ON a.id = s.appointment_id
+        WHERE s.salon_id IN (SELECT salon_id FROM my_salons)
+          AND s.status = 'completed'
+          AND (a.id IS NULL OR (a.status IN ('paid', 'partial') AND a.deleted_at IS NULL))
+      ),
+      open_partial_rows AS (
+        SELECT p.created_at AS event_at, p.paid_amount AS amount
+        FROM payments p
+        JOIN appointments a ON a.id = p.appointment_id
+        WHERE p.salon_id IN (SELECT salon_id FROM my_salons)
+          AND p.status = 'partial'
+          AND a.deleted_at IS NULL
+          AND a.status NOT IN ('cancelled', 'no-show')
+          AND NOT EXISTS (
+            SELECT 1 FROM sales s2 WHERE s2.appointment_id = p.appointment_id AND s2.status = 'completed'
+          )
+      ),
+      revenue_events AS (
+        SELECT event_at, amount FROM sales_rows
+        UNION ALL
+        SELECT event_at, amount FROM open_partial_rows
+      ),
+      days_series AS (
+        SELECT generate_series(CURRENT_DATE - ($2::int - 1), CURRENT_DATE, '1 day')::date AS day
+      )
+      SELECT
+        ds.day::text AS day,
+        COALESCE(SUM(re.amount), 0)::numeric AS revenue
+      FROM days_series ds
+      LEFT JOIN revenue_events re ON DATE(re.event_at) = ds.day
+      GROUP BY ds.day
+      ORDER BY ds.day
+    `, [branchOwnerId, days]);
+    return rows.map((r) => ({ day: r.day, revenue: Number(r.revenue) }));
+  },
+
+  // Cross-salon "Needs Attention" metrics — each one is a real, independently
+  // queryable signal (no fabricated proxies). Unpaid invoices reuses the same
+  // due_amount>0 convention as the Payment Collection Report; pending bookings
+  // maps to appointments.status='booked' (there's no separate "unconfirmed"
+  // state in the enum); staff requests maps to pending staff_leaves rows,
+  // since that's the only staff-initiated "request" concept in this schema.
+  async getAttentionMetrics(branchOwnerId: string) {
+    const [unpaid, pendingBookings, staffRequests] = await Promise.all([
+      pool.query<{ unpaid_count: string; unpaid_amount: string }>(`
+        WITH my_salons AS (
+          SELECT salon_id FROM branch_owner_salons WHERE branch_owner_id = $1
+        ),
+        latest_payment AS (
+          SELECT DISTINCT ON (a.id)
+            a.id AS appointment_id, p.due_amount
+          FROM appointments a
+          JOIN payments p ON p.appointment_id = a.id AND p.status <> 'refunded'
+          WHERE a.salon_id IN (SELECT salon_id FROM my_salons)
+            AND a.deleted_at IS NULL
+          ORDER BY a.id, p.created_at DESC, (p.status = 'completed') DESC, p.due_amount ASC
+        )
+        SELECT
+          COUNT(*) FILTER (WHERE due_amount > 0.5)::int AS unpaid_count,
+          COALESCE(SUM(due_amount) FILTER (WHERE due_amount > 0.5), 0)::numeric AS unpaid_amount
+        FROM latest_payment
+      `, [branchOwnerId]),
+
+      pool.query<{ pending_bookings: string }>(`
+        SELECT COUNT(*)::int AS pending_bookings
+        FROM appointments
+        WHERE salon_id IN (SELECT salon_id FROM branch_owner_salons WHERE branch_owner_id = $1)
+          AND deleted_at IS NULL
+          AND status = 'booked'
+      `, [branchOwnerId]),
+
+      pool.query<{ pending_requests: string }>(`
+        SELECT COUNT(*)::int AS pending_requests
+        FROM staff_leaves sl
+        JOIN staff st ON st.id = sl.staff_id
+        WHERE st.salon_id IN (SELECT salon_id FROM branch_owner_salons WHERE branch_owner_id = $1)
+          AND sl.status = 'pending'
+      `, [branchOwnerId]),
+    ]);
+
+    return {
+      unpaid_invoices_count: unpaid.rows[0]?.unpaid_count ?? 0,
+      unpaid_invoices_amount: Number(unpaid.rows[0]?.unpaid_amount ?? 0),
+      pending_bookings: pendingBookings.rows[0]?.pending_bookings ?? 0,
+      pending_staff_requests: staffRequests.rows[0]?.pending_requests ?? 0,
+    };
+  },
+
   async getRecentPayments(branchOwnerId: string, limit = 10, status?: string) {
     const values: any[] = [branchOwnerId];
     let statusClause = "";
@@ -156,10 +312,12 @@ export const branchOwnerRepository = {
       SELECT
         p.id, p.amount, p.status, p.payment_method, p.created_at,
         s.id                                        AS salon_id,
-        COALESCE(s.business_name, s.slug, 'Unnamed') AS salon_name
+        COALESCE(s.business_name, s.slug, 'Unnamed') AS salon_name,
+        sa.invoice_number                            AS invoice_number
       FROM payments p
       JOIN branch_owner_salons bos ON bos.salon_id = p.salon_id
       JOIN salons s ON s.id = p.salon_id
+      LEFT JOIN sales sa ON sa.appointment_id = p.appointment_id AND sa.status = 'completed'
       WHERE bos.branch_owner_id = $1 ${statusClause}
       ORDER BY p.created_at DESC
       LIMIT $${values.length}

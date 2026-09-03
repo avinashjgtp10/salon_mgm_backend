@@ -4,7 +4,10 @@ import { branchOwnerRepository } from "./branch-owner.repository";
 import { superAdminRepository } from "../super-admin/super-admin.repository";
 import { AppError } from "../../middleware/error.middleware";
 import { salonDashboardRepository } from "../salon-dashboard/salon-dashboard.repository";
-import { staffCommissionsService } from "../staff/staff.service";
+import { staffCommissionsService, staffService } from "../staff/staff.service";
+import { billingService } from "../billing/billing.service";
+import { supportService } from "../support/support.service";
+import { notificationsService } from "../notifications/notifications.service";
 
 const ACCESS_SECRET: Secret = process.env.JWT_ACCESS_SECRET || "";
 
@@ -25,13 +28,20 @@ export const branchOwnerService = {
   // used to be 3 separate calls (salons, stats, payments), 2 of which
   // (/stats, /payments) hit routes that never existed on the backend and
   // silently 404'd, leaving those cards permanently empty on the frontend.
+  // inventorySummary (low-stock/pending-transfer counts for the "Needs
+  // Attention" panel) was a 4th separate GET from the dashboard page until
+  // this — folded in here so the page makes exactly one call, same as every
+  // other Branch Owner page after the one-API-per-page pass.
   async getDashboard(branchOwnerId: string) {
-    const [salons, stats, payments] = await Promise.all([
+    const [salons, stats, payments, revenueTrend, inventorySummary, attention] = await Promise.all([
       branchOwnerRepository.getMySalons(branchOwnerId),
       branchOwnerRepository.getDashboardStats(branchOwnerId),
       branchOwnerRepository.getRecentPayments(branchOwnerId, 10),
+      branchOwnerRepository.getRevenueTrend(branchOwnerId, 14),
+      branchOwnerRepository.getInventorySummary(branchOwnerId),
+      branchOwnerRepository.getAttentionMetrics(branchOwnerId),
     ]);
-    return { salons, stats, payments };
+    return { salons, stats, payments, revenueTrend, inventorySummary, attention };
   },
 
   async getPayments(branchOwnerId: string, status?: string) {
@@ -247,11 +257,11 @@ export const branchOwnerService = {
 
   // ── Staff Performance Across Branches ─────────────────────────────────────
 
-  async getStaffPerformance(branchOwnerId: string) {
+  async getStaffPerformance(branchOwnerId: string, period?: string) {
       const salons = await branchOwnerRepository.getMySalons(branchOwnerId);
       const perSalon = await Promise.all(salons.map(async (salon: any) => {
           const [revenue, commission] = await Promise.all([
-              salonDashboardRepository.getStaffRevenue(salon.id),
+              salonDashboardRepository.getStaffRevenue(salon.id, period),
               staffCommissionsService.getEarnedBySalon(salon.id),
           ]);
           const commissionByStaff = new Map(commission.map((c: any) => [c.staff_id, c]));
@@ -288,6 +298,129 @@ export const branchOwnerService = {
       { expiresIn: "1h" } as any
     );
     return { token, isOnboardingComplete: true };
+  },
+
+  // Lets a branch owner reset the login password for a salon they manage —
+  // scoped via assertSalonsAssigned so they can only touch salons assigned
+  // to them, and resolved to that salon's owner_id rather than accepting a
+  // user id directly from the frontend.
+  async resetSalonOwnerPassword(branchOwnerId: string, salonId: string, newPassword: string) {
+    await assertSalonsAssigned(branchOwnerId, [salonId]);
+    if (!newPassword || newPassword.length < 6) throw new AppError(400, "Password must be at least 6 characters", "VALIDATION_ERROR");
+    const ownerId = await superAdminRepository.getSalonOwnerId(salonId);
+    if (!ownerId) throw new AppError(404, "Salon or owner not found", "NOT_FOUND");
+    await superAdminRepository.resetUserPassword(ownerId, newPassword);
+    return { success: true };
+  },
+
+  async deleteSalon(branchOwnerId: string, salonId: string) {
+    await assertSalonsAssigned(branchOwnerId, [salonId]);
+    const result = await superAdminRepository.deleteSalon(salonId);
+    if (!result) throw new AppError(404, "Salon not found", "NOT_FOUND");
+    return { success: true };
+  },
+
+  // ── Staff & Permissions ──────────────────────────────────────────────────
+
+  async getSalonStaff(branchOwnerId: string, salonId: string) {
+    await assertSalonsAssigned(branchOwnerId, [salonId]);
+    const { data } = await staffService.list(salonId, {});
+    return data;
+  },
+
+  // Single-call version of the Staff & Permissions page — the frontend used
+  // to GET /salons/:salonId/staff once per assigned salon (N browser round
+  // trips). This does the same per-salon fan-out server-side in one request,
+  // tagging each staff row with its salonId/salonName so the page can still
+  // render the combined table and the salon column.
+  async getAllStaff(branchOwnerId: string) {
+    const salons = await branchOwnerRepository.getMySalons(branchOwnerId);
+    const perSalon = await Promise.all(salons.map(async (salon: any) => {
+      const { data } = await staffService.list(salon.id, {});
+      return data.map((member: any) => ({ ...member, salonId: salon.id, salonName: salon.name }));
+    }));
+    return perSalon.flat();
+  },
+
+  // Only custom_permissions is writable through this route — same narrow
+  // surface as the salon owner's "Customize permissions" modal, just called
+  // with a branch_owner token instead of a salon_owner one.
+  async updateSalonStaffPermissions(branchOwnerId: string, salonId: string, staffId: string, customPermissions: Record<string, boolean> | null) {
+    await assertSalonsAssigned(branchOwnerId, [salonId]);
+    return staffService.update({
+      id: staffId, salonId, requesterUserId: branchOwnerId, requesterRole: "branch_owner",
+      patch: { custom_permissions: customPermissions },
+    });
+  },
+
+  // ── Subscription (read-only) ──────────────────────────────────────────────
+  // A branch owner can see, but never change, a managed salon's billing plan
+  // — upgrade/cancel/payment stays exclusive to salon_owner/admin via
+  // billing.routes.ts's own roleMiddleware. This just assembles the same
+  // subscription + plan shape the salon owner's Billing page reads, scoped
+  // through assertSalonsAssigned instead of req.user.salonId.
+  async getSalonSubscription(branchOwnerId: string, salonId: string) {
+    await assertSalonsAssigned(branchOwnerId, [salonId]);
+    const subscription = await billingService.getSubscription(salonId);
+    if (!subscription) return { subscription: null, plan: null };
+    const plan = await billingService.getPlanById(subscription.plan_id).catch(() => null);
+    return { subscription, plan };
+  },
+
+  async getSalonInvoices(branchOwnerId: string, salonId: string) {
+    await assertSalonsAssigned(branchOwnerId, [salonId]);
+    const { data } = await billingService.listInvoices({ salon_id: salonId, limit: 50 });
+    return data;
+  },
+
+  // ── Support ────────────────────────────────────────────────────────────────
+  // supportService.submitTicket requires a real salon_id (support_tickets.
+  // salon_id is NOT NULL) — a branch_owner JWT carries no salonId of its own
+  // (see enterSalon, which mints a separate salon-scoped token), so the Help
+  // page must always pass one explicitly, validated the same way every other
+  // salon-scoped branch-owner action is.
+  async submitSupportTicket(branchOwnerId: string, params: {
+    salonId: string; subject: string; category: string; message: string; priority?: string;
+  }) {
+    const { salonId, subject, category, message, priority = "medium" } = params;
+    if (!salonId) throw new AppError(400, "Select a salon to report the issue against", "VALIDATION_ERROR");
+    await assertSalonsAssigned(branchOwnerId, [salonId]);
+    if (!subject?.trim() || !message?.trim()) {
+      throw new AppError(400, "Subject and message are required", "VALIDATION_ERROR");
+    }
+    return supportService.submitTicket({
+      salon_id: salonId, user_id: branchOwnerId, subject: subject.trim(),
+      category: category || "general", message: message.trim(), priority,
+    });
+  },
+
+  // ── Notifications ────────────────────────────────────────────────────────
+  // The real notifications system (notifications.service.ts) is scoped to a
+  // single salonId taken from the JWT via getSalonId(req) — but a
+  // branch_owner's JWT carries no salonId of its own, and they manage
+  // multiple salons. So notifications are scoped per-request to whichever
+  // salon the branch owner currently has selected in the topbar switcher,
+  // validated through assertSalonsAssigned like every other salon-scoped
+  // branch-owner action, rather than trusting req.user.salonId.
+  async listNotifications(branchOwnerId: string, salonId: string) {
+    await assertSalonsAssigned(branchOwnerId, [salonId]);
+    return notificationsService.list(salonId);
+  },
+
+  async getUnreadNotificationCount(branchOwnerId: string, salonId: string) {
+    await assertSalonsAssigned(branchOwnerId, [salonId]);
+    return notificationsService.getUnreadCount(salonId);
+  },
+
+  async markNotificationRead(branchOwnerId: string, salonId: string, notificationId: string) {
+    await assertSalonsAssigned(branchOwnerId, [salonId]);
+    return notificationsService.markRead(notificationId, salonId);
+  },
+
+  async markAllNotificationsRead(branchOwnerId: string, salonId: string) {
+    await assertSalonsAssigned(branchOwnerId, [salonId]);
+    await notificationsService.markAllRead(salonId);
+    return { success: true };
   },
 
 };
