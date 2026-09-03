@@ -272,7 +272,26 @@ export const ordersRepository = {
             [id],
         );
 
-        return { ...orderRows[0], items: itemRows };
+        const order = orderRows[0];
+
+        // Bill/paid/pending — derived from the Purchase(s) created when this
+        // order was received (order_id-linked), not stored on the order
+        // itself. See purchasesRepository.getOrderPaymentSummary for the
+        // known total_price-vs-total_amount (tax/discount) basis note.
+        const billing = await purchasesRepository.getOrderPaymentSummary(id, order.supplier_id, salonId);
+        const totalPrice = Number(order.total_price) || 0;
+        const rawPaid = billing?.amount_paid ?? 0;
+        const paidAmount = Math.min(rawPaid, totalPrice);
+        const pendingAmount = Math.max(0, totalPrice - paidAmount);
+        const billPaymentStatus = pendingAmount <= 0.5 ? "paid" : paidAmount > 0 ? "partial" : "unpaid";
+
+        return {
+            ...order,
+            items: itemRows,
+            paid_amount: paidAmount,
+            pending_amount: pendingAmount,
+            bill_payment_status: billPaymentStatus,
+        };
     },
 
     /**

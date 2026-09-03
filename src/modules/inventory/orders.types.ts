@@ -52,6 +52,14 @@ export interface Order {
     created_at: string;
     updated_at: string;
     items?: OrderItem[];
+    // Populated only by ordersRepository.getById() — derived from the
+    // Purchase(s) created when this order was received (see
+    // purchasesRepository.getOrderPaymentSummary). "unpaid" covers both a
+    // not-yet-received order and a received-but-nothing-paid one; the Bill
+    // PDF is only offered for "paid"/"partial".
+    paid_amount?: number;
+    pending_amount?: number;
+    bill_payment_status?: "paid" | "partial" | "unpaid";
 }
 
 export interface CreateOrderItemDTO {

@@ -613,11 +613,19 @@ export const paymentsService = {
               let pointsToRedeem = Math.min(rewardPointsRequested, rpBalance);
               if (pointsToRedeem > 0 && rpConfig.redeem_points > 0) {
                 let value = (pointsToRedeem / rpConfig.redeem_points) * rpConfig.redeem_value;
-                if (value > remaining) {
-                  // Cap the ₹ value at what's left, then work backward to how
-                  // many points that actually costs — floor so this can only
-                  // ever slightly UNDER-redeem, never exceed what's remaining.
-                  pointsToRedeem = Math.floor((remaining / rpConfig.redeem_value) * rpConfig.redeem_points);
+                // Never trust a redemption % cap check the frontend already
+                // did — reward points alone can never cover more than
+                // max_redeem_percent of the ORIGINAL bill (preRedemptionTotal,
+                // not `remaining`), regardless of how much is still left after
+                // membership/eWallet. 100 (the default) is a no-op.
+                const percentCap = preliminaryTotals.preRedemptionTotal * (rpConfig.max_redeem_percent / 100);
+                const cap = Math.min(remaining, percentCap);
+                if (value > cap) {
+                  // Cap the ₹ value at the lower of what's left / the percent
+                  // cap, then work backward to how many points that actually
+                  // costs — floor so this can only ever slightly UNDER-redeem,
+                  // never exceed either limit.
+                  pointsToRedeem = Math.floor((cap / rpConfig.redeem_value) * rpConfig.redeem_points);
                   value = (pointsToRedeem / rpConfig.redeem_points) * rpConfig.redeem_value;
                 }
                 rewardPointsRedeemedActual = pointsToRedeem;

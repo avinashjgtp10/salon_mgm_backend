@@ -259,6 +259,54 @@ export const purchasesRepository = {
         return { data: rows, total };
     },
 
+    /**
+     * Aggregate paid amount for one Order, from the Purchase(s) created when
+     * that order was received (order_id-linked, possibly more than one for a
+     * partially-received order delivered in batches). Reuses the same FIFO
+     * allocation of supplier_payments as withPaymentStatus/list() above, just
+     * summed by order instead of returned per-purchase. Returns null for an
+     * order that hasn't been received yet — no linked purchase exists, so
+     * there's nothing paid or billed against it.
+     *
+     * Note: purchases.total_amount is qty × cost_price only (no discount/tax
+     * — see create() above), while the Order's own total_price includes
+     * both. The caller (ordersRepository.getById) clamps this raw paid
+     * figure against the order's real total_price rather than this method
+     * inventing a prorated split — see the comment there.
+     */
+    async getOrderPaymentSummary(orderId: string, supplierId: string, salonId: string): Promise<{ amount_paid: number } | null> {
+        const { rows: linked } = await pool.query(
+            `SELECT id FROM purchases WHERE order_id = $1 AND salon_id = $2`,
+            [orderId, salonId],
+        );
+        if (!linked.length) return null;
+        const linkedIds = new Set(linked.map((r) => r.id));
+
+        const { rows: paidRows } = await pool.query(
+            `SELECT COALESCE(SUM(amount), 0)::float8 AS total_paid
+               FROM supplier_payments
+              WHERE supplier_id = $1 AND salon_id = $2`,
+            [supplierId, salonId],
+        );
+        let remainingCredit = Number(paidRows[0].total_paid) || 0;
+
+        const { rows: allPurchases } = await pool.query(
+            `SELECT id, total_amount FROM purchases
+              WHERE supplier_id = $1 AND salon_id = $2
+              ORDER BY purchase_date ASC, created_at ASC`,
+            [supplierId, salonId],
+        );
+
+        let amountPaid = 0;
+        for (const p of allPurchases) {
+            const total = Number(p.total_amount) || 0;
+            const applied = Math.min(remainingCredit, total);
+            remainingCredit -= applied;
+            if (linkedIds.has(p.id)) amountPaid += applied;
+        }
+        return { amount_paid: amountPaid };
+    },
+
     async getById(id: string, salonId: string): Promise<Purchase | null> {
         const { rows: purchaseRows } = await pool.query(
             `SELECT pu.*, sup.name AS supplier_name
