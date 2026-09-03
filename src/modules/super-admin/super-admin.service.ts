@@ -92,24 +92,52 @@ export const superAdminService = {
     return result;
   },
 
+  // The impersonated tab is a fully separate browser window/store from the
+  // super admin's own tab — it never has the super admin's session to fall
+  // back on, so a short-lived, refresh-less access token eventually expires
+  // and the frontend's normal silent-refresh path finds nothing to exchange,
+  // hard-logging the admin out mid-session (surfacing as an unexpected
+  // forced re-login inside the salon account). The real fix is giving the
+  // impersonated tab its own refresh token — routed through the exact same
+  // /auth/refresh endpoint every other session already uses (auth.service.ts
+  // refresh() re-derives the impersonated user's real role/salonId from the
+  // DB by userId, so it needs no special-casing there) — but capped to a
+  // short DB-side expiry (impersonateRefreshExpiryDate) rather than the
+  // normal 30-day one, since this token is otherwise indistinguishable from
+  // the impersonated user's own real refresh token if it ever leaked.
   async getImpersonateToken(salonId: string) {
     const ownerId = await superAdminRepository.getSalonOwnerId(salonId);
     if (!ownerId) throw new AppError(404, "Salon or owner not found", "NOT_FOUND");
-    if (!ACCESS_SECRET) throw new AppError(500, "JWT config missing", "SERVER_ERROR");
+    if (!ACCESS_SECRET || !REFRESH_SECRET) throw new AppError(500, "JWT config missing", "SERVER_ERROR");
     const token = jwt.sign({ userId: ownerId, role: "salon_owner", salonId, impersonatedBy: "super_admin" }, ACCESS_SECRET, { expiresIn: "1h" } as any);
-    return { token, isOnboardingComplete: true };
+    const refreshToken = await this._issueImpersonationRefreshToken(ownerId);
+    return { token, refreshToken, isOnboardingComplete: true };
   },
 
   async getImpersonateUserToken(userId: string) {
     const user = await superAdminRepository.getUserForImpersonate(userId);
     if (!user) throw new AppError(404, "User not found", "NOT_FOUND");
-    if (!ACCESS_SECRET) throw new AppError(500, "JWT config missing", "SERVER_ERROR");
+    if (!ACCESS_SECRET || !REFRESH_SECRET) throw new AppError(500, "JWT config missing", "SERVER_ERROR");
     const token = jwt.sign(
       { userId: user.id, role: user.role, salonId: user.salon_id ?? null, impersonatedBy: "super_admin" },
       ACCESS_SECRET,
       { expiresIn: "1h" } as any
     );
-    return { token, isOnboardingComplete: user.is_onboarding_complete };
+    const refreshToken = await this._issueImpersonationRefreshToken(user.id);
+    return { token, refreshToken, isOnboardingComplete: user.is_onboarding_complete };
+  },
+
+  // Signed with the same REFRESH_SECRET and persisted in the same
+  // refresh_tokens table as a normal login's refresh token, so
+  // authService.refresh() accepts it completely unmodified — the only
+  // difference is a much shorter DB-side expires_at (8h instead of 30d),
+  // which is the authoritative check refresh() makes before ever looking at
+  // the JWT's own exp claim.
+  async _issueImpersonationRefreshToken(userId: string): Promise<string> {
+    const refreshToken = jwt.sign({ userId }, REFRESH_SECRET, { expiresIn: "8h" } as any);
+    const expiresAt = new Date(Date.now() + 8 * 60 * 60 * 1000);
+    await authRepository.saveRefreshToken({ user_id: userId, token: refreshToken, expires_at: expiresAt });
+    return refreshToken;
   },
 
   // ── SALON PERMISSIONS ────────────────────────────────────────────────────────

@@ -237,6 +237,18 @@ router.post(
 );
 
 // ======================================================
+// NO-SHOW RECOVERY REPORT (independent report API)
+// No-show appointments within the filtered window, meant to be paired with
+// a WhatsApp recovery template.
+// ======================================================
+
+router.post(
+    "/no-show-recovery",
+    ...guard,
+    reportsController.getNoShowRecoveryReport
+);
+
+// ======================================================
 // CUSTOMER FREQUENCY REPORT (independent report API)
 // Reads clients/sales directly — never calls the Appointment API/service.
 // ======================================================

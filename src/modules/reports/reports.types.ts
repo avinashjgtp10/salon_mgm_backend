@@ -1662,6 +1662,62 @@ export interface MembershipOpportunityResponse {
 }
 
 // ===============================
+// No-Show Recovery Report (independent report API —
+// POST /api/report/no-show-recovery)
+// One row per no-show appointment within the filtered window — clients who
+// booked but never showed up, meant to be paired with a WhatsApp "We Missed
+// You" recovery template. Unlike Cancellation Recovery (latest appointment
+// only, one row per client), this lists every no-show appointment matching
+// the filters, since a client can no-show more than once and each is its
+// own recoverable booking.
+// ===============================
+
+export interface NoShowRecoveryFilters {
+    start_date?: string;
+    end_date?: string;
+    staff_ids?: string[];
+    service_ids?: string[];
+    search?: string;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface NoShowRecoveryRow {
+    appointment_id: string;
+    client_id: string;
+    client_name: string;
+    contact: string;
+    service_name: string | null;
+    staff_name: string | null;
+    scheduled_date: string;
+    days_since: number;
+}
+
+export interface NoShowRecoveryStats {
+    total_no_shows: number;
+}
+
+export interface NoShowRecoveryPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface NoShowRecoveryFiltersAvailable {
+    staff: { id: string; label: string }[];
+    services: { id: string; label: string }[];
+}
+
+export interface NoShowRecoveryResponse {
+    rows: NoShowRecoveryRow[];
+    pagination: NoShowRecoveryPagination;
+    stats: NoShowRecoveryStats;
+    filters_available: NoShowRecoveryFiltersAvailable;
+}
+
+// ===============================
 // Customer Spend Segments Report (POST /api/report/customer-spend)
 //
 // Classifies clients as VIP / Regular / Low by how much they have spent, and

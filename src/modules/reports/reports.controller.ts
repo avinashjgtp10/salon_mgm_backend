@@ -1714,6 +1714,49 @@ async getMembershipOpportunityReport(
 },
 
 // ======================================================
+// NO-SHOW RECOVERY REPORT (independent report API)
+// POST /api/report/no-show-recovery
+// ======================================================
+
+async getNoShowRecoveryReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const asStringArray = (value: unknown): string[] | undefined =>
+            Array.isArray(value)
+                ? value.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined;
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            staff_ids: asStringArray(body.staff_ids),
+            service_ids: asStringArray(body.service_ids),
+            search: asString(body.search),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getNoShowRecoveryReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "No-show recovery report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
 // CUSTOMER FREQUENCY REPORT (independent report API)
 // POST /api/report/customer-frequency
 // ======================================================

@@ -56,6 +56,8 @@ import {
     CancellationRecoveryStats,
     MembershipOpportunityRow,
     MembershipOpportunityStats,
+    NoShowRecoveryRow,
+    NoShowRecoveryStats,
     CustomerFrequencyReportRow,
     CustomerFrequencyReportStats,
     LostCustomersReportRow,
@@ -6130,6 +6132,165 @@ async getMembershipOpportunityFiltersAvailable(salonId: string): Promise<{ clien
     [salonId]
   ));
   return { client_sources: rows.map((r: any) => ({ id: r.id, label: r.label })) };
+},
+
+// ======================================================
+// NO-SHOW RECOVERY REPORT (independent report API)
+// POST /api/report/no-show-recovery — one row per no-show appointment
+// (a.status = 'no-show') within the filtered window. Unlike Cancellation
+// Recovery (latest appointment only, one row per client), every no-show
+// appointment matching the filters gets its own row, since a client can
+// no-show more than once and each is independently recoverable.
+// ======================================================
+
+_buildNoShowRecoveryWhere(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; staff_ids?: string[]; service_ids?: string[]; search?: string }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["a.salon_id = $1", "a.deleted_at IS NULL", "a.status = 'no-show'", "a.client_id IS NOT NULL"];
+  let idx = 2;
+
+  if (filters.start_date) {
+    where.push(`a.scheduled_at >= ($${idx++}::date::timestamp AT TIME ZONE 'Asia/Kolkata')`);
+    values.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    where.push(`a.scheduled_at < (($${idx++}::date + interval '1 day')::timestamp AT TIME ZONE 'Asia/Kolkata')`);
+    values.push(filters.end_date);
+  }
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    where.push(`a.staff_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.staff_ids);
+  }
+  if (filters.service_ids && filters.service_ids.length > 0) {
+    where.push(`EXISTS (
+      SELECT 1 FROM jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) AS svc(value)
+      WHERE NULLIF(svc.value->>'service_id', '')::uuid = ANY($${idx++}::uuid[])
+    )`);
+    values.push(filters.service_ids);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+async getNoShowRecoveryStats(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; staff_ids?: string[]; service_ids?: string[]; search?: string }
+): Promise<NoShowRecoveryStats> {
+  const { where, values } = this._buildNoShowRecoveryWhere(salonId, filters);
+  const query = `
+    SELECT COUNT(*)::int AS total_no_shows
+    FROM appointments a
+    JOIN clients c ON c.id = a.client_id
+    WHERE ${where}
+  `;
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return { total_no_shows: Number(rows[0]?.total_no_shows ?? 0) };
+},
+
+async getNoShowRecoveryRows(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; staff_ids?: string[]; service_ids?: string[]; search?: string;
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: NoShowRecoveryRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildNoShowRecoveryWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    SELECT
+      a.id AS appointment_id,
+      c.id AS client_id,
+      COALESCE(NULLIF(TRIM(c.full_name), ''), 'Unnamed Client') AS client_name,
+      COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS contact,
+      (
+        SELECT STRING_AGG(NULLIF(svc.value->>'name', ''), ', ')
+        FROM jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) AS svc(value)
+      ) AS service_name,
+      COALESCE(NULLIF(TRIM(CONCAT_WS(' ', st.first_name, st.last_name)), ''), 'Unassigned') AS staff_name,
+      TO_CHAR(a.scheduled_at, 'YYYY-MM-DD') AS scheduled_date,
+      EXTRACT(DAY FROM NOW() - a.scheduled_at)::int AS days_since,
+      COUNT(*) OVER() AS total_count
+    FROM appointments a
+    JOIN clients c ON c.id = a.client_id
+    LEFT JOIN staff st ON st.id = a.staff_id
+    WHERE ${where}
+    ORDER BY a.scheduled_at DESC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: NoShowRecoveryRow[] = rows.map((row: any) => ({
+    appointment_id: row.appointment_id,
+    client_id: row.client_id,
+    client_name: row.client_name,
+    contact: row.contact,
+    service_name: row.service_name || null,
+    staff_name: row.staff_name || null,
+    scheduled_date: row.scheduled_date,
+    days_since: Number(row.days_since ?? 0),
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// Filter dropdown options for the No-Show Recovery report — staff and
+// services actually present on this salon's no-show appointments, not a
+// hardcoded or salon-wide list, so the dropdowns only ever offer choices
+// that can actually narrow the result set.
+async getNoShowRecoveryFiltersAvailable(salonId: string): Promise<{ staff: { id: string; label: string }[]; services: { id: string; label: string }[] }> {
+  const [staffResult, servicesResult] = await Promise.all([
+    safeQuery(() => pool.query(
+      `SELECT DISTINCT st.id, TRIM(CONCAT_WS(' ', st.first_name, st.last_name)) AS label
+       FROM appointments a
+       JOIN staff st ON st.id = a.staff_id
+       WHERE a.salon_id = $1 AND a.status = 'no-show' AND a.deleted_at IS NULL
+       ORDER BY label ASC`,
+      [salonId]
+    )),
+    safeQuery(() => pool.query(
+      `SELECT DISTINCT sv.id, sv.name AS label
+       FROM appointments a
+       JOIN jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) AS svc(value) ON true
+       JOIN services sv ON sv.id = NULLIF(svc.value->>'service_id', '')::uuid
+       WHERE a.salon_id = $1 AND a.status = 'no-show' AND a.deleted_at IS NULL
+       ORDER BY label ASC`,
+      [salonId]
+    )),
+  ]);
+  return {
+    staff: staffResult.rows.map((r: any) => ({ id: r.id, label: r.label })),
+    services: servicesResult.rows.map((r: any) => ({ id: r.id, label: r.label })),
+  };
 },
 
 // ======================================================

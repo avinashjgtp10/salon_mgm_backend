@@ -261,6 +261,8 @@ import {
     CancellationRecoveryResponse,
     MembershipOpportunityFilters,
     MembershipOpportunityResponse,
+    NoShowRecoveryFilters,
+    NoShowRecoveryResponse,
     CustomerFrequencyReportFilters,
     CustomerFrequencyReportResponse,
     LostCustomersReportFilters,
@@ -1672,6 +1674,28 @@ async getMembershipOpportunityReport(
         reportsRepository.getMembershipOpportunityStats(salonId, filters),
         reportsRepository.getMembershipOpportunityRows(salonId, filters),
         reportsRepository.getMembershipOpportunityFiltersAvailable(salonId),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+        filters_available: filtersAvailable,
+    };
+},
+
+// ======================================================
+// NO-SHOW RECOVERY REPORT (independent report API)
+// ======================================================
+
+async getNoShowRecoveryReport(
+    salonId: string,
+    filters: NoShowRecoveryFilters
+): Promise<NoShowRecoveryResponse> {
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
+        reportsRepository.getNoShowRecoveryStats(salonId, filters),
+        reportsRepository.getNoShowRecoveryRows(salonId, filters),
+        reportsRepository.getNoShowRecoveryFiltersAvailable(salonId),
     ]);
 
     return {
