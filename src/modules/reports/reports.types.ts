@@ -1521,6 +1521,147 @@ export interface AllClientsReportResponse {
 }
 
 // ===============================
+// New Client Follow-Up Report (independent report API —
+// POST /api/report/new-client-follow-up)
+// "New" = joined within the last `new_within_days` days (default 7).
+// "Follow-up not completed" reuses the exact same completed-appointment-count
+// convention as All Clients' customer_type filter (COALESCE(completed_count,
+// 0) = 0) — a new client who has never had a completed/paid appointment yet.
+// ===============================
+
+export interface NewClientFollowUpFilters {
+    new_within_days?: number;
+    search?: string;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface NewClientFollowUpRow {
+    client_id: string;
+    client_name: string;
+    contact: string;
+    joined_date: string;
+    days_since_joined: number;
+}
+
+export interface NewClientFollowUpStats {
+    total_eligible: number;
+}
+
+export interface NewClientFollowUpPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface NewClientFollowUpResponse {
+    rows: NewClientFollowUpRow[];
+    pagination: NewClientFollowUpPagination;
+    stats: NewClientFollowUpStats;
+}
+
+// ===============================
+// Cancellation Recovery Report (independent report API —
+// POST /api/report/cancellation-recovery)
+// A client's most recent appointment (within `cancelled_within_days`) has
+// status='cancelled', and they have no LATER appointment of any status —
+// i.e. the cancellation was never followed by a rebooking. One row per
+// client, keyed on their single most recent cancelled appointment.
+// ===============================
+
+export interface CancellationRecoveryFilters {
+    cancelled_within_days?: number;
+    search?: string;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface CancellationRecoveryRow {
+    client_id: string;
+    client_name: string;
+    contact: string;
+    service_name: string | null;
+    invoice_number: string | null;
+    cancelled_date: string;
+    days_since_cancelled: number;
+}
+
+export interface CancellationRecoveryStats {
+    total_eligible: number;
+}
+
+export interface CancellationRecoveryPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface CancellationRecoveryResponse {
+    rows: CancellationRecoveryRow[];
+    pagination: CancellationRecoveryPagination;
+    stats: CancellationRecoveryStats;
+}
+
+// ===============================
+// Membership Opportunity Report (independent report API —
+// POST /api/report/membership-opportunity)
+// "Suitable for membership" = frequent visitor (>= min_visits completed
+// appointments in the trailing window) with no currently active membership
+// — reuses the exact NOT EXISTS(client_memberships ... status='active')
+// convention All Clients' has_membership filter already uses, so "has an
+// active membership" can never quietly mean something different here.
+// ===============================
+
+export interface MembershipOpportunityFilters {
+    window_days?: number;
+    min_visits?: number;
+    search?: string;
+    has_membership?: "has" | "no";
+    last_visit_from?: string;
+    last_visit_to?: string;
+    genders?: string[];
+    client_source?: string;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface MembershipOpportunityFiltersAvailable {
+    client_sources: { id: string; label: string }[];
+}
+
+export interface MembershipOpportunityRow {
+    client_id: string;
+    client_name: string;
+    contact: string;
+    visit_count: number;
+    has_membership: boolean;
+    last_visit_date: string | null;
+}
+
+export interface MembershipOpportunityStats {
+    total_eligible: number;
+}
+
+export interface MembershipOpportunityPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface MembershipOpportunityResponse {
+    rows: MembershipOpportunityRow[];
+    pagination: MembershipOpportunityPagination;
+    stats: MembershipOpportunityStats;
+    filters_available: MembershipOpportunityFiltersAvailable;
+}
+
+// ===============================
 // Customer Spend Segments Report (POST /api/report/customer-spend)
 //
 // Classifies clients as VIP / Regular / Low by how much they have spent, and
