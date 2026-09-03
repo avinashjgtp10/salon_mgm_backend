@@ -1718,6 +1718,73 @@ export interface NoShowRecoveryResponse {
 }
 
 // ===============================
+// Enquiry Report (independent report API — POST /api/report/enquiries)
+// Reads the enquiries table directly (same rows the Add Enquiry form /
+// EnquiriesListPage already create and manage) — a read-oriented view with
+// richer filters (staff/service/source/follow-up date) and KPI stats on top
+// of the exact same data, not a separate enquiry pipeline.
+// ===============================
+
+export interface EnquiryReportFilters {
+    start_date?: string;
+    end_date?: string;
+    staff_ids?: string[];
+    service_ids?: string[];
+    statuses?: string[];
+    sources?: string[];
+    follow_up_date?: string;
+    search?: string;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface EnquiryReportRow {
+    enquiry_id: string;
+    enquiry_no: number;
+    name: string;
+    phone: string;
+    service_id: string | null;
+    service_name: string | null;
+    staff_id: string | null;
+    staff_name: string | null;
+    status: string;
+    source: string | null;
+    follow_up_at: string | null;
+    notes: string | null;
+    created_at: string;
+}
+
+export interface EnquiryReportStats {
+    total_enquiries: number;
+    new_enquiries: number;
+    pending_follow_ups: number;
+    converted_enquiries: number;
+    lost_enquiries: number;
+    conversion_rate: number;
+}
+
+export interface EnquiryReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface EnquiryReportFiltersAvailable {
+    staff: { id: string; label: string }[];
+    services: { id: string; label: string }[];
+    sources: { id: string; label: string }[];
+}
+
+export interface EnquiryReportResponse {
+    rows: EnquiryReportRow[];
+    pagination: EnquiryReportPagination;
+    stats: EnquiryReportStats;
+    filters_available: EnquiryReportFiltersAvailable;
+}
+
+// ===============================
 // Customer Spend Segments Report (POST /api/report/customer-spend)
 //
 // Classifies clients as VIP / Regular / Low by how much they have spent, and
