@@ -33,15 +33,25 @@ export const branchOwnerService = {
   // this — folded in here so the page makes exactly one call, same as every
   // other Branch Owner page after the one-API-per-page pass.
   async getDashboard(branchOwnerId: string) {
-    const [salons, stats, payments, revenueTrend, inventorySummary, attention] = await Promise.all([
+    const [salons, stats, payments, dailyTrend, inventorySummary, attention] = await Promise.all([
       branchOwnerRepository.getMySalons(branchOwnerId),
       branchOwnerRepository.getDashboardStats(branchOwnerId),
       branchOwnerRepository.getRecentPayments(branchOwnerId, 10),
-      branchOwnerRepository.getRevenueTrend(branchOwnerId, 14),
+      branchOwnerRepository.getRevenueTrend(branchOwnerId, "daily"),
       branchOwnerRepository.getInventorySummary(branchOwnerId),
       branchOwnerRepository.getAttentionMetrics(branchOwnerId),
     ]);
-    return { salons, stats, payments, revenueTrend, inventorySummary, attention };
+    // Dashboard's initial paint only needs the daily points array — the
+    // priorPeriodRevenue figure is only meaningful once the frontend also
+    // knows which period it belongs to, which the dedicated revenue-trend
+    // endpoint provides when the Daily/Weekly/Monthly toggle is used.
+    return { salons, stats, payments, revenueTrend: dailyTrend.points, inventorySummary, attention };
+  },
+
+  // Separate from getDashboard so switching the Daily/Weekly/Monthly toggle
+  // on the Revenue Overview card only refetches this, not the whole page.
+  async getRevenueTrend(branchOwnerId: string, period: "daily" | "weekly" | "monthly") {
+    return branchOwnerRepository.getRevenueTrend(branchOwnerId, period);
   },
 
   async getPayments(branchOwnerId: string, status?: string) {

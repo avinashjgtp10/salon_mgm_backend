@@ -33,6 +33,18 @@ export const branchOwnerController = {
     } catch (err) { return next(err); }
   },
 
+  async getRevenueTrend(req: AuthedRequest, res: Response, next: NextFunction) {
+    try {
+      const branchOwnerId = req.user!.userId;
+      const period = String(req.query.period ?? "daily");
+      if (period !== "daily" && period !== "weekly" && period !== "monthly") {
+        throw new AppError(400, "period must be daily, weekly, or monthly", "VALIDATION_ERROR");
+      }
+      const data = await branchOwnerService.getRevenueTrend(branchOwnerId, period);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
   async getPayments(req: AuthedRequest, res: Response, next: NextFunction) {
     try {
       const branchOwnerId = req.user!.userId;

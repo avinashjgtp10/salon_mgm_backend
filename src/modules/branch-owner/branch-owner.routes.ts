@@ -8,6 +8,7 @@ const router = Router();
 router.use(authMiddleware, roleMiddleware("branch_owner"));
 
 router.get("/dashboard",         branchOwnerController.getDashboard);
+router.get("/dashboard/revenue-trend", branchOwnerController.getRevenueTrend);
 router.get("/payments",          branchOwnerController.getPayments);
 router.post("/payments/list",    branchOwnerController.listPayments);
 

@@ -199,13 +199,18 @@ export const branchOwnerRepository = {
     };
   },
 
-  // Day-by-day revenue for the dashboard's trend chart — same revenue_events
+  // Bucketed revenue for the dashboard's trend chart — same revenue_events
   // convention (completed sale, or an open partial deposit with no completed
-  // sale yet) as getDashboardStats(), just bucketed by day over the trailing
-  // window instead of summed into one total. generate_series fills in days
-  // with zero revenue so the chart doesn't skip gaps.
-  async getRevenueTrend(branchOwnerId: string, days = 14) {
-    const { rows } = await pool.query<{ day: string; revenue: string }>(`
+  // sale yet) as getDashboardStats(), just bucketed by day/week/month over a
+  // trailing window instead of summed into one total. generate_series fills
+  // in empty buckets so the chart doesn't skip gaps. Also returns the sum of
+  // the immediately preceding window of the same length, so the frontend can
+  // show a genuine period-over-period comparison rather than a fabricated one.
+  async getRevenueTrend(branchOwnerId: string, period: "daily" | "weekly" | "monthly" = "daily") {
+    const bucketUnit = period === "daily" ? "day" : period === "weekly" ? "week" : "month";
+    const bucketCount = period === "daily" ? 14 : period === "weekly" ? 12 : 12;
+
+    const { rows } = await pool.query<{ bucket: string; revenue: string }>(`
       WITH my_salons AS (
         SELECT salon_id FROM branch_owner_salons WHERE branch_owner_id = $1
       ),
@@ -234,18 +239,66 @@ export const branchOwnerRepository = {
         UNION ALL
         SELECT event_at, amount FROM open_partial_rows
       ),
-      days_series AS (
-        SELECT generate_series(CURRENT_DATE - ($2::int - 1), CURRENT_DATE, '1 day')::date AS day
+      buckets_series AS (
+        SELECT generate_series(
+          date_trunc('${bucketUnit}', CURRENT_DATE) - (($2::int - 1) || ' ${bucketUnit}')::interval,
+          date_trunc('${bucketUnit}', CURRENT_DATE),
+          ('1 ${bucketUnit}')::interval
+        )::date AS bucket
       )
       SELECT
-        ds.day::text AS day,
+        bs.bucket::text AS bucket,
         COALESCE(SUM(re.amount), 0)::numeric AS revenue
-      FROM days_series ds
-      LEFT JOIN revenue_events re ON DATE(re.event_at) = ds.day
-      GROUP BY ds.day
-      ORDER BY ds.day
-    `, [branchOwnerId, days]);
-    return rows.map((r) => ({ day: r.day, revenue: Number(r.revenue) }));
+      FROM buckets_series bs
+      LEFT JOIN revenue_events re ON date_trunc('${bucketUnit}', re.event_at) = bs.bucket
+      GROUP BY bs.bucket
+      ORDER BY bs.bucket
+    `, [branchOwnerId, bucketCount]);
+
+    const points = rows.map((r) => ({ day: r.bucket, revenue: Number(r.revenue) }));
+
+    // Prior-window comparison: sum of the same number of buckets immediately
+    // before the window above, computed with the same revenue_events logic.
+    const { rows: priorRows } = await pool.query<{ prior_revenue: string }>(`
+      WITH my_salons AS (
+        SELECT salon_id FROM branch_owner_salons WHERE branch_owner_id = $1
+      ),
+      sales_rows AS (
+        SELECT s.created_at AS event_at, ROUND(s.total_amount) AS amount
+        FROM sales s
+        LEFT JOIN appointments a ON a.id = s.appointment_id
+        WHERE s.salon_id IN (SELECT salon_id FROM my_salons)
+          AND s.status = 'completed'
+          AND (a.id IS NULL OR (a.status IN ('paid', 'partial') AND a.deleted_at IS NULL))
+      ),
+      open_partial_rows AS (
+        SELECT p.created_at AS event_at, p.paid_amount AS amount
+        FROM payments p
+        JOIN appointments a ON a.id = p.appointment_id
+        WHERE p.salon_id IN (SELECT salon_id FROM my_salons)
+          AND p.status = 'partial'
+          AND a.deleted_at IS NULL
+          AND a.status NOT IN ('cancelled', 'no-show')
+          AND NOT EXISTS (
+            SELECT 1 FROM sales s2 WHERE s2.appointment_id = p.appointment_id AND s2.status = 'completed'
+          )
+      ),
+      revenue_events AS (
+        SELECT event_at, amount FROM sales_rows
+        UNION ALL
+        SELECT event_at, amount FROM open_partial_rows
+      ),
+      window_bounds AS (
+        SELECT
+          date_trunc('${bucketUnit}', CURRENT_DATE) - ($2::int || ' ${bucketUnit}')::interval AS prior_start,
+          date_trunc('${bucketUnit}', CURRENT_DATE) - (($2::int - 1) || ' ${bucketUnit}')::interval AS prior_end
+      )
+      SELECT COALESCE(SUM(re.amount), 0)::numeric AS prior_revenue
+      FROM revenue_events re, window_bounds wb
+      WHERE re.event_at >= wb.prior_start AND re.event_at < wb.prior_end
+    `, [branchOwnerId, bucketCount]);
+
+    return { points, priorPeriodRevenue: Number(priorRows[0]?.prior_revenue ?? 0) };
   },
 
   // Cross-salon "Needs Attention" metrics — each one is a real, independently
