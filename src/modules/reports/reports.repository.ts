@@ -58,6 +58,8 @@ import {
     MembershipOpportunityStats,
     NoShowRecoveryRow,
     NoShowRecoveryStats,
+    EnquiryReportRow,
+    EnquiryReportStats,
     CustomerFrequencyReportRow,
     CustomerFrequencyReportStats,
     LostCustomersReportRow,
@@ -6290,6 +6292,202 @@ async getNoShowRecoveryFiltersAvailable(salonId: string): Promise<{ staff: { id:
   return {
     staff: staffResult.rows.map((r: any) => ({ id: r.id, label: r.label })),
     services: servicesResult.rows.map((r: any) => ({ id: r.id, label: r.label })),
+  };
+},
+
+// ======================================================
+// ENQUIRY REPORT (independent report API)
+// POST /api/report/enquiries — reads the enquiries table directly (the same
+// rows the Add Enquiry form / EnquiriesListPage already create and manage).
+// "Pending Follow-ups" = any enquiry not yet in a resolved state (Converted/
+// Closed/Lost) — i.e. still New, Contacted, or Follow-up.
+// ======================================================
+
+_buildEnquiryReportWhere(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; staff_ids?: string[]; service_ids?: string[];
+    statuses?: string[]; sources?: string[]; follow_up_date?: string; search?: string;
+  }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["e.salon_id = $1"];
+  let idx = 2;
+
+  if (filters.start_date) { where.push(`e.created_at >= $${idx++}::date`); values.push(filters.start_date); }
+  if (filters.end_date)   { where.push(`e.created_at < ($${idx++}::date + interval '1 day')`); values.push(filters.end_date); }
+
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    where.push(`e.staff_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.staff_ids);
+  }
+  if (filters.service_ids && filters.service_ids.length > 0) {
+    where.push(`e.service_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.service_ids);
+  }
+  if (filters.statuses && filters.statuses.length > 0) {
+    where.push(`e.status = ANY($${idx++}::text[])`);
+    values.push(filters.statuses);
+  }
+  if (filters.sources && filters.sources.length > 0) {
+    where.push(`e.source = ANY($${idx++}::text[])`);
+    values.push(filters.sources);
+  }
+  if (filters.follow_up_date) {
+    where.push(`e.follow_up_at::date = $${idx++}::date`);
+    values.push(filters.follow_up_date);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(e.name ILIKE $${idx} OR e.phone ILIKE $${idx})`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+async getEnquiryReportStats(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; staff_ids?: string[]; service_ids?: string[];
+    statuses?: string[]; sources?: string[]; follow_up_date?: string; search?: string;
+  }
+): Promise<EnquiryReportStats> {
+  const { where, values } = this._buildEnquiryReportWhere(salonId, filters);
+  const query = `
+    SELECT
+      COUNT(*)::int AS total_enquiries,
+      COUNT(*) FILTER (WHERE e.status = 'New')::int AS new_enquiries,
+      COUNT(*) FILTER (WHERE e.status IN ('New', 'Contacted', 'Follow-up'))::int AS pending_follow_ups,
+      COUNT(*) FILTER (WHERE e.status = 'Converted')::int AS converted_enquiries,
+      COUNT(*) FILTER (WHERE e.status IN ('Lost', 'Closed'))::int AS lost_enquiries
+    FROM enquiries e
+    WHERE ${where}
+  `;
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  const total = Number(r.total_enquiries ?? 0);
+  const converted = Number(r.converted_enquiries ?? 0);
+  return {
+    total_enquiries: total,
+    new_enquiries: Number(r.new_enquiries ?? 0),
+    pending_follow_ups: Number(r.pending_follow_ups ?? 0),
+    converted_enquiries: converted,
+    lost_enquiries: Number(r.lost_enquiries ?? 0),
+    conversion_rate: total > 0 ? Math.round((converted / total) * 1000) / 10 : 0,
+  };
+},
+
+async getEnquiryReportRows(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; staff_ids?: string[]; service_ids?: string[];
+    statuses?: string[]; sources?: string[]; follow_up_date?: string; search?: string;
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: EnquiryReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildEnquiryReportWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    SELECT
+      e.id AS enquiry_id,
+      e.enquiry_no,
+      e.name,
+      e.phone,
+      e.service_id,
+      sv.name AS service_name,
+      e.staff_id,
+      NULLIF(TRIM(CONCAT_WS(' ', st.first_name, st.last_name)), '') AS staff_name,
+      e.status,
+      e.source,
+      e.follow_up_at,
+      e.notes,
+      e.created_at,
+      COUNT(*) OVER() AS total_count
+    FROM enquiries e
+    LEFT JOIN services sv ON sv.id = e.service_id
+    LEFT JOIN staff st ON st.id = e.staff_id
+    WHERE ${where}
+    ORDER BY e.created_at DESC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: EnquiryReportRow[] = rows.map((row: any) => ({
+    enquiry_id: row.enquiry_id,
+    enquiry_no: Number(row.enquiry_no),
+    name: row.name,
+    phone: row.phone,
+    service_id: row.service_id,
+    service_name: row.service_name || null,
+    staff_id: row.staff_id,
+    staff_name: row.staff_name || null,
+    status: row.status,
+    source: row.source || null,
+    follow_up_at: row.follow_up_at,
+    notes: row.notes || null,
+    created_at: row.created_at,
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// Filter dropdown options for the Enquiry Report — staff/services/sources
+// actually present on this salon's enquiries, not a hardcoded list.
+async getEnquiryReportFiltersAvailable(salonId: string): Promise<{
+  staff: { id: string; label: string }[];
+  services: { id: string; label: string }[];
+  sources: { id: string; label: string }[];
+}> {
+  const [staffResult, servicesResult, sourcesResult] = await Promise.all([
+    safeQuery(() => pool.query(
+      `SELECT DISTINCT st.id, TRIM(CONCAT_WS(' ', st.first_name, st.last_name)) AS label
+       FROM enquiries e
+       JOIN staff st ON st.id = e.staff_id
+       WHERE e.salon_id = $1
+       ORDER BY label ASC`,
+      [salonId]
+    )),
+    safeQuery(() => pool.query(
+      `SELECT DISTINCT sv.id, sv.name AS label
+       FROM enquiries e
+       JOIN services sv ON sv.id = e.service_id
+       WHERE e.salon_id = $1
+       ORDER BY label ASC`,
+      [salonId]
+    )),
+    safeQuery(() => pool.query(
+      `SELECT DISTINCT ON (LOWER(TRIM(source))) TRIM(source) AS id, TRIM(source) AS label
+       FROM enquiries
+       WHERE salon_id = $1 AND source IS NOT NULL AND TRIM(source) <> ''
+       ORDER BY LOWER(TRIM(source)) ASC, TRIM(source) ASC`,
+      [salonId]
+    )),
+  ]);
+  return {
+    staff: staffResult.rows.map((r: any) => ({ id: r.id, label: r.label })),
+    services: servicesResult.rows.map((r: any) => ({ id: r.id, label: r.label })),
+    sources: sourcesResult.rows.map((r: any) => ({ id: r.id, label: r.label })),
   };
 },
 

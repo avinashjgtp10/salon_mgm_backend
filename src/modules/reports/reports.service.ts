@@ -263,6 +263,8 @@ import {
     MembershipOpportunityResponse,
     NoShowRecoveryFilters,
     NoShowRecoveryResponse,
+    EnquiryReportFilters,
+    EnquiryReportResponse,
     CustomerFrequencyReportFilters,
     CustomerFrequencyReportResponse,
     LostCustomersReportFilters,
@@ -1696,6 +1698,28 @@ async getNoShowRecoveryReport(
         reportsRepository.getNoShowRecoveryStats(salonId, filters),
         reportsRepository.getNoShowRecoveryRows(salonId, filters),
         reportsRepository.getNoShowRecoveryFiltersAvailable(salonId),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+        filters_available: filtersAvailable,
+    };
+},
+
+// ======================================================
+// ENQUIRY REPORT (independent report API)
+// ======================================================
+
+async getEnquiryReport(
+    salonId: string,
+    filters: EnquiryReportFilters
+): Promise<EnquiryReportResponse> {
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
+        reportsRepository.getEnquiryReportStats(salonId, filters),
+        reportsRepository.getEnquiryReportRows(salonId, filters),
+        reportsRepository.getEnquiryReportFiltersAvailable(salonId),
     ]);
 
     return {

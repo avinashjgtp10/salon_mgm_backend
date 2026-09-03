@@ -249,6 +249,18 @@ router.post(
 );
 
 // ======================================================
+// ENQUIRY REPORT (independent report API)
+// Reads the enquiries table directly — same data the Add Enquiry form and
+// EnquiriesListPage already create/manage, with richer filters and KPIs.
+// ======================================================
+
+router.post(
+    "/enquiries",
+    ...guard,
+    reportsController.getEnquiryReport
+);
+
+// ======================================================
 // CUSTOMER FREQUENCY REPORT (independent report API)
 // Reads clients/sales directly — never calls the Appointment API/service.
 // ======================================================
