@@ -5,6 +5,7 @@ import {
     ProductAuditItem,
     CreateProductAuditBody, ListProductAuditsFilters, ProductAuditStatus,
 } from "./product-audit.types";
+import { inventoryAlertsService } from "./inventory-alerts.service";
 
 // Schema (product_audits, product_audit_items, product_audit_history) is NOT
 // self-migrated from here — per project policy, schema changes are never
@@ -319,6 +320,7 @@ export const productAuditRepository = {
             );
 
             let adjustedCount = 0;
+            const adjustedProductIds: string[] = [];
             for (const item of items) {
                 const bottleSize = Number(item.bottle_size) || 0;
                 const baseUnitsPerPack = bottleSize > 0 ? bottleSize : 1;
@@ -331,6 +333,7 @@ export const productAuditRepository = {
                 // approval to it). Leave stock and the ledger untouched.
                 if (baseDelta === 0) continue;
                 adjustedCount++;
+                adjustedProductIds.push(item.product_id);
 
                 const txnType = baseDelta > 0 ? "audit_adjustment_in" : "audit_adjustment_out";
 
@@ -372,6 +375,9 @@ export const productAuditRepository = {
             );
 
             await client.query("COMMIT");
+            inventoryAlertsService
+                .checkAndNotify(adjustedProductIds, salonId)
+                .catch(() => { /* logged internally, never blocks the caller */ });
             return { audit: updatedRows[0], adjustedCount };
         } catch (err) {
             await client.query("ROLLBACK");

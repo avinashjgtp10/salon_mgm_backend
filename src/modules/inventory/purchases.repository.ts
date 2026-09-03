@@ -1,6 +1,7 @@
 import pool from "../../config/database";
 import { productInventoryRepository, ProductInventoryRow } from "./product-inventory.repository";
 import { CreatePurchaseDTO, ListPurchaseFilters, Purchase, PurchaseItem } from "./purchases.types";
+import { inventoryAlertsService } from "./inventory-alerts.service";
 
 // Schema (purchases, purchase_items, salons.next_purchase_seq) is NOT
 // self-migrated from here — per project policy, schema changes are never
@@ -195,6 +196,9 @@ export const purchasesRepository = {
                 salonId,
             );
 
+            inventoryAlertsService
+                .checkAndNotify(productIds, salonId)
+                .catch(() => { /* logged internally, never blocks the caller */ });
             return { purchase: { ...purchase, items }, updatedProducts };
         } catch (err) {
             await client.query("ROLLBACK");

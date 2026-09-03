@@ -68,6 +68,10 @@ export interface ListProductInventoryFilters {
     brand_id?: string;
     /** "low" restricts to items at or below their reorder point. */
     stock_status?: "all" | "low";
+    /** Restricts the list to a single product — used by the notification
+     *  bell's "view product" click-through, which needs that one row (with
+     *  its live status/expiry) regardless of what page it'd normally fall on. */
+    product_id?: string;
     page?: number;
     limit?: number;
 }
@@ -174,6 +178,7 @@ export const productInventoryRepository = {
         if (filters.stock_status === "low") {
             conditions.push(`(p.qty_alert IS NOT NULL AND p.qty_alert > 0 AND CEIL(${STOCK_IN_PACKS}) <= p.qty_alert)`);
         }
+        if (filters.product_id) { conditions.push(`p.id = $${idx++}`); values.push(filters.product_id); }
 
         const where = `WHERE ${conditions.join(" AND ")}`;
         const page = Math.max(1, filters.page ?? 1);

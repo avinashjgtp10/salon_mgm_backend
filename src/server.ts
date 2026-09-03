@@ -13,6 +13,7 @@ import { startNoShowScheduler, stopNoShowScheduler } from './modules/appointment
 import { startPushReceiptScheduler, stopPushReceiptScheduler } from './modules/notifications/pushNotification.service'
 import { startBotQuestionsCleanupScheduler, stopBotQuestionsCleanupScheduler } from './modules/bot/bot-questions-cleanup.scheduler'
 import { startExpiryWriteOffScheduler, stopExpiryWriteOffScheduler } from './modules/inventory/expiry-write-off.scheduler'
+import { startInventoryAlertsScheduler, stopInventoryAlertsScheduler } from './modules/inventory/inventory-alerts.scheduler'
 
 const PORT = config.port
 
@@ -58,6 +59,9 @@ httpServer.listen(PORT, () => {
 
   // Write off retail products whose entire stock has expired
   startExpiryWriteOffScheduler()
+
+  // Notify on products approaching/past their expiry date
+  startInventoryAlertsScheduler()
 })
 
 // Graceful shutdown
@@ -70,6 +74,7 @@ process.on('SIGTERM', () => {
   stopPushReceiptScheduler()
   stopBotQuestionsCleanupScheduler()
   stopExpiryWriteOffScheduler()
+  stopInventoryAlertsScheduler()
   httpServer.close(() => {
     logger.info('HTTP server closed')
     db.end()

@@ -4,6 +4,7 @@ import {
     StockMovement, CreateStockMovementBody, ListStockMovementsFilters,
     StockReconciliationRow, SaveConsumableUsageBody,
 } from "./inventory.types";
+import { inventoryAlertsService } from "./inventory-alerts.service";
 
 // ─── Suppliers ────────────────────────────────────────────────────────────────
 
@@ -436,6 +437,9 @@ export const consumableUsageRepository = {
             }
 
             await client.query("COMMIT");
+            inventoryAlertsService
+                .checkAndNotify(body.items.map((i) => i.product_id), salonId)
+                .catch(() => { /* logged internally, never blocks the caller */ });
             return recorded;
         } catch (err) {
             await client.query("ROLLBACK");
@@ -574,6 +578,9 @@ export const stockTakeRepository = {
             }
 
             await client.query("COMMIT");
+            inventoryAlertsService
+                .checkAndNotify(params.items.map((i) => i.product_id), params.salonId)
+                .catch(() => { /* logged internally, never blocks the caller */ });
             return movements;
         } catch (err) {
             await client.query("ROLLBACK");
