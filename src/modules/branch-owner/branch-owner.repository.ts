@@ -21,10 +21,17 @@ export const branchOwnerRepository = {
         COALESCE(staff_counts.staff_count, 0)                                            AS staff_count,
         COALESCE(client_counts.client_count, 0)                                          AS client_count,
         COALESCE(appt_counts.appointments_today, 0)                                      AS appointments_today,
-        COALESCE(revenue.revenue_today, 0)                                               AS revenue_today
+        COALESCE(revenue.revenue_today, 0)                                               AS revenue_today,
+        COALESCE(sub.has_active_plan, false)                                             AS has_active_plan
       FROM branch_owner_salons bos
       JOIN salons s ON s.id = bos.salon_id
       LEFT JOIN users u ON u.id = s.owner_id
+      LEFT JOIN (
+        SELECT salon_id, true AS has_active_plan
+        FROM billing_subscriptions
+        WHERE status IN ('trialing', 'active')
+        GROUP BY salon_id
+      ) sub ON sub.salon_id = s.id
       LEFT JOIN (
         SELECT salon_id, COUNT(*)::int AS staff_count
         FROM staff
