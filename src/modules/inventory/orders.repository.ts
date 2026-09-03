@@ -45,7 +45,7 @@ export const ordersRepository = {
                     const orderResult = await client.query(
                         `INSERT INTO orders (
                            salon_id, order_number, status, supplier_id,
-                           bill_to_branch_id, ship_to_branch_id, order_date,
+                           delivery_address, delivery_instructions, order_date,
                            remark, ref_number, payment_terms_days,
                            shipment_date, delivery_date,
                            tax_type, tax_group, terms_conditions, signature_url,
@@ -54,7 +54,7 @@ export const ordersRepository = {
                          RETURNING *`,
                         [
                             salonId, orderNumber, data.status === "draft" ? "draft" : "sent", data.supplier_id,
-                            data.bill_to_branch_id ?? null, data.ship_to_branch_id ?? null, data.order_date ?? null,
+                            data.delivery_address ?? null, data.delivery_instructions ?? null, data.order_date ?? null,
                             data.remark ?? null, data.ref_number ?? null, data.payment_terms_days ?? null,
                             data.shipment_date ?? null, data.delivery_date ?? null,
                             data.tax_type, data.tax_group ?? null, data.terms_conditions ?? null, data.signature_url ?? null,
@@ -148,14 +148,14 @@ export const ordersRepository = {
 
             await client.query(
                 `UPDATE orders SET
-                   supplier_id = $1, bill_to_branch_id = $2, ship_to_branch_id = $3,
+                   supplier_id = $1, delivery_address = $2, delivery_instructions = $3,
                    order_date = COALESCE($4, order_date), remark = $5, ref_number = $6,
                    payment_terms_days = $7, shipment_date = $8, delivery_date = $9,
                    tax_type = $10, tax_group = $11, terms_conditions = $12,
                    signature_url = $13, shipping_cost = $14, updated_at = NOW()
                  WHERE id = $15`,
                 [
-                    data.supplier_id, data.bill_to_branch_id ?? null, data.ship_to_branch_id ?? null,
+                    data.supplier_id, data.delivery_address ?? null, data.delivery_instructions ?? null,
                     data.order_date ?? null, data.remark ?? null, data.ref_number ?? null,
                     data.payment_terms_days ?? null, data.shipment_date ?? null, data.delivery_date ?? null,
                     data.tax_type, data.tax_group ?? null, data.terms_conditions ?? null,
