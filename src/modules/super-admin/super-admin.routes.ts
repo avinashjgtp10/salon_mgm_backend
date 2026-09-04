@@ -22,6 +22,8 @@ router.get("/subscription-permissions/:salonId",             superAdminControlle
 router.put("/subscription-permissions/:salonId",             superAdminController.updateSubscriptionPermissions);
 router.get("/subscription-permissions/:salonId/audit-log",   superAdminController.getSubscriptionPermissionAuditLog);
 router.post("/subscription-permissions/:salonId/grant-days", superAdminController.grantSubscriptionDays);
+router.post("/subscription-permissions/:salonId/apply",      superAdminController.applySubscription);
+router.post("/subscription-permissions/:salonId/remove",     superAdminController.removeSubscription);
 
 // Recent / Frequent Logins & No-Plan Users
 router.get("/recent-logins",         superAdminController.getRecentLogins);

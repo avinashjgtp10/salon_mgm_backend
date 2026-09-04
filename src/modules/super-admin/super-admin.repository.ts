@@ -430,12 +430,23 @@ export const superAdminRepository = {
         s.is_active,
         u.email                                                  AS owner_email,
         TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,''))) AS owner_name,
-        bp.name                                                  AS plan_name,
+        sp.name                                                  AS plan_name,
+        sub.status                                               AS subscription_status,
+        COALESCE(sub.trial_start, sub.current_period_start)      AS subscription_start_date,
+        COALESCE(sub.trial_end, sub.current_period_end)          AS subscription_end_date,
+        sub.cancel_at_period_end                                 AS subscription_cancel_at_period_end,
+        sub.cancelled_at                                         AS subscription_cancelled_at,
+        sub.is_trial                                             AS subscription_is_trial,
         ss.value                                                 AS subscription_permissions
       FROM salons s
       JOIN  users u  ON u.id = s.owner_id
-      LEFT JOIN billing_subscriptions bs ON bs.salon_id = s.id AND bs.status IN ('active','trialing')
-      LEFT JOIN billing_plans bp ON bp.id = bs.plan_id
+      LEFT JOIN LATERAL (
+        SELECT * FROM subscriptions
+        WHERE salon_id = s.id
+        ORDER BY created_at DESC
+        LIMIT 1
+      ) sub ON true
+      LEFT JOIN subscription_plans sp ON sp.id = sub.plan_id
       LEFT JOIN salon_settings ss ON ss.salon_id = s.id AND ss.key = 'subscription_permissions'
       WHERE s.id = $1
       LIMIT 1
@@ -504,6 +515,29 @@ export const superAdminRepository = {
   // grants for a salon, distinguished by the `action` field.
   async logSubscriptionGrantDays(salonId: string, changedByUserId: string, days: number, newPeriodEnd: string) {
     const value = JSON.stringify({ action: "grant_days", days, new_current_period_end: newPeriodEnd });
+    await pool.query(
+      `INSERT INTO subscription_permission_audit_log (salon_id, changed_by, previous_value, new_value)
+       VALUES ($1, $2, NULL, $3)`,
+      [salonId, changedByUserId, value]
+    );
+  },
+
+  // Reuses subscription_permission_audit_log for "apply subscription" (explicit
+  // start/end dates) too — new_value carries
+  // { action: 'apply_subscription', start_date, end_date }.
+  async logSubscriptionApply(salonId: string, changedByUserId: string, startDate: string, endDate: string) {
+    const value = JSON.stringify({ action: "apply_subscription", start_date: startDate, end_date: endDate });
+    await pool.query(
+      `INSERT INTO subscription_permission_audit_log (salon_id, changed_by, previous_value, new_value)
+       VALUES ($1, $2, NULL, $3)`,
+      [salonId, changedByUserId, value]
+    );
+  },
+
+  // Reuses subscription_permission_audit_log for "remove subscription" too —
+  // new_value carries { action: 'remove_subscription' }.
+  async logSubscriptionRemove(salonId: string, changedByUserId: string) {
+    const value = JSON.stringify({ action: "remove_subscription" });
     await pool.query(
       `INSERT INTO subscription_permission_audit_log (salon_id, changed_by, previous_value, new_value)
        VALUES ($1, $2, NULL, $3)`,

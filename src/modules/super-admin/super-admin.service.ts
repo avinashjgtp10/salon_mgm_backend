@@ -177,7 +177,16 @@ export const superAdminService = {
       try { permissions = JSON.parse(salon.subscription_permissions); } catch { permissions = {}; }
     }
     return {
-      salon: { id: salon.id, name: salon.name, owner_email: salon.owner_email, owner_name: salon.owner_name, plan_name: salon.plan_name, is_active: salon.is_active },
+      salon: {
+        id: salon.id, name: salon.name, owner_email: salon.owner_email, owner_name: salon.owner_name,
+        plan_name: salon.plan_name, is_active: salon.is_active,
+        subscription_status: salon.subscription_status,
+        subscription_start_date: salon.subscription_start_date,
+        subscription_end_date: salon.subscription_end_date,
+        subscription_cancel_at_period_end: salon.subscription_cancel_at_period_end,
+        subscription_cancelled_at: salon.subscription_cancelled_at,
+        subscription_is_trial: salon.subscription_is_trial,
+      },
       permissions,
     };
   },
@@ -242,6 +251,62 @@ export const superAdminService = {
     await superAdminRepository.logSubscriptionGrantDays(salonId, changedByUserId, days, updated.current_period_end as string);
 
     return { subscription: updated, days_granted: days };
+  },
+
+  // ── APPLY SUBSCRIPTION (explicit start/end dates) ─────────────────────────────
+  // Same shape as grantSubscriptionDays but takes explicit dates instead of a
+  // day count — for the super-admin "Apply Subscription" action with Start
+  // Date / End Date pickers. Reuses the salon's existing plan_id if it has a
+  // subscription already, otherwise falls back to the first available plan
+  // (same fallback grantSubscriptionDays uses) since subscriptions.plan_id
+  // is NOT NULL.
+  async applySubscription(salonId: string, startDate: string, endDate: string, changedByUserId: string) {
+    if (!salonId) throw new AppError(400, "Salon ID required", "VALIDATION_ERROR");
+    if (!startDate || !endDate) throw new AppError(400, "start_date and end_date are required", "VALIDATION_ERROR");
+    if (new Date(endDate) <= new Date(startDate)) throw new AppError(400, "end_date must be after start_date", "VALIDATION_ERROR");
+    if (!changedByUserId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+
+    const existing = await subscriptionsRepository.findMostRecentBySalonId(salonId);
+
+    let updated;
+    if (existing) {
+      updated = await subscriptionsRepository.applySubscriptionDates(existing.id, startDate, endDate);
+    } else {
+      const plans = await subscriptionsRepository.listPlans();
+      if (plans.length === 0) {
+        throw new AppError(500, "No subscription plans exist to attach this subscription to", "NO_PLANS_CONFIGURED");
+      }
+      updated = await subscriptionsRepository.createManualSubscriptionWithDates({
+        salon_id: salonId,
+        plan_id: plans[0].id,
+        start_date: startDate,
+        end_date: endDate,
+      });
+    }
+
+    await superAdminRepository.logSubscriptionApply(salonId, changedByUserId, startDate, endDate);
+
+    return { subscription: updated };
+  },
+
+  // ── REMOVE SUBSCRIPTION (immediate deactivation) ──────────────────────────────
+  // Deactivates EVERY active/paused subscription row for the salon, not just
+  // the most recent one — fetchSubscriptionStatusThunk on the frontend grants
+  // access if ANY row for the salon is active/trialing, so leaving an older
+  // row untouched (e.g. a leftover trial row) would keep the account logged
+  // in and unblocked even after this "succeeds". No-op-but-success when the
+  // salon has no such rows at all — the admin's intent ("this account should
+  // have no active subscription") is already satisfied, so this shouldn't
+  // 404 and block the Remove button from ever working for those accounts.
+  async removeSubscription(salonId: string, changedByUserId: string) {
+    if (!salonId) throw new AppError(400, "Salon ID required", "VALIDATION_ERROR");
+    if (!changedByUserId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+
+    const updated = await subscriptionsRepository.deactivateAllForSalon(salonId);
+
+    await superAdminRepository.logSubscriptionRemove(salonId, changedByUserId);
+
+    return { subscription: updated[0] ?? null, deactivated_count: updated.length };
   },
 
   // ── USERS ─────────────────────────────────────────────────────────────────────
