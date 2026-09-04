@@ -17,6 +17,7 @@ type CreateNotificationData = {
   product_id?: string;
   branch_id?: string;
   alert_status?: string;
+  spotlight_feature_id?: string;
 };
 
 type CreateNotificationOptions = {
@@ -65,6 +66,7 @@ export const notificationsService = {
       product_id: data.product_id,
       branch_id: data.branch_id,
       alert_status: data.alert_status,
+      spotlight_feature_id: data.spotlight_feature_id,
     });
     logger.info("Notification DB row created", {
       notificationId: notification.id,

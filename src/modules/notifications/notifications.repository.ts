@@ -12,6 +12,7 @@ export interface Notification {
   branch_id?: string | null;
   alert_status?: string | null;
   resolved_at?: string | null;
+  spotlight_feature_id?: string | null;
 }
 
 export const notificationsRepository = {
@@ -23,14 +24,15 @@ export const notificationsRepository = {
     product_id?: string;
     branch_id?: string;
     alert_status?: string;
+    spotlight_feature_id?: string;
   }) {
     const { rows } = await pool.query<Notification>(
-      `INSERT INTO notifications (salon_id, type, title, body, product_id, branch_id, alert_status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO notifications (salon_id, type, title, body, product_id, branch_id, alert_status, spotlight_feature_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
       [
         data.salon_id, data.type, data.title, data.body ?? null,
-        data.product_id ?? null, data.branch_id ?? null, data.alert_status ?? null,
+        data.product_id ?? null, data.branch_id ?? null, data.alert_status ?? null, data.spotlight_feature_id ?? null,
       ]
     );
     return rows[0];
