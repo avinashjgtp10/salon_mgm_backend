@@ -14,6 +14,7 @@ import { startPushReceiptScheduler, stopPushReceiptScheduler } from './modules/n
 import { startBotQuestionsCleanupScheduler, stopBotQuestionsCleanupScheduler } from './modules/bot/bot-questions-cleanup.scheduler'
 import { startExpiryWriteOffScheduler, stopExpiryWriteOffScheduler } from './modules/inventory/expiry-write-off.scheduler'
 import { startInventoryAlertsScheduler, stopInventoryAlertsScheduler } from './modules/inventory/inventory-alerts.scheduler'
+import { startPosPaymentsScheduler, stopPosPaymentsScheduler } from './modules/pos-payments/pos-payments.scheduler'
 
 const PORT = config.port
 
@@ -62,6 +63,10 @@ httpServer.listen(PORT, () => {
 
   // Notify on products approaching/past their expiry date
   startInventoryAlertsScheduler()
+
+  // Confirm/expire in-flight Payment Machine requests — the only durable
+  // confirmation path for providers with no webhook (Paytm today).
+  startPosPaymentsScheduler()
 })
 
 // Graceful shutdown
@@ -75,6 +80,7 @@ process.on('SIGTERM', () => {
   stopBotQuestionsCleanupScheduler()
   stopExpiryWriteOffScheduler()
   stopInventoryAlertsScheduler()
+  stopPosPaymentsScheduler()
   httpServer.close(() => {
     logger.info('HTTP server closed')
     db.end()
