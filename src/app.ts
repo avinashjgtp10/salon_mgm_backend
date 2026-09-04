@@ -58,6 +58,7 @@ import { ensureTable as ensureAiEngineTables } from "./modules/ai-engine/ai-engi
 import waAutomationRoutes from "./modules/whatsapp-automation/whatsapp-automation.routes";
 import waScheduledMessagesRoutes from "./modules/whatsapp-automation/wa-scheduled-messages.routes";
 import waPurchaseTemplatesRoutes from "./modules/whatsapp-automation/wa-purchase-templates.routes";
+import notificationChannelsRoutes from "./modules/notification-channels/notification-channels.routes";
 import attendanceRoutes from "./modules/attendance/attendance.routes";
 import { deviceApiRouter, admsRouter } from "./modules/device/device.routes";
 import packageTemplatesRoutes from "./modules/package-templates/package-templates.routes";
@@ -292,6 +293,7 @@ app.use("/api/v1/cash-management", cashManagementRoutes);
 app.use("/api/v1/wa-automation", waAutomationRoutes);
 app.use("/api/v1/wa-automation/purchase-templates", waPurchaseTemplatesRoutes);
 app.use("/api/v1/wa-automation/scheduled", waScheduledMessagesRoutes);
+app.use("/api/v1/notification-channels", notificationChannelsRoutes);
 app.use("/api/v1/attendance", attendanceRoutes);
 app.use("/api/v1/devices", deviceApiRouter);
 app.use("/api/v1/package-templates", packageTemplatesRoutes);
