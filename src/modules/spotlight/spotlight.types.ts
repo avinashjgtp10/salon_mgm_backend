@@ -6,6 +6,19 @@ export interface SpotlightImage {
     description?: string;
 }
 
+// A named walkthrough section within a feature (e.g. "Booking an
+// appointment" inside a "Calendar" feature) — its own title, description/
+// steps text, and its own independent set of screenshots. Deliberately
+// separate from the top-level `images` gallery (used by the cover photo /
+// "Why it works" flat list) so a feature can have both a general gallery
+// AND a structured, titled walkthrough without the two mixing.
+export interface SpotlightSection {
+    id: string; // client-generated (crypto.randomUUID()) — stable React key across add/remove/reorder, not a DB row id (sections live inline as JSONB, not a child table)
+    title: string;
+    description: string;
+    images: SpotlightImage[];
+}
+
 // Mirrors the frontend's SpotlightFeature shape 1:1 (camelCase) — the
 // repository maps snake_case DB columns to this at the read boundary so the
 // API response needs no transformation on the frontend side.
@@ -19,6 +32,7 @@ export interface SpotlightFeature {
     howItWorks: string;
     benefits: string;
     images: SpotlightImage[];
+    sections: SpotlightSection[];
     // A YouTube link (watch/youtu.be/embed/shorts), NOT an uploaded/hosted
     // video file — the cover image (images[0]) is always what's shown by
     // default; this only decides whether a Play button appears over it,
