@@ -7,6 +7,7 @@ import {
   validateUpsertEssentials, validateUpsertAbout,
   validateUpsertLocation, validateUpsertWorkingHours,
   validateAddImage, validateReorderImages, validateUpsertFeatures,
+  validateUpsertBookingPolicy,
 } from "./marketplace.validator";
 
 const router  = Router();
@@ -19,6 +20,7 @@ router.get("/profile",          auth, ownerAdmin, marketplaceController.getProfi
 // ── Essentials & About ────────────────────────────────────────────────────────
 router.put("/essentials",       auth, ownerAdmin, validateUpsertEssentials, marketplaceController.upsertEssentials);
 router.put("/about",            auth, ownerAdmin, validateUpsertAbout,      marketplaceController.upsertAbout);
+router.put("/booking-policy",   auth, ownerAdmin, validateUpsertBookingPolicy, marketplaceController.upsertBookingPolicy);
 
 // ── Location ──────────────────────────────────────────────────────────────────
 router.get("/location",         auth, ownerAdmin, marketplaceController.getLocation);

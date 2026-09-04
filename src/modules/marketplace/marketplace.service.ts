@@ -10,6 +10,7 @@ import {
   MarketplaceProfile, MarketplaceProfileFull, WorkingHoursDay,
   UpsertEssentialsBody, UpsertAboutBody, UpsertLocationBody,
   UpsertWorkingHoursBody, AddImageBody, ReorderImagesBody, UpsertFeaturesBody,
+  UpsertBookingPolicyBody,
 } from "./marketplace.types";
 
 const MAX_IMAGES = 10;
@@ -24,7 +25,7 @@ async function _ensureProfile(salonId: string): Promise<MarketplaceProfile> {
 
 // ─── Helper: group flat working hour rows into day objects ────────────────────
 
-function _groupHours(rows: any[]): WorkingHoursDay[] {
+export function groupWorkingHours(rows: any[]): WorkingHoursDay[] {
   const map = new Map<number, WorkingHoursDay>();
   for (const r of rows) {
     if (!map.has(r.day_of_week)) {
@@ -54,7 +55,7 @@ export const marketplaceService = {
     return {
       ...profile,
       location,
-      working_hours: _groupHours(hourRows),
+      working_hours: groupWorkingHours(hourRows),
       images,
       amenities:  featureRows.filter((f) => f.feature_type === "amenity")  .map((f) => f.feature_key as Amenity),
       highlights: featureRows.filter((f) => f.feature_type === "highlight").map((f) => f.feature_key as Highlight),
@@ -77,6 +78,16 @@ export const marketplaceService = {
     return marketplaceProfileRepo.upsertAbout(salonId, data);
   },
 
+  // ── Booking Policy ──────────────────────────────────────────────────────────
+
+  async upsertBookingPolicy(salonId: string, data: UpsertBookingPolicyBody) {
+    logger.info("marketplace.upsertBookingPolicy", { salonId });
+    await _ensureProfile(salonId);
+    const updated = await marketplaceProfileRepo.upsertBookingPolicy(salonId, data);
+    if (!updated) throw new AppError(500, "Failed to save booking policy", "INTERNAL_ERROR");
+    return updated;
+  },
+
   // ── Location ────────────────────────────────────────────────────────────────
 
   async getLocation(salonId: string) {
@@ -95,14 +106,14 @@ export const marketplaceService = {
   async getWorkingHours(salonId: string) {
     const profile = await _ensureProfile(salonId);
     const rows = await marketplaceWorkingHoursRepo.findByProfileId(profile.id);
-    return _groupHours(rows);
+    return groupWorkingHours(rows);
   },
 
   async upsertWorkingHours(salonId: string, data: UpsertWorkingHoursBody) {
     logger.info("marketplace.upsertWorkingHours", { salonId });
     const profile = await _ensureProfile(salonId);
     const rows = await marketplaceWorkingHoursRepo.upsertBulk(profile.id, data);
-    return _groupHours(rows);
+    return groupWorkingHours(rows);
   },
 
   // ── Images ──────────────────────────────────────────────────────────────────
