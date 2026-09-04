@@ -289,6 +289,14 @@ export const salonsRepository = {
         return rows;
     },
 
+    // Just the id, for broadcast-style fan-out (e.g. spotlightService.publish
+    // notifying every salon) — no point selecting every column of a
+    // potentially large table when only salon_id is needed per iteration.
+    async listAllActiveIds(): Promise<string[]> {
+        const { rows } = await pool.query(`SELECT id FROM salons WHERE is_active = true`);
+        return rows.map((r) => r.id);
+    },
+
     async create(ownerId: string, data: CreateSalonBody): Promise<Salon> {
         const { rows } = await pool.query(
             `INSERT INTO salons (
