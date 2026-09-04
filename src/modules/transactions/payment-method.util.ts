@@ -15,11 +15,13 @@ export interface NormalizedPaymentMethod {
 
 /**
  * Maps the frontend's raw payment labels (built by buildMethodLabel() in
- * paymentUtils.ts — a small, enumerable set: "Cash" | "Card" | "UPI",
- * any "+"-joined combination of those three, or "eWallet") to the real
- * sales_payment_method_check constraint values. Never lets an unrecognized
- * raw label reach the INSERT — that's what silently broke sale creation
- * for composite labels before this module existed.
+ * paymentUtils.ts — a small, enumerable set: "Cash" | "Card" | "UPI" |
+ * "Payment Machine", any "+"-joined combination of Cash/Card/UPI, or
+ * "eWallet") to the real sales_payment_method_check constraint values.
+ * Never lets an unrecognized raw label reach the INSERT — that's what
+ * silently broke sale creation for composite labels before this module
+ * existed, and what would have broken it again for "Payment Machine" had
+ * it not been added here too.
  */
 function resolveMoneyMethod(
   label: string,
@@ -43,6 +45,17 @@ function resolveMoneyMethod(
   // eWallet is its own payment method, not folded into "split".
   if (normalizedLabel === "ewallet") {
     return { method: "wallet" };
+  }
+
+  // Payment Machine (POS terminal) — buildMethodLabel() returns the raw
+  // singleMethod value unchanged for it, same as "Cash"/"Card"/"UPI" do.
+  // Without this branch it fell through to UnrecognizedPaymentMethodError
+  // below, exactly the silent sale-creation failure this module's header
+  // comment describes for "Cash+Card"/"eWallet" before it existed — the
+  // payments row still succeeded (no constraint there), so the appointment
+  // showed PAID with no invoice number.
+  if (normalizedLabel === "payment machine") {
+    return { method: "pos_machine" };
   }
 
   if (normalizedLabel === "gift_card" || normalizedLabel === "gift card" || normalizedLabel === "giftcard") {
