@@ -61,10 +61,27 @@ export const staffService = {
                 throw new AppError(409, "A staff member with this email already exists", "DUPLICATE_EMAIL");
             }
 
-            // Guard against silently hijacking a salon_owner/admin account: without this
-            // check, the "admin sets password directly" branch below would find that
-            // user by email and overwrite their role to "staff" via updateUserRole().
+            // Guard against silently hijacking a salon_owner/admin/super_admin account:
+            // without this check, the "admin sets password directly" branch below
+            // would find that user by email and overwrite their role to "staff" via
+            // updateUserRole() — and even before that, staffRepository.create() just
+            // below unconditionally inserts a `staff` row for this email regardless
+            // of what role its linked user account actually holds, so a superadmin
+            // (or owner/admin) email could end up listed as an active staff member
+            // in the UI even though the users.role mutation itself gets blocked
+            // downstream (see authRepository's reserved-email guard). super_admin
+            // was missing from this check entirely — that's exactly what let
+            // avinash@salonox.com (a real superadmin login) get added as staff.
+            //
+            // super_admin gets the same plain "already exists" wording as a normal
+            // duplicate-email collision (DUPLICATE_EMAIL above) rather than naming
+            // the role — a staff-creation form has no business surfacing that an
+            // email belongs to a platform superadmin account.
             const existingUser = await authRepository.findUserByEmail(body.email);
+            if (existingUser?.role === "super_admin") {
+                console.log("[DEBUG] staffService.create - Email belongs to an existing super_admin:", body.email);
+                throw new AppError(409, "A staff member with this email already exists", "DUPLICATE_EMAIL");
+            }
             if (existingUser && (existingUser.role === "salon_owner" || existingUser.role === "admin")) {
                 console.log("[DEBUG] staffService.create - Email belongs to an existing", existingUser.role, ":", body.email);
                 throw new AppError(
