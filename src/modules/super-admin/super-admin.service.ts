@@ -297,11 +297,22 @@ export const superAdminService = {
     });
   },
 
-  async clearSalonData(id: string) {
+  async clearSalonData(id: string, clearedByUserId: string, reason?: string) {
     if (!id) throw new AppError(400, "Salon ID required", "VALIDATION_ERROR");
-    const cleared = await superAdminRepository.clearSalonData(id);
+    if (!clearedByUserId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+    const cleared = await superAdminRepository.clearSalonData(id, clearedByUserId, reason);
     if (!cleared) throw new AppError(404, "Salon not found", "NOT_FOUND");
     return { success: true };
+  },
+
+  async getSalonCleanupHistory(opts: { search?: string; page: number; perPage: number }) {
+    const page = Math.max(1, opts.page || 1);
+    const perPage = Math.min(100, Math.max(1, opts.perPage || 20));
+    return superAdminRepository.getSalonCleanupHistory({
+      search: opts.search,
+      limit: perPage,
+      offset: (page - 1) * perPage,
+    });
   },
 
   async getAllUsers(search?: string, role?: string, minLogins?: number) {

@@ -113,10 +113,23 @@ export const superAdminController = {
     } catch (err) { return next(err); }
   },
 
-  async clearSalonData(req: Request, res: Response, next: NextFunction) {
+  async clearSalonData(req: Request & { user?: { userId: string } }, res: Response, next: NextFunction) {
     try {
       const id = String(req.params.id);
-      const data = await superAdminService.clearSalonData(id);
+      const reason = typeof req.body?.reason === "string" ? req.body.reason : undefined;
+      const clearedByUserId = req.user?.userId;
+      if (!clearedByUserId) return res.status(401).json({ success: false, error: { message: "Unauthorized" } });
+      const data = await superAdminService.clearSalonData(id, clearedByUserId, reason);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
+  async getSalonCleanupHistory(req: Request, res: Response, next: NextFunction) {
+    try {
+      const search = typeof req.query.search === "string" ? req.query.search : undefined;
+      const page = req.query.page ? Number(req.query.page) : 1;
+      const perPage = req.query.per_page ? Number(req.query.per_page) : 20;
+      const data = await superAdminService.getSalonCleanupHistory({ search, page, perPage });
       return res.json({ success: true, data });
     } catch (err) { return next(err); }
   },

@@ -786,14 +786,16 @@ export const superAdminRepository = {
     }
   },
 
-  async clearSalonData(id: string) {
+  async clearSalonData(id: string, clearedByUserId: string, reason?: string) {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
       // FOR UPDATE guards against a concurrent request racing this same
-      // salon (e.g. double-click on "Clear All Data").
+      // salon (e.g. double-click on "Clear All Data"). Name snapshotted for
+      // salon_cleanup_log so History still reads correctly even if the
+      // salon is later renamed or deleted outright.
       const { rows: salons } = await client.query(
-        `SELECT id FROM salons WHERE id = $1 FOR UPDATE`,
+        `SELECT id, COALESCE(business_name, slug, 'Unnamed') AS name FROM salons WHERE id = $1 FOR UPDATE`,
         [id]
       );
       if (!salons[0]) {
@@ -801,6 +803,13 @@ export const superAdminRepository = {
         return false;
       }
       const cleared = await clearSalonDataRows(client, id);
+
+      await client.query(
+        `INSERT INTO salon_cleanup_log (salon_id, salon_name, cleared_by, reason)
+         VALUES ($1, $2, $3, $4)`,
+        [id, salons[0].name, clearedByUserId, reason ?? null]
+      );
+
       await client.query("COMMIT");
       return cleared;
     } catch (err) {
@@ -809,6 +818,40 @@ export const superAdminRepository = {
     } finally {
       client.release();
     }
+  },
+
+  // ── SALON CLEANUP HISTORY ─────────────────────────────────────────────────────
+
+  async getSalonCleanupHistory(opts: { search?: string; limit: number; offset: number }) {
+    const { search, limit, offset } = opts;
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+
+    if (search) {
+      params.push(`%${search}%`);
+      conditions.push(`scl.salon_name ILIKE $${params.length}`);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+
+    const { rows: countRows } = await pool.query(
+      `SELECT COUNT(*)::int AS total FROM salon_cleanup_log scl ${where}`,
+      params
+    );
+
+    params.push(limit, offset);
+    const { rows } = await pool.query(`
+      SELECT
+        scl.id, scl.salon_id, scl.salon_name, scl.reason, scl.created_at,
+        TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,''))) AS cleared_by_name,
+        u.email AS cleared_by_email
+      FROM salon_cleanup_log scl
+      LEFT JOIN users u ON u.id = scl.cleared_by
+      ${where}
+      ORDER BY scl.created_at DESC
+      LIMIT $${params.length - 1} OFFSET $${params.length}
+    `, params);
+
+    return { items: rows, total: countRows[0]?.total ?? 0 };
   },
 
   // ── PAYMENTS ──────────────────────────────────────────────────────────────────
