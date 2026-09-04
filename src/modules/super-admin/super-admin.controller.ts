@@ -91,10 +91,24 @@ export const superAdminController = {
     } catch (err) { return next(err); }
   },
 
-  async deleteSalon(req: Request, res: Response, next: NextFunction) {
+  async deleteSalon(req: Request & { user?: { userId: string } }, res: Response, next: NextFunction) {
     try {
       const id = String(req.params.id);
-      const data = await superAdminService.deleteSalon(id);
+      const reason = typeof req.body?.reason === "string" ? req.body.reason : undefined;
+      const deletedByUserId = req.user?.userId;
+      if (!deletedByUserId) return res.status(401).json({ success: false, error: { message: "Unauthorized" } });
+      const data = await superAdminService.deleteSalon(id, deletedByUserId, reason);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
+  async getDeletedAccountHistory(req: Request, res: Response, next: NextFunction) {
+    try {
+      const search = typeof req.query.search === "string" ? req.query.search : undefined;
+      const accountType = typeof req.query.account_type === "string" ? req.query.account_type : undefined;
+      const page = req.query.page ? Number(req.query.page) : 1;
+      const perPage = req.query.per_page ? Number(req.query.per_page) : 20;
+      const data = await superAdminService.getDeletedAccountHistory({ search, accountType, page, perPage });
       return res.json({ success: true, data });
     } catch (err) { return next(err); }
   },
@@ -271,10 +285,13 @@ export const superAdminController = {
     } catch (err) { return next(err); }
   },
 
-  async deleteUser(req: Request, res: Response, next: NextFunction) {
+  async deleteUser(req: Request & { user?: { userId: string } }, res: Response, next: NextFunction) {
     try {
       const id = String(req.params.id);
-      const data = await superAdminService.deleteUser(id);
+      const reason = typeof req.body?.reason === "string" ? req.body.reason : undefined;
+      const deletedByUserId = req.user?.userId;
+      if (!deletedByUserId) return res.status(401).json({ success: false, error: { message: "Unauthorized" } });
+      const data = await superAdminService.deleteUser(id, deletedByUserId, reason);
       return res.json({ success: true, data });
     } catch (err) { return next(err); }
   },
