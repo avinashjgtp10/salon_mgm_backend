@@ -15,6 +15,7 @@ function mapRow(row: any): SpotlightFeature {
         howItWorks: row.how_it_works,
         benefits: row.benefits,
         images: row.images ?? [],
+        sections: row.sections ?? [],
         videoDataUrl: row.video_url,
         releaseDate: row.release_date instanceof Date ? row.release_date.toISOString().slice(0, 10) : row.release_date,
         targetAudience: row.target_audience ?? ["all"],
@@ -46,13 +47,14 @@ export const spotlightRepository = {
         const { rows } = await pool.query(
             `INSERT INTO spotlight_features (
                 feature_name, module, module_route, short_description, what_is_this,
-                how_it_works, benefits, images, video_url, release_date,
+                how_it_works, benefits, images, sections, video_url, release_date,
                 target_audience, status, published_at, created_by
-             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
              RETURNING *`,
             [
                 body.featureName, body.module, body.moduleRoute ?? null, body.shortDescription, body.whatIsThis ?? "",
-                body.howItWorks ?? "", body.benefits ?? "", JSON.stringify(body.images ?? []), body.videoDataUrl ?? null,
+                body.howItWorks ?? "", body.benefits ?? "", JSON.stringify(body.images ?? []), JSON.stringify(body.sections ?? []),
+                body.videoDataUrl ?? null,
                 body.releaseDate || new Date().toISOString().slice(0, 10),
                 JSON.stringify(body.targetAudience?.length ? body.targetAudience : ["all"]),
                 body.status ?? "draft",
@@ -82,6 +84,7 @@ export const spotlightRepository = {
         if (body.howItWorks !== undefined) push("how_it_works", body.howItWorks);
         if (body.benefits !== undefined) push("benefits", body.benefits);
         if (body.images !== undefined) push("images", JSON.stringify(body.images));
+        if (body.sections !== undefined) push("sections", JSON.stringify(body.sections));
         if (body.videoDataUrl !== undefined) push("video_url", body.videoDataUrl ?? null);
         if (body.releaseDate !== undefined) push("release_date", body.releaseDate);
         if (body.targetAudience !== undefined) push("target_audience", JSON.stringify(body.targetAudience?.length ? body.targetAudience : ["all"]));
