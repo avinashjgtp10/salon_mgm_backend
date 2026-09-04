@@ -4,7 +4,7 @@ import {
   MarketplaceImage, MarketplaceFeature,
   UpsertEssentialsBody, UpsertAboutBody, UpsertLocationBody,
   UpsertWorkingHoursBody, AddImageBody, ReorderImagesBody,
-  UpsertFeaturesBody,
+  UpsertFeaturesBody, UpsertBookingPolicyBody,
 } from "./marketplace.types";
 
 // ─── Profile ──────────────────────────────────────────────────────────────────
@@ -20,10 +20,12 @@ export const marketplaceProfileRepo = {
   async upsertEssentials(salonId: string, data: UpsertEssentialsBody): Promise<MarketplaceProfile> {
     const { rows } = await pool.query(
       `INSERT INTO marketplace_profiles
-         (salon_id, display_name, business_phone, business_phone_country_code, business_email)
-       VALUES ($1,$2,$3,$4,$5)
+         (salon_id, display_name, tagline, website, business_phone, business_phone_country_code, business_email)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
        ON CONFLICT (salon_id) DO UPDATE SET
          display_name                = EXCLUDED.display_name,
+         tagline                     = EXCLUDED.tagline,
+         website                     = EXCLUDED.website,
          business_phone              = EXCLUDED.business_phone,
          business_phone_country_code = EXCLUDED.business_phone_country_code,
          business_email              = EXCLUDED.business_email,
@@ -31,6 +33,8 @@ export const marketplaceProfileRepo = {
        RETURNING *`,
       [
         salonId, data.display_name,
+        data.tagline                     ?? null,
+        data.website                     ?? null,
         data.business_phone              ?? null,
         data.business_phone_country_code ?? null,
         data.business_email              ?? null,
@@ -39,15 +43,33 @@ export const marketplaceProfileRepo = {
     return rows[0];
   },
 
-  async upsertAbout(salonId: string, data: UpsertAboutBody): Promise<MarketplaceProfile> {
+  async upsertBookingPolicy(salonId: string, data: UpsertBookingPolicyBody): Promise<MarketplaceProfile | null> {
     const { rows } = await pool.query(
-      `INSERT INTO marketplace_profiles (salon_id, display_name, venue_description)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (salon_id) DO UPDATE SET
-         venue_description = EXCLUDED.venue_description,
-         updated_at        = NOW()
-       RETURNING *`,
-      [salonId, data.venue_description, data.venue_description]
+      `UPDATE marketplace_profiles SET
+         max_advance_days          = COALESCE($1, max_advance_days),
+         min_notice_hours          = COALESCE($2, min_notice_hours),
+         cancellation_notice_hours = COALESCE($3, cancellation_notice_hours),
+         slot_interval_minutes     = COALESCE($4, slot_interval_minutes),
+         updated_at                = NOW()
+       WHERE salon_id = $5 RETURNING *`,
+      [
+        data.max_advance_days          ?? null,
+        data.min_notice_hours          ?? null,
+        data.cancellation_notice_hours ?? null,
+        data.slot_interval_minutes     ?? null,
+        salonId,
+      ]
+    );
+    return rows[0] || null;
+  },
+
+  async upsertAbout(salonId: string, data: UpsertAboutBody): Promise<MarketplaceProfile> {
+    // Callers always run this after _ensureProfile(), so the row already
+    // exists — a straight UPDATE, not an upsert-with-a-guessed-display_name.
+    const { rows } = await pool.query(
+      `UPDATE marketplace_profiles SET venue_description = $1, updated_at = NOW()
+       WHERE salon_id = $2 RETURNING *`,
+      [data.venue_description, salonId]
     );
     return rows[0];
   },

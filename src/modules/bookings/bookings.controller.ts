@@ -27,6 +27,23 @@ export const bookingsController = {
         }
     },
 
+    async getAvailability(req: Request, res: Response, next: NextFunction) {
+        try {
+            const { salon_id } = req.params;
+            const { date, staffId, durationMinutes } = req.query;
+            if (!salon_id || !date) throw new AppError(400, "salon_id and date are required", "VALIDATION_ERROR");
+            const result = await bookingsService.getAvailability({
+                salon_id: salon_id as string,
+                date: date as string,
+                staffId: staffId ? (staffId as string) : undefined,
+                durationMinutes: durationMinutes ? Number(durationMinutes) : undefined,
+            });
+            return sendSuccess(res, 200, result, "Availability fetched successfully");
+        } catch (err) {
+            return next(err);
+        }
+    },
+
     async createBooking(req: Request, res: Response, next: NextFunction) {
         try {
             const body = req.body as PublicBookingRequest;

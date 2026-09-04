@@ -6,6 +6,7 @@ import config from "../../config/env";
 import {
     UpsertEssentialsBody, UpsertAboutBody, UpsertLocationBody,
     UpsertWorkingHoursBody, AddImageBody, ReorderImagesBody, UpsertFeaturesBody,
+    UpsertBookingPolicyBody,
 } from "./marketplace.types";
 
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string } };
@@ -39,6 +40,14 @@ export const marketplaceController = {
         try {
             const data = await marketplaceService.upsertAbout(await getSalonId(req), req.body as UpsertAboutBody);
             return sendSuccess(res, 200, data, "About section saved");
+        } catch (err) { return next(err); }
+    },
+
+    // ── Booking Policy ───────────────────────────────────────────────────────────
+    async upsertBookingPolicy(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const data = await marketplaceService.upsertBookingPolicy(await getSalonId(req), req.body as UpsertBookingPolicyBody);
+            return sendSuccess(res, 200, data, "Booking policy saved");
         } catch (err) { return next(err); }
     },
 
