@@ -1,6 +1,10 @@
-export type EnquiryStatus = "New" | "Follow-up" | "Converted" | "Closed";
+// "Contacted" and "Lost" added for the Enquiry Report's status vocabulary —
+// "Closed" is kept alongside "Lost" (not replaced) so existing enquiries
+// already marked "Closed" and any code branching on that value are
+// unaffected.
+export type EnquiryStatus = "New" | "Contacted" | "Follow-up" | "Converted" | "Closed" | "Lost";
 
-export const ENQUIRY_STATUSES: EnquiryStatus[] = ["New", "Follow-up", "Converted", "Closed"];
+export const ENQUIRY_STATUSES: EnquiryStatus[] = ["New", "Contacted", "Follow-up", "Converted", "Closed", "Lost"];
 
 export type Enquiry = {
     id: string;

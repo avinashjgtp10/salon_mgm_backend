@@ -158,10 +158,11 @@ export const productAuditService = {
             throw new AppError(403, "An audit must be reviewed by someone other than the auditor", "SELF_REVIEW_NOT_ALLOWED");
         }
 
-        await productAuditRepository.transitionStatus(auditId, salonId, {
-            status: "complete", reviewer_id: finalReviewerId, rejection_reason: null,
-        });
-        await productAuditRepository.addHistory(auditId, finalReviewerId, "Review approved", "All differences verified and accepted");
+        // Approval is the moment the physical count becomes the official
+        // stock — this applies every item's variance to products.amount and
+        // writes the matching Stock Ledger entries atomically with the status
+        // flip, not just a status change. See approveWithAdjustments.
+        await productAuditRepository.approveWithAdjustments(auditId, salonId, finalReviewerId);
         return getOwned(auditId, salonId);
     },
 

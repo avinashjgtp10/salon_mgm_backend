@@ -255,6 +255,16 @@ import {
     ClientRevenueReportResponse,
     AllClientsReportFilters,
     AllClientsReportResponse,
+    NewClientFollowUpFilters,
+    NewClientFollowUpResponse,
+    CancellationRecoveryFilters,
+    CancellationRecoveryResponse,
+    MembershipOpportunityFilters,
+    MembershipOpportunityResponse,
+    NoShowRecoveryFilters,
+    NoShowRecoveryResponse,
+    EnquiryReportFilters,
+    EnquiryReportResponse,
     CustomerFrequencyReportFilters,
     CustomerFrequencyReportResponse,
     LostCustomersReportFilters,
@@ -1604,6 +1614,112 @@ async getAllClientsReport(
         reportsRepository.getAllClientsReportStats(salonId, filters),
         reportsRepository.getAllClientsReportRows(salonId, filters),
         reportsRepository.getAllClientsFiltersAvailable(salonId),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+        filters_available: filtersAvailable,
+    };
+},
+
+// ======================================================
+// NEW CLIENT FOLLOW-UP REPORT (independent report API)
+// ======================================================
+
+async getNewClientFollowUpReport(
+    salonId: string,
+    filters: NewClientFollowUpFilters
+): Promise<NewClientFollowUpResponse> {
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getNewClientFollowUpStats(salonId, filters),
+        reportsRepository.getNewClientFollowUpRows(salonId, filters),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+    };
+},
+
+// ======================================================
+// CANCELLATION RECOVERY REPORT (independent report API)
+// ======================================================
+
+async getCancellationRecoveryReport(
+    salonId: string,
+    filters: CancellationRecoveryFilters
+): Promise<CancellationRecoveryResponse> {
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getCancellationRecoveryStats(salonId, filters),
+        reportsRepository.getCancellationRecoveryRows(salonId, filters),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+    };
+},
+
+// ======================================================
+// MEMBERSHIP OPPORTUNITY REPORT (independent report API)
+// ======================================================
+
+async getMembershipOpportunityReport(
+    salonId: string,
+    filters: MembershipOpportunityFilters
+): Promise<MembershipOpportunityResponse> {
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
+        reportsRepository.getMembershipOpportunityStats(salonId, filters),
+        reportsRepository.getMembershipOpportunityRows(salonId, filters),
+        reportsRepository.getMembershipOpportunityFiltersAvailable(salonId),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+        filters_available: filtersAvailable,
+    };
+},
+
+// ======================================================
+// NO-SHOW RECOVERY REPORT (independent report API)
+// ======================================================
+
+async getNoShowRecoveryReport(
+    salonId: string,
+    filters: NoShowRecoveryFilters
+): Promise<NoShowRecoveryResponse> {
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
+        reportsRepository.getNoShowRecoveryStats(salonId, filters),
+        reportsRepository.getNoShowRecoveryRows(salonId, filters),
+        reportsRepository.getNoShowRecoveryFiltersAvailable(salonId),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+        filters_available: filtersAvailable,
+    };
+},
+
+// ======================================================
+// ENQUIRY REPORT (independent report API)
+// ======================================================
+
+async getEnquiryReport(
+    salonId: string,
+    filters: EnquiryReportFilters
+): Promise<EnquiryReportResponse> {
+    const [stats, rowsResult, filtersAvailable] = await Promise.all([
+        reportsRepository.getEnquiryReportStats(salonId, filters),
+        reportsRepository.getEnquiryReportRows(salonId, filters),
+        reportsRepository.getEnquiryReportFiltersAvailable(salonId),
     ]);
 
     return {

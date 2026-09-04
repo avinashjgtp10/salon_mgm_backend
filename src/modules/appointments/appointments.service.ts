@@ -759,7 +759,8 @@ export const appointmentsService = {
                 include_gst:      patch.include_gst        ?? existing.include_gst,
             };
             const activeTaxes = await getActiveTaxes(existing.salon_id).catch(() => []);
-            const newGrandTotal = computeAppointmentTotals(merged, activeTaxes).grandTotal;
+            const totals = computeAppointmentTotals(merged, activeTaxes);
+            const newGrandTotal = totals.grandTotal;
             const existingPaid = await paymentsRepository.getTotalPaidForAppointment(appointmentId);
             logger.info("[DEBUG update() reprice]", {
                 appointmentId, existingStatus: existing.status, isContentEdit,
@@ -768,14 +769,73 @@ export const appointmentsService = {
             });
 
             if (newGrandTotal < existingPaid - 0.5) {
-                // Overpayment: the edit would take the bill below what's
-                // already been collected. There's no refund workflow — block
-                // the save rather than silently create/hide an overpaid state.
-                throw new AppError(
-                    400,
-                    "This change would reduce the total below the amount already paid. Cancel or handle removals separately instead of editing a paid appointment down.",
-                    "OVERPAYMENT_BLOCKED",
-                );
+                // The edit takes the bill below what's already been collected
+                // (e.g. a ₹3,000 product removed, a ₹150 service added
+                // instead). No refund/credit workflow — by product decision,
+                // the recorded payment is corrected DOWN to the new total in
+                // place (not a separate adjustment record), so total revenue,
+                // client history and every report read the new figure with no
+                // separate trace of the difference. Staff handle the actual
+                // real-world refund themselves outside the app.
+                await paymentsRepository.reduceForAppointment(appointmentId, newGrandTotal);
+
+                // Keep the linked sales row (revenue reports read this, not
+                // payments) in step too — unlike a bill INCREASE, which
+                // self-heals the next time a "Continue to Payment" collection
+                // re-runs recordTransaction(), a bill decrease has no such
+                // follow-up write to piggyback on. recordTransaction() is
+                // idempotent per appointment_id (finds the sale this
+                // appointment's original payment already created and updates
+                // it in place) — never creates a second sale row. Logged, not
+                // re-thrown: a failure here must not resurrect the exact
+                // "save blocked" bug this replaces; the payments correction
+                // above is what actually matters for "money reduced everywhere".
+                try {
+                    const existingPayment = await paymentsRepository.findByAppointmentId(appointmentId);
+                    const buildItems = (): import("../transactions/transaction.types").TransactionItemInput[] => [
+                        ...(merged.services ?? []).filter((s: any) => !s.is_package_service).map((s: any) => ({
+                            item_type: "service" as const, item_id: s.service_id ?? undefined,
+                            staff_id: s.staff_id ?? undefined, name: s.name,
+                            quantity: Number(s.quantity) || 1, unit_price: Number(s.price) || 0,
+                        })),
+                        ...(merged.package_items ?? []).map((p: any) => ({
+                            item_type: "package" as const, item_id: p.package_id ?? undefined,
+                            staff_id: p.staff_id ?? undefined, name: p.name,
+                            quantity: Number(p.quantity) || 1, unit_price: Number(p.price) || 0,
+                        })),
+                        ...(merged.product_items ?? []).map((pr: any) => ({
+                            item_type: "product" as const, item_id: pr.product_id ?? undefined,
+                            staff_id: pr.staff_id ?? undefined, name: pr.name,
+                            quantity: Number(pr.quantity) || 1, unit_price: Number(pr.price) || 0,
+                        })),
+                        ...(merged.membership_items ?? []).map((m: any) => ({
+                            item_type: "membership" as const, item_id: m.membership_id ?? undefined,
+                            staff_id: m.staff_id ?? undefined, name: m.name,
+                            quantity: Number(m.quantity) || 1, unit_price: Number(m.price) || 0,
+                        })),
+                    ];
+                    await recordTransaction({
+                        salon_id: existing.salon_id,
+                        client_id: existing.client_id ?? undefined,
+                        appointment_id: appointmentId,
+                        staff_id: existing.staff_id ?? undefined,
+                        origin: "calendar_checkout",
+                        payment_label: existingPayment?.payment_method || "cash",
+                        items: buildItems(),
+                        discount_amount: totals.manualDiscount,
+                        tax_amount: totals.gstAmount,
+                        ex_charges: Number(merged.ex_charges) || 0,
+                        tip_amount: Number(merged.tip_amount) || 0,
+                        tip_added_to_salon: !!merged.tip_added_to_salon,
+                        created_at: existing.scheduled_at,
+                    });
+                } catch (err) {
+                    logger.error("[PAYMENT_REDUCTION] Failed to refresh linked sale after reducing paid appointment's bill", {
+                        appointmentId, newGrandTotal, message: (err as any)?.message,
+                    });
+                }
+
+                patch = { ...patch, status: "paid" };
             } else if (newGrandTotal > existingPaid + 0.5) {
                 patch = { ...patch, status: "partial" };
                 // Only a genuinely Paid booking being reopened needs the
@@ -1118,24 +1178,13 @@ export const appointmentsService = {
             } catch (err: any) { logger.error("[email] appointmentCancelled (owner) failed:", err?.message ?? err); }
         })();
 
-        // ── Email: Appointment Cancelled (to client) ──────────────────────────
-        ;(async () => {
-            try {
-                const clientEmail = (existing as any).client_email;
-                if (!clientEmail) { logger.info("[email] appointmentCancelled: no client email, skipping"); return; }
-                logger.info(`[email] appointmentCancelled → to=${clientEmail}`);
-                const allowed = await canSendEmail(existing.salon_id, "appointmentCancelled");
-                if (!allowed) { logger.info("[email] appointmentCancelled: skipped (preference off)"); return; }
-                await emailService.sendAppointmentCancelledEmail({
-                    to:         clientEmail,
-                    clientName: existing.client_name          ?? "Valued Customer",
-                    salonName:  (existing as any).salon_name  ?? "our salon",
-                    date:       formatDate(existing.scheduled_at),
-                    time:       formatTime(existing.scheduled_at),
-                });
-                logger.info(`[email] appointmentCancelled sent to ${clientEmail}`);
-            } catch (err: any) { logger.error("[email] appointmentCancelled failed:", err?.message ?? err); }
-        })();
+        // Client-facing "Appointment Cancelled" email is now sent by
+        // notification-channels' dispatchNonWhatsappChannels(), fanned out
+        // from the same trigger({ eventType: 'appointment_cancelled', ... })
+        // call already made for this cancellation (see below/nearby) — the
+        // old direct emailService.sendAppointmentCancelledEmail() IIFE that
+        // used to live here was removed to avoid double-sending. The owner
+        // alert above is unrelated and untouched.
 
         return cancelled;
     },
@@ -1353,22 +1402,12 @@ export const appointmentsService = {
                 })();
             }
 
-            // ── Email: Appointment Completed receipt (to client) ──────────────
-            ;(async () => {
-                try {
-                    const clientEmail = (existing as any).client_email;
-                    if (!clientEmail) return;
-                    const allowed = await canSendEmail(existing.salon_id, "appointmentCompleted");
-                    if (!allowed) return;
-                    await emailService.sendAppointmentCompletedEmail({
-                        to:         clientEmail,
-                        clientName: existing.client_name         ?? "Valued Customer",
-                        salonName:  (existing as any).salon_name ?? "our salon",
-                        services:   existing.services?.map((s: any) => s.name).join(", ") ?? "Service",
-                        amount:     String(preExistingSale.total_amount ?? "0"),
-                    });
-                } catch (err: any) { logger.error("[email] appointmentCompleted (preexisting) failed:", err?.message ?? err); }
-            })();
+            // Client-facing "Appointment Completed" receipt email is now sent
+            // by notification-channels' dispatchNonWhatsappChannels(), fanned
+            // out from the payment_received trigger() call for this checkout
+            // — the old direct emailService.sendAppointmentCompletedEmail()
+            // IIFE that used to live here was removed to avoid double-
+            // sending. The owner alert below is unrelated and untouched.
 
             // ── Email: New Payment (to salon owner) ───────────────────────────
             ;(async () => {
@@ -1632,24 +1671,12 @@ export const appointmentsService = {
             })().catch(() => {});
         }
 
-        // ── Email: Appointment Completed receipt (to client) ──────────────────
-        ;(async () => {
-            try {
-                const clientEmail = (existing as any).client_email;
-                if (!clientEmail) { logger.info("[email] appointmentCompleted: no client email, skipping"); return; }
-                logger.info(`[email] appointmentCompleted → to=${clientEmail}`);
-                const allowed = await canSendEmail(existing.salon_id, "appointmentCompleted");
-                if (!allowed) { logger.info("[email] appointmentCompleted: skipped (preference off)"); return; }
-                await emailService.sendAppointmentCompletedEmail({
-                    to:         clientEmail,
-                    clientName: existing.client_name         ?? "Valued Customer",
-                    salonName:  (existing as any).salon_name ?? "our salon",
-                    services:   existing.services?.map((s: any) => s.name).join(", ") ?? "Service",
-                    amount:     String(sale.total_amount     ?? "0"),
-                });
-                logger.info(`[email] appointmentCompleted sent to ${clientEmail}`);
-            } catch (err: any) { logger.error("[email] appointmentCompleted failed:", err?.message ?? err); }
-        })();
+        // Client-facing "Appointment Completed" receipt email is now sent by
+        // notification-channels' dispatchNonWhatsappChannels(), fanned out
+        // from the payment_received trigger() call for this checkout — the
+        // old direct emailService.sendAppointmentCompletedEmail() IIFE that
+        // used to live here was removed to avoid double-sending. The owner
+        // alert below is unrelated and untouched.
 
         // ── Email: New Payment (to salon owner) ───────────────────────────────
         ;(async () => {

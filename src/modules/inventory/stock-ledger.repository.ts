@@ -7,6 +7,7 @@ import {
     StockLedgerSummary,
     STOCK_LEDGER_IN_TYPES,
 } from "./stock-ledger.types";
+import { inventoryAlertsService } from "./inventory-alerts.service";
 
 // Shared SELECT list + joins so list/findById/getTimeline all project the
 // same shape — product name/category for display, created_by resolved to a
@@ -164,6 +165,10 @@ export const stockLedgerRepository = {
 
             await client.query("COMMIT");
 
+            inventoryAlertsService
+                .checkAndNotify([data.product_id], salonId)
+                .catch(() => { /* logged internally, never blocks the caller */ });
+
             const created = await this.findById(rows[0].id, salonId);
             return created as StockLedgerEntry;
         } catch (err) {
@@ -252,14 +257,21 @@ export const stockLedgerRepository = {
                 if (!(item.quantity > 0)) continue;
 
                 const { rows: prodRows } = await client.query(
-                    `SELECT id, COALESCE(amount, 0) AS amount FROM products
+                    `SELECT id, COALESCE(amount, 0) AS amount, bottle_size FROM products
                       WHERE id = $1 AND salon_id = $2
                       FOR UPDATE`,
                     [item.product_id, salonId],
                 );
                 if (!prodRows.length) continue; // product deleted/not found — nothing to deduct
 
-                const signedQty = -Math.abs(item.quantity);
+                // item.quantity is a count of retail units/bottles sold, but
+                // products.amount is base units (ml/g) whenever bottle_size is
+                // set — same conversion product-inventory.repository.ts#stockIn
+                // and purchases.repository.ts#create already apply on the way
+                // in. Without it, selling 1 bottle only deducted 1 base unit.
+                const bottleSize = Number(prodRows[0].bottle_size) || 0;
+                const baseUnitsPerPack = bottleSize > 0 ? bottleSize : 1;
+                const signedQty = -Math.abs(item.quantity) * baseUnitsPerPack;
                 const balanceAfter = parseFloat(prodRows[0].amount) + signedQty;
 
                 await client.query(
@@ -277,6 +289,9 @@ export const stockLedgerRepository = {
             }
 
             await client.query("COMMIT");
+            inventoryAlertsService
+                .checkAndNotify(items.map((i) => i.product_id), salonId)
+                .catch(() => { /* logged internally, never blocks the caller */ });
         } catch (err) {
             await client.query("ROLLBACK");
             throw err;
@@ -352,6 +367,9 @@ export const stockLedgerRepository = {
             );
 
             await client.query("COMMIT");
+            inventoryAlertsService
+                .checkAndNotify([params.productId], params.salonId)
+                .catch(() => { /* logged internally, never blocks the caller */ });
         } catch (err) {
             await client.query("ROLLBACK");
             throw err;

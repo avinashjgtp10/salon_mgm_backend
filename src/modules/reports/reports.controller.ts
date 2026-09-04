@@ -1598,6 +1598,211 @@ async getAllClientsReport(
 },
 
 // ======================================================
+// NEW CLIENT FOLLOW-UP REPORT (independent report API)
+// POST /api/report/new-client-follow-up
+// ======================================================
+
+async getNewClientFollowUpReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            new_within_days: body.new_within_days !== undefined ? Number(body.new_within_days) : undefined,
+            search: asString(body.search),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getNewClientFollowUpReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "New client follow-up report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// CANCELLATION RECOVERY REPORT (independent report API)
+// POST /api/report/cancellation-recovery
+// ======================================================
+
+async getCancellationRecoveryReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            cancelled_within_days: body.cancelled_within_days !== undefined ? Number(body.cancelled_within_days) : undefined,
+            search: asString(body.search),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getCancellationRecoveryReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Cancellation recovery report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// MEMBERSHIP OPPORTUNITY REPORT (independent report API)
+// POST /api/report/membership-opportunity
+// ======================================================
+
+async getMembershipOpportunityReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const asStringArray = (value: unknown): string[] | undefined =>
+            Array.isArray(value)
+                ? value.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined;
+
+        const filters = {
+            window_days: body.window_days !== undefined ? Number(body.window_days) : undefined,
+            min_visits: body.min_visits !== undefined ? Number(body.min_visits) : undefined,
+            search: asString(body.search),
+            has_membership: body.has_membership === "has" ? "has" as const : body.has_membership === "no" ? "no" as const : undefined,
+            last_visit_from: asString(body.last_visit_from),
+            last_visit_to: asString(body.last_visit_to),
+            genders: asStringArray(body.genders),
+            client_source: asString(body.client_source),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getMembershipOpportunityReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Membership opportunity report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// NO-SHOW RECOVERY REPORT (independent report API)
+// POST /api/report/no-show-recovery
+// ======================================================
+
+async getNoShowRecoveryReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const asStringArray = (value: unknown): string[] | undefined =>
+            Array.isArray(value)
+                ? value.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined;
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            staff_ids: asStringArray(body.staff_ids),
+            service_ids: asStringArray(body.service_ids),
+            search: asString(body.search),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getNoShowRecoveryReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "No-show recovery report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// ENQUIRY REPORT (independent report API)
+// POST /api/report/enquiries
+// ======================================================
+
+async getEnquiryReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const asStringArray = (value: unknown): string[] | undefined =>
+            Array.isArray(value)
+                ? value.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined;
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            staff_ids: asStringArray(body.staff_ids),
+            service_ids: asStringArray(body.service_ids),
+            statuses: asStringArray(body.statuses),
+            sources: asStringArray(body.sources),
+            follow_up_date: asString(body.follow_up_date),
+            search: asString(body.search),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getEnquiryReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Enquiry report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
 // CUSTOMER FREQUENCY REPORT (independent report API)
 // POST /api/report/customer-frequency
 // ======================================================

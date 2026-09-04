@@ -7,6 +7,7 @@ import { whatsappMetaApi } from '../marketing/whatsapp/shared/whatsapp.api'
 import { configRepository } from '../marketing/whatsapp/config/config.repository'
 import { whatsappAutomationRepository } from './whatsapp-automation.repository'
 import { waScheduledMessagesRepository } from './wa-scheduled-messages.repository'
+import { notificationChannelsService } from '../notification-channels/notification-channels.service'
 import {
   AutomationEventType,
   AutomationTriggerPayload,
@@ -105,6 +106,13 @@ export const whatsappAutomationService = {
           return
         }
       }
+
+      // 1c. SMS/Email fan-out — deliberately BEFORE the WhatsApp-specific
+      // gates below (salon-automation-enabled, Meta config, template lookup)
+      // so a salon with no WhatsApp set up still gets SMS/Email. Fire-and-
+      // forget, same "never blocks/throws to caller" contract this function
+      // itself has — see notification-channels.service.ts.
+      notificationChannelsService.dispatchNonWhatsappChannels(payload).catch(() => {})
 
       // 2. Check salon has this automation enabled
       const salonEnabled = await whatsappAutomationRepository.isSalonAutomationEnabled(salonId, eventType)

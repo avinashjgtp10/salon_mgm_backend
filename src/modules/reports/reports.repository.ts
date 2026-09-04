@@ -50,6 +50,16 @@ import {
     AllClientsReportRow,
     AllClientsReportStats,
     AllClientsFiltersAvailable,
+    NewClientFollowUpRow,
+    NewClientFollowUpStats,
+    CancellationRecoveryRow,
+    CancellationRecoveryStats,
+    MembershipOpportunityRow,
+    MembershipOpportunityStats,
+    NoShowRecoveryRow,
+    NoShowRecoveryStats,
+    EnquiryReportRow,
+    EnquiryReportStats,
     CustomerFrequencyReportRow,
     CustomerFrequencyReportStats,
     LostCustomersReportRow,
@@ -5495,7 +5505,10 @@ _buildAllClientsWhere(
     values.push(filters.genders.map(g => g.toLowerCase()));
   }
   if (filters.client_source && filters.client_source !== "all") {
-    where.push(`c.client_source = $${idx++}`);
+    // Case/whitespace-insensitive so a client stored as "walk-in" or
+    // "Walk-in " still matches the trimmed, deduped "Walk-in" option the
+    // filters-available query offers.
+    where.push(`LOWER(TRIM(c.client_source)) = LOWER($${idx++})`);
     values.push(filters.client_source);
   }
   if (filters.birth_month) {
@@ -5689,16 +5702,792 @@ async getAllClientsReportRows(
 
 // Filter dropdown options for the All Clients report — client_source
 // values actually present on this salon's clients, not a hardcoded list.
+// DISTINCT ON the lower-cased, trimmed value collapses case/whitespace
+// variants (e.g. "Walk-in" vs "walk-in ") into one option.
 async getAllClientsFiltersAvailable(salonId: string): Promise<AllClientsFiltersAvailable> {
   const { rows } = await safeQuery(() => pool.query(
-    `SELECT DISTINCT client_source AS id, client_source AS label
+    `SELECT DISTINCT ON (LOWER(TRIM(client_source))) TRIM(client_source) AS id, TRIM(client_source) AS label
      FROM clients
      WHERE salon_id = $1 AND client_source IS NOT NULL AND TRIM(client_source) <> ''
-     ORDER BY client_source ASC`,
+     ORDER BY LOWER(TRIM(client_source)) ASC, TRIM(client_source) ASC`,
     [salonId]
   ));
   return {
     client_sources: rows.map((r: any) => ({ id: r.id, label: r.label })),
+  };
+},
+
+// ======================================================
+// NEW CLIENT FOLLOW-UP REPORT (independent report API)
+// POST /api/report/new-client-follow-up — clients who joined within the
+// trailing `new_within_days` window and have never had a completed/paid
+// appointment yet. Reuses the exact same "completed_count = 0" convention
+// as All Clients' customer_type=new filter (av.completed_count join above)
+// so "new, no follow-up" can never quietly diverge from what "new" already
+// means elsewhere in Reports.
+// ======================================================
+
+_buildNewClientFollowUpWhere(
+  salonId: string,
+  filters: { new_within_days?: number; search?: string }
+): { joinSql: string; where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["c.salon_id = $1", "c.is_active = true"];
+  let idx = 2;
+
+  const days = Math.max(1, Number(filters.new_within_days ?? 7));
+  where.push(`c.created_at >= NOW() - ($${idx++} || ' days')::interval`);
+  values.push(days);
+
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  const joinSql = `
+    LEFT JOIN (
+      SELECT client_id, COUNT(*) FILTER (WHERE status = 'paid') AS completed_count
+      FROM appointments
+      WHERE salon_id = $1 AND deleted_at IS NULL
+      GROUP BY client_id
+    ) av ON av.client_id = c.id
+  `;
+  where.push(`COALESCE(av.completed_count, 0) = 0`);
+
+  return { joinSql, where: where.join(" AND "), values, nextIndex: idx };
+},
+
+async getNewClientFollowUpStats(
+  salonId: string,
+  filters: { new_within_days?: number; search?: string }
+): Promise<NewClientFollowUpStats> {
+  const { joinSql, where, values } = this._buildNewClientFollowUpWhere(salonId, filters);
+  const query = `
+    SELECT COUNT(*)::int AS total_eligible
+    FROM clients c
+    ${joinSql}
+    WHERE ${where}
+  `;
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return { total_eligible: Number(rows[0]?.total_eligible ?? 0) };
+},
+
+async getNewClientFollowUpRows(
+  salonId: string,
+  filters: { new_within_days?: number; search?: string; page?: number; limit?: number; is_export?: boolean }
+): Promise<{
+  items: NewClientFollowUpRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { joinSql, where, values, nextIndex } = this._buildNewClientFollowUpWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    SELECT
+      c.id AS client_id,
+      COALESCE(NULLIF(TRIM(c.full_name), ''), 'Unnamed Client') AS client_name,
+      COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS contact,
+      TO_CHAR(c.created_at, 'YYYY-MM-DD') AS joined_date,
+      EXTRACT(DAY FROM NOW() - c.created_at)::int AS days_since_joined,
+      COUNT(*) OVER() AS total_count
+    FROM clients c
+    ${joinSql}
+    WHERE ${where}
+    ORDER BY c.created_at DESC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: NewClientFollowUpRow[] = rows.map((row: any) => ({
+    client_id: row.client_id,
+    client_name: row.client_name,
+    contact: row.contact,
+    joined_date: row.joined_date,
+    days_since_joined: Number(row.days_since_joined ?? 0),
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// ======================================================
+// CANCELLATION RECOVERY REPORT (independent report API)
+// POST /api/report/cancellation-recovery — one row per client whose most
+// recent appointment was cancelled within the trailing window, AND who has
+// had no appointment of any kind since (booked, paid, partial, or another
+// cancellation) — i.e. the cancellation was never followed up with a
+// rebooking. Ranks each client's appointments by scheduled_at DESC to find
+// "most recent", same DISTINCT ON convention the Payment Collection Report
+// uses for "latest payment per appointment".
+// ======================================================
+
+_buildCancellationRecoveryWhere(
+  salonId: string,
+  filters: { cancelled_within_days?: number; search?: string }
+): { where: string; values: any[]; nextIndex: number; days: number } {
+  const values: any[] = [salonId];
+  let idx = 2;
+
+  const days = Math.max(1, Number(filters.cancelled_within_days ?? 30));
+  values.push(days);
+  idx++;
+
+  const where: string[] = [];
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  return { where: where.length ? `AND ${where.join(" AND ")}` : "", values, nextIndex: idx, days };
+},
+
+async getCancellationRecoveryStats(
+  salonId: string,
+  filters: { cancelled_within_days?: number; search?: string }
+): Promise<CancellationRecoveryStats> {
+  const { where, values } = this._buildCancellationRecoveryWhere(salonId, filters);
+  const query = `
+    WITH latest_appt AS (
+      SELECT DISTINCT ON (a.client_id)
+        a.client_id, a.status, a.scheduled_at
+      FROM appointments a
+      WHERE a.salon_id = $1 AND a.deleted_at IS NULL AND a.client_id IS NOT NULL
+      ORDER BY a.client_id, a.scheduled_at DESC
+    )
+    SELECT COUNT(*)::int AS total_eligible
+    FROM latest_appt la
+    JOIN clients c ON c.id = la.client_id
+    WHERE la.status = 'cancelled'
+      AND la.scheduled_at >= NOW() - ($2 || ' days')::interval
+      ${where}
+  `;
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return { total_eligible: Number(rows[0]?.total_eligible ?? 0) };
+},
+
+async getCancellationRecoveryRows(
+  salonId: string,
+  filters: { cancelled_within_days?: number; search?: string; page?: number; limit?: number; is_export?: boolean }
+): Promise<{
+  items: CancellationRecoveryRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildCancellationRecoveryWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    WITH latest_appt AS (
+      SELECT DISTINCT ON (a.client_id)
+        a.id, a.client_id, a.status, a.scheduled_at, a.services
+      FROM appointments a
+      WHERE a.salon_id = $1 AND a.deleted_at IS NULL AND a.client_id IS NOT NULL
+      ORDER BY a.client_id, a.scheduled_at DESC
+    )
+    SELECT
+      c.id AS client_id,
+      COALESCE(NULLIF(TRIM(c.full_name), ''), 'Unnamed Client') AS client_name,
+      COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS contact,
+      (
+        SELECT STRING_AGG(NULLIF(svc.value->>'name', ''), ', ')
+        FROM jsonb_array_elements(COALESCE(la.services, '[]'::jsonb)) AS svc(value)
+      ) AS service_name,
+      s.invoice_number AS invoice_number,
+      TO_CHAR(la.scheduled_at, 'YYYY-MM-DD') AS cancelled_date,
+      EXTRACT(DAY FROM NOW() - la.scheduled_at)::int AS days_since_cancelled,
+      COUNT(*) OVER() AS total_count
+    FROM latest_appt la
+    JOIN clients c ON c.id = la.client_id
+    LEFT JOIN sales s ON s.appointment_id = la.id
+    WHERE la.status = 'cancelled'
+      AND la.scheduled_at >= NOW() - ($2 || ' days')::interval
+      ${where}
+    ORDER BY la.scheduled_at DESC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: CancellationRecoveryRow[] = rows.map((row: any) => ({
+    client_id: row.client_id,
+    client_name: row.client_name,
+    contact: row.contact,
+    service_name: row.service_name || null,
+    invoice_number: row.invoice_number || null,
+    cancelled_date: row.cancelled_date,
+    days_since_cancelled: Number(row.days_since_cancelled ?? 0),
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// ======================================================
+// MEMBERSHIP OPPORTUNITY REPORT (independent report API)
+// POST /api/report/membership-opportunity — clients with at least
+// `min_visits` completed appointments in the trailing `window_days` window
+// who do NOT currently have an active membership. Reuses the exact
+// NOT EXISTS(client_memberships ... status='active') convention All
+// Clients' has_membership filter already uses.
+// ======================================================
+
+_buildMembershipOpportunityWhere(
+  salonId: string,
+  filters: {
+    window_days?: number; min_visits?: number; search?: string; has_membership?: "has" | "no";
+    last_visit_from?: string; last_visit_to?: string;
+    genders?: string[]; client_source?: string;
+  }
+): { joinSql: string; where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  let idx = 2;
+
+  const days = Math.max(1, Number(filters.window_days ?? 90));
+  const minVisits = Math.max(0, Number(filters.min_visits ?? 0));
+  values.push(days);
+  idx++;
+
+  const where = ["c.salon_id = $1", "c.is_active = true", `COALESCE(av.visit_count, 0) >= $${idx}`];
+  values.push(minVisits);
+  idx++;
+
+  // Unset by default — the report shows both, until the user manually ticks
+  // one. "no" narrows to frequent visitors not yet converted (this report's
+  // core purpose); "has" lets it double as a renewal/upgrade list.
+  if (filters.has_membership === "has") {
+    where.push(`EXISTS (SELECT 1 FROM client_memberships cm WHERE cm.client_id = c.id AND LOWER(cm.status) = 'active')`);
+  } else if (filters.has_membership === "no") {
+    where.push(`NOT EXISTS (SELECT 1 FROM client_memberships cm WHERE cm.client_id = c.id AND LOWER(cm.status) = 'active')`);
+  }
+
+  // Same last-visit range convention as All Clients' last_visit_from/to —
+  // narrows to clients whose last visit falls in this range, layered on top
+  // of the window_days/min_visits eligibility above rather than replacing it.
+  if (filters.last_visit_from) { where.push(`av.last_visit_at::date >= $${idx++}::date`); values.push(filters.last_visit_from); }
+  if (filters.last_visit_to)   { where.push(`av.last_visit_at::date <= $${idx++}::date`); values.push(filters.last_visit_to); }
+
+  // Gender / client source — same columns and semantics as All Clients'
+  // own filters, just layered under this report's eligibility criteria.
+  if (filters.genders && filters.genders.length > 0) {
+    where.push(`LOWER(c.gender) = ANY($${idx++}::text[])`);
+    values.push(filters.genders.map((g) => g.toLowerCase()));
+  }
+  if (filters.client_source && filters.client_source !== "all") {
+    // Case/whitespace-insensitive so a client stored as "walk-in" or
+    // "Walk-in " still matches the trimmed, deduped "Walk-in" option the
+    // filters-available query offers.
+    where.push(`LOWER(TRIM(c.client_source)) = LOWER($${idx++})`);
+    values.push(filters.client_source);
+  }
+
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  const joinSql = `
+    LEFT JOIN (
+      SELECT client_id,
+             COUNT(*) FILTER (WHERE status = 'paid') AS visit_count,
+             MAX(scheduled_at) FILTER (WHERE status = 'paid') AS last_visit_at
+      FROM appointments
+      WHERE salon_id = $1 AND deleted_at IS NULL
+        AND scheduled_at >= NOW() - ($2 || ' days')::interval
+      GROUP BY client_id
+    ) av ON av.client_id = c.id
+  `;
+
+  return { joinSql, where: where.join(" AND "), values, nextIndex: idx };
+},
+
+async getMembershipOpportunityStats(
+  salonId: string,
+  filters: {
+    window_days?: number; min_visits?: number; search?: string; has_membership?: "has" | "no";
+    last_visit_from?: string; last_visit_to?: string;
+    genders?: string[]; client_source?: string;
+  }
+): Promise<MembershipOpportunityStats> {
+  const { joinSql, where, values } = this._buildMembershipOpportunityWhere(salonId, filters);
+  const query = `
+    SELECT COUNT(*)::int AS total_eligible
+    FROM clients c
+    ${joinSql}
+    WHERE ${where}
+  `;
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return { total_eligible: Number(rows[0]?.total_eligible ?? 0) };
+},
+
+async getMembershipOpportunityRows(
+  salonId: string,
+  filters: {
+    window_days?: number; min_visits?: number; search?: string; has_membership?: "has" | "no";
+    last_visit_from?: string; last_visit_to?: string;
+    genders?: string[]; client_source?: string;
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: MembershipOpportunityRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { joinSql, where, values, nextIndex } = this._buildMembershipOpportunityWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    SELECT
+      c.id AS client_id,
+      COALESCE(NULLIF(TRIM(c.full_name), ''), 'Unnamed Client') AS client_name,
+      COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS contact,
+      COALESCE(av.visit_count, 0)::int AS visit_count,
+      TO_CHAR(av.last_visit_at, 'YYYY-MM-DD') AS last_visit_date,
+      EXISTS (SELECT 1 FROM client_memberships cm WHERE cm.client_id = c.id AND LOWER(cm.status) = 'active') AS has_membership,
+      COUNT(*) OVER() AS total_count
+    FROM clients c
+    ${joinSql}
+    WHERE ${where}
+    ORDER BY av.visit_count DESC, c.created_at DESC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: MembershipOpportunityRow[] = rows.map((row: any) => ({
+    client_id: row.client_id,
+    client_name: row.client_name,
+    contact: row.contact,
+    visit_count: Number(row.visit_count ?? 0),
+    has_membership: Boolean(row.has_membership),
+    last_visit_date: row.last_visit_date || null,
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// Filter dropdown options for the Membership Opportunity report —
+// client_source values actually present on this salon's clients, same
+// pattern as All Clients' own filters-available query. DISTINCT ON the
+// lower-cased, trimmed value collapses case/whitespace variants (e.g.
+// "Walk-in" vs "walk-in ") into one option instead of listing each raw
+// variant separately.
+async getMembershipOpportunityFiltersAvailable(salonId: string): Promise<{ client_sources: { id: string; label: string }[] }> {
+  const { rows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT ON (LOWER(TRIM(client_source))) TRIM(client_source) AS id, TRIM(client_source) AS label
+     FROM clients
+     WHERE salon_id = $1 AND client_source IS NOT NULL AND TRIM(client_source) <> ''
+     ORDER BY LOWER(TRIM(client_source)) ASC, TRIM(client_source) ASC`,
+    [salonId]
+  ));
+  return { client_sources: rows.map((r: any) => ({ id: r.id, label: r.label })) };
+},
+
+// ======================================================
+// NO-SHOW RECOVERY REPORT (independent report API)
+// POST /api/report/no-show-recovery — one row per no-show appointment
+// (a.status = 'no-show') within the filtered window. Unlike Cancellation
+// Recovery (latest appointment only, one row per client), every no-show
+// appointment matching the filters gets its own row, since a client can
+// no-show more than once and each is independently recoverable.
+// ======================================================
+
+_buildNoShowRecoveryWhere(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; staff_ids?: string[]; service_ids?: string[]; search?: string }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["a.salon_id = $1", "a.deleted_at IS NULL", "a.status = 'no-show'", "a.client_id IS NOT NULL"];
+  let idx = 2;
+
+  if (filters.start_date) {
+    where.push(`a.scheduled_at >= ($${idx++}::date::timestamp AT TIME ZONE 'Asia/Kolkata')`);
+    values.push(filters.start_date);
+  }
+  if (filters.end_date) {
+    where.push(`a.scheduled_at < (($${idx++}::date + interval '1 day')::timestamp AT TIME ZONE 'Asia/Kolkata')`);
+    values.push(filters.end_date);
+  }
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    where.push(`a.staff_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.staff_ids);
+  }
+  if (filters.service_ids && filters.service_ids.length > 0) {
+    where.push(`EXISTS (
+      SELECT 1 FROM jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) AS svc(value)
+      WHERE NULLIF(svc.value->>'service_id', '')::uuid = ANY($${idx++}::uuid[])
+    )`);
+    values.push(filters.service_ids);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+async getNoShowRecoveryStats(
+  salonId: string,
+  filters: { start_date?: string; end_date?: string; staff_ids?: string[]; service_ids?: string[]; search?: string }
+): Promise<NoShowRecoveryStats> {
+  const { where, values } = this._buildNoShowRecoveryWhere(salonId, filters);
+  const query = `
+    SELECT COUNT(*)::int AS total_no_shows
+    FROM appointments a
+    JOIN clients c ON c.id = a.client_id
+    WHERE ${where}
+  `;
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return { total_no_shows: Number(rows[0]?.total_no_shows ?? 0) };
+},
+
+async getNoShowRecoveryRows(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; staff_ids?: string[]; service_ids?: string[]; search?: string;
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: NoShowRecoveryRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildNoShowRecoveryWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    SELECT
+      a.id AS appointment_id,
+      c.id AS client_id,
+      COALESCE(NULLIF(TRIM(c.full_name), ''), 'Unnamed Client') AS client_name,
+      COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS contact,
+      (
+        SELECT STRING_AGG(NULLIF(svc.value->>'name', ''), ', ')
+        FROM jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) AS svc(value)
+      ) AS service_name,
+      COALESCE(NULLIF(TRIM(CONCAT_WS(' ', st.first_name, st.last_name)), ''), 'Unassigned') AS staff_name,
+      TO_CHAR(a.scheduled_at, 'YYYY-MM-DD') AS scheduled_date,
+      EXTRACT(DAY FROM NOW() - a.scheduled_at)::int AS days_since,
+      COUNT(*) OVER() AS total_count
+    FROM appointments a
+    JOIN clients c ON c.id = a.client_id
+    LEFT JOIN staff st ON st.id = a.staff_id
+    WHERE ${where}
+    ORDER BY a.scheduled_at DESC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: NoShowRecoveryRow[] = rows.map((row: any) => ({
+    appointment_id: row.appointment_id,
+    client_id: row.client_id,
+    client_name: row.client_name,
+    contact: row.contact,
+    service_name: row.service_name || null,
+    staff_name: row.staff_name || null,
+    scheduled_date: row.scheduled_date,
+    days_since: Number(row.days_since ?? 0),
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// Filter dropdown options for the No-Show Recovery report — staff and
+// services actually present on this salon's no-show appointments, not a
+// hardcoded or salon-wide list, so the dropdowns only ever offer choices
+// that can actually narrow the result set.
+async getNoShowRecoveryFiltersAvailable(salonId: string): Promise<{ staff: { id: string; label: string }[]; services: { id: string; label: string }[] }> {
+  const [staffResult, servicesResult] = await Promise.all([
+    safeQuery(() => pool.query(
+      `SELECT DISTINCT st.id, TRIM(CONCAT_WS(' ', st.first_name, st.last_name)) AS label
+       FROM appointments a
+       JOIN staff st ON st.id = a.staff_id
+       WHERE a.salon_id = $1 AND a.status = 'no-show' AND a.deleted_at IS NULL
+       ORDER BY label ASC`,
+      [salonId]
+    )),
+    safeQuery(() => pool.query(
+      `SELECT DISTINCT sv.id, sv.name AS label
+       FROM appointments a
+       JOIN jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) AS svc(value) ON true
+       JOIN services sv ON sv.id = NULLIF(svc.value->>'service_id', '')::uuid
+       WHERE a.salon_id = $1 AND a.status = 'no-show' AND a.deleted_at IS NULL
+       ORDER BY label ASC`,
+      [salonId]
+    )),
+  ]);
+  return {
+    staff: staffResult.rows.map((r: any) => ({ id: r.id, label: r.label })),
+    services: servicesResult.rows.map((r: any) => ({ id: r.id, label: r.label })),
+  };
+},
+
+// ======================================================
+// ENQUIRY REPORT (independent report API)
+// POST /api/report/enquiries — reads the enquiries table directly (the same
+// rows the Add Enquiry form / EnquiriesListPage already create and manage).
+// "Pending Follow-ups" = any enquiry not yet in a resolved state (Converted/
+// Closed/Lost) — i.e. still New, Contacted, or Follow-up.
+// ======================================================
+
+_buildEnquiryReportWhere(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; staff_ids?: string[]; service_ids?: string[];
+    statuses?: string[]; sources?: string[]; follow_up_date?: string; search?: string;
+  }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["e.salon_id = $1"];
+  let idx = 2;
+
+  if (filters.start_date) { where.push(`e.created_at >= $${idx++}::date`); values.push(filters.start_date); }
+  if (filters.end_date)   { where.push(`e.created_at < ($${idx++}::date + interval '1 day')`); values.push(filters.end_date); }
+
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    where.push(`e.staff_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.staff_ids);
+  }
+  if (filters.service_ids && filters.service_ids.length > 0) {
+    where.push(`e.service_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.service_ids);
+  }
+  if (filters.statuses && filters.statuses.length > 0) {
+    where.push(`e.status = ANY($${idx++}::text[])`);
+    values.push(filters.statuses);
+  }
+  if (filters.sources && filters.sources.length > 0) {
+    where.push(`e.source = ANY($${idx++}::text[])`);
+    values.push(filters.sources);
+  }
+  if (filters.follow_up_date) {
+    where.push(`e.follow_up_at::date = $${idx++}::date`);
+    values.push(filters.follow_up_date);
+  }
+  if (filters.search?.trim()) {
+    where.push(`(e.name ILIKE $${idx} OR e.phone ILIKE $${idx})`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+async getEnquiryReportStats(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; staff_ids?: string[]; service_ids?: string[];
+    statuses?: string[]; sources?: string[]; follow_up_date?: string; search?: string;
+  }
+): Promise<EnquiryReportStats> {
+  const { where, values } = this._buildEnquiryReportWhere(salonId, filters);
+  const query = `
+    SELECT
+      COUNT(*)::int AS total_enquiries,
+      COUNT(*) FILTER (WHERE e.status = 'New')::int AS new_enquiries,
+      COUNT(*) FILTER (WHERE e.status IN ('New', 'Contacted', 'Follow-up'))::int AS pending_follow_ups,
+      COUNT(*) FILTER (WHERE e.status = 'Converted')::int AS converted_enquiries,
+      COUNT(*) FILTER (WHERE e.status IN ('Lost', 'Closed'))::int AS lost_enquiries
+    FROM enquiries e
+    WHERE ${where}
+  `;
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  const total = Number(r.total_enquiries ?? 0);
+  const converted = Number(r.converted_enquiries ?? 0);
+  return {
+    total_enquiries: total,
+    new_enquiries: Number(r.new_enquiries ?? 0),
+    pending_follow_ups: Number(r.pending_follow_ups ?? 0),
+    converted_enquiries: converted,
+    lost_enquiries: Number(r.lost_enquiries ?? 0),
+    conversion_rate: total > 0 ? Math.round((converted / total) * 1000) / 10 : 0,
+  };
+},
+
+async getEnquiryReportRows(
+  salonId: string,
+  filters: {
+    start_date?: string; end_date?: string; staff_ids?: string[]; service_ids?: string[];
+    statuses?: string[]; sources?: string[]; follow_up_date?: string; search?: string;
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: EnquiryReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildEnquiryReportWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    SELECT
+      e.id AS enquiry_id,
+      e.enquiry_no,
+      e.name,
+      e.phone,
+      e.service_id,
+      sv.name AS service_name,
+      e.staff_id,
+      NULLIF(TRIM(CONCAT_WS(' ', st.first_name, st.last_name)), '') AS staff_name,
+      e.status,
+      e.source,
+      e.follow_up_at,
+      e.notes,
+      e.created_at,
+      COUNT(*) OVER() AS total_count
+    FROM enquiries e
+    LEFT JOIN services sv ON sv.id = e.service_id
+    LEFT JOIN staff st ON st.id = e.staff_id
+    WHERE ${where}
+    ORDER BY e.created_at DESC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: EnquiryReportRow[] = rows.map((row: any) => ({
+    enquiry_id: row.enquiry_id,
+    enquiry_no: Number(row.enquiry_no),
+    name: row.name,
+    phone: row.phone,
+    service_id: row.service_id,
+    service_name: row.service_name || null,
+    staff_id: row.staff_id,
+    staff_name: row.staff_name || null,
+    status: row.status,
+    source: row.source || null,
+    follow_up_at: row.follow_up_at,
+    notes: row.notes || null,
+    created_at: row.created_at,
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// Filter dropdown options for the Enquiry Report — staff/services/sources
+// actually present on this salon's enquiries, not a hardcoded list.
+async getEnquiryReportFiltersAvailable(salonId: string): Promise<{
+  staff: { id: string; label: string }[];
+  services: { id: string; label: string }[];
+  sources: { id: string; label: string }[];
+}> {
+  const [staffResult, servicesResult, sourcesResult] = await Promise.all([
+    safeQuery(() => pool.query(
+      `SELECT DISTINCT st.id, TRIM(CONCAT_WS(' ', st.first_name, st.last_name)) AS label
+       FROM enquiries e
+       JOIN staff st ON st.id = e.staff_id
+       WHERE e.salon_id = $1
+       ORDER BY label ASC`,
+      [salonId]
+    )),
+    safeQuery(() => pool.query(
+      `SELECT DISTINCT sv.id, sv.name AS label
+       FROM enquiries e
+       JOIN services sv ON sv.id = e.service_id
+       WHERE e.salon_id = $1
+       ORDER BY label ASC`,
+      [salonId]
+    )),
+    safeQuery(() => pool.query(
+      `SELECT DISTINCT ON (LOWER(TRIM(source))) TRIM(source) AS id, TRIM(source) AS label
+       FROM enquiries
+       WHERE salon_id = $1 AND source IS NOT NULL AND TRIM(source) <> ''
+       ORDER BY LOWER(TRIM(source)) ASC, TRIM(source) ASC`,
+      [salonId]
+    )),
+  ]);
+  return {
+    staff: staffResult.rows.map((r: any) => ({ id: r.id, label: r.label })),
+    services: servicesResult.rows.map((r: any) => ({ id: r.id, label: r.label })),
+    sources: sourcesResult.rows.map((r: any) => ({ id: r.id, label: r.label })),
   };
 },
 

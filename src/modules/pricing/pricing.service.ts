@@ -407,11 +407,17 @@ export const pricingService = {
         let pointsToRedeem = Math.min(body.rewardPointsToRedeem ?? 0, rpBalance);
         if (pointsToRedeem > 0 && rpConfig.redeem_points > 0) {
           let value = (pointsToRedeem / rpConfig.redeem_points) * rpConfig.redeem_value;
-          if (value > remaining) {
-            // Cap the ₹ value at what's left, then work backward to how many
-            // points that actually costs — floor so this only ever slightly
-            // UNDER-redeems in the preview, matching the real charge-time logic.
-            pointsToRedeem = Math.floor((remaining / rpConfig.redeem_value) * rpConfig.redeem_points);
+          // Same max_redeem_percent-of-preRedemptionTotal cap as
+          // payments.service.ts's charge-time logic, so the preview never
+          // shows a bigger redemption than checkout will actually allow.
+          const percentCap = preliminaryTotals.preRedemptionTotal * (rpConfig.max_redeem_percent / 100);
+          const cap = Math.min(remaining, percentCap);
+          if (value > cap) {
+            // Cap the ₹ value at the lower of what's left / the percent cap,
+            // then work backward to how many points that actually costs —
+            // floor so this only ever slightly UNDER-redeems in the preview,
+            // matching the real charge-time logic.
+            pointsToRedeem = Math.floor((cap / rpConfig.redeem_value) * rpConfig.redeem_points);
             value = (pointsToRedeem / rpConfig.redeem_points) * rpConfig.redeem_value;
           }
           appliedRewardPointsValue = value;

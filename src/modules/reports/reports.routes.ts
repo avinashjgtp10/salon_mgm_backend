@@ -201,6 +201,66 @@ router.post(
 );
 
 // ======================================================
+// NEW CLIENT FOLLOW-UP REPORT (independent report API)
+// "New" clients (joined within the last N days) who have never had a
+// completed/paid appointment yet — same "new" convention as All Clients'
+// customer_type filter, scoped to a shorter trailing window.
+// ======================================================
+
+router.post(
+    "/new-client-follow-up",
+    ...guard,
+    reportsController.getNewClientFollowUpReport
+);
+
+// ======================================================
+// CANCELLATION RECOVERY REPORT (independent report API)
+// Clients whose most recent appointment was a cancellation within the
+// trailing window, with no rebooking since.
+// ======================================================
+
+router.post(
+    "/cancellation-recovery",
+    ...guard,
+    reportsController.getCancellationRecoveryReport
+);
+
+// ======================================================
+// MEMBERSHIP OPPORTUNITY REPORT (independent report API)
+// Frequent visitors with no currently active membership.
+// ======================================================
+
+router.post(
+    "/membership-opportunity",
+    ...guard,
+    reportsController.getMembershipOpportunityReport
+);
+
+// ======================================================
+// NO-SHOW RECOVERY REPORT (independent report API)
+// No-show appointments within the filtered window, meant to be paired with
+// a WhatsApp recovery template.
+// ======================================================
+
+router.post(
+    "/no-show-recovery",
+    ...guard,
+    reportsController.getNoShowRecoveryReport
+);
+
+// ======================================================
+// ENQUIRY REPORT (independent report API)
+// Reads the enquiries table directly — same data the Add Enquiry form and
+// EnquiriesListPage already create/manage, with richer filters and KPIs.
+// ======================================================
+
+router.post(
+    "/enquiries",
+    ...guard,
+    reportsController.getEnquiryReport
+);
+
+// ======================================================
 // CUSTOMER FREQUENCY REPORT (independent report API)
 // Reads clients/sales directly — never calls the Appointment API/service.
 // ======================================================

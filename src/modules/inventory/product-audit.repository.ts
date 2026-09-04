@@ -1,9 +1,11 @@
 import pool from "../../config/database";
+import { AppError } from "../../middleware/error.middleware";
 import {
     ProductAudit, ProductAuditWithDetail, ProductAuditListRow,
     ProductAuditItem,
     CreateProductAuditBody, ListProductAuditsFilters, ProductAuditStatus,
 } from "./product-audit.types";
+import { inventoryAlertsService } from "./inventory-alerts.service";
 
 // Schema (product_audits, product_audit_items, product_audit_history) is NOT
 // self-migrated from here — per project policy, schema changes are never
@@ -22,7 +24,7 @@ const AUDIT_SELECT = `
 // resolved live via this join (never denormalized onto the row), so a later
 // rename in the catalog is reflected instead of frozen at add-time.
 const ITEM_SELECT = `
-  SELECT pai.*, p.name AS product_name, p.sku, sc.name AS category
+  SELECT pai.*, p.name AS product_name, p.sku, p.measure_unit, sc.name AS category
     FROM product_audit_items pai
     JOIN products p ON p.id = pai.product_id
     LEFT JOIN service_categories sc ON sc.id = p.category_id
@@ -158,7 +160,7 @@ export const productAuditRepository = {
             await client.query("BEGIN");
 
             const { rows: prodRows } = await client.query(
-                `SELECT p.id, p.name, p.sku, sc.name AS category, (${STOCK_IN_PACKS})::float8 AS system_qty
+                `SELECT p.id, p.name, p.sku, p.measure_unit, sc.name AS category, (${STOCK_IN_PACKS})::float8 AS system_qty
                    FROM products p
                    LEFT JOIN service_categories sc ON sc.id = p.category_id
                   WHERE p.id = ANY($1::uuid[]) AND p.salon_id = $2`,
@@ -178,7 +180,7 @@ export const productAuditRepository = {
                     [auditId, p.id, p.system_qty],
                 );
                 if (rows[0]) {
-                    inserted.push({ ...rows[0], product_name: p.name, sku: p.sku, category: p.category });
+                    inserted.push({ ...rows[0], product_name: p.name, sku: p.sku, category: p.category, measure_unit: p.measure_unit });
                 }
             }
 
@@ -256,6 +258,133 @@ export const productAuditRepository = {
             [patch.status, patch.reviewer_id ?? null, patch.rejection_reason ?? null, auditId, salonId],
         );
         return rows[0];
+    },
+
+    // Approval is the moment a physical count becomes the official stock —
+    // NOT a plain status change. For every item with a counted physical_qty,
+    // this sets products.amount to match what was physically counted and
+    // writes a stock_ledger row (transaction_type audit_adjustment_in/out)
+    // tagged back to this audit, atomically with the status flip to
+    // 'complete'. A partial apply (some products adjusted, audit still
+    // pending_review) would be worse than the audit staying open, so
+    // everything shares one transaction.
+    //
+    // Deliberately an ABSOLUTE set to physical_qty, not "current amount +
+    // (physical_qty - system_qty)": system_qty was snapshotted when the item
+    // was added to the audit, so if any other stock movement (a sale, a
+    // purchase, another audit) happened since, that snapshot is stale. Using
+    // it as a delta base would apply the right-sized correction to the
+    // wrong baseline and land on a number that doesn't match what was
+    // physically counted — silently defeating the audit. Setting straight to
+    // physical_qty is correct regardless of what happened in between; the
+    // ledger's signed quantity is then derived from that (target - live
+    // amount at approval time), so the audit trail still shows the real
+    // change actually applied.
+    //
+    // system_qty/physical_qty are stored in PACKS (see STOCK_IN_PACKS above —
+    // same convention Product Inventory's "Available" column uses), but
+    // products.amount and stock_ledger are BASE units whenever bottle_size is
+    // set, so physical_qty is converted to base units here before touching
+    // either — same conversion product-inventory.repository and
+    // purchases.repository already apply on every other stock-writing path.
+    async approveWithAdjustments(
+        auditId: string,
+        salonId: string,
+        reviewerId: string,
+    ): Promise<{ audit: ProductAudit; adjustedCount: number }> {
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+
+            // Locks the audit row so two concurrent Approve clicks can't both
+            // pass the status check and double-apply the adjustment.
+            const { rows: auditRows } = await client.query(
+                `SELECT * FROM product_audits WHERE id = $1 AND salon_id = $2 FOR UPDATE`,
+                [auditId, salonId],
+            );
+            const audit = auditRows[0];
+            if (!audit) throw new AppError(404, "Audit not found", "AUDIT_NOT_FOUND");
+            if (audit.status !== "pending_review") {
+                throw new AppError(409, `Cannot approve an audit that is ${audit.status}`, "INVALID_TRANSITION");
+            }
+
+            const { rows: items } = await client.query(
+                `SELECT pai.id, pai.product_id, pai.physical_qty, pai.reason,
+                        COALESCE(p.amount, 0) AS amount, p.bottle_size
+                   FROM product_audit_items pai
+                   JOIN products p ON p.id = pai.product_id
+                  WHERE pai.audit_id = $1
+                    AND pai.physical_qty IS NOT NULL
+                  FOR UPDATE OF p`,
+                [auditId],
+            );
+
+            let adjustedCount = 0;
+            const adjustedProductIds: string[] = [];
+            for (const item of items) {
+                const bottleSize = Number(item.bottle_size) || 0;
+                const baseUnitsPerPack = bottleSize > 0 ? bottleSize : 1;
+                const currentAmount = parseFloat(item.amount);
+                const targetAmount = Number(item.physical_qty) * baseUnitsPerPack;
+                const baseDelta = targetAmount - currentAmount;
+
+                // Nothing to reconcile — the live balance already matches the
+                // physical count (e.g. a concurrent correction beat this
+                // approval to it). Leave stock and the ledger untouched.
+                if (baseDelta === 0) continue;
+                adjustedCount++;
+                adjustedProductIds.push(item.product_id);
+
+                const txnType = baseDelta > 0 ? "audit_adjustment_in" : "audit_adjustment_out";
+
+                await client.query(
+                    `UPDATE products SET amount = $1, updated_at = NOW() WHERE id = $2`,
+                    [targetAmount, item.product_id],
+                );
+
+                await client.query(
+                    `INSERT INTO stock_ledger (
+                        salon_id, branch_id, product_id, transaction_type,
+                        reference, quantity, balance_after, reason, notes, created_by
+                     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+                    [
+                        salonId, audit.branch_id, item.product_id, txnType,
+                        `Audit: ${audit.name}`, baseDelta, targetAmount,
+                        item.reason, `audit_id:${auditId}`, reviewerId,
+                    ],
+                );
+            }
+
+            const { rows: updatedRows } = await client.query(
+                `UPDATE product_audits
+                    SET status = 'complete', reviewer_id = $1, rejection_reason = NULL, updated_at = NOW()
+                  WHERE id = $2 AND salon_id = $3
+                  RETURNING *`,
+                [reviewerId, auditId, salonId],
+            );
+
+            await client.query(
+                `INSERT INTO product_audit_history (audit_id, actor_id, action, note)
+                 VALUES ($1, $2, 'Review approved', $3)`,
+                [
+                    auditId, reviewerId,
+                    adjustedCount > 0
+                        ? `All differences verified and accepted — stock adjusted for ${adjustedCount} product(s)`
+                        : "All differences verified and accepted",
+                ],
+            );
+
+            await client.query("COMMIT");
+            inventoryAlertsService
+                .checkAndNotify(adjustedProductIds, salonId)
+                .catch(() => { /* logged internally, never blocks the caller */ });
+            return { audit: updatedRows[0], adjustedCount };
+        } catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        } finally {
+            client.release();
+        }
     },
 
     async delete(id: string, salonId: string): Promise<void> {
