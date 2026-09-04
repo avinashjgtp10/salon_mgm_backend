@@ -1178,24 +1178,13 @@ export const appointmentsService = {
             } catch (err: any) { logger.error("[email] appointmentCancelled (owner) failed:", err?.message ?? err); }
         })();
 
-        // ── Email: Appointment Cancelled (to client) ──────────────────────────
-        ;(async () => {
-            try {
-                const clientEmail = (existing as any).client_email;
-                if (!clientEmail) { logger.info("[email] appointmentCancelled: no client email, skipping"); return; }
-                logger.info(`[email] appointmentCancelled → to=${clientEmail}`);
-                const allowed = await canSendEmail(existing.salon_id, "appointmentCancelled");
-                if (!allowed) { logger.info("[email] appointmentCancelled: skipped (preference off)"); return; }
-                await emailService.sendAppointmentCancelledEmail({
-                    to:         clientEmail,
-                    clientName: existing.client_name          ?? "Valued Customer",
-                    salonName:  (existing as any).salon_name  ?? "our salon",
-                    date:       formatDate(existing.scheduled_at),
-                    time:       formatTime(existing.scheduled_at),
-                });
-                logger.info(`[email] appointmentCancelled sent to ${clientEmail}`);
-            } catch (err: any) { logger.error("[email] appointmentCancelled failed:", err?.message ?? err); }
-        })();
+        // Client-facing "Appointment Cancelled" email is now sent by
+        // notification-channels' dispatchNonWhatsappChannels(), fanned out
+        // from the same trigger({ eventType: 'appointment_cancelled', ... })
+        // call already made for this cancellation (see below/nearby) — the
+        // old direct emailService.sendAppointmentCancelledEmail() IIFE that
+        // used to live here was removed to avoid double-sending. The owner
+        // alert above is unrelated and untouched.
 
         return cancelled;
     },
@@ -1413,22 +1402,12 @@ export const appointmentsService = {
                 })();
             }
 
-            // ── Email: Appointment Completed receipt (to client) ──────────────
-            ;(async () => {
-                try {
-                    const clientEmail = (existing as any).client_email;
-                    if (!clientEmail) return;
-                    const allowed = await canSendEmail(existing.salon_id, "appointmentCompleted");
-                    if (!allowed) return;
-                    await emailService.sendAppointmentCompletedEmail({
-                        to:         clientEmail,
-                        clientName: existing.client_name         ?? "Valued Customer",
-                        salonName:  (existing as any).salon_name ?? "our salon",
-                        services:   existing.services?.map((s: any) => s.name).join(", ") ?? "Service",
-                        amount:     String(preExistingSale.total_amount ?? "0"),
-                    });
-                } catch (err: any) { logger.error("[email] appointmentCompleted (preexisting) failed:", err?.message ?? err); }
-            })();
+            // Client-facing "Appointment Completed" receipt email is now sent
+            // by notification-channels' dispatchNonWhatsappChannels(), fanned
+            // out from the payment_received trigger() call for this checkout
+            // — the old direct emailService.sendAppointmentCompletedEmail()
+            // IIFE that used to live here was removed to avoid double-
+            // sending. The owner alert below is unrelated and untouched.
 
             // ── Email: New Payment (to salon owner) ───────────────────────────
             ;(async () => {
@@ -1692,24 +1671,12 @@ export const appointmentsService = {
             })().catch(() => {});
         }
 
-        // ── Email: Appointment Completed receipt (to client) ──────────────────
-        ;(async () => {
-            try {
-                const clientEmail = (existing as any).client_email;
-                if (!clientEmail) { logger.info("[email] appointmentCompleted: no client email, skipping"); return; }
-                logger.info(`[email] appointmentCompleted → to=${clientEmail}`);
-                const allowed = await canSendEmail(existing.salon_id, "appointmentCompleted");
-                if (!allowed) { logger.info("[email] appointmentCompleted: skipped (preference off)"); return; }
-                await emailService.sendAppointmentCompletedEmail({
-                    to:         clientEmail,
-                    clientName: existing.client_name         ?? "Valued Customer",
-                    salonName:  (existing as any).salon_name ?? "our salon",
-                    services:   existing.services?.map((s: any) => s.name).join(", ") ?? "Service",
-                    amount:     String(sale.total_amount     ?? "0"),
-                });
-                logger.info(`[email] appointmentCompleted sent to ${clientEmail}`);
-            } catch (err: any) { logger.error("[email] appointmentCompleted failed:", err?.message ?? err); }
-        })();
+        // Client-facing "Appointment Completed" receipt email is now sent by
+        // notification-channels' dispatchNonWhatsappChannels(), fanned out
+        // from the payment_received trigger() call for this checkout — the
+        // old direct emailService.sendAppointmentCompletedEmail() IIFE that
+        // used to live here was removed to avoid double-sending. The owner
+        // alert below is unrelated and untouched.
 
         // ── Email: New Payment (to salon owner) ───────────────────────────────
         ;(async () => {
