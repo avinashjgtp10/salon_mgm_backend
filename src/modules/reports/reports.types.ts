@@ -579,6 +579,9 @@ export interface SalesSummaryReportFilters {
     // not the raw sales.status the `status` field above filters on.
     payment_status?: string;
     payment_statuses?: string[];
+    // Grand Total ("price"/total_sale) is GST-inclusive by default; false
+    // switches it to net-of-GST. The GST column itself is unaffected either way.
+    include_gst?: boolean;
     page?: number;
     limit?: number;
     is_export?: boolean; // bypasses the page-size cap for CSV export
@@ -2428,6 +2431,9 @@ export interface StaffPerformanceReportFilters {
     package_ids?: string[];
     membership_id?: string;
     membership_ids?: string[];
+    // Whether each line item's revenue is gross (total_price + tax_amount) or
+    // net (total_price only). Defaults to true (gross) when omitted.
+    include_gst?: boolean;
     page?: number;
     limit?: number;
     is_export?: boolean;
