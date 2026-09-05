@@ -682,7 +682,11 @@ export const superAdminRepository = {
       await client.query(`DELETE FROM refresh_tokens WHERE user_id = $1`, [id]);
       await client.query(`DELETE FROM otp_verifications WHERE user_id = $1`, [id]);
       await client.query(`DELETE FROM user_identities WHERE user_id = $1`, [id]);
-      await client.query(`UPDATE staff SET user_id = NULL, updated_at = NOW() WHERE user_id = $1`, [id]);
+      // email is cleared (not just user_id detached) so the address is
+      // immediately reusable for a new staff/user signup — the staff row
+      // itself is kept (not deleted) since payroll/commission/review history
+      // references staff.id via FK and would otherwise be lost.
+      await client.query(`UPDATE staff SET user_id = NULL, email = NULL, updated_at = NOW() WHERE user_id = $1`, [id]);
       await client.query(`UPDATE support_tickets SET user_id = NULL, updated_at = NOW() WHERE user_id = $1`, [id]);
 
       const { rows } = await client.query(
@@ -798,7 +802,10 @@ export const superAdminRepository = {
           await client.query(`DELETE FROM refresh_tokens WHERE user_id = $1`, [ownerId]);
           await client.query(`DELETE FROM otp_verifications WHERE user_id = $1`, [ownerId]);
           await client.query(`DELETE FROM user_identities WHERE user_id = $1`, [ownerId]);
-          await client.query(`UPDATE staff SET user_id = NULL, updated_at = NOW() WHERE user_id = $1`, [ownerId]);
+          // See deleteUser's identical staff update above: email must be
+          // cleared here too, not just user_id, or the owner's email stays
+          // stuck on an orphaned staff row at whatever other salon it's at.
+          await client.query(`UPDATE staff SET user_id = NULL, email = NULL, updated_at = NOW() WHERE user_id = $1`, [ownerId]);
           await client.query(`UPDATE support_tickets SET user_id = NULL, updated_at = NOW() WHERE user_id = $1`, [ownerId]);
           await client.query(`DELETE FROM users WHERE id = $1 AND role != 'super_admin'`, [ownerId]);
         }
