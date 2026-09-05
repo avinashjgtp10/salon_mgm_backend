@@ -641,14 +641,25 @@ export const paymentsService = {
 
           // ── Referral credit redemption: own dedicated balance now, not
           // eWallet. Never trust a ₹ amount sent from the frontend — cap it
-          // at the client's real balance AND at what's still left on the bill.
+          // at the client's real balance, at what's still left on the bill,
+          // AND at the salon-configured max_redeem_percent-of-the-ORIGINAL-bill
+          // cap (same preRedemptionTotal basis reward points caps against, and
+          // a no-op when redeem_enabled/max_redeem_percent are left at their
+          // defaults) — same principle as reward points just above.
           let referralCreditRequestedValue = 0;
           const referralCreditRequested = Math.max(0, Number(data.referral_credit_used) || 0);
           if (data.client_id && referralCreditRequested > 0 && remaining > 0) {
             try {
-              const referralBalance = await referralRepository.getBalance(data.client_id);
-              referralCreditUsedActual = Math.min(referralCreditRequested, referralBalance, remaining);
-              referralCreditRequestedValue = referralCreditUsedActual;
+              const [referralConfig, referralBalance] = await Promise.all([
+                referralRepository.getConfig(data.salon_id),
+                referralRepository.getBalance(data.client_id),
+              ]);
+              if (referralConfig.redeem_enabled) {
+                const percentCap = preliminaryTotals.preRedemptionTotal * (referralConfig.max_redeem_percent / 100);
+                const cap = Math.min(remaining, percentCap);
+                referralCreditUsedActual = Math.min(referralCreditRequested, referralBalance, cap);
+                referralCreditRequestedValue = referralCreditUsedActual;
+              }
             } catch (err: any) {
               logger.warn('[payments] referral balance check failed:', err?.message ?? err);
             }
