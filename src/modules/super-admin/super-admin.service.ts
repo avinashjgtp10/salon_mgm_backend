@@ -343,18 +343,41 @@ export const superAdminService = {
     return { ...user, plainPassword: data.password };
   },
 
-  async deleteSalon(id: string) {
+  async deleteSalon(id: string, deletedByUserId: string, reason?: string) {
     if (!id) throw new AppError(400, "Salon ID required", "VALIDATION_ERROR");
-    const result = await superAdminRepository.deleteSalon(id);
+    if (!deletedByUserId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+    const result = await superAdminRepository.deleteSalon(id, deletedByUserId, reason);
     if (!result) throw new AppError(404, "Salon not found", "NOT_FOUND");
     return { success: true };
   },
 
-  async clearSalonData(id: string) {
+  async getDeletedAccountHistory(opts: { search?: string; accountType?: string; page: number; perPage: number }) {
+    const page = Math.max(1, opts.page || 1);
+    const perPage = Math.min(100, Math.max(1, opts.perPage || 20));
+    return superAdminRepository.getDeletedAccountHistory({
+      search: opts.search,
+      accountType: opts.accountType,
+      limit: perPage,
+      offset: (page - 1) * perPage,
+    });
+  },
+
+  async clearSalonData(id: string, clearedByUserId: string, reason?: string) {
     if (!id) throw new AppError(400, "Salon ID required", "VALIDATION_ERROR");
-    const cleared = await superAdminRepository.clearSalonData(id);
+    if (!clearedByUserId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+    const cleared = await superAdminRepository.clearSalonData(id, clearedByUserId, reason);
     if (!cleared) throw new AppError(404, "Salon not found", "NOT_FOUND");
     return { success: true };
+  },
+
+  async getSalonCleanupHistory(opts: { search?: string; page: number; perPage: number }) {
+    const page = Math.max(1, opts.page || 1);
+    const perPage = Math.min(100, Math.max(1, opts.perPage || 20));
+    return superAdminRepository.getSalonCleanupHistory({
+      search: opts.search,
+      limit: perPage,
+      offset: (page - 1) * perPage,
+    });
   },
 
   async getAllUsers(search?: string, role?: string, minLogins?: number) {
@@ -389,9 +412,10 @@ export const superAdminService = {
     return { success: true };
   },
 
-  async deleteUser(id: string) {
+  async deleteUser(id: string, deletedByUserId: string, reason?: string) {
     if (!id) throw new AppError(400, "User ID required", "VALIDATION_ERROR");
-    const result = await superAdminRepository.deleteUser(id);
+    if (!deletedByUserId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+    const result = await superAdminRepository.deleteUser(id, deletedByUserId, reason);
     if (!result) throw new AppError(404, "User not found", "NOT_FOUND");
     if ("blocked" in result && result.blocked === "owns_salon") {
       throw new AppError(

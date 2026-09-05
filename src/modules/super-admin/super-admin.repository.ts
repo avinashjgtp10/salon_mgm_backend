@@ -651,13 +651,17 @@ export const superAdminRepository = {
     );
   },
 
-  async deleteUser(id: string) {
+  async deleteUser(id: string, deletedByUserId: string, reason?: string) {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
 
+      // Snapshotted BEFORE the delete for deleted_account_log — the users
+      // row is gone immediately after, so email/name/role can't be joined
+      // back later the way every other audit log in this app does.
       const { rows: users } = await client.query(
-        `SELECT id, role FROM users WHERE id = $1 FOR UPDATE`,
+        `SELECT id, email, role, TRIM(CONCAT(first_name,' ',COALESCE(last_name,''))) AS name
+         FROM users WHERE id = $1 FOR UPDATE`,
         [id]
       );
       const user = users[0];
@@ -686,6 +690,14 @@ export const superAdminRepository = {
         [id]
       );
 
+      if (rows[0]) {
+        await client.query(
+          `INSERT INTO deleted_account_log (account_type, account_id, account_email, account_name, account_role, deleted_by, reason)
+           VALUES ('user', $1, $2, $3, $4, $5, $6)`,
+          [id, user.email, user.name, user.role, deletedByUserId, reason ?? null]
+        );
+      }
+
       await client.query("COMMIT");
       return rows[0] ?? null;
     } catch (err) {
@@ -696,15 +708,60 @@ export const superAdminRepository = {
     }
   },
 
+  // ── DELETE ACCOUNT HISTORY ────────────────────────────────────────────────────
+
+  async getDeletedAccountHistory(opts: { search?: string; accountType?: string; limit: number; offset: number }) {
+    const { search, accountType, limit, offset } = opts;
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+
+    if (accountType) {
+      params.push(accountType);
+      conditions.push(`dal.account_type = $${params.length}`);
+    }
+    if (search) {
+      params.push(`%${search}%`);
+      conditions.push(`(dal.account_email ILIKE $${params.length} OR dal.account_name ILIKE $${params.length})`);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+
+    const { rows: countRows } = await pool.query(
+      `SELECT COUNT(*)::int AS total FROM deleted_account_log dal ${where}`,
+      params
+    );
+
+    params.push(limit, offset);
+    const { rows } = await pool.query(`
+      SELECT
+        dal.id, dal.account_type, dal.account_id, dal.account_email, dal.account_name,
+        dal.account_role, dal.reason, dal.created_at,
+        TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,''))) AS deleted_by_name,
+        u.email AS deleted_by_email
+      FROM deleted_account_log dal
+      LEFT JOIN users u ON u.id = dal.deleted_by
+      ${where}
+      ORDER BY dal.created_at DESC
+      LIMIT $${params.length - 1} OFFSET $${params.length}
+    `, params);
+
+    return { items: rows, total: countRows[0]?.total ?? 0 };
+  },
+
   // ── PAYMENTS ──────────────────────────────────────────────────────────────────
 
-  async deleteSalon(id: string) {
+  async deleteSalon(id: string, deletedByUserId: string, reason?: string) {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
 
+      // Snapshotted BEFORE purgeSalon/the owner delete for
+      // deleted_account_log, same reasoning as deleteUser above.
+      // Locks only `salons` — FOR UPDATE can't be applied across a LEFT JOIN
+      // (Postgres rejects locking the nullable side of an outer join), so
+      // the owner's email is fetched separately below instead of joined in.
       const { rows: salons } = await client.query(
-        `SELECT id, owner_id FROM salons WHERE id = $1 FOR UPDATE`,
+        `SELECT id, owner_id, COALESCE(business_name, slug, 'Unnamed') AS name
+         FROM salons WHERE id = $1 FOR UPDATE`,
         [id]
       );
       if (!salons[0]) {
@@ -712,6 +769,15 @@ export const superAdminRepository = {
         return null;
       }
       const ownerId = salons[0].owner_id;
+
+      // Fetched separately (not joined into the locked SELECT above — see
+      // that query's comment) BEFORE the owner's user row is possibly
+      // deleted below, so deleted_account_log still gets an email.
+      let ownerEmail: string | null = null;
+      if (ownerId) {
+        const { rows: ownerRows } = await client.query(`SELECT email FROM users WHERE id = $1`, [ownerId]);
+        ownerEmail = ownerRows[0]?.email ?? null;
+      }
 
       // Deletes every row scoped to this salon, including tables with no FK
       // to salons (appointments, sales, bundles, etc.) that ON DELETE CASCADE
@@ -738,6 +804,12 @@ export const superAdminRepository = {
         }
       }
 
+      await client.query(
+        `INSERT INTO deleted_account_log (account_type, account_id, account_email, account_name, account_role, deleted_by, reason)
+         VALUES ('salon', $1, $2, $3, 'salon_owner', $4, $5)`,
+        [id, ownerEmail, salons[0].name, deletedByUserId, reason ?? null]
+      );
+
       await client.query("COMMIT");
       return deleted;
     } catch (err) {
@@ -748,14 +820,16 @@ export const superAdminRepository = {
     }
   },
 
-  async clearSalonData(id: string) {
+  async clearSalonData(id: string, clearedByUserId: string, reason?: string) {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
       // FOR UPDATE guards against a concurrent request racing this same
-      // salon (e.g. double-click on "Clear All Data").
+      // salon (e.g. double-click on "Clear All Data"). Name snapshotted for
+      // salon_cleanup_log so History still reads correctly even if the
+      // salon is later renamed or deleted outright.
       const { rows: salons } = await client.query(
-        `SELECT id FROM salons WHERE id = $1 FOR UPDATE`,
+        `SELECT id, COALESCE(business_name, slug, 'Unnamed') AS name FROM salons WHERE id = $1 FOR UPDATE`,
         [id]
       );
       if (!salons[0]) {
@@ -763,6 +837,13 @@ export const superAdminRepository = {
         return false;
       }
       const cleared = await clearSalonDataRows(client, id);
+
+      await client.query(
+        `INSERT INTO salon_cleanup_log (salon_id, salon_name, cleared_by, reason)
+         VALUES ($1, $2, $3, $4)`,
+        [id, salons[0].name, clearedByUserId, reason ?? null]
+      );
+
       await client.query("COMMIT");
       return cleared;
     } catch (err) {
@@ -771,6 +852,40 @@ export const superAdminRepository = {
     } finally {
       client.release();
     }
+  },
+
+  // ── SALON CLEANUP HISTORY ─────────────────────────────────────────────────────
+
+  async getSalonCleanupHistory(opts: { search?: string; limit: number; offset: number }) {
+    const { search, limit, offset } = opts;
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+
+    if (search) {
+      params.push(`%${search}%`);
+      conditions.push(`scl.salon_name ILIKE $${params.length}`);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+
+    const { rows: countRows } = await pool.query(
+      `SELECT COUNT(*)::int AS total FROM salon_cleanup_log scl ${where}`,
+      params
+    );
+
+    params.push(limit, offset);
+    const { rows } = await pool.query(`
+      SELECT
+        scl.id, scl.salon_id, scl.salon_name, scl.reason, scl.created_at,
+        TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,''))) AS cleared_by_name,
+        u.email AS cleared_by_email
+      FROM salon_cleanup_log scl
+      LEFT JOIN users u ON u.id = scl.cleared_by
+      ${where}
+      ORDER BY scl.created_at DESC
+      LIMIT $${params.length - 1} OFFSET $${params.length}
+    `, params);
+
+    return { items: rows, total: countRows[0]?.total ?? 0 };
   },
 
   // ── PAYMENTS ──────────────────────────────────────────────────────────────────

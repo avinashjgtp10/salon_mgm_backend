@@ -42,6 +42,12 @@ router.post("/salons/:id/impersonate",      superAdminController.impersonateSalo
 router.delete("/salons/:id",               superAdminController.deleteSalon);
 router.post("/salons/:id/clear-data",       superAdminController.clearSalonData);
 
+// Delete Account History (super-admin deleteSalon/deleteUser audit trail)
+router.get("/deleted-account-history", superAdminController.getDeletedAccountHistory);
+
+// Clean Up Account History (super-admin clearSalonData audit trail)
+router.get("/salon-cleanup-history", superAdminController.getSalonCleanupHistory);
+
 // Demo Inquiries (landing page "Schedule a Free Demo" submissions)
 router.get("/demo-requests",                superAdminController.getAllDemoRequests);
 router.patch("/demo-requests/:id/status",   superAdminController.setDemoRequestStatus);
