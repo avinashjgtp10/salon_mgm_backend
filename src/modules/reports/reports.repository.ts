@@ -2157,7 +2157,7 @@ async getSalesSummaryReportRows(
     )
     SELECT *, COUNT(*) OVER() AS total_count
     FROM unified
-    ORDER BY created_at DESC
+    ORDER BY NULLIF(regexp_replace(invoice_number, '\\D', '', 'g'), '')::bigint DESC NULLS LAST, created_at DESC
     ${limitClause}
   `;
 
