@@ -32,6 +32,7 @@ import { computeBillTotals, rowsTotal, normalizeDiscountAppliesTo, ActiveTaxRow 
 import { getActiveTaxes } from "../settings/tax.util";
 import { paymentsRepository } from "../payments/payments.repository";
 import { clientPackagesService } from "../client-packages/client-packages.service";
+import { autoCreatePackagesForBill } from "../transactions/package-autocreate.helper";
 import {
     Appointment,
     AppointmentServiceConsumableRecord,
@@ -776,6 +777,92 @@ export const appointmentsService = {
                 patchKeys: Object.keys(patch),
             });
 
+            // Keep the linked sales row (revenue/Sales Summary reports read
+            // sale_items, not the appointment's own JSONB) in step with
+            // whatever was actually edited — every content edit to a
+            // paid/partial appointment needs this, not just the ones that
+            // move the grand total: converting a service to a package (or
+            // adding one) can land within the ±0.5 "roughly equal" case
+            // below and still change item_type from "service" to "package",
+            // which only a sale_items rewrite (via recordTransaction) can
+            // reflect. recordTransaction() is idempotent per appointment_id
+            // (finds the sale this appointment's original payment already
+            // created and updates it in place) — never creates a second sale
+            // row. Logged, not re-thrown: a failure here must not resurrect
+            // the exact "save blocked" bug this replaces.
+            const refreshLinkedSale = async (logTag: string) => {
+                try {
+                    const existingPayment = await paymentsRepository.findByAppointmentId(appointmentId);
+                    const buildItems = (): import("../transactions/transaction.types").TransactionItemInput[] => [
+                        ...(merged.services ?? []).filter((s: any) => !s.is_package_service).map((s: any) => ({
+                            item_type: "service" as const, item_id: s.service_id ?? undefined,
+                            staff_id: s.staff_id ?? undefined, name: s.name,
+                            quantity: Number(s.quantity) || Number(s.qty) || 1, unit_price: Number(s.price) || 0,
+                        })),
+                        ...(merged.package_items ?? []).map((p: any) => ({
+                            item_type: "package" as const, item_id: p.package_id ?? undefined,
+                            staff_id: p.staff_id ?? undefined, name: p.name,
+                            quantity: Number(p.quantity) || Number(p.qty) || 1, unit_price: Number(p.price) || 0,
+                        })),
+                        ...(merged.product_items ?? []).map((pr: any) => ({
+                            item_type: "product" as const, item_id: pr.product_id ?? undefined,
+                            staff_id: pr.staff_id ?? undefined, name: pr.name,
+                            quantity: Number(pr.quantity) || Number(pr.qty) || 1, unit_price: Number(pr.price) || 0,
+                        })),
+                        ...(merged.membership_items ?? []).map((m: any) => ({
+                            item_type: "membership" as const, item_id: m.membership_id ?? undefined,
+                            staff_id: m.staff_id ?? undefined, name: m.name,
+                            quantity: Number(m.quantity) || Number(m.qty) || 1, unit_price: Number(m.price) || 0,
+                        })),
+                    ];
+                    const { sale } = await recordTransaction({
+                        salon_id: existing.salon_id,
+                        client_id: existing.client_id ?? undefined,
+                        appointment_id: appointmentId,
+                        staff_id: existing.staff_id ?? undefined,
+                        origin: "calendar_checkout",
+                        payment_label: existingPayment?.payment_method || "cash",
+                        items: buildItems(),
+                        discount_amount: totals.manualDiscount,
+                        tax_amount: totals.gstAmount,
+                        ex_charges: Number(merged.ex_charges) || 0,
+                        tip_amount: Number(merged.tip_amount) || 0,
+                        tip_added_to_salon: !!merged.tip_added_to_salon,
+                        created_at: existing.scheduled_at,
+                    });
+
+                    // A package added/changed on this edit needs its own
+                    // client_packages row too — recordTransaction() above only
+                    // refreshes sales/sale_items, which the Package Sale
+                    // report never reads (it reads client_packages
+                    // exclusively). autoCreateFromPayment is idempotent per
+                    // (appointment, package name), so re-running this on every
+                    // edit just settles the existing row instead of
+                    // duplicating it — same as payments.service.ts's own
+                    // repeat-payment case.
+                    if (merged.package_items?.length) {
+                        const isFullyPaid = newGrandTotal <= existingPaid + 0.5 || newGrandTotal < existingPaid - 0.5;
+                        const paidFraction = isFullyPaid || newGrandTotal <= 0
+                            ? 1
+                            : Math.min(1, Math.max(0, existingPaid / newGrandTotal));
+                        await autoCreatePackagesForBill(merged.package_items, {
+                            salonId: existing.salon_id,
+                            clientId: existing.client_id ?? undefined,
+                            appointmentId,
+                            gstPercent: existing.gst_percent ?? 0,
+                            saleId: sale.id,
+                            staffId: existing.staff_id ?? undefined,
+                            paidFraction,
+                            isFullyPaid,
+                        });
+                    }
+                } catch (err) {
+                    logger.error(`[${logTag}] Failed to refresh linked sale after editing paid appointment's bill`, {
+                        appointmentId, newGrandTotal, message: (err as any)?.message,
+                    });
+                }
+            };
+
             if (newGrandTotal < existingPaid - 0.5) {
                 // The edit takes the bill below what's already been collected
                 // (e.g. a ₹3,000 product removed, a ₹150 service added
@@ -786,63 +873,7 @@ export const appointmentsService = {
                 // separate trace of the difference. Staff handle the actual
                 // real-world refund themselves outside the app.
                 await paymentsRepository.reduceForAppointment(appointmentId, newGrandTotal);
-
-                // Keep the linked sales row (revenue reports read this, not
-                // payments) in step too — unlike a bill INCREASE, which
-                // self-heals the next time a "Continue to Payment" collection
-                // re-runs recordTransaction(), a bill decrease has no such
-                // follow-up write to piggyback on. recordTransaction() is
-                // idempotent per appointment_id (finds the sale this
-                // appointment's original payment already created and updates
-                // it in place) — never creates a second sale row. Logged, not
-                // re-thrown: a failure here must not resurrect the exact
-                // "save blocked" bug this replaces; the payments correction
-                // above is what actually matters for "money reduced everywhere".
-                try {
-                    const existingPayment = await paymentsRepository.findByAppointmentId(appointmentId);
-                    const buildItems = (): import("../transactions/transaction.types").TransactionItemInput[] => [
-                        ...(merged.services ?? []).filter((s: any) => !s.is_package_service).map((s: any) => ({
-                            item_type: "service" as const, item_id: s.service_id ?? undefined,
-                            staff_id: s.staff_id ?? undefined, name: s.name,
-                            quantity: Number(s.quantity) || Number(s.qty) || 1, unit_price: Number(s.price) || 0,
-                        })),
-                        ...(merged.package_items ?? []).map((p: any) => ({
-                            item_type: "package" as const, item_id: p.package_id ?? undefined,
-                            staff_id: p.staff_id ?? undefined, name: p.name,
-                            quantity: Number(p.quantity) || Number(p.qty) || 1, unit_price: Number(p.price) || 0,
-                        })),
-                        ...(merged.product_items ?? []).map((pr: any) => ({
-                            item_type: "product" as const, item_id: pr.product_id ?? undefined,
-                            staff_id: pr.staff_id ?? undefined, name: pr.name,
-                            quantity: Number(pr.quantity) || Number(pr.qty) || 1, unit_price: Number(pr.price) || 0,
-                        })),
-                        ...(merged.membership_items ?? []).map((m: any) => ({
-                            item_type: "membership" as const, item_id: m.membership_id ?? undefined,
-                            staff_id: m.staff_id ?? undefined, name: m.name,
-                            quantity: Number(m.quantity) || Number(m.qty) || 1, unit_price: Number(m.price) || 0,
-                        })),
-                    ];
-                    await recordTransaction({
-                        salon_id: existing.salon_id,
-                        client_id: existing.client_id ?? undefined,
-                        appointment_id: appointmentId,
-                        staff_id: existing.staff_id ?? undefined,
-                        origin: "calendar_checkout",
-                        payment_label: existingPayment?.payment_method || "cash",
-                        items: buildItems(),
-                        discount_amount: totals.manualDiscount,
-                        tax_amount: totals.gstAmount,
-                        ex_charges: Number(merged.ex_charges) || 0,
-                        tip_amount: Number(merged.tip_amount) || 0,
-                        tip_added_to_salon: !!merged.tip_added_to_salon,
-                        created_at: existing.scheduled_at,
-                    });
-                } catch (err) {
-                    logger.error("[PAYMENT_REDUCTION] Failed to refresh linked sale after reducing paid appointment's bill", {
-                        appointmentId, newGrandTotal, message: (err as any)?.message,
-                    });
-                }
-
+                await refreshLinkedSale("PAYMENT_REDUCTION");
                 patch = { ...patch, status: "paid" };
             } else if (newGrandTotal > existingPaid + 0.5) {
                 patch = { ...patch, status: "partial" };
@@ -850,60 +881,10 @@ export const appointmentsService = {
                 // stay-editable flag — a booking that was already partial
                 // (a real deposit) keeps its existing lock behavior untouched.
                 if (existing.status === "paid") patch = { ...patch, reopened_from_paid: true };
-
-                // Keep the linked sales row (revenue reports read this, not
-                // payments) in step immediately, the same way the bill-decrease
-                // branch above does — don't rely on a later "Continue to
-                // Payment" collection to re-run recordTransaction(), since that
-                // top-up may use a path that never refreshes sales/sale_items,
-                // leaving Sales Summary's Grand Total stuck at the pre-edit
-                // figure even after the appointment/payments show the new one.
-                try {
-                    const existingPayment = await paymentsRepository.findByAppointmentId(appointmentId);
-                    const buildItems = (): import("../transactions/transaction.types").TransactionItemInput[] => [
-                        ...(merged.services ?? []).filter((s: any) => !s.is_package_service).map((s: any) => ({
-                            item_type: "service" as const, item_id: s.service_id ?? undefined,
-                            staff_id: s.staff_id ?? undefined, name: s.name,
-                            quantity: Number(s.quantity) || Number(s.qty) || 1, unit_price: Number(s.price) || 0,
-                        })),
-                        ...(merged.package_items ?? []).map((p: any) => ({
-                            item_type: "package" as const, item_id: p.package_id ?? undefined,
-                            staff_id: p.staff_id ?? undefined, name: p.name,
-                            quantity: Number(p.quantity) || Number(p.qty) || 1, unit_price: Number(p.price) || 0,
-                        })),
-                        ...(merged.product_items ?? []).map((pr: any) => ({
-                            item_type: "product" as const, item_id: pr.product_id ?? undefined,
-                            staff_id: pr.staff_id ?? undefined, name: pr.name,
-                            quantity: Number(pr.quantity) || Number(pr.qty) || 1, unit_price: Number(pr.price) || 0,
-                        })),
-                        ...(merged.membership_items ?? []).map((m: any) => ({
-                            item_type: "membership" as const, item_id: m.membership_id ?? undefined,
-                            staff_id: m.staff_id ?? undefined, name: m.name,
-                            quantity: Number(m.quantity) || Number(m.qty) || 1, unit_price: Number(m.price) || 0,
-                        })),
-                    ];
-                    await recordTransaction({
-                        salon_id: existing.salon_id,
-                        client_id: existing.client_id ?? undefined,
-                        appointment_id: appointmentId,
-                        staff_id: existing.staff_id ?? undefined,
-                        origin: "calendar_checkout",
-                        payment_label: existingPayment?.payment_method || "cash",
-                        items: buildItems(),
-                        discount_amount: totals.manualDiscount,
-                        tax_amount: totals.gstAmount,
-                        ex_charges: Number(merged.ex_charges) || 0,
-                        tip_amount: Number(merged.tip_amount) || 0,
-                        tip_added_to_salon: !!merged.tip_added_to_salon,
-                        created_at: existing.scheduled_at,
-                    });
-                } catch (err) {
-                    logger.error("[BILL_INCREASE] Failed to refresh linked sale after increasing paid appointment's bill", {
-                        appointmentId, newGrandTotal, message: (err as any)?.message,
-                    });
-                }
+                await refreshLinkedSale("BILL_INCREASE");
             } else {
                 patch = { ...patch, status: "paid" };
+                await refreshLinkedSale("BILL_UNCHANGED");
             }
         }
 

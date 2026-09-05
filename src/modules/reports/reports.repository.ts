@@ -9156,9 +9156,14 @@ _buildPackageSaleWhere(
     values.push(filters.max_amount);
   }
   if (filters.search?.trim()) {
+    // s.invoice_number requires the caller's FROM clause to join
+    // "LEFT JOIN sales s ON s.id = cp.sale_id" (client_packages itself has
+    // no invoice number — see the comment on getPackageSaleReportRows'
+    // own join below). Both call sites now carry that join.
     where.push(`(
       COALESCE(cp.client_name, '') ILIKE $${idx}
       OR COALESCE(cp.package_name, '') ILIKE $${idx}
+      OR COALESCE(s.invoice_number, '') ILIKE $${idx}
     )`);
     values.push(`%${filters.search.trim()}%`);
     idx++;
@@ -9186,6 +9191,7 @@ async getPackageSaleReportStats(
       COALESCE(SUM(cp.pending_amount::numeric), 0) AS outstanding_balance,
       COUNT(DISTINCT cp.package_name)::int AS unique_packages
     FROM client_packages cp
+    LEFT JOIN sales s ON s.id = cp.sale_id
     WHERE ${where}
   `;
 
