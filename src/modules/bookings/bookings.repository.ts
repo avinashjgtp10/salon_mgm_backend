@@ -142,6 +142,39 @@ export const bookingsRepository = {
         return rows;
     },
 
+    // Per-staff working hours for a specific date — the real source of truth
+    // for online booking availability (Staff Schedule / Working Hours, Web →
+    // Team → Staff Schedule). A row with `date` set is a one-off override for
+    // that exact day; a row with `date IS NULL` is the recurring weekly
+    // default for that day_of_week. Only the single best-matching row per
+    // staff member is needed, so this picks it in SQL (date match wins).
+    async findStaffScheduleForDate(staffIds: string[], dateStr: string, dayOfWeek: number) {
+        if (staffIds.length === 0) return [];
+        const { rows } = await pool.query(
+            `SELECT DISTINCT ON (staff_id) staff_id, is_available, start_time, end_time
+             FROM staff_schedules
+             WHERE staff_id = ANY($1::uuid[])
+               AND (date = $2::date OR (date IS NULL AND day_of_week = $3))
+             ORDER BY staff_id, date NULLS LAST`,
+            [staffIds, dateStr, dayOfWeek]
+        );
+        return rows;
+    },
+
+    // Which of these staff have ever had a schedule configured at all — used
+    // to fall back to the salon-wide marketplace hours ONLY for staff who've
+    // never touched Staff Schedule, never as a per-day gap-filler (a
+    // configured staff member with no row for this specific day means they
+    // don't work that day, not "ask the salon instead").
+    async findStaffIdsWithAnySchedule(staffIds: string[]): Promise<Set<string>> {
+        if (staffIds.length === 0) return new Set();
+        const { rows } = await pool.query(
+            `SELECT DISTINCT staff_id FROM staff_schedules WHERE staff_id = ANY($1::uuid[])`,
+            [staffIds]
+        );
+        return new Set(rows.map((r) => r.staff_id as string));
+    },
+
     async findMarketplaceDayHours(salonId: string, dayOfWeek: number) {
         try {
             const { rows } = await pool.query(

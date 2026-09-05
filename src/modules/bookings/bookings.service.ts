@@ -55,6 +55,54 @@ function fmt12h(totalMinutes: number): string {
     return `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
 }
 
+// Shared by computeAvailableSlots (what the UI is offered) and createBooking's
+// server-side re-check (what a submitted time is validated against) — both
+// must agree on what "working that day" means, per staff, per date.
+async function getStaffWindowsForDate(
+    salonId: string,
+    staffIds: string[],
+    dateStr: string
+): Promise<{ windowByStaff: Map<string, { open: number; close: number }>; stepMin: number }> {
+    const dayOfWeek = new Date(`${dateStr}T00:00:00Z`).getUTCDay();
+
+    const [scheduleRows, staffWithAnySchedule, marketplaceDayHours] = await Promise.all([
+        bookingsRepository.findStaffScheduleForDate(staffIds, dateStr, dayOfWeek),
+        bookingsRepository.findStaffIdsWithAnySchedule(staffIds),
+        bookingsRepository.findMarketplaceDayHours(salonId, dayOfWeek),
+    ]);
+    const scheduleByStaff = new Map(scheduleRows.map((r) => [r.staff_id as string, r]));
+
+    // Fallback window only for staff who've never configured Staff Schedule
+    // at all — a configured staff member with no row for this specific day
+    // means they don't work that day, not "ask the salon's general hours."
+    // `marketplaceDayHours === null` means no row for this day exists at all
+    // (salon never set up Marketplace hours) — default to 9-6 rather than
+    // leaving an unconfigured salon+staff combo with zero availability.
+    // `is_open === false` means the salon explicitly closes that day — no
+    // fallback window at all in that case.
+    const salonOpen =
+        marketplaceDayHours === null ? { open_time: "09:00", close_time: "18:00", slot_interval_minutes: 15 }
+        : marketplaceDayHours.is_open === false ? null
+        : marketplaceDayHours;
+    const stepMin = salonOpen?.slot_interval_minutes ?? 15;
+
+    // Each staff member's own [open, close) window in minutes-from-midnight
+    // for this exact date, or absent if they're not working at all that day.
+    const windowByStaff = new Map<string, { open: number; close: number }>();
+    for (const id of staffIds) {
+        const row = scheduleByStaff.get(id);
+        if (row) {
+            if (!row.is_available || !row.start_time || !row.end_time) continue; // explicit day off
+            windowByStaff.set(id, { open: toMinutes(String(row.start_time).slice(0, 5)), close: toMinutes(String(row.end_time).slice(0, 5)) });
+        } else if (!staffWithAnySchedule.has(id) && salonOpen) {
+            // Never configured — fall back to the salon's general hours.
+            windowByStaff.set(id, { open: toMinutes(salonOpen.open_time), close: toMinutes(salonOpen.close_time) });
+        }
+        // else: staff has a schedule elsewhere but nothing for this day/date — not working.
+    }
+    return { windowByStaff, stepMin };
+}
+
 async function computeAvailableSlots(params: {
     salonId: string;
     dateStr: string;
@@ -62,16 +110,6 @@ async function computeAvailableSlots(params: {
     durationMinutes: number;
 }): Promise<string[]> {
     const { salonId, dateStr, staffId, durationMinutes } = params;
-    const dayOfWeek = new Date(`${dateStr}T00:00:00Z`).getUTCDay();
-
-    const dayHours = await bookingsRepository.findMarketplaceDayHours(salonId, dayOfWeek);
-    // No marketplace working hours configured for this salon at all — fall
-    // back to a sensible default rather than showing nothing for every salon
-    // that hasn't set up the Marketplace Profile feature.
-    if (dayHours && !dayHours.is_open) return [];
-    const openMin  = toMinutes(dayHours?.open_time  ?? "09:00");
-    const closeMin = toMinutes(dayHours?.close_time ?? "18:00");
-    const stepMin  = dayHours?.slot_interval_minutes ?? 15;
 
     const [staffList, appointments, blockedTimes] = await Promise.all([
         staffId ? Promise.resolve([{ id: staffId }]) : bookingsRepository.findActiveStaff(salonId),
@@ -79,6 +117,10 @@ async function computeAvailableSlots(params: {
         blockedTimesRepository.list({ salon_id: salonId, date: dateStr }),
     ]);
     if (staffList.length === 0) return [];
+
+    const staffIds = staffList.map((s) => s.id);
+    const { windowByStaff, stepMin } = await getStaffWindowsForDate(salonId, staffIds, dateStr);
+    if (windowByStaff.size === 0) return [];
 
     // Per-staff busy [start, end) ranges in minutes-from-midnight (UTC, matching
     // how scheduled_at is written for public bookings — see createBooking above).
@@ -97,13 +139,19 @@ async function computeAvailableSlots(params: {
         addBusy(b.staff_id, toMinutes(String(b.start_time).slice(0, 5)), toMinutes(String(b.end_time).slice(0, 5)));
     }
 
-    const isStaffFree = (id: string, start: number, end: number) =>
-        !(busyByStaff.get(id) ?? []).some((r) => start < r.end && end > r.start);
+    const isStaffFreeAt = (id: string, start: number, end: number): boolean => {
+        const win = windowByStaff.get(id);
+        if (!win || start < win.open || end > win.close) return false;
+        return !(busyByStaff.get(id) ?? []).some((r) => start < r.end && end > r.start);
+    };
+
+    const overallOpen  = Math.min(...Array.from(windowByStaff.values()).map((w) => w.open));
+    const overallClose = Math.max(...Array.from(windowByStaff.values()).map((w) => w.close));
 
     const slots: string[] = [];
-    for (let start = openMin; start + durationMinutes <= closeMin; start += stepMin) {
+    for (let start = overallOpen; start + durationMinutes <= overallClose; start += stepMin) {
         const end = start + durationMinutes;
-        const anyStaffFree = staffList.some((s) => isStaffFree(s.id, start, end));
+        const anyStaffFree = staffIds.some((id) => isStaffFreeAt(id, start, end));
         if (anyStaffFree) slots.push(fmt12h(start));
     }
     return slots;
@@ -220,6 +268,18 @@ export const bookingsService = {
             });
             if (blocked) {
                 throw new AppError(409, "This time is no longer available for the selected staff member.", "BLOCKED_TIME");
+            }
+
+            // Re-validate against the staff member's actual working hours for this
+            // date — the same check computeAvailableSlots uses to build the list the
+            // client picked from, so a stale slot list (or a direct API call) can't
+            // book outside it.
+            const { windowByStaff } = await getStaffWindowsForDate(body.salon_id, [body.staff_id], dateStr);
+            const win = windowByStaff.get(body.staff_id);
+            const startMin = toMinutes(startStr);
+            const endMin = toMinutes(endStr);
+            if (!win || startMin < win.open || endMin > win.close) {
+                throw new AppError(409, "This staff member is not working at the selected time.", "OUTSIDE_WORKING_HOURS");
             }
         }
 

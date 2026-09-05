@@ -758,7 +758,7 @@ export const staffSchedulesController = {
       const salonId = getSalonId(req);
       const date = req.query.date ? String(req.query.date) : undefined;
       if (!date) throw new AppError(400, "Date is required", "MISSING_DATE");
-      await staffSchedulesService.delete(staffId, salonId, date);
+      await staffSchedulesService.deleteByDate(staffId, salonId, date);
       return sendSuccess(res, 200, null, "Schedule deleted successfully");
     } catch (err) { return next(err); }
   },

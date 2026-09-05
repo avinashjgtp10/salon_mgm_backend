@@ -363,8 +363,12 @@ export const validateUpsertStaffSchedules = (
     try {
         const b = req.body;
 
-        if (!Array.isArray(b.items) || b.items.length === 0 || b.items.length > 7)
-            throw new AppError(400, "items must be an array of 1 to 7 schedule entries", "VALIDATION_ERROR");
+        // Cap set generously above any realistic Copy Schedule payload (the UI's
+        // month calendar lets an admin select months of individual dates, or many
+        // full weeks at 7 items each) — a single day-editor save is 1 item, so this
+        // is purely an abuse/mistake ceiling, not a real usage limit.
+        if (!Array.isArray(b.items) || b.items.length === 0 || b.items.length > 400)
+            throw new AppError(400, "items must be an array of 1 to 400 schedule entries", "VALIDATION_ERROR");
 
         for (let i = 0; i < b.items.length; i++) {
             const item = b.items[i];
