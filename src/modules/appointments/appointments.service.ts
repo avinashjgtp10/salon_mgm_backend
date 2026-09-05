@@ -543,14 +543,14 @@ export const appointmentsService = {
             await appointmentsRepository.replaceServiceConsumables(appointment.id, consumableRows);
         }
 
-        // Deduct stock for products sold in this appointment (fire-and-forget)
-        const soldProducts = (body.product_items ?? []).filter(p => p.product_id);
-        if (soldProducts.length > 0) {
-            productsRepository.deductStock(
-                soldProducts.map(p => ({ product_id: p.product_id!, quantity: p.quantity })),
-                body.salon_id
-            ).catch(err => logger.warn("Stock deduction failed (non-fatal)", { err: err?.message }));
-        }
+        // Stock for products attached at booking time is intentionally NOT
+        // deducted here — it used to be (productsRepository.deductStock),
+        // but that ran again at checkout via stockLedgerService.deductForSale
+        // (bottle_size-aware, ledger-audited, idempotent per sale), so a
+        // product sold via an appointment was silently double-deducted.
+        // Checkout is the single source of truth for retail stock now; see
+        // the matching removal of the cancel()/delete() restore calls below,
+        // which only existed to undo this same premature deduction.
 
         // `appointment` here is the raw `INSERT ... RETURNING *` row
         // (appointments.repository.ts::create()), which has client_id but NOT
@@ -966,31 +966,11 @@ export const appointmentsService = {
             }
         }
 
-        // Adjust stock when product_items list changes (fire-and-forget)
-        if (patch.product_items !== undefined) {
-            const oldItems = (existing.product_items ?? []).filter(p => p.product_id);
-            const newItems = (patch.product_items ?? []).filter(p => p.product_id);
-
-            const oldMap = new Map(oldItems.map(p => [p.product_id!, p.quantity]));
-            const newMap = new Map(newItems.map(p => [p.product_id!, p.quantity]));
-
-            const toDeduct: { product_id: string; quantity: number }[] = [];
-            const toRestore: { product_id: string; quantity: number }[] = [];
-
-            for (const [id, newQty] of newMap) {
-                const oldQty = oldMap.get(id) ?? 0;
-                if (newQty > oldQty) toDeduct.push({ product_id: id, quantity: newQty - oldQty });
-                else if (newQty < oldQty) toRestore.push({ product_id: id, quantity: oldQty - newQty });
-            }
-            for (const [id, oldQty] of oldMap) {
-                if (!newMap.has(id)) toRestore.push({ product_id: id, quantity: oldQty });
-            }
-
-            if (toDeduct.length > 0)
-                productsRepository.deductStock(toDeduct, existing.salon_id).catch(err => logger.warn("Stock deduction failed (non-fatal)", { err: err?.message }));
-            if (toRestore.length > 0)
-                productsRepository.restoreStock(toRestore, existing.salon_id).catch(err => logger.warn("Stock restore failed (non-fatal)", { err: err?.message }));
-        }
+        // Stock is no longer adjusted here when product_items changes —
+        // checkout (stockLedgerService.deductForSale) is the single source
+        // of truth for retail deduction now; see the create() comment above
+        // for why the old deduct-at-booking-time/restore-on-change pair was
+        // removed (it double-deducted against the checkout-time ledger).
 
         // ── Live calendar update ───────────────────────────────────────────────
         // create()/cancel() already push a "notification" socket event that the
@@ -1110,14 +1090,10 @@ export const appointmentsService = {
         waScheduledMessagesService.cancelForReference('appointment', params.appointmentId, 'service_reminder_24h')
             .catch((err: any) => logger.error("[wa-scheduled] cancel-on-cancel failed:", err?.message ?? err));
 
-        // Restore stock for cancelled appointment products (fire-and-forget)
-        const cancelledProducts = (existing.product_items ?? []).filter(p => p.product_id);
-        if (cancelledProducts.length > 0) {
-            productsRepository.restoreStock(
-                cancelledProducts.map(p => ({ product_id: p.product_id!, quantity: p.quantity })),
-                existing.salon_id
-            ).catch(err => logger.warn("Stock restore failed (non-fatal)", { err: err?.message }));
-        }
+        // No stock restore needed here — cancel() is only reachable for a
+        // not-yet-paid appointment (guarded above), and stock is no longer
+        // deducted before checkout (see create()'s comment), so there's
+        // nothing to give back.
 
         // ── Push Notification: Appointment Cancelled (to salon owner) ─────────
         notificationsService.create({
@@ -1196,14 +1172,11 @@ export const appointmentsService = {
         if (!deleted) throw new AppError(500, "Failed to delete appointment", "INTERNAL_ERROR");
         logger.info("appointmentsService.delete success", { appointmentId });
 
-        // Restore stock for deleted appointment products (fire-and-forget)
-        const deletedProducts = (existing.product_items ?? []).filter(p => p.product_id);
-        if (deletedProducts.length > 0) {
-            productsRepository.restoreStock(
-                deletedProducts.map(p => ({ product_id: p.product_id!, quantity: p.quantity })),
-                existing.salon_id
-            ).catch(err => logger.warn("Stock restore failed (non-fatal)", { err: err?.message }));
-        }
+        // No stock restore here either (see cancel()'s comment) — for an
+        // already-PAID appointment being hard-deleted, this never correctly
+        // reversed the checkout-time stock_ledger deduction anyway (it wrote
+        // through the old unaudited path instead); that's a separate,
+        // pre-existing gap this fix doesn't attempt to close.
 
         return deleted;
     },
