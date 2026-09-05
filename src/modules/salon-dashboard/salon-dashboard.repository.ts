@@ -1,6 +1,7 @@
 import pool from "../../config/database";
 import logger from "../../config/logger";
 import { notificationsRepository } from "../notifications/notifications.repository";
+import { reportsRepository } from "../reports/reports.repository";
 import type {
   DashboardSummary,
   TodayAppointment,
@@ -42,7 +43,7 @@ function round1(n: number): number {
 export const salonDashboardRepository = {
   // ── KPI Summary ─────────────────────────────────────────────────────────────
   async getSummary(salonId: string): Promise<DashboardSummary> {
-    const [revenueRows, apptRows, clientRows, newClientRows, allTimeRevenueRows] = await Promise.all([
+    const [revenueRows, apptRows, clientRows, newClientRows, salesSummaryStats] = await Promise.all([
       // Revenue: this month, last month, today, yesterday — plus completed-sale
       // counts for avg bill value (this month vs last month, for a real % change).
       pool.query<{
@@ -62,14 +63,28 @@ export const salonDashboardRepository = {
            -- appointment's own status can still read 'partial' after that
            -- (e.g. a top-up that settles the balance without flipping the
            -- appointment back to 'paid').
-           -- ROUND to the nearest rupee, same as the checkout rounding that
-           -- produced the actual amount the client paid (pricing.engine.ts's
-           -- grandTotal = Math.round(rawFinalTotal)) — sales.total_amount
-           -- itself is stored unrounded, so summing it raw silently drops
-           -- every sale's own ±0.01–0.99 round-off adjustment.
-           SELECT s.created_at AS event_at, ROUND(s.total_amount) AS amount
+           -- Revenue here means money actually RECEIVED, not the bill's
+           -- Grand Total — same convention as Sales Summary's
+           -- received_amount (reports.repository.ts's sales_side.paid_amount,
+           -- also what getSalesSummaryReportStats/all_time_revenue above now
+           -- delegates to directly): for an appointment-linked sale, sum
+           -- whatever payments were actually collected against it (a
+           -- quantity/price edit after the fact can leave sales.total_amount
+           -- stale, or a bill can still be partially paid), falling back to
+           -- the sale's own total_amount only for a walk-in/no-appointment
+           -- sale that has no payments row to read from.
+           SELECT s.created_at AS event_at,
+             CASE
+               WHEN s.appointment_id IS NOT NULL THEN COALESCE(pay.paid_from_payments, 0)
+               ELSE ROUND(s.total_amount)
+             END AS amount
            FROM sales s
            LEFT JOIN appointments a ON a.id = s.appointment_id
+           LEFT JOIN LATERAL (
+             SELECT COALESCE(SUM(p.paid_amount) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS paid_from_payments
+             FROM payments p
+             WHERE p.appointment_id = s.appointment_id
+           ) pay ON s.appointment_id IS NOT NULL
            WHERE s.salon_id = $1
              AND s.status = 'completed'
              AND s.created_at >= date_trunc('month', NOW() - INTERVAL '1 month')
@@ -182,31 +197,19 @@ export const salonDashboardRepository = {
       ),
 
       // All-time total revenue — genuinely unbounded, unlike total_revenue
-      // above which is scoped to the current calendar month.
-      pool.query<{ all_time_revenue: string }>(
-        `SELECT COALESCE(SUM(amount), 0)::numeric AS all_time_revenue
-         FROM (
-           -- ROUND — see sales_rows in getSummary above for why.
-           SELECT ROUND(s.total_amount) AS amount
-           FROM sales s
-           LEFT JOIN appointments a ON a.id = s.appointment_id
-           WHERE s.salon_id = $1 AND s.status = 'completed'
-             AND (a.id IS NULL OR (a.status IN ('paid', 'partial') AND a.deleted_at IS NULL))
-           UNION ALL
-           SELECT p.paid_amount AS amount
-           FROM payments p
-           JOIN appointments a ON a.id = p.appointment_id
-           WHERE p.salon_id = $1
-             AND p.status = 'partial'
-             AND a.deleted_at IS NULL
-             AND a.status NOT IN ('cancelled', 'no-show')
-             AND NOT EXISTS (
-               SELECT 1 FROM sales s2
-               WHERE s2.appointment_id = p.appointment_id AND s2.status = 'completed'
-             )
-         ) combined`,
-        [salonId]
-      ),
+      // above which is scoped to the current calendar month. Delegates to
+      // the exact same function the Sales Summary report calls for its own
+      // "Received Amount" stat, so the Dashboard's Total Revenue card is
+      // guaranteed to read the identical figure rather than a
+      // separately-maintained approximation that can drift out of sync (see
+      // the two prior bugs this replaced: summing sales.total_amount instead
+      // of what was actually paid, and per-row ROUND() drift). payment_statuses
+      // must match SalesSummaryReport.tsx's own default (paymentStatuses.length
+      // > 0 ? paymentStatuses : ["paid", "partial"]) — omitting it entirely
+      // is NOT equivalent, since it would also pull in booked/cancelled/
+      // refunded sales the report's own default view excludes, inflating
+      // this figure above what the report ever actually displays.
+      reportsRepository.getSalesSummaryReportStats(salonId, { payment_statuses: ["paid", "partial"] }),
     ]);
 
     const r = revenueRows.rows[0];
@@ -214,7 +217,7 @@ export const salonDashboardRepository = {
     const nc = newClientRows.rows[0];
 
     const totalRevenue = parseFloat(r.total_revenue);
-    const allTimeRevenue = parseFloat(allTimeRevenueRows.rows[0]?.all_time_revenue ?? "0");
+    const allTimeRevenue = Number(salesSummaryStats.received_amount) || 0;
     const lastMonthRevenue = parseFloat(r.last_month_revenue);
     const todayRevenue = parseFloat(r.today_revenue);
     const lastMonthTodayRevenue = parseFloat(r.last_month_today_revenue);
