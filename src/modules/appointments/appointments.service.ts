@@ -64,7 +64,15 @@ function computeAppointmentTotals(appt: {
 }, activeTaxes: ActiveTaxRow[]) {
     const toRow = (items: any[] = []) => (items || []).map((i) => ({
         price: Number(i?.price) || 0,
-        qty: Number(i?.quantity) || 1,
+        // Stored appointment service/item rows use "qty" (see
+        // useAppointment.ts::buildServiceApiItems on the frontend) — never
+        // "quantity". Reading only .quantity here silently defaulted every
+        // row to qty=1, which is why increasing an item's quantity on a
+        // paid/partial appointment kept recomputing (and even re-persisting,
+        // via update()'s reprice branches below) the bill at its original
+        // qty=1 total. payments.service.ts already guards both keys; match
+        // that here so this is the one place that needs the fallback.
+        qty: Number(i?.quantity) || Number(i?.qty) || 1,
         isPackageService: !!i?.is_package_service,
     }));
     return computeBillTotals({
@@ -202,19 +210,19 @@ function attachItemTax(appt: Appointment, saleItems: SaleItem[]): Appointment {
     return {
         ...appt,
         services: (appt.services || []).map((s) => {
-            const tax = takeMatch("service", s.service_id, s.name, Number(s.quantity) || 1, Number(s.price) || 0);
+            const tax = takeMatch("service", s.service_id, s.name, Number(s.quantity) || Number((s as any).qty) || 1, Number(s.price) || 0);
             return tax !== undefined ? { ...s, tax_amount: tax } : s;
         }),
         package_items: (appt.package_items || []).map((p) => {
-            const tax = takeMatch("package", p.package_id, p.name, Number(p.quantity) || 1, Number(p.price) || 0);
+            const tax = takeMatch("package", p.package_id, p.name, Number(p.quantity) || Number((p as any).qty) || 1, Number(p.price) || 0);
             return tax !== undefined ? { ...p, tax_amount: tax } : p;
         }),
         product_items: (appt.product_items || []).map((pr) => {
-            const tax = takeMatch("product", pr.product_id, pr.name, Number(pr.quantity) || 1, Number(pr.price) || 0);
+            const tax = takeMatch("product", pr.product_id, pr.name, Number(pr.quantity) || Number((pr as any).qty) || 1, Number(pr.price) || 0);
             return tax !== undefined ? { ...pr, tax_amount: tax } : pr;
         }),
         membership_items: (appt.membership_items || []).map((m) => {
-            const tax = takeMatch("membership", m.membership_id, m.name, Number(m.quantity) || 1, Number(m.price) || 0);
+            const tax = takeMatch("membership", m.membership_id, m.name, Number(m.quantity) || Number((m as any).qty) || 1, Number(m.price) || 0);
             return tax !== undefined ? { ...m, tax_amount: tax } : m;
         }),
     };
@@ -796,22 +804,22 @@ export const appointmentsService = {
                         ...(merged.services ?? []).filter((s: any) => !s.is_package_service).map((s: any) => ({
                             item_type: "service" as const, item_id: s.service_id ?? undefined,
                             staff_id: s.staff_id ?? undefined, name: s.name,
-                            quantity: Number(s.quantity) || 1, unit_price: Number(s.price) || 0,
+                            quantity: Number(s.quantity) || Number(s.qty) || 1, unit_price: Number(s.price) || 0,
                         })),
                         ...(merged.package_items ?? []).map((p: any) => ({
                             item_type: "package" as const, item_id: p.package_id ?? undefined,
                             staff_id: p.staff_id ?? undefined, name: p.name,
-                            quantity: Number(p.quantity) || 1, unit_price: Number(p.price) || 0,
+                            quantity: Number(p.quantity) || Number(p.qty) || 1, unit_price: Number(p.price) || 0,
                         })),
                         ...(merged.product_items ?? []).map((pr: any) => ({
                             item_type: "product" as const, item_id: pr.product_id ?? undefined,
                             staff_id: pr.staff_id ?? undefined, name: pr.name,
-                            quantity: Number(pr.quantity) || 1, unit_price: Number(pr.price) || 0,
+                            quantity: Number(pr.quantity) || Number(pr.qty) || 1, unit_price: Number(pr.price) || 0,
                         })),
                         ...(merged.membership_items ?? []).map((m: any) => ({
                             item_type: "membership" as const, item_id: m.membership_id ?? undefined,
                             staff_id: m.staff_id ?? undefined, name: m.name,
-                            quantity: Number(m.quantity) || 1, unit_price: Number(m.price) || 0,
+                            quantity: Number(m.quantity) || Number(m.qty) || 1, unit_price: Number(m.price) || 0,
                         })),
                     ];
                     await recordTransaction({
@@ -842,6 +850,58 @@ export const appointmentsService = {
                 // stay-editable flag — a booking that was already partial
                 // (a real deposit) keeps its existing lock behavior untouched.
                 if (existing.status === "paid") patch = { ...patch, reopened_from_paid: true };
+
+                // Keep the linked sales row (revenue reports read this, not
+                // payments) in step immediately, the same way the bill-decrease
+                // branch above does — don't rely on a later "Continue to
+                // Payment" collection to re-run recordTransaction(), since that
+                // top-up may use a path that never refreshes sales/sale_items,
+                // leaving Sales Summary's Grand Total stuck at the pre-edit
+                // figure even after the appointment/payments show the new one.
+                try {
+                    const existingPayment = await paymentsRepository.findByAppointmentId(appointmentId);
+                    const buildItems = (): import("../transactions/transaction.types").TransactionItemInput[] => [
+                        ...(merged.services ?? []).filter((s: any) => !s.is_package_service).map((s: any) => ({
+                            item_type: "service" as const, item_id: s.service_id ?? undefined,
+                            staff_id: s.staff_id ?? undefined, name: s.name,
+                            quantity: Number(s.quantity) || Number(s.qty) || 1, unit_price: Number(s.price) || 0,
+                        })),
+                        ...(merged.package_items ?? []).map((p: any) => ({
+                            item_type: "package" as const, item_id: p.package_id ?? undefined,
+                            staff_id: p.staff_id ?? undefined, name: p.name,
+                            quantity: Number(p.quantity) || Number(p.qty) || 1, unit_price: Number(p.price) || 0,
+                        })),
+                        ...(merged.product_items ?? []).map((pr: any) => ({
+                            item_type: "product" as const, item_id: pr.product_id ?? undefined,
+                            staff_id: pr.staff_id ?? undefined, name: pr.name,
+                            quantity: Number(pr.quantity) || Number(pr.qty) || 1, unit_price: Number(pr.price) || 0,
+                        })),
+                        ...(merged.membership_items ?? []).map((m: any) => ({
+                            item_type: "membership" as const, item_id: m.membership_id ?? undefined,
+                            staff_id: m.staff_id ?? undefined, name: m.name,
+                            quantity: Number(m.quantity) || Number(m.qty) || 1, unit_price: Number(m.price) || 0,
+                        })),
+                    ];
+                    await recordTransaction({
+                        salon_id: existing.salon_id,
+                        client_id: existing.client_id ?? undefined,
+                        appointment_id: appointmentId,
+                        staff_id: existing.staff_id ?? undefined,
+                        origin: "calendar_checkout",
+                        payment_label: existingPayment?.payment_method || "cash",
+                        items: buildItems(),
+                        discount_amount: totals.manualDiscount,
+                        tax_amount: totals.gstAmount,
+                        ex_charges: Number(merged.ex_charges) || 0,
+                        tip_amount: Number(merged.tip_amount) || 0,
+                        tip_added_to_salon: !!merged.tip_added_to_salon,
+                        created_at: existing.scheduled_at,
+                    });
+                } catch (err) {
+                    logger.error("[BILL_INCREASE] Failed to refresh linked sale after increasing paid appointment's bill", {
+                        appointmentId, newGrandTotal, message: (err as any)?.message,
+                    });
+                }
             } else {
                 patch = { ...patch, status: "paid" };
             }
@@ -1472,7 +1532,7 @@ export const appointmentsService = {
                     item_id: s.service_id,
                     staff_id: s.staff_id ?? undefined,
                     name: s.name,
-                    quantity: s.quantity,
+                    quantity: Number(s.quantity) || Number((s as any).qty) || 1,
                     unit_price: s.price,
                 })),
                 ...existing.package_items.map(p => ({
@@ -1480,7 +1540,7 @@ export const appointmentsService = {
                     item_id: p.package_id,
                     staff_id: p.staff_id ?? undefined,
                     name: p.name,
-                    quantity: p.quantity,
+                    quantity: Number(p.quantity) || Number((p as any).qty) || 1,
                     unit_price: p.price,
                 })),
                 ...existing.product_items.map(pr => ({
@@ -1488,7 +1548,7 @@ export const appointmentsService = {
                     item_id: pr.product_id ?? undefined,
                     staff_id: pr.staff_id ?? undefined,
                     name: pr.name,
-                    quantity: pr.quantity,
+                    quantity: Number(pr.quantity) || Number((pr as any).qty) || 1,
                     unit_price: pr.price,
                 })),
                 ...existing.membership_items.map(m => ({
@@ -1496,7 +1556,7 @@ export const appointmentsService = {
                     item_id: m.membership_id ?? undefined,
                     staff_id: m.staff_id ?? undefined,
                     name: m.name,
-                    quantity: m.quantity,
+                    quantity: Number(m.quantity) || Number((m as any).qty) || 1,
                     unit_price: m.price,
                 })),
             ];
