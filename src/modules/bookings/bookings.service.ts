@@ -17,7 +17,7 @@ import logger from "../../config/logger";
 // falling back to its hardcoded placeholder defaults (4.8 rating, sample
 // reviews, generic amenities).
 async function attachPublicExtras(salon: any) {
-    const [marketplaceExtras, reviewSummary] = await Promise.all([
+    const [marketplaceExtras, reviewSummary, bookingPolicy] = await Promise.all([
         salon?.marketplace_profile_id
             ? Promise.all([
                 bookingsRepository.findWorkingHours(salon.marketplace_profile_id),
@@ -25,10 +25,12 @@ async function attachPublicExtras(salon: any) {
             ]).then(([hourRows, amenities]) => ({ working_hours: groupWorkingHours(hourRows), amenities }))
             : Promise.resolve({}),
         reviewsService.getPublicSummary(salon.id),
+        bookingsRepository.findBookingPolicy(salon.id),
     ]);
     return {
         ...salon,
         ...marketplaceExtras,
+        ...bookingPolicy,
         rating: reviewSummary.averageRating,
         review_count: reviewSummary.totalReviews,
         rating_breakdown: reviewSummary.breakdown,

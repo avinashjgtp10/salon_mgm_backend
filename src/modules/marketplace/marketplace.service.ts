@@ -82,10 +82,12 @@ export const marketplaceService = {
 
   async upsertBookingPolicy(salonId: string, data: UpsertBookingPolicyBody) {
     logger.info("marketplace.upsertBookingPolicy", { salonId });
-    await _ensureProfile(salonId);
+    const profile = await _ensureProfile(salonId);
+    // repo returns null (not an error) when the booking-policy migration
+    // hasn't been run yet — degrade to a silent no-op rather than blocking
+    // the rest of the Marketplace Profile save (essentials/hours/publish).
     const updated = await marketplaceProfileRepo.upsertBookingPolicy(salonId, data);
-    if (!updated) throw new AppError(500, "Failed to save booking policy", "INTERNAL_ERROR");
-    return updated;
+    return updated ?? profile;
   },
 
   // ── Location ────────────────────────────────────────────────────────────────

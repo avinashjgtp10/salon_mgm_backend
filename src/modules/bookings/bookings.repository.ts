@@ -1,10 +1,28 @@
 import pool from "../../config/database";
 
+// Postgres "undefined_column" — thrown if Migration/add_marketplace_booking_
+// settings_and_saved_links.sql hasn't been run yet. Booking-policy reads are
+// wrapped to fall back to defaults on this specific error so the core public
+// booking flow (which must not depend on that migration) keeps working either way.
+const UNDEFINED_COLUMN = "42703";
+const DEFAULT_BOOKING_POLICY = {
+    max_advance_days: 30,
+    min_notice_hours: 0,
+    cancellation_notice_hours: 0,
+    slot_interval_minutes: 15,
+};
+
 // Public-facing salon lookups favor the salon's own business fields, then its
 // marketplace listing, and only fall back to the owner's personal user-account
 // phone/email as a last resort (small single-owner salons that never filled in
 // separate business contact info) — never the owner's personal address, since
 // there's no reasonable case where leaking that publicly is correct.
+//
+// Deliberately does NOT select the booking-policy columns (max_advance_days
+// etc.) — those live behind a migration that may not have been run yet, and
+// this query gates the entire public booking flow, so it must never fail
+// because of that. See findBookingPolicy() below for those, fetched separately
+// and defensively.
 const PUBLIC_SALON_SELECT = `
     SELECT s.id, s.slug, s.description, s.city, s.state, s.country,
            s.logo_url, s.banner_url, s.currency,
@@ -13,9 +31,7 @@ const PUBLIC_SALON_SELECT = `
            COALESCE(NULLIF(s.email, ''), u.email) AS email,
            COALESCE(NULLIF(ml.address_line, ''), NULLIF(s.address, '')) AS address,
            mp.venue_description AS marketplace_description,
-           mp.id AS marketplace_profile_id,
-           mp.max_advance_days, mp.min_notice_hours,
-           mp.cancellation_notice_hours, mp.slot_interval_minutes
+           mp.id AS marketplace_profile_id
     FROM salons s
     LEFT JOIN users u ON u.id = s.owner_id
     LEFT JOIN marketplace_profiles mp ON mp.salon_id = s.id
@@ -127,15 +143,44 @@ export const bookingsRepository = {
     },
 
     async findMarketplaceDayHours(salonId: string, dayOfWeek: number) {
-        const { rows } = await pool.query(
-            `SELECT wh.is_open, wh.open_time, wh.close_time, mp.slot_interval_minutes
-             FROM marketplace_profiles mp
-             JOIN marketplace_working_hours wh ON wh.profile_id = mp.id AND wh.day_of_week = $2
-             WHERE mp.salon_id = $1
-             ORDER BY wh.slot_index ASC LIMIT 1`,
-            [salonId, dayOfWeek]
-        );
-        return rows[0] || null;
+        try {
+            const { rows } = await pool.query(
+                `SELECT wh.is_open, wh.open_time, wh.close_time, mp.slot_interval_minutes
+                 FROM marketplace_profiles mp
+                 JOIN marketplace_working_hours wh ON wh.profile_id = mp.id AND wh.day_of_week = $2
+                 WHERE mp.salon_id = $1
+                 ORDER BY wh.slot_index ASC LIMIT 1`,
+                [salonId, dayOfWeek]
+            );
+            return rows[0] || null;
+        } catch (err: any) {
+            if (err?.code !== UNDEFINED_COLUMN) throw err;
+            const { rows } = await pool.query(
+                `SELECT wh.is_open, wh.open_time, wh.close_time
+                 FROM marketplace_profiles mp
+                 JOIN marketplace_working_hours wh ON wh.profile_id = mp.id AND wh.day_of_week = $2
+                 WHERE mp.salon_id = $1
+                 ORDER BY wh.slot_index ASC LIMIT 1`,
+                [salonId, dayOfWeek]
+            );
+            return rows[0] ? { ...rows[0], slot_interval_minutes: DEFAULT_BOOKING_POLICY.slot_interval_minutes } : null;
+        }
+    },
+
+    // Fetched separately from PUBLIC_SALON_SELECT (see comment there) and
+    // defended against the migration not having run yet.
+    async findBookingPolicy(salonId: string) {
+        try {
+            const { rows } = await pool.query(
+                `SELECT max_advance_days, min_notice_hours, cancellation_notice_hours, slot_interval_minutes
+                 FROM marketplace_profiles WHERE salon_id = $1`,
+                [salonId]
+            );
+            return rows[0] ?? DEFAULT_BOOKING_POLICY;
+        } catch (err: any) {
+            if (err?.code !== UNDEFINED_COLUMN) throw err;
+            return DEFAULT_BOOKING_POLICY;
+        }
     },
 
     async createAppointment(params: {

@@ -7,6 +7,10 @@ import {
   UpsertFeaturesBody, UpsertBookingPolicyBody,
 } from "./marketplace.types";
 
+// See bookings.repository.ts for why this guard exists — same unrun-migration
+// scenario, this time on the admin-side essentials/booking-policy save.
+const UNDEFINED_COLUMN = "42703";
+
 // ─── Profile ──────────────────────────────────────────────────────────────────
 
 export const marketplaceProfileRepo = {
@@ -18,49 +22,79 @@ export const marketplaceProfileRepo = {
   },
 
   async upsertEssentials(salonId: string, data: UpsertEssentialsBody): Promise<MarketplaceProfile> {
-    const { rows } = await pool.query(
-      `INSERT INTO marketplace_profiles
-         (salon_id, display_name, tagline, website, business_phone, business_phone_country_code, business_email)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)
-       ON CONFLICT (salon_id) DO UPDATE SET
-         display_name                = EXCLUDED.display_name,
-         tagline                     = EXCLUDED.tagline,
-         website                     = EXCLUDED.website,
-         business_phone              = EXCLUDED.business_phone,
-         business_phone_country_code = EXCLUDED.business_phone_country_code,
-         business_email              = EXCLUDED.business_email,
-         updated_at                  = NOW()
-       RETURNING *`,
-      [
-        salonId, data.display_name,
-        data.tagline                     ?? null,
-        data.website                     ?? null,
-        data.business_phone              ?? null,
-        data.business_phone_country_code ?? null,
-        data.business_email              ?? null,
-      ]
-    );
-    return rows[0];
+    try {
+      const { rows } = await pool.query(
+        `INSERT INTO marketplace_profiles
+           (salon_id, display_name, tagline, website, business_phone, business_phone_country_code, business_email)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)
+         ON CONFLICT (salon_id) DO UPDATE SET
+           display_name                = EXCLUDED.display_name,
+           tagline                     = EXCLUDED.tagline,
+           website                     = EXCLUDED.website,
+           business_phone              = EXCLUDED.business_phone,
+           business_phone_country_code = EXCLUDED.business_phone_country_code,
+           business_email              = EXCLUDED.business_email,
+           updated_at                  = NOW()
+         RETURNING *`,
+        [
+          salonId, data.display_name,
+          data.tagline                     ?? null,
+          data.website                     ?? null,
+          data.business_phone              ?? null,
+          data.business_phone_country_code ?? null,
+          data.business_email              ?? null,
+        ]
+      );
+      return rows[0];
+    } catch (err: any) {
+      // Migration/add_marketplace_booking_settings_and_saved_links.sql not run
+      // yet — save everything except the two columns it hasn't added.
+      if (err?.code !== UNDEFINED_COLUMN) throw err;
+      const { rows } = await pool.query(
+        `INSERT INTO marketplace_profiles
+           (salon_id, display_name, business_phone, business_phone_country_code, business_email)
+         VALUES ($1,$2,$3,$4,$5)
+         ON CONFLICT (salon_id) DO UPDATE SET
+           display_name                = EXCLUDED.display_name,
+           business_phone              = EXCLUDED.business_phone,
+           business_phone_country_code = EXCLUDED.business_phone_country_code,
+           business_email              = EXCLUDED.business_email,
+           updated_at                  = NOW()
+         RETURNING *`,
+        [
+          salonId, data.display_name,
+          data.business_phone              ?? null,
+          data.business_phone_country_code ?? null,
+          data.business_email              ?? null,
+        ]
+      );
+      return rows[0];
+    }
   },
 
   async upsertBookingPolicy(salonId: string, data: UpsertBookingPolicyBody): Promise<MarketplaceProfile | null> {
-    const { rows } = await pool.query(
-      `UPDATE marketplace_profiles SET
-         max_advance_days          = COALESCE($1, max_advance_days),
-         min_notice_hours          = COALESCE($2, min_notice_hours),
-         cancellation_notice_hours = COALESCE($3, cancellation_notice_hours),
-         slot_interval_minutes     = COALESCE($4, slot_interval_minutes),
-         updated_at                = NOW()
-       WHERE salon_id = $5 RETURNING *`,
-      [
-        data.max_advance_days          ?? null,
-        data.min_notice_hours          ?? null,
-        data.cancellation_notice_hours ?? null,
-        data.slot_interval_minutes     ?? null,
-        salonId,
-      ]
-    );
-    return rows[0] || null;
+    try {
+      const { rows } = await pool.query(
+        `UPDATE marketplace_profiles SET
+           max_advance_days          = COALESCE($1, max_advance_days),
+           min_notice_hours          = COALESCE($2, min_notice_hours),
+           cancellation_notice_hours = COALESCE($3, cancellation_notice_hours),
+           slot_interval_minutes     = COALESCE($4, slot_interval_minutes),
+           updated_at                = NOW()
+         WHERE salon_id = $5 RETURNING *`,
+        [
+          data.max_advance_days          ?? null,
+          data.min_notice_hours          ?? null,
+          data.cancellation_notice_hours ?? null,
+          data.slot_interval_minutes     ?? null,
+          salonId,
+        ]
+      );
+      return rows[0] || null;
+    } catch (err: any) {
+      if (err?.code !== UNDEFINED_COLUMN) throw err;
+      return null; // silently a no-op until the migration is run
+    }
   },
 
   async upsertAbout(salonId: string, data: UpsertAboutBody): Promise<MarketplaceProfile> {
