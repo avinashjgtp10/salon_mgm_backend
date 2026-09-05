@@ -38,8 +38,8 @@ export const validateCreatePurchase = (
             if (!isUUID(item.product_id)) {
                 throw new AppError(400, `items[${i}].product_id must be a UUID`, "VALIDATION_ERROR");
             }
-            if (typeof item.quantity !== "number" || !Number.isFinite(item.quantity) || item.quantity <= 0) {
-                throw new AppError(400, `items[${i}].quantity must be a positive number`, "VALIDATION_ERROR");
+            if (typeof item.quantity !== "number" || !Number.isInteger(item.quantity) || item.quantity <= 0) {
+                throw new AppError(400, `items[${i}].quantity must be a positive whole number`, "VALIDATION_ERROR");
             }
             if (typeof item.purchase_price !== "number" || !Number.isFinite(item.purchase_price) || item.purchase_price < 0) {
                 throw new AppError(400, `items[${i}].purchase_price must be a non-negative number`, "VALIDATION_ERROR");

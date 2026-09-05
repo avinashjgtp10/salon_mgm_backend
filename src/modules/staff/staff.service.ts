@@ -897,12 +897,6 @@ export const staffSchedulesService = {
         await _ensureStaff(staffId, salonId);
         await staffSchedulesRepository.deleteByDate(staffId, date);
     },
-    async delete(staffId: string, salonId: string, dateStr: string): Promise<void> {
-        await _ensureStaff(staffId, salonId);
-        const dateObj = new Date(dateStr + "T12:00:00");
-        const dayOfWeek = dateObj.getDay();
-        await staffSchedulesRepository.deleteByDay(staffId, dayOfWeek);
-    },
 };
 
 // ─── Leaves ───────────────────────────────────────────────────────────────────

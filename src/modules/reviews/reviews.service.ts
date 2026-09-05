@@ -15,6 +15,17 @@ export const reviewsService = {
     return reviewsRepository.getStats(salonId, staffId)
   },
 
+  // Public booking page — real aggregate rating instead of a hardcoded
+  // "4.8 / 120 reviews" shown identically for every salon.
+  async getPublicSummary(salonId: string) {
+    const [stats, breakdown, reviews] = await Promise.all([
+      reviewsRepository.getStats(salonId),
+      reviewsRepository.getRatingBreakdown(salonId),
+      reviewsRepository.listPublic(salonId, 10),
+    ])
+    return { ...stats, breakdown, reviews }
+  },
+
   async listForClient(clientId: string, salonId: string): Promise<ClientReviewEntry[]> {
     return reviewsRepository.listForClient(clientId, salonId)
   },

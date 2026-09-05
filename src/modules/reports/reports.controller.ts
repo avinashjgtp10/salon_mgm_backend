@@ -909,6 +909,7 @@ async getSalesSummaryReport(
             payment_statuses: Array.isArray(body.payment_statuses)
                 ? body.payment_statuses.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
                 : undefined,
+            include_gst: body.include_gst !== false,
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,
@@ -2293,6 +2294,7 @@ async getStaffPerformanceReport(
                 ? body.membership_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
                 : undefined,
             search: asString(body.search),
+            include_gst: body.include_gst !== false,
             page: body.page != null ? Number(body.page) : undefined,
             limit: body.limit != null ? Number(body.limit) : undefined,
             is_export: body.is_export === true,

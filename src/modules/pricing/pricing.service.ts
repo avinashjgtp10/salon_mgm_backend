@@ -426,8 +426,10 @@ export const pricingService = {
     }
     remaining = Math.max(0, remaining - appliedRewardPointsValue);
 
-    // ── Referral credit: clamp requested ₹ to real balance AND to what's
-    // still left on the bill ─────────────────────────────────────────────────
+    // ── Referral credit: clamp requested ₹ to real balance, to what's still
+    // left on the bill, AND to the same max_redeem_percent cap payments.service.ts
+    // enforces at charge time, so the preview never shows a bigger redemption
+    // than checkout will actually allow ───────────────────────────────────────
     let appliedReferralCredit = 0;
     let referralCreditRejectedReason: string | undefined;
     if (body.applyReferralCredit) {
@@ -435,8 +437,15 @@ export const pricingService = {
         referralCreditRejectedReason = 'No client selected';
       } else if ((body.referralCreditRequested ?? 0) > 0 && remaining > 0) {
         try {
-          const balance = await referralRepository.getBalance(body.client_id);
-          appliedReferralCredit = Math.min(body.referralCreditRequested ?? 0, balance, remaining);
+          const [referralConfig, balance] = await Promise.all([
+            referralRepository.getConfig(salonId),
+            referralRepository.getBalance(body.client_id),
+          ]);
+          if (referralConfig.redeem_enabled) {
+            const percentCap = preliminaryTotals.preRedemptionTotal * (referralConfig.max_redeem_percent / 100);
+            const cap = Math.min(remaining, percentCap);
+            appliedReferralCredit = Math.min(body.referralCreditRequested ?? 0, balance, cap);
+          }
         } catch { /* non-fatal */ }
       }
     }
