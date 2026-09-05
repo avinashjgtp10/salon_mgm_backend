@@ -6,10 +6,7 @@ import { describePaymentMethod } from '../transactions/payment-method.util';
 import { membershipsRepository } from '../memberships/memberships.repository';
 import { clientMembershipsService } from '../client-memberships/client-memberships.service';
 import { clientMembershipsRepository } from '../client-memberships/client-memberships.repository';
-import { packageTemplatesRepository } from '../package-templates/package-templates.repository';
-import { packagesRepository } from '../packages/packages.repository';
-import { clientPackagesService } from '../client-packages/client-packages.service';
-import { servicesRepository } from '../services/services.repository';
+import { autoCreatePackagesForBill } from '../transactions/package-autocreate.helper';
 import { rewardPointsRepository } from '../reward-points/reward-points.repository';
 import { ewalletRepository } from '../ewallet/ewallet.repository';
 import { referralRepository } from '../referral/referral.repository';
@@ -1530,139 +1527,28 @@ export const paymentsService = {
     const billPaidFraction = isBillFullyPaid || billTotalForPkg <= 0
       ? 1
       : Math.min(1, Math.max(0, (billTotalForPkg - (Number(data.due_amount) || 0)) / billTotalForPkg));
-    if ((data.status === 'completed' || data.status === 'partial') && data.client_id && packageItemsSrc.length > 0) {
-      // Awaited (see the Promise.allSettled below), unlike the membership
-      // block above which is still fire-and-forget. The client_packages row
-      // has to exist before this request returns: the UI refetches
-      // /client-packages the moment checkout responds, and when creation ran
-      // detached that refetch consistently won the race and came back empty,
-      // so a client who had just paid appeared to own no package at all.
-      // Only the row insert is awaited — autoCreateFromPayment detaches its
-      // own slow tail (auto-scheduling appointments, WhatsApp), so this adds
-      // very little to the checkout response time.
-      const packageCreations: Array<Promise<void>> = [];
-      for (const item of packageItemsSrc) {
-        packageCreations.push((async () => {
-          try {
-            // Prefer a Package Template (has a real per-service session
-            // breakdown) — fall back to a plain Catalog package (services
-            // list only, no session counts), crediting 1 session per
-            // included service since that's what was actually billed.
-            let services: Array<{ serviceId?: string; serviceName: string; totalSessions: number; price: number; schedule?: { scheduledAt: string; staffId?: string } }> = [];
-            let basePrice      = Number(item.price ?? 0) * Number(item.quantity ?? 1);
-            let discount       = 0;
-            // Package Templates carry their own precise gst_percentage (set
-            // below when one resolves). A plain Catalog package has no tax
-            // rate of its own at all — the bill's actual GST on this line was
-            // computed client-side from Tax Mapping rules and folded into the
-            // appointment total, never broken back out per item. Falling back
-            // to the appointment's own blended rate is the same convention
-            // reports.repository.ts's unbilled-appointment CTE already uses
-            // for the identical "closest rate we actually have" situation,
-            // rather than silently leaving this package's own record at 0 GST.
-            let gstPercentage  = appt?.gst_percent ?? 0;
-            let expiryDate     = "2099-12-31";
-            // Set only when a real template resolves and defines an
-            // aggregate-session cap ("Expires after this many services") —
-            // custom/combo packages have no template to carry this from.
-            let expireAfterServices: number | null = null;
-            // Denormalized onto client_packages at sale time, same reasoning
-            // as client_memberships.description — resolved from whichever of
-            // template/combo actually matches below, so it's declared here
-            // and filled in by either branch.
-            let description: string | null = null;
-
-            const template = item.package_id
-              ? await packageTemplatesRepository.findById(item.package_id, data.salon_id)
-              : null;
-            if (template) {
-              basePrice     = template.basePrice;
-              discount      = template.discount;
-              gstPercentage = template.gstPercentage;
-              expireAfterServices = template.expireAfterServices ?? null;
-              description   = template.description ?? null;
-              if (!template.neverExpires && template.expiryDays != null) {
-                const d = new Date();
-                d.setDate(d.getDate() + template.expiryDays);
-                expiryDate = d.toISOString().slice(0, 10);
-              }
-            } else if (item.never_expires === false && item.expiry_date) {
-              // A custom package built on the spot via "+ Sell Package"
-              // (ServicesPanel.tsx's PackageRow, isCustom rows) — no
-              // template to resolve an expiry from, but the frontend already
-              // carries the real date the staff picked in the builder.
-              // "2099-12-31" (the default above) already IS this codebase's
-              // established never-expires sentinel, so nothing extra is
-              // needed when never_expires is true/absent.
-              expiryDate = item.expiry_date;
-            }
-
-            // Prefer the frontend's own per-service breakdown when present —
-            // it's resolved at package-pick time (see PackageRow.tsx) and is
-            // the ONLY place a per-service `schedule` (book a future
-            // appointment for this service now) can come from; re-deriving
-            // from the template/catalog below would silently drop it.
-            // Package-level fields (price/discount/GST/expiry) above still
-            // come from the template/catalog lookup regardless — the
-            // frontend breakdown only carries per-service name/price/sessions.
-            if (item.services?.length) {
-              services = item.services.map((s: any) => ({
-                serviceId:     s.serviceId || undefined,
-                serviceName:   s.serviceName,
-                totalSessions: Number(s.totalSessions) || 1,
-                price:         Number(s.price) || 0,
-                schedule:      s.schedule?.scheduledAt ? { scheduledAt: s.schedule.scheduledAt, staffId: s.schedule.staffId } : undefined,
-              }));
-            } else if (template) {
-              services = template.services.map(s => ({ serviceName: s.serviceName, totalSessions: s.totalSessions, price: s.price }));
-            } else {
-              const combo = item.package_id
-                ? await packagesRepository.findById(item.package_id, data.salon_id)
-                : null;
-              if (combo) description = combo.description ?? null;
-              if (combo && combo.serviceIds.length > 0) {
-                const perServicePrice = parseFloat((basePrice / combo.serviceIds.length).toFixed(2));
-                for (const svcId of combo.serviceIds) {
-                  const svc = await servicesRepository.findById(svcId, data.salon_id);
-                  services.push({ serviceId: svcId, serviceName: svc?.name ?? "Service", totalSessions: 1, price: perServicePrice });
-                }
-                discount = combo.discountType === "fixed"
-                  ? combo.discountValue
-                  : parseFloat((basePrice * combo.discountValue / 100).toFixed(2));
-              }
-            }
-
-            if (services.length === 0) {
-              logger.warn(`[payments] could not resolve package for name="${item.name}" id="${item.package_id}" — skipping client_package auto-create`);
-              return;
-            }
-
-            await clientPackagesService.autoCreateFromPayment(
-              data.salon_id,
-              data.client_id!,
-              item.name || "Package",
-              services,
-              basePrice,
-              discount,
-              gstPercentage,
-              expiryDate,
-              expireAfterServices,
-              description,
-              data.appointment_id,
-              item.staff_id || appt?.staff_id || undefined,
-              checkoutSaleId,
-              requesterUserId,
-              billPaidFraction,
-              isBillFullyPaid,
-            );
-          } catch (err: any) {
-            logger.warn('[payments] package auto-create failed:', err?.message ?? err);
-          }
-        })());
-      }
-      // allSettled, not all — each entry already swallows its own errors, and
-      // one package failing must never fail the payment that was collected.
-      await Promise.allSettled(packageCreations);
+    if (data.status === 'completed' || data.status === 'partial') {
+      // Awaited (see autoCreatePackagesForBill's own Promise.allSettled),
+      // unlike the membership block above which is still fire-and-forget.
+      // The client_packages row has to exist before this request returns:
+      // the UI refetches /client-packages the moment checkout responds, and
+      // when creation ran detached that refetch consistently won the race
+      // and came back empty, so a client who had just paid appeared to own
+      // no package at all. Only the row insert is awaited —
+      // autoCreateFromPayment detaches its own slow tail (auto-scheduling
+      // appointments, WhatsApp), so this adds very little to the checkout
+      // response time.
+      await autoCreatePackagesForBill(packageItemsSrc, {
+        salonId: data.salon_id,
+        clientId: data.client_id,
+        appointmentId: data.appointment_id,
+        gstPercent: appt?.gst_percent ?? 0,
+        saleId: checkoutSaleId,
+        staffId: appt?.staff_id ?? undefined,
+        requesterUserId,
+        paidFraction: billPaidFraction,
+        isFullyPaid: isBillFullyPaid,
+      });
     }
 
     // Live calendar sync — appointments.service.ts already does this for
