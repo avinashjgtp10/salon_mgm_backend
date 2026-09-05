@@ -1960,6 +1960,7 @@ async getSalesSummaryReportStats(
     item_type?: string; item_types?: string[];
     service_id?: string; service_ids?: string[];
     payment_status?: string; payment_statuses?: string[];
+    include_gst?: boolean;
   }
 ): Promise<{
   total_bill: number; total_sale: number; received_amount: number; total_tip: number;
@@ -1967,11 +1968,18 @@ async getSalesSummaryReportStats(
 }> {
   const { where, values, nextIndex } = this._buildSalesSummaryWhere(salonId, filters);
   const unbilled = this._UNBILLED_APPOINTMENT_ROWS_CTE(filters, nextIndex);
+  // Grand Total ("price"/total_sale) is GST-inclusive by default. When the
+  // GST filter is switched off, both sides subtract their own tax_amount so
+  // the stat reflects the net-of-GST figure instead.
+  const priceExpr = filters.include_gst === false
+    ? "(s.total_amount::numeric - COALESCE(s.tax_amount, 0))"
+    : "s.total_amount::numeric";
+  const unbilledPriceExpr = filters.include_gst === false ? "(u.price - u.tax_amount)" : "u.price";
 
   const query = `
     WITH sales_side AS (
       SELECT
-        s.total_amount::numeric AS price,
+        ${priceExpr} AS price,
         CASE
           WHEN s.appointment_id IS NOT NULL THEN pay.paid_from_payments
           WHEN s.status = 'completed' THEN s.total_amount::numeric
@@ -1988,7 +1996,7 @@ async getSalesSummaryReportStats(
     ),
     appt_side AS (
       SELECT
-        u.price, u.paid_amount, u.tip_amount,
+        ${unbilledPriceExpr} AS price, u.paid_amount, u.tip_amount,
         u.ewallet_used, u.membership_wallet_used, u.package_used,
         u.reward_points_value, u.referral_credit_used
       FROM (${unbilled.sql}) u
@@ -2035,6 +2043,7 @@ async getSalesSummaryReportRows(
     item_type?: string; item_types?: string[];
     service_id?: string; service_ids?: string[];
     payment_status?: string; payment_statuses?: string[];
+    include_gst?: boolean;
   }
 ): Promise<{
   items: SalesSummaryReportRow[];
@@ -2043,6 +2052,13 @@ async getSalesSummaryReportRows(
   const { where, values, nextIndex } = this._buildSalesSummaryWhere(salonId, filters);
   const unbilled = this._UNBILLED_APPOINTMENT_ROWS_CTE(filters, nextIndex);
   let idx = unbilled.nextIndex;
+  // Same GST toggle as getSalesSummaryReportStats — Grand Total switches
+  // between gross (default) and net-of-GST; the GST column itself (tax_amount)
+  // is left untouched either way so it keeps showing what was actually taxed.
+  const priceExpr = filters.include_gst === false
+    ? "(s.total_amount - COALESCE(s.tax_amount, 0))"
+    : "s.total_amount";
+  const unbilledPriceExpr = filters.include_gst === false ? "(u.price - u.tax_amount)" : "u.price";
 
   const page = Math.max(1, Number(filters.page ?? 1));
   const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
@@ -2057,7 +2073,7 @@ async getSalesSummaryReportRows(
         s.id, s.invoice_number, s.created_at, s.payment_method, s.payment_reference,
         s.appointment_id,
         ${this._STATUS_EXPR} AS status,
-        s.subtotal AS actual_price, s.total_amount AS price,
+        s.subtotal AS actual_price, ${priceExpr} AS price,
         -- Deliberately NOT s.discount_amount — that column is a revenue-
         -- recognition figure (payments.service.ts folds membership wallet +
         -- membership discount into it too, see its recordTransaction() call),
@@ -2124,7 +2140,7 @@ async getSalesSummaryReportRows(
         u.id, u.invoice_number, u.created_at, u.payment_method,
         NULL::text AS payment_reference,
         u.appointment_id, u.status,
-        u.actual_price, u.price, u.discount_amount,
+        u.actual_price, ${unbilledPriceExpr} AS price, u.discount_amount,
         NULL::text AS report_coupon_code, 0::numeric AS coupon_discount_amount, 0::numeric AS referral_discount_amount,
         u.tax_amount, u.tip_amount,
         u.client_name, u.client_phone, u.staff_name,
@@ -2531,7 +2547,20 @@ _UNBILLED_APPOINTMENT_DAILY_ROWS_CTE(
       src.item_type,
       st.id AS staff_id,
       NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff,
-      (src.price * src.quantity) AS amount,
+      -- Invoice-level Grand Total (tax/ex-charges-inclusive), NOT
+      -- src.price * src.quantity — that's one line item's pre-tax net
+      -- amount, so it undercounts a multi-item or qty>1 unbilled
+      -- appointment's true total the same way sales_side's si.total_price
+      -- did before. Mirrors _UNBILLED_APPOINTMENT_ROWS_CTE's formula
+      -- (Sales Summary's equivalent), using the bill-level (unscoped)
+      -- discount since Daily Sheet has no per-item-type discount display
+      -- to keep consistent with.
+      GREATEST(
+        GREATEST(a.items_total - a.manual_discount - a.membership_discount_used, 0)
+          * (1 + a.gst_percent / 100)
+          + a.ex_charges + a.tip_amount,
+        0
+      ) AS amount,
       pay.latest_method AS payment_method,
       a.status::text AS status,
       pay.total_paid,
@@ -2542,8 +2571,42 @@ _UNBILLED_APPOINTMENT_DAILY_ROWS_CTE(
              a.package_items, a.product_items, a.membership_items,
              TO_CHAR(a.scheduled_at AT TIME ZONE 'Asia/Kolkata', 'DD-MM-YYYY') AS date,
              TO_CHAR(a.scheduled_at AT TIME ZONE 'Asia/Kolkata', 'HH12:MI AM') AS booking_time,
-             NULL::text AS ticket_no
+             NULL::text AS ticket_no,
+             COALESCE(a.gst_percent, 0) AS gst_percent,
+             COALESCE(a.ex_charges, 0) AS ex_charges,
+             COALESCE(a.tip_amount, 0) AS tip_amount,
+             COALESCE(items_totals.items_total, 0) AS items_total,
+             CASE
+               WHEN a.discount_type = 'percentage'
+                 THEN COALESCE(items_totals.items_total, 0) * (COALESCE(a.discount_value, 0) / 100)
+               ELSE COALESCE(a.discount_value, 0)
+             END AS manual_discount,
+             COALESCE(pay_discount.membership_discount_used, 0) AS membership_discount_used
       FROM appointments a
+      LEFT JOIN LATERAL (
+        SELECT SUM(src2.price * src2.quantity) AS items_total
+        FROM (
+          SELECT COALESCE(NULLIF(svc.value->>'price', '')::numeric, 0) AS price,
+                 COALESCE(NULLIF(svc.value->>'quantity', '')::numeric, 1) AS quantity
+          FROM jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) AS svc(value)
+          UNION ALL
+          SELECT COALESCE(NULLIF(pkg.value->>'price', '')::numeric, 0),
+                 COALESCE(NULLIF(pkg.value->>'quantity', '')::numeric, 1)
+          FROM jsonb_array_elements(COALESCE(a.package_items, '[]'::jsonb)) AS pkg(value)
+          UNION ALL
+          SELECT COALESCE(NULLIF(prod.value->>'price', '')::numeric, 0),
+                 COALESCE(NULLIF(prod.value->>'quantity', '')::numeric, 1)
+          FROM jsonb_array_elements(COALESCE(a.product_items, '[]'::jsonb)) AS prod(value)
+          UNION ALL
+          SELECT COALESCE(NULLIF(mem.value->>'price', '')::numeric, 0),
+                 COALESCE(NULLIF(mem.value->>'quantity', '')::numeric, 1)
+          FROM jsonb_array_elements(COALESCE(a.membership_items, '[]'::jsonb)) AS mem(value)
+        ) src2
+      ) items_totals ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(MAX(p.membership_discount_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS membership_discount_used
+        FROM payments p WHERE p.appointment_id = a.id
+      ) pay_discount ON TRUE
     ) a
     LEFT JOIN clients c ON a.client_id = c.id
     LEFT JOIN LATERAL (
@@ -2654,7 +2717,14 @@ async getDailySheetReport(
         si.item_type,
         st.id AS staff_id,
         NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff,
-        COALESCE(si.total_price, s.total_amount) AS amount,
+        -- Invoice-level Grand Total (tax/ex-charges-inclusive), NOT
+        -- si.total_price — that column is each line's pre-tax/pre-ex-charges
+        -- net amount (quantity * unit_price - discount), so summing it across
+        -- a multi-item invoice (or a qty>1 line) undercounts the true total
+        -- by the invoice's tax_amount + ex_charges. Same constant-per-line
+        -- convention as paid_amount/due_amount below, collapsed back to one
+        -- row per invoice via MAX (a no-op on a constant) instead of SUM.
+        s.total_amount::numeric AS amount,
         -- Sale-level paid/due, exactly as Sales Summary computes it (same
         -- _PAYMENT_LATERAL fields, same branches) — NOT prorated per line
         -- item. Every line item of the same sale carries the identical
@@ -2721,7 +2791,13 @@ async getDailySheetReport(
         STRING_AGG(DISTINCT service, ', ') AS service,
         STRING_AGG(DISTINCT item_type, ', ') AS item_type,
         STRING_AGG(DISTINCT staff, ', ') AS staff,
-        SUM(amount) AS amount,
+        -- amount is now an invoice-level constant too (s.total_amount /
+        -- the unbilled CTE's own invoice-level price), same as paid/due
+        -- below — MAX collapses the fan-out from the LEFT JOIN sale_items
+        -- (one row per line item) back to one row without re-summing it
+        -- once per line item, which previously double/triple-counted a
+        -- multi-item invoice's total.
+        MAX(amount) AS amount,
         -- paid/due are a constant per invoice/appointment (every line item
         -- row of the same group carries the identical value), so MAX is a
         -- no-op collapse back to one row, not a real aggregation.
@@ -8478,6 +8554,7 @@ _buildStaffPerformanceWhere(
     package_id?: string; package_ids?: string[];
     membership_id?: string; membership_ids?: string[];
     search?: string;
+    include_gst?: boolean;
   }
 ): { where: string; values: any[]; nextIndex: number } {
   const values: any[] = [salonId];
@@ -8572,7 +8649,8 @@ _buildStaffPerformanceWhere(
 // once per staff who happened to touch it — that would inflate total money
 // collected across the report). commission comes straight from
 // commission_earned, already computed per staff per sale at checkout time.
-_STAFF_PERFORMANCE_AGG(where: string): string {
+_STAFF_PERFORMANCE_AGG(where: string, includeGst: boolean = true): string {
+  const itemRevenue = includeGst ? "(si.total_price + COALESCE(si.tax_amount, 0))" : "si.total_price";
   return `
     WITH filtered_sales AS (
       SELECT
@@ -8597,13 +8675,13 @@ _STAFF_PERFORMANCE_AGG(where: string): string {
         COALESCE(si.staff_id, fs.resolved_staff_id) AS staff_id,
         COUNT(DISTINCT fs.id) AS invoice_count,
         COUNT(*) FILTER (WHERE si.item_type = 'service') AS service_count,
-        COALESCE(SUM(si.total_price) FILTER (WHERE si.item_type = 'service'), 0) AS service_revenue,
+        COALESCE(SUM(${itemRevenue}) FILTER (WHERE si.item_type = 'service'), 0) AS service_revenue,
         COUNT(*) FILTER (WHERE si.item_type = 'product') AS product_count,
-        COALESCE(SUM(si.total_price) FILTER (WHERE si.item_type = 'product'), 0) AS product_revenue,
+        COALESCE(SUM(${itemRevenue}) FILTER (WHERE si.item_type = 'product'), 0) AS product_revenue,
         COUNT(*) FILTER (WHERE si.item_type = 'package') AS package_count,
-        COALESCE(SUM(si.total_price) FILTER (WHERE si.item_type = 'package'), 0) AS package_revenue,
+        COALESCE(SUM(${itemRevenue}) FILTER (WHERE si.item_type = 'package'), 0) AS package_revenue,
         COUNT(*) FILTER (WHERE si.item_type = 'membership') AS membership_count,
-        COALESCE(SUM(si.total_price) FILTER (WHERE si.item_type = 'membership'), 0) AS membership_revenue
+        COALESCE(SUM(${itemRevenue}) FILTER (WHERE si.item_type = 'membership'), 0) AS membership_revenue
       FROM sale_items si
       JOIN filtered_sales fs ON fs.id = si.sale_id
       GROUP BY COALESCE(si.staff_id, fs.resolved_staff_id)
@@ -8659,12 +8737,13 @@ async getStaffPerformanceReportStats(
     service_id?: string; product_id?: string;
     package_id?: string; package_ids?: string[];
     membership_id?: string; membership_ids?: string[];
+    include_gst?: boolean;
   }
 ): Promise<StaffPerformanceReportStats> {
   const { where, values } = this._buildStaffPerformanceWhere(salonId, filters);
 
   const query = `
-    ${this._STAFF_PERFORMANCE_AGG(where)}
+    ${this._STAFF_PERFORMANCE_AGG(where, filters.include_gst !== false)}
     SELECT
       COUNT(*)::int AS total_staff,
       COALESCE(SUM(total_revenue), 0) AS total_revenue,
@@ -8702,6 +8781,7 @@ async getStaffPerformanceReport(
     service_id?: string; product_id?: string;
     package_id?: string; package_ids?: string[];
     membership_id?: string; membership_ids?: string[];
+    include_gst?: boolean;
     page?: number; limit?: number; is_export?: boolean;
   }
 ): Promise<{
@@ -8719,7 +8799,7 @@ async getStaffPerformanceReport(
   const limitValues = limit ? [limit, offset] : [];
 
   const query = `
-    ${this._STAFF_PERFORMANCE_AGG(where)}
+    ${this._STAFF_PERFORMANCE_AGG(where, filters.include_gst !== false)}
     SELECT *, COUNT(*) OVER() AS total_count
     FROM combined
     ORDER BY total_revenue DESC
