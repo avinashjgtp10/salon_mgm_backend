@@ -214,6 +214,70 @@ export const subscriptionsRepository = {
         return rows[0]
     },
 
+    // Super-admin manual "Apply Subscription" — sets an explicit
+    // current_period_start/end (rather than +N days from now) and forces
+    // status back to 'active', same reasoning as extendSubscriptionDays.
+    async applySubscriptionDates(subscriptionId: string, startDate: string, endDate: string): Promise<Subscription> {
+        const { rows } = await pool.query(
+            `UPDATE subscriptions
+       SET current_period_start = $2,
+           current_period_end = $3,
+           status = 'active',
+           cancel_at_period_end = false,
+           cancelled_at = NULL,
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
+            [subscriptionId, startDate, endDate]
+        )
+        return rows[0]
+    },
+
+    // Counterpart to createManualSubscription, but with explicit dates
+    // instead of a day count — used when the account has no subscription
+    // row yet and a super-admin applies one directly via start/end dates.
+    async createManualSubscriptionWithDates(data: {
+        salon_id: string
+        plan_id: string
+        start_date: string
+        end_date: string
+    }): Promise<Subscription> {
+        const { rows } = await pool.query(
+            `INSERT INTO subscriptions (
+                salon_id, plan_id, razorpay_subscription_id, razorpay_plan_id,
+                status, is_trial, current_period_start, current_period_end
+            )
+            VALUES ($1, $2, NULL, NULL, 'active', false, $3, $4)
+            RETURNING *`,
+            [data.salon_id, data.plan_id, data.start_date, data.end_date]
+        )
+        return rows[0]
+    },
+
+    // Super-admin "Remove Subscription" — immediately deactivates, same
+    // shape as the Razorpay webhook cancellation path (subscriptions.service.ts).
+    // billingSlice's fetchSubscriptionStatusThunk treats the salon as active
+    // if ANY of its subscription rows is 'active' or 'trialing' (not just
+    // the most recent) — so removing a subscription must deactivate every
+    // such row for the salon, or an older row (e.g. a leftover trial, which
+    // is stored as is_trial=true + status='active', not a literal
+    // 'trialing' status) keeps the account unlocked even after the
+    // "current" one is cancelled.
+    async deactivateAllForSalon(salonId: string): Promise<Subscription[]> {
+        const { rows } = await pool.query(
+            `UPDATE subscriptions
+       SET status = 'cancelled',
+           cancelled_at = NOW(),
+           current_period_end = NULL,
+           updated_at = NOW()
+       WHERE salon_id = $1
+         AND status IN ('active', 'authenticated', 'paused')
+       RETURNING *`,
+            [salonId]
+        )
+        return rows
+    },
+
     async updateSubscriptionStatus(
         razorpaySubId: string,
         status: SubscriptionStatus,

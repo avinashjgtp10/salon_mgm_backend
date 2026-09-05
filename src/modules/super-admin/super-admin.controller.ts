@@ -204,6 +204,27 @@ export const superAdminController = {
     } catch (err) { return next(err); }
   },
 
+  async applySubscription(req: Request & { user?: { userId: string } }, res: Response, next: NextFunction) {
+    try {
+      const salonId = String(req.params.salonId);
+      const { start_date, end_date } = req.body;
+      const changedByUserId = req.user?.userId;
+      if (!changedByUserId) return res.status(401).json({ success: false, error: { message: "Unauthorized" } });
+      const data = await superAdminService.applySubscription(salonId, start_date, end_date, changedByUserId);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
+  async removeSubscription(req: Request & { user?: { userId: string } }, res: Response, next: NextFunction) {
+    try {
+      const salonId = String(req.params.salonId);
+      const changedByUserId = req.user?.userId;
+      if (!changedByUserId) return res.status(401).json({ success: false, error: { message: "Unauthorized" } });
+      const data = await superAdminService.removeSubscription(salonId, changedByUserId);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
   // ── USERS ─────────────────────────────────────────────────────────────────────
 
   async createUser(req: Request, res: Response, next: NextFunction) {
