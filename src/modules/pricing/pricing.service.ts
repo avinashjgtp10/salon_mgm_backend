@@ -244,7 +244,14 @@ export const pricingService = {
         const result = await couponsService.validate({ code: body.couponCode, orderAmount: rawSubtotal, salonId });
         couponDiscount = result.discountAmount;
       } catch (err: any) {
-        couponRejectedReason = err instanceof AppError ? (err.code ?? err.message) : 'Could not validate coupon';
+        // Human-readable message first (e.g. "Minimum order amount of ₹500
+        // required for this coupon") — previously this preferred err.code
+        // (e.g. "MIN_ORDER_NOT_MET"), and the frontend never read this field
+        // at all, so a coupon silently losing validity (crossing a min/max
+        // order-amount threshold, expiring, hitting its usage limit) as the
+        // bill changed showed no explanation whatsoever: couponDiscount just
+        // dropped to 0 and the Coupon/Total Discount row quietly vanished.
+        couponRejectedReason = err instanceof AppError ? (err.message ?? err.code) : 'Could not validate coupon';
       }
     }
 
