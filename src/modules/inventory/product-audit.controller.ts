@@ -115,6 +115,7 @@ export const productAuditController = {
             const userId = getUserId(req);
             const audit = await productAuditService.submitForReview({
                 auditId: String(req.params.id), salonId, actorId: userId,
+                items: Array.isArray(req.body.items) ? req.body.items : undefined,
             });
             sendSuccess(res, 200, audit, "Audit submitted for review");
         } catch (err) { next(err); }

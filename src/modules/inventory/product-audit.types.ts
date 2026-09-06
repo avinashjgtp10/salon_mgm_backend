@@ -78,6 +78,19 @@ export type UpdateAuditItemBody = {
     reason?: string | null;
 };
 
+export type SubmitAuditItemUpdate = {
+    item_id: string;
+    physical_qty: number | null;
+    reason?: string | null;
+};
+
+export type SubmitAuditBody = {
+    /** Every locally-edited row's latest value, applied atomically with the
+     *  submit itself — the frontend holds edits in local state and only
+     *  calls the API here, once, instead of a PATCH per field/row. */
+    items?: SubmitAuditItemUpdate[];
+};
+
 export type RejectAuditBody = {
     reason: string;
 };
