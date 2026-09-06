@@ -31,6 +31,7 @@ import {
     validateCreateProductAudit,
     validateAddAuditItems,
     validateUpdateAuditItem,
+    validateSubmitAudit,
     validateRejectAudit,
     validateApproveAudit,
 } from "./product-audit.validator";
@@ -524,6 +525,7 @@ router.post(
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
     manageInventory,
+    validateSubmitAudit,
     productAuditController.submitForReview
 );
 

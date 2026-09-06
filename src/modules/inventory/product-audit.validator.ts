@@ -62,6 +62,32 @@ export const validateUpdateAuditItem = (
     } catch (err) { return next(err); }
 };
 
+export const validateSubmitAudit = (
+    req: Request, _res: Response, next: NextFunction,
+): void => {
+    try {
+        const b = req.body;
+        if (b.items !== undefined) {
+            if (!Array.isArray(b.items)) {
+                throw new AppError(400, "items must be an array", "VALIDATION_ERROR");
+            }
+            for (let i = 0; i < b.items.length; i++) {
+                const item = b.items[i] ?? {};
+                if (!isUUID(item.item_id)) {
+                    throw new AppError(400, `items[${i}].item_id must be a UUID`, "VALIDATION_ERROR");
+                }
+                if (item.physical_qty !== null && item.physical_qty !== undefined && typeof item.physical_qty !== "number") {
+                    throw new AppError(400, `items[${i}].physical_qty must be a number or null`, "VALIDATION_ERROR");
+                }
+                if (!isOptionalString(item.reason)) {
+                    throw new AppError(400, `items[${i}].reason must be a string`, "VALIDATION_ERROR");
+                }
+            }
+        }
+        return next();
+    } catch (err) { return next(err); }
+};
+
 export const validateRejectAudit = (
     req: Request, _res: Response, next: NextFunction,
 ): void => {
