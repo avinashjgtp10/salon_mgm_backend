@@ -2,10 +2,9 @@ import AWS from "aws-sdk";
 import path from "path";
 import fs from "fs";
 import logger from "../../config/logger";
-import config from "../../config/env";
 
 // ── S3 client ─────────────────────────────────────────────────────────────────
-const s3 = new AWS.S3({
+export const s3 = new AWS.S3({
   region: process.env.AWS_REGION || "us-east-1",
   // If no explicit keys are set the SDK falls back to the EC2 instance's
   // IAM role credentials automatically (recommended on EC2)
@@ -15,7 +14,7 @@ const s3 = new AWS.S3({
   }),
 });
 
-const BUCKET = process.env.AWS_S3_BUCKET || "";
+export const BUCKET = process.env.AWS_S3_BUCKET || "";
 
 // ── Upload a file (from disk path) to S3 ─────────────────────────────────────
 // `keyPrefix` defaults to "avatars" for existing callers (clients.controller
@@ -34,11 +33,14 @@ export async function uploadAvatarToS3(
   logger.info("[avatarUpload] Uploading avatar to S3", { key, BUCKET });
 
   if (!BUCKET) {
-    // Fallback: serve from local /uploads directory when S3 is not configured
+    // Fallback: serve from local /uploads directory when S3 is not configured.
+    // Relative path, not prefixed with config.publicBaseUrl — the frontend
+    // resolves this against whatever origin it's being served from (see
+    // resolveMediaUrl), and it no longer depends on a public tunnel being up
+    // just to view images inside the app itself.
     logger.warn("[avatarUpload] AWS_S3_BUCKET not set — serving file locally");
     const filename = path.basename(filePath);
-    const localUrl = `${config.publicBaseUrl}/uploads/${filename}`;
-    return localUrl;
+    return `/uploads/${filename}`;
   }
 
   const fileContent = fs.readFileSync(filePath);
@@ -56,5 +58,10 @@ export async function uploadAvatarToS3(
   // Clean up local temp file
   try { fs.unlinkSync(filePath); } catch { /* ignore */ }
 
-  return result.Location;
+  // The bucket is private (no public-read ACL/policy) — hand back our own
+  // proxy URL (see media.controller.ts) instead of the raw S3 Location,
+  // which 403s for anyone without the account's own credentials. Relative,
+  // not prefixed with config.publicBaseUrl, for the same reason as the local
+  // fallback above — see resolveMediaUrl on the frontend.
+  return `/api/v1/media/${key}`;
 }

@@ -2,7 +2,7 @@
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { marketplaceService } from "./marketplace.service";
-import config from "../../config/env";
+import { uploadAvatarToS3 } from "../utils/avatar.upload";
 import {
     UpsertEssentialsBody, UpsertAboutBody, UpsertLocationBody,
     UpsertWorkingHoursBody, AddImageBody, ReorderImagesBody, UpsertFeaturesBody,
@@ -93,12 +93,12 @@ export const marketplaceController = {
         try {
             let imageUrl: string = (req.body as AddImageBody)?.image_url;
             const file = (req as any).file as Express.Multer.File | undefined;
+            const salonId = await getSalonId(req);
             if (file) {
-                // Use the backend's own public URL, not the frontend's — see config.publicBaseUrl.
-                imageUrl = `${config.publicBaseUrl}/uploads/${file.filename}`;
+                imageUrl = await uploadAvatarToS3(file.path, `${salonId}-gallery-${Date.now()}`, file.mimetype, "gallery");
             }
             if (!imageUrl) throw new AppError(400, "No image provided", "VALIDATION_ERROR");
-            const data = await marketplaceService.addImage(await getSalonId(req), { image_url: imageUrl });
+            const data = await marketplaceService.addImage(salonId, { image_url: imageUrl });
             return sendSuccess(res, 201, data, "Image added");
         } catch (err) { return next(err); }
     },
@@ -144,8 +144,9 @@ export const marketplaceController = {
         try {
             const file = (req as any).file as Express.Multer.File | undefined;
             if (!file) throw new AppError(400, "No image file provided", "VALIDATION_ERROR");
-            const logoUrl = `${config.publicBaseUrl}/uploads/${file.filename}`;
-            const data = await marketplaceService.uploadLogo(await getSalonId(req), logoUrl);
+            const salonId = await getSalonId(req);
+            const logoUrl = await uploadAvatarToS3(file.path, `${salonId}-logo-${Date.now()}`, file.mimetype, "logos");
+            const data = await marketplaceService.uploadLogo(salonId, logoUrl);
             return sendSuccess(res, 200, data, "Logo uploaded");
         } catch (err) { return next(err); }
     },
@@ -154,8 +155,9 @@ export const marketplaceController = {
         try {
             const file = (req as any).file as Express.Multer.File | undefined;
             if (!file) throw new AppError(400, "No image file provided", "VALIDATION_ERROR");
-            const coverUrl = `${config.publicBaseUrl}/uploads/${file.filename}`;
-            const data = await marketplaceService.uploadCover(await getSalonId(req), coverUrl);
+            const salonId = await getSalonId(req);
+            const coverUrl = await uploadAvatarToS3(file.path, `${salonId}-cover-${Date.now()}`, file.mimetype, "covers");
+            const data = await marketplaceService.uploadCover(salonId, coverUrl);
             return sendSuccess(res, 200, data, "Cover photo uploaded");
         } catch (err) { return next(err); }
     },

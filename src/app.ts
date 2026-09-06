@@ -82,6 +82,7 @@ import supportRoutes from "./modules/support/support.routes";
 import notificationsRoutes from "./modules/notifications/notifications.routes";
 import deploymentAnnouncementsRoutes from "./modules/deployment-announcements/deployment-announcements.routes";
 import enquiriesRoutes from "./modules/enquiries/enquiries.routes";
+import mediaRoutes from "./modules/media/media.routes";
 import { emailService } from "./modules/utils/email.service";
 import swaggerUi from "swagger-ui-express";
 import path from "path";
@@ -157,7 +158,14 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // Serve uploaded files as static assets
-app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
+// helmet() (above) defaults Cross-Origin-Resource-Policy to "same-origin",
+// which blocks the browser from rendering these as <img> whenever the page's
+// origin differs from config.publicBaseUrl's — these are public-facing
+// business images (logos, avatars), so opt out. See media.controller.ts for
+// the equivalent S3-backed proxy route.
+app.use("/uploads", express.static(path.join(__dirname, "../uploads"), {
+  setHeaders: (res) => res.set("Cross-Origin-Resource-Policy", "cross-origin"),
+}));
 
 // Compression
 app.use(compression());
@@ -311,6 +319,7 @@ app.use("/api/v1/support", supportRoutes);
 app.use("/api/v1/notifications", notificationsRoutes);
 app.use("/api/v1/deployment-announcements", deploymentAnnouncementsRoutes);
 app.use("/api/v1/enquiries", enquiriesRoutes);
+app.use("/api/v1/media", mediaRoutes);
 
 const swaggerDocument = require(path.join(__dirname, "../docs/api/swagger-gen.json"));
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
