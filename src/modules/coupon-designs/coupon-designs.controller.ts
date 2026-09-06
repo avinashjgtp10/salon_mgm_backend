@@ -1,7 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { AppError } from '../../middleware/error.middleware';
 import { sendSuccess } from '../utils/response.util';
-import config from '../../config/env';
 import { couponDesignsService } from './coupon-designs.service';
 import { designExportService } from './design-export.service';
 import { DesignKind, DesignStatus } from './coupon-designs.types';
@@ -93,8 +92,9 @@ export const couponDesignsController = {
       );
 
       // Served from the same static /uploads mount the rest of the app uses.
+      // Relative, not prefixed with config.publicBaseUrl — see avatar.upload.ts.
       return sendSuccess(res, 200, {
-        url: `${config.publicBaseUrl}/uploads/designs/${result.fileName}`,
+        url: `/uploads/designs/${result.fileName}`,
         fileName: result.fileName,
         bytes: result.bytes,
         // Surfaced so the UI can say "2 fields had no value" rather than

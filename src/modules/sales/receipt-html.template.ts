@@ -1,4 +1,5 @@
 import { Sale, SaleItem } from "./sales.types";
+import config from "../../config/env";
 
 // Ported from the dashboard's ViewBillModal.tsx `printReceipt()` — same visual
 // invoice staff see when they print/save a bill, adapted from the frontend's
@@ -39,7 +40,15 @@ export function buildReceiptHtml(params: {
     const salonEmail = salon.email || "";
     const salonWebsite = salon.website_url || "";
     const gst = salon.gst_number || "";
-    const logoUrl = salon.logo_url || "";
+    // Puppeteer renders this via page.setContent() (no navigation, so no base
+    // URL to resolve a relative src against) — and runs on this same backend
+    // process, so localhost is always reachable here regardless of whether a
+    // public tunnel/LAN address is up. A legacy row still holding an old
+    // absolute URL (ngrok/S3) is left as-is.
+    const rawLogoUrl = salon.logo_url || "";
+    const logoUrl = rawLogoUrl.startsWith("/")
+        ? `http://localhost:${config.port}${rawLogoUrl}`
+        : rawLogoUrl;
 
     const now = new Date();
     const printDate = now.toLocaleDateString("en-IN", { year: "numeric", month: "long", day: "numeric" });
