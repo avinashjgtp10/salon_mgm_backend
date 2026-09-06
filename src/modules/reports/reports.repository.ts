@@ -8438,7 +8438,14 @@ async getStaffSalesReport(
       SELECT
         s.id, s.created_at,
         ${this._STATUS_EXPR} AS status,
-        s.payment_method,
+        -- Package/Membership are benefits/credits applied against the bill,
+        -- never real payment methods (sales.payment_method is the
+        -- constrained single-word enum normalizePaymentMethod() writes —
+        -- see payment-method.util.ts — which collapses a fully
+        -- package/membership-covered sale to exactly 'package'/'membership'
+        -- with no real-money leg at all). Same fix as the Pending Payment
+        -- Report's payment_method column.
+        CASE WHEN LOWER(s.payment_method) IN ('package', 'membership') THEN NULL ELSE s.payment_method END AS payment_method,
         -- One row per line item, scoped to that item's own staff/amount —
         -- never the whole invoice's total_amount. See getProductRetailReport
         -- for the same one-row-per-line-item + proration pattern.
@@ -8517,7 +8524,7 @@ async getStaffSalesReport(
     paid_amount: Number(row.paid_amount ?? 0),
     due_amount: Number(row.due_amount ?? 0),
     commission_amount: Number(row.commission_amount ?? 0),
-    payment_method: row.payment_method,
+    payment_method: row.payment_method ?? "—",
     status: row.status,
     created_at: row.created_at,
   }));
@@ -8569,11 +8576,18 @@ _buildStaffPerformanceWhere(
     where.push(`s.created_at < ($${idx++}::date + interval '1 day')`);
     values.push(filters.end_date);
   }
+  // 'partial' (and 'paid'/'booked') are values of the DISPLAYED status —
+  // same _STATUS_EXPR vocabulary _buildSalesSummaryWhere uses — never the
+  // raw sales.status column, which only has draft/completed/cancelled/
+  // refunded and has no 'partial' value at all. Filtering s.status directly
+  // against 'partial' silently matched zero rows every time (this function's
+  // caller, _STAFF_PERFORMANCE_AGG, already joins appointments via `a`, so
+  // it's in scope here too).
   if (filters.payment_statuses && filters.payment_statuses.length > 0) {
-    where.push(`s.status = ANY($${idx++}::text[])`);
+    where.push(`(${this._STATUS_EXPR}) = ANY($${idx++}::text[])`);
     values.push(filters.payment_statuses);
   } else if (filters.payment_status) {
-    where.push(`s.status = $${idx++}`);
+    where.push(`(${this._STATUS_EXPR}) = $${idx++}`);
     values.push(filters.payment_status);
   }
   if (filters.payment_modes && filters.payment_modes.length > 0) {
@@ -8668,6 +8682,7 @@ _STAFF_PERFORMANCE_AGG(where: string, includeGst: boolean = true): string {
       FROM sales s
       LEFT JOIN clients c ON s.client_id = c.id
       ${this._PAYMENT_LATERAL}
+      ${this._APPOINTMENT_STATUS_JOIN}
       WHERE ${where}
     ),
     item_agg AS (
