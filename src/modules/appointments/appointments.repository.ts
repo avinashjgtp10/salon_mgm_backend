@@ -84,6 +84,17 @@ export const appointmentsRepository = {
                 -- (paid or not), which diverged from Sales Summary/reports
                 -- (both read sales.invoice_number directly).
                 (SELECT s.invoice_number FROM sales s WHERE s.appointment_id = a.id LIMIT 1) AS invoice_number,
+                -- Coupon discount/code only ever land on the linked sale (set at
+                -- actual payment time — see payments.service.ts/sales.repository.ts),
+                -- never copied back onto the appointment row itself. Without these,
+                -- a paid appointment's own discount_amount/discount_value fields
+                -- only ever reflect the pre-payment manual/Svc discount, so a coupon
+                -- applied at checkout was invisible everywhere this query feeds
+                -- (ViewBillModal's Sales Summary) — its ₹ reduction just fell into
+                -- "Round Off" as an unexplained gap between subtotal+tax and the
+                -- actually-charged grand total.
+                (SELECT s.coupon_discount_amount FROM sales s WHERE s.appointment_id = a.id LIMIT 1) AS coupon_discount_amount,
+                (SELECT s.coupon_code FROM sales s WHERE s.appointment_id = a.id LIMIT 1) AS coupon_code,
                 c.full_name                              AS client_name,
                 c.phone_number                           AS client_phone,
                 c.phone_country_code                     AS client_phone_code,
@@ -209,6 +220,10 @@ export const appointmentsRepository = {
                -- from the linked sale's own sequential number, not an
                -- appointment-count, so it matches Sales Summary/reports.
                (SELECT s.invoice_number FROM sales s WHERE s.appointment_id = a.id LIMIT 1) AS invoice_number,
+               -- See findById()'s identical comment — coupon discount/code only
+               -- ever land on the linked sale, never the appointment row itself.
+               (SELECT s.coupon_discount_amount FROM sales s WHERE s.appointment_id = a.id LIMIT 1) AS coupon_discount_amount,
+               (SELECT s.coupon_code FROM sales s WHERE s.appointment_id = a.id LIMIT 1) AS coupon_code,
                c.full_name    AS client_name,
                c.phone_number AS client_phone,
                c.email        AS client_email,
