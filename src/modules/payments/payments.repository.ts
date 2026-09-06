@@ -185,6 +185,39 @@ export const paymentsRepository = {
     return rows[0] || null;
   },
 
+  // Corrects the recorded paid amount(s) on an already-paid/partial
+  // appointment down to a lower recalculated bill (editing a paid
+  // appointment's items down, e.g. removing a ₹3,000 product and adding a
+  // ₹150 service) — no separate refund/credit record is created, per
+  // product decision; the original row(s) are corrected in place so total
+  // revenue/reports show the new figure with no separate trace of the
+  // difference. Newest-first: the latest payment absorbs as much of the new
+  // (lower) total as it can, older rows only get whatever's left — covers
+  // the common single-payment case (one row, corrected straight to the new
+  // total) and the rarer split/deposit+top-up case without leaving the sum
+  // wrong either way.
+  async reduceForAppointment(appointmentId: string, newTotal: number, client?: import("pg").PoolClient): Promise<void> {
+    const db = client ?? pool;
+    const { rows } = await db.query(
+      `SELECT id, paid_amount FROM payments
+       WHERE appointment_id = $1 AND status IN ('partial', 'completed')
+       ORDER BY created_at DESC`,
+      [appointmentId]
+    );
+    let remaining = Math.max(0, newTotal);
+    for (const row of rows) {
+      const original = parseFloat(row.paid_amount ?? '0');
+      const allocated = Math.min(original, remaining);
+      remaining -= allocated;
+      await db.query(
+        `UPDATE payments
+         SET paid_amount = $1, net_amount = $1, gross_amount = $1, amount = $1, due_amount = 0, updated_at = NOW()
+         WHERE id = $2`,
+        [allocated, row.id]
+      );
+    }
+  },
+
   async findBySalonId(salonId: string, limit = 50): Promise<Payment[]> {
     const { rows } = await pool.query(
       `SELECT * FROM payments WHERE salon_id = $1 ORDER BY created_at DESC LIMIT $2`,

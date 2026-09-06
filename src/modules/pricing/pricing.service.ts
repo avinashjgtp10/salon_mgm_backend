@@ -244,7 +244,14 @@ export const pricingService = {
         const result = await couponsService.validate({ code: body.couponCode, orderAmount: rawSubtotal, salonId });
         couponDiscount = result.discountAmount;
       } catch (err: any) {
-        couponRejectedReason = err instanceof AppError ? (err.code ?? err.message) : 'Could not validate coupon';
+        // Human-readable message first (e.g. "Minimum order amount of ₹500
+        // required for this coupon") — previously this preferred err.code
+        // (e.g. "MIN_ORDER_NOT_MET"), and the frontend never read this field
+        // at all, so a coupon silently losing validity (crossing a min/max
+        // order-amount threshold, expiring, hitting its usage limit) as the
+        // bill changed showed no explanation whatsoever: couponDiscount just
+        // dropped to 0 and the Coupon/Total Discount row quietly vanished.
+        couponRejectedReason = err instanceof AppError ? (err.message ?? err.code) : 'Could not validate coupon';
       }
     }
 
@@ -407,11 +414,17 @@ export const pricingService = {
         let pointsToRedeem = Math.min(body.rewardPointsToRedeem ?? 0, rpBalance);
         if (pointsToRedeem > 0 && rpConfig.redeem_points > 0) {
           let value = (pointsToRedeem / rpConfig.redeem_points) * rpConfig.redeem_value;
-          if (value > remaining) {
-            // Cap the ₹ value at what's left, then work backward to how many
-            // points that actually costs — floor so this only ever slightly
-            // UNDER-redeems in the preview, matching the real charge-time logic.
-            pointsToRedeem = Math.floor((remaining / rpConfig.redeem_value) * rpConfig.redeem_points);
+          // Same max_redeem_percent-of-preRedemptionTotal cap as
+          // payments.service.ts's charge-time logic, so the preview never
+          // shows a bigger redemption than checkout will actually allow.
+          const percentCap = preliminaryTotals.preRedemptionTotal * (rpConfig.max_redeem_percent / 100);
+          const cap = Math.min(remaining, percentCap);
+          if (value > cap) {
+            // Cap the ₹ value at the lower of what's left / the percent cap,
+            // then work backward to how many points that actually costs —
+            // floor so this only ever slightly UNDER-redeems in the preview,
+            // matching the real charge-time logic.
+            pointsToRedeem = Math.floor((cap / rpConfig.redeem_value) * rpConfig.redeem_points);
             value = (pointsToRedeem / rpConfig.redeem_points) * rpConfig.redeem_value;
           }
           appliedRewardPointsValue = value;
@@ -420,8 +433,10 @@ export const pricingService = {
     }
     remaining = Math.max(0, remaining - appliedRewardPointsValue);
 
-    // ── Referral credit: clamp requested ₹ to real balance AND to what's
-    // still left on the bill ─────────────────────────────────────────────────
+    // ── Referral credit: clamp requested ₹ to real balance, to what's still
+    // left on the bill, AND to the same max_redeem_percent cap payments.service.ts
+    // enforces at charge time, so the preview never shows a bigger redemption
+    // than checkout will actually allow ───────────────────────────────────────
     let appliedReferralCredit = 0;
     let referralCreditRejectedReason: string | undefined;
     if (body.applyReferralCredit) {
@@ -429,8 +444,15 @@ export const pricingService = {
         referralCreditRejectedReason = 'No client selected';
       } else if ((body.referralCreditRequested ?? 0) > 0 && remaining > 0) {
         try {
-          const balance = await referralRepository.getBalance(body.client_id);
-          appliedReferralCredit = Math.min(body.referralCreditRequested ?? 0, balance, remaining);
+          const [referralConfig, balance] = await Promise.all([
+            referralRepository.getConfig(salonId),
+            referralRepository.getBalance(body.client_id),
+          ]);
+          if (referralConfig.redeem_enabled) {
+            const percentCap = preliminaryTotals.preRedemptionTotal * (referralConfig.max_redeem_percent / 100);
+            const cap = Math.min(remaining, percentCap);
+            appliedReferralCredit = Math.min(body.referralCreditRequested ?? 0, balance, cap);
+          }
         } catch { /* non-fatal */ }
       }
     }

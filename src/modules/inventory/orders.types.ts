@@ -33,8 +33,8 @@ export interface Order {
     status: OrderStatus;
     supplier_id: string;
     supplier_name?: string;
-    bill_to_branch_id: string | null;
-    ship_to_branch_id: string | null;
+    delivery_address: string | null;
+    delivery_instructions: string | null;
     order_date: string;
     remark: string | null;
     ref_number: string | null;
@@ -52,6 +52,14 @@ export interface Order {
     created_at: string;
     updated_at: string;
     items?: OrderItem[];
+    // Populated only by ordersRepository.getById() — derived from the
+    // Purchase(s) created when this order was received (see
+    // purchasesRepository.getOrderPaymentSummary). "unpaid" covers both a
+    // not-yet-received order and a received-but-nothing-paid one; the Bill
+    // PDF is only offered for "paid"/"partial".
+    paid_amount?: number;
+    pending_amount?: number;
+    bill_payment_status?: "paid" | "partial" | "unpaid";
 }
 
 export interface CreateOrderItemDTO {
@@ -68,8 +76,8 @@ export interface CreateOrderDTO {
     // "draft" is the only other value a caller may set directly (Save Draft).
     status?: "draft" | "sent";
     supplier_id: string;
-    bill_to_branch_id?: string;
-    ship_to_branch_id?: string;
+    delivery_address?: string;
+    delivery_instructions?: string;
     order_date?: string;
     remark?: string;
     ref_number?: string;

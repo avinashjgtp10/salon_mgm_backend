@@ -162,24 +162,22 @@ export const clientsService = {
     async create(body: CreateClientBody, salonId: string, include?: string): Promise<ClientWithRelations> {
         const normalized = normalizeCreateBody(body);
 
-        // One active client per phone number — same number under a different
-        // name is almost always a duplicate/mistake, not two real clients.
-        if (normalized.phone_number) {
-            const dup = await clientsRepository.findActiveByPhone(
-                normalized.phone_number, salonId,
+        // One active client per phone number (almost always a duplicate/mistake
+        // under a different name, not two real clients) and one per email —
+        // checked proactively here (rather than only relying on the DB's
+        // ux_clients_salon_email unique index) so the caller gets a specific,
+        // field-attributable error instead of a raw 23505 constraint violation
+        // caught generically by the error middleware. Combined into a single
+        // round trip (was two sequential SELECTs) since both checks always run
+        // together on create.
+        if (normalized.phone_number || normalized.email) {
+            const { phoneMatch, emailMatch } = await clientsRepository.findActiveByPhoneOrEmail(
+                normalized.phone_number, normalized.email, salonId,
             );
-            if (dup) {
-                throw new AppError(409, `This phone number is already registered to ${dup.full_name}`, "DUPLICATE_PHONE");
+            if (phoneMatch) {
+                throw new AppError(409, `This phone number is already registered to ${phoneMatch.full_name}`, "DUPLICATE_PHONE");
             }
-        }
-
-        // Same for email — checked proactively here (rather than only relying on
-        // the DB's ux_clients_salon_email unique index) so the caller gets a
-        // specific, field-attributable error instead of a raw 23505 constraint
-        // violation caught generically by the error middleware.
-        if (normalized.email) {
-            const dupEmail = await clientsRepository.findActiveByEmail(normalized.email, salonId);
-            if (dupEmail) {
+            if (emailMatch) {
                 throw new AppError(409, "This email address is already registered. Please use a different email address.", "DUPLICATE_EMAIL");
             }
         }
@@ -205,8 +203,10 @@ export const clientsService = {
             rewardStatus: referredByClientId ? "pending" : null,
         });
 
-        if (body.addresses?.length) await clientsRepository.replaceUpsertAddresses(created.id, body.addresses);
-        if (body.emergency_contacts?.length) await clientsRepository.replaceUpsertEmergencyContacts(created.id, body.emergency_contacts);
+        const [insertedAddresses, insertedEmergencyContacts] = await Promise.all([
+            body.addresses?.length ? clientsRepository.replaceUpsertAddresses(created.id, body.addresses, true) : Promise.resolve([]),
+            body.emergency_contacts?.length ? clientsRepository.replaceUpsertEmergencyContacts(created.id, body.emergency_contacts, true) : Promise.resolve([]),
+        ]);
 
         // Fire notification (fire-and-forget)
         notificationsService.create({
@@ -291,7 +291,15 @@ export const clientsService = {
             } catch (err: any) { logger.error("[email] newClient failed:", err?.message ?? err); }
         })();
 
-        const withRel = await clientsRepository.getByIdWithRelations(created.id, salonId) as ClientWithRelations;
+        // Build the response from what's already in hand (created's RETURNING *,
+        // plus the just-inserted relation rows) instead of re-SELECTing the row
+        // we just wrote — was an extra findById + 2 relation queries that only
+        // ever re-read data this function already had.
+        const withRel: ClientWithRelations = {
+            ...created,
+            addresses: insertedAddresses,
+            emergency_contacts: insertedEmergencyContacts,
+        };
 
         // A brand-new client has no packages/memberships/visits/loyalty-unlock
         // yet — seed empty/zeroed values instead of running the same queries

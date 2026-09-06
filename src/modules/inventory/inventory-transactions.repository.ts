@@ -6,6 +6,7 @@ import {
   InventoryTransactionItem,
   InventoryTransactionParams,
 } from "./inventory-transactions.types";
+import { inventoryAlertsService } from "./inventory-alerts.service";
 
 const REASON_LABEL: Record<InventoryTransactionParams["reason"], string> = {
   consumable_usage: "Consumable usage",
@@ -155,9 +156,15 @@ export const inventoryTransactionsRepository = {
 
   async deduct(params: InventoryTransactionParams, client?: PoolClient): Promise<void> {
     await applyMovement(params, "deduct", client);
+    inventoryAlertsService
+      .checkAndNotify(params.items.map((i) => i.product_id), params.salonId)
+      .catch(() => { /* logged internally, never blocks the caller */ });
   },
 
   async restore(params: InventoryTransactionParams, client?: PoolClient): Promise<void> {
     await applyMovement(params, "return", client);
+    inventoryAlertsService
+      .checkAndNotify(params.items.map((i) => i.product_id), params.salonId)
+      .catch(() => { /* logged internally, never blocks the caller */ });
   },
 };

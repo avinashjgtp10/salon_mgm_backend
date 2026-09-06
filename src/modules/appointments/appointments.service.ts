@@ -32,6 +32,7 @@ import { computeBillTotals, rowsTotal, normalizeDiscountAppliesTo, ActiveTaxRow 
 import { getActiveTaxes } from "../settings/tax.util";
 import { paymentsRepository } from "../payments/payments.repository";
 import { clientPackagesService } from "../client-packages/client-packages.service";
+import { autoCreatePackagesForBill } from "../transactions/package-autocreate.helper";
 import {
     Appointment,
     AppointmentServiceConsumableRecord,
@@ -64,7 +65,15 @@ function computeAppointmentTotals(appt: {
 }, activeTaxes: ActiveTaxRow[]) {
     const toRow = (items: any[] = []) => (items || []).map((i) => ({
         price: Number(i?.price) || 0,
-        qty: Number(i?.quantity) || 1,
+        // Stored appointment service/item rows use "qty" (see
+        // useAppointment.ts::buildServiceApiItems on the frontend) — never
+        // "quantity". Reading only .quantity here silently defaulted every
+        // row to qty=1, which is why increasing an item's quantity on a
+        // paid/partial appointment kept recomputing (and even re-persisting,
+        // via update()'s reprice branches below) the bill at its original
+        // qty=1 total. payments.service.ts already guards both keys; match
+        // that here so this is the one place that needs the fallback.
+        qty: Number(i?.quantity) || Number(i?.qty) || 1,
         isPackageService: !!i?.is_package_service,
     }));
     return computeBillTotals({
@@ -202,19 +211,19 @@ function attachItemTax(appt: Appointment, saleItems: SaleItem[]): Appointment {
     return {
         ...appt,
         services: (appt.services || []).map((s) => {
-            const tax = takeMatch("service", s.service_id, s.name, Number(s.quantity) || 1, Number(s.price) || 0);
+            const tax = takeMatch("service", s.service_id, s.name, Number(s.quantity) || Number((s as any).qty) || 1, Number(s.price) || 0);
             return tax !== undefined ? { ...s, tax_amount: tax } : s;
         }),
         package_items: (appt.package_items || []).map((p) => {
-            const tax = takeMatch("package", p.package_id, p.name, Number(p.quantity) || 1, Number(p.price) || 0);
+            const tax = takeMatch("package", p.package_id, p.name, Number(p.quantity) || Number((p as any).qty) || 1, Number(p.price) || 0);
             return tax !== undefined ? { ...p, tax_amount: tax } : p;
         }),
         product_items: (appt.product_items || []).map((pr) => {
-            const tax = takeMatch("product", pr.product_id, pr.name, Number(pr.quantity) || 1, Number(pr.price) || 0);
+            const tax = takeMatch("product", pr.product_id, pr.name, Number(pr.quantity) || Number((pr as any).qty) || 1, Number(pr.price) || 0);
             return tax !== undefined ? { ...pr, tax_amount: tax } : pr;
         }),
         membership_items: (appt.membership_items || []).map((m) => {
-            const tax = takeMatch("membership", m.membership_id, m.name, Number(m.quantity) || 1, Number(m.price) || 0);
+            const tax = takeMatch("membership", m.membership_id, m.name, Number(m.quantity) || Number((m as any).qty) || 1, Number(m.price) || 0);
             return tax !== undefined ? { ...m, tax_amount: tax } : m;
         }),
     };
@@ -543,14 +552,14 @@ export const appointmentsService = {
             await appointmentsRepository.replaceServiceConsumables(appointment.id, consumableRows);
         }
 
-        // Deduct stock for products sold in this appointment (fire-and-forget)
-        const soldProducts = (body.product_items ?? []).filter(p => p.product_id);
-        if (soldProducts.length > 0) {
-            productsRepository.deductStock(
-                soldProducts.map(p => ({ product_id: p.product_id!, quantity: p.quantity })),
-                body.salon_id
-            ).catch(err => logger.warn("Stock deduction failed (non-fatal)", { err: err?.message }));
-        }
+        // Stock for products attached at booking time is intentionally NOT
+        // deducted here — it used to be (productsRepository.deductStock),
+        // but that ran again at checkout via stockLedgerService.deductForSale
+        // (bottle_size-aware, ledger-audited, idempotent per sale), so a
+        // product sold via an appointment was silently double-deducted.
+        // Checkout is the single source of truth for retail stock now; see
+        // the matching removal of the cancel()/delete() restore calls below,
+        // which only existed to undo this same premature deduction.
 
         // `appointment` here is the raw `INSERT ... RETURNING *` row
         // (appointments.repository.ts::create()), which has client_id but NOT
@@ -759,7 +768,8 @@ export const appointmentsService = {
                 include_gst:      patch.include_gst        ?? existing.include_gst,
             };
             const activeTaxes = await getActiveTaxes(existing.salon_id).catch(() => []);
-            const newGrandTotal = computeAppointmentTotals(merged, activeTaxes).grandTotal;
+            const totals = computeAppointmentTotals(merged, activeTaxes);
+            const newGrandTotal = totals.grandTotal;
             const existingPaid = await paymentsRepository.getTotalPaidForAppointment(appointmentId);
             logger.info("[DEBUG update() reprice]", {
                 appointmentId, existingStatus: existing.status, isContentEdit,
@@ -767,23 +777,114 @@ export const appointmentsService = {
                 patchKeys: Object.keys(patch),
             });
 
+            // Keep the linked sales row (revenue/Sales Summary reports read
+            // sale_items, not the appointment's own JSONB) in step with
+            // whatever was actually edited — every content edit to a
+            // paid/partial appointment needs this, not just the ones that
+            // move the grand total: converting a service to a package (or
+            // adding one) can land within the ±0.5 "roughly equal" case
+            // below and still change item_type from "service" to "package",
+            // which only a sale_items rewrite (via recordTransaction) can
+            // reflect. recordTransaction() is idempotent per appointment_id
+            // (finds the sale this appointment's original payment already
+            // created and updates it in place) — never creates a second sale
+            // row. Logged, not re-thrown: a failure here must not resurrect
+            // the exact "save blocked" bug this replaces.
+            const refreshLinkedSale = async (logTag: string) => {
+                try {
+                    const existingPayment = await paymentsRepository.findByAppointmentId(appointmentId);
+                    const buildItems = (): import("../transactions/transaction.types").TransactionItemInput[] => [
+                        ...(merged.services ?? []).filter((s: any) => !s.is_package_service).map((s: any) => ({
+                            item_type: "service" as const, item_id: s.service_id ?? undefined,
+                            staff_id: s.staff_id ?? undefined, name: s.name,
+                            quantity: Number(s.quantity) || Number(s.qty) || 1, unit_price: Number(s.price) || 0,
+                        })),
+                        ...(merged.package_items ?? []).map((p: any) => ({
+                            item_type: "package" as const, item_id: p.package_id ?? undefined,
+                            staff_id: p.staff_id ?? undefined, name: p.name,
+                            quantity: Number(p.quantity) || Number(p.qty) || 1, unit_price: Number(p.price) || 0,
+                        })),
+                        ...(merged.product_items ?? []).map((pr: any) => ({
+                            item_type: "product" as const, item_id: pr.product_id ?? undefined,
+                            staff_id: pr.staff_id ?? undefined, name: pr.name,
+                            quantity: Number(pr.quantity) || Number(pr.qty) || 1, unit_price: Number(pr.price) || 0,
+                        })),
+                        ...(merged.membership_items ?? []).map((m: any) => ({
+                            item_type: "membership" as const, item_id: m.membership_id ?? undefined,
+                            staff_id: m.staff_id ?? undefined, name: m.name,
+                            quantity: Number(m.quantity) || Number(m.qty) || 1, unit_price: Number(m.price) || 0,
+                        })),
+                    ];
+                    const { sale } = await recordTransaction({
+                        salon_id: existing.salon_id,
+                        client_id: existing.client_id ?? undefined,
+                        appointment_id: appointmentId,
+                        staff_id: existing.staff_id ?? undefined,
+                        origin: "calendar_checkout",
+                        payment_label: existingPayment?.payment_method || "cash",
+                        items: buildItems(),
+                        discount_amount: totals.manualDiscount,
+                        tax_amount: totals.gstAmount,
+                        ex_charges: Number(merged.ex_charges) || 0,
+                        tip_amount: Number(merged.tip_amount) || 0,
+                        tip_added_to_salon: !!merged.tip_added_to_salon,
+                        created_at: existing.scheduled_at,
+                    });
+
+                    // A package added/changed on this edit needs its own
+                    // client_packages row too — recordTransaction() above only
+                    // refreshes sales/sale_items, which the Package Sale
+                    // report never reads (it reads client_packages
+                    // exclusively). autoCreateFromPayment is idempotent per
+                    // (appointment, package name), so re-running this on every
+                    // edit just settles the existing row instead of
+                    // duplicating it — same as payments.service.ts's own
+                    // repeat-payment case.
+                    if (merged.package_items?.length) {
+                        const isFullyPaid = newGrandTotal <= existingPaid + 0.5 || newGrandTotal < existingPaid - 0.5;
+                        const paidFraction = isFullyPaid || newGrandTotal <= 0
+                            ? 1
+                            : Math.min(1, Math.max(0, existingPaid / newGrandTotal));
+                        await autoCreatePackagesForBill(merged.package_items, {
+                            salonId: existing.salon_id,
+                            clientId: existing.client_id ?? undefined,
+                            appointmentId,
+                            gstPercent: existing.gst_percent ?? 0,
+                            saleId: sale.id,
+                            staffId: existing.staff_id ?? undefined,
+                            paidFraction,
+                            isFullyPaid,
+                        });
+                    }
+                } catch (err) {
+                    logger.error(`[${logTag}] Failed to refresh linked sale after editing paid appointment's bill`, {
+                        appointmentId, newGrandTotal, message: (err as any)?.message,
+                    });
+                }
+            };
+
             if (newGrandTotal < existingPaid - 0.5) {
-                // Overpayment: the edit would take the bill below what's
-                // already been collected. There's no refund workflow — block
-                // the save rather than silently create/hide an overpaid state.
-                throw new AppError(
-                    400,
-                    "This change would reduce the total below the amount already paid. Cancel or handle removals separately instead of editing a paid appointment down.",
-                    "OVERPAYMENT_BLOCKED",
-                );
+                // The edit takes the bill below what's already been collected
+                // (e.g. a ₹3,000 product removed, a ₹150 service added
+                // instead). No refund/credit workflow — by product decision,
+                // the recorded payment is corrected DOWN to the new total in
+                // place (not a separate adjustment record), so total revenue,
+                // client history and every report read the new figure with no
+                // separate trace of the difference. Staff handle the actual
+                // real-world refund themselves outside the app.
+                await paymentsRepository.reduceForAppointment(appointmentId, newGrandTotal);
+                await refreshLinkedSale("PAYMENT_REDUCTION");
+                patch = { ...patch, status: "paid" };
             } else if (newGrandTotal > existingPaid + 0.5) {
                 patch = { ...patch, status: "partial" };
                 // Only a genuinely Paid booking being reopened needs the
                 // stay-editable flag — a booking that was already partial
                 // (a real deposit) keeps its existing lock behavior untouched.
                 if (existing.status === "paid") patch = { ...patch, reopened_from_paid: true };
+                await refreshLinkedSale("BILL_INCREASE");
             } else {
                 patch = { ...patch, status: "paid" };
+                await refreshLinkedSale("BILL_UNCHANGED");
             }
         }
 
@@ -906,31 +1007,11 @@ export const appointmentsService = {
             }
         }
 
-        // Adjust stock when product_items list changes (fire-and-forget)
-        if (patch.product_items !== undefined) {
-            const oldItems = (existing.product_items ?? []).filter(p => p.product_id);
-            const newItems = (patch.product_items ?? []).filter(p => p.product_id);
-
-            const oldMap = new Map(oldItems.map(p => [p.product_id!, p.quantity]));
-            const newMap = new Map(newItems.map(p => [p.product_id!, p.quantity]));
-
-            const toDeduct: { product_id: string; quantity: number }[] = [];
-            const toRestore: { product_id: string; quantity: number }[] = [];
-
-            for (const [id, newQty] of newMap) {
-                const oldQty = oldMap.get(id) ?? 0;
-                if (newQty > oldQty) toDeduct.push({ product_id: id, quantity: newQty - oldQty });
-                else if (newQty < oldQty) toRestore.push({ product_id: id, quantity: oldQty - newQty });
-            }
-            for (const [id, oldQty] of oldMap) {
-                if (!newMap.has(id)) toRestore.push({ product_id: id, quantity: oldQty });
-            }
-
-            if (toDeduct.length > 0)
-                productsRepository.deductStock(toDeduct, existing.salon_id).catch(err => logger.warn("Stock deduction failed (non-fatal)", { err: err?.message }));
-            if (toRestore.length > 0)
-                productsRepository.restoreStock(toRestore, existing.salon_id).catch(err => logger.warn("Stock restore failed (non-fatal)", { err: err?.message }));
-        }
+        // Stock is no longer adjusted here when product_items changes —
+        // checkout (stockLedgerService.deductForSale) is the single source
+        // of truth for retail deduction now; see the create() comment above
+        // for why the old deduct-at-booking-time/restore-on-change pair was
+        // removed (it double-deducted against the checkout-time ledger).
 
         // ── Live calendar update ───────────────────────────────────────────────
         // create()/cancel() already push a "notification" socket event that the
@@ -1050,14 +1131,10 @@ export const appointmentsService = {
         waScheduledMessagesService.cancelForReference('appointment', params.appointmentId, 'service_reminder_24h')
             .catch((err: any) => logger.error("[wa-scheduled] cancel-on-cancel failed:", err?.message ?? err));
 
-        // Restore stock for cancelled appointment products (fire-and-forget)
-        const cancelledProducts = (existing.product_items ?? []).filter(p => p.product_id);
-        if (cancelledProducts.length > 0) {
-            productsRepository.restoreStock(
-                cancelledProducts.map(p => ({ product_id: p.product_id!, quantity: p.quantity })),
-                existing.salon_id
-            ).catch(err => logger.warn("Stock restore failed (non-fatal)", { err: err?.message }));
-        }
+        // No stock restore needed here — cancel() is only reachable for a
+        // not-yet-paid appointment (guarded above), and stock is no longer
+        // deducted before checkout (see create()'s comment), so there's
+        // nothing to give back.
 
         // ── Push Notification: Appointment Cancelled (to salon owner) ─────────
         notificationsService.create({
@@ -1118,24 +1195,13 @@ export const appointmentsService = {
             } catch (err: any) { logger.error("[email] appointmentCancelled (owner) failed:", err?.message ?? err); }
         })();
 
-        // ── Email: Appointment Cancelled (to client) ──────────────────────────
-        ;(async () => {
-            try {
-                const clientEmail = (existing as any).client_email;
-                if (!clientEmail) { logger.info("[email] appointmentCancelled: no client email, skipping"); return; }
-                logger.info(`[email] appointmentCancelled → to=${clientEmail}`);
-                const allowed = await canSendEmail(existing.salon_id, "appointmentCancelled");
-                if (!allowed) { logger.info("[email] appointmentCancelled: skipped (preference off)"); return; }
-                await emailService.sendAppointmentCancelledEmail({
-                    to:         clientEmail,
-                    clientName: existing.client_name          ?? "Valued Customer",
-                    salonName:  (existing as any).salon_name  ?? "our salon",
-                    date:       formatDate(existing.scheduled_at),
-                    time:       formatTime(existing.scheduled_at),
-                });
-                logger.info(`[email] appointmentCancelled sent to ${clientEmail}`);
-            } catch (err: any) { logger.error("[email] appointmentCancelled failed:", err?.message ?? err); }
-        })();
+        // Client-facing "Appointment Cancelled" email is now sent by
+        // notification-channels' dispatchNonWhatsappChannels(), fanned out
+        // from the same trigger({ eventType: 'appointment_cancelled', ... })
+        // call already made for this cancellation (see below/nearby) — the
+        // old direct emailService.sendAppointmentCancelledEmail() IIFE that
+        // used to live here was removed to avoid double-sending. The owner
+        // alert above is unrelated and untouched.
 
         return cancelled;
     },
@@ -1147,14 +1213,11 @@ export const appointmentsService = {
         if (!deleted) throw new AppError(500, "Failed to delete appointment", "INTERNAL_ERROR");
         logger.info("appointmentsService.delete success", { appointmentId });
 
-        // Restore stock for deleted appointment products (fire-and-forget)
-        const deletedProducts = (existing.product_items ?? []).filter(p => p.product_id);
-        if (deletedProducts.length > 0) {
-            productsRepository.restoreStock(
-                deletedProducts.map(p => ({ product_id: p.product_id!, quantity: p.quantity })),
-                existing.salon_id
-            ).catch(err => logger.warn("Stock restore failed (non-fatal)", { err: err?.message }));
-        }
+        // No stock restore here either (see cancel()'s comment) — for an
+        // already-PAID appointment being hard-deleted, this never correctly
+        // reversed the checkout-time stock_ledger deduction anyway (it wrote
+        // through the old unaudited path instead); that's a separate,
+        // pre-existing gap this fix doesn't attempt to close.
 
         return deleted;
     },
@@ -1353,22 +1416,12 @@ export const appointmentsService = {
                 })();
             }
 
-            // ── Email: Appointment Completed receipt (to client) ──────────────
-            ;(async () => {
-                try {
-                    const clientEmail = (existing as any).client_email;
-                    if (!clientEmail) return;
-                    const allowed = await canSendEmail(existing.salon_id, "appointmentCompleted");
-                    if (!allowed) return;
-                    await emailService.sendAppointmentCompletedEmail({
-                        to:         clientEmail,
-                        clientName: existing.client_name         ?? "Valued Customer",
-                        salonName:  (existing as any).salon_name ?? "our salon",
-                        services:   existing.services?.map((s: any) => s.name).join(", ") ?? "Service",
-                        amount:     String(preExistingSale.total_amount ?? "0"),
-                    });
-                } catch (err: any) { logger.error("[email] appointmentCompleted (preexisting) failed:", err?.message ?? err); }
-            })();
+            // Client-facing "Appointment Completed" receipt email is now sent
+            // by notification-channels' dispatchNonWhatsappChannels(), fanned
+            // out from the payment_received trigger() call for this checkout
+            // — the old direct emailService.sendAppointmentCompletedEmail()
+            // IIFE that used to live here was removed to avoid double-
+            // sending. The owner alert below is unrelated and untouched.
 
             // ── Email: New Payment (to salon owner) ───────────────────────────
             ;(async () => {
@@ -1433,7 +1486,7 @@ export const appointmentsService = {
                     item_id: s.service_id,
                     staff_id: s.staff_id ?? undefined,
                     name: s.name,
-                    quantity: s.quantity,
+                    quantity: Number(s.quantity) || Number((s as any).qty) || 1,
                     unit_price: s.price,
                 })),
                 ...existing.package_items.map(p => ({
@@ -1441,7 +1494,7 @@ export const appointmentsService = {
                     item_id: p.package_id,
                     staff_id: p.staff_id ?? undefined,
                     name: p.name,
-                    quantity: p.quantity,
+                    quantity: Number(p.quantity) || Number((p as any).qty) || 1,
                     unit_price: p.price,
                 })),
                 ...existing.product_items.map(pr => ({
@@ -1449,7 +1502,7 @@ export const appointmentsService = {
                     item_id: pr.product_id ?? undefined,
                     staff_id: pr.staff_id ?? undefined,
                     name: pr.name,
-                    quantity: pr.quantity,
+                    quantity: Number(pr.quantity) || Number((pr as any).qty) || 1,
                     unit_price: pr.price,
                 })),
                 ...existing.membership_items.map(m => ({
@@ -1457,7 +1510,7 @@ export const appointmentsService = {
                     item_id: m.membership_id ?? undefined,
                     staff_id: m.staff_id ?? undefined,
                     name: m.name,
-                    quantity: m.quantity,
+                    quantity: Number(m.quantity) || Number((m as any).qty) || 1,
                     unit_price: m.price,
                 })),
             ];
@@ -1632,24 +1685,12 @@ export const appointmentsService = {
             })().catch(() => {});
         }
 
-        // ── Email: Appointment Completed receipt (to client) ──────────────────
-        ;(async () => {
-            try {
-                const clientEmail = (existing as any).client_email;
-                if (!clientEmail) { logger.info("[email] appointmentCompleted: no client email, skipping"); return; }
-                logger.info(`[email] appointmentCompleted → to=${clientEmail}`);
-                const allowed = await canSendEmail(existing.salon_id, "appointmentCompleted");
-                if (!allowed) { logger.info("[email] appointmentCompleted: skipped (preference off)"); return; }
-                await emailService.sendAppointmentCompletedEmail({
-                    to:         clientEmail,
-                    clientName: existing.client_name         ?? "Valued Customer",
-                    salonName:  (existing as any).salon_name ?? "our salon",
-                    services:   existing.services?.map((s: any) => s.name).join(", ") ?? "Service",
-                    amount:     String(sale.total_amount     ?? "0"),
-                });
-                logger.info(`[email] appointmentCompleted sent to ${clientEmail}`);
-            } catch (err: any) { logger.error("[email] appointmentCompleted failed:", err?.message ?? err); }
-        })();
+        // Client-facing "Appointment Completed" receipt email is now sent by
+        // notification-channels' dispatchNonWhatsappChannels(), fanned out
+        // from the payment_received trigger() call for this checkout — the
+        // old direct emailService.sendAppointmentCompletedEmail() IIFE that
+        // used to live here was removed to avoid double-sending. The owner
+        // alert below is unrelated and untouched.
 
         // ── Email: New Payment (to salon owner) ───────────────────────────────
         ;(async () => {

@@ -64,6 +64,36 @@ export const suppliersController = {
         } catch (err) { next(err); }
     },
 
+    // POST — real server-side pagination for the Suppliers list page (the
+    // GET above still loads everything, kept for any other existing caller).
+    // salon_id in the body is accepted for the documented request shape but
+    // never trusted for scoping — same as every other endpoint here, the
+    // authenticated user's own salon (getSalonId(req)) is what's actually
+    // queried, so one salon can never page through another's suppliers by
+    // passing a different id in the body.
+    async listPost(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const salonId = await getSalonId(req);
+            const page = Number(req.body?.page) || 1;
+            const limit = Number(req.body?.page_limit) || 10;
+            const search = typeof req.body?.search === "string" ? req.body.search.trim() || undefined : undefined;
+            const city = typeof req.body?.city === "string" ? req.body.city.trim() || undefined : undefined;
+            const state = typeof req.body?.state === "string" ? req.body.state.trim() || undefined : undefined;
+            logger.info("POST /inventory/suppliers/list called", { requesterUserId: req.user?.userId, salonId, page, limit });
+
+            const result = await suppliersService.listPaginated(salonId, page, limit, { search, city, state });
+            sendSuccess(res, 200, result, "Suppliers fetched successfully");
+        } catch (err) { next(err); }
+    },
+
+    async listLocations(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const salonId = await getSalonId(req);
+            const locations = await suppliersService.listLocations(salonId);
+            sendSuccess(res, 200, locations, "Supplier locations fetched successfully");
+        } catch (err) { next(err); }
+    },
+
     async getById(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             const id = String(req.params.id || "").trim();

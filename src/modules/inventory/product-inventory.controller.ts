@@ -21,13 +21,14 @@ export const productInventoryController = {
     async list(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             const salonId = getSalonId(req);
-            const { search, category_id, brand_id, stock_status } = req.query;
+            const { search, category_id, brand_id, stock_status, product_id } = req.query;
             const result = await productInventoryRepository.list(
                 {
                     search: (search as string) || undefined,
                     category_id: (category_id as string) || undefined,
                     brand_id: (brand_id as string) || undefined,
                     stock_status: stock_status === "low" ? "low" : "all",
+                    product_id: (product_id as string) || undefined,
                     page: asPositiveInt(req.query.page, 1),
                     limit: asPositiveInt(req.query.limit, 20),
                 },

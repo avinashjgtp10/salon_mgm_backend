@@ -5,7 +5,6 @@ const UUID_RE =
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const isUUID = (v: unknown): boolean => typeof v === "string" && UUID_RE.test(v);
-const isOptionalUUID = (v: unknown): boolean => v === undefined || v === null || isUUID(v);
 const isOptionalString = (v: unknown): boolean =>
     v === undefined || v === null || typeof v === "string";
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -27,11 +26,11 @@ export const validateCreateOrder = (
         if (!isUUID(b.supplier_id)) {
             throw new AppError(400, "supplier_id is required and must be a UUID", "VALIDATION_ERROR");
         }
-        if (!isOptionalUUID(b.bill_to_branch_id)) {
-            throw new AppError(400, "bill_to_branch_id must be a UUID", "VALIDATION_ERROR");
+        if (!isOptionalString(b.delivery_address)) {
+            throw new AppError(400, "delivery_address must be a string", "VALIDATION_ERROR");
         }
-        if (!isOptionalUUID(b.ship_to_branch_id)) {
-            throw new AppError(400, "ship_to_branch_id must be a UUID", "VALIDATION_ERROR");
+        if (!isOptionalString(b.delivery_instructions)) {
+            throw new AppError(400, "delivery_instructions must be a string", "VALIDATION_ERROR");
         }
         if (!isOptionalDate(b.order_date)) {
             throw new AppError(400, "order_date must be in YYYY-MM-DD format", "VALIDATION_ERROR");

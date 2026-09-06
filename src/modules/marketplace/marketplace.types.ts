@@ -35,6 +35,8 @@ export type MarketplaceProfile = {
   salon_id: string;
   // Essentials
   display_name: string;
+  tagline: string | null;
+  website: string | null;
   business_phone: string | null;
   business_phone_country_code: string | null;
   business_email: string | null;
@@ -43,6 +45,11 @@ export type MarketplaceProfile = {
   // Branding
   logo_url: string | null;
   cover_url: string | null;
+  // Booking policy
+  max_advance_days: number;
+  min_notice_hours: number;
+  cancellation_notice_hours: number;
+  slot_interval_minutes: number;
   // Status
   is_published: boolean;
   created_at: string;
@@ -51,6 +58,8 @@ export type MarketplaceProfile = {
 
 export type UpsertEssentialsBody = {
   display_name: string;
+  tagline?: string | null;
+  website?: string | null;
   business_phone?: string | null;
   business_phone_country_code?: string | null;
   business_email?: string | null;
@@ -58,6 +67,13 @@ export type UpsertEssentialsBody = {
 
 export type UpsertAboutBody = {
   venue_description: string;
+};
+
+export type UpsertBookingPolicyBody = {
+  max_advance_days?: number;
+  min_notice_hours?: number;
+  cancellation_notice_hours?: number;
+  slot_interval_minutes?: number;
 };
 
 // ─── Business Location ────────────────────────────────────────────────────────

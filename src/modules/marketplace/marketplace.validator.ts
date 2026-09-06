@@ -38,6 +38,12 @@ export const validateUpsertEssentials = (req: Request, _res: Response, next: Nex
     if (!isNonEmpty(b.display_name))
       throw new AppError(400, "display_name is required", "VALIDATION_ERROR");
 
+    if (!isOptStr(b.tagline) || (typeof b.tagline === "string" && b.tagline.length > 80))
+      throw new AppError(400, "tagline must be a string of 80 characters or fewer", "VALIDATION_ERROR");
+
+    if (!isOptStr(b.website) || (typeof b.website === "string" && b.website.length > 0 && !URL_RE.test(b.website)))
+      throw new AppError(400, "website must be a valid URL", "VALIDATION_ERROR");
+
     if (!isOptStr(b.business_phone))
       throw new AppError(400, "business_phone must be a string", "VALIDATION_ERROR");
 
@@ -62,6 +68,28 @@ export const validateUpsertAbout = (req: Request, _res: Response, next: NextFunc
 
     if (b.venue_description.length > 2000)
       throw new AppError(400, "venue_description must be 2000 characters or fewer", "VALIDATION_ERROR");
+
+    return next();
+  } catch (err) { return next(err); }
+};
+
+// ─── Booking Policy ─────────────────────────────────────────────────────────────
+
+const isOptPosInt = (v: unknown) =>
+  v === undefined || (typeof v === "number" && Number.isInteger(v) && v >= 0);
+
+export const validateUpsertBookingPolicy = (req: Request, _res: Response, next: NextFunction) => {
+  try {
+    const b = req.body;
+
+    if (!isOptPosInt(b.max_advance_days))
+      throw new AppError(400, "max_advance_days must be a non-negative integer", "VALIDATION_ERROR");
+    if (!isOptPosInt(b.min_notice_hours))
+      throw new AppError(400, "min_notice_hours must be a non-negative integer", "VALIDATION_ERROR");
+    if (!isOptPosInt(b.cancellation_notice_hours))
+      throw new AppError(400, "cancellation_notice_hours must be a non-negative integer", "VALIDATION_ERROR");
+    if (!isOptPosInt(b.slot_interval_minutes))
+      throw new AppError(400, "slot_interval_minutes must be a non-negative integer", "VALIDATION_ERROR");
 
     return next();
   } catch (err) { return next(err); }

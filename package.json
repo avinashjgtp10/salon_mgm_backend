@@ -70,6 +70,7 @@
     "node-pg-migrate": "^8.0.4",
     "nodemailer": "^8.0.1",
     "papaparse": "^5.5.3",
+    "paytmchecksum": "^1.5.1",
     "pdfkit": "^0.17.2",
     "pg": "^8.21.0",
     "puppeteer": "^25.3.0",

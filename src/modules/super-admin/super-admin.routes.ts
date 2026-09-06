@@ -22,6 +22,8 @@ router.get("/subscription-permissions/:salonId",             superAdminControlle
 router.put("/subscription-permissions/:salonId",             superAdminController.updateSubscriptionPermissions);
 router.get("/subscription-permissions/:salonId/audit-log",   superAdminController.getSubscriptionPermissionAuditLog);
 router.post("/subscription-permissions/:salonId/grant-days", superAdminController.grantSubscriptionDays);
+router.post("/subscription-permissions/:salonId/apply",      superAdminController.applySubscription);
+router.post("/subscription-permissions/:salonId/remove",     superAdminController.removeSubscription);
 
 // Recent / Frequent Logins & No-Plan Users
 router.get("/recent-logins",         superAdminController.getRecentLogins);
@@ -39,6 +41,12 @@ router.patch("/salons/:id/onboarding",      superAdminController.forceOnboarding
 router.post("/salons/:id/impersonate",      superAdminController.impersonateSalon);
 router.delete("/salons/:id",               superAdminController.deleteSalon);
 router.post("/salons/:id/clear-data",       superAdminController.clearSalonData);
+
+// Delete Account History (super-admin deleteSalon/deleteUser audit trail)
+router.get("/deleted-account-history", superAdminController.getDeletedAccountHistory);
+
+// Clean Up Account History (super-admin clearSalonData audit trail)
+router.get("/salon-cleanup-history", superAdminController.getSalonCleanupHistory);
 
 // Demo Inquiries (landing page "Schedule a Free Demo" submissions)
 router.get("/demo-requests",                superAdminController.getAllDemoRequests);

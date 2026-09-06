@@ -3,6 +3,7 @@ import {
     Product, CreateProductBody, UpdateProductBody, ProductListFilters,
     ProductPhoto, Brand, CreateBrandBody, UpdateBrandBody,
 } from "./products.types";
+import { inventoryAlertsService } from "../inventory/inventory-alerts.service";
 
 const PRODUCT_COLUMNS = `id, name, barcode, brand_id, category_id, supplier_id, measure_unit, product_type, size, amount, bottle_size, qty_alert,
     short_description, description, remark, lot_number, supply_price, retail_sales_enabled,
@@ -269,6 +270,9 @@ export const productsRepository = {
         } finally {
             client.release();
         }
+        inventoryAlertsService
+            .checkAndNotify(items.map((i) => i.product_id), salonId)
+            .catch(() => { /* logged internally, never blocks the caller */ });
     },
 
     async restoreStock(items: { product_id: string; quantity: number }[], salonId: string): Promise<void> {
@@ -291,6 +295,9 @@ export const productsRepository = {
         } finally {
             client.release();
         }
+        inventoryAlertsService
+            .checkAndNotify(items.map((i) => i.product_id), salonId)
+            .catch(() => { /* logged internally, never blocks the caller */ });
     },
 };
 

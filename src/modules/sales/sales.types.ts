@@ -1,5 +1,5 @@
 export type SaleStatus = "draft" | "completed" | "cancelled" | "refunded";
-export type PaymentMethod = "cash" | "card" | "gift_card" | "split" | "upi" | "wallet" | "package" | "membership";
+export type PaymentMethod = "cash" | "card" | "gift_card" | "split" | "upi" | "wallet" | "package" | "membership" | "pos_machine";
 export type SaleItemType = "service" | "product" | "membership" | "gift_card" | "quick" | "package";
 
 // Per-staff share of tip_amount — purely an attribution record ("who

@@ -116,6 +116,7 @@ const DEFAULT_STAFF_PERMS: Record<string, boolean> = {
     view_reports: false,
     export_reports: false,
     general_settings: false,
+    manage_pos_payments: false,
     view_enquiries: true,
 };
 

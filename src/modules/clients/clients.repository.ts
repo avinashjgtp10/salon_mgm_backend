@@ -483,24 +483,47 @@ export const clientsRepository = {
     },
 
     // ---------------- RELATIONS UPSERT ----------------
-    async replaceUpsertAddresses(clientId: string, items: Array<any>): Promise<void> {
+    // skipDelete is set on the create path — a brand-new client has nothing
+    // to delete yet, so that first DELETE was pure wasted work every time a
+    // client was created with addresses/emergency_contacts attached.
+    // Multi-row VALUES insert replaces the old per-item INSERT loop (N round
+    // trips -> 1) for both paths.
+    async replaceUpsertAddresses(clientId: string, items: Array<any>, skipDelete = false): Promise<ClientAddress[]> {
+        if (!skipDelete && items.length === 0) {
+            await pool.query(`DELETE FROM client_addresses WHERE client_id = $1`, [clientId]);
+            return [];
+        }
+
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
-            await client.query(`DELETE FROM client_addresses WHERE client_id = $1`, [clientId]);
-            for (const a of items) {
-                await client.query(
-                    `INSERT INTO client_addresses (
-            client_id, type, address_name, address_line1, address_line2, apt_suite, district, city, region, postcode, country
-          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-                    [
+            if (!skipDelete) {
+                await client.query(`DELETE FROM client_addresses WHERE client_id = $1`, [clientId]);
+            }
+            let inserted: ClientAddress[] = [];
+            if (items.length) {
+                const cols = 11;
+                const values: unknown[] = [];
+                const placeholders = items.map((a, i) => {
+                    const base = i * cols;
+                    values.push(
                         clientId, a.type, a.address_name ?? null, a.address_line1 ?? null,
                         a.address_line2 ?? null, a.apt_suite ?? null, a.district ?? null,
                         a.city ?? null, a.region ?? null, a.postcode ?? null, a.country ?? null,
-                    ]
+                    );
+                    return `(${Array.from({ length: cols }, (_, j) => `$${base + j + 1}`).join(",")})`;
+                }).join(",");
+                const { rows } = await client.query(
+                    `INSERT INTO client_addresses (
+            client_id, type, address_name, address_line1, address_line2, apt_suite, district, city, region, postcode, country
+          ) VALUES ${placeholders}
+          RETURNING *`,
+                    values
                 );
+                inserted = rows;
             }
             await client.query("COMMIT");
+            return inserted;
         } catch (e) {
             await client.query("ROLLBACK");
             throw e;
@@ -509,23 +532,41 @@ export const clientsRepository = {
         }
     },
 
-    async replaceUpsertEmergencyContacts(clientId: string, items: Array<any>): Promise<void> {
+    async replaceUpsertEmergencyContacts(clientId: string, items: Array<any>, skipDelete = false): Promise<ClientEmergencyContact[]> {
+        if (!skipDelete && items.length === 0) {
+            await pool.query(`DELETE FROM client_emergency_contacts WHERE client_id = $1`, [clientId]);
+            return [];
+        }
+
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
-            await client.query(`DELETE FROM client_emergency_contacts WHERE client_id = $1`, [clientId]);
-            for (const e of items) {
-                await client.query(
-                    `INSERT INTO client_emergency_contacts (
-            client_id, type, full_name, relationship, email, phone_country_code, phone_number
-          ) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-                    [
+            if (!skipDelete) {
+                await client.query(`DELETE FROM client_emergency_contacts WHERE client_id = $1`, [clientId]);
+            }
+            let inserted: ClientEmergencyContact[] = [];
+            if (items.length) {
+                const cols = 7;
+                const values: unknown[] = [];
+                const placeholders = items.map((e, i) => {
+                    const base = i * cols;
+                    values.push(
                         clientId, e.type, e.full_name, e.relationship ?? null,
                         e.email ?? null, e.phone_country_code ?? null, e.phone_number ?? null,
-                    ]
+                    );
+                    return `(${Array.from({ length: cols }, (_, j) => `$${base + j + 1}`).join(",")})`;
+                }).join(",");
+                const { rows } = await client.query(
+                    `INSERT INTO client_emergency_contacts (
+            client_id, type, full_name, relationship, email, phone_country_code, phone_number
+          ) VALUES ${placeholders}
+          RETURNING *`,
+                    values
                 );
+                inserted = rows;
             }
             await client.query("COMMIT");
+            return inserted;
         } catch (e) {
             await client.query("ROLLBACK");
             throw e;
@@ -658,6 +699,41 @@ export const clientsRepository = {
             [salonId, e, excludeClientId ?? null]
         );
         return rows[0] || null;
+    },
+
+    // Combines findActiveByPhone + findActiveByEmail into a single round trip
+    // for the create-time duplicate check — the two were previously two
+    // sequential SELECTs where phone almost always makes email unnecessary.
+    // Returns whichever active client matched phone OR email (either/both),
+    // tagged so the caller can attribute the 409 to the right field without
+    // a second query.
+    async findActiveByPhoneOrEmail(
+        phone_number: string | null | undefined,
+        email: string | null | undefined,
+        salonId: string,
+    ): Promise<{ phoneMatch: Client | null; emailMatch: Client | null }> {
+        const pn = phone_number ? String(phone_number).trim() : "";
+        const e = email ? String(email).trim().toLowerCase() : "";
+        if (!pn && !e) return { phoneMatch: null, emailMatch: null };
+
+        const { rows } = await pool.query(
+            `SELECT * FROM clients
+             WHERE salon_id = $1 AND is_active = true
+               AND (
+                 ($2 != '' AND TRIM(phone_number) = $2)
+                 OR ($3 != '' AND LOWER(TRIM(email)) = $3)
+               )
+             LIMIT 2`,
+            [salonId, pn, e]
+        );
+
+        let phoneMatch: Client | null = null;
+        let emailMatch: Client | null = null;
+        for (const row of rows) {
+            if (!phoneMatch && pn && String(row.phone_number ?? "").trim() === pn) phoneMatch = row;
+            if (!emailMatch && e && String(row.email ?? "").trim().toLowerCase() === e) emailMatch = row;
+        }
+        return { phoneMatch, emailMatch };
     },
 
     async findDuplicatesByPhone(phone_number: string, salonId: string): Promise<Client[]> {

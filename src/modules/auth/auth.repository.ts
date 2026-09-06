@@ -1,4 +1,30 @@
 import pool, { safeQuery } from "../../config/database";
+import { AppError } from "../../middleware/error.middleware";
+
+// Reserved superadmin login — must never be creatable/promotable as a
+// salon_owner, admin, or staff account. The superadmin role is just a plain
+// `users.role` value (see role.middleware.ts), so nothing at the schema
+// level stops this email from also being reassigned to a tenant-facing
+// role; this is the deliberate application-level guard for that. Checked
+// case-insensitively since email lookups elsewhere in this file are not
+// (users.email has no citext/lower() normalization), so a differently-cased
+// variant must still be caught.
+const RESERVED_SUPERADMIN_EMAIL = "avinash@salonox.com";
+const GUARDED_ROLES = new Set(["salon_owner", "admin", "staff"]);
+
+// Message deliberately reads like a plain duplicate-email collision (same
+// wording family as staff.service.ts's DUPLICATE_EMAIL) rather than naming
+// "superadmin" or "reserved" — a salon owner/staff creation form has no
+// business surfacing that an email belongs to a platform superadmin
+// account. RESERVED_SUPERADMIN_EMAIL is kept as the error `code` so callers
+// that need to distinguish this from a genuine duplicate-email case still
+// can, without it leaking into the user-facing message.
+function assertNotReservedSuperadminEmail(email: string | null | undefined, role: string): void {
+  if (!email || !GUARDED_ROLES.has(role)) return;
+  if (email.trim().toLowerCase() === RESERVED_SUPERADMIN_EMAIL) {
+    throw new AppError(409, "This email already exists", "RESERVED_SUPERADMIN_EMAIL");
+  }
+}
 
 export const authRepository = {
   // ===================== USERS =====================
@@ -46,6 +72,8 @@ export const authRepository = {
     country?: string | null;
     country_code?: string | null;
   }) {
+    assertNotReservedSuperadminEmail(data.email, data.role);
+
     const { rows } = await safeQuery(() =>
       pool.query(
         `INSERT INTO users (
@@ -113,6 +141,13 @@ export const authRepository = {
    * Update a user's role
    */
   async updateUserRole(userId: string, role: string) {
+    if (GUARDED_ROLES.has(role)) {
+      const { rows } = await safeQuery(() =>
+        pool.query(`SELECT email FROM users WHERE id = $1 LIMIT 1`, [userId]),
+      );
+      assertNotReservedSuperadminEmail(rows[0]?.email, role);
+    }
+
     await safeQuery(() =>
       pool.query(`UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2`, [role, userId]),
     );
@@ -122,6 +157,11 @@ export const authRepository = {
    * Promote a user to salon_owner (used when a client creates their first salon)
    */
   async upgradeToSalonOwner(userId: string) {
+    const { rows: userRows } = await safeQuery(() =>
+      pool.query(`SELECT email FROM users WHERE id = $1 LIMIT 1`, [userId]),
+    );
+    assertNotReservedSuperadminEmail(userRows[0]?.email, "salon_owner");
+
     const { rows } = await safeQuery(() =>
       pool.query(
         `UPDATE users SET role = 'salon_owner', updated_at = NOW() WHERE id = $1 AND role != 'salon_owner' RETURNING id, role`,

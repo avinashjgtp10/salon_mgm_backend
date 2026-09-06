@@ -31,6 +31,7 @@ import {
     validateCreateProductAudit,
     validateAddAuditItems,
     validateUpdateAuditItem,
+    validateSubmitAudit,
     validateRejectAudit,
     validateApproveAudit,
 } from "./product-audit.validator";
@@ -60,6 +61,22 @@ router.get(
     roleMiddleware("salon_owner", "admin", "staff"),
     viewInventory,
     suppliersController.list
+);
+
+router.post(
+    "/suppliers/list",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    suppliersController.listPost
+);
+
+router.get(
+    "/suppliers/locations",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewInventory,
+    suppliersController.listLocations
 );
 
 router.get(
@@ -508,6 +525,7 @@ router.post(
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
     manageInventory,
+    validateSubmitAudit,
     productAuditController.submitForReview
 );
 

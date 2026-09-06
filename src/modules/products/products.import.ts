@@ -6,40 +6,54 @@ import { categoriesRepository } from "../categories/categories.repository";
 import { suppliersRepository } from "../inventory/inventory.repository";
 import { CreateProductBody } from "./products.types";
 
+// Mirrors ProductFormPage.tsx (the "Add Product" page) — every field below,
+// its required-ness, and its validation rule exists there first. This file
+// is meant to accept the same data through a spreadsheet instead of the
+// form, not a looser/different schema. Column names accept a couple of
+// common aliases (case-insensitive) so existing sheets built against the
+// old template still mostly work, but the *rules* now match the form.
 interface ImportRow {
     name?: string;
-    description?: string;
     barcode?: string;
-    brand?: string;
-    vendor?: string;
-    // The product's menu CATEGORY (e.g. "Hair Care") — from the "Category"
-    // column only. Was previously conflated with productType below via a
-    // `||` fallback, so a sheet with BOTH columns (like the real export
-    // template) silently discarded Category and created a bogus category
-    // literally named "Consumable"/"Retail" instead.
     category?: string;
-    // Retail / Consumable / Both — from the "Product Type" column only.
+    brand?: string;
+    supplier?: string;
+    description?: string;
+    remark?: string;
+    // Retail / Consumable / Both — matches ProductFormPage's Product Type toggle.
     productType?: string;
-    costPrice?: number;
-    fullPrice?: number;
-    sellPrice?: number;
-    // MRP (Maximum Retail Price) — common on Indian supplier Excel sheets.
-    // Maps to retail_price; takes priority over Sell Price / Full Price.
-    mrp?: number;
-    // Paid Price — fallback for retail_price when MRP/Sell/Full are all absent.
-    paidPrice?: number;
+    // "Stock Quantity" (retail) / "Product Quantity" (consumable) on the form —
+    // one column here, same as the form uses one state var (productQty) for both.
+    stockQuantity?: number;
+    // "Unit Size *" on the form — required when Product Type is Consumable/Both,
+    // meaningless (and ignored) for a plain Retail product.
+    unitSize?: number;
+    // "Unit" dropdown on the form (ml/L/g/kg/pcs/bottle/tube/pack/box/roll).
+    measureUnit?: string;
     qtyAlert?: number;
-    inHandQuantity?: number;
-    type?: string;
+    lotNumber?: string;
+    supplyPrice?: number;
+    taxType?: string;
+    customTaxRate?: number;
+    taxGroup?: string;
     hsnSac?: string;
-    productUsage?: string;
+    // "YYYY-MM-DD", once parsed — see parseDateCell.
+    expiryDate?: string;
+    isPublic?: boolean;
+    // Retail Price fallback chain — same priority order validateRow already
+    // used before this rewrite (MRP > Sell Price > Full Price > Paid Price),
+    // kept as-is since it's a genuinely useful convenience for Indian
+    // supplier sheets that label the same column differently.
+    retailPrice?: number;
+    mrp?: number;
+    sellPrice?: number;
+    fullPrice?: number;
+    paidPrice?: number;
 }
 
 // One entry per row that didn't cleanly import — covers both hard failures
 // (bad data, rejected before ever touching the DB) and skips (valid data,
 // but a duplicate already exists and updateExisting wasn't requested).
-// Replaces the old bare {row, reason} shape so the UI can show the product
-// name and an actionable suggestion, not just a row number.
 interface ImportIssue {
     row: number;
     name?: string;
@@ -62,13 +76,108 @@ interface ImportResult {
 // that's what validateRow already produces — avoids a second parallel
 // classification system that could drift out of sync with the messages.
 function suggestionFor(reason: string): string | undefined {
-    if (reason.includes("name is required")) return "Add a value in the Name column.";
-    if (reason.includes("Sell price must be greater than 0")) return "Enter a Sell Price, Full Price, or MRP greater than 0.";
-    if (reason.includes("Cost price cannot be negative")) return "Enter a non-negative Cost Price, or leave it blank.";
-    if (reason.includes("Invalid Type")) return "Set the Type column to one of: Retail, Consumable, Both (any case).";
+    if (reason.includes("name is required")) return "Add a value in the Product Name column.";
+    if (reason.includes("100 characters")) return "Shorten the Product Name to 100 characters or fewer.";
+    if (reason.includes("Category is required")) return "Add a value in the Category column.";
+    if (reason.includes("Stock Quantity is required")) return "Add a Stock Quantity of 0 or more.";
+    if (reason.includes("Unit Size is required")) return "Add a Unit Size — required for Consumable/Both products.";
+    if (reason.includes("Low Stock Alert must be less than")) return "Lower the Low Stock Alert below the Stock Quantity, or leave it blank.";
+    if (reason.includes("Retail Price is required")) return "Add a Retail Price (or MRP/Sell Price/Full Price/Paid Price) greater than 0.";
+    if (reason.includes("Cost price cannot be negative") || reason.includes("Supply Price cannot be negative")) return "Enter a non-negative Supply Price, or leave it blank.";
+    if (reason.includes("Invalid Product Type")) return "Set Product Type to one of: Retail, Consumable, Both (any case).";
+    if (reason.includes("Invalid Unit")) return "Set Unit to one of: ml, L, g, kg, pcs, bottle, tube, pack, box, roll.";
+    if (reason.includes("Invalid Tax Type")) return "Set Tax Type to one of: No Tax, GST 5%, GST 12%, GST 18%, GST 28%, Custom.";
+    if (reason.includes("Invalid Expiry Date")) return "Use DD-MM-YYYY or YYYY-MM-DD for Expiry Date.";
+    if (reason.includes("Expiry Date cannot be in the past")) return "Use today's date or a future date, or leave Expiry Date blank.";
+    if (reason.includes("Category") && reason.includes("could not be created")) return "Try the import again, or create the category manually first.";
     if (reason.includes("barcode") && reason.includes("already exists")) return "Check 'Update existing products' to update it, or use a different Barcode to import it as new.";
     if (reason.includes("already exists") && reason.includes("name")) return "Check 'Update existing products' to update it, or change the Name/Brand/Category to import it as a distinct product.";
     return undefined;
+}
+
+// ─── Column aliases ─────────────────────────────────────────────────────────
+// Every key a row can be read from, lowercased. First match wins. Kept
+// case-insensitive and alias-tolerant (not just the new canonical header) so
+// sheets built against the pre-rewrite template still import.
+const COLUMN_ALIASES: Record<keyof ImportRow, string[]> = {
+    name: ["product name", "name"],
+    barcode: ["barcode", "barcodeid"],
+    category: ["category"],
+    brand: ["brand"],
+    supplier: ["supplier", "vendor"],
+    description: ["description"],
+    remark: ["remark", "remarks"],
+    productType: ["product type", "type"],
+    stockQuantity: ["stock quantity", "product quantity", "quantity", "in hand quantity"],
+    unitSize: ["unit size", "bottle size"],
+    measureUnit: ["unit", "measure unit"],
+    qtyAlert: ["low stock alert", "qty alert"],
+    lotNumber: ["lot number"],
+    supplyPrice: ["supply price", "cost price"],
+    taxType: ["tax type"],
+    customTaxRate: ["custom tax rate"],
+    taxGroup: ["tax group"],
+    hsnSac: ["hsn/sac", "hsn sac", "hsn"],
+    expiryDate: ["expiry date"],
+    isPublic: ["is public"],
+    retailPrice: ["retail price"],
+    mrp: ["mrp", "m.r.p", "m.r.p."],
+    sellPrice: ["sell price"],
+    fullPrice: ["full price"],
+    paidPrice: ["paid price"],
+};
+
+const NUMBER_FIELDS = new Set<keyof ImportRow>([
+    "stockQuantity", "unitSize", "qtyAlert", "supplyPrice", "customTaxRate",
+    "retailPrice", "mrp", "sellPrice", "fullPrice", "paidPrice",
+]);
+
+// Shared row-builder for both CSV and Excel — `get(aliases)` returns the raw
+// cell value for the first alias present, however the caller wants to look
+// it up (a plain object for CSV, worksheet cells for Excel).
+function buildRow(get: (aliases: string[]) => any): ImportRow {
+    const row: any = {};
+    for (const key of Object.keys(COLUMN_ALIASES) as (keyof ImportRow)[]) {
+        const raw = get(COLUMN_ALIASES[key]);
+        if (key === "isPublic") {
+            const str = raw == null ? "" : String(raw).trim();
+            row[key] = str === "" ? undefined : /^(y|yes|true|1)$/i.test(str);
+            continue;
+        }
+        if (key === "expiryDate") {
+            row[key] = parseDateCell(raw);
+            continue;
+        }
+        if (NUMBER_FIELDS.has(key)) {
+            const str = raw == null ? "" : String(raw).trim();
+            row[key] = str === "" ? undefined : parseFloat(str);
+            continue;
+        }
+        const str = raw == null ? "" : String(raw).trim();
+        row[key] = str === "" ? undefined : str;
+    }
+    return row as ImportRow;
+}
+
+// Excel date cells arrive as JS Date objects; CSV/typed cells arrive as
+// "DD-MM-YYYY" (matching the Add Product form's own dd-mm-yyyy display) or
+// "YYYY-MM-DD" (ISO, matching what the form stores/sends). Anything else
+// (including an unparseable non-blank string) returns the special
+// "invalid" marker so validateRow can tell "blank" apart from "garbage".
+const INVALID_DATE = "__invalid__";
+function parseDateCell(value: any): string | undefined {
+    if (value == null || value === "") return undefined;
+    if (value instanceof Date) {
+        if (isNaN(value.getTime())) return INVALID_DATE;
+        return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+    }
+    const str = String(value).trim();
+    if (!str) return undefined;
+    let m = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (m) return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+    m = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+    if (m) return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+    return INVALID_DATE;
 }
 
 // Parse CSV
@@ -80,55 +189,20 @@ function parseCSV(content: string): ImportRow[] {
 
         if (lines.length < 2) return [];
 
-        const headers = parseCSVLine(lines[0]);
-
+        const headers = parseCSVLine(lines[0]).map((h) => h.toLowerCase());
         const records: ImportRow[] = [];
 
         for (let i = 1; i < lines.length; i++) {
             const values = parseCSVLine(lines[i]);
+            const cellByHeader: Record<string, string> = {};
+            headers.forEach((header, idx) => { cellByHeader[header] = values[idx] ?? ""; });
 
-            const row: Record<string, any> = {};
-
-            headers.forEach((header, idx) => {
-                row[header] = values[idx] || "";
-            });
-
-            records.push({
-                name: row["Name"] || row["name"] || row["Product Name"],
-                description: row["Description"],
-                barcode: row["BarcodeID"] || row["barcode"],
-                brand: row["Brand"] || row["brand"],
-                vendor: row["Vendor"],
-                category: row["Category"],
-                productType: row["Product Type"],
-                costPrice: row["Cost Price"]
-                    ? parseFloat(String(row["Cost Price"]))
-                    : undefined,
-                fullPrice: row["Full Price"]
-                    ? parseFloat(String(row["Full Price"]))
-                    : undefined,
-                sellPrice: row["Sell Price"]
-                    ? parseFloat(String(row["Sell Price"]))
-                    : undefined,
-                mrp: row["MRP"] || row["mrp"] || row["M.R.P"] || row["M.R.P."]
-                    ? parseFloat(String(row["MRP"] || row["mrp"] || row["M.R.P"] || row["M.R.P."]))
-                    : undefined,
-                paidPrice: row["Paid Price"] || row["paid_price"]
-                    ? parseFloat(String(row["Paid Price"] || row["paid_price"]))
-                    : undefined,
-                qtyAlert: row["Qty Alert"]
-                    ? parseInt(String(row["Qty Alert"]), 10)
-                    : undefined,
-                inHandQuantity: row["In Hand Quantity"]
-                    ? parseInt(
-                          String(row["In Hand Quantity"]),
-                          10
-                      )
-                    : undefined,
-                type: row["Type"],
-                hsnSac: row["HSN/SAC"],
-                productUsage: row["Product Usage"],
-            });
+            records.push(buildRow((aliases) => {
+                for (const alias of aliases) {
+                    if (cellByHeader[alias] !== undefined && cellByHeader[alias] !== "") return cellByHeader[alias];
+                }
+                return undefined;
+            }));
         }
 
         return records;
@@ -186,121 +260,22 @@ async function parseExcel(
         const headers: Record<string, number> = {};
 
         worksheet.getRow(1).eachCell((cell, colNumber) => {
-            headers[String(cell.value).toLowerCase()] =
-                colNumber;
+            headers[String(cell.value).toLowerCase()] = colNumber;
         });
 
         worksheet.eachRow((row, rowNumber) => {
             if (rowNumber === 1) return;
 
-            const getCell = (colName: string) => {
-                const colNum =
-                    headers[colName.toLowerCase()];
-
-                return colNum
-                    ? row.getCell(colNum).value
-                    : undefined;
-            };
-
-            rows.push({
-                name:
-                    String(
-                        getCell("Product Name") ||
-                            getCell("Name") ||
-                            ""
-                    ).trim() || undefined,
-
-                description:
-                    String(
-                        getCell("Description") || ""
-                    ).trim() || undefined,
-
-                barcode:
-                    String(
-                        getCell("BarcodeID") ||
-                            getCell("Barcode") ||
-                            ""
-                    ).trim() || undefined,
-
-                brand:
-                    String(getCell("Brand") || "").trim() ||
-                    undefined,
-
-                vendor:
-                    String(getCell("Vendor") || "").trim() ||
-                    undefined,
-
-                category:
-                    String(
-                        getCell("Category") || ""
-                    ).trim() || undefined,
-
-                productType:
-                    String(
-                        getCell("Product Type") || ""
-                    ).trim() || undefined,
-
-                costPrice: getCell("Cost Price")
-                    ? parseFloat(
-                          String(getCell("Cost Price"))
-                      )
-                    : undefined,
-
-                fullPrice: getCell("Full Price")
-                    ? parseFloat(
-                          String(getCell("Full Price"))
-                      )
-                    : undefined,
-
-                sellPrice: getCell("Sell Price")
-                    ? parseFloat(
-                          String(getCell("Sell Price"))
-                      )
-                    : undefined,
-
-                mrp: getCell("MRP") || getCell("M.R.P") || getCell("M.R.P.")
-                    ? parseFloat(
-                          String(getCell("MRP") || getCell("M.R.P") || getCell("M.R.P."))
-                      )
-                    : undefined,
-
-                paidPrice: getCell("Paid Price")
-                    ? parseFloat(String(getCell("Paid Price")))
-                    : undefined,
-
-                qtyAlert: getCell("Qty Alert")
-                    ? parseInt(
-                          String(getCell("Qty Alert")),
-                          10
-                      )
-                    : undefined,
-
-                inHandQuantity: getCell(
-                    "In Hand Quantity"
-                )
-                    ? parseInt(
-                          String(
-                              getCell(
-                                  "In Hand Quantity"
-                              )
-                          ),
-                          10
-                      )
-                    : undefined,
-
-                type:
-                    String(getCell("Type") || "").trim() ||
-                    undefined,
-
-                hsnSac:
-                    String(getCell("HSN/SAC") || "").trim() ||
-                    undefined,
-
-                productUsage:
-                    String(
-                        getCell("Product Usage") || ""
-                    ).trim() || undefined,
-            });
+            rows.push(buildRow((aliases) => {
+                for (const alias of aliases) {
+                    const colNum = headers[alias];
+                    if (colNum) {
+                        const val = row.getCell(colNum).value;
+                        if (val !== null && val !== undefined && val !== "") return val;
+                    }
+                }
+                return undefined;
+            }));
         });
 
         return rows;
@@ -313,94 +288,157 @@ async function parseExcel(
     }
 }
 
+const MAX_NAME_LENGTH = 100;
+
 const VALID_PRODUCT_TYPES = ["retail", "consumable", "both"] as const;
 type ProductTypeValue = (typeof VALID_PRODUCT_TYPES)[number];
 
-// "Retail" / "Consumable" / "Both" (any case, extra whitespace trimmed) from
-// the sheet -> the DB's retail/consumable/both enum. The "Type" column is the
-// primary source (that's the one product creation/edit actually uses); a
-// sheet using "Product Type" instead is accepted as a fallback for backward
-// compatibility. Blank/absent -> defaults to "retail" (same default the
-// manual product form uses). A NON-BLANK but unrecognized value is a real
-// error, not silently coerced to "retail" — the caller must reject the row.
-function resolveProductType(row: ImportRow): { value: ProductTypeValue } | { error: string } {
-    const raw = (row.type || row.productType || "").trim();
-    if (!raw) return { value: "retail" };
+// "Retail" / "Consumable" / "Both" (any case, extra whitespace trimmed) —
+// same three values as ProductFormPage's Product Type toggle, same "retail"
+// default. A NON-BLANK but unrecognized value is a real error, not silently
+// coerced to "retail".
+function resolveProductType(raw?: string): { value: ProductTypeValue } | { error: string } {
+    const trimmed = (raw || "").trim();
+    if (!trimmed) return { value: "retail" };
 
-    const normalized = raw.toLowerCase();
+    const normalized = trimmed.toLowerCase();
     if ((VALID_PRODUCT_TYPES as readonly string[]).includes(normalized)) {
         return { value: normalized as ProductTypeValue };
     }
 
     return {
-        error: `Invalid Type "${raw}" — must be one of: Retail, Consumable, Both`,
+        error: `Invalid Product Type "${raw}" — must be one of: Retail, Consumable, Both`,
     };
 }
 
-// Validate row
-function validateRow(row: ImportRow): {
+const VALID_UNITS = ["ml", "l", "g", "kg", "pcs", "bottle", "tube", "pack", "box", "roll"];
+// Canonical casing to store — matches ProductFormPage's PRODUCT_UNITS list
+// (VALID_UNITS above is only the lowercased lookup set).
+const UNIT_CANONICAL: Record<string, string> = {
+    ml: "ml", l: "L", g: "g", kg: "kg", pcs: "pcs",
+    bottle: "bottle", tube: "tube", pack: "pack", box: "box", roll: "roll",
+};
+
+function resolveUnit(raw: string | undefined, isConsumable: boolean): { value: string } | { error: string } {
+    // Retail-only products are a plain unit count on the form too — no
+    // measurement unit selector, always "pcs" regardless of what's in the
+    // sheet (mirrors the form forcing unit -> "pcs" the moment Product Type
+    // is set to Retail).
+    if (!isConsumable) return { value: "pcs" };
+
+    const trimmed = (raw || "").trim();
+    if (!trimmed) return { value: "ml" }; // form's own default when switching to consumable
+
+    const normalized = trimmed.toLowerCase();
+    if (VALID_UNITS.includes(normalized)) return { value: UNIT_CANONICAL[normalized] };
+
+    return { error: `Invalid Unit "${raw}" — must be one of: ml, L, g, kg, pcs, bottle, tube, pack, box, roll` };
+}
+
+const VALID_TAX_TYPES: Record<string, string> = {
+    notax: "no_tax", no_tax: "no_tax",
+    gst5: "gst_5", gst_5: "gst_5",
+    gst12: "gst_12", gst_12: "gst_12",
+    gst18: "gst_18", gst_18: "gst_18",
+    gst28: "gst_28", gst_28: "gst_28",
+    custom: "custom",
+};
+
+function resolveTaxType(raw?: string): { value: string } | { error: string } {
+    const trimmed = (raw || "").trim();
+    if (!trimmed) return { value: "no_tax" }; // same default products.repository.create() itself falls back to
+
+    const normalized = trimmed.toLowerCase().replace(/[%\s]/g, "");
+    if (VALID_TAX_TYPES[normalized]) return { value: VALID_TAX_TYPES[normalized] };
+
+    return { error: `Invalid Tax Type "${raw}" — must be one of: No Tax, GST 5%, GST 12%, GST 18%, GST 28%, Custom` };
+}
+
+// Validate row — same required fields and rules as ProductFormPage's
+// isValid/*Error checks. See that page for the source of truth; this is
+// meant to accept the same data through a spreadsheet, not a looser schema.
+function validateRow(row: ImportRow, todayIso: string): {
     valid: boolean;
     error?: string;
     data?: CreateProductBody;
 } {
     if (!row.name || !row.name.trim()) {
-        return {
-            valid: false,
-            error: "Product name is required",
-        };
+        return { valid: false, error: "Product name is required" };
+    }
+    if (row.name.trim().length > MAX_NAME_LENGTH) {
+        return { valid: false, error: `Product name must be ${MAX_NAME_LENGTH} characters or fewer` };
     }
 
-    if (row.sellPrice && row.sellPrice <= 0) {
-        return {
-            valid: false,
-            error:
-                "Sell price must be greater than 0",
-        };
+    if (!row.category || !row.category.trim()) {
+        return { valid: false, error: "Category is required" };
     }
 
-    if (row.costPrice && row.costPrice < 0) {
-        return {
-            valid: false,
-            error: "Cost price cannot be negative",
-        };
+    const productType = resolveProductType(row.productType);
+    if ("error" in productType) return { valid: false, error: productType.error };
+    const isConsumable = productType.value === "consumable" || productType.value === "both";
+    const sellsRetail = productType.value === "retail" || productType.value === "both";
+
+    if (row.stockQuantity === undefined || row.stockQuantity < 0) {
+        return { valid: false, error: "Stock Quantity is required" };
     }
 
-    const productType = resolveProductType(row);
-    if ("error" in productType) {
-        return { valid: false, error: productType.error };
+    if (isConsumable && !(row.unitSize && row.unitSize > 0)) {
+        return { valid: false, error: "Unit Size is required for Consumable/Both products" };
     }
+
+    const unit = resolveUnit(row.measureUnit, isConsumable);
+    if ("error" in unit) return { valid: false, error: unit.error };
+
+    if (row.qtyAlert !== undefined && row.stockQuantity > 0 && row.qtyAlert >= row.stockQuantity) {
+        return { valid: false, error: "Low Stock Alert must be less than the Stock Quantity" };
+    }
+
+    if (row.supplyPrice !== undefined && row.supplyPrice < 0) {
+        return { valid: false, error: "Supply Price cannot be negative" };
+    }
+
+    const taxType = resolveTaxType(row.taxType);
+    if ("error" in taxType) return { valid: false, error: taxType.error };
+
+    if (row.expiryDate === INVALID_DATE) {
+        return { valid: false, error: "Invalid Expiry Date — use DD-MM-YYYY or YYYY-MM-DD" };
+    }
+    if (row.expiryDate && row.expiryDate < todayIso) {
+        return { valid: false, error: "Expiry Date cannot be in the past" };
+    }
+
+    // Same MRP > Sell Price > Full Price > Paid Price > Retail Price priority
+    // as before this rewrite, now just also required when the product sells
+    // retail — a Consumable-only row doesn't need a retail price at all.
+    const retailPrice = row.mrp ?? row.sellPrice ?? row.fullPrice ?? row.paidPrice ?? row.retailPrice;
+    if (sellsRetail && !(retailPrice && retailPrice > 0)) {
+        return { valid: false, error: "Retail Price is required" };
+    }
+
+    const amount = isConsumable ? row.stockQuantity! * row.unitSize! : row.stockQuantity!;
 
     return {
         valid: true,
         data: {
             name: row.name.trim(),
-            barcode:
-                row.barcode &&
-                row.barcode.trim() !== ""
-                    ? row.barcode.trim()
-                    : undefined,
-
-            description:
-                row.description &&
-                row.description.trim() !== ""
-                    ? row.description.trim()
-                    : undefined,
-
-            short_description:
-                row.productUsage &&
-                row.productUsage.trim() !== ""
-                    ? row.productUsage.trim()
-                    : undefined,
-
+            barcode: row.barcode?.trim() || undefined,
+            description: row.description?.trim() || undefined,
+            remark: row.remark?.trim() || undefined,
             product_type: productType.value,
-            measure_unit: "pcs",
-            amount: row.inHandQuantity || 0,
-            qty_alert: row.qtyAlert || undefined,
-            supply_price: row.costPrice || 0,
-            retail_sales_enabled: true,
-            retail_price: row.mrp || row.sellPrice || row.fullPrice || row.paidPrice || 0,
-            tax_type: "gst_18",
-            hsn_sac: row.hsnSac && row.hsnSac.trim() !== "" ? row.hsnSac.trim() : undefined,
+            measure_unit: unit.value,
+            amount,
+            bottle_size: isConsumable ? row.unitSize : null,
+            qty_alert: row.qtyAlert,
+            lot_number: row.lotNumber?.trim() || undefined,
+            supply_price: row.supplyPrice ?? 0,
+            retail_sales_enabled: sellsRetail,
+            retail_price: sellsRetail ? retailPrice : undefined,
+            tax_type: taxType.value,
+            custom_tax_rate: taxType.value === "custom" ? (row.customTaxRate ?? 0) : undefined,
+            tax_group: row.taxGroup?.trim() || undefined,
+            hsn_sac: row.hsnSac?.trim() || undefined,
+            expiry_date: row.expiryDate || null,
+            is_public: row.isPublic ?? true,
         },
     };
 }
@@ -569,6 +607,7 @@ export const productsImportService = {
         const categoryCache = new Map<string, string>();
         const supplierCache = new Map<string, string>();
         const createdCategoryNames = new Set<string>();
+        const todayIso = new Date().toISOString().slice(0, 10);
 
         try {
             let rows: ImportRow[] = [];
@@ -595,14 +634,12 @@ export const productsImportService = {
             result.total = rows.length;
 
             // Prefetch everything the row loop needs to duplicate-check once,
-            // up front — the old code did up to ~5 sequential SELECTs per row
+            // up front — an N-row file doing ~5 sequential SELECTs per row
             // (brand, category, supplier, barcode match, name+brand+category
-            // match), so an N-row file meant ~5N round-trips before a single
-            // product was even created. On a large CSV that's slow enough to
-            // trip an upstream proxy/gateway timeout, which surfaces to the
-            // browser as a bare "Network error" with no server response at
-            // all — not a validation failure, just the request never finishing
-            // in time. Four queries total instead of per-row ones.
+            // match) is slow enough to trip an upstream proxy/gateway timeout
+            // on a large sheet, which surfaces to the browser as a bare
+            // "Network error" with no server response at all. Four queries
+            // total instead of per-row ones.
             const [existingBrands, existingCategories, existingSuppliers, existingProducts] =
                 await Promise.all([
                     brandsRepository.list(salonId),
@@ -641,7 +678,7 @@ export const productsImportService = {
 
                 try {
                     const validation =
-                        validateRow(row);
+                        validateRow(row, todayIso);
 
                     if (!validation.valid) {
                         const reason = validation.error || "Validation failed";
@@ -675,15 +712,26 @@ export const productsImportService = {
                         }
                     }
 
-                    if (row.category) {
-                        const categoryId = await getOrCreateCategory(row.category, salonId, categoryCache, createdCategoryNames);
-                        if (categoryId) {
-                            productData.category_id = categoryId;
-                        }
+                    // Category is required (validateRow already rejected a
+                    // blank cell) — if resolving/creating it still comes back
+                    // empty (a DB error), the row must fail rather than
+                    // silently save with no category at all.
+                    const categoryId = await getOrCreateCategory(row.category!, salonId, categoryCache, createdCategoryNames);
+                    if (!categoryId) {
+                        result.issues.push({
+                            row: rowIndex,
+                            name: productData.name,
+                            status: "failed",
+                            reason: `Category "${row.category}" could not be created`,
+                            suggestion: suggestionFor("Category could not be created"),
+                        });
+                        result.failed++;
+                        continue;
                     }
+                    productData.category_id = categoryId;
 
-                    if (row.vendor) {
-                        const supplierId = await getOrCreateSupplier(row.vendor, salonId, supplierCache);
+                    if (row.supplier) {
+                        const supplierId = await getOrCreateSupplier(row.supplier, salonId, supplierCache);
                         if (supplierId) {
                             productData.supplier_id = supplierId;
                         }
@@ -737,10 +785,7 @@ export const productsImportService = {
                             result.success++;
                         } else {
                             // Valid row, but a duplicate already exists and
-                            // updateExisting wasn't requested — previously this
-                            // was silently counted with no reason recorded at
-                            // all, so a "3 skipped" summary gave no way to tell
-                            // which rows or why.
+                            // updateExisting wasn't requested.
                             const reason = matchedBy === "barcode"
                                 ? `A product with barcode "${productData.barcode}" already exists.`
                                 : `A product named "${productData.name}" already exists with the same brand and category.`;

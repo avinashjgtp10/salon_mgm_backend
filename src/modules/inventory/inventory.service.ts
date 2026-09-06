@@ -55,6 +55,19 @@ export const suppliersService = {
         return suppliersRepository.listAllWithBalance(salonId);
     },
 
+    async listPaginated(
+        salonId: string,
+        page: number,
+        limit: number,
+        filters?: { search?: string; city?: string; state?: string },
+    ): Promise<{ data: SupplierWithBalance[]; total: number }> {
+        return suppliersRepository.listPaginatedWithBalance(salonId, page, limit, filters);
+    },
+
+    async listLocations(salonId: string): Promise<{ cities: string[]; states: string[] }> {
+        return suppliersRepository.listDistinctLocations(salonId);
+    },
+
     async update(params: {
         supplierId: string;
         requesterUserId: string;

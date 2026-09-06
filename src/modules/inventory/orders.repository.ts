@@ -2,6 +2,7 @@ import pool from "../../config/database";
 import { AppError } from "../../middleware/error.middleware";
 import { CreateOrderDTO, ListOrderFilters, Order, OrderItem, OrderSignature, ReceiveOrderDTO } from "./orders.types";
 import { purchasesRepository } from "./purchases.repository";
+import { inventoryAlertsService } from "./inventory-alerts.service";
 
 // Schema (orders, order_items, order_signatures, salons.next_order_seq) is
 // NOT self-migrated from here — per project policy, schema changes are never
@@ -45,7 +46,7 @@ export const ordersRepository = {
                     const orderResult = await client.query(
                         `INSERT INTO orders (
                            salon_id, order_number, status, supplier_id,
-                           bill_to_branch_id, ship_to_branch_id, order_date,
+                           delivery_address, delivery_instructions, order_date,
                            remark, ref_number, payment_terms_days,
                            shipment_date, delivery_date,
                            tax_type, tax_group, terms_conditions, signature_url,
@@ -54,7 +55,7 @@ export const ordersRepository = {
                          RETURNING *`,
                         [
                             salonId, orderNumber, data.status === "draft" ? "draft" : "sent", data.supplier_id,
-                            data.bill_to_branch_id ?? null, data.ship_to_branch_id ?? null, data.order_date ?? null,
+                            data.delivery_address ?? null, data.delivery_instructions ?? null, data.order_date ?? null,
                             data.remark ?? null, data.ref_number ?? null, data.payment_terms_days ?? null,
                             data.shipment_date ?? null, data.delivery_date ?? null,
                             data.tax_type, data.tax_group ?? null, data.terms_conditions ?? null, data.signature_url ?? null,
@@ -148,14 +149,14 @@ export const ordersRepository = {
 
             await client.query(
                 `UPDATE orders SET
-                   supplier_id = $1, bill_to_branch_id = $2, ship_to_branch_id = $3,
+                   supplier_id = $1, delivery_address = $2, delivery_instructions = $3,
                    order_date = COALESCE($4, order_date), remark = $5, ref_number = $6,
                    payment_terms_days = $7, shipment_date = $8, delivery_date = $9,
                    tax_type = $10, tax_group = $11, terms_conditions = $12,
                    signature_url = $13, shipping_cost = $14, updated_at = NOW()
                  WHERE id = $15`,
                 [
-                    data.supplier_id, data.bill_to_branch_id ?? null, data.ship_to_branch_id ?? null,
+                    data.supplier_id, data.delivery_address ?? null, data.delivery_instructions ?? null,
                     data.order_date ?? null, data.remark ?? null, data.ref_number ?? null,
                     data.payment_terms_days ?? null, data.shipment_date ?? null, data.delivery_date ?? null,
                     data.tax_type, data.tax_group ?? null, data.terms_conditions ?? null,
@@ -272,7 +273,26 @@ export const ordersRepository = {
             [id],
         );
 
-        return { ...orderRows[0], items: itemRows };
+        const order = orderRows[0];
+
+        // Bill/paid/pending — derived from the Purchase(s) created when this
+        // order was received (order_id-linked), not stored on the order
+        // itself. See purchasesRepository.getOrderPaymentSummary for the
+        // known total_price-vs-total_amount (tax/discount) basis note.
+        const billing = await purchasesRepository.getOrderPaymentSummary(id, order.supplier_id, salonId);
+        const totalPrice = Number(order.total_price) || 0;
+        const rawPaid = billing?.amount_paid ?? 0;
+        const paidAmount = Math.min(rawPaid, totalPrice);
+        const pendingAmount = Math.max(0, totalPrice - paidAmount);
+        const billPaymentStatus = pendingAmount <= 0.5 ? "paid" : paidAmount > 0 ? "partial" : "unpaid";
+
+        return {
+            ...order,
+            items: itemRows,
+            paid_amount: paidAmount,
+            pending_amount: pendingAmount,
+            bill_payment_status: billPaymentStatus,
+        };
     },
 
     /**
@@ -435,6 +455,10 @@ export const ordersRepository = {
         } finally {
             client.release();
         }
+
+        inventoryAlertsService
+            .checkAndNotify([orderItem.product_id], salonId)
+            .catch(() => { /* logged internally, never blocks the caller */ });
 
         return (await this.getById(orderId, salonId))!;
     },

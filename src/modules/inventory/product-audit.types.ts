@@ -1,7 +1,11 @@
 // Product Audit — count physical stock against system quantities and
-// reconcile differences. Deliberately read-only against products.amount:
-// this module never writes stock (unlike stockTakeService.process), so it
-// can be reviewed/rejected/reopened freely without touching real inventory.
+// reconcile differences. Read-only against products.amount right up until
+// approval: an audit can be freely edited/submitted/rejected/reopened
+// without touching real inventory, but productAuditService.approve() (see
+// product-audit.repository.ts#approveWithAdjustments) is the one moment a
+// physical count becomes the official stock — it applies every item's
+// variance to products.amount and writes matching Stock Ledger entries,
+// atomically with the status flip to 'complete'.
 
 export type ProductAuditStatus = "in_progress" | "pending_review" | "complete" | "rejected";
 
@@ -11,6 +15,7 @@ export type ProductAuditItem = {
     product_id: string;
     product_name: string;
     sku: string | null;
+    measure_unit: string | null;
     category: string | null;
     system_qty: number;
     physical_qty: number | null;
@@ -71,6 +76,19 @@ export type AddAuditItemsBody = {
 export type UpdateAuditItemBody = {
     physical_qty: number | null;
     reason?: string | null;
+};
+
+export type SubmitAuditItemUpdate = {
+    item_id: string;
+    physical_qty: number | null;
+    reason?: string | null;
+};
+
+export type SubmitAuditBody = {
+    /** Every locally-edited row's latest value, applied atomically with the
+     *  submit itself — the frontend holds edits in local state and only
+     *  calls the API here, once, instead of a PATCH per field/row. */
+    items?: SubmitAuditItemUpdate[];
 };
 
 export type RejectAuditBody = {
