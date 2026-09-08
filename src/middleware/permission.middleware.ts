@@ -226,8 +226,15 @@ export async function staffHasPermission(user: PermUser, permKey: string): Promi
         if (permKey in overrides) return overrides[permKey];
 
         // 2. Otherwise fall through to the assigned role's permission set.
+        // A key with no row here means "not explicitly granted" and must
+        // resolve to false — NOT fall back to the legacy DEFAULT_STAFF_PERMS
+        // map. That fallback only belongs in the legacy path below (for
+        // salons that predate this system entirely); once a staff member has
+        // a real role_id, an unconfigured permission is a deliberate deny,
+        // otherwise a freshly-created blank role would silently leak every
+        // legacy "true by default" permission it never actually granted.
         const rolePerms = await loadRolePermissions(roleInfo.roleId);
-        return rolePerms[permKey] ?? DEFAULT_STAFF_PERMS[permKey] ?? false;
+        return rolePerms[permKey] ?? false;
     }
 
     // ── Legacy path: this staff member hasn't been backfilled yet (or the
