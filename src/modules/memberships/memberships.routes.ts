@@ -17,6 +17,8 @@ const guard = [authMiddleware, roleMiddleware("salon_owner", "admin", "staff")];
 // appointment, even for staff who weren't separately granted Catalog view.
 const viewMemberships = requireAnyPermission(["view_memberships", "create_sales", "manage_calendar"]);
 const createMemberships = requirePermission("create_memberships");
+const editMemberships = requirePermission("edit_memberships");
+const deleteMemberships = requirePermission("delete_memberships");
 
 router.get("/",            ...guard, viewMemberships, validateMembershipsListQuery, membershipsController.list);
 // Must precede "/:id" — otherwise these are swallowed as an id.
@@ -27,7 +29,7 @@ router.get("/export/excel", ...guard, viewMemberships, validateExportQuery, memb
 router.get("/export/pdf",   ...guard, viewMemberships, validateExportQuery, membershipsController.exportPdf);
 router.post("/",           ...guard, createMemberships, validateCreateMembership,     membershipsController.create);
 router.get("/:id",         ...guard, viewMemberships,                                 membershipsController.getById);
-router.patch("/:id",       ...guard, createMemberships, validateUpdateMembership,     membershipsController.update);
-router.delete("/:id",      ...guard, createMemberships,                               membershipsController.delete);
+router.patch("/:id",       ...guard, editMemberships, validateUpdateMembership,       membershipsController.update);
+router.delete("/:id",      ...guard, deleteMemberships,                               membershipsController.delete);
 
 export default router;

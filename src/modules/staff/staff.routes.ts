@@ -26,6 +26,19 @@ const router = Router();
 const auth = authMiddleware;
 const ownerAdmin = roleMiddleware("salon_owner", "admin");
 const ownerAdminStaff = roleMiddleware("salon_owner", "admin", "staff");
+// Wages/Commissions/Tips were previously owner/admin-only with no permission
+// key at all (view_payroll being the sole exception — it existed but was
+// dead for the same role-gate reason). All four opened to staff this phase.
+const viewWages = requirePermission("view_wages");
+const manageWages = requirePermission("manage_wages");
+const viewCommissions = requirePermission("view_commissions");
+const manageCommissions = requirePermission("manage_commissions");
+const viewTips = requirePermission("view_tips");
+const manageTips = requirePermission("manage_tips");
+// Staff addresses/emergency contacts/schedules/leaves — role gate unchanged
+// (owner/admin for writes, as before), just adding the permission check
+// that was missing entirely.
+const manageStaffPersonalData = requirePermission("manage_staff_personal_data");
 
 // ─── Public (no auth) ─────────────────────────────────────────────────────────
 router.get("/invite/:token/verify", staffInvitationController.verifyToken);
@@ -44,26 +57,29 @@ router.get("/export/excel",  auth, ownerAdmin, staffController.exportExcel);
 router.get("/export/csv",    auth, ownerAdmin, staffController.exportCsv);
 
 // ─── Commissions — salon-wide (must be BEFORE /:staffId routes) ──────────────
-router.get("/commissions/summary",              auth, ownerAdmin, staffCommissionsController.getCommissionSummary);
-router.get("/commissions/earned",               auth, ownerAdmin, staffCommissionsController.getEarnedBySalon);
-router.get("/commissions/export",               auth, ownerAdmin, staffCommissionsController.exportCommissions);
-router.post("/commissions/:staffId/mark-paid",  auth, ownerAdmin, staffCommissionsController.markStaffCommissionPaid);
-router.get("/commissions/:staffId/settlements", auth, ownerAdmin, staffCommissionsController.getSettlementHistory);
-router.get("/commissions/all",                  auth, ownerAdmin, staffCommissionsController.listBySalon);
-router.post("/commissions/bulk-configure",      auth, ownerAdmin, staffCommissionsController.bulkConfigure);
+// Previously owner/admin-only with no permission key — opened to staff via
+// view_commissions/manage_commissions per the same decision that opened
+// Payroll/Wages/Tips/Marketing this phase.
+router.get("/commissions/summary",              auth, ownerAdminStaff, viewCommissions, staffCommissionsController.getCommissionSummary);
+router.get("/commissions/earned",               auth, ownerAdminStaff, viewCommissions, staffCommissionsController.getEarnedBySalon);
+router.get("/commissions/export",               auth, ownerAdminStaff, viewCommissions, staffCommissionsController.exportCommissions);
+router.post("/commissions/:staffId/mark-paid",  auth, ownerAdminStaff, manageCommissions, staffCommissionsController.markStaffCommissionPaid);
+router.get("/commissions/:staffId/settlements", auth, ownerAdminStaff, viewCommissions, staffCommissionsController.getSettlementHistory);
+router.get("/commissions/all",                  auth, ownerAdminStaff, viewCommissions, staffCommissionsController.listBySalon);
+router.post("/commissions/bulk-configure",      auth, ownerAdminStaff, manageCommissions, staffCommissionsController.bulkConfigure);
 
 // ─── Tips — salon-wide (must be BEFORE /:staffId routes, same reason as
 // Commissions above — a literal segment like "tips" registered after a
 // "/:staffId" route would otherwise be swallowed by it) ──────────────────────
-router.get("/tips/summary",              auth, ownerAdmin, staffTipsController.getTipSummary);
-router.get("/tips/earned",               auth, ownerAdmin, staffTipsController.getEarnedBySalon);
-router.post("/tips/:staffId/settle",     auth, ownerAdmin, staffTipsController.settleStaffTip);
-router.get("/tips/:staffId/settlements", auth, ownerAdmin, staffTipsController.getSettlementHistory);
+router.get("/tips/summary",              auth, ownerAdminStaff, viewTips, staffTipsController.getTipSummary);
+router.get("/tips/earned",               auth, ownerAdminStaff, viewTips, staffTipsController.getEarnedBySalon);
+router.post("/tips/:staffId/settle",     auth, ownerAdminStaff, manageTips, staffTipsController.settleStaffTip);
+router.get("/tips/:staffId/settlements", auth, ownerAdminStaff, viewTips, staffTipsController.getSettlementHistory);
 
 // ─── Commission Slabs + History — per staff ──────────────────────────────────
-router.get("/:staffId/commissions/slabs",   auth, ownerAdmin, staffCommissionsController.getSlabs);
-router.put("/:staffId/commissions/slabs",   auth, ownerAdmin, staffCommissionsController.upsertSlabs);
-router.get("/:staffId/commissions/history", auth, ownerAdminStaff, staffCommissionsController.getStaffHistory);
+router.get("/:staffId/commissions/slabs",   auth, ownerAdminStaff, viewCommissions, staffCommissionsController.getSlabs);
+router.put("/:staffId/commissions/slabs",   auth, ownerAdminStaff, manageCommissions, staffCommissionsController.upsertSlabs);
+router.get("/:staffId/commissions/history", auth, ownerAdminStaff, viewCommissions, staffCommissionsController.getStaffHistory);
 
 // ─── Roles & Permissions — bulk (must be BEFORE /:id routes, same reason as
 // Commissions/Tips above) ──────────────────────────────────────────────────
@@ -88,39 +104,41 @@ router.post("/:id/resend-invite",    auth, ownerAdmin, staffInvitationController
 router.delete("/:id/cancel-invite",  auth, ownerAdmin, staffInvitationController.cancelInvitation);
 
 // ─── Addresses ────────────────────────────────────────────────────────────────
-router.get("/:staffId/addresses",         auth, ownerAdminStaff, staffAddressController.list);
-router.post("/:staffId/addresses",        auth, ownerAdmin, validateCreateStaffAddress, staffAddressController.create);
-router.patch("/:staffId/addresses/:id",   auth, ownerAdmin, validateUpdateStaffAddress, staffAddressController.update);
-router.delete("/:staffId/addresses/:id",  auth, ownerAdmin, staffAddressController.delete);
+// Role gate unchanged (still owner/admin for writes) — this ticket only
+// closes the missing-permission-check gap, it doesn't change who's eligible.
+router.get("/:staffId/addresses",         auth, ownerAdminStaff, manageStaffPersonalData, staffAddressController.list);
+router.post("/:staffId/addresses",        auth, ownerAdmin, manageStaffPersonalData, validateCreateStaffAddress, staffAddressController.create);
+router.patch("/:staffId/addresses/:id",   auth, ownerAdmin, manageStaffPersonalData, validateUpdateStaffAddress, staffAddressController.update);
+router.delete("/:staffId/addresses/:id",  auth, ownerAdmin, manageStaffPersonalData, staffAddressController.delete);
 
 // ─── Emergency Contacts ───────────────────────────────────────────────────────
-router.get("/:staffId/emergency-contacts",        auth, ownerAdminStaff, staffEmergencyContactController.list);
-router.post("/:staffId/emergency-contacts",       auth, ownerAdmin, validateCreateEmergencyContact, staffEmergencyContactController.create);
-router.patch("/:staffId/emergency-contacts/:id",  auth, ownerAdmin, validateUpdateEmergencyContact, staffEmergencyContactController.update);
-router.delete("/:staffId/emergency-contacts/:id", auth, ownerAdmin, staffEmergencyContactController.delete);
+router.get("/:staffId/emergency-contacts",        auth, ownerAdminStaff, manageStaffPersonalData, staffEmergencyContactController.list);
+router.post("/:staffId/emergency-contacts",       auth, ownerAdmin, manageStaffPersonalData, validateCreateEmergencyContact, staffEmergencyContactController.create);
+router.patch("/:staffId/emergency-contacts/:id",  auth, ownerAdmin, manageStaffPersonalData, validateUpdateEmergencyContact, staffEmergencyContactController.update);
+router.delete("/:staffId/emergency-contacts/:id", auth, ownerAdmin, manageStaffPersonalData, staffEmergencyContactController.delete);
 
 // ─── Wages ────────────────────────────────────────────────────────────────────
-router.get("/:staffId/wages", auth, ownerAdmin, staffWagesController.get);
-router.put("/:staffId/wages", auth, ownerAdmin, validateUpdateWageSettings, staffWagesController.upsert);
+router.get("/:staffId/wages", auth, ownerAdminStaff, viewWages, staffWagesController.get);
+router.put("/:staffId/wages", auth, ownerAdminStaff, manageWages, validateUpdateWageSettings, staffWagesController.upsert);
 
 // ─── Commissions — per staff ──────────────────────────────────────────────────
-router.get("/:staffId/commissions", auth, ownerAdmin, staffCommissionsController.list);
-router.put("/:staffId/commissions", auth, ownerAdmin, validateUpdateCommission, staffCommissionsController.upsert);
+router.get("/:staffId/commissions", auth, ownerAdminStaff, viewCommissions, staffCommissionsController.list);
+router.put("/:staffId/commissions", auth, ownerAdminStaff, manageCommissions, validateUpdateCommission, staffCommissionsController.upsert);
 
 // ─── Pay Runs ─────────────────────────────────────────────────────────────────
 router.get("/:staffId/pay-runs", auth, ownerAdmin, staffPayRunsController.get);
 router.put("/:staffId/pay-runs", auth, ownerAdmin, validateUpdatePayRun, staffPayRunsController.upsert);
 
 // ─── Schedules ────────────────────────────────────────────────────────────────
-router.get("/:staffId/scheduled",    auth, ownerAdminStaff, staffSchedulesController.list);
-router.put("/:staffId/scheduled",    auth, ownerAdmin, validateUpsertStaffSchedules, staffSchedulesController.upsert);
-router.delete("/:staffId/scheduled", auth, ownerAdmin, staffSchedulesController.delete);
+router.get("/:staffId/scheduled",    auth, ownerAdminStaff, manageStaffPersonalData, staffSchedulesController.list);
+router.put("/:staffId/scheduled",    auth, ownerAdmin, manageStaffPersonalData, validateUpsertStaffSchedules, staffSchedulesController.upsert);
+router.delete("/:staffId/scheduled", auth, ownerAdmin, manageStaffPersonalData, staffSchedulesController.delete);
 
 // ─── Leaves ───────────────────────────────────────────────────────────────────
-router.get("/:staffId/leaves",        auth, ownerAdminStaff, staffLeavesController.list);
-router.post("/:staffId/leaves",       auth, ownerAdmin, validateCreateStaffLeave, staffLeavesController.create);
-router.patch("/:staffId/leaves/:id",  auth, ownerAdmin, validateUpdateStaffLeave, staffLeavesController.update);
-router.delete("/:staffId/leaves/:id", auth, ownerAdmin, staffLeavesController.delete);
+router.get("/:staffId/leaves",        auth, ownerAdminStaff, manageStaffPersonalData, staffLeavesController.list);
+router.post("/:staffId/leaves",       auth, ownerAdmin, manageStaffPersonalData, validateCreateStaffLeave, staffLeavesController.create);
+router.patch("/:staffId/leaves/:id",  auth, ownerAdmin, manageStaffPersonalData, validateUpdateStaffLeave, staffLeavesController.update);
+router.delete("/:staffId/leaves/:id", auth, ownerAdmin, manageStaffPersonalData, staffLeavesController.delete);
 
 // ─── Blocked Times (staff-scoped) ────────────────────────────────────────────
 router.post(

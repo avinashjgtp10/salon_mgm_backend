@@ -44,13 +44,19 @@ const router = Router();
 const viewInventory = requirePermission("view_inventory");
 const stockAdjustment = requirePermission("stock_adjustment");
 const manageInventory = requirePermission("manage_inventory");
+// Supplier CRUD was owner/admin-only with no permission key at all — now
+// staff-reachable via manage_suppliers. Supplier payments (money movement)
+// stay on the same key, matching the same product decision that opened
+// every other role-gated module up to staff this phase.
+const manageSuppliers = requirePermission("manage_suppliers");
 
 // ─── Suppliers ────────────────────────────────────────────────────────────────
 
 router.post(
     "/suppliers",
     authMiddleware,
-    roleMiddleware("salon_owner", "admin"),
+    roleMiddleware("salon_owner", "admin", "staff"),
+    manageSuppliers,
     validateCreateSupplier,
     suppliersController.create
 );
@@ -90,7 +96,8 @@ router.get(
 router.patch(
     "/suppliers/:id",
     authMiddleware,
-    roleMiddleware("salon_owner", "admin"),
+    roleMiddleware("salon_owner", "admin", "staff"),
+    manageSuppliers,
     validateUpdateSupplier,
     suppliersController.update
 );
@@ -98,16 +105,16 @@ router.patch(
 router.delete(
     "/suppliers/:id",
     authMiddleware,
-    roleMiddleware("salon_owner", "admin"),
+    roleMiddleware("salon_owner", "admin", "staff"),
+    manageSuppliers,
     suppliersController.delete
 );
 
-// Payouts are a money-movement action, so restricted to owner/admin like
-// supplier create/update/delete — not opened up to staff via viewInventory.
 router.post(
     "/suppliers/:id/payments",
     authMiddleware,
-    roleMiddleware("salon_owner", "admin"),
+    roleMiddleware("salon_owner", "admin", "staff"),
+    manageSuppliers,
     validateCreateSupplierPayment,
     supplierPaymentsController.create
 );
