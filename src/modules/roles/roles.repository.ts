@@ -166,6 +166,42 @@ export const rolesRepository = {
     },
 
     // ── Audit log ─────────────────────────────────────────────────────────────
+    async listAuditLog(
+        salonId: string,
+        filters: { targetStaffId?: string; limit?: number; cursor?: string }
+    ): Promise<{ items: any[]; nextCursor: string | null }> {
+        const limit = Math.min(filters.limit ?? 50, 200);
+        const conditions: string[] = ["l.salon_id = $1"];
+        const values: unknown[] = [salonId];
+        let idx = 2;
+
+        if (filters.targetStaffId) {
+            conditions.push(`l.target_id = $${idx}`);
+            values.push(filters.targetStaffId);
+            idx++;
+        }
+        if (filters.cursor) {
+            conditions.push(`l.created_at < $${idx}`);
+            values.push(filters.cursor);
+            idx++;
+        }
+
+        values.push(limit + 1);
+        const { rows } = await pool.query(
+            `SELECT l.*, u.first_name AS actor_first_name, u.last_name AS actor_last_name, u.email AS actor_email
+             FROM permission_audit_log l
+             LEFT JOIN users u ON u.id = l.actor_user_id
+             WHERE ${conditions.join(" AND ")}
+             ORDER BY l.created_at DESC
+             LIMIT $${idx}`,
+            values
+        );
+
+        const hasMore = rows.length > limit;
+        const items = hasMore ? rows.slice(0, limit) : rows;
+        return { items, nextCursor: hasMore ? items[items.length - 1].created_at : null };
+    },
+
     async insertAuditLog(entry: {
         salonId: string;
         actorUserId: string;
