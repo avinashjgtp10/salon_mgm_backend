@@ -245,6 +245,24 @@ export async function staffHasPermission(user: PermUser, permKey: string): Promi
         : (DEFAULT_STAFF_PERMS[permKey] ?? false);
 }
 
+// ── Effective permissions for the current user (used by GET /users/me) ─────────
+// Computes the full { permKey: boolean } map for a staff user using the exact
+// same resolution as staffHasPermission() above — the frontend's usePermissions()
+// hook consumes this directly instead of maintaining its own separate,
+// drift-prone copy of the resolution logic. owner/admin never need this (they
+// bypass everywhere), so callers should only call it for role === "staff".
+export async function getEffectivePermissionsForUser(
+    userId: string,
+    salonId: string,
+    allKeys: string[]
+): Promise<Record<string, boolean>> {
+    const result: Record<string, boolean> = {};
+    for (const key of allKeys) {
+        result[key] = await staffHasPermission({ userId, role: "staff", salonId }, key);
+    }
+    return result;
+}
+
 // ── Middleware factory ────────────────────────────────────────────────────────
 export const requirePermission = (permKey: string) =>
     async (req: Request & { user?: PermUser }, _res: Response, next: NextFunction) => {
