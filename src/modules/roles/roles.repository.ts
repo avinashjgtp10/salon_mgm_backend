@@ -122,9 +122,9 @@ export const rolesRepository = {
     },
 
     // ── Staff role assignment + overrides ────────────────────────────────────
-    async getStaffRoleId(staffId: string, salonId: string): Promise<{ id: string; role_id: string | null } | null> {
+    async getStaffRoleId(staffId: string, salonId: string): Promise<{ id: string; user_id: string | null; role_id: string | null } | null> {
         const { rows } = await pool.query(
-            `SELECT id, role_id FROM staff WHERE id = $1 AND salon_id = $2`,
+            `SELECT id, user_id, role_id FROM staff WHERE id = $1 AND salon_id = $2`,
             [staffId, salonId]
         );
         return rows[0] || null;
