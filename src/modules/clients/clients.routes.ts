@@ -91,15 +91,15 @@ router.patch("/:clientId", authMiddleware, ownerAdminStaff, requirePermission("e
 router.delete("/:clientId", authMiddleware, ownerAdminStaff, requirePermission("delete_clients"), clientsController.remove);
 
 // NOTES
-router.get("/:clientId/notes", authMiddleware, ownerAdminStaff, clientNotesController.list);
-router.post("/:clientId/notes", authMiddleware, ownerAdminStaff, clientNotesController.create);
-router.patch("/:clientId/notes/:id", authMiddleware, ownerAdminStaff, clientNotesController.update);
-router.delete("/:clientId/notes/:id", authMiddleware, ownerAdminStaff, clientNotesController.delete);
+router.get("/:clientId/notes", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), clientNotesController.list);
+router.post("/:clientId/notes", authMiddleware, ownerAdminStaff, requirePermission("edit_clients"), clientNotesController.create);
+router.patch("/:clientId/notes/:id", authMiddleware, ownerAdminStaff, requirePermission("edit_clients"), clientNotesController.update);
+router.delete("/:clientId/notes/:id", authMiddleware, ownerAdminStaff, requirePermission("edit_clients"), clientNotesController.delete);
 
 // COMMUNICATIONS
-router.get("/:clientId/communications", authMiddleware, ownerAdminStaff, clientCommunicationController.list);
+router.get("/:clientId/communications", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), clientCommunicationController.list);
 
 // FEEDBACK & REVIEW
-router.get("/:clientId/reviews", authMiddleware, ownerAdminStaff, reviewsController.listForClient);
+router.get("/:clientId/reviews", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), reviewsController.listForClient);
 
 export default router;
