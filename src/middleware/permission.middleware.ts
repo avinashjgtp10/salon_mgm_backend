@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import pool from "../config/database";
 import { AppError } from "./error.middleware";
 
-interface PermUser {
+export interface PermUser {
     userId: string;
     role?: string;
     salonId?: string | null;
@@ -75,6 +75,88 @@ export function invalidateStaffPermCache(userId: string) {
     staffPermCache.delete(userId);
 }
 
+// ── New roles/permissions tables (post-backfill resolution path) ───────────────
+// See scripts/backfill-permissions-system.ts. A staff member resolves through
+// this path once their `staff.role_id` has been populated; until then,
+// staffHasPermission() below falls back to the legacy blob-based caches above,
+// so this file works correctly whether or not the backfill has run yet in a
+// given environment. Once every environment is backfilled, the legacy path
+// (and these two comments) can be deleted — Phase 3 cleanup.
+
+interface StaffRoleInfo {
+    staffId: string;
+    roleId: string | null;
+}
+
+// userId → { staffId, roleId, expiresAt }
+const staffRoleCache = new Map<string, StaffRoleInfo & { expiresAt: number }>();
+
+async function loadStaffRoleInfo(userId: string, salonId: string): Promise<StaffRoleInfo | null> {
+    const now = Date.now();
+    const cached = staffRoleCache.get(userId);
+    if (cached && cached.expiresAt > now) return cached;
+
+    const { rows } = await pool.query(
+        `SELECT id, role_id FROM staff WHERE user_id = $1 AND salon_id = $2 LIMIT 1`,
+        [userId, salonId]
+    );
+    if (!rows[0]) return null;
+
+    const info = { staffId: rows[0].id as string, roleId: (rows[0].role_id as string) ?? null };
+    staffRoleCache.set(userId, { ...info, expiresAt: now + CACHE_TTL_MS });
+    return info;
+}
+
+export function invalidateStaffRoleCache(userId: string) {
+    staffRoleCache.delete(userId);
+}
+
+// roleId → { permKey: allowed }
+const rolePermissionsCache = new Map<string, { perms: Record<string, boolean>; expiresAt: number }>();
+
+async function loadRolePermissions(roleId: string): Promise<Record<string, boolean>> {
+    const now = Date.now();
+    const cached = rolePermissionsCache.get(roleId);
+    if (cached && cached.expiresAt > now) return cached.perms;
+
+    const { rows } = await pool.query(
+        `SELECT permission_key, allowed FROM role_permissions WHERE role_id = $1`,
+        [roleId]
+    );
+    const perms: Record<string, boolean> = {};
+    for (const row of rows) perms[row.permission_key] = row.allowed;
+
+    rolePermissionsCache.set(roleId, { perms, expiresAt: now + CACHE_TTL_MS });
+    return perms;
+}
+
+export function invalidateRolePermissionsCache(roleId: string) {
+    rolePermissionsCache.delete(roleId);
+}
+
+// staffId → sparse { permKey: allowed } — only keys with an actual override row
+const staffOverridesCache = new Map<string, { overrides: Record<string, boolean>; expiresAt: number }>();
+
+async function loadStaffOverrides(staffId: string): Promise<Record<string, boolean>> {
+    const now = Date.now();
+    const cached = staffOverridesCache.get(staffId);
+    if (cached && cached.expiresAt > now) return cached.overrides;
+
+    const { rows } = await pool.query(
+        `SELECT permission_key, allowed FROM staff_permission_overrides WHERE staff_id = $1`,
+        [staffId]
+    );
+    const overrides: Record<string, boolean> = {};
+    for (const row of rows) overrides[row.permission_key] = row.allowed;
+
+    staffOverridesCache.set(staffId, { overrides, expiresAt: now + CACHE_TTL_MS });
+    return overrides;
+}
+
+export function invalidateStaffOverridesCache(staffId: string) {
+    staffOverridesCache.delete(staffId);
+}
+
 // ── Default staff permissions (used when nothing has been configured) ─────────
 // Mirrors the "staff" column defaults in src/features/settings/data/permissionMatrix.ts
 // on the frontend — keep the two in sync when adding a new requirePermission() key.
@@ -124,17 +206,39 @@ const DEFAULT_STAFF_PERMS: Record<string, boolean> = {
 // Returns whether the given permKey is allowed for this staff member. Callers
 // that already know the request is owner/admin (or don't need to short-circuit
 // on missing salon context with a specific error) can use this directly.
-async function staffHasPermission(user: PermUser, permKey: string): Promise<boolean> {
+// Exported so the anti-escalation check in roles.service.ts (a manage_roles
+// holder can't grant a permission they don't themselves have) can reuse the
+// exact same resolution logic instead of duplicating it. NOTE: this function
+// does not itself check user.role — callers must not invoke it for
+// owner/admin actors (who have no `staff` row to resolve against); the
+// owner/admin bypass belongs at the call site, same as requirePermission()
+// already does below.
+export async function staffHasPermission(user: PermUser, permKey: string): Promise<boolean> {
     const salonId = user.salonId;
     if (!salonId) return false;
 
-    // 1. Check per-staff custom permissions first
+    const roleInfo = await loadStaffRoleInfo(user.userId, salonId);
+
+    if (roleInfo?.roleId) {
+        // ── New path: staff.role_id has been backfilled for this staff member ──
+        // 1. Sparse per-staff override wins outright if a row exists for this key.
+        const overrides = await loadStaffOverrides(roleInfo.staffId);
+        if (permKey in overrides) return overrides[permKey];
+
+        // 2. Otherwise fall through to the assigned role's permission set.
+        const rolePerms = await loadRolePermissions(roleInfo.roleId);
+        return rolePerms[permKey] ?? DEFAULT_STAFF_PERMS[permKey] ?? false;
+    }
+
+    // ── Legacy path: this staff member hasn't been backfilled yet (or the
+    // backfill script hasn't been run in this environment) — resolve exactly
+    // as before so behavior is unchanged until the migration actually runs.
+    // Safe to delete once every environment is confirmed backfilled (Phase 3).
     const customPerms = await loadStaffCustomPerms(user.userId, salonId);
     if (customPerms !== null) {
         return customPerms[permKey] ?? false;
     }
 
-    // 2. Fall back to global role-level permissions
     const rolePerms = await loadRolePerms(salonId);
     return Object.keys(rolePerms).length > 0
         ? (rolePerms[permKey]?.staff ?? false)

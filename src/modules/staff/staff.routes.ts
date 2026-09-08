@@ -1,7 +1,8 @@
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
-import { requirePermission } from "../../middleware/permission.middleware";
+import { requirePermission, requireAnyPermission } from "../../middleware/permission.middleware";
+import { staffPermissionsController } from "../roles/roles.controller";
 import { upload } from "./staff.upload";
 import { uploadMiddleware } from "../../middleware/upload.middleware";
 import {
@@ -64,8 +65,18 @@ router.get("/:staffId/commissions/slabs",   auth, ownerAdmin, staffCommissionsCo
 router.put("/:staffId/commissions/slabs",   auth, ownerAdmin, staffCommissionsController.upsertSlabs);
 router.get("/:staffId/commissions/history", auth, ownerAdminStaff, staffCommissionsController.getStaffHistory);
 
+// ─── Roles & Permissions — bulk (must be BEFORE /:id routes, same reason as
+// Commissions/Tips above) ──────────────────────────────────────────────────
+router.post("/bulk/role",             auth, ownerAdmin, requirePermission("manage_roles"), staffPermissionsController.bulkAssignRole);
+router.post("/bulk/reset-overrides",  auth, ownerAdmin, requirePermission("manage_roles"), staffPermissionsController.bulkResetOverrides);
+
 // ─── Staff by ID ──────────────────────────────────────────────────────────────
 router.get("/:id",    auth, ownerAdminStaff, requirePermission("view_team"), staffController.getById);
+
+// ─── Roles & Permissions — per staff ─────────────────────────────────────────
+router.get("/:id/permissions",   auth, ownerAdminStaff, requirePermission("view_team"), requireAnyPermission(["view_roles", "manage_roles"]), staffPermissionsController.getEffective);
+router.patch("/:id/permissions", auth, ownerAdmin, requirePermission("manage_roles"), staffPermissionsController.setOverrides);
+router.patch("/:id/role",        auth, ownerAdmin, requirePermission("manage_roles"), staffPermissionsController.assignRole);
 router.patch("/:id",  auth, ownerAdmin, requirePermission("edit_team_member"), validateUpdateStaff, staffController.update);
 router.patch("/:id/activate",   auth, ownerAdmin, requirePermission("edit_team_member"), staffController.activate);
 router.patch("/:id/deactivate", auth, ownerAdmin, requirePermission("edit_team_member"), staffController.deactivate);
