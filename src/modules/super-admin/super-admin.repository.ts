@@ -884,9 +884,12 @@ export const superAdminRepository = {
       SELECT
         scl.id, scl.salon_id, scl.salon_name, scl.reason, scl.created_at,
         TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,''))) AS cleared_by_name,
-        u.email AS cleared_by_email
+        u.email AS cleared_by_email,
+        owner.email AS salon_owner_email
       FROM salon_cleanup_log scl
       LEFT JOIN users u ON u.id = scl.cleared_by
+      LEFT JOIN salons s ON s.id = scl.salon_id
+      LEFT JOIN users owner ON owner.id = s.owner_id
       ${where}
       ORDER BY scl.created_at DESC
       LIMIT $${params.length - 1} OFFSET $${params.length}
