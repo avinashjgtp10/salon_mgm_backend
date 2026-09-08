@@ -45,7 +45,13 @@ router.get("/invite/:token/verify", staffInvitationController.verifyToken);
 router.post("/invite/accept", validateAcceptInvitation, staffInvitationController.acceptInvitation);
 
 // ─── Staff CRUD ───────────────────────────────────────────────────────────────
-router.get("/", auth, ownerAdminStaff, requirePermission("view_team"), staffController.list);
+// Quick Sale and Calendar both need to list staff to assign one to an
+// appointment/sale line item — and Calendar needs it just to VIEW the
+// calendar at all, since it renders one column per staff member (view_calendar
+// alone, not just manage_calendar, has to be enough — you don't need edit
+// rights on the calendar to see who it's organized by).
+const viewTeamOrBooking = requireAnyPermission(["view_team", "create_sales", "manage_calendar", "view_calendar"]);
+router.get("/", auth, ownerAdminStaff, viewTeamOrBooking, staffController.list);
 router.post("/", auth, ownerAdmin, requirePermission("add_team_member"), validateCreateStaff, staffController.create);
 
 // ─── Avatar upload (stateless — must be BEFORE /:id) ─────────────────────────

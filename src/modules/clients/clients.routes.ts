@@ -2,7 +2,7 @@
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
-import { requirePermission } from "../../middleware/permission.middleware";
+import { requirePermission, requireAnyPermission } from "../../middleware/permission.middleware";
 import { uploadMiddleware } from "../../middleware/upload.middleware";
 import { clientsController } from "./clients.controller";
 import { upload } from "./clients.upload";
@@ -22,9 +22,16 @@ import {
 const router = Router();
 const ownerAdmin = roleMiddleware("salon_owner", "admin");
 const ownerAdminStaff = roleMiddleware("salon_owner", "admin", "staff");
+// Quick Sale and Calendar both need to look up/select a client to build a
+// sale or appointment, even for staff who weren't separately granted Client
+// view access — same reasoning already applied to Services/Products/
+// Packages/Memberships. This was the gap: everywhere else got this
+// treatment, Clients didn't, which broke booking/checkout for anyone
+// granted only view_calendar or create_sales.
+const viewClients = requireAnyPermission(["view_clients", "create_sales", "manage_calendar"]);
 
 // LIST + CREATE
-router.get("/", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), validateClientsListQuery, clientsController.list);
+router.get("/", authMiddleware, ownerAdminStaff, viewClients, validateClientsListQuery, clientsController.list);
 router.post("/", authMiddleware, ownerAdminStaff, requirePermission("edit_clients"), validateCreateClient, clientsController.create);
 
 // Avatar upload (stateless — must be BEFORE /:clientId)
@@ -49,7 +56,7 @@ router.patch("/block", authMiddleware, ownerAdmin, validateBlockClients, clients
 router.post("/unblock", authMiddleware, ownerAdmin, validateUnblockClients, clientsController.unblock);
 
 // SEARCH — must be BEFORE /:clientId
-router.get("/search", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), validateSearchClients, clientsController.search);
+router.get("/search", authMiddleware, ownerAdminStaff, viewClients, validateSearchClients, clientsController.search);
 
 // Smart Filter for campaigns — must be BEFORE /:clientId
 router.get("/filter", authMiddleware, ownerAdmin, clientsController.filterForCampaign);
@@ -81,12 +88,12 @@ router.post(
     "/:clientId/details",
     authMiddleware,
     ownerAdminStaff,
-    requirePermission("view_clients"),
+    viewClients,
     clientsController.getByIdDetails
 );
 
 // GET / PATCH / DELETE by id
-router.get("/:clientId", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), clientsController.getById);
+router.get("/:clientId", authMiddleware, ownerAdminStaff, viewClients, clientsController.getById);
 router.patch("/:clientId", authMiddleware, ownerAdminStaff, requirePermission("edit_clients"), validateUpdateClient, clientsController.update);
 router.delete("/:clientId", authMiddleware, ownerAdminStaff, requirePermission("delete_clients"), clientsController.remove);
 
