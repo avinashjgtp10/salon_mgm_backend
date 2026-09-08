@@ -49,6 +49,11 @@ export const rolesService = {
         return rolesRepository.listPermissions();
     },
 
+    // ── Audit log ────────────────────────────────────────────────────────────
+    async listAuditLog(salonId: string, filters: { targetStaffId?: string; limit?: number; cursor?: string }) {
+        return rolesRepository.listAuditLog(salonId, filters);
+    },
+
     // ── Roles ────────────────────────────────────────────────────────────────
     async listRoles(salonId: string): Promise<(Role & { staff_count: number })[]> {
         return rolesRepository.listRoles(salonId);

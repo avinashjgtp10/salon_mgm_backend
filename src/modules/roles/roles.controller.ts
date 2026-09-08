@@ -40,6 +40,19 @@ export const permissionsController = {
     },
 };
 
+export const auditLogController = {
+    async list(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const salonId = getSalonId(req);
+            const targetStaffId = req.query.target_staff_id ? String(req.query.target_staff_id) : undefined;
+            const limit = req.query.limit ? Number(req.query.limit) : undefined;
+            const cursor = req.query.cursor ? String(req.query.cursor) : undefined;
+            const result = await rolesService.listAuditLog(salonId, { targetStaffId, limit, cursor });
+            return sendSuccess(res, 200, result, "Permission audit log fetched successfully");
+        } catch (err) { return next(err); }
+    },
+};
+
 export const rolesController = {
     async list(req: AuthRequest, res: Response, next: NextFunction) {
         try {
