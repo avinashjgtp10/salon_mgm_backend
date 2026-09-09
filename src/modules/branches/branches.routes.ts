@@ -3,6 +3,7 @@
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
+import { requirePermission } from "../../middleware/permission.middleware";
 import { branchesController } from "./branches.controller";
 import {
     validateCreateBranch,
@@ -15,12 +16,20 @@ import {
 } from "./branches.validator";
 
 const router = Router();
+// Previously owner/admin-only with no permission key at all (and no
+// frontend UI to reach it) — opened to staff via view_branches/
+// manage_branches this phase. NOTE: a frontend screen still needs to be
+// built for this to be reachable in the UI — this only closes the backend
+// gap so the API is ready when that UI exists.
+const ownerAdminStaff = roleMiddleware("salon_owner", "admin", "staff");
+const viewBranches = requirePermission("view_branches");
+const manageBranches = requirePermission("manage_branches");
 
 // ---------- BRANCH ----------
 router.post(
     "/",
     authMiddleware,
-    roleMiddleware("salon_owner", "admin"),
+    ownerAdminStaff, manageBranches,
     validateCreateBranch,
     branchesController.create
 );
@@ -28,21 +37,21 @@ router.post(
 router.get(
     "/by-salon/:salonId",
     authMiddleware,
-    roleMiddleware("salon_owner", "admin"),
+    ownerAdminStaff, viewBranches,
     branchesController.listBySalon
 );
 
 router.get(
     "/:id",
     authMiddleware,
-    roleMiddleware("salon_owner", "admin"),
+    ownerAdminStaff, viewBranches,
     branchesController.getById
 );
 
 router.patch(
     "/:id",
     authMiddleware,
-    roleMiddleware("salon_owner", "admin"),
+    ownerAdminStaff, manageBranches,
     validateUpdateBranch,
     branchesController.update
 );
@@ -51,7 +60,7 @@ router.patch(
 router.post(
     "/:id/timings",
     authMiddleware,
-    roleMiddleware("salon_owner", "admin"),
+    ownerAdminStaff, manageBranches,
     validateSetTimings,
     branchesController.setTimings
 );
@@ -59,14 +68,14 @@ router.post(
 router.get(
     "/:id/timings",
     authMiddleware,
-    roleMiddleware("salon_owner", "admin"),
+    ownerAdminStaff, viewBranches,
     branchesController.getTimings
 );
 
 router.put(
     "/:id/timings",
     authMiddleware,
-    roleMiddleware("salon_owner", "admin"),
+    ownerAdminStaff, manageBranches,
     validateReplaceTimings,
     branchesController.replaceTimings
 );
@@ -75,7 +84,7 @@ router.put(
 router.post(
     "/:id/holidays",
     authMiddleware,
-    roleMiddleware("salon_owner", "admin"),
+    ownerAdminStaff, manageBranches,
     validateCreateHoliday,
     branchesController.createHoliday
 );
@@ -83,7 +92,7 @@ router.post(
 router.get(
     "/:id/holidays",
     authMiddleware,
-    roleMiddleware("salon_owner", "admin"),
+    ownerAdminStaff, viewBranches,
     validateHolidayListQuery,
     branchesController.listHolidays
 );
@@ -92,7 +101,7 @@ router.get(
 router.delete(
     "/holidays/:holidayId",
     authMiddleware,
-    roleMiddleware("salon_owner", "admin"),
+    ownerAdminStaff, manageBranches,
     validateDeleteHoliday,
     branchesController.deleteHoliday
 );

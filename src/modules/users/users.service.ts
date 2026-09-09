@@ -3,8 +3,10 @@ import { AppError } from "../../middleware/error.middleware";
 import { usersRepo } from "./users.repository";
 import { SafeUser, UpdateUserInput } from "./users.types";
 import logger from "../../config/logger";
+import { getEffectivePermissionsForUser } from "../../middleware/permission.middleware";
+import { rolesRepository } from "../roles/roles.repository";
 
-function toSafeUser(u: any): SafeUser {
+function toSafeUser(u: any, effectivePermissions: Record<string, boolean> | null = null): SafeUser {
   const fullName =
     (u.full_name?.trim()) ||
     [u.first_name, u.last_name]
@@ -33,6 +35,7 @@ function toSafeUser(u: any): SafeUser {
     countryCode: u.country_code ?? null,
     isOnboardingComplete: u.is_onboarding_complete ?? false,
     custom_permissions: u.custom_permissions ?? null,
+    effective_permissions: effectivePermissions,
   };
 }
 
@@ -48,8 +51,23 @@ export const usersService = {
       throw new AppError(404, "User not found", "USER_NOT_FOUND");
     }
 
+    // effective_permissions is the frontend's single source of truth for
+    // usePermissions() — computed via the exact same resolution the backend
+    // uses to enforce every request, so the UI can never drift from what's
+    // actually allowed. Only meaningful for staff (owner/admin bypass
+    // everything, so there's nothing useful to compute for them).
+    let effectivePermissions: Record<string, boolean> | null = null;
+    if (user.role === "staff" && user.staff_salon_id) {
+      const catalog = await rolesRepository.listPermissions();
+      effectivePermissions = await getEffectivePermissionsForUser(
+        userId,
+        user.staff_salon_id,
+        catalog.map((p) => p.key)
+      );
+    }
+
     logger.info(`User profile fetched successfully`, { userId });
-    return toSafeUser(user);
+    return toSafeUser(user, effectivePermissions);
   },
 
   async list() {
@@ -59,7 +77,7 @@ export const usersService = {
 
     logger.info(`Users fetched`, { count: users.length });
 
-    return users.map(toSafeUser);
+    return users.map((u) => toSafeUser(u));
   },
 
   async getById(id: string) {
