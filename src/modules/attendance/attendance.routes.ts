@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
+import { requirePermission } from "../../middleware/permission.middleware";
 import { attendanceController } from "./attendance.controller";
 
 const router = Router();
@@ -16,7 +17,7 @@ router.get("/today",       authMiddleware, ownerAdminStaff, attendanceController
 router.get("/monthly",     authMiddleware, ownerAdminStaff, attendanceController.getMonthly);
 router.get("/range",       authMiddleware, ownerAdminStaff, attendanceController.getRange);
 router.get("/summary",     authMiddleware, ownerAdminStaff, attendanceController.getDailySummary);
-router.get("/export",      authMiddleware, ownerAdmin,      attendanceController.exportCSV);
+router.get("/export",      authMiddleware, ownerAdmin,      requirePermission("export_csv"), attendanceController.exportCSV);
 router.get("/staff/:staffId", authMiddleware, ownerAdminStaff, attendanceController.getForStaff);
 
 // Check in/out

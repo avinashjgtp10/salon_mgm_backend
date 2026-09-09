@@ -31,9 +31,9 @@ router.get("/",            ...guard, viewMemberships, requireMembershipsFeature,
 // Must precede "/:id" — otherwise these are swallowed as an id.
 router.get("/loyalty-eligibility", ...guard, viewMemberships, membershipsController.loyaltyEligibility);
 router.get("/filter-options",      ...guard, viewMemberships, requireMembershipsFeature, membershipsController.filterOptions);
-router.get("/export/csv",   ...guard, viewMemberships, requireMembershipsFeature, validateExportQuery, membershipsController.exportCsv);
-router.get("/export/excel", ...guard, viewMemberships, requireMembershipsFeature, validateExportQuery, membershipsController.exportExcel);
-router.get("/export/pdf",   ...guard, viewMemberships, requireMembershipsFeature, validateExportQuery, membershipsController.exportPdf);
+router.get("/export/csv",   ...guard, viewMemberships, requireMembershipsFeature, requirePermission("export_csv"),   validateExportQuery, membershipsController.exportCsv);
+router.get("/export/excel", ...guard, viewMemberships, requireMembershipsFeature, requirePermission("export_excel"), validateExportQuery, membershipsController.exportExcel);
+router.get("/export/pdf",   ...guard, viewMemberships, requireMembershipsFeature, requirePermission("export_pdf"),   validateExportQuery, membershipsController.exportPdf);
 router.post("/",           ...guard, createMemberships, requireMembershipsFeature, validateCreateMembership,     membershipsController.create);
 router.get("/:id",         ...guard, viewMemberships,                                 membershipsController.getById);
 router.patch("/:id",       ...guard, editMemberships, requireMembershipsFeature, validateUpdateMembership,       membershipsController.update);
