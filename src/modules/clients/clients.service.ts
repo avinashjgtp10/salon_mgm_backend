@@ -600,13 +600,13 @@ export const clientsService = {
                     continue;
                 }
                 body.phone_number = phoneDigits;
-                if (!body.gender) {
-                    result.skipped += 1;
-                    result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: "Gender is required" });
-                    continue;
-                }
 
                 // ── Optional fields — validated only when present, same as the form ──
+                // Gender is intentionally NOT required here even though the
+                // manual Add Client form (AddClientPage.tsx) still requires
+                // it — bulk import files commonly don't carry gender for
+                // every row, and the column accepts null (see
+                // clients.repository.ts's `body.gender ?? null`).
                 if (body.email && !EMAIL_FORMAT_RE.test(body.email)) {
                     result.skipped += 1;
                     result.errors.push({ row: rowNum, code: "VALIDATION_ERROR", message: `Invalid email "${body.email}". Enter a valid email address.` });
