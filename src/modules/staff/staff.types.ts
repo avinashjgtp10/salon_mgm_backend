@@ -119,7 +119,9 @@ export type StaffScheduleSummary = {
 
 export type CreateStaffBody = {
     first_name: string;
-    email: string;
+    // Optional — only required when Staff Login is being enabled (a
+    // password is set); see validateCreateStaff / staffService.create.
+    email?: string;
     last_name?: string;
     phone?: string;
     phone_country_code?: string;
