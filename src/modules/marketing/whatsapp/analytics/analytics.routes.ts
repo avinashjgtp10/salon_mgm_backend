@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { authMiddleware } from '../../../../middleware/auth.middleware'
 import { roleMiddleware } from '../../../../middleware/role.middleware'
+import { requirePermission } from '../../../../middleware/permission.middleware'
 import { analyticsController } from './analytics.controller'
 
 const router = Router()
@@ -9,7 +10,8 @@ const router = Router()
 router.get(
   '/',
   authMiddleware,
-  roleMiddleware('salon_owner', 'admin'),
+  roleMiddleware('salon_owner', 'admin', 'staff'),
+  requirePermission('view_campaigns'),
   analyticsController.getAnalytics
 )
 

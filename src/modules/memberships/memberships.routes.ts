@@ -24,6 +24,8 @@ const createMemberships = requirePermission("create_memberships");
 // sale/appointment, which stay available to every tier. See
 // Migration/add_feature_key_to_salon_plans.sql.
 const requireMembershipsFeature = requirePlanFeature("memberships");
+const editMemberships = requirePermission("edit_memberships");
+const deleteMemberships = requirePermission("delete_memberships");
 
 router.get("/",            ...guard, viewMemberships, requireMembershipsFeature, validateMembershipsListQuery, membershipsController.list);
 // Must precede "/:id" — otherwise these are swallowed as an id.
@@ -34,7 +36,7 @@ router.get("/export/excel", ...guard, viewMemberships, requireMembershipsFeature
 router.get("/export/pdf",   ...guard, viewMemberships, requireMembershipsFeature, validateExportQuery, membershipsController.exportPdf);
 router.post("/",           ...guard, createMemberships, requireMembershipsFeature, validateCreateMembership,     membershipsController.create);
 router.get("/:id",         ...guard, viewMemberships,                                 membershipsController.getById);
-router.patch("/:id",       ...guard, createMemberships, requireMembershipsFeature, validateUpdateMembership,     membershipsController.update);
-router.delete("/:id",      ...guard, createMemberships, requireMembershipsFeature,                               membershipsController.delete);
+router.patch("/:id",       ...guard, editMemberships, requireMembershipsFeature, validateUpdateMembership,       membershipsController.update);
+router.delete("/:id",      ...guard, deleteMemberships, requireMembershipsFeature,                               membershipsController.delete);
 
 export default router;

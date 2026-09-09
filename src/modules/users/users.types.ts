@@ -33,6 +33,9 @@ export type SafeUser = {
     countryCode: string | null;
     isOnboardingComplete: boolean;
     custom_permissions: Record<string, boolean> | null;
+    /** Real-time resolved permission map (staff only) — see permission.middleware.ts's
+     * getEffectivePermissionsForUser(). null for owner/admin/client, who don't need it. */
+    effective_permissions: Record<string, boolean> | null;
 };
 
 export type { UpdateUserInput } from "./users.validator";

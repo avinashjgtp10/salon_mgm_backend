@@ -1,5 +1,11 @@
 import { AppError } from "../../middleware/error.middleware";
-import { staffHasPermission, PermUser } from "../../middleware/permission.middleware";
+import {
+    staffHasPermission,
+    PermUser,
+    invalidateStaffRoleCache,
+    invalidateRolePermissionsCache,
+    invalidateStaffOverridesCache,
+} from "../../middleware/permission.middleware";
 import { rolesRepository } from "./roles.repository";
 import {
     Permission,
@@ -43,10 +49,26 @@ async function assertNoEscalation(actor: ActorContext, keysBeingGrantedTrue: str
     }
 }
 
+// Finds an existing role by name for this salon, or creates it blank (every
+// permission false) — deliberately NOT seeded from DEFAULT_STAFF_PERMS. Once
+// a staff member is touched through the new system at all, they should be on
+// an explicit-grant model, not silently inheriting the old legacy defaults.
+async function ensureDefaultRole(salonId: string, name: string): Promise<string> {
+    const existing = await rolesRepository.findRoleByName(salonId, name);
+    if (existing) return existing.id;
+    const created = await rolesRepository.createRole(salonId, name, `Default ${name} role`);
+    return created.id;
+}
+
 export const rolesService = {
     // ── Permission catalog ───────────────────────────────────────────────────
     async listPermissions(): Promise<Permission[]> {
         return rolesRepository.listPermissions();
+    },
+
+    // ── Audit log ────────────────────────────────────────────────────────────
+    async listAuditLog(salonId: string, filters: { targetStaffId?: string; limit?: number; cursor?: string }) {
+        return rolesRepository.listAuditLog(salonId, filters);
     },
 
     // ── Roles ────────────────────────────────────────────────────────────────
@@ -76,6 +98,7 @@ export const rolesService = {
         for (const [key, allowed] of Object.entries(permissions)) {
             await rolesRepository.setRolePermission(role.id, key, allowed);
         }
+        invalidateRolePermissionsCache(role.id);
 
         await rolesRepository.insertAuditLog({
             salonId,
@@ -117,6 +140,7 @@ export const rolesService = {
         });
 
         if (body.permissions) {
+            invalidateRolePermissionsCache(id);
             for (const [key, allowed] of Object.entries(body.permissions)) {
                 if (beforePermissions[key] !== allowed) {
                     await rolesRepository.setRolePermission(id, key, allowed);
@@ -214,8 +238,21 @@ export const rolesService = {
         actor: ActorContext,
         overrides: Record<string, boolean | null>
     ): Promise<StaffPermissionsView> {
-        const staff = await rolesRepository.getStaffRoleId(staffId, salonId);
+        let staff = await rolesRepository.getStaffRoleId(staffId, salonId);
         if (!staff) throw new AppError(404, "Staff member not found", "NOT_FOUND");
+
+        // An override with no role behind it is inert — permission.middleware.ts's
+        // resolver only ever consults staff_permission_overrides once role_id is
+        // set, otherwise it falls through to the legacy blob/DEFAULT_STAFF_PERMS
+        // path, silently ignoring whatever was just saved here. Auto-assign the
+        // default "Staff" role (creating it, blank, if this salon doesn't have one
+        // yet) so an override set through this endpoint is never a no-op.
+        if (!staff.role_id) {
+            const defaultRoleId = await ensureDefaultRole(salonId, "Staff");
+            await rolesRepository.assignStaffRole(staffId, defaultRoleId);
+            staff = { ...staff, role_id: defaultRoleId };
+            if (staff.user_id) invalidateStaffRoleCache(staff.user_id);
+        }
 
         const grantedTrueKeys = Object.entries(overrides).filter(([, v]) => v === true).map(([k]) => k);
         await assertNoEscalation(actor, grantedTrueKeys);
@@ -240,6 +277,7 @@ export const rolesService = {
                 userAgent: actor.userAgent,
             });
         }
+        invalidateStaffOverridesCache(staffId);
 
         return this.getStaffEffectivePermissions(staffId, salonId);
     },
@@ -250,6 +288,7 @@ export const rolesService = {
 
         const before = await rolesRepository.getStaffOverrides(staffId);
         await rolesRepository.deleteAllStaffOverrides(staffId);
+        invalidateStaffOverridesCache(staffId);
 
         if (Object.keys(before).length > 0) {
             await rolesRepository.insertAuditLog({
@@ -282,6 +321,7 @@ export const rolesService = {
 
         const beforeRoleId = staff.role_id;
         await rolesRepository.assignStaffRole(staffId, roleId);
+        if (staff.user_id) invalidateStaffRoleCache(staff.user_id);
 
         await rolesRepository.insertAuditLog({
             salonId,
