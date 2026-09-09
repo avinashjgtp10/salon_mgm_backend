@@ -3,6 +3,7 @@ import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { requirePermission } from "../../middleware/permission.middleware";
+import { requirePlanFeature } from "../../middleware/planFeature.middleware";
 import { uploadMiddleware } from "../../middleware/upload.middleware";
 import { clientsController } from "./clients.controller";
 import { upload } from "./clients.upload";
@@ -22,6 +23,12 @@ import {
 const router = Router();
 const ownerAdmin = roleMiddleware("salon_owner", "admin");
 const ownerAdminStaff = roleMiddleware("salon_owner", "admin", "staff");
+
+// featureKey "clients" — Basic tier and up by default, but a super admin can
+// still revoke it per salon via feature_overrides. See inventory.routes.ts
+// for the same router.use() pattern and why authMiddleware needs repeating
+// here even though each route below also calls it.
+router.use(authMiddleware, requirePlanFeature("clients"));
 
 // LIST + CREATE
 router.get("/", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), validateClientsListQuery, clientsController.list);

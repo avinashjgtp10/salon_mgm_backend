@@ -2,6 +2,7 @@ import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { uploadMiddleware } from "../../middleware/upload.middleware";
+import { requirePlanFeature } from "../../middleware/planFeature.middleware";
 import { marketplaceController } from "./marketplace.controller";
 import {
   validateUpsertEssentials, validateUpsertAbout,
@@ -13,6 +14,10 @@ import {
 const router  = Router();
 const auth    = authMiddleware;
 const ownerAdmin = roleMiddleware("salon_owner", "admin");
+
+// featureKey "online_booking" — Basic tier and up by default, revocable per
+// salon via feature_overrides.
+router.use(authMiddleware, requirePlanFeature("online_booking"));
 
 // ── Full profile ──────────────────────────────────────────────────────────────
 router.get("/profile",          auth, ownerAdmin, marketplaceController.getProfile);
