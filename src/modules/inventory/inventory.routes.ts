@@ -89,11 +89,11 @@ router.post(
 );
 
 router.get(
-    "/suppliers/locations",
+    "/suppliers/filter-options",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
     viewInventory,
-    suppliersController.listLocations
+    suppliersController.listFilterOptions
 );
 
 router.get(
