@@ -410,6 +410,11 @@ export type StaffListQuery = {
     employment_type?: EmploymentType;
     is_active?: boolean;
     branch_id?: string;
-    sort_by?: "first_name" | "last_name" | "email" | "created_at" | "invitation_status" | "designation";
+    // Staff Members list's "Bookable / Non-bookable" filter — server-side so
+    // pagination totals stay correct while that filter is applied (see
+    // StaffListPage.tsx, which used to filter this client-side over an
+    // already-fetched, unpaginated list).
+    allow_calendar_bookings?: boolean;
+    sort_by?: "first_name" | "last_name" | "email" | "created_at" | "invitation_status" | "designation" | "joined_date";
     sort_order?: "ASC" | "DESC";
 };

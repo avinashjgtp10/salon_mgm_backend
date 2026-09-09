@@ -208,6 +208,15 @@ export const staffService = {
         // Split out blocked_times — handled separately, not a staff table column
         const { blocked_times: blockedTimesToCreate, ...staffPatch } = patch as any;
 
+        // Email is immutable once a staff member exists — the Edit Staff screen
+        // shows it read-only, but this drops it here too so the API itself can't
+        // be used to change it regardless of what a client sends. Deleting
+        // (rather than validating-and-rejecting) keeps the update endpoint
+        // tolerant of clients that still echo the unchanged email back, and the
+        // password-setup branch below falls back to `existing.email` once this
+        // is gone from staffPatch.
+        delete staffPatch.email;
+
         // Create any embedded blocked times
         const createdBlockedTimes: any[] = [];
         if (Array.isArray(blockedTimesToCreate) && blockedTimesToCreate.length > 0) {

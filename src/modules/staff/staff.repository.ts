@@ -29,11 +29,11 @@ export const staffRepository = {
     async list(salonId: string, q: StaffListQuery): Promise<{ data: Staff[]; total: number }> {
         const {
             page = 1, limit = 50, search, invitation_status,
-            employment_type, is_active, branch_id,
+            employment_type, is_active, branch_id, allow_calendar_bookings,
             sort_by = "created_at", sort_order = "DESC",
         } = q;
 
-        const ALLOWED_SORT = ["first_name", "last_name", "email", "created_at", "invitation_status", "designation"];
+        const ALLOWED_SORT = ["first_name", "last_name", "email", "created_at", "invitation_status", "designation", "joined_date"];
         const safeSortBy = ALLOWED_SORT.includes(sort_by) ? sort_by : "created_at";
         const safeSortOrder = sort_order === "ASC" ? "ASC" : "DESC";
 
@@ -50,6 +50,7 @@ export const staffRepository = {
         if (employment_type) { conditions.push(`employment_type = $${idx}`); values.push(employment_type); idx++; }
         if (is_active !== undefined) { conditions.push(`is_active = $${idx}`); values.push(is_active); idx++; }
         if (branch_id) { conditions.push(`branch_id = $${idx}`); values.push(branch_id); idx++; }
+        if (allow_calendar_bookings !== undefined) { conditions.push(`allow_calendar_bookings = $${idx}`); values.push(allow_calendar_bookings); idx++; }
 
         const where = conditions.join(" AND ");
         const offset = (page - 1) * limit;
