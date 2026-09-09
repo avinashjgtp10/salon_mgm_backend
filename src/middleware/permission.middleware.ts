@@ -176,6 +176,7 @@ const DEFAULT_STAFF_PERMS: Record<string, boolean> = {
     delete_clients: false,
     view_sales: true,
     create_sales: true,
+    import_sales: false,
     view_services: true,
     create_services: false,
     edit_services: false,
