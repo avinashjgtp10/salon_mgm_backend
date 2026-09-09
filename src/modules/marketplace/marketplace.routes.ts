@@ -3,6 +3,7 @@ import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { requirePermission } from "../../middleware/permission.middleware";
 import { uploadMiddleware } from "../../middleware/upload.middleware";
+import { requirePlanFeature } from "../../middleware/planFeature.middleware";
 import { marketplaceController } from "./marketplace.controller";
 import {
   validateUpsertEssentials, validateUpsertAbout,
@@ -19,6 +20,10 @@ const auth    = authMiddleware;
 const ownerAdminStaff = roleMiddleware("salon_owner", "admin", "staff");
 const viewBooking = requirePermission("view_booking");
 const manageBooking = requirePermission("manage_booking");
+
+// featureKey "online_booking" — Basic tier and up by default, revocable per
+// salon via feature_overrides.
+router.use(authMiddleware, requirePlanFeature("online_booking"));
 
 // ── Full profile ──────────────────────────────────────────────────────────────
 router.get("/profile",          auth, ownerAdminStaff, viewBooking, marketplaceController.getProfile);

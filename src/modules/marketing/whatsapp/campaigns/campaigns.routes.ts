@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { authMiddleware } from '../../../../middleware/auth.middleware'
 import { roleMiddleware } from '../../../../middleware/role.middleware'
+import { requirePlanFeature } from '../../../../middleware/planFeature.middleware'
 import { requirePermission } from '../../../../middleware/permission.middleware'
 import { campaignsController } from './campaigns.controller'
 import { validateCreateCampaign } from './campaigns.validator'
@@ -12,6 +13,12 @@ const router = Router()
 const ownerAdminStaff = roleMiddleware('salon_owner', 'admin', 'staff')
 const viewCampaigns = requirePermission('view_campaigns')
 const manageCampaigns = requirePermission('create_campaigns')
+
+// featureKey "marketing" — Advance tier and up (see
+// Migration/add_feature_key_to_salon_plans.sql). See inventory.routes.ts for
+// the same router.use() pattern and why authMiddleware needs repeating here
+// even though each route below also calls it.
+router.use(authMiddleware, requirePlanFeature('marketing'))
 
 router.get('/',
   authMiddleware, ownerAdminStaff, viewCampaigns,
