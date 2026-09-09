@@ -34,10 +34,10 @@ router.patch("/brands/:id", authMiddleware, ownerAdminStaff, createProducts, val
 router.delete("/brands/:id", authMiddleware, roleMiddleware("salon_owner", "admin"), brandsController.delete);
 
 // Products
-router.get("/export/csv", authMiddleware, ownerAdminStaff, viewProducts, productsController.exportCSV);
-router.get("/export/excel", authMiddleware, ownerAdminStaff, viewProducts, productsController.exportExcel);
-router.get("/export/pdf", authMiddleware, ownerAdminStaff, viewProducts, productsController.exportPDF);
-router.post("/import", authMiddleware, ownerAdminStaff, createProducts, importUpload.single("file"), productsController.importProducts);
+router.get("/export/csv", authMiddleware, ownerAdminStaff, viewProducts, requirePermission("export_csv"), productsController.exportCSV);
+router.get("/export/excel", authMiddleware, ownerAdminStaff, viewProducts, requirePermission("export_excel"), productsController.exportExcel);
+router.get("/export/pdf", authMiddleware, ownerAdminStaff, viewProducts, requirePermission("export_pdf"), productsController.exportPDF);
+router.post("/import", authMiddleware, ownerAdminStaff, createProducts, requirePermission("import_file"), importUpload.single("file"), productsController.importProducts);
 
 router.get("/", authMiddleware, ownerAdminStaff, viewProducts, validateListQuery, productsController.list);
 router.post("/search", authMiddleware, ownerAdminStaff, viewProducts, validateSearchBody, productsController.search);

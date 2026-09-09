@@ -300,6 +300,31 @@ export const requirePermission = (permKey: string) =>
         }
     };
 
+// ── Middleware factory (export-format-aware) ───────────────────────────────────
+// A handful of export endpoints serve csv/excel/pdf from one route via
+// ?format=..., rather than three separate routes — so the permission to
+// check can't be picked statically at route-registration time. Mirrors each
+// controller's own format parsing/defaulting exactly, so the permission
+// checked always matches the file actually generated.
+//
+// `formatToKey` lets a caller remap a query value that isn't literally
+// "pdf"/"excel"/"csv" onto the right permission — e.g. staff commissions'
+// export endpoint uses ?format=json to fetch rows for a client-side PDF
+// build (same pattern as the Reports module's ReportExportButton), which
+// should still require export_pdf, not a nonexistent "export_json".
+export const requireExportFormatPermission = (
+    allowedFormats: string[] = ["csv", "excel", "pdf"],
+    defaultFormat: string = "csv",
+    formatToKey: Record<string, "csv" | "excel" | "pdf"> = {}
+) =>
+    (req: Request & { user?: PermUser }, res: Response, next: NextFunction) => {
+        const raw = String(req.query.format || "").toLowerCase();
+        const format = allowedFormats.includes(raw) ? raw : defaultFormat;
+        const resolved = formatToKey[format] ?? (format as "csv" | "excel" | "pdf");
+        const key = resolved === "pdf" ? "export_pdf" : resolved === "excel" ? "export_excel" : "export_csv";
+        return requirePermission(key)(req, res, next);
+    };
+
 // ── Middleware factory (any-of) ────────────────────────────────────────────────
 // Passes if the staff member has AT LEAST ONE of the given keys. Use this for
 // reads that multiple independent features legitimately depend on — e.g. Quick

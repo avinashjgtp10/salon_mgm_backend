@@ -2,7 +2,7 @@
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
-import { requirePermission, requireAnyPermission } from "../../middleware/permission.middleware";
+import { requirePermission, requireAnyPermission, requireExportFormatPermission } from "../../middleware/permission.middleware";
 import { requirePlanFeature } from "../../middleware/planFeature.middleware";
 import { uploadMiddleware } from "../../middleware/upload.middleware";
 import { clientsController } from "./clients.controller";
@@ -45,10 +45,10 @@ router.post("/", authMiddleware, ownerAdminStaff, requirePermission("edit_client
 router.post("/upload-avatar", authMiddleware, ownerAdmin, uploadMiddleware.single("avatar"), clientsController.uploadAvatar);
 
 // EXPORT (same filters)
-router.get("/export", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), validateClientsListQuery, clientsController.export);
+router.get("/export", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), requireExportFormatPermission(["csv", "excel", "pdf"], "csv"), validateClientsListQuery, clientsController.export);
 
 // IMPORT
-router.post("/import", authMiddleware, ownerAdmin, upload.single("file"), clientsController.import);
+router.post("/import", authMiddleware, ownerAdmin, requirePermission("import_file"), upload.single("file"), clientsController.import);
 
 // GET /api/v1/clients/duplicates?phone_number=...
 router.get("/duplicates", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), clientsController.findDuplicates);

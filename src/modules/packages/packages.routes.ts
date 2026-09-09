@@ -28,9 +28,9 @@ const editPackages = requirePermission("edit_packages");
 const deletePackages = requirePermission("delete_packages");
 
 // Export routes MUST come before /:id to avoid param matching
-router.get("/export/csv",   ...auth, viewPackages, requirePackagesFeature, packagesController.exportCsv);
-router.get("/export/excel", ...auth, viewPackages, requirePackagesFeature, packagesController.exportExcel);
-router.get("/export/pdf",   ...auth, viewPackages, requirePackagesFeature, packagesController.exportPdf);
+router.get("/export/csv",   ...auth, viewPackages, requirePackagesFeature, requirePermission("export_csv"),   packagesController.exportCsv);
+router.get("/export/excel", ...auth, viewPackages, requirePackagesFeature, requirePermission("export_excel"), packagesController.exportExcel);
+router.get("/export/pdf",   ...auth, viewPackages, requirePackagesFeature, requirePermission("export_pdf"),   packagesController.exportPdf);
 
 // CRUD
 router.get("/",      ...auth, viewPackages, requirePackagesFeature, validatePackagesListQuery, packagesController.list);
