@@ -23,6 +23,8 @@ const ownerAdminStaff = roleMiddleware("salon_owner", "admin", "staff");
 // manage the calendar.
 const viewProducts = requireAnyPermission(["view_products", "create_sales", "manage_calendar"]);
 const createProducts = requirePermission("create_products");
+const editProducts = requirePermission("edit_products");
+const deleteProducts = requirePermission("delete_products");
 
 // Brands
 router.get("/brands", authMiddleware, ownerAdminStaff, viewProducts, brandsController.list);
@@ -32,21 +34,21 @@ router.patch("/brands/:id", authMiddleware, ownerAdminStaff, createProducts, val
 router.delete("/brands/:id", authMiddleware, roleMiddleware("salon_owner", "admin"), brandsController.delete);
 
 // Products
-router.get("/export/csv", authMiddleware, ownerAdminStaff, viewProducts, productsController.exportCSV);
-router.get("/export/excel", authMiddleware, ownerAdminStaff, viewProducts, productsController.exportExcel);
-router.get("/export/pdf", authMiddleware, ownerAdminStaff, viewProducts, productsController.exportPDF);
-router.post("/import", authMiddleware, ownerAdminStaff, createProducts, importUpload.single("file"), productsController.importProducts);
+router.get("/export/csv", authMiddleware, ownerAdminStaff, viewProducts, requirePermission("export_csv"), productsController.exportCSV);
+router.get("/export/excel", authMiddleware, ownerAdminStaff, viewProducts, requirePermission("export_excel"), productsController.exportExcel);
+router.get("/export/pdf", authMiddleware, ownerAdminStaff, viewProducts, requirePermission("export_pdf"), productsController.exportPDF);
+router.post("/import", authMiddleware, ownerAdminStaff, createProducts, requirePermission("import_file"), importUpload.single("file"), productsController.importProducts);
 
 router.get("/", authMiddleware, ownerAdminStaff, viewProducts, validateListQuery, productsController.list);
 router.post("/search", authMiddleware, ownerAdminStaff, viewProducts, validateSearchBody, productsController.search);
 router.get("/:id", authMiddleware, ownerAdminStaff, viewProducts, productsController.getById);
 router.post("/", authMiddleware, ownerAdminStaff, createProducts, uploadMiddleware.array("photos", 5), validateCreateProduct, productsController.create);
-router.patch("/:id", authMiddleware, ownerAdminStaff, createProducts, validateUpdateProduct, productsController.update);
-router.delete("/:id", authMiddleware, roleMiddleware("salon_owner", "admin"), productsController.delete);
+router.patch("/:id", authMiddleware, ownerAdminStaff, editProducts, validateUpdateProduct, productsController.update);
+router.delete("/:id", authMiddleware, ownerAdminStaff, deleteProducts, productsController.delete);
 
 // Product Photos
-router.post("/:id/photos", authMiddleware, ownerAdminStaff, createProducts, uploadMiddleware.array("photos", 5), productsController.uploadPhotos);
-router.put("/:id/photos/reorder", authMiddleware, ownerAdminStaff, createProducts, validateReorderPhotos, productsController.reorderPhotos);
-router.delete("/:id/photos/:photoId", authMiddleware, ownerAdminStaff, createProducts, productsController.deletePhoto);
+router.post("/:id/photos", authMiddleware, ownerAdminStaff, editProducts, uploadMiddleware.array("photos", 5), productsController.uploadPhotos);
+router.put("/:id/photos/reorder", authMiddleware, ownerAdminStaff, editProducts, validateReorderPhotos, productsController.reorderPhotos);
+router.delete("/:id/photos/:photoId", authMiddleware, ownerAdminStaff, editProducts, productsController.deletePhoto);
 
 export default router;

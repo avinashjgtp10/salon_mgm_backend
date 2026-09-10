@@ -189,6 +189,13 @@ export type AutomationTriggerPayload = {
   // send time (Meta's dynamic URL button mechanism). Only meaningful when the
   // resolved template has has_button = true; ignored otherwise.
   buttonSuffix?: string | null
+  // ── Non-WhatsApp channel fan-out (see notification-channels module) ──────
+  // Optional — most call sites already have a client's email resolved for
+  // their own purposes (or don't, and the dispatcher looks it up from
+  // clientId instead). emailAttachment is set only by bill_receipt's own
+  // call site, which already has the PDF buffer built for the WhatsApp send.
+  email?: string | null
+  emailAttachment?: { buffer: Buffer; filename: string } | null
 }
 
 // ── API Bodies ────────────────────────────────────────────────────────────────

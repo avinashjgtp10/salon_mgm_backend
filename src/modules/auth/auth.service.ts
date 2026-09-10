@@ -179,6 +179,9 @@ export const authService = {
     await authRepository.updateLastLogin(user.id);
 
     const salonId = await authRepository.findSalonIdByUserId(user.id);
+    // Informational only — see findStaffRoleNameByUserId's own comment for
+    // why this must never replace user.role in the token or response below.
+    const staffRoleName = await authRepository.findStaffRoleNameByUserId(user.id);
     const accessToken = signAccessToken({ userId: user.id, role: user.role, salonId });
     const refreshToken = signRefreshToken({ userId: user.id });
 
@@ -226,6 +229,12 @@ export const authService = {
         id: user.id,
         email: user.email,
         role: user.role,
+        // The staff member's assigned role NAME from Roles & Permissions
+        // (e.g. "Manager", "Staff") — null for owner/admin/client, and for
+        // staff who haven't been assigned a role yet. This is what the
+        // frontend should use to show/label "Manager" after login; `role`
+        // above stays the fixed authorization enum and is never "manager".
+        roleName: staffRoleName,
         first_name: user.first_name,
         last_name: user.last_name,
         salonId,

@@ -32,6 +32,35 @@ export const reviewsRepository = {
     return { data: rows, total: countRow?.total ?? 0 }
   },
 
+  // Public booking page — only visible reviews that actually carry written
+  // feedback (a bare star rating with no text isn't worth surfacing to a
+  // browsing client), and only the reviewer's first name, never phone/client_id.
+  async listPublic(salonId: string, limit = 10): Promise<Array<{ id: string; rating: number; review_text: string; created_at: string; client_first_name: string }>> {
+    const { rows } = await pool.query(
+      `SELECT r.id, r.rating, r.review_text, r.created_at,
+              COALESCE(NULLIF(c.first_name, ''), 'Guest') AS client_first_name
+       FROM reviews r
+       LEFT JOIN clients c ON c.id = r.client_id
+       WHERE r.salon_id = $1 AND r.is_visible = true
+             AND r.review_text IS NOT NULL AND r.review_text <> ''
+       ORDER BY r.created_at DESC
+       LIMIT $2`,
+      [salonId, limit]
+    )
+    return rows
+  },
+
+  async getRatingBreakdown(salonId: string): Promise<Record<number, number>> {
+    const { rows } = await pool.query(
+      `SELECT rating, COUNT(*)::int AS count FROM reviews
+       WHERE salon_id = $1 AND is_visible = true GROUP BY rating`,
+      [salonId]
+    )
+    const breakdown: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 }
+    for (const r of rows) breakdown[r.rating] = r.count
+    return breakdown
+  },
+
   async getStats(salonId: string, staffId?: string): Promise<ReviewStats> {
     const params: any[] = [salonId]
     let staffFilter = ""

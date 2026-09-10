@@ -5,6 +5,7 @@ import {
     ProductAuditItem,
     CreateProductAuditBody, ListProductAuditsFilters, ProductAuditStatus,
 } from "./product-audit.types";
+import { inventoryAlertsService } from "./inventory-alerts.service";
 
 // Schema (product_audits, product_audit_items, product_audit_history) is NOT
 // self-migrated from here — per project policy, schema changes are never
@@ -213,6 +214,35 @@ export const productAuditRepository = {
         return rows[0] || null;
     },
 
+    // Applies every locally-edited row in one transaction — the counterpart
+    // to updateItem() above, used by submitForReview so the frontend can
+    // batch every pending qty/reason edit into the single API call that
+    // fires at Submit, instead of one PATCH per field/row as the user works.
+    async updateItems(
+        auditId: string,
+        items: { itemId: string; physicalQty: number | null; reason: string | null }[],
+    ): Promise<void> {
+        if (items.length === 0) return;
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            for (const it of items) {
+                await client.query(
+                    `UPDATE product_audit_items
+                        SET physical_qty = $1, reason = $2, updated_at = NOW()
+                      WHERE id = $3 AND audit_id = $4`,
+                    [it.physicalQty, it.reason, it.itemId, auditId],
+                );
+            }
+            await client.query("COMMIT");
+        } catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        } finally {
+            client.release();
+        }
+    },
+
     async countMissingReasons(auditId: string): Promise<number> {
         const { rows } = await pool.query(
             `SELECT COUNT(*) FROM product_audit_items
@@ -319,6 +349,7 @@ export const productAuditRepository = {
             );
 
             let adjustedCount = 0;
+            const adjustedProductIds: string[] = [];
             for (const item of items) {
                 const bottleSize = Number(item.bottle_size) || 0;
                 const baseUnitsPerPack = bottleSize > 0 ? bottleSize : 1;
@@ -331,6 +362,7 @@ export const productAuditRepository = {
                 // approval to it). Leave stock and the ledger untouched.
                 if (baseDelta === 0) continue;
                 adjustedCount++;
+                adjustedProductIds.push(item.product_id);
 
                 const txnType = baseDelta > 0 ? "audit_adjustment_in" : "audit_adjustment_out";
 
@@ -372,6 +404,9 @@ export const productAuditRepository = {
             );
 
             await client.query("COMMIT");
+            inventoryAlertsService
+                .checkAndNotify(adjustedProductIds, salonId)
+                .catch(() => { /* logged internally, never blocks the caller */ });
             return { audit: updatedRows[0], adjustedCount };
         } catch (err) {
             await client.query("ROLLBACK");

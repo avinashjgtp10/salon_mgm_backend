@@ -413,10 +413,6 @@ export const staffSchedulesRepository = {
         await pool.query(`DELETE FROM staff_schedules WHERE staff_id = $1 AND date = $2::date`, [staffId, date]);
     },
 
-    async deleteByDay(staffId: string, dayOfWeek: number): Promise<void> {
-        await pool.query(`DELETE FROM staff_schedules WHERE staff_id = $1 AND day_of_week = $2`, [staffId, dayOfWeek]);
-    },
-
     async upsertBulk(staffId: string, body: UpsertStaffSchedulesBody): Promise<StaffSchedule[]> {
         const client = await pool.connect();
         try {

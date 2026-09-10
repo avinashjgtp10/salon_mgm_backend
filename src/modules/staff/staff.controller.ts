@@ -45,6 +45,8 @@ export const staffController = {
         employment_type: req.query.employment_type as any,
         is_active: req.query.is_active !== undefined ? req.query.is_active === "true" : undefined,
         branch_id: req.query.branch_id ? String(req.query.branch_id) : undefined,
+        allow_calendar_bookings: req.query.allow_calendar_bookings !== undefined
+          ? req.query.allow_calendar_bookings === "true" : undefined,
         sort_by: req.query.sort_by as any,
         sort_order: req.query.sort_order as any,
       };
@@ -758,7 +760,7 @@ export const staffSchedulesController = {
       const salonId = getSalonId(req);
       const date = req.query.date ? String(req.query.date) : undefined;
       if (!date) throw new AppError(400, "Date is required", "MISSING_DATE");
-      await staffSchedulesService.delete(staffId, salonId, date);
+      await staffSchedulesService.deleteByDate(staffId, salonId, date);
       return sendSuccess(res, 200, null, "Schedule deleted successfully");
     } catch (err) { return next(err); }
   },

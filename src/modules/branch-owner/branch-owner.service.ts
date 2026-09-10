@@ -325,7 +325,7 @@ export const branchOwnerService = {
 
   async deleteSalon(branchOwnerId: string, salonId: string) {
     await assertSalonsAssigned(branchOwnerId, [salonId]);
-    const result = await superAdminRepository.deleteSalon(salonId);
+    const result = await superAdminRepository.deleteSalon(salonId, branchOwnerId);
     if (!result) throw new AppError(404, "Salon not found", "NOT_FOUND");
     return { success: true };
   },

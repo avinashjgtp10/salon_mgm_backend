@@ -12,4 +12,25 @@ router.post(
     linkBuilderController.generate
 );
 
+router.get(
+    "/saved",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    linkBuilderController.listSaved
+);
+
+router.post(
+    "/saved",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    linkBuilderController.save
+);
+
+router.delete(
+    "/saved/:id",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    linkBuilderController.deleteSaved
+);
+
 export default router;

@@ -2,6 +2,7 @@
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { salesService } from "./sales.service";
+import { salesImportService } from "./sales.import";
 import { CreateSaleBody, UpdateSaleBody, CheckoutSaleBody } from "./sales.types";
 import { getSalonId } from "../utils/tenant.util";
 
@@ -119,6 +120,26 @@ export const salesController = {
                 body: req.body as CheckoutSaleBody,
             });
             return sendSuccess(res, 200, sale, "Sale checked out successfully");
+        } catch (err) { return next(err); }
+    },
+
+    // POST /api/v1/sales/import — Bulk Billing Import (historical data migration)
+    async import(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const userId = req.user?.userId;
+            if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+            const salonId = await getSalonId(req);
+            const file = (req as any).file as Express.Multer.File | undefined;
+            if (!file) throw new AppError(400, "file is required", "VALIDATION_ERROR");
+            const dry_run = String(req.body.dry_run || "").toLowerCase() === "true";
+            const result = await salesImportService.importSales({
+                file: file.buffer,
+                filename: file.originalname,
+                salonId,
+                requesterUserId: userId,
+                dry_run,
+            });
+            return sendSuccess(res, 200, result, dry_run ? "Preview generated" : "Import completed");
         } catch (err) { return next(err); }
     },
 

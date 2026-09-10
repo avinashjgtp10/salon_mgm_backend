@@ -12,6 +12,8 @@ import categoriesRoutes from "./modules/categories/categories.routes";
 import salonsRoutes from "./modules/salons/salons.routes";
 import branchesRoutes from "./modules/branches/branches.routes";
 import staffRoutes from "./modules/staff/staff.routes";
+import rolesRoutes from "./modules/roles/roles.routes";
+import permissionsRoutes from "./modules/permissions/permissions.routes";
 import commissionRulesRoutes from "./modules/commissionRules/commissionRules.routes";
 import payrollRoutes from "./modules/payroll/payroll.routes";
 import clientsRoutes from "./modules/clients/clients.routes";
@@ -28,6 +30,7 @@ import salesRoutes from "./modules/sales/sales.routes";
 import bookingsRoutes from "./modules/bookings/bookings.routes";
 import linkBuilderRoutes from "./modules/link-builder/link-builder.routes";
 import inventoryRoutes from "./modules/inventory/inventory.routes";
+import spotlightRoutes from "./modules/spotlight/spotlight.routes";
 import billingRoutes from "./modules/billing/billing.routes";
 import pricingRoutes from "./modules/pricing/pricing.routes";
 import subscriptionsRoutes from "./modules/subscriptions/subscriptions.routes";
@@ -40,6 +43,8 @@ import profileRoutes from "./modules/profile/profile.routes";
 import inboxRouter from './modules/marketing/whatsapp/inbox/inbox.routes';
 import salonDashboardRoutes from "./modules/salon-dashboard/salon-dashboard.routes";
 import paymentsRoutes from "./modules/payments/payments.routes";
+import posPaymentsRoutes from "./modules/pos-payments/pos-payments.routes";
+import paymentSettingsRoutes from "./modules/payment-settings/payment-settings.routes";
 import couponsRoutes from "./modules/coupons/coupons.routes";
 import couponDesignsRoutes from "./modules/coupon-designs/coupon-designs.routes";
 import brandKitRoutes from "./modules/brand-kit/brand-kit.routes";
@@ -57,6 +62,7 @@ import { ensureTable as ensureAiEngineTables } from "./modules/ai-engine/ai-engi
 import waAutomationRoutes from "./modules/whatsapp-automation/whatsapp-automation.routes";
 import waScheduledMessagesRoutes from "./modules/whatsapp-automation/wa-scheduled-messages.routes";
 import waPurchaseTemplatesRoutes from "./modules/whatsapp-automation/wa-purchase-templates.routes";
+import notificationChannelsRoutes from "./modules/notification-channels/notification-channels.routes";
 import attendanceRoutes from "./modules/attendance/attendance.routes";
 import { deviceApiRouter, admsRouter } from "./modules/device/device.routes";
 import packageTemplatesRoutes from "./modules/package-templates/package-templates.routes";
@@ -75,11 +81,13 @@ import { ensureCashManagementTables } from "./modules/cash-management/cash-manag
 import superAdminRoutes from "./modules/super-admin/super-admin.routes";
 import branchOwnerRoutes from "./modules/branch-owner/branch-owner.routes";
 import { ensureBranchOwnerTables } from "./modules/branch-owner/branch-owner.repository";
+import salonPlansRoutes from "./modules/salon-plans/salon-plans.routes";
 import demoRequestsRoutes from "./modules/demo-requests/demo-requests.routes";
 import supportRoutes from "./modules/support/support.routes";
 import notificationsRoutes from "./modules/notifications/notifications.routes";
 import deploymentAnnouncementsRoutes from "./modules/deployment-announcements/deployment-announcements.routes";
 import enquiriesRoutes from "./modules/enquiries/enquiries.routes";
+import mediaRoutes from "./modules/media/media.routes";
 import { emailService } from "./modules/utils/email.service";
 import swaggerUi from "swagger-ui-express";
 import path from "path";
@@ -160,7 +168,14 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // Serve uploaded files as static assets
-app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
+// helmet() (above) defaults Cross-Origin-Resource-Policy to "same-origin",
+// which blocks the browser from rendering these as <img> whenever the page's
+// origin differs from config.publicBaseUrl's — these are public-facing
+// business images (logos, avatars), so opt out. See media.controller.ts for
+// the equivalent S3-backed proxy route.
+app.use("/uploads", express.static(path.join(__dirname, "../uploads"), {
+  setHeaders: (res) => res.set("Cross-Origin-Resource-Policy", "cross-origin"),
+}));
 
 // Compression
 app.use(compression());
@@ -255,6 +270,8 @@ app.use("/api/v1/categories", categoriesRoutes);
 app.use("/api/v1/salons", salonsRoutes);
 app.use("/api/v1/branches", branchesRoutes);
 app.use("/api/v1/staff", staffRoutes);
+app.use("/api/v1/roles", rolesRoutes);
+app.use("/api/v1/permissions", permissionsRoutes);
 app.use("/api/v1/commission-rules", commissionRulesRoutes);
 app.use("/api/v1/payroll", payrollRoutes);
 app.use("/api/v1/clients", clientsRoutes);
@@ -270,6 +287,7 @@ app.use("/api/v1/link-builder", linkBuilderRoutes);
 app.use("/api/v1/calendar", calendarRoutes);
 app.use("/api/v1/sales", salesRoutes);
 app.use("/api/v1/inventory", inventoryRoutes);
+app.use("/api/v1/spotlight", spotlightRoutes);
 //app.use('/api/v1//dashboard', marketingDashboardRoutes)
 app.use('/api/v1/marketing/dashboard', marketingDashboardRoutes);
 app.use('/api/v1/marketing/analytics', analyticsRoutes)
@@ -286,6 +304,8 @@ app.use("/api/v1/coupons", couponsRoutes);
 app.use("/api/v1/coupon-designs", couponDesignsRoutes);
 app.use("/api/v1/brand-kit", brandKitRoutes);
 app.use("/api/v1/payments", paymentsRoutes);
+app.use("/api/v1/pos-payments", posPaymentsRoutes);
+app.use("/api/v1/payment-settings", paymentSettingsRoutes);
 app.use("/api/v1/blocked-times", blockedTimesRoutes);
 app.use("/api/v1/settings", settingsRoutes);
 app.use("/api/v1/bot", botRoutes);
@@ -297,6 +317,7 @@ app.use("/api/v1/cash-management", cashManagementRoutes);
 app.use("/api/v1/wa-automation", waAutomationRoutes);
 app.use("/api/v1/wa-automation/purchase-templates", waPurchaseTemplatesRoutes);
 app.use("/api/v1/wa-automation/scheduled", waScheduledMessagesRoutes);
+app.use("/api/v1/notification-channels", notificationChannelsRoutes);
 app.use("/api/v1/attendance", attendanceRoutes);
 app.use("/api/v1/devices", deviceApiRouter);
 app.use("/api/v1/package-templates", packageTemplatesRoutes);
@@ -306,11 +327,13 @@ app.use("/api/v1/reward-points", rewardPointsRoutes);
 app.use("/api/v1/referral", referralRoutes);
 app.use("/api/v1/super-admin", superAdminRoutes);
 app.use("/api/v1/branch-owner", branchOwnerRoutes);
+app.use("/api/v1/salon-plans", salonPlansRoutes);
 app.use("/api/v1/demo-requests", demoRequestsRoutes);
 app.use("/api/v1/support", supportRoutes);
 app.use("/api/v1/notifications", notificationsRoutes);
 app.use("/api/v1/deployment-announcements", deploymentAnnouncementsRoutes);
 app.use("/api/v1/enquiries", enquiriesRoutes);
+app.use("/api/v1/media", mediaRoutes);
 
 const swaggerDocument = require(path.join(__dirname, "../docs/api/swagger-gen.json"));
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));

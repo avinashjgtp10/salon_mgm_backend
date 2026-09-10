@@ -8,6 +8,7 @@ import { renderReceiptPdf } from "./receipt-pdf.service";
 import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
 import { sendBillReceiptTemplateMessage } from "../whatsapp-automation/wa-bill-receipt-template.helper";
 import { generateFeedbackToken } from "../reviews/feedback-token.util";
+import { notificationChannelsService } from "../notification-channels/notification-channels.service";
 import logger from "../../config/logger";
 
 // Dedicated production domain for the public feedback form (points at the
@@ -117,18 +118,21 @@ export async function sendPurchaseReceipt(params: ReceiptContextParams): Promise
         const billTemplate = await whatsappAutomationRepository.findTemplate("bill_receipt", params.salonId);
         console.log(`[BILL_RECEIPT] findTemplate result — found=${!!billTemplate} status=${billTemplate?.status} template_name=${billTemplate?.template_name} meta_template_id=${billTemplate?.meta_template_id}`);
 
+        const appointmentId = params.appointment?.id ?? null;
+        const feedbackLine = appointmentId
+            ? `We'd love to hear your feedback: ${buildFeedbackLink(appointmentId)}`
+            : "We'd love to hear your feedback — just reply to this message!";
+        const invoiceLabel = ctx.sale.invoice_number ?? ctx.sale.id.slice(0, 8).toUpperCase();
+        const itemsBlock = buildItemsBlock(params.items, params.paidAmount, params.dueAmount ?? 0);
+
+        let result: { sent: boolean; reason?: string };
+
         if (billTemplate) {
             const pdfBuffer = await renderReceiptPdf(ctx);
             console.log(`[BILL_RECEIPT] renderReceiptPdf result — bytes=${pdfBuffer.length}`);
-
-            const appointmentId = params.appointment?.id ?? null;
-            const feedbackLine = appointmentId
-                ? `We'd love to hear your feedback: ${buildFeedbackLink(appointmentId)}`
-                : "We'd love to hear your feedback — just reply to this message!";
-            const invoiceLabel = ctx.sale.invoice_number ?? ctx.sale.id.slice(0, 8).toUpperCase();
             console.log(`[BILL_RECEIPT] feedbackLine=${feedbackLine}`);
 
-            const result = await sendBillReceiptTemplateMessage({
+            result = await sendBillReceiptTemplateMessage({
                 salonId:      params.salonId,
                 phone:        params.phone,
                 countryCode:  params.countryCode,
@@ -139,19 +143,54 @@ export async function sendPurchaseReceipt(params: ReceiptContextParams): Promise
                 variables: {
                     "1": ctx.client.name,
                     "2": ctx.salon.business_name,
-                    "3": buildItemsBlock(params.items, params.paidAmount, params.dueAmount ?? 0),
+                    "3": itemsBlock,
                     "4": feedbackLine,
                 },
             });
             console.log(`[BILL_RECEIPT] sendBillReceiptTemplateMessage result:`, result);
-            return result;
+
+            // SMS/Email fan-out — independent of WhatsApp's own template
+            // approval status, so it always fires once the PDF is rendered.
+            // Reuses the pdfBuffer already built above, no duplicate render.
+            notificationChannelsService.dispatchNonWhatsappChannels({
+                salonId: params.salonId,
+                eventType: "bill_receipt",
+                clientId: params.clientId,
+                phone: params.phone,
+                countryCode: params.countryCode,
+                email: ctx.client.email,
+                variables: { "1": ctx.client.name, "2": ctx.salon.business_name, "3": itemsBlock, "4": feedbackLine },
+                referenceId: ctx.sale.id,
+                referenceType: "sale",
+                emailAttachment: { buffer: pdfBuffer, filename: `Receipt-${invoiceLabel}.pdf` },
+            }).catch(() => {});
+        } else {
+            console.log(`[BILL_RECEIPT] no APPROVED bill_receipt template — falling back to plain PDF (sendReceiptDocument)`);
+            logger.info(`[WA-TRACE] bill_receipt not yet APPROVED for salon=${params.salonId} — falling back to plain PDF`);
+            result = await sendReceiptDocument(ctx);
+            console.log(`[BILL_RECEIPT] sendReceiptDocument (fallback) result:`, result);
+
+            // SMS/Email don't depend on Meta template approval at all — still
+            // fan out here, rendering the PDF once for the email attachment
+            // (sendReceiptDocument above renders its own separate copy
+            // internally for the WhatsApp send; not worth plumbing through a
+            // shared buffer for this fallback-only path).
+            const pdfBuffer = await renderReceiptPdf(ctx);
+            notificationChannelsService.dispatchNonWhatsappChannels({
+                salonId: params.salonId,
+                eventType: "bill_receipt",
+                clientId: params.clientId,
+                phone: params.phone,
+                countryCode: params.countryCode,
+                email: ctx.client.email,
+                variables: { "1": ctx.client.name, "2": ctx.salon.business_name, "3": itemsBlock, "4": feedbackLine },
+                referenceId: ctx.sale.id,
+                referenceType: "sale",
+                emailAttachment: { buffer: pdfBuffer, filename: `Receipt-${invoiceLabel}.pdf` },
+            }).catch(() => {});
         }
 
-        console.log(`[BILL_RECEIPT] no APPROVED bill_receipt template — falling back to plain PDF (sendReceiptDocument)`);
-        logger.info(`[WA-TRACE] bill_receipt not yet APPROVED for salon=${params.salonId} — falling back to plain PDF`);
-        const fallbackResult = await sendReceiptDocument(ctx);
-        console.log(`[BILL_RECEIPT] sendReceiptDocument (fallback) result:`, fallbackResult);
-        return fallbackResult;
+        return result;
     } catch (err: any) {
         console.log(`[BILL_RECEIPT] EXCEPTION:`, err?.response?.data ?? err?.message ?? err);
         // Best-effort — sendReceiptDocument already swallows its own errors;

@@ -20,6 +20,11 @@ export type SafeUser = {
     lastName: string | null;
     fullName: string;
     role: UserRole;
+    /** Staff's assigned role NAME from Roles & Permissions (e.g. "Manager",
+     * "Staff") — informational, for display. null for owner/admin/client,
+     * and for staff not yet assigned a role. Never replaces `role` above,
+     * which every authorization check in the app is built around. */
+    roleName: string | null;
     avatarUrl: string | null;
     isVerified: boolean;
     isActive: boolean;
@@ -33,6 +38,9 @@ export type SafeUser = {
     countryCode: string | null;
     isOnboardingComplete: boolean;
     custom_permissions: Record<string, boolean> | null;
+    /** Real-time resolved permission map (staff only) — see permission.middleware.ts's
+     * getEffectivePermissionsForUser(). null for owner/admin/client, who don't need it. */
+    effective_permissions: Record<string, boolean> | null;
 };
 
 export type { UpdateUserInput } from "./users.validator";

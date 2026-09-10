@@ -70,6 +70,7 @@
     "node-pg-migrate": "^8.0.4",
     "nodemailer": "^8.0.1",
     "papaparse": "^5.5.3",
+    "paytmchecksum": "^1.5.1",
     "pdfkit": "^0.17.2",
     "pg": "^8.21.0",
     "puppeteer": "^25.3.0",
@@ -115,6 +116,7 @@
     "prettier": "^3.8.1",
     "supertest": "^7.2.2",
     "swagger-autogen": "^2.23.7",
+    "ts-jest": "^29.4.12",
     "ts-node": "^10.9.2",
     "ts-node-dev": "^2.0.0",
     "typescript": "^5.9.3"

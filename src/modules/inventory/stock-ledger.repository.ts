@@ -7,6 +7,7 @@ import {
     StockLedgerSummary,
     STOCK_LEDGER_IN_TYPES,
 } from "./stock-ledger.types";
+import { inventoryAlertsService } from "./inventory-alerts.service";
 
 // Shared SELECT list + joins so list/findById/getTimeline all project the
 // same shape — product name/category for display, created_by resolved to a
@@ -46,7 +47,12 @@ export const stockLedgerRepository = {
         if (filters.staff_id) { conditions.push(`sl.created_by = $${idx++}`); values.push(filters.staff_id); }
         if (filters.search) { conditions.push(`p.name ILIKE $${idx++}`); values.push(`%${filters.search}%`); }
         if (filters.from_date) { conditions.push(`sl.created_at >= $${idx++}`); values.push(filters.from_date); }
-        if (filters.to_date) { conditions.push(`sl.created_at <= $${idx++}`); values.push(filters.to_date); }
+        // to_date is a bare "YYYY-MM-DD" from the date-range filter, which
+        // Postgres casts to midnight of that day — a plain `<=` against that
+        // would exclude every row created later that same day. Comparing
+        // against the *next* day's midnight instead makes the end date
+        // inclusive of its full 24 hours.
+        if (filters.to_date) { conditions.push(`sl.created_at < ($${idx++}::date + INTERVAL '1 day')`); values.push(filters.to_date); }
 
         const where = `WHERE ${conditions.join(" AND ")}`;
         const page = filters.page ?? 1;
@@ -96,7 +102,7 @@ export const stockLedgerRepository = {
         if (filters.staff_id) { conditions.push(`sl.created_by = $${idx++}`); values.push(filters.staff_id); }
         if (filters.search) { conditions.push(`p.name ILIKE $${idx++}`); values.push(`%${filters.search}%`); }
         if (filters.from_date) { conditions.push(`sl.created_at >= $${idx++}`); values.push(filters.from_date); }
-        if (filters.to_date) { conditions.push(`sl.created_at <= $${idx++}`); values.push(filters.to_date); }
+        if (filters.to_date) { conditions.push(`sl.created_at < ($${idx++}::date + INTERVAL '1 day')`); values.push(filters.to_date); }
 
         const where = `WHERE ${conditions.join(" AND ")}`;
         const inTypesList = STOCK_LEDGER_IN_TYPES.map((t) => `'${t}'`).join(", ");
@@ -163,6 +169,10 @@ export const stockLedgerRepository = {
             );
 
             await client.query("COMMIT");
+
+            inventoryAlertsService
+                .checkAndNotify([data.product_id], salonId)
+                .catch(() => { /* logged internally, never blocks the caller */ });
 
             const created = await this.findById(rows[0].id, salonId);
             return created as StockLedgerEntry;
@@ -284,6 +294,9 @@ export const stockLedgerRepository = {
             }
 
             await client.query("COMMIT");
+            inventoryAlertsService
+                .checkAndNotify(items.map((i) => i.product_id), salonId)
+                .catch(() => { /* logged internally, never blocks the caller */ });
         } catch (err) {
             await client.query("ROLLBACK");
             throw err;
@@ -359,6 +372,9 @@ export const stockLedgerRepository = {
             );
 
             await client.query("COMMIT");
+            inventoryAlertsService
+                .checkAndNotify([params.productId], params.salonId)
+                .catch(() => { /* logged internally, never blocks the caller */ });
         } catch (err) {
             await client.query("ROLLBACK");
             throw err;

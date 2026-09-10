@@ -58,6 +58,13 @@ export type Staff = {
     user_id: string | null;
     salon_id: string;
     branch_id: string | null;
+    role_id?: string | null;
+    /** Roles & Permissions tier name ("Manager", "Staff", …) — joined in
+     * staff.repository.ts's list() from role_id, not a real staff column. */
+    role_name?: string | null;
+    /** True if staff_permission_overrides has any row for this staff member
+     * — joined in staff.repository.ts's list(), not a real staff column. */
+    has_overrides?: boolean;
     employee_code: string | null;
     // Auto-generated on creation (STF-00001, ...), unique per salon, never
     // user-editable and never reused — separate from employee_code, which
@@ -119,7 +126,9 @@ export type StaffScheduleSummary = {
 
 export type CreateStaffBody = {
     first_name: string;
-    email: string;
+    // Optional — only required when Staff Login is being enabled (a
+    // password is set); see validateCreateStaff / staffService.create.
+    email?: string;
     last_name?: string;
     phone?: string;
     phone_country_code?: string;
@@ -408,6 +417,11 @@ export type StaffListQuery = {
     employment_type?: EmploymentType;
     is_active?: boolean;
     branch_id?: string;
-    sort_by?: "first_name" | "last_name" | "email" | "created_at" | "invitation_status" | "designation";
+    // Staff Members list's "Bookable / Non-bookable" filter — server-side so
+    // pagination totals stay correct while that filter is applied (see
+    // StaffListPage.tsx, which used to filter this client-side over an
+    // already-fetched, unpaginated list).
+    allow_calendar_bookings?: boolean;
+    sort_by?: "first_name" | "last_name" | "email" | "created_at" | "invitation_status" | "designation" | "joined_date";
     sort_order?: "ASC" | "DESC";
 };

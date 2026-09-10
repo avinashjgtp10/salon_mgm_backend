@@ -92,24 +92,52 @@ export const superAdminService = {
     return result;
   },
 
+  // The impersonated tab is a fully separate browser window/store from the
+  // super admin's own tab — it never has the super admin's session to fall
+  // back on, so a short-lived, refresh-less access token eventually expires
+  // and the frontend's normal silent-refresh path finds nothing to exchange,
+  // hard-logging the admin out mid-session (surfacing as an unexpected
+  // forced re-login inside the salon account). The real fix is giving the
+  // impersonated tab its own refresh token — routed through the exact same
+  // /auth/refresh endpoint every other session already uses (auth.service.ts
+  // refresh() re-derives the impersonated user's real role/salonId from the
+  // DB by userId, so it needs no special-casing there) — but capped to a
+  // short DB-side expiry (impersonateRefreshExpiryDate) rather than the
+  // normal 30-day one, since this token is otherwise indistinguishable from
+  // the impersonated user's own real refresh token if it ever leaked.
   async getImpersonateToken(salonId: string) {
     const ownerId = await superAdminRepository.getSalonOwnerId(salonId);
     if (!ownerId) throw new AppError(404, "Salon or owner not found", "NOT_FOUND");
-    if (!ACCESS_SECRET) throw new AppError(500, "JWT config missing", "SERVER_ERROR");
+    if (!ACCESS_SECRET || !REFRESH_SECRET) throw new AppError(500, "JWT config missing", "SERVER_ERROR");
     const token = jwt.sign({ userId: ownerId, role: "salon_owner", salonId, impersonatedBy: "super_admin" }, ACCESS_SECRET, { expiresIn: "1h" } as any);
-    return { token, isOnboardingComplete: true };
+    const refreshToken = await this._issueImpersonationRefreshToken(ownerId);
+    return { token, refreshToken, isOnboardingComplete: true };
   },
 
   async getImpersonateUserToken(userId: string) {
     const user = await superAdminRepository.getUserForImpersonate(userId);
     if (!user) throw new AppError(404, "User not found", "NOT_FOUND");
-    if (!ACCESS_SECRET) throw new AppError(500, "JWT config missing", "SERVER_ERROR");
+    if (!ACCESS_SECRET || !REFRESH_SECRET) throw new AppError(500, "JWT config missing", "SERVER_ERROR");
     const token = jwt.sign(
       { userId: user.id, role: user.role, salonId: user.salon_id ?? null, impersonatedBy: "super_admin" },
       ACCESS_SECRET,
       { expiresIn: "1h" } as any
     );
-    return { token, isOnboardingComplete: user.is_onboarding_complete };
+    const refreshToken = await this._issueImpersonationRefreshToken(user.id);
+    return { token, refreshToken, isOnboardingComplete: user.is_onboarding_complete };
+  },
+
+  // Signed with the same REFRESH_SECRET and persisted in the same
+  // refresh_tokens table as a normal login's refresh token, so
+  // authService.refresh() accepts it completely unmodified — the only
+  // difference is a much shorter DB-side expires_at (8h instead of 30d),
+  // which is the authoritative check refresh() makes before ever looking at
+  // the JWT's own exp claim.
+  async _issueImpersonationRefreshToken(userId: string): Promise<string> {
+    const refreshToken = jwt.sign({ userId }, REFRESH_SECRET, { expiresIn: "8h" } as any);
+    const expiresAt = new Date(Date.now() + 8 * 60 * 60 * 1000);
+    await authRepository.saveRefreshToken({ user_id: userId, token: refreshToken, expires_at: expiresAt });
+    return refreshToken;
   },
 
   // ── SALON PERMISSIONS ────────────────────────────────────────────────────────
@@ -149,7 +177,16 @@ export const superAdminService = {
       try { permissions = JSON.parse(salon.subscription_permissions); } catch { permissions = {}; }
     }
     return {
-      salon: { id: salon.id, name: salon.name, owner_email: salon.owner_email, owner_name: salon.owner_name, plan_name: salon.plan_name, is_active: salon.is_active },
+      salon: {
+        id: salon.id, name: salon.name, owner_email: salon.owner_email, owner_name: salon.owner_name,
+        plan_name: salon.plan_name, is_active: salon.is_active,
+        subscription_status: salon.subscription_status,
+        subscription_start_date: salon.subscription_start_date,
+        subscription_end_date: salon.subscription_end_date,
+        subscription_cancel_at_period_end: salon.subscription_cancel_at_period_end,
+        subscription_cancelled_at: salon.subscription_cancelled_at,
+        subscription_is_trial: salon.subscription_is_trial,
+      },
       permissions,
     };
   },
@@ -216,6 +253,62 @@ export const superAdminService = {
     return { subscription: updated, days_granted: days };
   },
 
+  // ── APPLY SUBSCRIPTION (explicit start/end dates) ─────────────────────────────
+  // Same shape as grantSubscriptionDays but takes explicit dates instead of a
+  // day count — for the super-admin "Apply Subscription" action with Start
+  // Date / End Date pickers. Reuses the salon's existing plan_id if it has a
+  // subscription already, otherwise falls back to the first available plan
+  // (same fallback grantSubscriptionDays uses) since subscriptions.plan_id
+  // is NOT NULL.
+  async applySubscription(salonId: string, startDate: string, endDate: string, changedByUserId: string) {
+    if (!salonId) throw new AppError(400, "Salon ID required", "VALIDATION_ERROR");
+    if (!startDate || !endDate) throw new AppError(400, "start_date and end_date are required", "VALIDATION_ERROR");
+    if (new Date(endDate) <= new Date(startDate)) throw new AppError(400, "end_date must be after start_date", "VALIDATION_ERROR");
+    if (!changedByUserId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+
+    const existing = await subscriptionsRepository.findMostRecentBySalonId(salonId);
+
+    let updated;
+    if (existing) {
+      updated = await subscriptionsRepository.applySubscriptionDates(existing.id, startDate, endDate);
+    } else {
+      const plans = await subscriptionsRepository.listPlans();
+      if (plans.length === 0) {
+        throw new AppError(500, "No subscription plans exist to attach this subscription to", "NO_PLANS_CONFIGURED");
+      }
+      updated = await subscriptionsRepository.createManualSubscriptionWithDates({
+        salon_id: salonId,
+        plan_id: plans[0].id,
+        start_date: startDate,
+        end_date: endDate,
+      });
+    }
+
+    await superAdminRepository.logSubscriptionApply(salonId, changedByUserId, startDate, endDate);
+
+    return { subscription: updated };
+  },
+
+  // ── REMOVE SUBSCRIPTION (immediate deactivation) ──────────────────────────────
+  // Deactivates EVERY active/paused subscription row for the salon, not just
+  // the most recent one — fetchSubscriptionStatusThunk on the frontend grants
+  // access if ANY row for the salon is active/trialing, so leaving an older
+  // row untouched (e.g. a leftover trial row) would keep the account logged
+  // in and unblocked even after this "succeeds". No-op-but-success when the
+  // salon has no such rows at all — the admin's intent ("this account should
+  // have no active subscription") is already satisfied, so this shouldn't
+  // 404 and block the Remove button from ever working for those accounts.
+  async removeSubscription(salonId: string, changedByUserId: string) {
+    if (!salonId) throw new AppError(400, "Salon ID required", "VALIDATION_ERROR");
+    if (!changedByUserId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+
+    const updated = await subscriptionsRepository.deactivateAllForSalon(salonId);
+
+    await superAdminRepository.logSubscriptionRemove(salonId, changedByUserId);
+
+    return { subscription: updated[0] ?? null, deactivated_count: updated.length };
+  },
+
   // ── USERS ─────────────────────────────────────────────────────────────────────
 
   async createUser(data: { first_name: string; last_name?: string; email: string; password: string; phone?: string; role: string; business_name?: string; address?: string }) {
@@ -250,18 +343,41 @@ export const superAdminService = {
     return { ...user, plainPassword: data.password };
   },
 
-  async deleteSalon(id: string) {
+  async deleteSalon(id: string, deletedByUserId: string, reason?: string) {
     if (!id) throw new AppError(400, "Salon ID required", "VALIDATION_ERROR");
-    const result = await superAdminRepository.deleteSalon(id);
+    if (!deletedByUserId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+    const result = await superAdminRepository.deleteSalon(id, deletedByUserId, reason);
     if (!result) throw new AppError(404, "Salon not found", "NOT_FOUND");
     return { success: true };
   },
 
-  async clearSalonData(id: string) {
+  async getDeletedAccountHistory(opts: { search?: string; accountType?: string; page: number; perPage: number }) {
+    const page = Math.max(1, opts.page || 1);
+    const perPage = Math.min(100, Math.max(1, opts.perPage || 20));
+    return superAdminRepository.getDeletedAccountHistory({
+      search: opts.search,
+      accountType: opts.accountType,
+      limit: perPage,
+      offset: (page - 1) * perPage,
+    });
+  },
+
+  async clearSalonData(id: string, clearedByUserId: string, reason?: string) {
     if (!id) throw new AppError(400, "Salon ID required", "VALIDATION_ERROR");
-    const cleared = await superAdminRepository.clearSalonData(id);
+    if (!clearedByUserId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+    const cleared = await superAdminRepository.clearSalonData(id, clearedByUserId, reason);
     if (!cleared) throw new AppError(404, "Salon not found", "NOT_FOUND");
     return { success: true };
+  },
+
+  async getSalonCleanupHistory(opts: { search?: string; page: number; perPage: number }) {
+    const page = Math.max(1, opts.page || 1);
+    const perPage = Math.min(100, Math.max(1, opts.perPage || 20));
+    return superAdminRepository.getSalonCleanupHistory({
+      search: opts.search,
+      limit: perPage,
+      offset: (page - 1) * perPage,
+    });
   },
 
   async getAllUsers(search?: string, role?: string, minLogins?: number) {
@@ -296,9 +412,10 @@ export const superAdminService = {
     return { success: true };
   },
 
-  async deleteUser(id: string) {
+  async deleteUser(id: string, deletedByUserId: string, reason?: string) {
     if (!id) throw new AppError(400, "User ID required", "VALIDATION_ERROR");
-    const result = await superAdminRepository.deleteUser(id);
+    if (!deletedByUserId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+    const result = await superAdminRepository.deleteUser(id, deletedByUserId, reason);
     if (!result) throw new AppError(404, "User not found", "NOT_FOUND");
     if ("blocked" in result && result.blocked === "owns_salon") {
       throw new AppError(

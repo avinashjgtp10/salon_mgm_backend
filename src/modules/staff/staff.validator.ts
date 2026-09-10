@@ -40,6 +40,11 @@ const isOptionalISODate = (v: unknown) => {
     if (typeof v !== "string") return false;
     return !Number.isNaN(new Date(v).getTime());
 };
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Email is only mandatory when Staff Login is being enabled (a password is
+// set) — see validateCreateStaff below. Absent, it's fine; present, it must
+// be a real address either way.
+const isOptionalEmail = (v: unknown) => v === undefined || v === null || v === "" || (typeof v === "string" && EMAIL_RE.test(v));
 
 const VALID_CALENDAR_COLORS: CalendarColor[] = [
     "light_blue", "blue", "dark_blue", "purple", "violet", "pink", "hot_pink", "rose",
@@ -78,8 +83,16 @@ export const validateCreateStaff = (
         if (!isNonEmptyString(b.first_name))
             throw new AppError(400, "first_name is required and must be a non-empty string", "VALIDATION_ERROR");
 
-        if (!isNonEmptyString(b.email) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(b.email))
-            throw new AppError(400, "email is required and must be a valid email address", "VALIDATION_ERROR");
+        // Email is mandatory only when Staff Login is being turned on for
+        // this staff member — a set password is the one reliable server-side
+        // signal for that (Staff Login can also be "on" with no password yet,
+        // letting the staff member set their own later, but that path always
+        // goes through email invitation, which the frontend already requires
+        // an email for before it lets the toggle stay on with no password).
+        if (!isOptionalEmail(b.email))
+            throw new AppError(400, "email must be a valid email address", "VALIDATION_ERROR");
+        if (b.password !== undefined && !isNonEmptyString(b.email))
+            throw new AppError(400, "email is required to set a password (Staff Login)", "VALIDATION_ERROR");
 
         for (const f of ["last_name", "phone", "phone_country_code", "additional_phone", "country", "job_title", "staff_external_id", "employee_code"]) {
             if (!isOptionalString(b[f]))
@@ -139,7 +152,7 @@ export const validateUpdateStaff = (
         if (b.first_name !== undefined && !isNonEmptyString(b.first_name))
             throw new AppError(400, "first_name must be a non-empty string", "VALIDATION_ERROR");
 
-        if (b.email !== undefined && (typeof b.email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(b.email)))
+        if (!isOptionalEmail(b.email))
             throw new AppError(400, "email must be a valid email address", "VALIDATION_ERROR");
 
         for (const f of ["last_name", "phone", "phone_country_code", "additional_phone", "country", "job_title", "staff_external_id", "employee_code"]) {
@@ -363,8 +376,12 @@ export const validateUpsertStaffSchedules = (
     try {
         const b = req.body;
 
-        if (!Array.isArray(b.items) || b.items.length === 0 || b.items.length > 7)
-            throw new AppError(400, "items must be an array of 1 to 7 schedule entries", "VALIDATION_ERROR");
+        // Cap set generously above any realistic Copy Schedule payload (the UI's
+        // month calendar lets an admin select months of individual dates, or many
+        // full weeks at 7 items each) — a single day-editor save is 1 item, so this
+        // is purely an abuse/mistake ceiling, not a real usage limit.
+        if (!Array.isArray(b.items) || b.items.length === 0 || b.items.length > 400)
+            throw new AppError(400, "items must be an array of 1 to 400 schedule entries", "VALIDATION_ERROR");
 
         for (let i = 0; i < b.items.length; i++) {
             const item = b.items[i];

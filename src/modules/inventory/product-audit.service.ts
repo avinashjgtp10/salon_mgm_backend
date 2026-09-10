@@ -115,8 +115,15 @@ export const productAuditService = {
         return getOwned(auditId, salonId);
     },
 
-    async submitForReview(params: { auditId: string; salonId: string; actorId: string }): Promise<ProductAuditWithDetail> {
-        const { auditId, salonId, actorId } = params;
+    async submitForReview(params: {
+        auditId: string; salonId: string; actorId: string;
+        // Every locally-edited row's latest value — the frontend keeps edits
+        // in local state while the user works and only calls the API here,
+        // once, at Submit (see ProductAuditDetailsModal.tsx), instead of a
+        // PATCH per field/row.
+        items?: { item_id: string; physical_qty: number | null; reason?: string | null }[];
+    }): Promise<ProductAuditWithDetail> {
+        const { auditId, salonId, actorId, items } = params;
         const audit = await getOwned(auditId, salonId);
 
         if (!ALLOWED_TRANSITIONS[audit.status].includes("pending_review")) {
@@ -125,6 +132,33 @@ export const productAuditService = {
         if (audit.items.length === 0) {
             throw new AppError(400, "Add at least one product before submitting for review", "NO_PRODUCTS");
         }
+
+        if (items && items.length > 0) {
+            const itemsById = new Map(audit.items.map((i) => [i.id, i]));
+            // Validated up front (same REASON_REQUIRED rule updateItem() enforces)
+            // before writing anything, so a bad row in the batch can't leave the
+            // audit with some items saved and others silently skipped.
+            for (const upd of items) {
+                const item = itemsById.get(upd.item_id);
+                if (!item) throw new AppError(404, "Audit item not found", "AUDIT_ITEM_NOT_FOUND");
+                if (upd.physical_qty != null && !Number.isFinite(upd.physical_qty)) {
+                    throw new AppError(400, "physical_qty must be a number", "VALIDATION_ERROR");
+                }
+                const diff = upd.physical_qty == null ? null : upd.physical_qty - item.system_qty;
+                if (diff != null && diff !== 0 && !(upd.reason ?? "").trim()) {
+                    throw new AppError(400, "Reason is required when physical quantity differs from system quantity", "REASON_REQUIRED");
+                }
+            }
+            await productAuditRepository.updateItems(
+                auditId,
+                items.map((upd) => ({
+                    itemId: upd.item_id,
+                    physicalQty: upd.physical_qty,
+                    reason: (upd.reason ?? "").trim() || null,
+                })),
+            );
+        }
+
         const missingReasons = await productAuditRepository.countMissingReasons(auditId);
         if (missingReasons > 0) {
             throw new AppError(400, `${missingReasons} product(s) have a difference but no reason`, "REASON_REQUIRED");

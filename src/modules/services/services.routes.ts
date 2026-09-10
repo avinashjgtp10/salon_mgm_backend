@@ -22,12 +22,12 @@ const createServices = requirePermission("create_services");
 const editServices = requirePermission("edit_services");
 
 // ─── Downloads (before /:id to avoid conflicts) ───────────────────────────────
-router.get("/download/pdf",   ...authBase, viewServices, downloadCataloguePdf);
-router.get("/download/excel", ...authBase, viewServices, downloadCatalogueExcel);
-router.get("/download/csv",   ...authBase, viewServices, downloadCatalogueCsv);
+router.get("/download/pdf",   ...authBase, viewServices, requirePermission("export_pdf"),   downloadCataloguePdf);
+router.get("/download/excel", ...authBase, viewServices, requirePermission("export_excel"), downloadCatalogueExcel);
+router.get("/download/csv",   ...authBase, viewServices, requirePermission("export_csv"),   downloadCatalogueCsv);
 
 // ─── Import ───────────────────────────────────────────────────────────────────
-router.post("/import", ...authOwnerAdmin, upload.single("file"), servicesImportController.import);
+router.post("/import", ...authOwnerAdmin, requirePermission("import_file"), upload.single("file"), servicesImportController.import);
 
 // ─── Services CRUD ────────────────────────────────────────────────────────────
 router.get("/",    ...authBase, viewServices, servicesController.list);
