@@ -58,6 +58,13 @@ export type Staff = {
     user_id: string | null;
     salon_id: string;
     branch_id: string | null;
+    role_id?: string | null;
+    /** Roles & Permissions tier name ("Manager", "Staff", …) — joined in
+     * staff.repository.ts's list() from role_id, not a real staff column. */
+    role_name?: string | null;
+    /** True if staff_permission_overrides has any row for this staff member
+     * — joined in staff.repository.ts's list(), not a real staff column. */
+    has_overrides?: boolean;
     employee_code: string | null;
     // Auto-generated on creation (STF-00001, ...), unique per salon, never
     // user-editable and never reused — separate from employee_code, which

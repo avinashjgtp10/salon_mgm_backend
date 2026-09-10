@@ -57,13 +57,29 @@ export const staffRepository = {
 
         const [{ rows: data }, { rows: countRows }] = await Promise.all([
             pool.query(
-                `SELECT s.*, bt_agg.blocked_times, sch_agg.schedule
+                `SELECT s.*, bt_agg.blocked_times, sch_agg.schedule, r.name AS role_name, ov_agg.has_overrides
                  FROM (
                    SELECT * FROM staff
                    WHERE ${where}
                    ORDER BY ${safeSortBy} ${safeSortOrder}
                    LIMIT $${idx} OFFSET $${idx + 1}
                  ) s
+                 -- The staff list's "Role" column (StaffListPage.tsx,
+                 -- RolesPermissionsPage.tsx's Individual Staff tab) needs the
+                 -- actual Manager/Staff tier from the Roles & Permissions
+                 -- system, not the dead s.permission_level column or a
+                 -- nonexistent s.role field — same join users.repository.ts's
+                 -- findByIdWithStaffPermissions already uses for /users/me.
+                 LEFT JOIN roles r ON r.id = s.role_id
+                 -- "Custom" badge on the Individual Staff tab — must reflect
+                 -- the real staff_permission_overrides table (the new
+                 -- per-key sparse override system), not the legacy
+                 -- custom_permissions blob column, which is unrelated once a
+                 -- staff member has a role_id and is on the new resolution
+                 -- path (see staffHasPermission in permission.middleware.ts).
+                 LEFT JOIN LATERAL (
+                   SELECT EXISTS(SELECT 1 FROM staff_permission_overrides spo WHERE spo.staff_id = s.id) AS has_overrides
+                 ) ov_agg ON true
                  LEFT JOIN LATERAL (
                    SELECT COALESCE(
                      json_agg(

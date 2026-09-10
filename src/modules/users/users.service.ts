@@ -42,10 +42,10 @@ function toSafeUser(u: any, effectivePermissions: Record<string, boolean> | null
 
 export const usersService = {
 
-  async me(userId: string) {
+  async me(userId: string, sessionSalonId?: string | null) {
     logger.info(`Fetching current user profile`, { userId });
 
-    const user = await usersRepo.findByIdWithStaffPermissions(userId);
+    const user = await usersRepo.findByIdWithStaffPermissions(userId, sessionSalonId);
 
     if (!user) {
       logger.warn(`User not found`, { userId });

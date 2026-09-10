@@ -34,6 +34,15 @@ function redactFinancialSummaryFields(summary: Record<string, unknown>): Record<
   return redacted;
 }
 
+// Flattened, not emptied — the frontend chart is expected to still render
+// its container/labels/period toggle with a masked appearance (equal-height
+// points), not disappear into an empty state. Keeps month/fullLabel (time
+// labels, not financial) and zeroes only the value fields the shape is
+// drawn from.
+function redactRevenueChart(chart: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  return chart.map((pt) => ({ ...pt, revenue: 1, expenses: 1 }));
+}
+
 export const salonDashboardController = {
   async getSummary(req: AuthRequest, res: Response, next: NextFunction) {
     try {
@@ -115,8 +124,14 @@ export const salonDashboardController = {
 
       if (!canFinancials) {
         data.summary = redactFinancialSummaryFields(data.summary);
-        data.revenueChart = [];
-        data.pendingPayments = { count: 0, amount: 0 };
+        data.revenueChart = redactRevenueChart(data.revenueChart ?? []);
+        // count stays real — it's "how many clients", not a ₹ figure, and
+        // zeroing it previously made a masked Due Amount card read as "0
+        // clients" (looks like nothing is due, not "hidden"). amount is a
+        // non-null dummy (not null) so the frontend's fmt() still calls
+        // formatAmount() and renders the masked placeholder text instead of
+        // falling back to its own "no value" dash.
+        data.pendingPayments = { count: data.pendingPayments?.count ?? 0, amount: 0 };
       }
       if (!canStaffPerformance) {
         data.topStaff = [];
