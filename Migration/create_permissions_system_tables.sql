@@ -128,12 +128,19 @@ CREATE INDEX IF NOT EXISTS idx_permission_audit_log_target ON permission_audit_l
 -- ticket #17, not part of this migration.
 INSERT INTO permissions (key, name, description, module, group_name, action, risk_level, depends_on) VALUES
   ('view_dashboard',      'View Dashboard',        'Access the main dashboard',                          'Dashboard',     NULL,           'view',   'low',      NULL),
-  ('view_quick_sale',     'View Quick Sale',       'Access the quick sale screen',                       'Quick Sale',    NULL,           'view',   'low',      NULL),
-  ('create_quick_sale',   'Create Quick Sale',     'Process quick sales',                                'Quick Sale',    NULL,           'create', 'medium',   ARRAY['view_quick_sale']),
-  ('edit_quick_sale',     'Edit Quick Sale',       'Edit pending quick sales',                           'Quick Sale',    NULL,           'edit',   'medium',   ARRAY['view_quick_sale']),
-  ('delete_quick_sale',   'Delete Quick Sale',     'Delete quick sale records',                          'Quick Sale',    NULL,           'delete', 'high',     ARRAY['view_quick_sale']),
-  ('view_sales',          'View Sales',            'Access sales records and daily summaries',           'Sales',         NULL,           'view',   'low',      NULL),
-  ('create_sales',        'Create Sales',          'Create, edit and checkout sales',                    'Sales',         NULL,           'create', 'medium',   ARRAY['view_sales']),
+  -- view_quick_sale/create_quick_sale/edit_quick_sale/delete_quick_sale were
+  -- removed (see Migration/remove_dead_quick_sale_permission_keys.sql) —
+  -- nothing ever checked them; view_sales/create_sales below are the real
+  -- keys sales.routes.ts enforces. create_sales is grouped under 'Quick
+  -- Sale' (see Migration/group_create_sales_under_quick_sale_module.sql) —
+  -- it's what the Quick Sale nav item and route actually gate; view_sales
+  -- is grouped under 'Reports' (see
+  -- Migration/group_view_sales_under_reports_module.sql) — a distinct
+  -- concept (viewing past sales records/summaries/exports, not the Quick
+  -- Sale screen itself) real staff pages (StaffSalesPage etc.) depend on,
+  -- so it's kept, just regrouped rather than left alone in its own section.
+  ('view_sales',          'View Sales',            'Access sales records and daily summaries',           'Reports',       NULL,           'view',   'low',      NULL),
+  ('create_sales',        'Create Sales',          'Create, edit and checkout sales',                    'Quick Sale',    NULL,           'create', 'medium',   ARRAY['view_sales']),
   ('view_calendar',       'View Calendar',         'See all appointments on calendar',                   'Calendar',      NULL,           'view',   'low',      NULL),
   ('manage_calendar',     'Manage Calendar',       'Create, edit and cancel bookings',                   'Calendar',      NULL,           'manage', 'medium',   ARRAY['view_calendar']),
   ('view_clients',        'View Clients',          'Access client profiles',                             'Clients',       NULL,           'view',   'low',      NULL),
