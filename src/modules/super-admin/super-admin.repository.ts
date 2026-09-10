@@ -156,7 +156,10 @@ export const superAdminRepository = {
         (SELECT bp.name FROM billing_subscriptions bs
            JOIN billing_plans bp ON bp.id = bs.plan_id
            WHERE bs.salon_id = s.id AND bs.status IN ('active','trialing')
-           ORDER BY bs.created_at DESC LIMIT 1)                                           AS plan_name
+           ORDER BY bs.created_at DESC LIMIT 1)                                           AS plan_name,
+        (SELECT bs.current_period_end FROM billing_subscriptions bs
+           WHERE bs.salon_id = s.id AND bs.status IN ('active','trialing')
+           ORDER BY bs.created_at DESC LIMIT 1)                                           AS plan_expires_at
       FROM salons s
       LEFT JOIN users u ON u.id = s.owner_id
       WHERE ($1::text IS NULL

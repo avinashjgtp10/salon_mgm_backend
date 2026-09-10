@@ -29,11 +29,11 @@ export const staffRepository = {
     async list(salonId: string, q: StaffListQuery): Promise<{ data: Staff[]; total: number }> {
         const {
             page = 1, limit = 50, search, invitation_status,
-            employment_type, is_active, branch_id,
+            employment_type, is_active, branch_id, allow_calendar_bookings,
             sort_by = "created_at", sort_order = "DESC",
         } = q;
 
-        const ALLOWED_SORT = ["first_name", "last_name", "email", "created_at", "invitation_status", "designation"];
+        const ALLOWED_SORT = ["first_name", "last_name", "email", "created_at", "invitation_status", "designation", "joined_date"];
         const safeSortBy = ALLOWED_SORT.includes(sort_by) ? sort_by : "created_at";
         const safeSortOrder = sort_order === "ASC" ? "ASC" : "DESC";
 
@@ -50,19 +50,36 @@ export const staffRepository = {
         if (employment_type) { conditions.push(`employment_type = $${idx}`); values.push(employment_type); idx++; }
         if (is_active !== undefined) { conditions.push(`is_active = $${idx}`); values.push(is_active); idx++; }
         if (branch_id) { conditions.push(`branch_id = $${idx}`); values.push(branch_id); idx++; }
+        if (allow_calendar_bookings !== undefined) { conditions.push(`allow_calendar_bookings = $${idx}`); values.push(allow_calendar_bookings); idx++; }
 
         const where = conditions.join(" AND ");
         const offset = (page - 1) * limit;
 
         const [{ rows: data }, { rows: countRows }] = await Promise.all([
             pool.query(
-                `SELECT s.*, bt_agg.blocked_times, sch_agg.schedule
+                `SELECT s.*, bt_agg.blocked_times, sch_agg.schedule, r.name AS role_name, ov_agg.has_overrides
                  FROM (
                    SELECT * FROM staff
                    WHERE ${where}
                    ORDER BY ${safeSortBy} ${safeSortOrder}
                    LIMIT $${idx} OFFSET $${idx + 1}
                  ) s
+                 -- The staff list's "Role" column (StaffListPage.tsx,
+                 -- RolesPermissionsPage.tsx's Individual Staff tab) needs the
+                 -- actual Manager/Staff tier from the Roles & Permissions
+                 -- system, not the dead s.permission_level column or a
+                 -- nonexistent s.role field — same join users.repository.ts's
+                 -- findByIdWithStaffPermissions already uses for /users/me.
+                 LEFT JOIN roles r ON r.id = s.role_id
+                 -- "Custom" badge on the Individual Staff tab — must reflect
+                 -- the real staff_permission_overrides table (the new
+                 -- per-key sparse override system), not the legacy
+                 -- custom_permissions blob column, which is unrelated once a
+                 -- staff member has a role_id and is on the new resolution
+                 -- path (see staffHasPermission in permission.middleware.ts).
+                 LEFT JOIN LATERAL (
+                   SELECT EXISTS(SELECT 1 FROM staff_permission_overrides spo WHERE spo.staff_id = s.id) AS has_overrides
+                 ) ov_agg ON true
                  LEFT JOIN LATERAL (
                    SELECT COALESCE(
                      json_agg(

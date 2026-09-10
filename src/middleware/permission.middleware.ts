@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import pool from "../config/database";
 import { AppError } from "./error.middleware";
+import logger from "../config/logger";
 
 export interface PermUser {
     userId: string;
@@ -176,6 +177,7 @@ const DEFAULT_STAFF_PERMS: Record<string, boolean> = {
     delete_clients: false,
     view_sales: true,
     create_sales: true,
+    import_sales: false,
     view_services: true,
     create_services: false,
     edit_services: false,
@@ -223,7 +225,12 @@ export async function staffHasPermission(user: PermUser, permKey: string): Promi
         // ── New path: staff.role_id has been backfilled for this staff member ──
         // 1. Sparse per-staff override wins outright if a row exists for this key.
         const overrides = await loadStaffOverrides(roleInfo.staffId);
-        if (permKey in overrides) return overrides[permKey];
+        if (permKey in overrides) {
+            if (permKey.startsWith("view_dashboard") || permKey === "view_calendar") {
+                logger.warn("[DEBUG staffHasPermission] override hit", { userId: user.userId, salonId, staffId: roleInfo.staffId, roleId: roleInfo.roleId, permKey, value: overrides[permKey] });
+            }
+            return overrides[permKey];
+        }
 
         // 2. Otherwise fall through to the assigned role's permission set.
         // A key with no row here means "not explicitly granted" and must
@@ -234,7 +241,14 @@ export async function staffHasPermission(user: PermUser, permKey: string): Promi
         // otherwise a freshly-created blank role would silently leak every
         // legacy "true by default" permission it never actually granted.
         const rolePerms = await loadRolePermissions(roleInfo.roleId);
+        if (permKey.startsWith("view_dashboard") || permKey === "view_calendar") {
+            logger.warn("[DEBUG staffHasPermission] role-default hit", { userId: user.userId, salonId, staffId: roleInfo.staffId, roleId: roleInfo.roleId, permKey, value: rolePerms[permKey] ?? false, overrideKeys: Object.keys(overrides) });
+        }
         return rolePerms[permKey] ?? false;
+    }
+
+    if (permKey.startsWith("view_dashboard") || permKey === "view_calendar") {
+        logger.warn("[DEBUG staffHasPermission] legacy path (no role_id)", { userId: user.userId, salonId, permKey });
     }
 
     // ── Legacy path: this staff member hasn't been backfilled yet (or the
@@ -297,6 +311,31 @@ export const requirePermission = (permKey: string) =>
         } catch (err) {
             return next(err);
         }
+    };
+
+// ── Middleware factory (export-format-aware) ───────────────────────────────────
+// A handful of export endpoints serve csv/excel/pdf from one route via
+// ?format=..., rather than three separate routes — so the permission to
+// check can't be picked statically at route-registration time. Mirrors each
+// controller's own format parsing/defaulting exactly, so the permission
+// checked always matches the file actually generated.
+//
+// `formatToKey` lets a caller remap a query value that isn't literally
+// "pdf"/"excel"/"csv" onto the right permission — e.g. staff commissions'
+// export endpoint uses ?format=json to fetch rows for a client-side PDF
+// build (same pattern as the Reports module's ReportExportButton), which
+// should still require export_pdf, not a nonexistent "export_json".
+export const requireExportFormatPermission = (
+    allowedFormats: string[] = ["csv", "excel", "pdf"],
+    defaultFormat: string = "csv",
+    formatToKey: Record<string, "csv" | "excel" | "pdf"> = {}
+) =>
+    (req: Request & { user?: PermUser }, res: Response, next: NextFunction) => {
+        const raw = String(req.query.format || "").toLowerCase();
+        const format = allowedFormats.includes(raw) ? raw : defaultFormat;
+        const resolved = formatToKey[format] ?? (format as "csv" | "excel" | "pdf");
+        const key = resolved === "pdf" ? "export_pdf" : resolved === "excel" ? "export_excel" : "export_csv";
+        return requirePermission(key)(req, res, next);
     };
 
 // ── Middleware factory (any-of) ────────────────────────────────────────────────

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
+import { requirePlanFeature } from "../../middleware/planFeature.middleware";
 import { requirePermission } from "../../middleware/permission.middleware";
 import { payrollController } from "./payroll.controller";
 import {
@@ -17,6 +18,10 @@ const auth = authMiddleware;
 const ownerAdminStaff = roleMiddleware("salon_owner", "admin", "staff");
 const viewPayroll = requirePermission("view_payroll");
 const managePayroll = requirePermission("manage_payroll");
+
+// featureKey "payroll" (Advance tier and up) — entire module, no core-ops
+// dependency from other features the way memberships/packages have.
+router.use(authMiddleware, requirePlanFeature("payroll"));
 
 router.get("/attendance-summary", auth, ownerAdminStaff, viewPayroll, payrollController.attendanceSummary);
 router.get("/salary-advances", auth, ownerAdminStaff, viewPayroll, payrollController.listSalaryAdvances);

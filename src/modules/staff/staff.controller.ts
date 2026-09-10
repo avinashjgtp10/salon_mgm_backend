@@ -45,6 +45,8 @@ export const staffController = {
         employment_type: req.query.employment_type as any,
         is_active: req.query.is_active !== undefined ? req.query.is_active === "true" : undefined,
         branch_id: req.query.branch_id ? String(req.query.branch_id) : undefined,
+        allow_calendar_bookings: req.query.allow_calendar_bookings !== undefined
+          ? req.query.allow_calendar_bookings === "true" : undefined,
         sort_by: req.query.sort_by as any,
         sort_order: req.query.sort_order as any,
       };

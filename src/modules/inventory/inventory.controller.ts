@@ -86,11 +86,11 @@ export const suppliersController = {
         } catch (err) { next(err); }
     },
 
-    async listLocations(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    async listFilterOptions(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             const salonId = await getSalonId(req);
-            const locations = await suppliersService.listLocations(salonId);
-            sendSuccess(res, 200, locations, "Supplier locations fetched successfully");
+            const filterOptions = await suppliersService.listFilterOptions(salonId);
+            sendSuccess(res, 200, filterOptions, "Supplier filter options fetched successfully");
         } catch (err) { next(err); }
     },
 

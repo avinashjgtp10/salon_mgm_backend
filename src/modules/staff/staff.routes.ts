@@ -1,7 +1,7 @@
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
-import { requirePermission, requireAnyPermission } from "../../middleware/permission.middleware";
+import { requirePermission, requireAnyPermission, requireExportFormatPermission } from "../../middleware/permission.middleware";
 import { staffPermissionsController } from "../roles/roles.controller";
 import { upload } from "./staff.upload";
 import { uploadMiddleware } from "../../middleware/upload.middleware";
@@ -58,9 +58,9 @@ router.post("/", auth, ownerAdmin, requirePermission("add_team_member"), validat
 router.post("/upload-avatar", auth, ownerAdmin, uploadMiddleware.single("avatar"), staffController.uploadAvatar);
 
 // ─── Import / Export (must be BEFORE /:id) ───────────────────────────────────
-router.post("/import",       auth, ownerAdmin, upload.single("file"), staffController.importStaff);
-router.get("/export/excel",  auth, ownerAdmin, staffController.exportExcel);
-router.get("/export/csv",    auth, ownerAdmin, staffController.exportCsv);
+router.post("/import",       auth, ownerAdmin, requirePermission("import_file"),   upload.single("file"), staffController.importStaff);
+router.get("/export/excel",  auth, ownerAdmin, requirePermission("export_excel"),  staffController.exportExcel);
+router.get("/export/csv",    auth, ownerAdmin, requirePermission("export_csv"),    staffController.exportCsv);
 
 // ─── Commissions — salon-wide (must be BEFORE /:staffId routes) ──────────────
 // Previously owner/admin-only with no permission key — opened to staff via
@@ -68,7 +68,7 @@ router.get("/export/csv",    auth, ownerAdmin, staffController.exportCsv);
 // Payroll/Wages/Tips/Marketing this phase.
 router.get("/commissions/summary",              auth, ownerAdminStaff, viewCommissions, staffCommissionsController.getCommissionSummary);
 router.get("/commissions/earned",               auth, ownerAdminStaff, viewCommissions, staffCommissionsController.getEarnedBySalon);
-router.get("/commissions/export",               auth, ownerAdminStaff, viewCommissions, staffCommissionsController.exportCommissions);
+router.get("/commissions/export",               auth, ownerAdminStaff, viewCommissions, requireExportFormatPermission(["csv", "excel", "json"], "csv", { json: "pdf" }), staffCommissionsController.exportCommissions);
 router.post("/commissions/:staffId/mark-paid",  auth, ownerAdminStaff, manageCommissions, staffCommissionsController.markStaffCommissionPaid);
 router.get("/commissions/:staffId/settlements", auth, ownerAdminStaff, viewCommissions, staffCommissionsController.getSettlementHistory);
 router.get("/commissions/all",                  auth, ownerAdminStaff, viewCommissions, staffCommissionsController.listBySalon);
