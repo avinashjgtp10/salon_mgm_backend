@@ -187,6 +187,28 @@ export const authRepository = {
     return staffRows[0]?.salon_id ?? null;
   },
 
+  // The staff member's assigned role NAME (e.g. "Manager", "Staff") from the
+  // Roles & Permissions system — informational only, for display purposes
+  // (see auth.service.ts's login()). This is deliberately NOT the same thing
+  // as users.role (the fixed salon_owner/admin/staff/client enum that every
+  // roleMiddleware()/requirePermission() authorization check in the app is
+  // built around) — that column must never become "manager" or any other
+  // role name, or every allow-list that only lists "staff" would reject
+  // Manager-tier staff outright. null when the user isn't staff, or is staff
+  // but hasn't been assigned a role yet (still on the legacy resolution path).
+  async findStaffRoleNameByUserId(userId: string): Promise<string | null> {
+    const { rows } = await safeQuery(() =>
+      pool.query(
+        `SELECT r.name FROM staff s
+         JOIN roles r ON r.id = s.role_id
+         WHERE s.user_id = $1
+         ORDER BY s.created_at DESC LIMIT 1`,
+        [userId],
+      ),
+    );
+    return rows[0]?.name ?? null;
+  },
+
   // ===================== OTP VERIFICATIONS =====================
 
   /**

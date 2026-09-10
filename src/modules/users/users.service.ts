@@ -23,6 +23,7 @@ function toSafeUser(u: any, effectivePermissions: Record<string, boolean> | null
     lastName: u.last_name ?? null,
     fullName,
     role: u.role,
+    roleName: u.role_name ?? null,
     avatarUrl: u.avatar_url ?? null,
     isVerified: u.is_verified ?? false,
     isActive: u.is_active ?? true,
