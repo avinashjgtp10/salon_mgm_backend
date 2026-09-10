@@ -16,14 +16,19 @@ const router = Router();
 // other client-facing module uses, plus a dedicated permission check.
 const auth = [authMiddleware, requireSalon, roleMiddleware("salon_owner", "admin", "staff")];
 const managePurchaseHistory = requirePermission("manage_client_purchase_history");
-// Reads also accept plain view_clients — Quick Sale/Calendar need to read a
-// selected client's package coverage just to build a booking/sale (e.g.
-// checking whether a service is covered), which is routine client-viewing,
-// not "managing" their purchase history. Requiring the stronger manage
-// permission here blocked any staff who could process a sale but wasn't
-// separately granted manage_client_purchase_history from ever loading a
-// client with packages — see readPurchaseHistory below.
-const readPurchaseHistory = requireAnyPermission(["view_clients", "manage_client_purchase_history"]);
+// Reads also accept view_clients or view_appointment — Quick Sale/Calendar
+// need to read a selected client's package coverage just to build a
+// booking/sale or show it inside View Appointment (e.g. checking whether a
+// service is covered), which is routine client-viewing, not "managing"
+// their purchase history. Requiring the stronger manage permission here
+// blocked any staff who could process a sale/view an appointment but wasn't
+// separately granted manage_client_purchase_history (a different module's
+// permission) from ever loading a client with packages — see
+// readPurchaseHistory below. Each caller's own section permission
+// (Calendar's view_appointment, Clients' view_clients) is meant to be
+// sufficient on its own — this must never force a staff member to also be
+// granted an unrelated module's permission just to see this section.
+const readPurchaseHistory = requireAnyPermission(["view_clients", "manage_client_purchase_history", "view_appointment"]);
 
 router.get("/",      ...auth, readPurchaseHistory, clientPackagesController.list);
 router.post("/",     ...auth, managePurchaseHistory, validateCreateClientPackage, clientPackagesController.create);
