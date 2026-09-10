@@ -84,6 +84,7 @@ import demoRequestsRoutes from "./modules/demo-requests/demo-requests.routes";
 import supportRoutes from "./modules/support/support.routes";
 import notificationsRoutes from "./modules/notifications/notifications.routes";
 import deploymentAnnouncementsRoutes from "./modules/deployment-announcements/deployment-announcements.routes";
+import appVersionRoutes from "./modules/app-version/app-version.routes";
 import enquiriesRoutes from "./modules/enquiries/enquiries.routes";
 import mediaRoutes from "./modules/media/media.routes";
 import { emailService } from "./modules/utils/email.service";
@@ -324,6 +325,10 @@ app.use("/api/v1/demo-requests", demoRequestsRoutes);
 app.use("/api/v1/support", supportRoutes);
 app.use("/api/v1/notifications", notificationsRoutes);
 app.use("/api/v1/deployment-announcements", deploymentAnnouncementsRoutes);
+// Global mobile app version configuration. GET /api/v1/app/version is public.
+// Distinct from /api/v1/appointments: Express matches mount paths on segment
+// boundaries, so "/api/v1/app" never captures "/api/v1/appointments".
+app.use("/api/v1/app", appVersionRoutes);
 app.use("/api/v1/enquiries", enquiriesRoutes);
 app.use("/api/v1/media", mediaRoutes);
 
