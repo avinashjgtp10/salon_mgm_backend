@@ -10,14 +10,18 @@ const router = Router();
 // client-packages.routes.ts, closed the same way.
 const auth = [authMiddleware, requireSalon, roleMiddleware('salon_owner', 'admin', 'staff')];
 const managePurchaseHistory = requirePermission('manage_client_purchase_history');
-// Reads also accept plain view_clients — useClientMembershipWallet fetches
-// this list for ANY selected client (eWallet/membership-balance display
-// during Quick Sale/Calendar checkout), which is routine client-viewing,
-// not "managing" their purchase history. Requiring the stronger manage
-// permission here blocked any staff who could process a sale but wasn't
-// separately granted manage_client_purchase_history the moment they picked
-// a client with a membership.
-const readPurchaseHistory = requireAnyPermission(['view_clients', 'manage_client_purchase_history']);
+// Reads also accept view_clients or view_appointment — useClientMembershipWallet
+// fetches this list for ANY selected client (eWallet/membership-balance
+// display during Quick Sale/Calendar checkout, or inside View Appointment),
+// which is routine client-viewing, not "managing" their purchase history.
+// Requiring the stronger manage permission here blocked any staff who could
+// process a sale/view an appointment but wasn't separately granted
+// manage_client_purchase_history (a different module's permission) the
+// moment they picked a client with a membership. Each caller's own section
+// permission (Calendar's view_appointment, Clients' view_clients) is meant
+// to be sufficient on its own — this must never force a staff member to
+// also be granted an unrelated module's permission just to see this section.
+const readPurchaseHistory = requireAnyPermission(['view_clients', 'manage_client_purchase_history', 'view_appointment']);
 
 router.get('/',              ...auth, readPurchaseHistory, clientMembershipsController.list);
 router.post('/',             ...auth, managePurchaseHistory, clientMembershipsController.purchase);
