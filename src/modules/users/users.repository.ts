@@ -10,9 +10,10 @@ export const usersRepo = {
 
   async findByIdWithStaffPermissions(id: string) {
     const { rows } = await pool.query(
-      `SELECT u.*, s.custom_permissions, s.salon_id AS staff_salon_id, s.role_id
+      `SELECT u.*, s.custom_permissions, s.salon_id AS staff_salon_id, s.role_id, r.name AS role_name
        FROM users u
        LEFT JOIN staff s ON s.user_id = u.id
+       LEFT JOIN roles r ON r.id = s.role_id
        WHERE u.id = $1
        LIMIT 1`,
       [id]
