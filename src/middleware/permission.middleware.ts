@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import pool from "../config/database";
 import { AppError } from "./error.middleware";
+import logger from "../config/logger";
 
 export interface PermUser {
     userId: string;
@@ -224,7 +225,12 @@ export async function staffHasPermission(user: PermUser, permKey: string): Promi
         // ── New path: staff.role_id has been backfilled for this staff member ──
         // 1. Sparse per-staff override wins outright if a row exists for this key.
         const overrides = await loadStaffOverrides(roleInfo.staffId);
-        if (permKey in overrides) return overrides[permKey];
+        if (permKey in overrides) {
+            if (permKey.startsWith("view_dashboard") || permKey === "view_calendar") {
+                logger.warn("[DEBUG staffHasPermission] override hit", { userId: user.userId, salonId, staffId: roleInfo.staffId, roleId: roleInfo.roleId, permKey, value: overrides[permKey] });
+            }
+            return overrides[permKey];
+        }
 
         // 2. Otherwise fall through to the assigned role's permission set.
         // A key with no row here means "not explicitly granted" and must
@@ -235,7 +241,14 @@ export async function staffHasPermission(user: PermUser, permKey: string): Promi
         // otherwise a freshly-created blank role would silently leak every
         // legacy "true by default" permission it never actually granted.
         const rolePerms = await loadRolePermissions(roleInfo.roleId);
+        if (permKey.startsWith("view_dashboard") || permKey === "view_calendar") {
+            logger.warn("[DEBUG staffHasPermission] role-default hit", { userId: user.userId, salonId, staffId: roleInfo.staffId, roleId: roleInfo.roleId, permKey, value: rolePerms[permKey] ?? false, overrideKeys: Object.keys(overrides) });
+        }
         return rolePerms[permKey] ?? false;
+    }
+
+    if (permKey.startsWith("view_dashboard") || permKey === "view_calendar") {
+        logger.warn("[DEBUG staffHasPermission] legacy path (no role_id)", { userId: user.userId, salonId, permKey });
     }
 
     // ── Legacy path: this staff member hasn't been backfilled yet (or the

@@ -9,6 +9,7 @@ interface AuthRequest extends Request {
   user?: {
     userId: string;
     role?: string;
+    salonId?: string | null;
   };
 }
 
@@ -42,7 +43,7 @@ export const usersController = {
         throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
       }
 
-      const user = await usersService.me(userId);
+      const user = await usersService.me(userId, req.user?.salonId);
 
       logger.info("GET /users/me success", {
         userId,

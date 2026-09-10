@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
-import { requirePermission, requireExportFormatPermission } from "../../middleware/permission.middleware";
+import { requirePermission, requireAnyPermission, requireExportFormatPermission } from "../../middleware/permission.middleware";
 import { appointmentsController } from "./appointments.controller";
 import {
     validateCreateAppointment, validateUpdateAppointment, validateCheckoutAppointment,
@@ -11,7 +11,12 @@ const router = Router();
 const ownerAdminStaff = roleMiddleware("salon_owner", "admin", "staff");
 
 router.post("/", authMiddleware, ownerAdminStaff, requirePermission("manage_calendar"), validateCreateAppointment, appointmentsController.create);
-router.get("/", authMiddleware, ownerAdminStaff, requirePermission("view_calendar"), appointmentsController.list);
+// Also accepts view_dashboard_appointments — the Dashboard's "Today's
+// Appointments" widget calls this same list endpoint for live data (see
+// useTodayAppointments.ts) rather than the dashboard's own stale bundled
+// snapshot, so a staff member with only the Dashboard-scoped permission can
+// still see that preview without needing full Calendar module access.
+router.get("/", authMiddleware, ownerAdminStaff, requireAnyPermission(["view_calendar", "view_dashboard_appointments"]), appointmentsController.list);
 router.get("/export", authMiddleware, ownerAdminStaff, requirePermission("view_calendar"), requireExportFormatPermission(["csv", "excel"], "csv"), appointmentsController.exportAppointments);
 router.post("/bulk-delete", authMiddleware, ownerAdminStaff, requirePermission("manage_calendar"), appointmentsController.bulkDelete);
 router.get("/:id", authMiddleware, ownerAdminStaff, requirePermission("view_calendar"), appointmentsController.getById);
