@@ -48,6 +48,12 @@ const viewTips = requirePermission("view_tips");
 // other commissions route (including the write ones) still requires
 // view_commissions/manage_commissions on its own, unrelated to Payroll.
 const viewCommissionsOrPayroll = requireAnyPermission(["view_commissions", "view_payroll"]);
+// Reports ticket: Commission Report has no dedicated backend endpoint — it
+// reuses these two commissions routes. New report-specific key OR'd
+// alongside the existing feature permissions, same treatment as the other
+// no-route reports (see inventory.routes.ts/attendance.routes.ts).
+const viewCommissionsOrReport = requireAnyPermission(["view_commissions", "view_report_commission_report"]);
+const viewCommissionsOrPayrollOrReport = requireAnyPermission(["view_commissions", "view_payroll", "view_report_commission_report"]);
 const viewTipsOrPayroll = requireAnyPermission(["view_tips", "view_payroll"]);
 // Staff addresses/emergency contacts/schedules/leaves — role gate unchanged
 // (owner/admin for writes, as before), just adding the permission check
@@ -128,8 +134,8 @@ router.get("/export/csv",    auth, ownerAdminStaff, exportStaffCsv,   staffContr
 // Previously owner/admin-only with no permission key — opened to staff via
 // view_commissions/manage_commissions per the same decision that opened
 // Payroll/Wages/Tips/Marketing this phase.
-router.get("/commissions/summary",              auth, ownerAdminStaff, viewCommissions, staffCommissionsController.getCommissionSummary);
-router.get("/commissions/earned",               auth, ownerAdminStaff, viewCommissionsOrPayroll, staffCommissionsController.getEarnedBySalon);
+router.get("/commissions/summary",              auth, ownerAdminStaff, viewCommissionsOrReport, staffCommissionsController.getCommissionSummary);
+router.get("/commissions/earned",               auth, ownerAdminStaff, viewCommissionsOrPayrollOrReport, staffCommissionsController.getEarnedBySalon);
 router.get("/commissions/export",               auth, ownerAdminStaff, viewCommissions, exportCommissionsFormat, staffCommissionsController.exportCommissions);
 router.post("/commissions/:staffId/mark-paid",  auth, ownerAdminStaff, manageCommissions, staffCommissionsController.markStaffCommissionPaid);
 router.get("/commissions/:staffId/settlements", auth, ownerAdminStaff, viewCommissions, staffCommissionsController.getSettlementHistory);
