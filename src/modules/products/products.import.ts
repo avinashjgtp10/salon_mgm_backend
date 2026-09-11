@@ -132,6 +132,26 @@ const NUMBER_FIELDS = new Set<keyof ImportRow>([
     "retailPrice", "mrp", "sellPrice", "fullPrice", "paidPrice",
 ]);
 
+// The sample template this feature ships (ImportProductsPage.tsx's
+// SAMPLE_COLUMNS) marks every required column with a trailing "*" —
+// "Product Name *", "Category *", "Stock Quantity *", "Retail Price *" —
+// but COLUMN_ALIASES only ever listed the bare name ("product name"). A
+// plain .toLowerCase() on the header left every required header one
+// character off from its alias ("product name *" !== "product name"), so
+// every required field on every row resolved to undefined and the whole
+// sheet failed with e.g. "Product name is required" on every single row —
+// even filled out exactly per the downloaded template. Stripping "*" and
+// collapsing whitespace here is what actually makes "Product Name *" etc.
+// match. Mirrors sales.import.ts's normalizeHeaderKey, which fixed the same
+// bug in the Bulk Billing Importer.
+function normalizeHeaderKey(h: string): string {
+    return String(h ?? "")
+        .toLowerCase()
+        .replace(/\*/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
 // Shared row-builder for both CSV and Excel — `get(aliases)` returns the raw
 // cell value for the first alias present, however the caller wants to look
 // it up (a plain object for CSV, worksheet cells for Excel).
@@ -189,7 +209,7 @@ function parseCSV(content: string): ImportRow[] {
 
         if (lines.length < 2) return [];
 
-        const headers = parseCSVLine(lines[0]).map((h) => h.toLowerCase());
+        const headers = parseCSVLine(lines[0]).map(normalizeHeaderKey);
         const records: ImportRow[] = [];
 
         for (let i = 1; i < lines.length; i++) {
@@ -260,7 +280,7 @@ async function parseExcel(
         const headers: Record<string, number> = {};
 
         worksheet.getRow(1).eachCell((cell, colNumber) => {
-            headers[String(cell.value).toLowerCase()] = colNumber;
+            headers[normalizeHeaderKey(String(cell.value))] = colNumber;
         });
 
         worksheet.eachRow((row, rowNumber) => {

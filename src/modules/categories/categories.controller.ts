@@ -6,23 +6,23 @@ import { categoriesService } from "./categories.service";
 import { CreateCategoryBody, UpdateCategoryBody } from "./categories.types";
 
 type AuthRequest = Request & {
-  user?: { userId: string; role?: string };
+  user?: { userId: string; role?: string; salonId?: string };
 };
 
 export const categoriesController = {
   // POST /api/v1/categories
   async create(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const userId = req.user?.userId;
+      const salonId = req.user?.salonId;
 
-      logger.info("POST /categories called", { userId });
+      logger.info("POST /categories called", { salonId });
 
-      if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+      if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
 
       const body = req.body as CreateCategoryBody;
 
       const created = await categoriesService.create({
-        requesterUserId: userId,
+        salonId,
         body,
       });
 
@@ -36,14 +36,14 @@ export const categoriesController = {
   // GET /api/v1/categories
   async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const userId = req.user?.userId;
+      const salonId = req.user?.salonId;
 
-      logger.info("GET /categories called", { userId });
+      logger.info("GET /categories called", { salonId });
 
-      if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+      if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
 
       const rows = await categoriesService.listMySalonCategories({
-        requesterUserId: userId,
+        salonId,
       });
 
       return sendSuccess(res, 200, rows, "Categories fetched successfully");
@@ -56,16 +56,16 @@ export const categoriesController = {
   // GET /api/v1/categories/:id
   async getById(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const userId = req.user?.userId;
+      const salonId = req.user?.salonId;
       const id = String(req.params.id || "").trim();
 
-      logger.info("GET /categories/:id called", { userId, id });
+      logger.info("GET /categories/:id called", { salonId, id });
 
-      if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+      if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
       if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
 
       const cat = await categoriesService.getByIdForMySalon({
-        requesterUserId: userId,
+        salonId,
         id,
       });
 
@@ -79,18 +79,18 @@ export const categoriesController = {
   // PATCH /api/v1/categories/:id
   async update(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const userId = req.user?.userId;
+      const salonId = req.user?.salonId;
       const id = String(req.params.id || "").trim();
 
-      logger.info("PATCH /categories/:id called", { userId, id });
+      logger.info("PATCH /categories/:id called", { salonId, id });
 
-      if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+      if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
       if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
 
       const patch = req.body as UpdateCategoryBody;
 
       const updated = await categoriesService.updateForMySalon({
-        requesterUserId: userId,
+        salonId,
         id,
         patch,
       });
@@ -105,16 +105,16 @@ export const categoriesController = {
   // DELETE /api/v1/categories/:id
   async remove(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const userId = req.user?.userId;
+      const salonId = req.user?.salonId;
       const id = String(req.params.id || "").trim();
 
-      logger.info("DELETE /categories/:id called", { userId, id });
+      logger.info("DELETE /categories/:id called", { salonId, id });
 
-      if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+      if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
       if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
 
       const result = await categoriesService.removeForMySalon({
-        requesterUserId: userId,
+        salonId,
         id,
       });
 

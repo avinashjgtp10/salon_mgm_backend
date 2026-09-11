@@ -21,10 +21,13 @@
 //   2. Client/staff matching auto-creates on no match (client: phone/name +
 //      normal onboarding fields; staff: name only, everything else left
 //      genuinely null rather than fabricated) — see the Client/Staff blocks
-//      below for why those two are treated differently.
-//   3. A Service/Product cell can list multiple items separated by commas
-//      ("HAIR CUT LADIES, LOREAL SPA LADIES") — one Excel row is still
-//      exactly one invoice, just with multiple line items. The row's single
+//      below for why those two are treated differently. Staff name matching
+//      is normalized (trim + lowercase + collapsed whitespace) specifically
+//      so a typo/spacing variant of an existing name reuses that staff
+//      member instead of silently creating a duplicate.
+//   3. A Service/Product cell — and, positionally matched to it, the Staff
+//      cell — can each list multiple items/names separated by commas
+//      ("HAIR CUT LADIES, LOREAL SPA LADIES"). One Excel row is still
 //      Amount is the financial source of truth: it's split across the
 //      matched items in whole paise (no invented per-item pricing) so the
 //      created invoice's total always matches the source row exactly.
@@ -42,6 +45,8 @@ import { stockLedgerService } from "../inventory/stock-ledger.service";
 import { clientsService } from "../clients/clients.service";
 import { CreateClientBody } from "../clients/clients.types";
 import { staffRepository } from "../staff/staff.repository";
+import { appointmentsService } from "../appointments/appointments.service";
+import { appointmentsRepository } from "../appointments/appointments.repository";
 import { PaymentMethod } from "./sales.types";
 import {
     parseServiceItemNames,
@@ -58,7 +63,7 @@ interface ImportRow {
     clientName?: string;
     clientPhone?: string;
     item?: string;           // Service/Product cell — may be comma-separated
-    staffName?: string;
+    staffName?: string;      // may list multiple names, comma-separated — see the Staff block below
     amount?: number;
     discount?: number;
     tax?: number;
@@ -71,7 +76,10 @@ const COLUMN_ALIASES: Record<keyof ImportRow, string[]> = {
     clientName: ["client", "client name", "customer", "customer name"],
     clientPhone: ["client phone", "phone", "mobile", "contact", "client mobile"],
     item: ["service", "product", "service/product", "item", "item name"],
-    staffName: ["staff", "staff name", "employee"],
+    // "staff code"/"staff id" accepted here too — a sheet built during this
+    // feature's brief Staff-Code-only iteration may still carry that header
+    // even though the cell values are (and always were meant to be) names.
+    staffName: ["staff", "staff name", "employee", "staff code", "staff id"],
     amount: ["amount", "bill amount", "total amount", "total"],
     discount: ["discount", "discount amount"],
     tax: ["tax", "tax amount", "gst"],
@@ -297,10 +305,21 @@ export const salesImportService = {
             }
         }
 
+        // Collapses internal whitespace too (not just case + trim) — without
+        // this, "Priya  Sharma" (stray double space, a common paste artifact
+        // in real sheets) keyed differently than "Priya Sharma" and matched
+        // nothing, so every mis-spaced repeat of an existing staff member's
+        // name silently created a brand-new duplicate staff row instead of
+        // reusing the real one. Mirrors the services/products name maps just
+        // below, which already normalize this way.
+        function normalizeStaffName(name: string): string {
+            return name.trim().toLowerCase().replace(/\s+/g, " ");
+        }
+
         const staffByName = new Map<string, { id: string; name: string }[]>();
         for (const s of staffRows.rows) {
             const name = `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim();
-            const key = name.toLowerCase();
+            const key = normalizeStaffName(name);
             if (!key) continue;
             const arr = staffByName.get(key) ?? [];
             arr.push({ id: s.id, name }); staffByName.set(key, arr);
@@ -352,7 +371,14 @@ export const salesImportService = {
                 // phone was given but didn't match anything on file, name is
                 // still tried as a fallback before deciding this is a new
                 // client, so a client who exists without that exact phone
-                // recorded isn't duplicated. ─────────────────────────────
+                // recorded isn't duplicated. Client Phone itself is
+                // mandatory on every row (not just for new clients) — a
+                // bare name alone is too easy to accidentally split an
+                // existing client into a duplicate record. ───────────────
+                if (!row.clientPhone) {
+                    fail("Client Phone is required", "Add the client's phone number in the Client Phone column.");
+                    continue;
+                }
                 let matchedClient: { id: string; name: string } | undefined;
                 const clientPhoneDigits = row.clientPhone ? String(row.clientPhone).replace(/[\s\-().]/g, "") : null;
                 if (clientPhoneDigits) {
@@ -406,64 +432,12 @@ export const salesImportService = {
                 }
                 preview.client.matched_name = matchedClient!.name;
 
-                // ── Staff — match by exact name, else auto-create with ONLY
-                // the name filled in. Unlike a real "Add Staff" (which
-                // requires email/phone/gender/DOJ for login + onboarding),
-                // this deliberately does NOT fabricate those — an
-                // auto-created staff member here has every other field left
-                // genuinely null, to be completed later, rather than seeded
-                // with a fake email/phone that would look like real data.
-                // A BLANK Staff cell is routed to a single, clearly-labeled
-                // placeholder ("Unknown / Imported Staff") instead of either
-                // failing the row or silently guessing a real staff member —
-                // it goes through the exact same match-or-create path below,
-                // so it's created once and reused for every such row. ─────
-                const staffNameInput = row.staffName?.trim() || MISSING_STAFF_PLACEHOLDER_NAME;
-                const staffKey = staffNameInput.toLowerCase();
-                const staffCandidates = staffByName.get(staffKey) ?? [];
-                if (staffCandidates.length > 1) {
-                    fail(`Multiple staff named "${staffNameInput}" found`, "Use each staff member's exact full name to disambiguate.");
-                    continue;
-                }
-                let matchedStaff: { id: string; name: string } | undefined = staffCandidates[0];
-
-                if (!matchedStaff) {
-                    if (dry_run) {
-                        matchedStaff = { id: "__dry_run_new_staff__", name: staffNameInput };
-                        result.new_staff++;
-                        preview.staff.will_create = true;
-                    } else {
-                        try {
-                            const parts = staffNameInput.split(/\s+/);
-                            const firstName = parts[0];
-                            const lastName = parts.length > 1 ? parts.slice(1).join(" ") : null;
-                            const createdStaff = await staffRepository.create(salonId, {
-                                first_name: firstName,
-                                last_name: lastName,
-                                email: undefined,
-                            } as any, null);
-                            matchedStaff = {
-                                id: createdStaff.id,
-                                name: `${createdStaff.first_name} ${createdStaff.last_name ?? ""}`.trim(),
-                            };
-                            result.new_staff++;
-                            // Cache so a later row in the same sheet referencing
-                            // this same staff member (including the missing-
-                            // staff placeholder) reuses it, not a duplicate.
-                            staffByName.set(staffKey, [matchedStaff]);
-                        } catch (createErr: any) {
-                            fail(`Could not auto-create staff "${staffNameInput}": ${createErr?.message || "unknown error"}`);
-                            continue;
-                        }
-                    }
-                }
-                preview.staff.matched_name = matchedStaff.name;
-
                 // ── Service / Product — one cell can list multiple items
                 // separated by commas; one Excel row is still exactly one
                 // invoice, just with multiple line items. Every item must
                 // resolve independently or the whole row fails (no partial
-                // invoices). ───────────────────────────────────────────────
+                // invoices). Resolved before Staff so the Staff Code count
+                // below has an item count to line up against. ─────────────
                 if (!row.item) { fail("Service/Product is required", "Add a value in the Service column."); continue; }
                 const itemNames = parseServiceItemNames(row.item);
                 if (itemNames.length === 0) { fail("Service/Product is required", "Add a value in the Service column."); continue; }
@@ -482,6 +456,103 @@ export const salesImportService = {
                     );
                     continue;
                 }
+
+                // ── Staff — match by exact (normalized) name, else
+                // auto-create with ONLY the name filled in; Salonox assigns
+                // the new staff member's Staff Code automatically the same
+                // way any other new staff member gets one (see
+                // staffRepository.create). Unlike a real "Add Staff" (which
+                // requires email/phone/gender/DOJ for login + onboarding),
+                // this deliberately does NOT fabricate those — an
+                // auto-created staff member here has every other field left
+                // genuinely null, to be completed later, rather than seeded
+                // with a fake email/phone that would look like real data.
+                // A blank Staff cell is routed to a single, clearly-labeled
+                // placeholder ("Unknown / Imported Staff") instead of either
+                // failing the row or silently guessing a real staff member —
+                // it goes through the exact same match-or-create path below,
+                // so it's created once and reused for every such row.
+                //
+                // A bill with multiple line items can list multiple staff
+                // names in the same cell, comma-separated, positionally
+                // matched to the Service/Product items in the same order
+                // (mirrors how that column itself is already comma-
+                // separated) — one name per item, not one staff for the
+                // whole invoice. A single name still applies to every item,
+                // exactly as before.
+                //
+                // Matching is by name only, normalized (trim + lowercase +
+                // collapsed whitespace — normalizeStaffName below), which is
+                // what actually prevents duplicates: a typo/spacing variant
+                // of an existing staff member's name ("Priya  Sharma" vs
+                // "Priya Sharma") now resolves to the SAME staff record
+                // instead of silently creating a second one. ─────────────
+                const staffNameInputs = row.staffName
+                    ? row.staffName.split(",").map((n) => n.trim()).filter((n) => n.length > 0)
+                    : [];
+                if (staffNameInputs.length === 0) staffNameInputs.push(MISSING_STAFF_PLACEHOLDER_NAME);
+                if (staffNameInputs.length !== 1 && staffNameInputs.length !== matchedItems.length) {
+                    fail(
+                        `${staffNameInputs.length} staff name(s) given for ${matchedItems.length} item(s)`,
+                        "List either one staff name for the whole bill, or exactly one per Service/Product item in the same order."
+                    );
+                    continue;
+                }
+
+                const matchedStaffs: { id: string; name: string }[] = [];
+                for (const staffNameInput of staffNameInputs) {
+                    const staffKey = normalizeStaffName(staffNameInput);
+                    const staffCandidates = staffByName.get(staffKey) ?? [];
+                    if (staffCandidates.length > 1) {
+                        fail(`Multiple staff named "${staffNameInput}" found`, "Use each staff member's exact full name to disambiguate.");
+                        matchedStaffs.length = 0;
+                        break;
+                    }
+                    let matched: { id: string; name: string } | undefined = staffCandidates[0];
+
+                    if (!matched) {
+                        if (dry_run) {
+                            matched = { id: "__dry_run_new_staff__", name: staffNameInput };
+                            result.new_staff++;
+                            preview.staff.will_create = true;
+                        } else {
+                            try {
+                                const parts = staffNameInput.split(/\s+/);
+                                const firstName = parts[0];
+                                const lastName = parts.length > 1 ? parts.slice(1).join(" ") : null;
+                                const createdStaff = await staffRepository.create(salonId, {
+                                    first_name: firstName,
+                                    last_name: lastName,
+                                    email: undefined,
+                                } as any, null);
+                                matched = {
+                                    id: createdStaff.id,
+                                    name: `${createdStaff.first_name} ${createdStaff.last_name ?? ""}`.trim(),
+                                };
+                                result.new_staff++;
+                                // Cache so a later row in the same sheet referencing
+                                // this same staff member (including the missing-
+                                // staff placeholder) reuses it, not a duplicate.
+                                staffByName.set(staffKey, [matched]);
+                            } catch (createErr: any) {
+                                fail(`Could not auto-create staff "${staffNameInput}": ${createErr?.message || "unknown error"}`);
+                                matchedStaffs.length = 0;
+                                break;
+                            }
+                        }
+                    }
+                    matchedStaffs.push(matched);
+                }
+                if (matchedStaffs.length !== staffNameInputs.length) continue; // a fail() above already recorded the reason
+
+                // One name for a multi-item bill means "this staff did all
+                // of it" — expand to line up 1:1 with matchedItems, same as
+                // a single name always has.
+                const staffPerItem = matchedStaffs.length === 1
+                    ? matchedItems.map(() => matchedStaffs[0])
+                    : matchedStaffs;
+                const matchedStaff = matchedStaffs[0]; // primary/billing staff for the invoice-level fields below
+                preview.staff.matched_name = matchedStaffs.map((s) => s.name).join(", ");
 
                 // ── Amount ────────────────────────────────────────────────
                 if (row.amount === undefined || isNaN(row.amount) || row.amount <= 0) {
@@ -524,7 +595,7 @@ export const salesImportService = {
                 const saleItemsInput = matchedItems.map((it, idx) => ({
                     item_type: it.type,
                     item_id: it.id,
-                    staff_id: matchedStaff!.id,
+                    staff_id: staffPerItem[idx].id,
                     name: it.name,
                     quantity: 1,
                     unit_price: (paiseShares[idx] / 100).toFixed(2),
@@ -533,24 +604,98 @@ export const salesImportService = {
                     taxable_amount: (paiseShares[idx] / 100).toFixed(2),
                 }));
 
+                // ── Create a real Appointment first ──────────────────────
+                // Payment Collection Report and Detailed Appointment Report
+                // are both keyed off `appointments` (the former INNER JOINs
+                // payments to it, the latter explodes its services/
+                // product_items JSONB for line items) — a Sale/Payment pair
+                // with appointment_id = null is invisible to both. So each
+                // imported bill row gets its own backdated, already-"paid"
+                // appointment, and the Sale + Payment below are linked to it.
+                // DURATION_MINUTES_DEFAULT: the sheet has no per-row duration,
+                // and none of the reports this unlocks (payment collection,
+                // appointment detail) filter or display on it — an arbitrary
+                // fixed value is fine; only scheduled_at (the date) matters.
+                const DURATION_MINUTES_DEFAULT = 30;
+                const scheduledAt = `${row.date}T00:00:00.000Z`;
+                const itemsWithShares = matchedItems.map((it, idx) => ({
+                    ...it,
+                    price: Number((paiseShares[idx] / 100).toFixed(2)),
+                    staff: staffPerItem[idx],
+                }));
+                const appointmentServices = itemsWithShares
+                    .filter((it) => it.type === "service")
+                    .map((it) => ({
+                        service_id: it.id,
+                        staff_id: it.staff.id,
+                        staff_name: it.staff.name,
+                        name: it.name,
+                        price: it.price,
+                        quantity: 1,
+                    }));
+                const appointmentProducts = itemsWithShares
+                    .filter((it) => it.type === "product")
+                    .map((it) => ({
+                        product_id: it.id,
+                        staff_id: it.staff.id,
+                        staff_name: it.staff.name,
+                        name: it.name,
+                        price: it.price,
+                        quantity: 1,
+                    }));
+
+                const appointment = await appointmentsService.create({
+                    requesterUserId,
+                    body: {
+                        salon_id: salonId,
+                        client_id: matchedClient!.id,
+                        staff_id: matchedStaff!.id,
+                        scheduled_at: scheduledAt,
+                        duration_minutes: DURATION_MINUTES_DEFAULT,
+                        status: "paid",
+                        source: "quick_sale",
+                        notes: row.notes || undefined,
+                        services: appointmentServices,
+                        product_items: appointmentProducts,
+                        include_gst: false,
+                    },
+                });
+                // scheduled_at above sets the appointment's visit date, but
+                // "Booked Date" in the Appointment Detail Report reads
+                // appointments.created_at, which the INSERT always stamps as
+                // NOW() — backdate it to match, same as the sale/payment below.
+                await pool.query(`UPDATE appointments SET created_at = $2 WHERE id = $1`, [appointment.id, row.date]);
+
                 // ── Create the sale + payment record ─────────────────────
                 // Reuses salesRepository.create() as-is (same transactional,
                 // race-safe invoice numbering every live checkout gets) with
                 // status "completed" and this row's own date as created_at —
                 // parseCreatedAt() (sales.repository.ts) already accepts a
                 // plain "YYYY-MM-DD" and treats it as that day, midnight UTC.
-                const sale = await salesRepository.create({
-                    salon_id: salonId,
-                    client_id: matchedClient!.id,
-                    staff_id: matchedStaff!.id,
-                    status: "completed",
-                    discount_amount: discount.toString(),
-                    tax_amount: tax.toString(),
-                    payment_method: paymentMethod,
-                    notes: row.notes || undefined,
-                    created_at: row.date,
-                    items: saleItemsInput,
-                }, requesterUserId);
+                // A failure here is caught by the row-level try/catch below
+                // (fail() marks the row failed, no invoice is left behind) —
+                // but the appointment just created above would otherwise be
+                // orphaned (no linked sale/payment), so it's cleaned up too;
+                // see the file header's "no partial invoices" rule.
+                let sale;
+                try {
+                    sale = await salesRepository.create({
+                        salon_id: salonId,
+                        client_id: matchedClient!.id,
+                        appointment_id: appointment.id,
+                        staff_id: matchedStaff!.id,
+                        status: "completed",
+                        discount_amount: discount.toString(),
+                        tax_amount: tax.toString(),
+                        payment_method: paymentMethod,
+                        notes: row.notes || undefined,
+                        created_at: row.date,
+                        items: saleItemsInput,
+                    }, requesterUserId);
+                } catch (saleErr) {
+                    await appointmentsRepository.deleteById(appointment.id).catch(() => {});
+                    throw saleErr;
+                }
 
                 // Mirrors salesService.checkout()'s side-effect chain for a
                 // fully-paid bill — payment record, commission, stock, tip —
@@ -561,6 +706,7 @@ export const salesImportService = {
                     await paymentsRepository.create({
                         salon_id: salonId,
                         client_id: matchedClient!.id,
+                        appointment_id: appointment.id,
                         gross_amount: row.amount,
                         discount_amount: discount,
                         net_amount: totalAmount,
@@ -570,13 +716,25 @@ export const salesImportService = {
                         status: "completed",
                         notes: `Bulk billing import — Sale ID: ${sale.id}`,
                     });
+                    // paymentsRepository.create() always stamps paid_at/created_at
+                    // as NOW() — both reports' date logic (Payment Collection's
+                    // payment_date, Appointment Detail's payment_method lookup
+                    // via "latest payment") key off this row, so it must carry
+                    // the historical date too. Mirrors salesRepository's own
+                    // appointment_id-scoped backdate of payments (see
+                    // updateDateForAppointment's UTC-conversion comment there
+                    // for why this can't just bind the Date directly).
+                    await pool.query(
+                        `UPDATE payments SET created_at = ($2::timestamptz AT TIME ZONE 'UTC'), paid_at = ($2::timestamptz AT TIME ZONE 'UTC') WHERE appointment_id = $1`,
+                        [appointment.id, row.date]
+                    );
                 } catch (payErr: any) {
                     logger.error("[sales/import] payment record creation failed:", { saleId: sale.id, error: payErr?.message ?? payErr });
                 }
 
                 const items = await salesRepository.findItemsBySaleId(sale.id);
                 commissionCalculationService.calculateForSale({
-                    salonId, saleId: sale.id, appointmentId: null,
+                    salonId, saleId: sale.id, appointmentId: appointment.id,
                     fallbackStaffId: matchedStaff!.id, items,
                 }).catch(() => {});
                 tipCalculationService.earnForSale(sale.id, salonId).catch(() => {});

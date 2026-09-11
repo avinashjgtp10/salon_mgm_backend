@@ -2,7 +2,7 @@ import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { subscriptionMiddleware } from "../../middleware/subscription.middleware";
-import { requirePermission } from "../../middleware/permission.middleware";
+import { requirePermission, requireAnyPermission } from "../../middleware/permission.middleware";
 import { reportsController } from "./reports.controller";
 
 // ======================================================
@@ -13,22 +13,26 @@ import { reportsController } from "./reports.controller";
 
 const router = Router();
 
-const guard = [
+// baseGuard covers auth/subscription/role only — the individual-report
+// permission check (view_report_<id>, matching REPORTS[].id in
+// ReportsPage.tsx) is appended per-route below, replacing the old single
+// shared view_reports check that covered every report identically.
+const baseGuard = [
     authMiddleware,
     subscriptionMiddleware,
     roleMiddleware("salon_owner", "admin", "staff", "super_admin"),
-    requirePermission("view_reports"),
 ];
+const viewReport = (key: string) => requirePermission(key);
 
 router.post(
     "/sales-summary",
-    ...guard,
+    ...baseGuard, viewReport("view_report_sales_summary"),
     reportsController.getSalesSummaryReport
 );
 
 router.get(
     "/sales-summary/:saleId",
-    ...guard,
+    ...baseGuard, viewReport("view_report_sales_summary"),
     reportsController.getSaleDetail
 );
 
@@ -39,18 +43,22 @@ router.get(
 
 router.post(
     "/daily-sheet",
-    ...guard,
+    ...baseGuard, viewReport("view_report_daily_sheet"),
     reportsController.getDailySheetReport
 );
 
 // ======================================================
 // PRODUCT RETAIL REPORT (independent report API)
 // Reads sales/sale_items directly — never calls the Appointment API/service.
+// Shows under BOTH the Sales and Inventory report categories in
+// ReportsPage.tsx (REPORTS ids "product_sale" and "product_sale_inventory"
+// — same component, same backend endpoint) — per explicit instruction these
+// get independent toggles, so either one alone is enough to reach this route.
 // ======================================================
 
 router.post(
     "/product-retail",
-    ...guard,
+    ...baseGuard, requireAnyPermission(["view_report_product_sale", "view_report_product_sale_inventory"]),
     reportsController.getProductRetailReport
 );
 
@@ -61,7 +69,7 @@ router.post(
 
 router.post(
     "/service-sale",
-    ...guard,
+    ...baseGuard, viewReport("view_report_service_sale"),
     reportsController.getServiceSaleReport
 );
 
@@ -72,7 +80,7 @@ router.post(
 
 router.post(
     "/gst",
-    ...guard,
+    ...baseGuard, viewReport("view_report_taxes"),
     reportsController.getGstReport
 );
 
@@ -84,7 +92,7 @@ router.post(
 
 router.post(
     "/product-inventory-sales",
-    ...guard,
+    ...baseGuard, viewReport("view_report_product_inventory"),
     reportsController.getProductInventorySales
 );
 
@@ -96,7 +104,7 @@ router.post(
 
 router.post(
     "/product-inventory",
-    ...guard,
+    ...baseGuard, viewReport("view_report_product_inventory"),
     reportsController.getProductInventoryReport
 );
 
@@ -108,13 +116,13 @@ router.post(
 
 router.post(
     "/slow-moving-products",
-    ...guard,
+    ...baseGuard, viewReport("view_report_slow_moving_products"),
     reportsController.getSlowMovingProductsReport
 );
 
 router.post(
     "/fast-moving-products",
-    ...guard,
+    ...baseGuard, viewReport("view_report_fast_moving_products"),
     reportsController.getFastMovingProductsReport
 );
 
@@ -126,7 +134,7 @@ router.post(
 
 router.post(
     "/brand-performance",
-    ...guard,
+    ...baseGuard, viewReport("view_report_brand_performance"),
     reportsController.getBrandPerformanceReport
 );
 
@@ -138,19 +146,21 @@ router.post(
 
 router.post(
     "/purchase-vs-sales",
-    ...guard,
+    ...baseGuard, viewReport("view_report_purchase_vs_sales"),
     reportsController.getPurchaseVsSalesReport
 );
 
 // ======================================================
 // PRODUCT MARGIN REPORT (independent report API)
 // Reads sale_items/products directly — never calls the Appointment
-// API/service.
+// API/service. Shows under BOTH Sales and Inventory categories (REPORTS ids
+// "product_margin" and "product_margin_inventory") — independent toggles,
+// same treatment as Product Retail above.
 // ======================================================
 
 router.post(
     "/product-margin",
-    ...guard,
+    ...baseGuard, requireAnyPermission(["view_report_product_margin", "view_report_product_margin_inventory"]),
     reportsController.getProductMarginReport
 );
 
@@ -162,7 +172,7 @@ router.post(
 
 router.post(
     "/reward-points",
-    ...guard,
+    ...baseGuard, viewReport("view_report_reward"),
     reportsController.getRewardPointsReport
 );
 
@@ -173,7 +183,7 @@ router.post(
 
 router.post(
     "/ewallet",
-    ...guard,
+    ...baseGuard, viewReport("view_report_ewallet"),
     reportsController.getEwalletReport
 );
 
@@ -184,7 +194,7 @@ router.post(
 
 router.post(
     "/client-revenue",
-    ...guard,
+    ...baseGuard, viewReport("view_report_client_revenue"),
     reportsController.getClientRevenueReport
 );
 
@@ -196,7 +206,7 @@ router.post(
 
 router.post(
     "/all-clients",
-    ...guard,
+    ...baseGuard, viewReport("view_report_all_clients"),
     reportsController.getAllClientsReport
 );
 
@@ -209,7 +219,7 @@ router.post(
 
 router.post(
     "/new-client-follow-up",
-    ...guard,
+    ...baseGuard, viewReport("view_report_new_client_follow_up"),
     reportsController.getNewClientFollowUpReport
 );
 
@@ -221,7 +231,7 @@ router.post(
 
 router.post(
     "/cancellation-recovery",
-    ...guard,
+    ...baseGuard, viewReport("view_report_cancellation_recovery"),
     reportsController.getCancellationRecoveryReport
 );
 
@@ -232,7 +242,7 @@ router.post(
 
 router.post(
     "/membership-opportunity",
-    ...guard,
+    ...baseGuard, viewReport("view_report_membership_opportunity"),
     reportsController.getMembershipOpportunityReport
 );
 
@@ -244,7 +254,7 @@ router.post(
 
 router.post(
     "/no-show-recovery",
-    ...guard,
+    ...baseGuard, viewReport("view_report_no_show_recovery"),
     reportsController.getNoShowRecoveryReport
 );
 
@@ -256,7 +266,7 @@ router.post(
 
 router.post(
     "/enquiries",
-    ...guard,
+    ...baseGuard, viewReport("view_report_enquiry_report"),
     reportsController.getEnquiryReport
 );
 
@@ -267,7 +277,7 @@ router.post(
 
 router.post(
     "/customer-frequency",
-    ...guard,
+    ...baseGuard, viewReport("view_report_customer_frequency"),
     reportsController.getCustomerFrequencyReport
 );
 
@@ -279,7 +289,7 @@ router.post(
 
 router.post(
     "/lost-customers",
-    ...guard,
+    ...baseGuard, viewReport("view_report_lost_customers"),
     reportsController.getLostCustomersReport
 );
 
@@ -291,7 +301,7 @@ router.post(
 
 router.post(
     "/customer-spend",
-    ...guard,
+    ...baseGuard, viewReport("view_report_customer_spend"),
     reportsController.getCustomerSpendReport
 );
 
@@ -304,7 +314,7 @@ router.post(
 
 router.post(
     "/service-frequency",
-    ...guard,
+    ...baseGuard, viewReport("view_report_service_frequency"),
     reportsController.getServiceFrequencyReport
 );
 
@@ -316,7 +326,7 @@ router.post(
 
 router.post(
     "/membership-history",
-    ...guard,
+    ...baseGuard, viewReport("view_report_membership_history"),
     reportsController.getMembershipHistoryReport
 );
 
@@ -329,7 +339,7 @@ router.post(
 
 router.post(
     "/payment-collection",
-    ...guard,
+    ...baseGuard, viewReport("view_report_payment_collection"),
     reportsController.getPaymentCollectionReport
 );
 
@@ -342,7 +352,7 @@ router.post(
 
 router.post(
     "/pending-payment",
-    ...guard,
+    ...baseGuard, viewReport("view_report_pending_payment"),
     reportsController.getPendingPaymentReport
 );
 
@@ -354,7 +364,7 @@ router.post(
 
 router.post(
     "/cash-management",
-    ...guard,
+    ...baseGuard, viewReport("view_report_cash_management"),
     reportsController.getCashManagementReport
 );
 
@@ -366,19 +376,23 @@ router.post(
 
 router.post(
     "/referral",
-    ...guard,
+    ...baseGuard, viewReport("view_report_referral_report"),
     reportsController.getReferralReport
 );
 
 // ======================================================
 // CLIENT RATING REPORT (independent report API)
 // Reads the reviews table directly — never calls into the reviews module's
-// service/repository, and never calls the Appointment API/service.
+// service/repository, and never calls the Appointment API/service. Shows
+// under BOTH Clients ("Client Rating Report") and Marketing ("Marketing
+// Feedback & Ratings") categories (REPORTS ids "client_rating" and
+// "mkt_feedback") — independent toggles, same treatment as Product
+// Retail/Margin above.
 // ======================================================
 
 router.post(
     "/client-rating",
-    ...guard,
+    ...baseGuard, requireAnyPermission(["view_report_client_rating", "view_report_mkt_feedback"]),
     reportsController.getClientRatingReport
 );
 
@@ -389,7 +403,7 @@ router.post(
 
 router.post(
     "/staff-sales",
-    ...guard,
+    ...baseGuard, viewReport("view_report_staff_sales"),
     reportsController.getStaffSalesReport
 );
 
@@ -400,7 +414,7 @@ router.post(
 
 router.post(
     "/staff-performance",
-    ...guard,
+    ...baseGuard, viewReport("view_report_staff_performance"),
     reportsController.getStaffPerformanceReport
 );
 
@@ -411,7 +425,7 @@ router.post(
 
 router.post(
     "/staff-item-sales",
-    ...guard,
+    ...baseGuard, viewReport("view_report_staff_item_sales"),
     reportsController.getStaffItemSalesReport
 );
 
@@ -424,7 +438,7 @@ router.post(
 
 router.post(
     "/rebooking-rate",
-    ...guard,
+    ...baseGuard, viewReport("view_report_rebooking_rate"),
     reportsController.getRebookingRateReport
 );
 
@@ -435,7 +449,7 @@ router.post(
 
 router.post(
     "/payroll-history",
-    ...guard,
+    ...baseGuard, viewReport("view_report_payroll_history"),
     reportsController.getPayrollHistoryReport
 );
 
@@ -446,7 +460,7 @@ router.post(
 
 router.post(
     "/package-sale",
-    ...guard,
+    ...baseGuard, viewReport("view_report_package_sale"),
     reportsController.getPackageSaleReport
 );
 
@@ -458,7 +472,7 @@ router.post(
 
 router.post(
     "/package-history",
-    ...guard,
+    ...baseGuard, viewReport("view_report_package_history"),
     reportsController.getPackageHistoryReport
 );
 
@@ -469,7 +483,7 @@ router.post(
 
 router.post(
     "/member-sale",
-    ...guard,
+    ...baseGuard, viewReport("view_report_member_sale"),
     reportsController.getMemberSaleReport
 );
 
@@ -481,7 +495,7 @@ router.post(
 
 router.post(
     "/appointment-detail",
-    ...guard,
+    ...baseGuard, viewReport("view_report_appointment_detail"),
     reportsController.getAppointmentDetailReport
 );
 
@@ -493,7 +507,7 @@ router.post(
 
 router.post(
     "/upcoming-appointments",
-    ...guard,
+    ...baseGuard, viewReport("view_report_upcoming_appointments"),
     reportsController.getUpcomingAppointmentsReport
 );
 
@@ -504,7 +518,7 @@ router.post(
 
 router.post(
     "/wa-campaign",
-    ...guard,
+    ...baseGuard, viewReport("view_report_wa_campaign"),
     reportsController.getWaCampaignReport
 );
 
@@ -516,13 +530,13 @@ router.post(
 
 router.post(
     "/open-rate",
-    ...guard,
+    ...baseGuard, viewReport("view_report_open_rate"),
     reportsController.getOpenRateReport
 );
 
 router.post(
     "/open-rate/campaign",
-    ...guard,
+    ...baseGuard, viewReport("view_report_open_rate"),
     reportsController.getOpenRateCampaignDetail
 );
 
@@ -534,7 +548,7 @@ router.post(
 
 router.post(
     "/birthday-campaign",
-    ...guard,
+    ...baseGuard, viewReport("view_report_birthday_campaign"),
     reportsController.getBirthdayCampaignReport
 );
 
@@ -546,13 +560,13 @@ router.post(
 
 router.post(
     "/reply-rate",
-    ...guard,
+    ...baseGuard, viewReport("view_report_reply_rate"),
     reportsController.getReplyRateReport
 );
 
 router.post(
     "/reply-rate/campaign",
-    ...guard,
+    ...baseGuard, viewReport("view_report_reply_rate"),
     reportsController.getReplyRateCampaignDetail
 );
 
