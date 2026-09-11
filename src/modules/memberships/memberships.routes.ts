@@ -26,14 +26,20 @@ const createMemberships = requirePermission("create_memberships");
 const requireMembershipsFeature = requirePlanFeature("memberships");
 const editMemberships = requirePermission("edit_memberships");
 const deleteMemberships = requirePermission("delete_memberships");
+// Download CSV/Excel/PDF are their own dedicated permissions now (see the
+// Membership permissions ticket) — OR'd with the generic export_* so
+// existing grants keep working unchanged.
+const exportMembershipsCsv = requireAnyPermission(["download_membership_csv", "export_csv"]);
+const exportMembershipsExcel = requireAnyPermission(["download_membership_excel", "export_excel"]);
+const exportMembershipsPdf = requireAnyPermission(["download_membership_pdf", "export_pdf"]);
 
 router.get("/",            ...guard, viewMemberships, requireMembershipsFeature, validateMembershipsListQuery, membershipsController.list);
 // Must precede "/:id" — otherwise these are swallowed as an id.
 router.get("/loyalty-eligibility", ...guard, viewMemberships, membershipsController.loyaltyEligibility);
 router.get("/filter-options",      ...guard, viewMemberships, requireMembershipsFeature, membershipsController.filterOptions);
-router.get("/export/csv",   ...guard, viewMemberships, requireMembershipsFeature, requirePermission("export_csv"),   validateExportQuery, membershipsController.exportCsv);
-router.get("/export/excel", ...guard, viewMemberships, requireMembershipsFeature, requirePermission("export_excel"), validateExportQuery, membershipsController.exportExcel);
-router.get("/export/pdf",   ...guard, viewMemberships, requireMembershipsFeature, requirePermission("export_pdf"),   validateExportQuery, membershipsController.exportPdf);
+router.get("/export/csv",   ...guard, viewMemberships, requireMembershipsFeature, exportMembershipsCsv,   validateExportQuery, membershipsController.exportCsv);
+router.get("/export/excel", ...guard, viewMemberships, requireMembershipsFeature, exportMembershipsExcel, validateExportQuery, membershipsController.exportExcel);
+router.get("/export/pdf",   ...guard, viewMemberships, requireMembershipsFeature, exportMembershipsPdf,   validateExportQuery, membershipsController.exportPdf);
 router.post("/",           ...guard, createMemberships, requireMembershipsFeature, validateCreateMembership,     membershipsController.create);
 router.get("/:id",         ...guard, viewMemberships,                                 membershipsController.getById);
 router.patch("/:id",       ...guard, editMemberships, requireMembershipsFeature, validateUpdateMembership,       membershipsController.update);
