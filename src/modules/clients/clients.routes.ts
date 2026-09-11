@@ -2,7 +2,7 @@
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
-import { requirePermission, requireAnyPermission, requireExportFormatPermission } from "../../middleware/permission.middleware";
+import { requirePermission, requireAnyPermission } from "../../middleware/permission.middleware";
 import { requirePlanFeature } from "../../middleware/planFeature.middleware";
 import { uploadMiddleware } from "../../middleware/upload.middleware";
 import { clientsController } from "./clients.controller";
