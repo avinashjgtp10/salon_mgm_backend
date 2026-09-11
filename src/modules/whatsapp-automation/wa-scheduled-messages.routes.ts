@@ -12,26 +12,34 @@ const router = Router()
 
 router.use(authMiddleware)
 
-// Previously NO role or permission check at all — same gap as
-// whatsapp-automation.routes.ts, closed the same way.
+// Previously used the unrelated Automation module's view_wa_automation/
+// manage_wa_automation — replaced with Scheduled Templates' own dedicated
+// keys per the Marketing permissions ticket. view_wa_automation/
+// manage_wa_automation remain in use elsewhere (whatsapp-automation.routes.ts's
+// message-log/settings endpoints), untouched — out of scope here.
 const ownerAdminStaff = roleMiddleware('salon_owner', 'admin', 'staff')
-const viewAutomation = requirePermission('view_wa_automation')
-const manageAutomation = requirePermission('manage_wa_automation')
+const viewScheduledTemplates = requirePermission('view_scheduled_templates')
+const editScheduledTemplate = requirePermission('edit_scheduled_template')
+const deleteScheduledTemplate = requirePermission('delete_scheduled_template')
+const sendNowScheduledTemplate = requirePermission('send_now_scheduled_template')
+const resendScheduledTemplate = requirePermission('resend_scheduled_template')
 
 // GET /api/v1/wa-automation/scheduled/:salonId?status=&eventType=&clientId=&dateFrom=&dateTo=&search=&page=&limit=
-router.get('/:salonId', ownerAdminStaff, viewAutomation, waScheduledMessagesController.list)
+router.get('/:salonId', ownerAdminStaff, viewScheduledTemplates, waScheduledMessagesController.list)
 
 // POST /api/v1/wa-automation/scheduled/:salonId/:id/send-now
-router.post('/:salonId/:id/send-now', ownerAdminStaff, manageAutomation, waScheduledMessagesController.sendNow)
-// POST /api/v1/wa-automation/scheduled/:salonId/:id/retry-now
-router.post('/:salonId/:id/retry-now', ownerAdminStaff, manageAutomation, waScheduledMessagesController.retryNow)
+router.post('/:salonId/:id/send-now', ownerAdminStaff, sendNowScheduledTemplate, waScheduledMessagesController.sendNow)
+// POST /api/v1/wa-automation/scheduled/:salonId/:id/retry-now — same bucket
+// as Send Now: retrying is just sending again after a failure.
+router.post('/:salonId/:id/retry-now', ownerAdminStaff, sendNowScheduledTemplate, waScheduledMessagesController.retryNow)
 // PUT  /api/v1/wa-automation/scheduled/:salonId/:id/reschedule  body: { scheduled_at }
-router.put('/:salonId/:id/reschedule', ownerAdminStaff, manageAutomation, waScheduledMessagesController.reschedule)
-// POST /api/v1/wa-automation/scheduled/:salonId/:id/skip
-router.post('/:salonId/:id/skip', ownerAdminStaff, manageAutomation, waScheduledMessagesController.skip)
+router.put('/:salonId/:id/reschedule', ownerAdminStaff, editScheduledTemplate, waScheduledMessagesController.reschedule)
+// POST /api/v1/wa-automation/scheduled/:salonId/:id/skip — same bucket as
+// Cancel: both remove a pending send, no dedicated key for the distinction.
+router.post('/:salonId/:id/skip', ownerAdminStaff, deleteScheduledTemplate, waScheduledMessagesController.skip)
 // POST /api/v1/wa-automation/scheduled/:salonId/:id/cancel
-router.post('/:salonId/:id/cancel', ownerAdminStaff, manageAutomation, waScheduledMessagesController.cancel)
+router.post('/:salonId/:id/cancel', ownerAdminStaff, deleteScheduledTemplate, waScheduledMessagesController.cancel)
 // POST /api/v1/wa-automation/scheduled/:salonId/:id/resend
-router.post('/:salonId/:id/resend', ownerAdminStaff, manageAutomation, waScheduledMessagesController.resend)
+router.post('/:salonId/:id/resend', ownerAdminStaff, resendScheduledTemplate, waScheduledMessagesController.resend)
 
 export default router

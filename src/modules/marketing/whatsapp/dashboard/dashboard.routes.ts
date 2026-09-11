@@ -10,7 +10,7 @@ router.get(
   '/stats',
   authMiddleware,
   roleMiddleware('salon_owner', 'admin', 'staff'),
-  requirePermission('view_campaigns'),
+  requirePermission('view_marketing_dashboard'),
   dashboardController.getStats
 )
 
