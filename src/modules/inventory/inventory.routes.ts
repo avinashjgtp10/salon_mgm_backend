@@ -70,6 +70,68 @@ const receiveOrder = requirePermission("receive_order");
 // Signature upload is used from both the create and edit order flows.
 const createOrEditOrder = requireAnyPermission(["create_order", "edit_order"]);
 
+// Product Inventory (retail) now has its own independent View/Adjust
+// Stock/Stock History permissions too (see the Warehouse -> Product
+// Inventory ticket). Add/Edit/Delete Product are dedicated keys of their
+// own too (products.routes.ts OR's them in as alternatives to Catalog's
+// create_products/edit_products/delete_products on the shared /products
+// routes).
+const viewProductInventory = requirePermission("view_product_inventory");
+const adjustProductStock = requirePermission("adjust_product_stock");
+const viewProductStockHistory = requirePermission("view_product_stock_history");
+
+// Consumable Inventory now has its own independent View/Adjust Stock/Usage
+// permissions too (see the Warehouse -> Consumable Inventory ticket).
+// Add/Edit Consumable are handled as OR-alternatives directly on Catalog's
+// products.routes.ts (create_products/edit_products), since consumables ARE
+// products (product_type consumable/both) — see that file for
+// add_consumable/edit_consumable/activate_deactivate_consumable.
+const viewConsumableInventory = requirePermission("view_consumable_inventory");
+const adjustConsumableStock = requirePermission("adjust_consumable_stock");
+const viewConsumableUsage = requirePermission("view_consumable_usage");
+// A product with product_type "both" is BOTH a retail product and a
+// consumable — ProductFormPage.tsx fetches/saves this consumable detail
+// unconditionally whenever product_type is consumable/both, regardless of
+// which page (Catalog Products, Warehouse Product Inventory, or Warehouse
+// Consumable Inventory) the edit was opened from. Gating these two routes
+// on view_consumable_inventory/adjust_consumable_stock alone broke editing
+// a "both" product from Product Inventory for a staff member who only has
+// the Product Inventory permissions — OR'ing in view/adjust_product_stock
+// covers that case too.
+const viewConsumableDetailOrProductInventory = requireAnyPermission(["view_consumable_inventory", "view_product_inventory"]);
+const adjustConsumableStockOrProductStock = requireAnyPermission(["adjust_consumable_stock", "adjust_product_stock"]);
+// Reports ticket: Supplier Report, Supplier Purchase History, and Consumable
+// Usage Report have no dedicated backend endpoint — they reuse these
+// existing feature routes. Per explicit instruction, the new report-specific
+// key is OR'd alongside the existing feature permission (either one alone
+// unlocks it) rather than building 3 new dedicated /api/report/* endpoints.
+const viewSuppliersOrReport = requireAnyPermission(["view_suppliers", "view_report_supplier_report", "view_report_purchase_history"]);
+const viewProductInventoryOrPurchaseHistoryReport = requireAnyPermission(["view_product_inventory", "view_report_purchase_history"]);
+const viewInventoryOrConsumableUsageReport = requireAnyPermission(["view_inventory", "view_report_consumable_usage"]);
+
+// Stock Ledger now has its own independent View/Edit/Delete/Stock Adjustment
+// permissions too (see the Warehouse -> Stock Ledger ticket), replacing the
+// shared view_inventory/manage_inventory/stock_adjustment triple for this
+// section specifically (those three keys are still used by stock-movements/
+// stock-takes/stock-reconciliation — legacy routes with no nav tab of their
+// own anymore, out of scope here). Delete previously had NO staff access at
+// all (owner/admin-only role gate) — widened to ownerAdminStaff so
+// delete_stock_ledger is actually meaningful to grant.
+const viewStockLedger = requirePermission("view_stock_ledger");
+const editStockLedger = requirePermission("edit_stock_ledger");
+const deleteStockLedger = requirePermission("delete_stock_ledger");
+const stockLedgerAdjustment = requirePermission("stock_ledger_adjustment");
+
+// Product Audit now has its own independent View/Create-Perform/Approve
+// permissions too (see the Warehouse -> Product Audit ticket), replacing
+// the shared view_inventory/manage_inventory pair for this workflow.
+// Approve/Reject were previously owner/admin-only with no permission
+// check at all — widened to ownerAdminStaff below so approve_product_audit
+// is actually meaningful to grant a staff member.
+const viewProductAudit = requirePermission("view_product_audit");
+const createProductAudit = requirePermission("create_product_audit");
+const approveProductAudit = requirePermission("approve_product_audit");
+
 // Every route below still calls authMiddleware itself (kept, rather than
 // hoisted into this router.use(), so each route's full middleware chain
 // stays readable in place) — but router.use() runs before route handlers
@@ -95,7 +157,7 @@ router.get(
     "/suppliers",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewSuppliers,
+    viewSuppliersOrReport,
     suppliersController.list
 );
 
@@ -165,7 +227,7 @@ router.get(
     "/product-inventory",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewInventory,
+    viewProductInventory,
     productInventoryController.list
 );
 
@@ -173,7 +235,7 @@ router.get(
     "/product-inventory/filter-options",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewInventory,
+    viewProductInventory,
     productInventoryController.filterOptions
 );
 
@@ -181,7 +243,7 @@ router.get(
     "/product-inventory/history",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewInventory,
+    viewProductStockHistory,
     productInventoryController.history
 );
 
@@ -191,7 +253,7 @@ router.post(
     "/product-inventory/:id/stock-in",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    stockAdjustment,
+    adjustProductStock,
     productInventoryController.stockIn
 );
 
@@ -205,7 +267,7 @@ router.post(
     "/product-inventory/purchases",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    stockAdjustment,
+    adjustProductStock,
     validateCreatePurchase,
     purchasesController.create
 );
@@ -214,7 +276,7 @@ router.get(
     "/product-inventory/purchases",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewInventory,
+    viewProductInventoryOrPurchaseHistoryReport,
     validateListPurchases,
     purchasesController.list
 );
@@ -223,7 +285,7 @@ router.get(
     "/product-inventory/purchases/:id",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewInventory,
+    viewProductInventoryOrPurchaseHistoryReport,
     purchasesController.getById
 );
 
@@ -408,7 +470,7 @@ router.get(
     "/stock-reconciliation",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewInventory,
+    viewInventoryOrConsumableUsageReport,
     stockReconciliationController.list
 );
 
@@ -420,7 +482,7 @@ router.get(
     "/consumables",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewInventory,
+    viewConsumableInventory,
     consumableInventoryController.list
 );
 
@@ -429,7 +491,7 @@ router.get(
     "/consumables/kpis",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewInventory,
+    viewConsumableInventory,
     consumableInventoryController.kpis
 );
 
@@ -441,7 +503,7 @@ router.get(
     "/consumables/dashboard",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewInventory,
+    viewConsumableInventory,
     consumableInventoryController.dashboard
 );
 
@@ -452,7 +514,7 @@ router.get(
     "/consumables/usage-history",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewInventory,
+    viewConsumableUsage,
     consumableInventoryController.usageHistory
 );
 
@@ -461,7 +523,7 @@ router.get(
     "/consumables/:id",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewInventory,
+    viewConsumableDetailOrProductInventory,
     consumableInventoryController.getById
 );
 
@@ -470,7 +532,7 @@ router.post(
     "/consumables/:id/adjust",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    stockAdjustment,
+    adjustConsumableStock,
     consumableInventoryController.adjustStock
 );
 
@@ -480,7 +542,7 @@ router.get(
     "/consumables/:id/assigned-services",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewInventory,
+    viewConsumableInventory,
     consumableInventoryController.assignedServices
 );
 
@@ -491,14 +553,14 @@ router.get(
     "/consumables/:id/unit-conversions",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewInventory,
+    viewConsumableInventory,
     consumableInventoryController.getUnitConversions
 );
 router.put(
     "/consumables/:id/unit-conversions",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    stockAdjustment,
+    adjustConsumableStockOrProductStock,
     consumableInventoryController.replaceUnitConversions
 );
 
@@ -509,7 +571,7 @@ router.post(
     "/product-audits",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    manageInventory,
+    createProductAudit,
     validateCreateProductAudit,
     productAuditController.create
 );
@@ -518,7 +580,7 @@ router.get(
     "/product-audits",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewInventory,
+    viewProductAudit,
     productAuditController.list
 );
 
@@ -526,10 +588,12 @@ router.get(
     "/product-audits/:id",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewInventory,
+    viewProductAudit,
     productAuditController.getById
 );
 
+// Deleting the whole audit record isn't one of the ticketed actions (only
+// Create/Perform and Approve are) — left owner/admin-only, unchanged.
 router.delete(
     "/product-audits/:id",
     authMiddleware,
@@ -541,7 +605,7 @@ router.post(
     "/product-audits/:id/items",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    manageInventory,
+    createProductAudit,
     validateAddAuditItems,
     productAuditController.addItems
 );
@@ -550,7 +614,7 @@ router.delete(
     "/product-audits/:id/items/:itemId",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    manageInventory,
+    createProductAudit,
     productAuditController.removeItem
 );
 
@@ -558,7 +622,7 @@ router.patch(
     "/product-audits/:id/items/:itemId",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    manageInventory,
+    createProductAudit,
     validateUpdateAuditItem,
     productAuditController.updateItem
 );
@@ -567,17 +631,21 @@ router.post(
     "/product-audits/:id/submit",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    manageInventory,
+    createProductAudit,
     validateSubmitAudit,
     productAuditController.submitForReview
 );
 
-// Approve/reject are review actions — restricted to owner/admin, unlike the
-// count-entry endpoints above which staff can also perform.
+// Approve/reject are review actions — previously restricted to owner/admin
+// with NO permission check at all (a staff member could never review
+// regardless of any permission granted). Widened to ownerAdminStaff + a
+// dedicated approve_product_audit permission so this is actually delegable
+// per the Warehouse -> Product Audit ticket.
 router.post(
     "/product-audits/:id/approve",
     authMiddleware,
-    roleMiddleware("salon_owner", "admin"),
+    roleMiddleware("salon_owner", "admin", "staff"),
+    approveProductAudit,
     validateApproveAudit,
     productAuditController.approve
 );
@@ -585,7 +653,8 @@ router.post(
 router.post(
     "/product-audits/:id/reject",
     authMiddleware,
-    roleMiddleware("salon_owner", "admin"),
+    roleMiddleware("salon_owner", "admin", "staff"),
+    approveProductAudit,
     validateRejectAudit,
     productAuditController.reject
 );
@@ -594,7 +663,7 @@ router.post(
     "/product-audits/:id/reopen",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    manageInventory,
+    createProductAudit,
     productAuditController.reopen
 );
 
@@ -617,7 +686,7 @@ router.post(
     "/stock-ledger",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    stockAdjustment,
+    stockLedgerAdjustment,
     validateCreateStockLedgerEntry,
     stockLedgerController.create
 );
@@ -626,7 +695,7 @@ router.get(
     "/stock-ledger",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewInventory,
+    viewStockLedger,
     stockLedgerController.list
 );
 
@@ -636,7 +705,7 @@ router.post(
     "/stock-ledger/list",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewInventory,
+    viewStockLedger,
     stockLedgerController.search
 );
 
@@ -644,7 +713,7 @@ router.get(
     "/stock-ledger/:id",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewInventory,
+    viewStockLedger,
     stockLedgerController.getById
 );
 
@@ -652,7 +721,7 @@ router.get(
     "/stock-ledger/product/:productId/timeline",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewInventory,
+    viewStockLedger,
     stockLedgerController.getTimelineForProduct
 );
 
@@ -660,7 +729,7 @@ router.put(
     "/stock-ledger/:id",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    manageInventory,
+    editStockLedger,
     validateUpdateStockLedgerEntry,
     stockLedgerController.update
 );
@@ -668,8 +737,8 @@ router.put(
 router.delete(
     "/stock-ledger/:id",
     authMiddleware,
-    roleMiddleware("salon_owner", "admin"),
-    manageInventory,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    deleteStockLedger,
     stockLedgerController.delete
 );
 

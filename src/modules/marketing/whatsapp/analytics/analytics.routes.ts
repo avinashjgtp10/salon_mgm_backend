@@ -11,7 +11,7 @@ router.get(
   '/',
   authMiddleware,
   roleMiddleware('salon_owner', 'admin', 'staff'),
-  requirePermission('view_campaigns'),
+  requirePermission('view_marketing_analytics'),
   analyticsController.getAnalytics
 )
 
