@@ -6,7 +6,7 @@ import { Router } from 'express'
 import { whatsappAutomationController } from './whatsapp-automation.controller'
 import { authMiddleware } from '../../middleware/auth.middleware'
 import { roleMiddleware } from '../../middleware/role.middleware'
-import { requirePermission } from '../../middleware/permission.middleware'
+import { requirePermission, requireAnyPermission } from '../../middleware/permission.middleware'
 
 const router = Router()
 
@@ -18,7 +18,16 @@ router.use(authMiddleware)
 // the standard salon role gate plus real permission checks.
 const ownerAdminStaff = roleMiddleware('salon_owner', 'admin', 'staff')
 const viewAutomation = requirePermission('view_wa_automation')
-const manageAutomation = requirePermission('manage_wa_automation')
+// view_wa_automation/manage_wa_automation have no catalog row (an older,
+// pre-existing gap — see the Marketing permissions ticket's notes) so there
+// is no toggle anywhere for an owner to ever grant them. The Templates
+// page's Trigger Templates tab reads/writes this same salon-settings
+// endpoint for its per-event WhatsApp toggle, so it needs its own
+// view_templates/edit_template OR-fallback the same as the Automation Logs
+// page's own key — otherwise a staff member with View/Edit Template has no
+// way to use half of the Templates page they were explicitly granted.
+const viewAutomationOrTemplates = requireAnyPermission(['view_wa_automation', 'view_templates'])
+const manageAutomationOrTemplates = requireAnyPermission(['manage_wa_automation', 'edit_template'])
 
 // ── Message Logs ──────────────────────────────────────────────────────────────
 // GET /api/v1/wa-automation/logs/:salonId?eventType=&status=&clientId=&page=&limit=
@@ -26,9 +35,9 @@ router.get('/logs/:salonId', ownerAdminStaff, viewAutomation, whatsappAutomation
 
 // ── Per-Salon Settings ────────────────────────────────────────────────────────
 // GET /api/v1/wa-automation/settings/:salonId
-router.get('/settings/:salonId', ownerAdminStaff, viewAutomation, whatsappAutomationController.getSalonSettings)
+router.get('/settings/:salonId', ownerAdminStaff, viewAutomationOrTemplates, whatsappAutomationController.getSalonSettings)
 // PUT /api/v1/wa-automation/settings/:salonId  body: { event_type, is_active }
-router.put('/settings/:salonId', ownerAdminStaff, manageAutomation, whatsappAutomationController.updateSalonSetting)
+router.put('/settings/:salonId', ownerAdminStaff, manageAutomationOrTemplates, whatsappAutomationController.updateSalonSetting)
 
 // ── Global Template Management (SalonOx internal admin, not a salon
 // permission — unchanged, this is a different "admin" concept entirely) ──────
