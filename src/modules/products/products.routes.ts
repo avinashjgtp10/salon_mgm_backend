@@ -24,7 +24,16 @@ const ownerAdminStaff = roleMiddleware("salon_owner", "admin", "staff");
 const viewProducts = requireAnyPermission(["view_products", "create_sales", "manage_calendar"]);
 const createProducts = requirePermission("create_products");
 const editProducts = requirePermission("edit_products");
-const deleteProducts = requirePermission("delete_products");
+// Consumables ARE products (product_type consumable/both), and Warehouse's
+// Product Inventory page's Edit/Delete row actions also call these same
+// PATCH/DELETE routes — both Warehouse sections' dedicated permissions are
+// OR'd in here as alternatives rather than duplicating separate endpoints.
+// A staff member granted ONLY add_consumable/edit_consumable/edit_product/
+// delete_product (without the broader Catalog create_products/edit_products/
+// delete_products) can still use those specific Warehouse actions.
+const createProductsOrConsumable = requireAnyPermission(["create_products", "add_consumable"]);
+const editProductsOrConsumable = requireAnyPermission(["edit_products", "edit_consumable", "activate_deactivate_consumable", "edit_product"]);
+const deleteProductsOrInventory = requireAnyPermission(["delete_products", "delete_product"]);
 
 // Brands
 router.get("/brands", authMiddleware, ownerAdminStaff, viewProducts, brandsController.list);
@@ -42,9 +51,9 @@ router.post("/import", authMiddleware, ownerAdminStaff, createProducts, requireP
 router.get("/", authMiddleware, ownerAdminStaff, viewProducts, validateListQuery, productsController.list);
 router.post("/search", authMiddleware, ownerAdminStaff, viewProducts, validateSearchBody, productsController.search);
 router.get("/:id", authMiddleware, ownerAdminStaff, viewProducts, productsController.getById);
-router.post("/", authMiddleware, ownerAdminStaff, createProducts, uploadMiddleware.array("photos", 5), validateCreateProduct, productsController.create);
-router.patch("/:id", authMiddleware, ownerAdminStaff, editProducts, validateUpdateProduct, productsController.update);
-router.delete("/:id", authMiddleware, ownerAdminStaff, deleteProducts, productsController.delete);
+router.post("/", authMiddleware, ownerAdminStaff, createProductsOrConsumable, uploadMiddleware.array("photos", 5), validateCreateProduct, productsController.create);
+router.patch("/:id", authMiddleware, ownerAdminStaff, editProductsOrConsumable, validateUpdateProduct, productsController.update);
+router.delete("/:id", authMiddleware, ownerAdminStaff, deleteProductsOrInventory, productsController.delete);
 
 // Product Photos
 router.post("/:id/photos", authMiddleware, ownerAdminStaff, editProducts, uploadMiddleware.array("photos", 5), productsController.uploadPhotos);
