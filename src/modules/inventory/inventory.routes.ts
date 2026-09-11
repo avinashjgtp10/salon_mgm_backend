@@ -100,6 +100,14 @@ const viewConsumableUsage = requirePermission("view_consumable_usage");
 // covers that case too.
 const viewConsumableDetailOrProductInventory = requireAnyPermission(["view_consumable_inventory", "view_product_inventory"]);
 const adjustConsumableStockOrProductStock = requireAnyPermission(["adjust_consumable_stock", "adjust_product_stock"]);
+// Reports ticket: Supplier Report, Supplier Purchase History, and Consumable
+// Usage Report have no dedicated backend endpoint — they reuse these
+// existing feature routes. Per explicit instruction, the new report-specific
+// key is OR'd alongside the existing feature permission (either one alone
+// unlocks it) rather than building 3 new dedicated /api/report/* endpoints.
+const viewSuppliersOrReport = requireAnyPermission(["view_suppliers", "view_report_supplier_report", "view_report_purchase_history"]);
+const viewProductInventoryOrPurchaseHistoryReport = requireAnyPermission(["view_product_inventory", "view_report_purchase_history"]);
+const viewInventoryOrConsumableUsageReport = requireAnyPermission(["view_inventory", "view_report_consumable_usage"]);
 
 // Stock Ledger now has its own independent View/Edit/Delete/Stock Adjustment
 // permissions too (see the Warehouse -> Stock Ledger ticket), replacing the
@@ -149,7 +157,7 @@ router.get(
     "/suppliers",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewSuppliers,
+    viewSuppliersOrReport,
     suppliersController.list
 );
 
@@ -268,7 +276,7 @@ router.get(
     "/product-inventory/purchases",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewProductInventory,
+    viewProductInventoryOrPurchaseHistoryReport,
     validateListPurchases,
     purchasesController.list
 );
@@ -277,7 +285,7 @@ router.get(
     "/product-inventory/purchases/:id",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewProductInventory,
+    viewProductInventoryOrPurchaseHistoryReport,
     purchasesController.getById
 );
 
@@ -462,7 +470,7 @@ router.get(
     "/stock-reconciliation",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewInventory,
+    viewInventoryOrConsumableUsageReport,
     stockReconciliationController.list
 );
 
