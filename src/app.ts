@@ -78,6 +78,8 @@ import { ensureTable as ensureAppointmentsTables } from "./modules/appointments/
 import { ensureTable as ensureTipTables } from "./modules/tips/tipCalculation.service";
 import cashManagementRoutes from "./modules/cash-management/cash-management.routes";
 import { ensureCashManagementTables } from "./modules/cash-management/cash-management.repository";
+import digitalMenuRoutes from "./modules/digital-menu/digital-menu.routes";
+import { ensureTable as ensureDigitalMenuTables } from "./modules/digital-menu/digital-menu.repository";
 import superAdminRoutes from "./modules/super-admin/super-admin.routes";
 import salonPlansRoutes from "./modules/salon-plans/salon-plans.routes";
 import demoRequestsRoutes from "./modules/demo-requests/demo-requests.routes";
@@ -121,6 +123,11 @@ ensurePaymentsTables().catch(err =>
 // Bootstrap client_notes table (idempotent)
 ensureClientNotesTable().catch(err =>
   logger.warn("client_notes table init warning:", err?.message ?? err),
+);
+
+// Bootstrap digital_menus / digital_menu_services tables (idempotent)
+ensureDigitalMenuTables().catch(err =>
+  logger.warn("digital_menu table init warning:", err?.message ?? err),
 );
 
 // Bootstrap appointments table apply_membership_wallet column (idempotent)
@@ -269,6 +276,7 @@ app.use("/api/v1/commission-rules", commissionRulesRoutes);
 app.use("/api/v1/payroll", payrollRoutes);
 app.use("/api/v1/clients", clientsRoutes);
 app.use("/api/v1/services", servicesRoutes);
+app.use("/api/v1/digital-menu", digitalMenuRoutes);
 app.use("/api/v1/marketplace", marketplaceRoutes);
 app.use("/api/v1/memberships", membershipsRoutes);
 app.use("/api/v1/packages", packagesRoutes);
