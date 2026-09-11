@@ -45,11 +45,15 @@ const router = Router();
 const viewInventory = requirePermission("view_inventory");
 const stockAdjustment = requirePermission("stock_adjustment");
 const manageInventory = requirePermission("manage_inventory");
-// Supplier CRUD was owner/admin-only with no permission key at all — now
-// staff-reachable via manage_suppliers. Supplier payments (money movement)
-// stay on the same key, matching the same product decision that opened
-// every other role-gated module up to staff this phase.
-const manageSuppliers = requirePermission("manage_suppliers");
+// Suppliers now have their own independent action permissions (see the
+// Warehouse -> Suppliers permissions ticket) instead of one shared
+// manage_suppliers key — View/Add/Edit/Delete/Payout can each be granted or
+// withheld on their own.
+const viewSuppliers = requirePermission("view_suppliers");
+const createSuppliers = requirePermission("create_suppliers");
+const editSuppliers = requirePermission("edit_suppliers");
+const deleteSuppliers = requirePermission("delete_suppliers");
+const supplierPayout = requirePermission("supplier_payout");
 
 // Every route below still calls authMiddleware itself (kept, rather than
 // hoisted into this router.use(), so each route's full middleware chain
@@ -67,7 +71,7 @@ router.post(
     "/suppliers",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    manageSuppliers,
+    createSuppliers,
     validateCreateSupplier,
     suppliersController.create
 );
@@ -76,7 +80,7 @@ router.get(
     "/suppliers",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewInventory,
+    viewSuppliers,
     suppliersController.list
 );
 
@@ -84,7 +88,7 @@ router.post(
     "/suppliers/list",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewInventory,
+    viewSuppliers,
     suppliersController.listPost
 );
 
@@ -92,7 +96,7 @@ router.get(
     "/suppliers/filter-options",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewInventory,
+    viewSuppliers,
     suppliersController.listFilterOptions
 );
 
@@ -100,7 +104,7 @@ router.get(
     "/suppliers/:id",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewInventory,
+    viewSuppliers,
     suppliersController.getById
 );
 
@@ -108,7 +112,7 @@ router.patch(
     "/suppliers/:id",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    manageSuppliers,
+    editSuppliers,
     validateUpdateSupplier,
     suppliersController.update
 );
@@ -117,7 +121,7 @@ router.delete(
     "/suppliers/:id",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    manageSuppliers,
+    deleteSuppliers,
     suppliersController.delete
 );
 
@@ -125,7 +129,7 @@ router.post(
     "/suppliers/:id/payments",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    manageSuppliers,
+    supplierPayout,
     validateCreateSupplierPayment,
     supplierPaymentsController.create
 );
@@ -134,7 +138,7 @@ router.get(
     "/suppliers/:id/payments",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewInventory,
+    viewSuppliers,
     supplierPaymentsController.list
 );
 
