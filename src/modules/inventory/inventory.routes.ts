@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
-import { requirePermission } from "../../middleware/permission.middleware";
+import { requirePermission, requireAnyPermission } from "../../middleware/permission.middleware";
 import { requirePlanFeature } from "../../middleware/planFeature.middleware";
 import { uploadMiddleware } from "../../middleware/upload.middleware";
 import {
@@ -54,6 +54,21 @@ const createSuppliers = requirePermission("create_suppliers");
 const editSuppliers = requirePermission("edit_suppliers");
 const deleteSuppliers = requirePermission("delete_suppliers");
 const supplierPayout = requirePermission("supplier_payout");
+// Orders now have their own independent action permissions too (see the
+// Warehouse -> Orders permissions ticket) instead of the shared
+// view_inventory/manage_inventory pair. Delete Order previously had NO
+// permission check at all (role-only, owner/admin) — closed the same way
+// as every other zero-gating gap found this session.
+// No separate view_order key — access to the Orders list (view_orders)
+// implies access to a single order's details too, so the detail route is
+// gated by the same permission rather than a redundant second one.
+const viewOrders = requirePermission("view_orders");
+const createOrder = requirePermission("create_order");
+const editOrder = requirePermission("edit_order");
+const cancelOrder = requirePermission("cancel_order");
+const receiveOrder = requirePermission("receive_order");
+// Signature upload is used from both the create and edit order flows.
+const createOrEditOrder = requireAnyPermission(["create_order", "edit_order"]);
 
 // Every route below still calls authMiddleware itself (kept, rather than
 // hoisted into this router.use(), so each route's full middleware chain
@@ -222,7 +237,7 @@ router.post(
     "/orders/upload-signature",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    manageInventory,
+    createOrEditOrder,
     uploadMiddleware.single("signature"),
     ordersController.uploadSignature
 );
@@ -231,7 +246,7 @@ router.get(
     "/orders/signatures",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewInventory,
+    viewOrders,
     ordersController.listSignatures
 );
 
@@ -239,7 +254,7 @@ router.post(
     "/orders",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    manageInventory,
+    createOrder,
     validateCreateOrder,
     ordersController.create
 );
@@ -248,7 +263,7 @@ router.get(
     "/orders",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewInventory,
+    viewOrders,
     ordersController.list
 );
 
@@ -256,7 +271,7 @@ router.get(
     "/orders/:id",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    viewInventory,
+    viewOrders,
     ordersController.getById
 );
 
@@ -264,7 +279,7 @@ router.post(
     "/orders/:id/receive",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    manageInventory,
+    receiveOrder,
     validateReceiveOrder,
     ordersController.receive
 );
@@ -275,16 +290,21 @@ router.post(
     "/orders/:id/items/:itemId/correct-received",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    manageInventory,
+    receiveOrder,
     validateCorrectReceivedQty,
     ordersController.correctReceivedQty
 );
 
+// Cancel and Delete share one "Delete/Cancel Order" permission per the
+// Warehouse -> Orders ticket (presented as a single action there, not two).
+// Delete previously had NO permission check at all (role-only, owner/admin)
+// — also widened to ownerAdminStaff so cancel_order is actually meaningful
+// to grant a staff member for both actions, not just Cancel.
 router.post(
     "/orders/:id/cancel",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    manageInventory,
+    cancelOrder,
     ordersController.cancel
 );
 
@@ -292,7 +312,8 @@ router.post(
 router.post(
     "/orders/:id/delete",
     authMiddleware,
-    roleMiddleware("salon_owner", "admin"),
+    roleMiddleware("salon_owner", "admin", "staff"),
+    cancelOrder,
     ordersController.delete
 );
 
@@ -301,7 +322,7 @@ router.post(
     "/orders/:id/update",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
-    manageInventory,
+    editOrder,
     validateCreateOrder,
     ordersController.update
 );
