@@ -398,7 +398,30 @@ const DEFAULT_STAFF_PERMS: Record<string, boolean> = {
     view_report_new_client_follow_up: false, download_report_new_client_follow_up: false,
     view_report_cancellation_recovery: false, download_report_cancellation_recovery: false,
     view_report_membership_opportunity: false, download_report_membership_opportunity: false,
-    general_settings: false,
+    // Settings module permissions ticket — "can open and use" each of the
+    // 18 Settings sections. Branches/Coupons/Roles & Permissions reuse
+    // their existing view_branches/view_coupons/view_roles keys instead of
+    // duplicating (see add_settings_section_permission_keys.sql).
+    view_settings_profile: false,
+    view_settings_business: false,
+    view_settings_account_security: false,
+    view_settings_notifications: false,
+    view_settings_integrations: false,
+    view_settings_pos_payments: false,
+    view_settings_billing: false,
+    view_settings_currency: false,
+    view_settings_tax_mapping: false,
+    view_settings_reward_points: false,
+    view_settings_referral: false,
+    view_settings_packages: false,
+    view_settings_print: false,
+    view_settings_bulk_billing_import: false,
+    view_settings_data_privacy: false,
+    // Master "can open Settings at all" switch — mirrors view_reports:
+    // a real, toggleable permission that's also OR'd together with the 18
+    // section keys above (see usePermissions.ts's VIRTUAL_PERMS.access_settings),
+    // so granting it alone is enough without having to enable every section.
+    access_settings: false,
     manage_pos_payments: false,
     view_enquiries: true,
     view_cash_management: false,
