@@ -312,6 +312,15 @@ const DEFAULT_STAFF_PERMS: Record<string, boolean> = {
     general_settings: false,
     manage_pos_payments: false,
     view_enquiries: true,
+    view_cash_management: false,
+    open_counter: false,
+    close_counter: false,
+    add_expense: false,
+    edit_expense: false,
+    delete_expense: false,
+    export_cash_management_pdf: false,
+    export_cash_management_excel: false,
+    export_cash_management_csv: false,
 };
 
 // ── Core resolver ──────────────────────────────────────────────────────────────
