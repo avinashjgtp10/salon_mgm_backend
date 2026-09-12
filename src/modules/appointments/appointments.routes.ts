@@ -26,7 +26,12 @@ router.delete("/:id", authMiddleware, ownerAdminStaff, requirePermission("delete
 // Independent from Quick Sale's create_sales — a staff member can be able
 // to record payment on a Calendar appointment without having Quick Sale
 // access, and vice versa (see the Calendar permissions ticket).
-router.post("/:id/checkout", authMiddleware, ownerAdminStaff, requirePermission("create_appointment"), validateCheckoutAppointment, appointmentsController.checkout);
+//
+// Gated by edit_appointment ("Edit & Payment Appointment"), not
+// create_appointment ("Create Booking Appointment") — the Calendar
+// permissions rename ticket split the two apart so booking a brand-new
+// appointment never implies the ability to record a payment on one.
+router.post("/:id/checkout", authMiddleware, ownerAdminStaff, requirePermission("edit_appointment"), validateCheckoutAppointment, appointmentsController.checkout);
 router.get("/:id/receipt-pdf", authMiddleware, ownerAdminStaff, requirePermission("view_payment_details"), appointmentsController.getReceiptPdf);
 
 export default router;

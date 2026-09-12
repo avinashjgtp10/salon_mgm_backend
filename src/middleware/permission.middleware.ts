@@ -1,7 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import pool from "../config/database";
 import { AppError } from "./error.middleware";
-import logger from "../config/logger";
 
 export interface PermUser {
     userId: string;
@@ -187,6 +186,15 @@ const DEFAULT_STAFF_PERMS: Record<string, boolean> = {
     reply_to_conversation: false,
     view_whatsapp_config: false,
     edit_whatsapp_config: false,
+    // Missing here entirely (unlike view_calendar right below it) meant any
+    // staff member still on the legacy path (staff.role_id not yet
+    // backfilled — see loadStaffRoleInfo below) resolved view_dashboard to
+    // `?? false` no matter what an owner set in Settings -> Roles &
+    // Permissions, since that UI only writes role_permissions/
+    // staff_permission_overrides, tables never consulted on this path.
+    // Defaulting to true here matches pre-existing behavior (the Dashboard
+    // was visible to every staff member before this permission existed).
+    view_dashboard: true,
     view_calendar: true,
     manage_calendar: false,
     view_appointment: true,
@@ -217,6 +225,11 @@ const DEFAULT_STAFF_PERMS: Record<string, boolean> = {
     download_service_menu_pdf: false,
     download_service_menu_excel: false,
     download_service_menu_csv: false,
+    view_digital_menu: true,
+    create_digital_menu: false,
+    edit_digital_menu: false,
+    manage_digital_menu_qr: false,
+    enable_disable_digital_menu: false,
     view_products: true,
     create_products: false,
     edit_products: false,
@@ -286,7 +299,19 @@ const DEFAULT_STAFF_PERMS: Record<string, boolean> = {
     receive_order: false,
     download_order_pdf: false,
     view_booking: true,
-    manage_booking: false,
+    // Online Booking Channels ticket — per-channel View toggles layered on
+    // top of view_booking, plus a manage_booking split. manage_booking is
+    // gone entirely (its whole scope was marketplace writes, which
+    // manage_marketplace now covers 1:1); manage_link_builder is a brand
+    // new gate for previously-ungated routes. All new keys default false,
+    // same convention as every other permission added this project (owner
+    // grants explicitly).
+    view_marketplace: false,
+    manage_marketplace: false,
+    view_reserve_with_google: false,
+    view_social_bookings: false,
+    view_link_builder: false,
+    manage_link_builder: false,
     view_team: true,
     add_team_member: false,
     edit_team_member: false,
@@ -424,6 +449,17 @@ const DEFAULT_STAFF_PERMS: Record<string, boolean> = {
     access_settings: false,
     manage_pos_payments: false,
     view_enquiries: true,
+    // Split from respond_enquiries (Enquiries permissions ticket) — Add and
+    // Edit are now independently toggleable, matching delete_enquiries's
+    // existing granularity.
+    add_enquiries: false,
+    edit_enquiries: false,
+    delete_enquiries: false,
+    // Notifications permission module ticket — gates the notification
+    // bell + feed page (dashboard/pages/NotificationsPage.tsx), distinct
+    // from view_settings_notifications (the Settings → Notifications
+    // preferences card).
+    view_notifications: false,
     view_cash_management: false,
     open_counter: false,
     close_counter: false,
@@ -457,9 +493,6 @@ export async function staffHasPermission(user: PermUser, permKey: string): Promi
         // 1. Sparse per-staff override wins outright if a row exists for this key.
         const overrides = await loadStaffOverrides(roleInfo.staffId);
         if (permKey in overrides) {
-            if (permKey.startsWith("view_dashboard") || permKey === "view_calendar") {
-                logger.warn("[DEBUG staffHasPermission] override hit", { userId: user.userId, salonId, staffId: roleInfo.staffId, roleId: roleInfo.roleId, permKey, value: overrides[permKey] });
-            }
             return overrides[permKey];
         }
 
@@ -472,29 +505,33 @@ export async function staffHasPermission(user: PermUser, permKey: string): Promi
         // otherwise a freshly-created blank role would silently leak every
         // legacy "true by default" permission it never actually granted.
         const rolePerms = await loadRolePermissions(roleInfo.roleId);
-        if (permKey.startsWith("view_dashboard") || permKey === "view_calendar") {
-            logger.warn("[DEBUG staffHasPermission] role-default hit", { userId: user.userId, salonId, staffId: roleInfo.staffId, roleId: roleInfo.roleId, permKey, value: rolePerms[permKey] ?? false, overrideKeys: Object.keys(overrides) });
-        }
         return rolePerms[permKey] ?? false;
     }
 
-    if (permKey.startsWith("view_dashboard") || permKey === "view_calendar") {
-        logger.warn("[DEBUG staffHasPermission] legacy path (no role_id)", { userId: user.userId, salonId, permKey });
-    }
-
     // ── Legacy path: this staff member hasn't been backfilled yet (or the
-    // backfill script hasn't been run in this environment) — resolve exactly
-    // as before so behavior is unchanged until the migration actually runs.
-    // Safe to delete once every environment is confirmed backfilled (Phase 3).
+    // backfill script hasn't been run in this environment). Fall through to
+    // DEFAULT_STAFF_PERMS per-KEY, not just when the whole blob is
+    // empty/missing — a key added to the catalog after this staff's
+    // custom_permissions (or the salon's role_permissions) blob was last
+    // saved would never be present in either, so it must still get the
+    // sensible default instead of silently resolving to false forever.
+    // (Found via view_dashboard: staff on this path with an older saved
+    // blob kept getting denied even after DEFAULT_STAFF_PERMS was updated,
+    // because the old "non-empty blob = trust it for everything" check
+    // never consulted the default for keys missing from that specific
+    // blob. Safe to delete this whole legacy path once every environment
+    // is confirmed backfilled — Phase 3.)
     const customPerms = await loadStaffCustomPerms(user.userId, salonId);
-    if (customPerms !== null) {
-        return customPerms[permKey] ?? false;
+    if (customPerms !== null && permKey in customPerms) {
+        return customPerms[permKey];
     }
 
     const rolePerms = await loadRolePerms(salonId);
-    return Object.keys(rolePerms).length > 0
-        ? (rolePerms[permKey]?.staff ?? false)
-        : (DEFAULT_STAFF_PERMS[permKey] ?? false);
+    if (permKey in rolePerms) {
+        return rolePerms[permKey]?.staff ?? false;
+    }
+
+    return DEFAULT_STAFF_PERMS[permKey] ?? false;
 }
 
 // ── Effective permissions for the current user (used by GET /users/me) ─────────

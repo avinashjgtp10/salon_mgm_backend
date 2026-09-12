@@ -61,20 +61,20 @@ const viewTipsOrPayroll = requireAnyPermission(["view_tips", "view_payroll"]);
 const manageStaffPersonalData = requirePermission("manage_staff_personal_data");
 
 // Staff List now has its own independent Delete/Deactivate/Import/Export
-// permissions too (see the Staff permissions ticket) — OR'd as alternatives
-// to the existing edit_team_member/import_file/export_csv/export_excel so
-// existing grants on those broader keys keep working unchanged. Several of
-// these routes were also previously owner/admin-ONLY at the role layer
-// (staff excluded regardless of any permission) — widened to ownerAdminStaff
-// below so granting a staff member one of these new keys is actually
-// meaningful.
+// permissions too (see the Staff permissions ticket). Several of these
+// routes were also previously owner/admin-ONLY at the role layer (staff
+// excluded regardless of any permission) — widened to ownerAdminStaff below
+// so granting a staff member one of these new keys is actually meaningful.
 const createStaff = requirePermission("add_team_member");
 const editStaff = requirePermission("edit_team_member");
 const deactivateStaff = requireAnyPermission(["deactivate_staff", "edit_team_member"]);
 const deleteStaffPerm = requireAnyPermission(["delete_staff", "edit_team_member"]);
-const importStaff = requireAnyPermission(["import_staff", "import_file"]);
-const exportStaffExcel = requireAnyPermission(["export_staff_excel", "export_excel"]);
-const exportStaffCsv = requireAnyPermission(["export_staff_csv", "export_csv"]);
+// import_file/export_csv/excel (System) are now global master gates, not
+// OR'd fallbacks — BOTH the specific permission AND the matching global
+// switch are required (Global Download Switches ticket).
+const importStaff = [requirePermission("import_staff"), requirePermission("import_file")];
+const exportStaffExcel = [requirePermission("export_staff_excel"), requirePermission("export_excel")];
+const exportStaffCsv = [requirePermission("export_staff_csv"), requirePermission("export_csv")];
 
 // Scheduled Shifts now has its own independent View/Add Working Hours/Edit
 // Working Hours/Add Time Off/Manage Day Off/Manage Blocked Day/Copy
@@ -96,16 +96,21 @@ const manageTimeOff = requirePermission("add_time_off");
 const manageBlockedDay = requirePermission("manage_blocked_day");
 
 // Tip & Commission ticket adds dedicated download_commission_tip_csv/excel/
-// pdf keys — same format-resolution logic as requireExportFormatPermission,
-// but OR'd against the new dedicated key alongside the existing generic
-// export_csv/excel/pdf so granting just the new key is enough on its own.
+// pdf keys — same format-resolution logic as requireExportFormatPermission.
+// export_csv/excel/pdf (System) are now global master gates: BOTH the
+// dedicated key AND the matching global switch are required (Global
+// Download Switches ticket), chained as two separate checks so both must
+// pass.
 const exportCommissionsFormat = (req: Request, res: Response, next: NextFunction) => {
   const raw = String(req.query.format || "").toLowerCase();
   const format = ["csv", "excel", "json"].includes(raw) ? raw : "csv";
   const resolved = format === "json" ? "pdf" : (format as "csv" | "excel");
   const dedicatedKey = resolved === "pdf" ? "download_commission_tip_pdf" : resolved === "excel" ? "download_commission_tip_excel" : "download_commission_tip_csv";
   const genericKey = resolved === "pdf" ? "export_pdf" : resolved === "excel" ? "export_excel" : "export_csv";
-  return requireAnyPermission([dedicatedKey, genericKey])(req, res, next);
+  return requirePermission(dedicatedKey)(req, res, (err?: unknown) => {
+    if (err) return next(err);
+    return requirePermission(genericKey)(req, res, next);
+  });
 };
 
 // ─── Public (no auth) ─────────────────────────────────────────────────────────
@@ -126,9 +131,9 @@ router.post("/", auth, ownerAdminStaff, createStaff, validateCreateStaff, staffC
 router.post("/upload-avatar", auth, ownerAdmin, uploadMiddleware.single("avatar"), staffController.uploadAvatar);
 
 // ─── Import / Export (must be BEFORE /:id) ───────────────────────────────────
-router.post("/import",       auth, ownerAdminStaff, importStaff,      upload.single("file"), staffController.importStaff);
-router.get("/export/excel",  auth, ownerAdminStaff, exportStaffExcel, staffController.exportExcel);
-router.get("/export/csv",    auth, ownerAdminStaff, exportStaffCsv,   staffController.exportCsv);
+router.post("/import",       auth, ownerAdminStaff, ...importStaff,      upload.single("file"), staffController.importStaff);
+router.get("/export/excel",  auth, ownerAdminStaff, ...exportStaffExcel, staffController.exportExcel);
+router.get("/export/csv",    auth, ownerAdminStaff, ...exportStaffCsv,   staffController.exportCsv);
 
 // ─── Commissions — salon-wide (must be BEFORE /:staffId routes) ──────────────
 // Previously owner/admin-only with no permission key — opened to staff via
