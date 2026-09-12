@@ -105,6 +105,17 @@ const adjustConsumableStockOrProductStock = requireAnyPermission(["adjust_consum
 // existing feature routes. Per explicit instruction, the new report-specific
 // key is OR'd alongside the existing feature permission (either one alone
 // unlocks it) rather than building 3 new dedicated /api/report/* endpoints.
+//
+// Product List permission ticket: deliberately NOT OR'ing view_products in
+// here — that would let Product List's background supplier-name fetch
+// (ProductsListPage.tsx) succeed even with view_suppliers off, which is
+// exactly the opposite of the requirement ("View Suppliers should be
+// required, not optional, whenever View Products is on"). Instead
+// view_products now depends_on view_suppliers in the catalog (see
+// add_view_products_requires_view_suppliers.sql) — the Roles & Permissions
+// editors cascade View Suppliers on automatically when View Products is
+// turned on, and refuse to save a role/staff state with View Products on
+// and View Suppliers off.
 const viewSuppliersOrReport = requireAnyPermission(["view_suppliers", "view_report_supplier_report", "view_report_purchase_history"]);
 const viewProductInventoryOrPurchaseHistoryReport = requireAnyPermission(["view_product_inventory", "view_report_purchase_history"]);
 const viewInventoryOrConsumableUsageReport = requireAnyPermission(["view_inventory", "view_report_consumable_usage"]);

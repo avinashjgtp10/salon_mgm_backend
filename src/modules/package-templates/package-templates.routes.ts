@@ -17,7 +17,15 @@ const auth = [authMiddleware, requireSalon, roleMiddleware("salon_owner", "admin
 // create_packages/edit_packages/delete_packages (out of scope for that
 // ticket) — OR'd in as alternatives so existing grants on the generic keys
 // keep working unchanged.
-const viewPackageTemplates = requireAnyPermission(["view_package_templates", "view_packages"]);
+//
+// Quick Sale and Calendar both need to read package templates to populate
+// their own "+ Package" row (AppointmentModal.tsx calls this same list
+// endpoint) — same cross-module read-dependency already applied to every
+// other catalog module (Services/Products/Memberships/Packages), just
+// missed here. Without create_sales/manage_calendar OR'd in, a staff member
+// granted only Quick Sale access saw an empty "No options available"
+// package dropdown (found 2026-09-11).
+const viewPackageTemplates = requireAnyPermission(["view_package_templates", "view_packages", "create_sales", "manage_calendar"]);
 const addPackageTemplate = requireAnyPermission(["add_package_template", "create_packages"]);
 const editPackageTemplate = requireAnyPermission(["edit_package_template", "edit_packages"]);
 const deletePackageTemplate = requireAnyPermission(["delete_package_template", "delete_packages"]);
