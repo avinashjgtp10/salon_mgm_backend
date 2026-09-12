@@ -34,13 +34,15 @@ const editProducts = requirePermission("edit_products");
 const createProductsOrConsumable = requireAnyPermission(["create_products", "add_consumable"]);
 const editProductsOrConsumable = requireAnyPermission(["edit_products", "edit_consumable", "activate_deactivate_consumable", "edit_product"]);
 const deleteProductsOrInventory = requireAnyPermission(["delete_products", "delete_product"]);
-// Import/Export Products are their own dedicated permissions now (see the
-// Products permissions ticket) — OR'd with the generic create_products/
-// import_file/export_* so existing grants keep working unchanged.
-const importProducts = requireAnyPermission(["import_products", "create_products", "import_file"]);
-const exportProductsCsv = requireAnyPermission(["download_products_csv", "export_csv"]);
-const exportProductsExcel = requireAnyPermission(["download_products_excel", "export_excel"]);
-const exportProductsPdf = requireAnyPermission(["download_products_pdf", "export_pdf"]);
+// Import/Export Products are their own dedicated permissions (Products
+// permissions ticket). import_file/export_csv/excel/pdf (System) are now
+// global master gates, not OR'd fallbacks — BOTH the specific permission
+// (import_products OR the broader create_products) AND the matching global
+// switch are required (Global Download Switches ticket).
+const importProducts = [requireAnyPermission(["import_products", "create_products"]), requirePermission("import_file")];
+const exportProductsCsv = [requirePermission("download_products_csv"), requirePermission("export_csv")];
+const exportProductsExcel = [requirePermission("download_products_excel"), requirePermission("export_excel")];
+const exportProductsPdf = [requirePermission("download_products_pdf"), requirePermission("export_pdf")];
 
 // Brands
 router.get("/brands", authMiddleware, ownerAdminStaff, viewProducts, brandsController.list);
@@ -50,10 +52,10 @@ router.patch("/brands/:id", authMiddleware, ownerAdminStaff, createProducts, val
 router.delete("/brands/:id", authMiddleware, roleMiddleware("salon_owner", "admin"), brandsController.delete);
 
 // Products
-router.get("/export/csv", authMiddleware, ownerAdminStaff, viewProducts, exportProductsCsv, productsController.exportCSV);
-router.get("/export/excel", authMiddleware, ownerAdminStaff, viewProducts, exportProductsExcel, productsController.exportExcel);
-router.get("/export/pdf", authMiddleware, ownerAdminStaff, viewProducts, exportProductsPdf, productsController.exportPDF);
-router.post("/import", authMiddleware, ownerAdminStaff, importProducts, importUpload.single("file"), productsController.importProducts);
+router.get("/export/csv", authMiddleware, ownerAdminStaff, viewProducts, ...exportProductsCsv, productsController.exportCSV);
+router.get("/export/excel", authMiddleware, ownerAdminStaff, viewProducts, ...exportProductsExcel, productsController.exportExcel);
+router.get("/export/pdf", authMiddleware, ownerAdminStaff, viewProducts, ...exportProductsPdf, productsController.exportPDF);
+router.post("/import", authMiddleware, ownerAdminStaff, ...importProducts, importUpload.single("file"), productsController.importProducts);
 
 router.get("/", authMiddleware, ownerAdminStaff, viewProducts, validateListQuery, productsController.list);
 router.post("/search", authMiddleware, ownerAdminStaff, viewProducts, validateSearchBody, productsController.search);

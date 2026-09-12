@@ -29,7 +29,9 @@ router.get("/today",       authMiddleware, ownerAdminStaff, viewAttendanceList, 
 router.get("/monthly",     authMiddleware, ownerAdminStaff, viewAttendanceList, attendanceController.getMonthly);
 router.get("/range",       authMiddleware, ownerAdminStaff, viewAttendanceListOrReport, attendanceController.getRange);
 router.get("/summary",     authMiddleware, ownerAdminStaff, viewAttendanceList, attendanceController.getDailySummary);
-router.get("/export",      authMiddleware, ownerAdminStaff, requireAnyPermission(["view_attendance_list", "export_csv"]), attendanceController.exportCSV);
+// export_csv (System) is now a global master gate, not an OR'd fallback —
+// must have BOTH view_attendance_list AND the global export_csv switch on.
+router.get("/export",      authMiddleware, ownerAdminStaff, viewAttendanceList, requirePermission("export_csv"), attendanceController.exportCSV);
 router.get("/staff/:staffId", authMiddleware, ownerAdminStaff, viewAttendanceList, attendanceController.getForStaff);
 
 // Check in/out — self-service, not part of this ticket's permission list;

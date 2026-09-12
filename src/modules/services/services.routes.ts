@@ -23,25 +23,23 @@ const editServices = requirePermission("edit_services");
 // permissions ticket) — OR'd with edit_services so existing role/staff
 // grants that only ever set edit_services keep working unchanged.
 const deleteServices = requireAnyPermission(["delete_services", "edit_services"]);
-// Import Services previously required import_file + owner/admin only (staff
-// excluded entirely, regardless of any permission). Widened to staff, with
-// a dedicated import_services key OR'd in as an alternative to the generic
-// import_file.
-const importServices = requireAnyPermission(["import_services", "import_file"]);
-// Export downloads keep the generic export_pdf/csv/excel working (other
-// modules may already grant those) but also accept the new Service Menu-
-// specific keys as alternatives, same OR pattern used across Warehouse.
-const exportServicePdf = requireAnyPermission(["download_service_menu_pdf", "export_pdf"]);
-const exportServiceExcel = requireAnyPermission(["download_service_menu_excel", "export_excel"]);
-const exportServiceCsv = requireAnyPermission(["download_service_menu_csv", "export_csv"]);
+// Import/Export Services are their own dedicated permissions (Service Menu
+// permissions ticket). import_file/export_pdf/csv/excel (System) are now
+// global master gates, not OR'd fallbacks — BOTH the specific permission
+// AND the matching global switch are required (Global Download Switches
+// ticket).
+const importServices = [requirePermission("import_services"), requirePermission("import_file")];
+const exportServicePdf = [requirePermission("download_service_menu_pdf"), requirePermission("export_pdf")];
+const exportServiceExcel = [requirePermission("download_service_menu_excel"), requirePermission("export_excel")];
+const exportServiceCsv = [requirePermission("download_service_menu_csv"), requirePermission("export_csv")];
 
 // ─── Downloads (before /:id to avoid conflicts) ───────────────────────────────
-router.get("/download/pdf",   ...authBase, viewServices, exportServicePdf,   downloadCataloguePdf);
-router.get("/download/excel", ...authBase, viewServices, exportServiceExcel, downloadCatalogueExcel);
-router.get("/download/csv",   ...authBase, viewServices, exportServiceCsv,   downloadCatalogueCsv);
+router.get("/download/pdf",   ...authBase, viewServices, ...exportServicePdf,   downloadCataloguePdf);
+router.get("/download/excel", ...authBase, viewServices, ...exportServiceExcel, downloadCatalogueExcel);
+router.get("/download/csv",   ...authBase, viewServices, ...exportServiceCsv,   downloadCatalogueCsv);
 
 // ─── Import ───────────────────────────────────────────────────────────────────
-router.post("/import", ...authBase, importServices, upload.single("file"), servicesImportController.import);
+router.post("/import", ...authBase, ...importServices, upload.single("file"), servicesImportController.import);
 
 // ─── Services CRUD ────────────────────────────────────────────────────────────
 router.get("/",    ...authBase, viewServices, servicesController.list);
