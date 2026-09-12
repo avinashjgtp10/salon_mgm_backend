@@ -374,9 +374,6 @@ export const staffService = {
         const REQUIRED_COLUMN_ALIASES: Record<string, string[]> = {
             Name: ["Name", "name"],
             Contact: ["Contact", "contact"],
-            Email: ["Email", "email"],
-            Gender: ["Gender", "gender"],
-            "DOJ(dd-mm-YYYY)": ["DOJ(dd-mm-YYYY)", "DOJ", "doj"],
         };
         if (rows.length > 0) {
             const headers = new Set(Object.keys(rows[0]));
@@ -487,9 +484,10 @@ export const staffService = {
                         // set when a value is actually provided.
                         if (genderRaw && !VALID_GENDERS.has(genderRaw.toLowerCase())) fieldErrors.push({ field: "Gender", message: "Invalid Gender — must be Male, Female, or Other" });
 
+                        // DOJ is optional — only Name and Contact are mandatory. If a
+                        // value IS given, it must still be a valid date.
                         let joined_date: string | null = null;
-                        if (!dojRaw) fieldErrors.push({ field: "DOJ", message: "DOJ is required" });
-                        else {
+                        if (dojRaw) {
                             joined_date = parseDate(dojRaw);
                             if (!joined_date) fieldErrors.push({ field: "DOJ", message: "Invalid date format. Expected dd-mm-YYYY" });
                         }
