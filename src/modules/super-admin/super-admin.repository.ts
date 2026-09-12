@@ -156,7 +156,10 @@ export const superAdminRepository = {
         (SELECT bp.name FROM billing_subscriptions bs
            JOIN billing_plans bp ON bp.id = bs.plan_id
            WHERE bs.salon_id = s.id AND bs.status IN ('active','trialing')
-           ORDER BY bs.created_at DESC LIMIT 1)                                           AS plan_name
+           ORDER BY bs.created_at DESC LIMIT 1)                                           AS plan_name,
+        (SELECT bs.current_period_end FROM billing_subscriptions bs
+           WHERE bs.salon_id = s.id AND bs.status IN ('active','trialing')
+           ORDER BY bs.created_at DESC LIMIT 1)                                           AS plan_expires_at
       FROM salons s
       LEFT JOIN users u ON u.id = s.owner_id
       WHERE ($1::text IS NULL
@@ -556,6 +559,7 @@ export const superAdminRepository = {
     role: string;
     business_name?: string;
     address?: string;
+    createdByUserId?: string;
   }) {
     const client = await pool.connect();
     try {
@@ -577,10 +581,20 @@ export const superAdminRepository = {
 
       if (data.business_name?.trim() && data.role === "salon_owner") {
         const slug = data.business_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") + "-" + Date.now();
-        await client.query(`
+        const { rows: salonRows } = await client.query(`
           INSERT INTO salons (owner_id, business_name, slug, address, is_active, onboarding_completed)
           VALUES ($1, $2, $3, $4, true, false)
+          RETURNING id
         `, [user.id, data.business_name.trim(), slug, data.address?.trim() ?? null]);
+
+        // New accounts default to the Pro tier so they aren't left on the
+        // implicit Basic fallback (see salon-plans.service.ts getCustomization)
+        // until a super admin manually customizes their plan.
+        await client.query(`
+          INSERT INTO salon_plan_customizations (salon_id, base_tier, updated_by)
+          VALUES ($1, 'pro', $2)
+          ON CONFLICT (salon_id) DO NOTHING
+        `, [salonRows[0].id, data.createdByUserId ?? user.id]);
       }
 
       await client.query("COMMIT");
@@ -884,9 +898,12 @@ export const superAdminRepository = {
       SELECT
         scl.id, scl.salon_id, scl.salon_name, scl.reason, scl.created_at,
         TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,''))) AS cleared_by_name,
-        u.email AS cleared_by_email
+        u.email AS cleared_by_email,
+        owner.email AS salon_owner_email
       FROM salon_cleanup_log scl
       LEFT JOIN users u ON u.id = scl.cleared_by
+      LEFT JOIN salons s ON s.id = scl.salon_id
+      LEFT JOIN users owner ON owner.id = s.owner_id
       ${where}
       ORDER BY scl.created_at DESC
       LIMIT $${params.length - 1} OFFSET $${params.length}

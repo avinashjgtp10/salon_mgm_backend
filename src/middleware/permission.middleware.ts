@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import pool from "../config/database";
 import { AppError } from "./error.middleware";
 
-interface PermUser {
+export interface PermUser {
     userId: string;
     role?: string;
     salonId?: string | null;
@@ -75,6 +75,88 @@ export function invalidateStaffPermCache(userId: string) {
     staffPermCache.delete(userId);
 }
 
+// ── New roles/permissions tables (post-backfill resolution path) ───────────────
+// See scripts/backfill-permissions-system.ts. A staff member resolves through
+// this path once their `staff.role_id` has been populated; until then,
+// staffHasPermission() below falls back to the legacy blob-based caches above,
+// so this file works correctly whether or not the backfill has run yet in a
+// given environment. Once every environment is backfilled, the legacy path
+// (and these two comments) can be deleted — Phase 3 cleanup.
+
+interface StaffRoleInfo {
+    staffId: string;
+    roleId: string | null;
+}
+
+// userId → { staffId, roleId, expiresAt }
+const staffRoleCache = new Map<string, StaffRoleInfo & { expiresAt: number }>();
+
+async function loadStaffRoleInfo(userId: string, salonId: string): Promise<StaffRoleInfo | null> {
+    const now = Date.now();
+    const cached = staffRoleCache.get(userId);
+    if (cached && cached.expiresAt > now) return cached;
+
+    const { rows } = await pool.query(
+        `SELECT id, role_id FROM staff WHERE user_id = $1 AND salon_id = $2 LIMIT 1`,
+        [userId, salonId]
+    );
+    if (!rows[0]) return null;
+
+    const info = { staffId: rows[0].id as string, roleId: (rows[0].role_id as string) ?? null };
+    staffRoleCache.set(userId, { ...info, expiresAt: now + CACHE_TTL_MS });
+    return info;
+}
+
+export function invalidateStaffRoleCache(userId: string) {
+    staffRoleCache.delete(userId);
+}
+
+// roleId → { permKey: allowed }
+const rolePermissionsCache = new Map<string, { perms: Record<string, boolean>; expiresAt: number }>();
+
+async function loadRolePermissions(roleId: string): Promise<Record<string, boolean>> {
+    const now = Date.now();
+    const cached = rolePermissionsCache.get(roleId);
+    if (cached && cached.expiresAt > now) return cached.perms;
+
+    const { rows } = await pool.query(
+        `SELECT permission_key, allowed FROM role_permissions WHERE role_id = $1`,
+        [roleId]
+    );
+    const perms: Record<string, boolean> = {};
+    for (const row of rows) perms[row.permission_key] = row.allowed;
+
+    rolePermissionsCache.set(roleId, { perms, expiresAt: now + CACHE_TTL_MS });
+    return perms;
+}
+
+export function invalidateRolePermissionsCache(roleId: string) {
+    rolePermissionsCache.delete(roleId);
+}
+
+// staffId → sparse { permKey: allowed } — only keys with an actual override row
+const staffOverridesCache = new Map<string, { overrides: Record<string, boolean>; expiresAt: number }>();
+
+async function loadStaffOverrides(staffId: string): Promise<Record<string, boolean>> {
+    const now = Date.now();
+    const cached = staffOverridesCache.get(staffId);
+    if (cached && cached.expiresAt > now) return cached.overrides;
+
+    const { rows } = await pool.query(
+        `SELECT permission_key, allowed FROM staff_permission_overrides WHERE staff_id = $1`,
+        [staffId]
+    );
+    const overrides: Record<string, boolean> = {};
+    for (const row of rows) overrides[row.permission_key] = row.allowed;
+
+    staffOverridesCache.set(staffId, { overrides, expiresAt: now + CACHE_TTL_MS });
+    return overrides;
+}
+
+export function invalidateStaffOverridesCache(staffId: string) {
+    staffOverridesCache.delete(staffId);
+}
+
 // ── Default staff permissions (used when nothing has been configured) ─────────
 // Mirrors the "staff" column defaults in src/features/settings/data/permissionMatrix.ts
 // on the frontend — keep the two in sync when adding a new requirePermission() key.
@@ -85,60 +167,389 @@ const DEFAULT_STAFF_PERMS: Record<string, boolean> = {
     // so the two sides actually agree.
     view_campaigns: false,
     create_campaigns: false,
-    design_coupons: false,
+    edit_campaign: false,
+    delete_campaign: false,
+    send_campaign: false,
+    view_marketing_dashboard: false,
+    view_marketing_analytics: false,
+    view_templates: false,
+    add_template: false,
+    edit_template: false,
+    delete_template: false,
+    view_scheduled_templates: false,
+    create_scheduled_template: false,
+    edit_scheduled_template: false,
+    delete_scheduled_template: false,
+    send_now_scheduled_template: false,
+    resend_scheduled_template: false,
+    view_inbox: false,
+    reply_to_conversation: false,
+    view_whatsapp_config: false,
+    edit_whatsapp_config: false,
+    // Missing here entirely (unlike view_calendar right below it) meant any
+    // staff member still on the legacy path (staff.role_id not yet
+    // backfilled — see loadStaffRoleInfo below) resolved view_dashboard to
+    // `?? false` no matter what an owner set in Settings -> Roles &
+    // Permissions, since that UI only writes role_permissions/
+    // staff_permission_overrides, tables never consulted on this path.
+    // Defaulting to true here matches pre-existing behavior (the Dashboard
+    // was visible to every staff member before this permission existed).
+    view_dashboard: true,
     view_calendar: true,
     manage_calendar: false,
+    view_appointment: true,
+    create_appointment: false,
+    edit_appointment: false,
+    cancel_appointment: false,
+    delete_appointment: false,
+    view_payment_details: false,
     view_clients: true,
     create_clients: true,
     edit_clients: true,
     delete_clients: false,
+    import_clients: false,
+    export_clients: false,
+    block_client: false,
+    view_client_history: true,
+    view_referral_rewards: false,
     view_sales: true,
     create_sales: true,
+    import_sales: false,
     view_services: true,
     create_services: false,
     edit_services: false,
+    delete_services: false,
+    manage_categories: false,
+    import_services: false,
+    print_menu_card: false,
+    download_service_menu_pdf: false,
+    download_service_menu_excel: false,
+    download_service_menu_csv: false,
+    view_digital_menu: true,
+    create_digital_menu: false,
+    edit_digital_menu: false,
+    manage_digital_menu_qr: false,
+    enable_disable_digital_menu: false,
     view_products: true,
     create_products: false,
+    edit_products: false,
+    delete_products: false,
+    import_products: false,
+    download_products_pdf: false,
+    download_products_excel: false,
+    download_products_csv: false,
     view_packages: true,
     create_packages: false,
+    edit_packages: false,
+    delete_packages: false,
+    view_client_packages: true,
+    create_package: false,
+    edit_package: false,
+    delete_package: false,
+    view_package_templates: true,
+    add_package_template: false,
+    edit_package_template: false,
+    delete_package_template: false,
     view_memberships: true,
     create_memberships: false,
+    edit_memberships: false,
+    delete_memberships: false,
+    download_membership_pdf: false,
+    download_membership_excel: false,
+    download_membership_csv: false,
     view_inventory: true,
     manage_inventory: false,
     stock_adjustment: false,
+    view_product_inventory: true,
+    add_product: false,
+    edit_product: false,
+    delete_product: false,
+    adjust_product_stock: false,
+    view_product_stock_history: true,
+    download_product_inventory_pdf: false,
+    download_product_inventory_excel: false,
+    download_product_inventory_csv: false,
+    view_consumable_inventory: true,
+    add_consumable: false,
+    edit_consumable: false,
+    adjust_consumable_stock: false,
+    activate_deactivate_consumable: false,
+    view_consumable_usage: true,
+    download_consumable_inventory_pdf: false,
+    download_consumable_inventory_excel: false,
+    download_consumable_inventory_csv: false,
+    view_product_audit: true,
+    create_product_audit: false,
+    approve_product_audit: false,
+    export_product_audit_excel: false,
+    view_stock_ledger: true,
+    edit_stock_ledger: false,
+    delete_stock_ledger: false,
+    stock_ledger_adjustment: false,
+    export_stock_ledger_excel: false,
+    view_suppliers: true,
+    create_suppliers: false,
+    edit_suppliers: false,
+    delete_suppliers: false,
+    supplier_payout: false,
+    view_orders: true,
+    create_order: false,
+    edit_order: false,
+    cancel_order: false,
+    receive_order: false,
+    download_order_pdf: false,
     view_booking: true,
-    manage_booking: false,
+    // Online Booking Channels ticket — per-channel View toggles layered on
+    // top of view_booking, plus a manage_booking split. manage_booking is
+    // gone entirely (its whole scope was marketplace writes, which
+    // manage_marketplace now covers 1:1); manage_link_builder is a brand
+    // new gate for previously-ungated routes. All new keys default false,
+    // same convention as every other permission added this project (owner
+    // grants explicitly).
+    view_marketplace: false,
+    manage_marketplace: false,
+    view_reserve_with_google: false,
+    view_social_bookings: false,
+    view_link_builder: false,
+    manage_link_builder: false,
     view_team: true,
     add_team_member: false,
     edit_team_member: false,
+    delete_staff: false,
+    deactivate_staff: false,
+    import_staff: false,
+    export_staff_csv: false,
+    export_staff_excel: false,
+    export_staff_pdf: false,
+    view_staff_history: true,
     manage_shifts: false,
+    view_scheduled_shifts: true,
+    add_working_hours: false,
+    edit_working_hours: false,
+    add_time_off: false,
+    manage_day_off: false,
+    manage_blocked_day: false,
+    copy_schedule: false,
+    view_commissions: false,
+    add_commission_rule: false,
+    edit_commission_rule: false,
+    delete_commission_rule: false,
+    view_tips: false,
+    add_tip: false,
+    edit_tip: false,
+    delete_tip: false,
+    download_commission_tip_csv: false,
+    download_commission_tip_excel: false,
+    download_commission_tip_pdf: false,
+    view_attendance_list: true,
+    view_attendance_rules: false,
     view_payroll: false,
+    add_salary_advance: false,
+    pay_salary: false,
+    view_payroll_details: false,
+    edit_payroll: false,
+    delete_payroll: false,
+    export_payroll: false,
     view_reports: false,
-    export_reports: false,
-    general_settings: false,
+    // Individual View/Download permissions for all 53 reports (Reports
+    // ticket) — module='Reports', group_name=category in the catalog.
+    // Category parent permissions:
+    view_reports_sales: false,
+    view_reports_payments: false,
+    view_reports_customers: false,
+    view_reports_appointments: false,
+    view_reports_inventory: false,
+    view_reports_staff: false,
+    view_reports_packages: false,
+    view_reports_marketing: false,
+    // Sales
+    view_report_sales_summary: false, download_report_sales_summary: false,
+    view_report_daily_sheet: false, download_report_daily_sheet: false,
+    view_report_product_sale: false, download_report_product_sale: false,
+    view_report_service_sale: false, download_report_service_sale: false,
+    view_report_taxes: false, download_report_taxes: false,
+    view_report_product_margin: false, download_report_product_margin: false,
+    view_report_reward: false, download_report_reward: false,
+    view_report_ewallet: false, download_report_ewallet: false,
+    // Payments
+    view_report_payment_collection: false, download_report_payment_collection: false,
+    view_report_pending_payment: false, download_report_pending_payment: false,
+    view_report_cash_management: false, download_report_cash_management: false,
+    // Clients
+    view_report_all_clients: false, download_report_all_clients: false,
+    view_report_client_revenue: false, download_report_client_revenue: false,
+    view_report_customer_frequency: false, download_report_customer_frequency: false,
+    view_report_lost_customers: false, download_report_lost_customers: false,
+    view_report_customer_spend: false, download_report_customer_spend: false,
+    view_report_service_frequency: false, download_report_service_frequency: false,
+    view_report_referral_report: false, download_report_referral_report: false,
+    view_report_client_rating: false, download_report_client_rating: false,
+    view_report_enquiry_report: false, download_report_enquiry_report: false,
+    // Appointments
+    view_report_appointment_detail: false, download_report_appointment_detail: false,
+    view_report_upcoming_appointments: false, download_report_upcoming_appointments: false,
+    view_report_no_show_recovery: false, download_report_no_show_recovery: false,
+    // Inventory
+    view_report_product_sale_inventory: false, download_report_product_sale_inventory: false,
+    view_report_product_margin_inventory: false, download_report_product_margin_inventory: false,
+    view_report_product_inventory: false, download_report_product_inventory: false,
+    view_report_slow_moving_products: false, download_report_slow_moving_products: false,
+    view_report_fast_moving_products: false, download_report_fast_moving_products: false,
+    view_report_brand_performance: false, download_report_brand_performance: false,
+    view_report_purchase_vs_sales: false, download_report_purchase_vs_sales: false,
+    view_report_consumable_usage: false, download_report_consumable_usage: false,
+    view_report_supplier_report: false, download_report_supplier_report: false,
+    view_report_purchase_history: false, download_report_purchase_history: false,
+    // Staff
+    view_report_staff_sales: false, download_report_staff_sales: false,
+    view_report_staff_performance: false, download_report_staff_performance: false,
+    view_report_staff_item_sales: false, download_report_staff_item_sales: false,
+    view_report_commission_report: false, download_report_commission_report: false,
+    view_report_tip_report: false, download_report_tip_report: false,
+    view_report_attendance_report: false, download_report_attendance_report: false,
+    view_report_payroll_history: false, download_report_payroll_history: false,
+    view_report_rebooking_rate: false, download_report_rebooking_rate: false,
+    // Package & Membership
+    view_report_package_sale: false, download_report_package_sale: false,
+    view_report_package_history: false, download_report_package_history: false,
+    view_report_member_sale: false, download_report_member_sale: false,
+    view_report_membership_history: false, download_report_membership_history: false,
+    // Marketing
+    view_report_wa_campaign: false, download_report_wa_campaign: false,
+    view_report_mkt_feedback: false, download_report_mkt_feedback: false,
+    view_report_open_rate: false, download_report_open_rate: false,
+    view_report_reply_rate: false, download_report_reply_rate: false,
+    view_report_birthday_campaign: false, download_report_birthday_campaign: false,
+    view_report_new_client_follow_up: false, download_report_new_client_follow_up: false,
+    view_report_cancellation_recovery: false, download_report_cancellation_recovery: false,
+    view_report_membership_opportunity: false, download_report_membership_opportunity: false,
+    // Settings module permissions ticket — "can open and use" each of the
+    // 18 Settings sections. Branches/Coupons/Roles & Permissions reuse
+    // their existing view_branches/view_coupons/view_roles keys instead of
+    // duplicating (see add_settings_section_permission_keys.sql).
+    view_settings_profile: false,
+    view_settings_business: false,
+    view_settings_account_security: false,
+    view_settings_notifications: false,
+    view_settings_integrations: false,
+    view_settings_pos_payments: false,
+    view_settings_billing: false,
+    view_settings_currency: false,
+    view_settings_tax_mapping: false,
+    view_settings_reward_points: false,
+    view_settings_referral: false,
+    view_settings_packages: false,
+    view_settings_print: false,
+    view_settings_bulk_billing_import: false,
+    view_settings_data_privacy: false,
+    // Master "can open Settings at all" switch — mirrors view_reports:
+    // a real, toggleable permission that's also OR'd together with the 18
+    // section keys above (see usePermissions.ts's VIRTUAL_PERMS.access_settings),
+    // so granting it alone is enough without having to enable every section.
+    access_settings: false,
     manage_pos_payments: false,
     view_enquiries: true,
+    // Split from respond_enquiries (Enquiries permissions ticket) — Add and
+    // Edit are now independently toggleable, matching delete_enquiries's
+    // existing granularity.
+    add_enquiries: false,
+    edit_enquiries: false,
+    delete_enquiries: false,
+    // Notifications permission module ticket — gates the notification
+    // bell + feed page (dashboard/pages/NotificationsPage.tsx), distinct
+    // from view_settings_notifications (the Settings → Notifications
+    // preferences card).
+    view_notifications: false,
+    view_cash_management: false,
+    open_counter: false,
+    close_counter: false,
+    add_expense: false,
+    edit_expense: false,
+    delete_expense: false,
+    export_cash_management_pdf: false,
+    export_cash_management_excel: false,
+    export_cash_management_csv: false,
 };
 
 // ── Core resolver ──────────────────────────────────────────────────────────────
 // Returns whether the given permKey is allowed for this staff member. Callers
 // that already know the request is owner/admin (or don't need to short-circuit
 // on missing salon context with a specific error) can use this directly.
-async function staffHasPermission(user: PermUser, permKey: string): Promise<boolean> {
+// Exported so the anti-escalation check in roles.service.ts (a manage_roles
+// holder can't grant a permission they don't themselves have) can reuse the
+// exact same resolution logic instead of duplicating it. NOTE: this function
+// does not itself check user.role — callers must not invoke it for
+// owner/admin actors (who have no `staff` row to resolve against); the
+// owner/admin bypass belongs at the call site, same as requirePermission()
+// already does below.
+export async function staffHasPermission(user: PermUser, permKey: string): Promise<boolean> {
     const salonId = user.salonId;
     if (!salonId) return false;
 
-    // 1. Check per-staff custom permissions first
-    const customPerms = await loadStaffCustomPerms(user.userId, salonId);
-    if (customPerms !== null) {
-        return customPerms[permKey] ?? false;
+    const roleInfo = await loadStaffRoleInfo(user.userId, salonId);
+
+    if (roleInfo?.roleId) {
+        // ── New path: staff.role_id has been backfilled for this staff member ──
+        // 1. Sparse per-staff override wins outright if a row exists for this key.
+        const overrides = await loadStaffOverrides(roleInfo.staffId);
+        if (permKey in overrides) {
+            return overrides[permKey];
+        }
+
+        // 2. Otherwise fall through to the assigned role's permission set.
+        // A key with no row here means "not explicitly granted" and must
+        // resolve to false — NOT fall back to the legacy DEFAULT_STAFF_PERMS
+        // map. That fallback only belongs in the legacy path below (for
+        // salons that predate this system entirely); once a staff member has
+        // a real role_id, an unconfigured permission is a deliberate deny,
+        // otherwise a freshly-created blank role would silently leak every
+        // legacy "true by default" permission it never actually granted.
+        const rolePerms = await loadRolePermissions(roleInfo.roleId);
+        return rolePerms[permKey] ?? false;
     }
 
-    // 2. Fall back to global role-level permissions
+    // ── Legacy path: this staff member hasn't been backfilled yet (or the
+    // backfill script hasn't been run in this environment). Fall through to
+    // DEFAULT_STAFF_PERMS per-KEY, not just when the whole blob is
+    // empty/missing — a key added to the catalog after this staff's
+    // custom_permissions (or the salon's role_permissions) blob was last
+    // saved would never be present in either, so it must still get the
+    // sensible default instead of silently resolving to false forever.
+    // (Found via view_dashboard: staff on this path with an older saved
+    // blob kept getting denied even after DEFAULT_STAFF_PERMS was updated,
+    // because the old "non-empty blob = trust it for everything" check
+    // never consulted the default for keys missing from that specific
+    // blob. Safe to delete this whole legacy path once every environment
+    // is confirmed backfilled — Phase 3.)
+    const customPerms = await loadStaffCustomPerms(user.userId, salonId);
+    if (customPerms !== null && permKey in customPerms) {
+        return customPerms[permKey];
+    }
+
     const rolePerms = await loadRolePerms(salonId);
-    return Object.keys(rolePerms).length > 0
-        ? (rolePerms[permKey]?.staff ?? false)
-        : (DEFAULT_STAFF_PERMS[permKey] ?? false);
+    if (permKey in rolePerms) {
+        return rolePerms[permKey]?.staff ?? false;
+    }
+
+    return DEFAULT_STAFF_PERMS[permKey] ?? false;
+}
+
+// ── Effective permissions for the current user (used by GET /users/me) ─────────
+// Computes the full { permKey: boolean } map for a staff user using the exact
+// same resolution as staffHasPermission() above — the frontend's usePermissions()
+// hook consumes this directly instead of maintaining its own separate,
+// drift-prone copy of the resolution logic. owner/admin never need this (they
+// bypass everywhere), so callers should only call it for role === "staff".
+export async function getEffectivePermissionsForUser(
+    userId: string,
+    salonId: string,
+    allKeys: string[]
+): Promise<Record<string, boolean>> {
+    const result: Record<string, boolean> = {};
+    for (const key of allKeys) {
+        result[key] = await staffHasPermission({ userId, role: "staff", salonId }, key);
+    }
+    return result;
 }
 
 // ── Middleware factory ────────────────────────────────────────────────────────
@@ -168,6 +579,31 @@ export const requirePermission = (permKey: string) =>
         } catch (err) {
             return next(err);
         }
+    };
+
+// ── Middleware factory (export-format-aware) ───────────────────────────────────
+// A handful of export endpoints serve csv/excel/pdf from one route via
+// ?format=..., rather than three separate routes — so the permission to
+// check can't be picked statically at route-registration time. Mirrors each
+// controller's own format parsing/defaulting exactly, so the permission
+// checked always matches the file actually generated.
+//
+// `formatToKey` lets a caller remap a query value that isn't literally
+// "pdf"/"excel"/"csv" onto the right permission — e.g. staff commissions'
+// export endpoint uses ?format=json to fetch rows for a client-side PDF
+// build (same pattern as the Reports module's ReportExportButton), which
+// should still require export_pdf, not a nonexistent "export_json".
+export const requireExportFormatPermission = (
+    allowedFormats: string[] = ["csv", "excel", "pdf"],
+    defaultFormat: string = "csv",
+    formatToKey: Record<string, "csv" | "excel" | "pdf"> = {}
+) =>
+    (req: Request & { user?: PermUser }, res: Response, next: NextFunction) => {
+        const raw = String(req.query.format || "").toLowerCase();
+        const format = allowedFormats.includes(raw) ? raw : defaultFormat;
+        const resolved = formatToKey[format] ?? (format as "csv" | "excel" | "pdf");
+        const key = resolved === "pdf" ? "export_pdf" : resolved === "excel" ? "export_excel" : "export_csv";
+        return requirePermission(key)(req, res, next);
     };
 
 // ── Middleware factory (any-of) ────────────────────────────────────────────────

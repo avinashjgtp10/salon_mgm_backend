@@ -54,11 +54,18 @@ export const staffService = {
         console.log("[DEBUG] staffService.create - params:", { salonId, requesterUserId, requesterRole, email: body.email });
 
         try {
-            console.log("[DEBUG] staffService.create - Step 1: Checking existing email...");
-            const existing = await staffRepository.findByEmail(salonId, body.email);
-            if (existing) {
-                console.log("[DEBUG] staffService.create - Email already exists:", body.email);
-                throw new AppError(409, "A staff member with this email already exists", "DUPLICATE_EMAIL");
+            // Staff Login off (no email at all) — none of the duplicate-email/
+            // owner-admin-collision checks below mean anything without an
+            // email to check, so they're skipped entirely rather than run
+            // against `undefined`.
+            const existingUser = body.email ? await authRepository.findUserByEmail(body.email) : null;
+            if (body.email) {
+                console.log("[DEBUG] staffService.create - Step 1: Checking existing email...");
+                const existing = await staffRepository.findByEmail(salonId, body.email);
+                if (existing) {
+                    console.log("[DEBUG] staffService.create - Email already exists:", body.email);
+                    throw new AppError(409, "A staff member with this email already exists", "DUPLICATE_EMAIL");
+                }
             }
 
             // Guard against silently hijacking a salon_owner/admin/super_admin account:
@@ -77,7 +84,6 @@ export const staffService = {
             // duplicate-email collision (DUPLICATE_EMAIL above) rather than naming
             // the role — a staff-creation form has no business surfacing that an
             // email belongs to a platform superadmin account.
-            const existingUser = await authRepository.findUserByEmail(body.email);
             if (existingUser?.role === "super_admin") {
                 console.log("[DEBUG] staffService.create - Email belongs to an existing super_admin:", body.email);
                 throw new AppError(409, "A staff member with this email already exists", "DUPLICATE_EMAIL");
@@ -109,6 +115,13 @@ export const staffService = {
             console.log("[DEBUG] staffService.create - staff created with ID:", staff.id);
 
             if (body.password && passwordHash) {
+                // Belt-and-suspenders: validateCreateStaff already rejects a
+                // password with no email over HTTP, but this service can also
+                // be called directly (bypassing that middleware), so the
+                // invariant is enforced here too rather than assumed.
+                if (!body.email) {
+                    throw new AppError(400, "email is required to set a password (Staff Login)", "VALIDATION_ERROR");
+                }
                 console.log("[DEBUG] staffService.create - Step 3: Admin-set password, creating user account directly...");
                 let user = await authRepository.findUserByEmail(body.email);
                 if (!user) {
@@ -127,7 +140,7 @@ export const staffService = {
                 await authRepository.markOnboardingComplete(user.id);
                 await staffRepository.activateDirectly(staff.id);
                 console.log("[DEBUG] staffService.create - user account created and staff activated:", user.id);
-            } else {
+            } else if (body.email) {
                 console.log("[DEBUG] staffService.create - Step 3: Linking a user account up front...");
                 // staff.user_id is populated immediately, even before the invite is
                 // accepted — otherwise anything keyed on user_id (e.g. the audit
@@ -169,6 +182,11 @@ export const staffService = {
                 }).catch((err) => {
                     console.error("[DEBUG] staffService.create - invitation email failed:", err);
                 });
+            } else {
+                // Staff Login off, no email at all — nothing to invite, no
+                // account to link. staff.user_id stays null until an email
+                // is added later (e.g. via Edit) and Staff Login turned on.
+                console.log("[DEBUG] staffService.create - Step 3: No email — Staff Login disabled, skipping user account/invitation");
             }
 
             return { staffId: staff.id };
@@ -189,6 +207,34 @@ export const staffService = {
 
         // Split out blocked_times — handled separately, not a staff table column
         const { blocked_times: blockedTimesToCreate, ...staffPatch } = patch as any;
+
+        // Email is now editable from the Edit Staff screen. Only act on it when
+        // it's actually changing — this keeps clients that still echo the
+        // unchanged email back from tripping the uniqueness check against
+        // themselves, and avoids pointless writes to the linked `users` row.
+        if (staffPatch.email && staffPatch.email === existing.email) {
+            delete staffPatch.email;
+        }
+        if (staffPatch.email) {
+            const duplicate = await staffRepository.findByEmail(salonId, staffPatch.email);
+            if (duplicate && duplicate.id !== id) {
+                throw new AppError(409, "A staff member with this email already exists", "DUPLICATE_EMAIL");
+            }
+            const existingUser = await authRepository.findUserByEmail(staffPatch.email);
+            if (existingUser && existingUser.id !== existing.user_id) {
+                if (existingUser.role === "super_admin") {
+                    throw new AppError(409, "A staff member with this email already exists", "DUPLICATE_EMAIL");
+                }
+                if (existingUser.role === "salon_owner" || existingUser.role === "admin") {
+                    throw new AppError(
+                        409,
+                        `This email already exists as the ${existingUser.role === "salon_owner" ? "salon owner" : "admin"} and cannot be added as a staff member.`,
+                        "EMAIL_IS_OWNER_OR_ADMIN",
+                    );
+                }
+                throw new AppError(409, "A staff member with this email already exists", "DUPLICATE_EMAIL");
+            }
+        }
 
         // Create any embedded blocked times
         const createdBlockedTimes: any[] = [];
@@ -211,6 +257,15 @@ export const staffService = {
                 passwordHash = await bcrypt.hash(staffPatch.password, 10);
             }
             updated = await staffRepository.update(id, salonId, staffPatch, passwordHash);
+
+            // Email just changed on an existing login-linked account — keep the
+            // `users` row (which login looks up by email) in sync, otherwise the
+            // staff member would be locked out under their old address.
+            if (staffPatch.email && existing.user_id) {
+                await authRepository.updateUserBasics(existing.user_id, {
+                    fullName: null, avatarUrl: null, email: staffPatch.email,
+                });
+            }
 
             // A password was just set for this staff member — make sure a login-
             // capable `users` row actually exists and is linked. Without this,
@@ -319,9 +374,6 @@ export const staffService = {
         const REQUIRED_COLUMN_ALIASES: Record<string, string[]> = {
             Name: ["Name", "name"],
             Contact: ["Contact", "contact"],
-            Email: ["Email", "email"],
-            Gender: ["Gender", "gender"],
-            "DOJ(dd-mm-YYYY)": ["DOJ(dd-mm-YYYY)", "DOJ", "doj"],
         };
         if (rows.length > 0) {
             const headers = new Set(Object.keys(rows[0]));
@@ -422,14 +474,20 @@ export const staffService = {
                         if (!fullName) fieldErrors.push({ field: "Name", message: "Name is required" });
                         if (!phoneRaw) fieldErrors.push({ field: "Contact", message: "Contact is required" });
                         else if (!isValidPhone(phoneRaw)) fieldErrors.push({ field: "Contact", message: "Contact number is invalid" });
-                        if (!email) fieldErrors.push({ field: "Email", message: "Email is required" });
-                        else if (!EMAIL_RE.test(email)) fieldErrors.push({ field: "Email", message: "Invalid email format" });
-                        if (!genderRaw) fieldErrors.push({ field: "Gender", message: "Gender is required" });
-                        else if (!VALID_GENDERS.has(genderRaw.toLowerCase())) fieldErrors.push({ field: "Gender", message: "Invalid Gender — must be Male, Female, or Other" });
+                        // Email is optional — a row with no email is imported
+                        // with no login capability (same rule as Add/Edit Staff
+                        // and staffService.create(), which already skips
+                        // invitation/user-account setup entirely when there's
+                        // no email). If a value IS given, it must be valid.
+                        if (email && !EMAIL_RE.test(email)) fieldErrors.push({ field: "Email", message: "Invalid email format" });
+                        // Gender is optional; only checked against the allowed
+                        // set when a value is actually provided.
+                        if (genderRaw && !VALID_GENDERS.has(genderRaw.toLowerCase())) fieldErrors.push({ field: "Gender", message: "Invalid Gender — must be Male, Female, or Other" });
 
+                        // DOJ is optional — only Name and Contact are mandatory. If a
+                        // value IS given, it must still be a valid date.
                         let joined_date: string | null = null;
-                        if (!dojRaw) fieldErrors.push({ field: "DOJ", message: "DOJ is required" });
-                        else {
+                        if (dojRaw) {
                             joined_date = parseDate(dojRaw);
                             if (!joined_date) fieldErrors.push({ field: "DOJ", message: "Invalid date format. Expected dd-mm-YYYY" });
                         }

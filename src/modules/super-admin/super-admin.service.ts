@@ -311,7 +311,7 @@ export const superAdminService = {
 
   // ── USERS ─────────────────────────────────────────────────────────────────────
 
-  async createUser(data: { first_name: string; last_name?: string; email: string; password: string; phone?: string; role: string; business_name?: string; address?: string }) {
+  async createUser(data: { first_name: string; last_name?: string; email: string; password: string; phone?: string; role: string; business_name?: string; address?: string }, createdByUserId?: string) {
     const allowed = ["salon_owner", "admin", "staff", "client"];
     if (!allowed.includes(data.role)) throw new AppError(400, "Invalid role", "VALIDATION_ERROR");
     if (!data.email?.trim()) throw new AppError(400, "Email is required", "VALIDATION_ERROR");
@@ -329,6 +329,7 @@ export const superAdminService = {
       role: data.role,
       business_name: data.business_name?.trim(),
       address: data.address?.trim(),
+      createdByUserId: createdByUserId?.trim() || undefined,
     });
 
     // Send credentials email (fire-and-forget — don't fail account creation if mail fails)

@@ -2,6 +2,7 @@ import { Router } from 'express'
 import multer from 'multer'
 import { authMiddleware } from '../../../../middleware/auth.middleware'
 import { roleMiddleware } from '../../../../middleware/role.middleware'
+import { requirePermission, requireAnyPermission } from '../../../../middleware/permission.middleware'
 import { templatesController } from './templates.controller'
 import { validateCreateTemplate } from './templates.validator'
 
@@ -9,12 +10,21 @@ const router = Router()
 // 16MB — Meta's largest template-header media cap (video); per-type caps
 // (image 5MB, document 10MB) are enforced in validateCreateTemplate.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 16 * 1024 * 1024 } })
+const ownerAdminStaff = roleMiddleware('salon_owner', 'admin', 'staff')
+const viewTemplates = requirePermission('view_templates')
+const addTemplate = requirePermission('add_template')
+const editTemplate = requirePermission('edit_template')
+const deleteTemplate = requirePermission('delete_template')
+// The Marketing Dashboard (view_marketing_dashboard) lists templates as
+// part of its overview — same cross-module read dependency as the
+// campaigns list above. Scoped to just the list route the dashboard calls.
+const viewTemplatesOrDashboard = requireAnyPermission(['view_templates', 'view_marketing_dashboard'])
 
 // GET /api/v1/templates
 router.get(
   '/',
   authMiddleware,
-  roleMiddleware('salon_owner', 'admin'),
+  ownerAdminStaff, viewTemplatesOrDashboard,
   templatesController.getAll
 )
 
@@ -22,7 +32,7 @@ router.get(
 router.get(
   '/:id',
   authMiddleware,
-  roleMiddleware('salon_owner', 'admin'),
+  ownerAdminStaff, viewTemplates,
   templatesController.getById
 )
 
@@ -30,7 +40,7 @@ router.get(
 router.post(
   '/',
   authMiddleware,
-  roleMiddleware('salon_owner', 'admin'),
+  ownerAdminStaff, addTemplate,
   upload.single('headerFile'),
   validateCreateTemplate,
   templatesController.create
@@ -40,7 +50,7 @@ router.post(
 router.patch(
   '/:id/media',
   authMiddleware,
-  roleMiddleware('salon_owner', 'admin'),
+  ownerAdminStaff, editTemplate,
   upload.single('headerFile'),
   templatesController.fixMedia
 )
@@ -49,7 +59,7 @@ router.patch(
 router.post(
   '/:id/sync',
   authMiddleware,
-  roleMiddleware('salon_owner', 'admin'),
+  ownerAdminStaff, editTemplate,
   templatesController.syncStatus
 )
 
@@ -57,14 +67,14 @@ router.post(
 router.delete(
   '/:id',
   authMiddleware,
-  roleMiddleware('salon_owner', 'admin'),
+  ownerAdminStaff, deleteTemplate,
   templatesController.delete
 )
 // POST /api/v1/templates/:id/favorite — toggle favorite
 router.post(
   '/:id/favorite',
   authMiddleware,
-  roleMiddleware('salon_owner', 'admin'),
+  ownerAdminStaff, viewTemplates,
   templatesController.toggleFavorite
 )
 

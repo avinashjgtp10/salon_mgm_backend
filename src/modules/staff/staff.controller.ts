@@ -45,6 +45,8 @@ export const staffController = {
         employment_type: req.query.employment_type as any,
         is_active: req.query.is_active !== undefined ? req.query.is_active === "true" : undefined,
         branch_id: req.query.branch_id ? String(req.query.branch_id) : undefined,
+        allow_calendar_bookings: req.query.allow_calendar_bookings !== undefined
+          ? req.query.allow_calendar_bookings === "true" : undefined,
         sort_by: req.query.sort_by as any,
         sort_order: req.query.sort_order as any,
       };
@@ -212,6 +214,35 @@ export const staffController = {
           const sheetName = wb.SheetNames[0];
           if (!sheetName) throw new AppError(400, "Excel file has no sheets", "VALIDATION_ERROR");
           rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" });
+          // A DOJ/DOB cell formatted as an actual Excel date (rather than typed
+          // as literal "dd-mm-YYYY" text) comes back from sheet_to_json as a JS
+          // Date or a numeric day-serial, neither of which staffService's
+          // dd-mm-YYYY string parser understands — normalize those columns to
+          // the expected string format here, before validation ever sees them.
+          const DATE_COLUMN_ALIASES = ["DOJ(dd-mm-YYYY)", "DOJ", "doj", "DOB(dd-mm-YYYY)", "DOB", "dob"];
+          const pad2 = (n: number) => String(n).padStart(2, "0");
+          const toDDMMYYYY = (val: unknown): unknown => {
+            if (val instanceof Date && !isNaN(val.getTime())) {
+              return `${pad2(val.getDate())}-${pad2(val.getMonth() + 1)}-${val.getFullYear()}`;
+            }
+            if (typeof val === "number") {
+              // Excel serial date (days since 1899-12-30) — only numbers in a
+              // plausible date range are converted; anything else is left as-is
+              // so a genuinely numeric column mapped by mistake isn't mangled.
+              const parsed = XLSX.SSF.parse_date_code(val);
+              if (parsed && parsed.y > 1900 && parsed.y < 2200) {
+                return `${pad2(parsed.d)}-${pad2(parsed.m)}-${parsed.y}`;
+              }
+            }
+            return val;
+          };
+          rows = rows.map((row) => {
+            const next = { ...row };
+            for (const col of DATE_COLUMN_ALIASES) {
+              if (col in next) next[col] = toDDMMYYYY(next[col]);
+            }
+            return next;
+          });
         }
       } catch (parseErr) {
         if (parseErr instanceof AppError) throw parseErr;

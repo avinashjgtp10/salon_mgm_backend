@@ -135,9 +135,11 @@ export async function autoCreatePackagesForBill(
               const svc = await servicesRepository.findById(svcId, ctx.salonId);
               services.push({ serviceId: svcId, serviceName: svc?.name ?? "Service", totalSessions: 1, price: perServicePrice });
             }
-            discount = combo.discountType === "fixed"
-              ? combo.discountValue
-              : parseFloat((basePrice * combo.discountValue / 100).toFixed(2));
+            // basePrice here is already what was actually billed (item.price,
+            // set by usePackageData.ts/AppointmentModal.tsx's own
+            // basePrice-minus-discount calculation) — re-applying the combo's
+            // discount on top of it would double-discount this record
+            // relative to what the client was actually charged.
           }
         }
 

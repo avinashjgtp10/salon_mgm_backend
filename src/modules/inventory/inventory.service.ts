@@ -64,7 +64,7 @@ export const suppliersService = {
         return suppliersRepository.listPaginatedWithBalance(salonId, page, limit, filters);
     },
 
-    async listLocations(salonId: string): Promise<{ cities: string[]; states: string[] }> {
+    async listFilterOptions(salonId: string): Promise<{ cities: string[]; states: string[] }> {
         return suppliersRepository.listDistinctLocations(salonId);
     },
 
