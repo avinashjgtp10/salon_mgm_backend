@@ -208,14 +208,33 @@ export const staffService = {
         // Split out blocked_times — handled separately, not a staff table column
         const { blocked_times: blockedTimesToCreate, ...staffPatch } = patch as any;
 
-        // Email is immutable once a staff member exists — the Edit Staff screen
-        // shows it read-only, but this drops it here too so the API itself can't
-        // be used to change it regardless of what a client sends. Deleting
-        // (rather than validating-and-rejecting) keeps the update endpoint
-        // tolerant of clients that still echo the unchanged email back, and the
-        // password-setup branch below falls back to `existing.email` once this
-        // is gone from staffPatch.
-        delete staffPatch.email;
+        // Email is now editable from the Edit Staff screen. Only act on it when
+        // it's actually changing — this keeps clients that still echo the
+        // unchanged email back from tripping the uniqueness check against
+        // themselves, and avoids pointless writes to the linked `users` row.
+        if (staffPatch.email && staffPatch.email === existing.email) {
+            delete staffPatch.email;
+        }
+        if (staffPatch.email) {
+            const duplicate = await staffRepository.findByEmail(salonId, staffPatch.email);
+            if (duplicate && duplicate.id !== id) {
+                throw new AppError(409, "A staff member with this email already exists", "DUPLICATE_EMAIL");
+            }
+            const existingUser = await authRepository.findUserByEmail(staffPatch.email);
+            if (existingUser && existingUser.id !== existing.user_id) {
+                if (existingUser.role === "super_admin") {
+                    throw new AppError(409, "A staff member with this email already exists", "DUPLICATE_EMAIL");
+                }
+                if (existingUser.role === "salon_owner" || existingUser.role === "admin") {
+                    throw new AppError(
+                        409,
+                        `This email already exists as the ${existingUser.role === "salon_owner" ? "salon owner" : "admin"} and cannot be added as a staff member.`,
+                        "EMAIL_IS_OWNER_OR_ADMIN",
+                    );
+                }
+                throw new AppError(409, "A staff member with this email already exists", "DUPLICATE_EMAIL");
+            }
+        }
 
         // Create any embedded blocked times
         const createdBlockedTimes: any[] = [];
@@ -238,6 +257,15 @@ export const staffService = {
                 passwordHash = await bcrypt.hash(staffPatch.password, 10);
             }
             updated = await staffRepository.update(id, salonId, staffPatch, passwordHash);
+
+            // Email just changed on an existing login-linked account — keep the
+            // `users` row (which login looks up by email) in sync, otherwise the
+            // staff member would be locked out under their old address.
+            if (staffPatch.email && existing.user_id) {
+                await authRepository.updateUserBasics(existing.user_id, {
+                    fullName: null, avatarUrl: null, email: staffPatch.email,
+                });
+            }
 
             // A password was just set for this staff member — make sure a login-
             // capable `users` row actually exists and is linked. Without this,
