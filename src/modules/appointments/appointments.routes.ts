@@ -23,15 +23,22 @@ router.get("/:id", authMiddleware, ownerAdminStaff, requirePermission("view_appo
 router.patch("/:id", authMiddleware, ownerAdminStaff, requirePermission("edit_appointment"), validateUpdateAppointment, appointmentsController.update);
 router.post("/:id/cancel", authMiddleware, roleMiddleware("salon_owner", "admin", "staff", "client"), requirePermission("cancel_appointment"), appointmentsController.cancel);
 router.delete("/:id", authMiddleware, ownerAdminStaff, requirePermission("delete_appointment"), appointmentsController.delete);
-// Independent from Quick Sale's create_sales — a staff member can be able
-// to record payment on a Calendar appointment without having Quick Sale
-// access, and vice versa (see the Calendar permissions ticket).
-//
 // Gated by edit_appointment ("Edit & Payment Appointment"), not
 // create_appointment ("Create Booking Appointment") — the Calendar
 // permissions rename ticket split the two apart so booking a brand-new
 // appointment never implies the ability to record a payment on one.
-router.post("/:id/checkout", authMiddleware, ownerAdminStaff, requirePermission("edit_appointment"), validateCheckoutAppointment, appointmentsController.checkout);
+//
+// create_sales is OR'd in because Quick Sale is a walk-in appointment under
+// the hood: after a Quick Sale payment settles, usePayment.ts fires this
+// endpoint so commission calculation runs and the appointment is marked
+// completed (payments.service.ts creates the sales row but deliberately
+// stops short of both). Without it, a staff member who can bill a Quick
+// Sale but has no Calendar access got a spurious "edit_appointment"
+// Permission Required popup on every completed sale — the payment itself
+// had already succeeded — and commission silently never fired for them.
+// Consistent with create_sales' own catalog description, "Create, edit and
+// checkout sales".
+router.post("/:id/checkout", authMiddleware, ownerAdminStaff, requireAnyPermission(["edit_appointment", "create_sales"]), validateCheckoutAppointment, appointmentsController.checkout);
 router.get("/:id/receipt-pdf", authMiddleware, ownerAdminStaff, requirePermission("view_payment_details"), appointmentsController.getReceiptPdf);
 
 export default router;
