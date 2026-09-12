@@ -46,6 +46,13 @@ export interface CreateClientPackageDTO {
   basePrice:      number;
   gstPercentage:  number;
   discount:       number;
+  /** Optional override for the computed (basePrice − discount + gstAmount)
+   *  total — pass the exact figure the caller displayed/confirmed (e.g. the
+   *  "Total amount" row on the Sell Package form) so what was shown to the
+   *  user is guaranteed to be what gets saved, immune to any future rounding-
+   *  order drift between this formula and wherever the caller renders it.
+   *  Omit to keep the normal behavior of deriving it here. */
+  totalAmount?:   number;
   paymentMethod:  string;
   /** Method -> amount breakdown, present only when paymentMethod === "split". */
   splitDetails?:  Record<string, number>;
@@ -104,6 +111,8 @@ export interface UpdateClientPackageDTO {
   basePrice?:      number;
   gstPercentage?:  number;
   discount?:       number;
+  /** See CreateClientPackageDTO.totalAmount — same override behavior. */
+  totalAmount?:    number;
   services?: Array<{
     serviceId:      string;
     serviceName?:   string;
