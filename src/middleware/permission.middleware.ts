@@ -291,7 +291,19 @@ const DEFAULT_STAFF_PERMS: Record<string, boolean> = {
     receive_order: false,
     download_order_pdf: false,
     view_booking: true,
-    manage_booking: false,
+    // Online Booking Channels ticket — per-channel View toggles layered on
+    // top of view_booking, plus a manage_booking split. manage_booking is
+    // gone entirely (its whole scope was marketplace writes, which
+    // manage_marketplace now covers 1:1); manage_link_builder is a brand
+    // new gate for previously-ungated routes. All new keys default false,
+    // same convention as every other permission added this project (owner
+    // grants explicitly).
+    view_marketplace: false,
+    manage_marketplace: false,
+    view_reserve_with_google: false,
+    view_social_bookings: false,
+    view_link_builder: false,
+    manage_link_builder: false,
     view_team: true,
     add_team_member: false,
     edit_team_member: false,
@@ -429,6 +441,17 @@ const DEFAULT_STAFF_PERMS: Record<string, boolean> = {
     access_settings: false,
     manage_pos_payments: false,
     view_enquiries: true,
+    // Split from respond_enquiries (Enquiries permissions ticket) — Add and
+    // Edit are now independently toggleable, matching delete_enquiries's
+    // existing granularity.
+    add_enquiries: false,
+    edit_enquiries: false,
+    delete_enquiries: false,
+    // Notifications permission module ticket — gates the notification
+    // bell + feed page (dashboard/pages/NotificationsPage.tsx), distinct
+    // from view_settings_notifications (the Settings → Notifications
+    // preferences card).
+    view_notifications: false,
     view_cash_management: false,
     open_counter: false,
     close_counter: false,
