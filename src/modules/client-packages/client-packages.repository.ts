@@ -249,7 +249,12 @@ export const clientPackagesRepository = {
       const c           = clientRes.rows[0];
       const clientName  = `${c.first_name} ${c.last_name ?? ""}`.trim();
       const gstAmount   = parseFloat(((dto.basePrice - dto.discount) * dto.gstPercentage / 100).toFixed(2));
-      const totalAmount = parseFloat((dto.basePrice - dto.discount + gstAmount).toFixed(2));
+      // Trust an explicitly-passed total (the exact figure the caller showed
+      // the user) over re-deriving it — the formula below is only a fallback
+      // for callers that don't send one.
+      const totalAmount = dto.totalAmount !== undefined
+        ? parseFloat(dto.totalAmount.toFixed(2))
+        : parseFloat((dto.basePrice - dto.discount + gstAmount).toFixed(2));
       const pkgId       = uuidv4();
       const paidSoFar   = parseFloat(
         (totalAmount * Math.min(1, Math.max(0, dto.paidFraction ?? 1))).toFixed(2),
@@ -368,7 +373,7 @@ export const clientPackagesRepository = {
       if (dto.expiryDate    !== undefined) { updates.push(`expiry_date = $${idx++}`);      values.push(dto.expiryDate); }
       if (dto.paymentMethod !== undefined) { updates.push(`payment_method = $${idx++}`);  values.push(dto.paymentMethod); }
 
-      if (dto.basePrice !== undefined || dto.gstPercentage !== undefined || dto.discount !== undefined) {
+      if (dto.basePrice !== undefined || dto.gstPercentage !== undefined || dto.discount !== undefined || dto.totalAmount !== undefined) {
         const cur = await client.query(
           `SELECT base_price, gst_percentage, discount FROM client_packages WHERE id = $1 AND salon_id = $2`,
           [id, salonId],
@@ -379,7 +384,12 @@ export const clientPackagesRepository = {
         const gstPct = dto.gstPercentage ?? parseFloat(row.gst_percentage);
         const disc   = dto.discount      ?? parseFloat(row.discount);
         const gstAmt = parseFloat(((base - disc) * gstPct / 100).toFixed(2));
-        const total  = parseFloat((base - disc + gstAmt).toFixed(2));
+        // Same override as create() — trust an explicitly-passed total over
+        // re-deriving it, so the figure shown on-screen at edit time is what
+        // gets saved even if it disagrees with fresh rounding.
+        const total  = dto.totalAmount !== undefined
+          ? parseFloat(dto.totalAmount.toFixed(2))
+          : parseFloat((base - disc + gstAmt).toFixed(2));
 
         updates.push(`base_price = $${idx++}`);     values.push(base);
         updates.push(`gst_percentage = $${idx++}`); values.push(gstPct);
