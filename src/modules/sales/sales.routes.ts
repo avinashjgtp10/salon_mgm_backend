@@ -19,14 +19,14 @@ router.get("/export", authMiddleware, ownerAdminStaff, requirePermission("view_s
 // upload can write thousands of historical financial records at once and has
 // a materially larger blast radius than a single staff-entered sale) AND the
 // system-wide import_file permission. view_settings_bulk_billing_import
-// (Settings permissions ticket — gates opening the section itself) is OR'd
-// into EACH of the two checks so either the original AND-pair or the new
-// single key alone satisfies both — (import_sales AND import_file) OR
-// view_settings_bulk_billing_import, expressed as two chained ORs since
-// middleware only AND-chains, not OR-across-pairs.
+// (Settings permissions ticket — gates opening the section itself) is still
+// OR'd into the import_sales check as an alternative entry point, but
+// import_file (System) is now a global master gate (Global Download
+// Switches ticket) — it must be on unconditionally, with no bypass, or
+// nothing imports anywhere regardless of any other key.
 router.post("/import", authMiddleware, ownerAdminStaff,
     requireAnyPermission(["import_sales", "view_settings_bulk_billing_import"]),
-    requireAnyPermission(["import_file", "view_settings_bulk_billing_import"]),
+    requirePermission("import_file"),
     upload.single("file"), salesController.import);
 router.get("/init", authMiddleware, ownerAdminStaff, requirePermission("create_sales"), salesController.getInit);
 router.get("/staff/:staffId/items", authMiddleware, ownerAdminStaff, requirePermission("view_sales"), salesController.listItemsByStaff);
