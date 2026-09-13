@@ -21,10 +21,16 @@
 //   2. Client/staff matching auto-creates on no match (client: phone/name +
 //      normal onboarding fields; staff: name only, everything else left
 //      genuinely null rather than fabricated) — see the Client/Staff blocks
-//      below for why those two are treated differently. Staff name matching
-//      is normalized (trim + lowercase + collapsed whitespace) specifically
-//      so a typo/spacing variant of an existing name reuses that staff
-//      member instead of silently creating a duplicate.
+//      below for why those two are treated differently. Client and staff
+//      name matching are both normalized (trim + lowercase + collapsed
+//      whitespace, normalizePersonName) and client phone matching uses
+//      clientPhoneKey — the SAME key the create-time duplicate guard in
+//      clients.repository.ts uses — specifically so a typo/spacing variant
+//      of an existing name, or a "+91…" vs bare-10-digit spelling of an
+//      existing number, reuses that record instead of silently creating a
+//      duplicate. Both auto-create paths also seed the lookup maps in
+//      dry_run as well as on commit, so the preview counts distinct people
+//      rather than rows.
 //   3. A Service/Product cell — and, positionally matched to it, the Staff
 //      cell — can each list multiple items/names separated by commas
 //      ("HAIR CUT LADIES, LOREAL SPA LADIES"). One Excel row is still
@@ -44,6 +50,7 @@ import { tipCalculationService } from "../tips/tipCalculation.service";
 import { stockLedgerService } from "../inventory/stock-ledger.service";
 import { clientsService } from "../clients/clients.service";
 import { CreateClientBody } from "../clients/clients.types";
+import { clientPhoneKey } from "../clients/clients.phone";
 import { staffRepository } from "../staff/staff.repository";
 import { appointmentsService } from "../appointments/appointments.service";
 import { appointmentsRepository } from "../appointments/appointments.repository";
@@ -289,37 +296,43 @@ export const salesImportService = {
             pool.query(`SELECT id, name FROM products WHERE salon_id = $1`, [salonId]),
         ]);
 
+        // Collapses internal whitespace too (not just case + trim) — without
+        // this, "Priya  Sharma" (stray double space, a common paste artifact
+        // in real sheets) keyed differently than "Priya Sharma" and matched
+        // nothing, so every mis-spaced repeat of an existing person's name
+        // silently created a brand-new duplicate row instead of reusing the
+        // real one. Mirrors the services/products name maps just below, which
+        // already normalize this way. Shared by the client and staff maps —
+        // the client map keyed on a bare `name.toLowerCase()` and so still had
+        // the exact double-space hole the staff map was fixed for.
+        function normalizePersonName(name: string): string {
+            return name.trim().toLowerCase().replace(/\s+/g, " ");
+        }
+
         const clientsByPhone = new Map<string, { id: string; name: string }[]>();
         const clientsByName = new Map<string, { id: string; name: string }[]>();
         for (const c of clientRows.rows) {
             const name = String(c.full_name ?? "").trim();
-            const phoneDigits = String(c.phone_number ?? "").replace(/[\s\-().]/g, "");
-            if (phoneDigits) {
-                const arr = clientsByPhone.get(phoneDigits) ?? [];
-                arr.push({ id: c.id, name }); clientsByPhone.set(phoneDigits, arr);
+            // clientPhoneKey (clients.phone.ts) — the same key the create-time
+            // duplicate guard uses, so a client already on file as
+            // "+919876543210" matches a sheet cell of "9876543210" rather than
+            // being created a second time under the same real number.
+            const phoneKey = clientPhoneKey(c.phone_number);
+            if (phoneKey) {
+                const arr = clientsByPhone.get(phoneKey) ?? [];
+                arr.push({ id: c.id, name }); clientsByPhone.set(phoneKey, arr);
             }
             if (name) {
-                const key = name.toLowerCase();
+                const key = normalizePersonName(name);
                 const arr = clientsByName.get(key) ?? [];
                 arr.push({ id: c.id, name }); clientsByName.set(key, arr);
             }
         }
 
-        // Collapses internal whitespace too (not just case + trim) — without
-        // this, "Priya  Sharma" (stray double space, a common paste artifact
-        // in real sheets) keyed differently than "Priya Sharma" and matched
-        // nothing, so every mis-spaced repeat of an existing staff member's
-        // name silently created a brand-new duplicate staff row instead of
-        // reusing the real one. Mirrors the services/products name maps just
-        // below, which already normalize this way.
-        function normalizeStaffName(name: string): string {
-            return name.trim().toLowerCase().replace(/\s+/g, " ");
-        }
-
         const staffByName = new Map<string, { id: string; name: string }[]>();
         for (const s of staffRows.rows) {
             const name = `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim();
-            const key = normalizeStaffName(name);
+            const key = normalizePersonName(name);
             if (!key) continue;
             const arr = staffByName.get(key) ?? [];
             arr.push({ id: s.id, name }); staffByName.set(key, arr);
@@ -380,12 +393,12 @@ export const salesImportService = {
                     continue;
                 }
                 let matchedClient: { id: string; name: string } | undefined;
-                const clientPhoneDigits = row.clientPhone ? String(row.clientPhone).replace(/[\s\-().]/g, "") : null;
+                const clientPhoneDigits = clientPhoneKey(row.clientPhone) || null;
                 if (clientPhoneDigits) {
                     matchedClient = (clientsByPhone.get(clientPhoneDigits) ?? [])[0];
                 }
                 if (!matchedClient && row.clientName) {
-                    const nameCandidates = clientsByName.get(row.clientName.trim().toLowerCase()) ?? [];
+                    const nameCandidates = clientsByName.get(normalizePersonName(row.clientName)) ?? [];
                     if (nameCandidates.length > 1) {
                         fail(`Multiple clients named "${row.clientName}" found`, "Add a Client Phone column to disambiguate.");
                         continue;
@@ -412,23 +425,31 @@ export const salesImportService = {
                             const createdClient = await clientsService.create({
                                 first_name: firstName,
                                 last_name: lastName,
+                                // clientPhoneDigits is already clientPhoneKey-
+                                // normalized, so what lands in the column is a
+                                // bare local number — not the "+91…" the sheet
+                                // may have carried, which would otherwise be
+                                // stored alongside a "+91" country code too.
                                 phone_country_code: clientPhoneDigits ? "+91" : null,
                                 phone_number: clientPhoneDigits || null,
                             } as CreateClientBody, salonId);
                             matchedClient = { id: createdClient.id, name: (createdClient as any).full_name ?? row.clientName.trim() };
                             result.new_clients++;
-                            // Cache immediately so a later row in the same
-                            // sheet referencing this same client (by phone or
-                            // by name) reuses it instead of creating a
-                            // second, duplicate client record.
-                            const nameKey = row.clientName.trim().toLowerCase();
-                            clientsByName.set(nameKey, [matchedClient]);
-                            if (clientPhoneDigits) clientsByPhone.set(clientPhoneDigits, [matchedClient]);
                         } catch (createErr: any) {
                             fail(`Could not auto-create client "${row.clientName}": ${createErr?.message || "unknown error"}`);
                             continue;
                         }
                     }
+                    // Cache immediately, on BOTH paths, so a later row in the
+                    // same sheet referencing this same client (by phone or by
+                    // name) reuses it. On the commit path that is what stops a
+                    // second, duplicate client record being written. In dry_run
+                    // it is what stops the preview counting one person once per
+                    // bill — seeding only on the commit path is why a
+                    // 12,000-row sheet covering 1,700 clients previewed as
+                    // 12,000 "new clients".
+                    clientsByName.set(normalizePersonName(row.clientName), [matchedClient!]);
+                    if (clientPhoneDigits) clientsByPhone.set(clientPhoneDigits, [matchedClient!]);
                 }
                 preview.client.matched_name = matchedClient!.name;
 
@@ -482,7 +503,7 @@ export const salesImportService = {
                 // exactly as before.
                 //
                 // Matching is by name only, normalized (trim + lowercase +
-                // collapsed whitespace — normalizeStaffName below), which is
+                // collapsed whitespace — normalizePersonName above), which is
                 // what actually prevents duplicates: a typo/spacing variant
                 // of an existing staff member's name ("Priya  Sharma" vs
                 // "Priya Sharma") now resolves to the SAME staff record
@@ -501,7 +522,7 @@ export const salesImportService = {
 
                 const matchedStaffs: { id: string; name: string }[] = [];
                 for (const staffNameInput of staffNameInputs) {
-                    const staffKey = normalizeStaffName(staffNameInput);
+                    const staffKey = normalizePersonName(staffNameInput);
                     const staffCandidates = staffByName.get(staffKey) ?? [];
                     if (staffCandidates.length > 1) {
                         fail(`Multiple staff named "${staffNameInput}" found`, "Use each staff member's exact full name to disambiguate.");
@@ -530,16 +551,20 @@ export const salesImportService = {
                                     name: `${createdStaff.first_name} ${createdStaff.last_name ?? ""}`.trim(),
                                 };
                                 result.new_staff++;
-                                // Cache so a later row in the same sheet referencing
-                                // this same staff member (including the missing-
-                                // staff placeholder) reuses it, not a duplicate.
-                                staffByName.set(staffKey, [matched]);
                             } catch (createErr: any) {
                                 fail(`Could not auto-create staff "${staffNameInput}": ${createErr?.message || "unknown error"}`);
                                 matchedStaffs.length = 0;
                                 break;
                             }
                         }
+                        // Cache on both paths so a later row in the same sheet
+                        // referencing this same staff member (including the
+                        // missing-staff placeholder) reuses it: on the commit
+                        // path that's what stops a duplicate staff row, and in
+                        // dry_run it's what stops the preview counting one
+                        // person once per bill (same defect the client cache
+                        // above had).
+                        staffByName.set(staffKey, [matched!]);
                     }
                     matchedStaffs.push(matched);
                 }
