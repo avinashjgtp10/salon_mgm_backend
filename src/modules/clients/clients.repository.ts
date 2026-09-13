@@ -13,6 +13,7 @@ import {
     MergeStrategy,
     CampaignFilterParams,
 } from "./clients.types";
+import { clientPhoneKey, CLIENT_PHONE_KEY_SQL } from "./clients.phone";
 
 const buildFullName = (first: string, last?: string | null) =>
     `${String(first || "").trim()} ${String(last || "").trim()}`.trim();
@@ -712,36 +713,52 @@ export const clientsRepository = {
         email: string | null | undefined,
         salonId: string,
     ): Promise<{ phoneMatch: Client | null; emailMatch: Client | null }> {
-        const pn = phone_number ? String(phone_number).trim() : "";
+        // Phone is compared on clientPhoneKey() (last 10 digits), not as a raw
+        // string — an existing "+919876543210" and an incoming "9876543210" are
+        // the same client, and comparing the literal strings let that duplicate
+        // straight through. CLIENT_PHONE_KEY_SQL is the SQL twin of the same
+        // function, so both sides of the comparison agree.
+        const pn = clientPhoneKey(phone_number);
         const e = email ? String(email).trim().toLowerCase() : "";
         if (!pn && !e) return { phoneMatch: null, emailMatch: null };
 
+        // One round trip, but the phone and email halves each get their own
+        // LIMIT 1 rather than sharing a single `LIMIT 2` over an OR. With the
+        // OR, two active clients already sharing a phone number could fill
+        // both slots and hide a genuine email match — which would hand the
+        // caller a raw 23505 from ux_clients_salon_email instead of the
+        // specific, field-attributable error this function exists to give.
         const { rows } = await pool.query(
-            `SELECT * FROM clients
-             WHERE salon_id = $1 AND is_active = true
-               AND (
-                 ($2 != '' AND TRIM(phone_number) = $2)
-                 OR ($3 != '' AND LOWER(TRIM(email)) = $3)
-               )
-             LIMIT 2`,
+            `(SELECT * FROM clients
+              WHERE salon_id = $1 AND is_active = true
+                AND $2 != '' AND ${CLIENT_PHONE_KEY_SQL} = $2
+              LIMIT 1)
+             UNION ALL
+             (SELECT * FROM clients
+              WHERE salon_id = $1 AND is_active = true
+                AND $3 != '' AND LOWER(TRIM(email)) = $3
+              LIMIT 1)`,
             [salonId, pn, e]
         );
 
         let phoneMatch: Client | null = null;
         let emailMatch: Client | null = null;
         for (const row of rows) {
-            if (!phoneMatch && pn && String(row.phone_number ?? "").trim() === pn) phoneMatch = row;
+            if (!phoneMatch && pn && clientPhoneKey(row.phone_number) === pn) phoneMatch = row;
             if (!emailMatch && e && String(row.email ?? "").trim().toLowerCase() === e) emailMatch = row;
         }
         return { phoneMatch, emailMatch };
     },
 
     async findDuplicatesByPhone(phone_number: string, salonId: string): Promise<Client[]> {
+        // Same clientPhoneKey() comparison as the create-time guard above —
+        // otherwise the duplicate finder can't surface the very pairs that
+        // format drift created ("+91…" next to a bare 10-digit number).
         const { rows } = await pool.query(
             `SELECT * FROM clients
-             WHERE TRIM(phone_number) = $1 AND salon_id = $2 AND is_active = true
+             WHERE ${CLIENT_PHONE_KEY_SQL} = $1 AND salon_id = $2 AND is_active = true
              ORDER BY created_at ASC`,
-            [phone_number.trim(), salonId]
+            [clientPhoneKey(phone_number), salonId]
         );
         return rows as Client[];
     },
