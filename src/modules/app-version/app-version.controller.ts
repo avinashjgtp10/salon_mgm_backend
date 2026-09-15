@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from "express";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { appVersionService, compareVersions } from "./app-version.service";
@@ -103,6 +104,38 @@ const parseReleaseNotes = (value: unknown): ReleaseNote[] => {
 };
 
 export const appVersionController = {
+  async announceRelease(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const secret = process.env.APP_RELEASE_TOKEN;
+      if (!secret || secret.length < 32) {
+        throw new AppError(503, "Release credential is not configured", "RELEASE_DISABLED");
+      }
+      const authorization = req.get("authorization") ?? "";
+      const token = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
+      const digest = (value: string) => createHash("sha256").update(value).digest();
+      if (!token || !timingSafeEqual(digest(token), digest(secret))) {
+        throw new AppError(401, "Invalid release credential", "UNAUTHORIZED");
+      }
+      const body: unknown = req.body;
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        throw new AppError(400, "A release object is required", "VALIDATION_ERROR");
+      }
+      const raw = body as Record<string, unknown>;
+      if (Object.keys(raw).some((key) => !["latest_version", "play_release_confirmed"].includes(key)) ||
+          raw.play_release_confirmed !== true) {
+        throw new AppError(400, "Only latest_version and play_release_confirmed=true are accepted", "VALIDATION_ERROR");
+      }
+      const version = raw.latest_version;
+      if (typeof version !== "string" || version.length > 32 ||
+          !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version) ||
+          !version.split(".").every((part) => Number.isSafeInteger(Number(part)))) {
+        throw new AppError(400, "latest_version must be a stable versionName such as 1.0.1", "VALIDATION_ERROR");
+      }
+      const data = await appVersionService.announceProductionAndroidRelease(version);
+      sendSuccess(res, 200, data, "Production Android release announcement saved");
+    } catch (err) { next(err); }
+  },
+
   // PUBLIC — no authMiddleware. The mobile app checks for a mandatory update on
   // cold start, before login; requiring a token would stop the check firing in
   // exactly the case it exists for (a client too old to authenticate).

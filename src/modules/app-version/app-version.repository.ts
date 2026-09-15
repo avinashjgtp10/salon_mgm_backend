@@ -1,4 +1,5 @@
 import pool from "../../config/database";
+import { AppError } from "../../middleware/error.middleware";
 import {
   AppEnvironment,
   AppPlatform,
@@ -7,8 +8,39 @@ import {
 } from "./app-version.types";
 
 export const appVersionRepository = {
-  // The lookup is always explicit on BOTH platform and environment — a QA build
-  // must never be able to fall back onto the production row.
+  async advanceProductionAndroidVersion(
+    version: string,
+    shouldAdvance: (row: AppVersionRow) => boolean,
+  ): Promise<AppVersionRow> {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      // Compare after locking: simultaneous announcements cannot downgrade.
+      const { rows } = await client.query<AppVersionRow>(
+        "SELECT * FROM app_versions WHERE platform = 'android' AND environment = 'production' FOR UPDATE",
+      );
+      const row = rows[0];
+      if (!row) {
+        throw new AppError(409, "Initialize the existing production Android version row first", "RELEASE_UNCONFIGURED");
+      }
+      let result = row;
+      if (shouldAdvance(row)) {
+        const updated = await client.query<AppVersionRow>(
+          "UPDATE app_versions SET latest_version = $1, updated_at = NOW(), updated_by = NULL WHERE id = $2 RETURNING *",
+          [version, row.id],
+        );
+        result = updated.rows[0];
+      }
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  },
+
   async getByPlatformAndEnvironment(
     platform: AppPlatform,
     environment: AppEnvironment,
