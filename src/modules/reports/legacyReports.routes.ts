@@ -20,6 +20,17 @@ const guard = [
     roleMiddleware("salon_owner", "admin", "staff", "super_admin"),
     requirePermission("view_reports"),
 ];
+// Tip Report is one of the ticket's 53 individually-permissioned reports —
+// the frontend's TipReport.tsx still calls this legacy path specifically
+// (not the newer reports.routes.ts), so its own dedicated key replaces the
+// shared view_reports check on just these two routes. Every other route in
+// this file is untouched — none of them are among the 53 named reports.
+const tipReportGuard = [
+    authMiddleware,
+    subscriptionMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff", "super_admin"),
+    requirePermission("view_report_tip_report"),
+];
 
 // ======================================================
 // SALES SUMMARY
@@ -83,13 +94,13 @@ router.get(
 
 router.get(
     "/tip-report",
-    ...guard,
+    ...tipReportGuard,
     reportsController.getTipReport
 );
 
 router.get(
     "/tip-report/table",
-    ...guard,
+    ...tipReportGuard,
     reportsController.getTipReportTable
 );
 

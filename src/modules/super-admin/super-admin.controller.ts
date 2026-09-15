@@ -254,10 +254,11 @@ export const superAdminController = {
 
   // ── USERS ─────────────────────────────────────────────────────────────────────
 
-  async createUser(req: Request, res: Response, next: NextFunction) {
+  async createUser(req: Request & { user?: { userId: string } }, res: Response, next: NextFunction) {
     try {
       const { first_name, last_name, email, password, phone, role, business_name, address } = req.body;
-      const data = await superAdminService.createUser({ first_name, last_name, email, password, phone, role, business_name, address });
+      const createdByUserId = req.user?.userId ?? "";
+      const data = await superAdminService.createUser({ first_name, last_name, email, password, phone, role, business_name, address }, createdByUserId);
       return res.status(201).json({ success: true, data });
     } catch (err) { return next(err); }
   },

@@ -84,7 +84,7 @@ const DEFAULT_MANAGER_VALUE = true;
 // Full key list — must match Migration/create_permissions_system_tables.sql's
 // seed exactly, since role_permissions.permission_key has an FK to permissions.key.
 const ALL_KEYS = [
-  'view_dashboard', 'view_quick_sale', 'create_quick_sale', 'edit_quick_sale', 'delete_quick_sale',
+  'view_dashboard',
   'view_sales', 'create_sales',
   'view_calendar', 'manage_calendar',
   'view_clients', 'create_clients', 'edit_clients', 'delete_clients',

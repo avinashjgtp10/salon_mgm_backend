@@ -3,7 +3,7 @@
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
-import { requirePermission } from "../../middleware/permission.middleware";
+import { requirePermission, requireAnyPermission } from "../../middleware/permission.middleware";
 import { branchesController } from "./branches.controller";
 import {
     validateCreateBranch,
@@ -24,6 +24,13 @@ const router = Router();
 const ownerAdminStaff = roleMiddleware("salon_owner", "admin", "staff");
 const viewBranches = requirePermission("view_branches");
 const manageBranches = requirePermission("manage_branches");
+// view_branches has no Roles & Permissions toggle of its own yet (see NOTE
+// above) — Stock Ledger's Add Stock/Edit page and Product Audit's New Audit
+// flow both need the branch list purely as a picker to fill a required
+// field, not as first-class Branches-module access. OR'ing their dedicated
+// permissions in here lets a staff member use those Warehouse features
+// without needing a permission there's currently no way to grant.
+const viewBranchesOrWarehouse = requireAnyPermission(["view_branches", "stock_ledger_adjustment", "edit_stock_ledger", "create_product_audit"]);
 
 // ---------- BRANCH ----------
 router.post(
@@ -37,7 +44,7 @@ router.post(
 router.get(
     "/by-salon/:salonId",
     authMiddleware,
-    ownerAdminStaff, viewBranches,
+    ownerAdminStaff, viewBranchesOrWarehouse,
     branchesController.listBySalon
 );
 

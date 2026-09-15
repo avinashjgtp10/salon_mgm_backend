@@ -559,6 +559,7 @@ export const superAdminRepository = {
     role: string;
     business_name?: string;
     address?: string;
+    createdByUserId?: string;
   }) {
     const client = await pool.connect();
     try {
@@ -580,10 +581,20 @@ export const superAdminRepository = {
 
       if (data.business_name?.trim() && data.role === "salon_owner") {
         const slug = data.business_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") + "-" + Date.now();
-        await client.query(`
+        const { rows: salonRows } = await client.query(`
           INSERT INTO salons (owner_id, business_name, slug, address, is_active, onboarding_completed)
           VALUES ($1, $2, $3, $4, true, false)
+          RETURNING id
         `, [user.id, data.business_name.trim(), slug, data.address?.trim() ?? null]);
+
+        // New accounts default to the Pro tier so they aren't left on the
+        // implicit Basic fallback (see salon-plans.service.ts getCustomization)
+        // until a super admin manually customizes their plan.
+        await client.query(`
+          INSERT INTO salon_plan_customizations (salon_id, base_tier, updated_by)
+          VALUES ($1, 'pro', $2)
+          ON CONFLICT (salon_id) DO NOTHING
+        `, [salonRows[0].id, data.createdByUserId ?? user.id]);
       }
 
       await client.query("COMMIT");

@@ -8,6 +8,7 @@ export interface Permission {
     risk_level: "low" | "medium" | "high" | "critical";
     is_system: boolean;
     depends_on: string[] | null;
+    display_order: number | null;
     created_at: string;
 }
 

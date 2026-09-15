@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { authMiddleware } from '../../../../middleware/auth.middleware'
 import { roleMiddleware } from '../../../../middleware/role.middleware'
 import { requirePlanFeature } from '../../../../middleware/planFeature.middleware'
-import { requirePermission } from '../../../../middleware/permission.middleware'
+import { requirePermission, requireAnyPermission } from '../../../../middleware/permission.middleware'
 import { campaignsController } from './campaigns.controller'
 import { validateCreateCampaign } from './campaigns.validator'
 
@@ -13,6 +13,17 @@ const router = Router()
 const ownerAdminStaff = roleMiddleware('salon_owner', 'admin', 'staff')
 const viewCampaigns = requirePermission('view_campaigns')
 const manageCampaigns = requirePermission('create_campaigns')
+// Send Campaign (pause/resume/resend an EXISTING campaign) is its own
+// dedicated key, distinct from create_campaigns (making a brand new one).
+// edit_campaign/delete_campaign exist in the catalog for completeness (the
+// ticket asks for the toggles) but have no route to wire to — there is no
+// edit or delete action for a campaign anywhere in this app today.
+const sendCampaign = requirePermission('send_campaign')
+// The Marketing Dashboard (view_marketing_dashboard) lists recent campaigns
+// as part of its overview — same cross-module read dependency as the
+// Payroll/WhatsApp-config fixes elsewhere in this ticket. Scoped to just
+// the list route the dashboard actually calls.
+const viewCampaignsOrDashboard = requireAnyPermission(['view_campaigns', 'view_marketing_dashboard'])
 
 // featureKey "marketing" — Advance tier and up (see
 // Migration/add_feature_key_to_salon_plans.sql). See inventory.routes.ts for
@@ -21,7 +32,7 @@ const manageCampaigns = requirePermission('create_campaigns')
 router.use(authMiddleware, requirePlanFeature('marketing'))
 
 router.get('/',
-  authMiddleware, ownerAdminStaff, viewCampaigns,
+  authMiddleware, ownerAdminStaff, viewCampaignsOrDashboard,
   campaignsController.getAll
 )
 
@@ -37,17 +48,17 @@ router.post('/',
 )
 
 router.post('/:id/resend',
-  authMiddleware, ownerAdminStaff, manageCampaigns,
+  authMiddleware, ownerAdminStaff, sendCampaign,
   campaignsController.resend
 )
 
 router.post('/:id/pause',
-  authMiddleware, ownerAdminStaff, manageCampaigns,
+  authMiddleware, ownerAdminStaff, sendCampaign,
   campaignsController.pause
 )
 
 router.post('/:id/resume',
-  authMiddleware, ownerAdminStaff, manageCampaigns,
+  authMiddleware, ownerAdminStaff, sendCampaign,
   campaignsController.resume
 )
 

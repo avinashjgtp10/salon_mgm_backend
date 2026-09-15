@@ -14,7 +14,10 @@ const managePos = requirePermission('manage_pos_payments');
 // "can this staff member add/edit/delete terminals or provider credentials",
 // so reads alone also accept create_sales/manage_calendar, same OR-pattern
 // already used for Products/Clients/Staff being read from Quick Sale.
-const viewPos = requireAnyPermission(['manage_pos_payments', 'create_sales', 'manage_calendar']);
+// view_settings_pos_payments (Settings permissions ticket — gates opening
+// the POS / Payment Machine settings card itself) OR'd in alongside the
+// existing reasons a read might be allowed.
+const viewPos = requireAnyPermission(['manage_pos_payments', 'create_sales', 'manage_calendar', 'view_settings_pos_payments']);
 
 // Writes stay strictly manage_pos_payments — this is financial setup
 // (terminal/provider config, credentials), not shared display config.

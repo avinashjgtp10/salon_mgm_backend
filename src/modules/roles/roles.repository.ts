@@ -5,7 +5,7 @@ export const rolesRepository = {
     // ── Global permission catalog ───────────────────────────────────────────
     async listPermissions(): Promise<Permission[]> {
         const { rows } = await pool.query(
-            `SELECT * FROM permissions ORDER BY module, group_name NULLS FIRST, action`
+            `SELECT * FROM permissions ORDER BY module, group_name NULLS FIRST, display_order NULLS LAST, action`
         );
         return rows;
     },

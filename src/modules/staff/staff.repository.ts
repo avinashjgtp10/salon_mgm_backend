@@ -37,6 +37,47 @@ export const staffRepository = {
         const safeSortBy = ALLOWED_SORT.includes(sort_by) ? sort_by : "created_at";
         const safeSortOrder = sort_order === "ASC" ? "ASC" : "DESC";
 
+        // Staff list ordering, outermost key first:
+        //
+        //   1. Active before inactive — ALWAYS, whichever sort is chosen. A
+        //      deactivated member belongs at the bottom of the list, not
+        //      interleaved by join date or name. NULL counts as active, to
+        //      match StaffListPage.tsx's own `member.is_active ?? true`
+        //      (the column is nullable with a `true` default).
+        //   2. Manager, then Staff, then no role assigned — but only for the
+        //      default "Custom order" listing. Once someone explicitly picks
+        //      "Name (A-Z)" or "Started at", that key has to win inside the
+        //      active group, or their chosen sort looks broken.
+        //   3. The requested (or default created_at DESC) column.
+        //
+        // `roles` is joined by the OUTER query, after this subquery has already
+        // paginated — so the tier is read here with a correlated subquery
+        // rather than dragging the join inside and changing what LIMIT counts.
+        const hasExplicitSort = ALLOWED_SORT.includes(q.sort_by ?? "");
+        const orderBy = [
+            `COALESCE(is_active, TRUE) DESC`,
+            ...(hasExplicitSort ? [] : [
+                `CASE (SELECT r.name FROM roles r WHERE r.id = staff.role_id)
+                        WHEN 'Manager' THEN 0 WHEN 'Staff' THEN 1 ELSE 2 END`,
+            ]),
+            `${safeSortBy} ${safeSortOrder}`,
+        ].join(", ");
+
+        // The same ordering restated for the OUTER query, which had no ORDER BY
+        // of its own and so relied on the subquery's order surviving four LEFT
+        // JOIN LATERALs — something Postgres does not actually guarantee. The
+        // inner ORDER BY still decides WHICH rows this page contains (it drives
+        // LIMIT/OFFSET); this one makes the order they come back in
+        // deterministic. Written against the joined aliases, so the role tier
+        // is a plain CASE on r.name instead of a second correlated subquery.
+        const outerOrderBy = [
+            `COALESCE(s.is_active, TRUE) DESC`,
+            ...(hasExplicitSort ? [] : [
+                `CASE r.name WHEN 'Manager' THEN 0 WHEN 'Staff' THEN 1 ELSE 2 END`,
+            ]),
+            `s.${safeSortBy} ${safeSortOrder}`,
+        ].join(", ");
+
         const conditions: string[] = ["salon_id = $1"];
         const values: unknown[] = [salonId];
         let idx = 2;
@@ -61,7 +102,7 @@ export const staffRepository = {
                  FROM (
                    SELECT * FROM staff
                    WHERE ${where}
-                   ORDER BY ${safeSortBy} ${safeSortOrder}
+                   ORDER BY ${orderBy}
                    LIMIT $${idx} OFFSET $${idx + 1}
                  ) s
                  -- The staff list's "Role" column (StaffListPage.tsx,
@@ -114,7 +155,8 @@ export const staffRepository = {
                      '[]'::json
                    ) AS schedule
                    FROM staff_schedules ss WHERE ss.staff_id = s.id
-                 ) sch_agg ON true`,
+                 ) sch_agg ON true
+                 ORDER BY ${outerOrderBy}`,
                 [...values, limit, offset]
             ),
             pool.query(`SELECT COUNT(*)::int AS total FROM staff WHERE ${where}`, values),

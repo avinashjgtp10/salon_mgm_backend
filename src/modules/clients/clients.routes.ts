@@ -39,16 +39,24 @@ router.use(authMiddleware, requirePlanFeature("clients"));
 
 // LIST + CREATE
 router.get("/", authMiddleware, ownerAdminStaff, viewClients, validateClientsListQuery, clientsController.list);
-router.post("/", authMiddleware, ownerAdminStaff, requirePermission("edit_clients"), validateCreateClient, clientsController.create);
+router.post("/", authMiddleware, ownerAdminStaff, requirePermission("create_clients"), validateCreateClient, clientsController.create);
 
 // Avatar upload (stateless — must be BEFORE /:clientId)
 router.post("/upload-avatar", authMiddleware, ownerAdmin, uploadMiddleware.single("avatar"), clientsController.uploadAvatar);
 
 // EXPORT (same filters)
-router.get("/export", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), requireExportFormatPermission(["csv", "excel", "pdf"], "csv"), validateClientsListQuery, clientsController.export);
+// export_clients is a self-contained permission covering every export
+// format for this module. export_csv/excel/pdf (System) are now global
+// master gates, not an optional stack (Global Download Switches ticket) —
+// BOTH export_clients AND the format actually requested (via
+// requireExportFormatPermission, ?format=csv|excel|pdf) are required.
+router.get("/export", authMiddleware, ownerAdminStaff, requirePermission("export_clients"), requireExportFormatPermission(["csv", "excel", "pdf"], "csv"), validateClientsListQuery, clientsController.export);
 
-// IMPORT
-router.post("/import", authMiddleware, ownerAdmin, requirePermission("import_file"), upload.single("file"), clientsController.import);
+// IMPORT — role widened from owner/admin-only to ownerAdminStaff so
+// import_clients is actually meaningful to grant a staff member (see the
+// Clients permissions ticket). import_file (System) is now a global master
+// gate, required in addition to import_clients.
+router.post("/import", authMiddleware, ownerAdminStaff, requirePermission("import_clients"), requirePermission("import_file"), upload.single("file"), clientsController.import);
 
 // GET /api/v1/clients/duplicates?phone_number=...
 router.get("/duplicates", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), clientsController.findDuplicates);
@@ -57,10 +65,12 @@ router.get("/duplicates", authMiddleware, ownerAdminStaff, requirePermission("vi
 router.post("/merge", authMiddleware, ownerAdmin, validateMergeClients, clientsController.merge);
 router.post("/merge-duplicates", authMiddleware, ownerAdmin, clientsController.mergeAllDuplicates);
 
-// BLOCK / UNBLOCK
-router.post("/block", authMiddleware, ownerAdmin, validateBlockClients, clientsController.block);
-router.patch("/block", authMiddleware, ownerAdmin, validateBlockClients, clientsController.block);
-router.post("/unblock", authMiddleware, ownerAdmin, validateUnblockClients, clientsController.unblock);
+// BLOCK / UNBLOCK — role widened from owner/admin-only to ownerAdminStaff,
+// plus a real permission check added (previously none at all — see the
+// Clients permissions ticket).
+router.post("/block", authMiddleware, ownerAdminStaff, requirePermission("block_client"), validateBlockClients, clientsController.block);
+router.patch("/block", authMiddleware, ownerAdminStaff, requirePermission("block_client"), validateBlockClients, clientsController.block);
+router.post("/unblock", authMiddleware, ownerAdminStaff, requirePermission("block_client"), validateUnblockClients, clientsController.unblock);
 
 // SEARCH — must be BEFORE /:clientId
 router.get("/search", authMiddleware, ownerAdminStaff, viewClients, validateSearchClients, clientsController.search);
@@ -73,7 +83,7 @@ router.get(
     "/with-history-stats",
     authMiddleware,
     ownerAdminStaff,
-    requirePermission("view_clients"),
+    requirePermission("view_client_history"),
     clientsController.listWithHistoryStats
 );
 
@@ -82,7 +92,7 @@ router.get(
     "/:clientId/history",
     authMiddleware,
     ownerAdminStaff,
-    requirePermission("view_clients"),
+    requirePermission("view_client_history"),
     clientsController.getHistory
 );
 
