@@ -13,6 +13,9 @@ const router = Router();
 // mutation, so nothing is exposed beyond the published version configuration.
 router.get("/version", appVersionController.getVersion);
 
+// Separate, production-Android-only CI credential; public GET stays unchanged.
+router.post("/version/release", appVersionController.announceRelease);
+
 // Super Admin only — managing the global configuration. Same posture as
 // deployment-announcements: global reads for clients, super-admin writes.
 router.get("/versions", authMiddleware, superAdminMiddleware, appVersionController.list);
