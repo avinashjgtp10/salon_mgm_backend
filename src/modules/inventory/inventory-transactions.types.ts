@@ -12,7 +12,10 @@
 // "waste" reason. Only these two are ever actually used.
 export type InventoryTransactionReason = "consumable_usage" | "adjustment";
 
-export type InventoryTransactionReferenceType = "appointment_complete" | "appointment_adjustment" | "manual";
+// "revert" is a correction of a past consumable deduction that never actually
+// happened (Consumable History -> Revert) — distinct from "appointment_adjustment",
+// which is a genuine re-computation after an appointment was edited.
+export type InventoryTransactionReferenceType = "appointment_complete" | "appointment_adjustment" | "manual" | "revert";
 
 export type InventoryTransactionItem = {
   product_id: string;
