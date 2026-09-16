@@ -163,8 +163,13 @@ export const clientMembershipsService = {
     // at all, so any Sales/Revenue page built from those tables misses it entirely.
     // Captured outside the try so the WhatsApp trigger below (Membership
     // Purchased) can include the real invoice number without a second lookup.
+    //
+    // A complimentary assignment (dto.silent) writes NO sale: nothing was
+    // sold, and recordTransaction would burn a real invoice number on a zero-
+    // value completed sale that then shows up in Sales Summary/Detail, Daily
+    // Sheet and client revenue as a phantom transaction.
     let invoiceNumber: string | null = null;
-    try {
+    if (!dto.silent) try {
       const pricePaid = Number(membership.pricePaid || 0);
       const txn = await recordTransaction({
         salon_id:      salonId,
@@ -197,7 +202,12 @@ export const clientMembershipsService = {
       logger.error('[clientMembershipsService] Failed to auto-create sale for membership purchase:', { error: err });
     }
 
-    notifyMembershipPurchased(membership, true, invoiceNumber).catch(() => {});
+    // Same reasoning as the skipped sale above: the client never bought this,
+    // so neither the membership_purchased automation nor a purchase-receipt
+    // PDF should reach their phone. The client_memberships row itself is
+    // still written, so the tag is a first-class membership everywhere it is
+    // read (client profile, Quick Sale/Calendar client card, Member Sale).
+    if (!dto.silent) notifyMembershipPurchased(membership, true, invoiceNumber).catch(() => {});
 
     // ── Scheduled Templates: membership_expiring_7d / membership_expiring_24h ──
     if (membership.mobile && membership.expiresAt) {
