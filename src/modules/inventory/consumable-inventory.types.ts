@@ -114,6 +114,13 @@ export type UsageHistoryRow = {
   qty: number;
   direction: "deduct" | "return";
   source: string | null;
+  /** Set on a deduction once it has been reverted. NULL = still revertable. */
+  reverted_at: string | null;
+  /** Set on a 'return' row that reverses a deduction — points at that deduction. */
+  reverts_usage_id: string | null;
+  /** products.amount at read time, for the revert confirmation dialog. */
+  current_stock: number;
+  can_revert: boolean;
 };
 
 export type UsageHistoryResponse = {

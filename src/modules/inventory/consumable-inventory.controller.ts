@@ -153,6 +153,23 @@ export const consumableInventoryController = {
     } catch (err) { return next(err); }
   },
 
+  // POST /api/v1/inventory/consumables/usage-history/:id/revert
+  // Undoes a consumable deduction that never actually happened. Body may
+  // carry an optional { reason } recorded on the reversal row.
+  async revertUsage(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = getSalonId(req);
+      const userId = req.user?.userId;
+      if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+
+      const { id } = req.params as { id: string };
+      const reason = typeof req.body?.reason === "string" ? req.body.reason : undefined;
+
+      const result = await consumableInventoryService.revertUsage({ usageId: id, salonId, userId, reason });
+      return sendSuccess(res, 200, result, "Consumable deduction reverted");
+    } catch (err) { return next(err); }
+  },
+
   // GET /api/v1/inventory/consumables/:id/assigned-services
   async assignedServices(req: AuthRequest, res: Response, next: NextFunction) {
     try {

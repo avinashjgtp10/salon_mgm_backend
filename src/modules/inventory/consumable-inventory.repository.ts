@@ -365,7 +365,16 @@ export const consumableInventoryRepository = {
          cu.id, cu.created_at AS date, cu.product_id, p.name AS product_name, cu.unit,
          s.name AS service_name,
          CONCAT(st.first_name, ' ', st.last_name) AS staff_name,
-         cu.qty, cu.direction, cu.source
+         cu.qty, cu.direction, cu.source,
+         cu.reverted_at, cu.reverts_usage_id,
+         -- The dialog shows "current stock" and "stock after revert", so the
+         -- figure has to travel with the row; products.amount is the
+         -- authoritative stock, not a sum over this table.
+         COALESCE(p.amount, 0) AS current_stock,
+         -- Revertable = a deduction that has not already been undone. Computed
+         -- here so the button stops depending on the client re-deriving the
+         -- same three conditions.
+         (cu.direction = 'deduct' AND cu.reverted_at IS NULL) AS can_revert
        FROM consumable_usage cu
        JOIN products p ON p.id = cu.product_id
        LEFT JOIN services s ON s.id = cu.service_id
@@ -380,6 +389,6 @@ export const consumableInventoryRepository = {
       [...values, limit, offset]
     );
 
-    return { data: rows.map((r) => coerceRowNumerics(r, ["qty"])), total };
+    return { data: rows.map((r) => coerceRowNumerics(r, ["qty", "current_stock"])), total };
   },
 };

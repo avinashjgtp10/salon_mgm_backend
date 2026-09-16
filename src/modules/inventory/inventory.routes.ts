@@ -529,6 +529,18 @@ router.get(
     consumableInventoryController.usageHistory
 );
 
+// POST /inventory/consumables/usage-history/:id/revert
+// Registered BEFORE /consumables/:id for the same reason as the GET above.
+// Gated on adjust_consumable_stock, not view_consumable_usage: this MOVES
+// stock, so seeing the history is not enough to undo it.
+router.post(
+    "/consumables/usage-history/:id/revert",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    adjustConsumableStock,
+    consumableInventoryController.revertUsage
+);
+
 // GET /inventory/consumables/:id
 router.get(
     "/consumables/:id",
