@@ -591,8 +591,15 @@ export const salesImportService = {
                 preview.staff.matched_name = matchedStaffs.map((s) => s.name).join(", ");
 
                 // ── Amount ────────────────────────────────────────────────
-                if (row.amount === undefined || isNaN(row.amount) || row.amount <= 0) {
-                    fail("Missing or invalid amount", "Add a positive value in the Amount column.");
+                // 0 is a legitimate historical bill amount (a comped/free
+                // service, a goodwill visit, etc.) — only missing, non-
+                // numeric, or negative values are rejected. row.amount is a
+                // real `number` here (buildRow's NUMBER_FIELDS parsing
+                // already turns a blank cell into `undefined`, never `0`),
+                // so `=== undefined` correctly excludes only true "nothing
+                // was in this cell" cases, not an entered zero.
+                if (row.amount === undefined || isNaN(row.amount) || row.amount < 0) {
+                    fail("Missing or invalid amount", "Add a value (0 or greater) in the Amount column.");
                     continue;
                 }
                 const discount = row.discount && row.discount > 0 ? row.discount : 0;
