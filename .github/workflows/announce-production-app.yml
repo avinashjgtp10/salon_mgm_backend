@@ -1,0 +1,51 @@
+name: Confirm Play release and synchronize app version
+
+# Backend deployment and AAB completion are NOT Play release events.
+# Until the real Play publishing process supplies a completion signal, this
+# operator confirmation is the post-release gate. No mobile repo edits needed.
+on:
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: Exact versionName now available in Play (for example 1.0.1)
+        required: true
+        type: string
+      version_code:
+        description: Corresponding Android versionCode (for example 19)
+        required: true
+        type: string
+      build_id:
+        description: Exact EAS build UUID uploaded to com.salonox.app in Play
+        required: true
+        type: string
+      play_release_confirmed:
+        description: This release is installable by ALL users served by the production Android version row
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-android-version-sync
+  cancel-in-progress: false
+
+jobs:
+  announce:
+    if: github.ref == 'refs/heads/main' && inputs.play_release_confirmed == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Synchronize the confirmed release and verify the public API
+        env:
+          VERSION_NAME: ${{ inputs.version_name }}
+          VERSION_CODE: ${{ inputs.version_code }}
+          BUILD_ID: ${{ inputs.build_id }}
+          PLAY_RELEASE_CONFIRMED: ${{ inputs.play_release_confirmed }}
+          APP_RELEASE_TOKEN: ${{ secrets.APP_RELEASE_TOKEN }}
+        run: node scripts/announce-production-app.mjs

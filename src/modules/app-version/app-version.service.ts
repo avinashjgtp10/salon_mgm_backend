@@ -1,4 +1,5 @@
 import { appVersionRepository } from "./app-version.repository";
+import { AppError } from "../../middleware/error.middleware";
 import {
   AppEnvironment,
   AppPlatform,
@@ -111,6 +112,27 @@ export const toPublicPayload = (
 };
 
 export const appVersionService = {
+  async announceProductionAndroidRelease(version: string): Promise<AppVersionRow> {
+    return appVersionRepository.advanceProductionAndroidVersion(version, (row) => {
+      if (compareVersions(version, row.latest_version) < 0) {
+        throw new AppError(409, "A newer version is already announced", "RELEASE_DOWNGRADE");
+      }
+      if (compareVersions(version, row.minimum_supported_version) < 0) {
+        throw new AppError(409, "Release is below the supported minimum", "RELEASE_BELOW_MINIMUM");
+      }
+      let url: URL;
+      try { url = new URL(row.android_store_url ?? ""); } catch {
+        throw new AppError(409, "Configure the existing Play Store URL first", "RELEASE_STORE_URL");
+      }
+      if (url.protocol !== "https:" || url.hostname !== "play.google.com" ||
+          url.pathname !== "/store/apps/details" || url.searchParams.get("id") !== "com.salonox.app" ||
+          url.username || url.password || url.port) {
+        throw new AppError(409, "Play Store URL must target SalonOX", "RELEASE_STORE_URL");
+      }
+      return compareVersions(version, row.latest_version) > 0;
+    });
+  },
+
   async getPublicConfig(
     platform: AppPlatform,
     environment: AppEnvironment,

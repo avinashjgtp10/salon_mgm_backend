@@ -233,6 +233,16 @@ interface ImportResult {
     success: number;
     failed: number;
     skipped: number;
+    // Sum of (amount - discount) across every successful row — the actual
+    // bill/sale value, excluding tax. Was previously folded into
+    // total_billed together with tax, which made the "Bill Amount" card
+    // display Bill Amount + GST as a single figure.
+    total_bill_amount: number;
+    // Sum of the Tax column across every successful row.
+    total_tax_amount: number;
+    // total_bill_amount + total_tax_amount — kept as its own field (not
+    // derived client-side) so the three figures can never drift out of sync
+    // with what was actually summed per row. This is "Total Sale".
     total_billed: number;
     // Clients/staff that didn't match an existing record and were created
     // automatically (name-only for staff — see the Staff block below). In a
@@ -258,7 +268,8 @@ export const salesImportService = {
 
         const result: ImportResult = {
             total: 0, success: 0, failed: 0, skipped: 0,
-            total_billed: 0, new_clients: 0, new_staff: 0, duplicate_batch: false, issues: [],
+            total_bill_amount: 0, total_tax_amount: 0, total_billed: 0,
+            new_clients: 0, new_staff: 0, duplicate_batch: false, issues: [],
         };
         const previewRows: RowPreview[] = [];
 
@@ -580,8 +591,15 @@ export const salesImportService = {
                 preview.staff.matched_name = matchedStaffs.map((s) => s.name).join(", ");
 
                 // ── Amount ────────────────────────────────────────────────
-                if (row.amount === undefined || isNaN(row.amount) || row.amount <= 0) {
-                    fail("Missing or invalid amount", "Add a positive value in the Amount column.");
+                // 0 is a legitimate historical bill amount (a comped/free
+                // service, a goodwill visit, etc.) — only missing, non-
+                // numeric, or negative values are rejected. row.amount is a
+                // real `number` here (buildRow's NUMBER_FIELDS parsing
+                // already turns a blank cell into `undefined`, never `0`),
+                // so `=== undefined` correctly excludes only true "nothing
+                // was in this cell" cases, not an entered zero.
+                if (row.amount === undefined || isNaN(row.amount) || row.amount < 0) {
+                    fail("Missing or invalid amount", "Add a value (0 or greater) in the Amount column.");
                     continue;
                 }
                 const discount = row.discount && row.discount > 0 ? row.discount : 0;
@@ -598,10 +616,18 @@ export const salesImportService = {
                     paymentMethod = resolved;
                 }
 
-                const totalAmount = Math.round((row.amount - discount + tax) * 100) / 100;
+                // Bill Amount = the sale itself (amount - discount), excluding
+                // tax — Total Sale is Bill Amount + Tax Amount, computed from
+                // these same two rounded figures so the three displayed cards
+                // (Bill Amount / Tax Amount / Total Sale) always add up
+                // exactly, with no tax silently folded into Bill Amount.
+                const billAmount = Math.round((row.amount - discount) * 100) / 100;
+                const totalAmount = Math.round((billAmount + tax) * 100) / 100;
 
                 if (dry_run) {
                     result.success++;
+                    result.total_bill_amount += billAmount;
+                    result.total_tax_amount += tax;
                     result.total_billed += totalAmount;
                     preview.status = "valid";
                     if (previewRows.length < PREVIEW_ROW_CAP) previewRows.push(preview);
@@ -771,6 +797,8 @@ export const salesImportService = {
 
                 importedSaleIds.push(sale.id);
                 result.success++;
+                result.total_bill_amount += billAmount;
+                result.total_tax_amount += tax;
                 result.total_billed += totalAmount;
             } catch (err: any) {
                 fail(err?.message || "Unexpected error");

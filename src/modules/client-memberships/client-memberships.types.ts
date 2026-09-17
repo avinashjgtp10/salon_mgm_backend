@@ -87,6 +87,14 @@ export interface CreateClientMembershipDTO {
   appointmentId?: string | null;
   /** Staff member who sold this membership — feeds client_memberships.staff_id and the sales/sale_items rows recordTransaction() creates. */
   staffId?: string;
+  /** Complimentary/manual assignment (Catalog → Memberships → "Assign to
+   *  client"): the client never paid and never asked for this, so firing the
+   *  `membership_purchased` WhatsApp automation and a purchase-receipt PDF at
+   *  them would send a real customer a receipt for a ₹0 sale. Suppresses those,
+   *  and also the auto-created sales row — recordTransaction would otherwise
+   *  burn an invoice number on a zero-value completed sale that surfaces in
+   *  Sales Summary/Detail and Daily Sheet as a phantom transaction. */
+  silent?: boolean;
 }
 
 export interface ConsumeSessionDTO {
