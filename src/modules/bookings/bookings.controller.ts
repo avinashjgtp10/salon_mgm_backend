@@ -72,7 +72,8 @@ export const bookingsController = {
         try {
             const appointmentId = req.params.appointmentId as string;
             const token = String(req.body?.token || req.query.token || "");
-            const appointment = await bookingsService.cancelManagedAppointment(appointmentId, token);
+            const reason = typeof req.body?.reason === "string" ? req.body.reason.slice(0, 500) : null;
+            const appointment = await bookingsService.cancelManagedAppointment(appointmentId, token, reason);
             return sendSuccess(res, 200, appointment, "Booking cancelled successfully");
         } catch (err) {
             return next(err);

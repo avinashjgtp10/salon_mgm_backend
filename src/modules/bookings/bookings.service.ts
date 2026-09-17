@@ -1,9 +1,11 @@
 import crypto from "crypto";
 import { AppError } from "../../middleware/error.middleware";
-import { bookingsRepository } from "./bookings.repository";
+import { bookingsRepository, SALON_TIMEZONE } from "./bookings.repository";
 import { clientsRepository } from "../clients/clients.repository";
 import { generateUniqueReferralCode } from "../clients/clients.service";
 import { notificationsService } from "../notifications/notifications.service";
+import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
+import { waScheduledMessagesService } from "../whatsapp-automation/wa-scheduled-messages.service";
 import { appointmentsService } from "../appointments/appointments.service";
 import { appointmentsRepository } from "../appointments/appointments.repository";
 import { blockedTimesRepository } from "../blocked_times/blocked_times.repository";
@@ -47,6 +49,81 @@ const toMinutes = (hhmm: string): number => {
     return h * 60 + (m || 0);
 };
 
+// An appointment's `scheduled_at` is an instant; staff schedules, marketplace
+// working hours and blocked times are all local wall clock. Everything below
+// compares the two, so every instant gets converted to the salon's local date
+// and minutes-from-midnight here first. Doing this with getUTCHours() instead
+// (what this used to do) silently shifted every time by the UTC offset.
+function salonLocalParts(instant: string | Date): { dateStr: string; minutes: number } {
+    const d = instant instanceof Date ? instant : new Date(instant);
+    const parts = new Intl.DateTimeFormat("en-CA", {
+        timeZone: SALON_TIMEZONE,
+        year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit", hour12: false,
+    }).formatToParts(d).reduce<Record<string, string>>((acc, p) => {
+        if (p.type !== "literal") acc[p.type] = p.value;
+        return acc;
+    }, {});
+    // Some ICU builds render midnight as hour "24" under hour12:false.
+    const hour = Number(parts.hour) % 24;
+    return {
+        dateStr: `${parts.year}-${parts.month}-${parts.day}`,
+        minutes: hour * 60 + Number(parts.minute),
+    };
+}
+
+// Whole days between two salon-local "YYYY-MM-DD" strings (negative if `to` is
+// earlier). Parsed at UTC midnight purely as a calendar subtraction — no clock
+// arithmetic, so DST and offsets can't skew it.
+const dayDiff = (fromYMD: string, toYMD: string): number =>
+    Math.round((Date.parse(`${toYMD}T00:00:00Z`) - Date.parse(`${fromYMD}T00:00:00Z`)) / 86_400_000);
+
+type BookingPolicyInput = {
+    min_notice_hours?: number | null;
+    max_advance_days?: number | null;
+    allow_same_day_booking?: boolean | null;
+};
+
+type DateWindow =
+    | { bookable: false; reason: "PAST" | "SAME_DAY_OFF" | "TOO_FAR_AHEAD" }
+    // Minutes from the requested date's local midnight; anything at or after
+    // this is within policy. 0 means the whole day is open.
+    | { bookable: true; earliestMinute: number };
+
+// The one place a salon's booking window is decided — how soon is too soon,
+// how far ahead is too far — so the offered slot list and the submit-time
+// check can never drift apart. Everything here is calendar-day arithmetic in
+// the salon's own timezone, never the server's.
+function resolveDateWindow(dateStr: string, policy: BookingPolicyInput): DateWindow {
+    const today = salonLocalParts(new Date());
+    const daysOut = dayDiff(today.dateStr, dateStr);
+
+    if (daysOut < 0) return { bookable: false, reason: "PAST" };
+    if (daysOut === 0 && policy.allow_same_day_booking === false) {
+        return { bookable: false, reason: "SAME_DAY_OFF" };
+    }
+
+    // Maximum advance booking, counted in whole days from today: a setting of
+    // 30 on 5 Sep means 5 Oct is the last bookable date (daysOut === 30) and
+    // 6 Oct is not. A missing/0 value means "not configured" rather than "today
+    // only" — a zero here would otherwise lock every salon out of tomorrow the
+    // moment the column exists but is unset.
+    const maxAdvance = Number(policy.max_advance_days) || 0;
+    if (maxAdvance > 0 && daysOut > maxAdvance) {
+        return { bookable: false, reason: "TOO_FAR_AHEAD" };
+    }
+
+    // Minimum notice is measured from now, so on a later date this goes
+    // negative and clamps to 0 (the whole day is open); on today it also rules
+    // out slots that have already gone by, even when notice is zero.
+    const noticeMinutes = Math.max(0, Number(policy.min_notice_hours) || 0) * 60;
+    return { bookable: true, earliestMinute: Math.max(0, today.minutes + noticeMinutes - daysOut * 1440) };
+}
+
+const pad2 = (n: number) => String(n).padStart(2, "0");
+const fmtHHMM = (totalMinutes: number): string =>
+    `${pad2(Math.floor(totalMinutes / 60) % 24)}:${pad2(totalMinutes % 60)}`;
+
 function fmt12h(totalMinutes: number): string {
     const h24 = Math.floor(totalMinutes / 60);
     const m = totalMinutes % 60;
@@ -55,6 +132,33 @@ function fmt12h(totalMinutes: number): string {
     return `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
 }
 
+// A staff member's declared breaks for a date (Staff Schedule → Add Working
+// Hours → breaks), stored as jsonb like [{"start_time":"13:00:00","end_time":
+// "13:30:00"}]. These are unavailable time inside an otherwise-working day, so
+// they have to come out of the offered slots the same way a booked appointment
+// does — previously the column was written by the Web UI and read by nobody,
+// which meant a stylist on a lunch break was still bookable through it.
+type BreakRange = { start: number; end: number };
+
+function parseBreaks(raw: unknown): BreakRange[] {
+    let list: any = raw;
+    if (typeof list === "string") {
+        try { list = JSON.parse(list); } catch { return []; }
+    }
+    if (!Array.isArray(list)) return [];
+    return list.reduce<BreakRange[]>((acc, b) => {
+        const s = b?.start_time, e = b?.end_time;
+        if (typeof s !== "string" || typeof e !== "string") return acc;
+        const start = toMinutes(s.slice(0, 5));
+        const end = toMinutes(e.slice(0, 5));
+        if (Number.isFinite(start) && Number.isFinite(end) && end > start) acc.push({ start, end });
+        return acc;
+    }, []);
+}
+
+const overlapsBreak = (breaks: BreakRange[], start: number, end: number): boolean =>
+    breaks.some((b) => start < b.end && end > b.start);
+
 // Shared by computeAvailableSlots (what the UI is offered) and createBooking's
 // server-side re-check (what a submitted time is validated against) — both
 // must agree on what "working that day" means, per staff, per date.
@@ -62,19 +166,31 @@ async function getStaffWindowsForDate(
     salonId: string,
     staffIds: string[],
     dateStr: string
-): Promise<{ windowByStaff: Map<string, { open: number; close: number }>; stepMin: number }> {
+): Promise<{ windowByStaff: Map<string, { open: number; close: number; breaks: BreakRange[] }>; stepMin: number }> {
     const dayOfWeek = new Date(`${dateStr}T00:00:00Z`).getUTCDay();
 
-    const [scheduleRows, staffWithAnySchedule, marketplaceDayHours] = await Promise.all([
+    const [scheduleRows, marketplaceDayHours] = await Promise.all([
         bookingsRepository.findStaffScheduleForDate(staffIds, dateStr, dayOfWeek),
-        bookingsRepository.findStaffIdsWithAnySchedule(staffIds),
         bookingsRepository.findMarketplaceDayHours(salonId, dayOfWeek),
     ]);
     const scheduleByStaff = new Map(scheduleRows.map((r) => [r.staff_id as string, r]));
 
-    // Fallback window only for staff who've never configured Staff Schedule
-    // at all — a configured staff member with no row for this specific day
-    // means they don't work that day, not "ask the salon's general hours."
+    // Resolution order per staff, per date (findStaffScheduleForDate already
+    // picks the first of these two in SQL, date match winning):
+    //   1. a row for this exact date          — a one-off override
+    //   2. the recurring weekly row for this day_of_week (date IS NULL)
+    //                                          — the staff member's baseline
+    //   3. the salon's general working hours   — staff with no baseline at all
+    //
+    // Step 3 used to be withheld from anyone holding any schedule row at all,
+    // on the reasoning that a configured staff member with no row for a date
+    // isn't working that date. That only holds if a baseline exists to be
+    // absent from — and nothing ever wrote one, so a stylist configured for a
+    // single date went dark on every other date, i.e. touching Staff Schedule
+    // made someone less bookable than ignoring it. A declared day off is an
+    // is_available=false row, which is matched at step 1 or 2 and correctly
+    // yields no window; "no row anywhere" now means unconfigured, not closed.
+    //
     // `marketplaceDayHours === null` means no row for this day exists at all
     // (salon never set up Marketplace hours) — default to 9-6 rather than
     // leaving an unconfigured salon+staff combo with zero availability.
@@ -88,17 +204,22 @@ async function getStaffWindowsForDate(
 
     // Each staff member's own [open, close) window in minutes-from-midnight
     // for this exact date, or absent if they're not working at all that day.
-    const windowByStaff = new Map<string, { open: number; close: number }>();
+    const windowByStaff = new Map<string, { open: number; close: number; breaks: BreakRange[] }>();
     for (const id of staffIds) {
         const row = scheduleByStaff.get(id);
         if (row) {
             if (!row.is_available || !row.start_time || !row.end_time) continue; // explicit day off
-            windowByStaff.set(id, { open: toMinutes(String(row.start_time).slice(0, 5)), close: toMinutes(String(row.end_time).slice(0, 5)) });
-        } else if (!staffWithAnySchedule.has(id) && salonOpen) {
-            // Never configured — fall back to the salon's general hours.
-            windowByStaff.set(id, { open: toMinutes(salonOpen.open_time), close: toMinutes(salonOpen.close_time) });
+            windowByStaff.set(id, {
+                open: toMinutes(String(row.start_time).slice(0, 5)),
+                close: toMinutes(String(row.end_time).slice(0, 5)),
+                breaks: parseBreaks(row.breaks),
+            });
+        } else if (salonOpen) {
+            // No exact-date row and no weekly baseline for this day — fall back
+            // to the salon's general hours, which carry no per-staff breaks.
+            windowByStaff.set(id, { open: toMinutes(salonOpen.open_time), close: toMinutes(salonOpen.close_time), breaks: [] });
         }
-        // else: staff has a schedule elsewhere but nothing for this day/date — not working.
+        // else: the salon itself is closed this day — nobody is bookable.
     }
     return { windowByStaff, stepMin };
 }
@@ -111,19 +232,29 @@ async function computeAvailableSlots(params: {
 }): Promise<string[]> {
     const { salonId, dateStr, staffId, durationMinutes } = params;
 
-    const [staffList, appointments, blockedTimes] = await Promise.all([
+    const [staffList, appointments, blockedTimes, policy] = await Promise.all([
         staffId ? Promise.resolve([{ id: staffId }]) : bookingsRepository.findActiveStaff(salonId),
         bookingsRepository.findAppointmentsForDate(salonId, dateStr),
         blockedTimesRepository.list({ salon_id: salonId, date: dateStr }),
+        bookingsRepository.findBookingPolicy(salonId),
     ]);
     if (staffList.length === 0) return [];
+
+    // Outside the salon's booking window (past, same-day off, or beyond the
+    // maximum advance) — offer nothing rather than a list nobody can submit.
+    const window = resolveDateWindow(dateStr, policy);
+    if (!window.bookable) return [];
+    const earliestMinute = window.earliestMinute;
 
     const staffIds = staffList.map((s) => s.id);
     const { windowByStaff, stepMin } = await getStaffWindowsForDate(salonId, staffIds, dateStr);
     if (windowByStaff.size === 0) return [];
 
-    // Per-staff busy [start, end) ranges in minutes-from-midnight (UTC, matching
-    // how scheduled_at is written for public bookings — see createBooking above).
+    // Per-staff busy [start, end) ranges in minutes from salon-local midnight —
+    // the same frame the schedule windows and blocked times below are in.
+    // `start_minute` is converted from the appointment's instant in SQL
+    // (findAppointmentsForDate), so an appointment at 1:00 PM local really does
+    // occupy minute 780 here and removes the 1:00 PM slot.
     const busyByStaff = new Map<string, Array<{ start: number; end: number }>>();
     const addBusy = (id: string | null | undefined, start: number, end: number) => {
         if (!id) return;
@@ -131,8 +262,8 @@ async function computeAvailableSlots(params: {
         busyByStaff.get(id)!.push({ start, end });
     };
     for (const appt of appointments) {
-        const d = new Date(appt.scheduled_at);
-        const start = d.getUTCHours() * 60 + d.getUTCMinutes();
+        const start = Number(appt.start_minute);
+        if (!Number.isFinite(start)) continue;
         addBusy(appt.staff_id, start, start + (Number(appt.duration_minutes) || 30));
     }
     for (const b of blockedTimes) {
@@ -142,6 +273,7 @@ async function computeAvailableSlots(params: {
     const isStaffFreeAt = (id: string, start: number, end: number): boolean => {
         const win = windowByStaff.get(id);
         if (!win || start < win.open || end > win.close) return false;
+        if (overlapsBreak(win.breaks, start, end)) return false;
         return !(busyByStaff.get(id) ?? []).some((r) => start < r.end && end > r.start);
     };
 
@@ -150,6 +282,7 @@ async function computeAvailableSlots(params: {
 
     const slots: string[] = [];
     for (let start = overallOpen; start + durationMinutes <= overallClose; start += stepMin) {
+        if (start < earliestMinute) continue;
         const end = start + durationMinutes;
         const anyStaffFree = staffIds.some((id) => isStaffFreeAt(id, start, end));
         if (anyStaffFree) slots.push(fmt12h(start));
@@ -166,6 +299,22 @@ function formatDate(dateStr: string): string {
     });
 }
 
+// Money for message templates. Uses the salon's own currency where it has one
+// so an email doesn't quote rupees to a salon billing in dirhams.
+function formatMoney(amount: number, currency?: string | null): string {
+    const value = Number.isFinite(amount) ? amount : 0;
+    try {
+        return new Intl.NumberFormat("en-IN", {
+            style: "currency",
+            currency: (currency || "INR").toUpperCase(),
+            maximumFractionDigits: 2,
+        }).format(value);
+    } catch {
+        // Unknown/garbage currency code — never let formatting break a send.
+        return value.toFixed(2);
+    }
+}
+
 function formatTime(dateStr: string): string {
     return new Date(dateStr).toLocaleTimeString("en-IN", {
         timeZone: "Asia/Kolkata",
@@ -176,6 +325,11 @@ function formatTime(dateStr: string): string {
 // Signs a per-appointment management token so a client can cancel/reschedule
 // their own booking from the confirmation link/email without an account —
 // no extra column needed, the token is just an HMAC of the appointment id.
+// Where the customer-facing booking pages live — same resolution the Link
+// Builder uses, so a manage link in an email matches the one on the site.
+const publicBaseUrl = () =>
+    process.env.APP_BASE_URL || process.env.FRONTEND_URL || "http://localhost:5173";
+
 const MANAGE_TOKEN_SECRET =
     process.env.BOOKING_MANAGE_SECRET || process.env.JWT_ACCESS_SECRET || "dev-booking-manage-secret";
 
@@ -195,7 +349,21 @@ function assertManageToken(appointmentId: string, token: string | undefined | nu
 export const bookingsService = {
     async getSalonBySlug(slug: string) {
         const salon = await bookingsRepository.findSalonBySlug(slug);
-        if (!salon) throw new AppError(404, "Salon not found", "NOT_FOUND");
+        if (!salon) {
+            // "Salon not found" is wrong — and actively misleading — when the
+            // link is correct and the salon has simply turned online booking
+            // off. That reads as a broken URL and sends people hunting for a
+            // typo instead of phoning the salon.
+            const state = await bookingsRepository.findSalonStateBySlug(slug);
+            if (state) {
+                throw new AppError(
+                    404,
+                    "This salon isn't accepting online bookings right now. Please contact the salon directly.",
+                    "BOOKING_UNAVAILABLE"
+                );
+            }
+            throw new AppError(404, "Salon not found", "NOT_FOUND");
+        }
 
         const [services, staff, fullSalon] = await Promise.all([
             bookingsRepository.findActiveServices(salon.id),
@@ -238,6 +406,34 @@ export const bookingsService = {
         const salon = await bookingsRepository.findSalonById(body.salon_id);
         if (!salon) throw new AppError(404, "This salon is not accepting online bookings", "NOT_FOUND");
 
+        // Same-day switch / minimum notice / past-date, checked before anything
+        // is written. The offered slot list already excludes these, but a tab
+        // left open across midnight or a direct API call would sail past it.
+        const requested = salonLocalParts(body.scheduled_at);
+        const policy = await bookingsRepository.findBookingPolicy(body.salon_id);
+        const window = resolveDateWindow(requested.dateStr, policy);
+        if (!window.bookable) {
+            const days = Number(policy.max_advance_days) || 0;
+            const message =
+                window.reason === "SAME_DAY_OFF"
+                    ? "This salon isn't accepting bookings for today. Please choose a later date."
+                : window.reason === "TOO_FAR_AHEAD"
+                    ? `This salon takes bookings up to ${days} day${days === 1 ? "" : "s"} ahead. Please choose an earlier date.`
+                    : "That date has already passed. Please choose another date.";
+            throw new AppError(409, message, window.reason === "TOO_FAR_AHEAD" ? "TOO_FAR_AHEAD" : "DATE_NOT_BOOKABLE");
+        }
+        const earliestMinute = window.earliestMinute;
+        if (requested.minutes < earliestMinute) {
+            const hrs = Math.max(0, Number(policy.min_notice_hours) || 0);
+            throw new AppError(
+                409,
+                hrs > 0
+                    ? `This salon needs at least ${hrs} hour${hrs === 1 ? "" : "s"} notice. Please choose a later time.`
+                    : "That time has already passed. Please choose a later time.",
+                "TOO_SOON"
+            );
+        }
+
         const services = await Promise.all(
             body.service_ids.map((id) => bookingsRepository.findServiceById(id, body.salon_id))
         );
@@ -253,12 +449,14 @@ export const bookingsService = {
             // flow enforces (appointments.service.ts) — public self-service booking
             // must not be able to schedule over a stylist's declared time off.
             const durationMinutes = services.reduce((sum, s) => sum + (Number(s!.duration) || 30), 0);
-            const apptDate = new Date(body.scheduled_at);
-            const dateStr  = apptDate.toISOString().slice(0, 10);
-            const pad = (n: number) => String(n).padStart(2, "0");
-            const startStr = `${pad(apptDate.getUTCHours())}:${pad(apptDate.getUTCMinutes())}`;
-            const endDate  = new Date(apptDate.getTime() + durationMinutes * 60_000);
-            const endStr   = `${pad(endDate.getUTCHours())}:${pad(endDate.getUTCMinutes())}`;
+
+            // Salon-local date and wall clock (resolved above) — blocked times and
+            // staff schedules are stored as local TIME values, so the requested
+            // instant has to be expressed in the same frame to be comparable.
+            const { dateStr, minutes: startMin } = requested;
+            const endMin   = startMin + durationMinutes;
+            const startStr = fmtHHMM(startMin);
+            const endStr   = fmtHHMM(endMin);
 
             const blocked = await blockedTimesRepository.hasOverlap({
                 staffId: body.staff_id,
@@ -276,10 +474,28 @@ export const bookingsService = {
             // book outside it.
             const { windowByStaff } = await getStaffWindowsForDate(body.salon_id, [body.staff_id], dateStr);
             const win = windowByStaff.get(body.staff_id);
-            const startMin = toMinutes(startStr);
-            const endMin = toMinutes(endStr);
             if (!win || startMin < win.open || endMin > win.close) {
                 throw new AppError(409, "This staff member is not working at the selected time.", "OUTSIDE_WORKING_HOURS");
+            }
+            if (overlapsBreak(win.breaks, startMin, endMin)) {
+                throw new AppError(409, "This staff member is on a break at the selected time.", "STAFF_ON_BREAK");
+            }
+
+            // And re-check the stylist's existing appointments. computeAvailableSlots
+            // already excludes booked ranges from the list the client sees, but that
+            // list is a snapshot: two people can hold the same slot at once, a tab can
+            // sit open while someone books over it, and a direct API call skips the
+            // list entirely. Nothing in the database prevents the overlap underneath,
+            // so this is the guard.
+            const alreadyBooked = await bookingsRepository.hasAppointmentOverlap({
+                salonId: body.salon_id,
+                staffId: body.staff_id,
+                dateStr,
+                startMinute: startMin,
+                endMinute: endMin,
+            });
+            if (alreadyBooked) {
+                throw new AppError(409, "This time has just been booked with the selected staff member. Please pick another slot.", "SLOT_TAKEN");
             }
         }
 
@@ -332,11 +548,16 @@ export const bookingsService = {
 
         // Live calendar update — the dashboard calendar refreshes on this same
         // socket event used for staff-created appointments (appointments.service.ts).
+        // `event_key` makes this obey the owner's own notification preferences,
+        // the way every staff-created appointment already does; without it this
+        // one push ignored a preference the owner had explicitly set.
         notificationsService.create({
             salon_id: body.salon_id,
             type: "appointment",
             title: "New Appointment Booked",
             body: `${body.client_name} — ${formatDate(body.scheduled_at)} at ${formatTime(body.scheduled_at)}`,
+            event_key: "newAppointment",
+            scheduled_at: body.scheduled_at,
         }).catch((err: any) => {
             logger.error("Public booking notification failed", {
                 appointmentId: appointment.id,
@@ -346,6 +567,114 @@ export const bookingsService = {
                 error: err,
             });
         });
+
+        // ── Client-facing WhatsApp ────────────────────────────────────────────
+        // A booking made here writes the appointment row directly rather than
+        // going through appointmentsService.create(), so it never reached any of
+        // that path's client messaging — an online customer got a confirmation
+        // screen and nothing else. These are the same two sends a staff-created
+        // calendar appointment fires, using the same events, templates and
+        // dedupe guard, so the two paths now behave identically.
+        //
+        // Everything that decides whether a message actually goes out lives
+        // inside trigger(): the salon's per-event enable switch, the client's
+        // notification opt-out, an approved template, the salon's own WhatsApp
+        // credentials, phone validation, delivery logging and retry. Nothing is
+        // re-implemented here, and a failure never affects the booking.
+        void (async () => {
+            try {
+                const full = await appointmentsRepository.findById(appointment.id);
+                const clientPhone = (full as any)?.client_phone;
+                if (!full || !clientPhone) return;
+
+                // Richer detail for the Email/SMS templates. These travel in
+                // extraVariables rather than `variables` because a Meta
+                // template is approved with a fixed parameter count — adding
+                // them to `variables` would break the WhatsApp send for every
+                // salon whose template is already approved with six.
+                const totalAmount = services.reduce((sum, s) => sum + (Number(s!.price) || 0), 0);
+                // Public booking takes no payment, so nothing is collected up
+                // front and the whole amount is still due at the salon. Written
+                // out rather than assumed, so it stays correct if a deposit
+                // step is ever added here.
+                const paidAmount = 0;
+                const address = (salon as any).address ?? "";
+                const cancellationHours = Number(policy.cancellation_notice_hours) || 0;
+                const manageUrl = (salon as any).slug
+                    ? `${publicBaseUrl()}/book/${(salon as any).slug}/manage/${appointment.id}?token=${generateManageToken(appointment.id)}`
+                    : "";
+
+                const extraVariables: Record<string, string> = {
+                    booking_id:        appointment.id,
+                    appointment_id:    appointment.id,
+                    appointment_amount: formatMoney(totalAmount, (salon as any).currency),
+                    paid_amount:       formatMoney(paidAmount, (salon as any).currency),
+                    deposit_amount:    formatMoney(paidAmount, (salon as any).currency),
+                    remaining_amount:  formatMoney(totalAmount - paidAmount, (salon as any).currency),
+                    salon_address:     address,
+                    google_maps_link:  address
+                        ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`
+                        : "",
+                    cancellation_policy: cancellationHours > 0
+                        ? `Free cancellation up to ${cancellationHours} hour${cancellationHours === 1 ? "" : "s"} before your appointment.`
+                        : "You can cancel or reschedule any time before your appointment.",
+                    manage_booking_link: manageUrl,
+                };
+
+                whatsappAutomationService.trigger({
+                    salonId:       full.salon_id,
+                    eventType:     "appointment_confirmation",
+                    clientId:      full.client_id,
+                    phone:         clientPhone,
+                    countryCode:   (full as any).client_phone_code ?? null,
+                    email:         (full as any).client_email ?? body.client_email ?? null,
+                    extraVariables,
+                    variables: {
+                        "1": full.client_name                 ?? "Valued Customer",
+                        "2": (full as any).salon_name         ?? "our salon",
+                        "3": formatDate(full.scheduled_at),
+                        "4": formatTime(full.scheduled_at),
+                        "5": full.services?.[0]?.name ?? full.title ?? "your service",
+                        "6": full.staff_name                  ?? "our team",
+                    },
+                    // Keyed on the appointment, so a retried submit or a double
+                    // click can never produce a second confirmation.
+                    referenceId:       full.id,
+                    referenceType:     "appointment",
+                    dedupeByReference: true,
+                }).catch(() => {});
+
+                // 24h reminder. Package-linked bookings get their own reminder
+                // event elsewhere and would otherwise be messaged twice — public
+                // booking can't create one today, but mirror the guard so this
+                // doesn't silently become wrong if it ever can.
+                const isPackageLinked = (full.services ?? []).some((s: any) => s.is_package_service);
+                if (!isPackageLinked) {
+                    waScheduledMessagesService.scheduleAppointmentReminder({
+                        salonId:       full.salon_id,
+                        clientId:      full.client_id,
+                        phone:         clientPhone,
+                        countryCode:   (full as any).client_phone_code ?? null,
+                        appointmentId: full.id,
+                        scheduledAt:   full.scheduled_at,
+                        clientName:    full.client_name         ?? "Valued Customer",
+                        salonName:     (full as any).salon_name ?? "our salon",
+                        serviceName:   full.services?.[0]?.name ?? full.title ?? "your service",
+                        staffName:     full.staff_name          ?? "our team",
+                    }).catch((err: any) =>
+                        logger.error("[wa-scheduled] public booking reminder schedule failed:", err?.message ?? err)
+                    );
+                }
+            } catch (err: any) {
+                // Never affects the booking the customer just made — but log it,
+                // so a real fault here doesn't disappear.
+                logger.error("[WA-AUTO] public booking client messaging failed", {
+                    appointmentId: appointment.id,
+                    salonId: body.salon_id,
+                    message: err?.message,
+                });
+            }
+        })();
 
         return { ...appointment, manage_token: generateManageToken(appointment.id) };
     },
@@ -359,12 +688,14 @@ export const bookingsService = {
         return appointment;
     },
 
-    async cancelManagedAppointment(appointmentId: string, token: string | undefined | null) {
+    async cancelManagedAppointment(appointmentId: string, token: string | undefined | null, reason?: string | null) {
         assertManageToken(appointmentId, token);
+        // The reason the customer picked is stored against the appointment, so
+        // the salon can see why a slot freed up rather than only that it did.
         return appointmentsService.cancel({
             appointmentId,
             requesterUserId: "public-client",
-            body: {},
+            body: { reason: reason?.trim() || undefined },
         });
     },
 

@@ -67,6 +67,9 @@ export type UpsertEssentialsBody = {
 
 export type UpsertAboutBody = {
   venue_description: string;
+  instagram_url?: string | null;
+  facebook_url?: string | null;
+  about_enabled?: boolean;
 };
 
 export type UpsertBookingPolicyBody = {
@@ -74,6 +77,8 @@ export type UpsertBookingPolicyBody = {
   min_notice_hours?: number;
   cancellation_notice_hours?: number;
   slot_interval_minutes?: number;
+  allow_same_day_booking?: boolean;
+  allow_multiple_services?: boolean;
 };
 
 // ─── Business Location ────────────────────────────────────────────────────────

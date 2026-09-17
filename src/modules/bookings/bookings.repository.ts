@@ -5,12 +5,58 @@ import pool from "../../config/database";
 // wrapped to fall back to defaults on this specific error so the core public
 // booking flow (which must not depend on that migration) keeps working either way.
 const UNDEFINED_COLUMN = "42703";
+
+// The one timezone every wall-clock comparison in online booking is done in.
+// `appointments.scheduled_at` is a timestamptz (an instant), while staff
+// schedules, marketplace working hours and blocked times are all TIME columns
+// holding local wall clock — so an instant has to be converted to this zone
+// before the two can be compared at all. Reading UTC hours off scheduled_at
+// instead (what this used to do) shifted every booked range by the UTC offset,
+// which is why a 1:00 PM appointment never removed the 1:00 PM slot.
+//
+// Hardcoded because there is no per-salon timezone column yet; the rest of this
+// module already assumes Asia/Kolkata (see formatDate/formatTime in
+// bookings.service.ts). When a salon timezone lands, this is the single place
+// to thread it through from.
+export const SALON_TIMEZONE = "Asia/Kolkata";
+
 const DEFAULT_BOOKING_POLICY = {
     max_advance_days: 30,
     min_notice_hours: 0,
     cancellation_notice_hours: 0,
     slot_interval_minutes: 15,
+    // Same-day booking is allowed unless a salon turns it off — the permissive
+    // default keeps every salon behaving as it did before the setting existed,
+    // including salons whose database hasn't had the column added yet.
+    allow_same_day_booking: true,
+    // About Us section: shown, with no links configured. `website` lives here
+    // rather than in PUBLIC_SALON_SELECT for the same reason as the rest — that
+    // query gates the entire public booking flow and must not reference a
+    // column a given environment might not have yet.
+    about_enabled: true,
+    instagram_url: null as string | null,
+    facebook_url: null as string | null,
+    website: null as string | null,
+    // Multi-service booking has always been possible, so it stays on by default.
+    allow_multiple_services: true,
 };
+
+// Which of the optional marketplace_profiles settings columns this database
+// actually has. Every key of DEFAULT_BOOKING_POLICY is a column added by some
+// migration, and environments drift (see the dev/QA/prod migration gap), so the
+// set is resolved once from information_schema and cached — one query per
+// process rather than one per booking page load.
+let optionalProfileColumnsCache: Set<string> | null = null;
+
+async function optionalProfileColumns(): Promise<Set<string>> {
+    if (optionalProfileColumnsCache) return optionalProfileColumnsCache;
+    const { rows } = await pool.query(
+        `SELECT column_name FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'marketplace_profiles'`
+    );
+    optionalProfileColumnsCache = new Set(rows.map((r) => r.column_name as string));
+    return optionalProfileColumnsCache;
+}
 
 // Public-facing salon lookups favor the salon's own business fields, then its
 // marketplace listing, and only fall back to the owner's personal user-account
@@ -48,6 +94,20 @@ export const bookingsRepository = {
         const { rows } = await pool.query(
             `${PUBLIC_SALON_SELECT}
              WHERE s.slug = $1 AND s.is_active = true AND ${PUBLISHED_CONDITION}`,
+            [slug]
+        );
+        return rows[0] || null;
+    },
+
+    // Deliberately ignores the is_active / is_published gates, so the caller can
+    // tell "this link is wrong" apart from "this salon exists but has online
+    // booking switched off" and say the right thing to the customer.
+    async findSalonStateBySlug(slug: string) {
+        const { rows } = await pool.query(
+            `SELECT s.is_active, mp.is_published
+             FROM salons s
+             LEFT JOIN marketplace_profiles mp ON mp.salon_id = s.id
+             WHERE s.slug = $1`,
             [slug]
         );
         return rows[0] || null;
@@ -96,12 +156,24 @@ export const bookingsRepository = {
         return rows;
     },
 
+    // Ratings come from the real `reviews` rows attributed to each staff member
+    // (the feedback-token flow already records staff_id). A stylist with no
+    // reviews yet returns null rather than a flattering default — the booking
+    // page shows nothing in that case instead of inventing a score.
     async findActiveStaff(salonId: string) {
         const { rows } = await pool.query(
-            `SELECT id, first_name, last_name, designation, avatar_url
-             FROM staff
-             WHERE salon_id = $1 AND is_active = true
-             ORDER BY first_name ASC`,
+            `SELECT s.id, s.first_name, s.last_name, s.designation, s.avatar_url,
+                    ROUND(r.avg_rating::numeric, 1)::float8 AS rating,
+                    COALESCE(r.review_count, 0)::int        AS review_count
+             FROM staff s
+             LEFT JOIN (
+                 SELECT staff_id, AVG(rating) AS avg_rating, COUNT(*) AS review_count
+                 FROM reviews
+                 WHERE salon_id = $1 AND staff_id IS NOT NULL AND rating IS NOT NULL
+                 GROUP BY staff_id
+             ) r ON r.staff_id = s.id
+             WHERE s.salon_id = $1 AND s.is_active = true
+             ORDER BY s.first_name ASC`,
             [salonId]
         );
         return rows;
@@ -130,16 +202,62 @@ export const bookingsRepository = {
     // Real availability needs every non-cancelled appointment for the salon
     // on the given date, per staff — used to exclude already-booked ranges
     // from the slots offered on the public booking page.
+    //
+    // Both the day window and the returned start time are in salon-local wall
+    // clock, converted here in SQL so Postgres' own tz database does the work:
+    // `$2::date` is the salon's local day (not a UTC day, which would put an
+    // evening appointment on the wrong date), and `start_minute` is minutes
+    // from local midnight, directly comparable to the schedule/blocked-time
+    // windows the slot grid is built from. Cast to int because the pg driver
+    // hands NUMERIC back as a string.
     async findAppointmentsForDate(salonId: string, dateStr: string) {
         const { rows } = await pool.query(
-            `SELECT staff_id, scheduled_at, duration_minutes
+            `SELECT staff_id,
+                    (EXTRACT(HOUR   FROM (scheduled_at AT TIME ZONE $3)) * 60 +
+                     EXTRACT(MINUTE FROM (scheduled_at AT TIME ZONE $3)))::int AS start_minute,
+                    duration_minutes
              FROM appointments
              WHERE salon_id = $1
-               AND scheduled_at >= $2::date AND scheduled_at < ($2::date + INTERVAL '1 day')
+               AND (scheduled_at AT TIME ZONE $3) >= $2::date
+               AND (scheduled_at AT TIME ZONE $3) <  ($2::date + INTERVAL '1 day')
                AND status NOT IN ('cancelled', 'deleted')`,
-            [salonId, dateStr]
+            [salonId, dateStr, SALON_TIMEZONE]
         );
         return rows;
+    },
+
+    // Does this staff member already have a non-cancelled appointment
+    // overlapping [startMinute, endMinute) on this local date? The slot list
+    // excludes booked ranges, but that list is built once and can be stale by
+    // the time it's submitted (or bypassed entirely by a direct API call), so
+    // the same question has to be asked again at write time. `excludeId` lets
+    // a reschedule ignore the appointment being moved.
+    async hasAppointmentOverlap(params: {
+        salonId: string;
+        staffId: string;
+        dateStr: string;
+        startMinute: number;
+        endMinute: number;
+        excludeId?: string | null;
+    }): Promise<boolean> {
+        const { rows } = await pool.query(
+            `SELECT 1
+             FROM appointments
+             WHERE salon_id = $1
+               AND staff_id = $2
+               AND status NOT IN ('cancelled', 'deleted')
+               AND ($6::uuid IS NULL OR id <> $6::uuid)
+               AND (scheduled_at AT TIME ZONE $7) >= $3::date
+               AND (scheduled_at AT TIME ZONE $7) <  ($3::date + INTERVAL '1 day')
+               AND (EXTRACT(HOUR   FROM (scheduled_at AT TIME ZONE $7)) * 60 +
+                    EXTRACT(MINUTE FROM (scheduled_at AT TIME ZONE $7))) < $5
+               AND (EXTRACT(HOUR   FROM (scheduled_at AT TIME ZONE $7)) * 60 +
+                    EXTRACT(MINUTE FROM (scheduled_at AT TIME ZONE $7))
+                    + COALESCE(duration_minutes, 30)) > $4
+             LIMIT 1`,
+            [params.salonId, params.staffId, params.dateStr, params.startMinute, params.endMinute, params.excludeId ?? null, SALON_TIMEZONE]
+        );
+        return rows.length > 0;
     },
 
     // Per-staff working hours for a specific date — the real source of truth
@@ -151,7 +269,7 @@ export const bookingsRepository = {
     async findStaffScheduleForDate(staffIds: string[], dateStr: string, dayOfWeek: number) {
         if (staffIds.length === 0) return [];
         const { rows } = await pool.query(
-            `SELECT DISTINCT ON (staff_id) staff_id, is_available, start_time, end_time
+            `SELECT DISTINCT ON (staff_id) staff_id, is_available, start_time, end_time, breaks
              FROM staff_schedules
              WHERE staff_id = ANY($1::uuid[])
                AND (date = $2::date OR (date IS NULL AND day_of_week = $3))
@@ -159,20 +277,6 @@ export const bookingsRepository = {
             [staffIds, dateStr, dayOfWeek]
         );
         return rows;
-    },
-
-    // Which of these staff have ever had a schedule configured at all — used
-    // to fall back to the salon-wide marketplace hours ONLY for staff who've
-    // never touched Staff Schedule, never as a per-day gap-filler (a
-    // configured staff member with no row for this specific day means they
-    // don't work that day, not "ask the salon instead").
-    async findStaffIdsWithAnySchedule(staffIds: string[]): Promise<Set<string>> {
-        if (staffIds.length === 0) return new Set();
-        const { rows } = await pool.query(
-            `SELECT DISTINCT staff_id FROM staff_schedules WHERE staff_id = ANY($1::uuid[])`,
-            [staffIds]
-        );
-        return new Set(rows.map((r) => r.staff_id as string));
     },
 
     async findMarketplaceDayHours(salonId: string, dayOfWeek: number) {
@@ -202,18 +306,24 @@ export const bookingsRepository = {
 
     // Fetched separately from PUBLIC_SALON_SELECT (see comment there) and
     // defended against the migration not having run yet.
+    // Several migrations have each added settings columns to
+    // marketplace_profiles, and any of them can be un-run on a given
+    // environment. Rather than a tower of try/catch fallbacks that has to grow
+    // with every migration — and that loses a salon's real settings whenever
+    // only the newest column is missing — ask the database once which of these
+    // columns actually exist and select only those, merging defaults for the
+    // rest. Cached for the process lifetime, so the API needs a restart after
+    // running a migration before the new settings take effect.
     async findBookingPolicy(salonId: string) {
-        try {
-            const { rows } = await pool.query(
-                `SELECT max_advance_days, min_notice_hours, cancellation_notice_hours, slot_interval_minutes
-                 FROM marketplace_profiles WHERE salon_id = $1`,
-                [salonId]
-            );
-            return rows[0] ?? DEFAULT_BOOKING_POLICY;
-        } catch (err: any) {
-            if (err?.code !== UNDEFINED_COLUMN) throw err;
-            return DEFAULT_BOOKING_POLICY;
-        }
+        const present = await optionalProfileColumns();
+        const wanted = Object.keys(DEFAULT_BOOKING_POLICY).filter((c) => present.has(c));
+        if (wanted.length === 0) return { ...DEFAULT_BOOKING_POLICY };
+
+        const { rows } = await pool.query(
+            `SELECT ${wanted.join(", ")} FROM marketplace_profiles WHERE salon_id = $1`,
+            [salonId]
+        );
+        return rows[0] ? { ...DEFAULT_BOOKING_POLICY, ...rows[0] } : { ...DEFAULT_BOOKING_POLICY };
     },
 
     async createAppointment(params: {

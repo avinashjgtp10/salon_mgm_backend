@@ -69,6 +69,26 @@ export const validateUpsertAbout = (req: Request, _res: Response, next: NextFunc
     if (b.venue_description.length > 2000)
       throw new AppError(400, "venue_description must be 2000 characters or fewer", "VALIDATION_ERROR");
 
+    // Social links are shown to the public and opened in a new tab, so only
+    // http(s) is accepted — a javascript: or data: URL here would otherwise be
+    // rendered straight into the booking page's markup.
+    for (const field of ["instagram_url", "facebook_url"] as const) {
+      const value = b[field];
+      if (value === undefined || value === null || value === "") continue;
+      if (typeof value !== "string")
+        throw new AppError(400, `${field} must be a string`, "VALIDATION_ERROR");
+      if (value.length > 255)
+        throw new AppError(400, `${field} must be 255 characters or fewer`, "VALIDATION_ERROR");
+      let parsed: URL;
+      try { parsed = new URL(value); }
+      catch { throw new AppError(400, `${field} must be a valid URL starting with http:// or https://`, "VALIDATION_ERROR"); }
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+        throw new AppError(400, `${field} must start with http:// or https://`, "VALIDATION_ERROR");
+    }
+
+    if (b.about_enabled !== undefined && typeof b.about_enabled !== "boolean")
+      throw new AppError(400, "about_enabled must be a boolean", "VALIDATION_ERROR");
+
     return next();
   } catch (err) { return next(err); }
 };
@@ -82,14 +102,24 @@ export const validateUpsertBookingPolicy = (req: Request, _res: Response, next: 
   try {
     const b = req.body;
 
+    // Upper bounds mirror the Booking Settings inputs. Both fields are now free
+    // text rather than a fixed dropdown, so an unbounded value can reach here.
     if (!isOptPosInt(b.max_advance_days))
       throw new AppError(400, "max_advance_days must be a non-negative integer", "VALIDATION_ERROR");
+    if (b.max_advance_days !== undefined && b.max_advance_days > 365)
+      throw new AppError(400, "max_advance_days cannot exceed 365", "VALIDATION_ERROR");
     if (!isOptPosInt(b.min_notice_hours))
       throw new AppError(400, "min_notice_hours must be a non-negative integer", "VALIDATION_ERROR");
+    if (b.min_notice_hours !== undefined && b.min_notice_hours > 720)
+      throw new AppError(400, "min_notice_hours cannot exceed 720 (30 days)", "VALIDATION_ERROR");
     if (!isOptPosInt(b.cancellation_notice_hours))
       throw new AppError(400, "cancellation_notice_hours must be a non-negative integer", "VALIDATION_ERROR");
     if (!isOptPosInt(b.slot_interval_minutes))
       throw new AppError(400, "slot_interval_minutes must be a non-negative integer", "VALIDATION_ERROR");
+    if (b.allow_same_day_booking !== undefined && typeof b.allow_same_day_booking !== "boolean")
+      throw new AppError(400, "allow_same_day_booking must be a boolean", "VALIDATION_ERROR");
+    if (b.allow_multiple_services !== undefined && typeof b.allow_multiple_services !== "boolean")
+      throw new AppError(400, "allow_multiple_services must be a boolean", "VALIDATION_ERROR");
 
     return next();
   } catch (err) { return next(err); }
