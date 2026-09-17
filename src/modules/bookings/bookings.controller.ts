@@ -30,13 +30,19 @@ export const bookingsController = {
     async getAvailability(req: Request, res: Response, next: NextFunction) {
         try {
             const { salon_id } = req.params;
-            const { date, staffId, durationMinutes } = req.query;
+            const { date, staffId, durationMinutes, serviceIds } = req.query;
             if (!salon_id || !date) throw new AppError(400, "salon_id and date are required", "VALIDATION_ERROR");
+            // Comma-separated, so "any stylist" availability only counts staff
+            // who can actually perform what's in the basket.
+            const parsedServiceIds = typeof serviceIds === "string" && serviceIds.trim()
+                ? serviceIds.split(",").map((s) => s.trim()).filter(Boolean)
+                : null;
             const result = await bookingsService.getAvailability({
                 salon_id: salon_id as string,
                 date: date as string,
                 staffId: staffId ? (staffId as string) : undefined,
                 durationMinutes: durationMinutes ? Number(durationMinutes) : undefined,
+                serviceIds: parsedServiceIds,
             });
             return sendSuccess(res, 200, result, "Availability fetched successfully");
         } catch (err) {

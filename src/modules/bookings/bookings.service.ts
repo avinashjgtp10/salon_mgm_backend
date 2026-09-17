@@ -11,6 +11,7 @@ import { appointmentsRepository } from "../appointments/appointments.repository"
 import { blockedTimesRepository } from "../blocked_times/blocked_times.repository";
 import { groupWorkingHours } from "../marketplace/marketplace.service";
 import { reviewsService } from "../reviews/reviews.service";
+import { hasFeature } from "../../middleware/planFeature.middleware";
 import { PublicBookingRequest } from "./bookings.types";
 import logger from "../../config/logger";
 
@@ -43,6 +44,10 @@ async function attachPublicExtras(salon: any) {
 // ── Availability ─────────────────────────────────────────────────────────────
 // Real slot generation for the public booking page, replacing what used to be
 // a pure hash-of-the-date fake list with no relation to actual bookings.
+
+// Only used to step through a day when the salon hasn't chosen an interval —
+// never to invent opening hours (see BUG-OB-016).
+const DEFAULT_SLOT_INTERVAL_MINUTES = 15;
 
 const toMinutes = (hhmm: string): number => {
     const [h, m] = hhmm.split(":").map(Number);
@@ -120,6 +125,27 @@ function resolveDateWindow(dateStr: string, policy: BookingPolicyInput): DateWin
     return { bookable: true, earliestMinute: Math.max(0, today.minutes + noticeMinutes - daysOut * 1440) };
 }
 
+// BUG-OB-012 / DECISION-OB-002: the admin Marketplace screens sit behind
+// requirePlanFeature("online_booking"), but the public endpoints are
+// unauthenticated and so never went through that middleware — a salon whose
+// plan excludes online booking could still take bookings through its link,
+// which made the paywall fiction. Same entitlement source as the middleware
+// (hasFeature), just reached without a session.
+const ONLINE_BOOKING_FEATURE = "online_booking";
+
+async function assertSalonEntitled(salonId: string): Promise<void> {
+    const entitled = await hasFeature(salonId, ONLINE_BOOKING_FEATURE);
+    if (!entitled) {
+        // Deliberately the same shape of message an unpublished salon gets —
+        // a customer shouldn't be told about the salon's billing status.
+        throw new AppError(
+            404,
+            "This salon isn't accepting online bookings right now. Please contact the salon directly.",
+            "BOOKING_UNAVAILABLE"
+        );
+    }
+}
+
 const pad2 = (n: number) => String(n).padStart(2, "0");
 const fmtHHMM = (totalMinutes: number): string =>
     `${pad2(Math.floor(totalMinutes / 60) % 24)}:${pad2(totalMinutes % 60)}`;
@@ -191,16 +217,16 @@ async function getStaffWindowsForDate(
     // is_available=false row, which is matched at step 1 or 2 and correctly
     // yields no window; "no row anywhere" now means unconfigured, not closed.
     //
-    // `marketplaceDayHours === null` means no row for this day exists at all
-    // (salon never set up Marketplace hours) — default to 9-6 rather than
-    // leaving an unconfigured salon+staff combo with zero availability.
-    // `is_open === false` means the salon explicitly closes that day — no
-    // fallback window at all in that case.
+    // BUG-OB-016: there is no hardcoded 9–6 any more. A salon that has
+    // configured neither staff schedules nor marketplace working hours offers
+    // NO slots, rather than inviting customers to book 9 AM on a day it may
+    // well be shut. `marketplaceDayHours === null` (no row for this weekday)
+    // and `is_open === false` (explicitly closed) both mean no fallback window.
     const salonOpen =
-        marketplaceDayHours === null ? { open_time: "09:00", close_time: "18:00", slot_interval_minutes: 15 }
-        : marketplaceDayHours.is_open === false ? null
-        : marketplaceDayHours;
-    const stepMin = salonOpen?.slot_interval_minutes ?? 15;
+        marketplaceDayHours === null || marketplaceDayHours.is_open === false
+            ? null
+            : marketplaceDayHours;
+    const stepMin = salonOpen?.slot_interval_minutes ?? DEFAULT_SLOT_INTERVAL_MINUTES;
 
     // Each staff member's own [open, close) window in minutes-from-midnight
     // for this exact date, or absent if they're not working at all that day.
@@ -229,11 +255,14 @@ async function computeAvailableSlots(params: {
     dateStr: string;
     staffId?: string;
     durationMinutes: number;
+    // When no specific stylist is chosen, only staff who can perform these
+    // services count towards "is anyone free" (BUG-OB-014).
+    serviceIds?: string[] | null;
 }): Promise<string[]> {
     const { salonId, dateStr, staffId, durationMinutes } = params;
 
     const [staffList, appointments, blockedTimes, policy] = await Promise.all([
-        staffId ? Promise.resolve([{ id: staffId }]) : bookingsRepository.findActiveStaff(salonId),
+        staffId ? Promise.resolve([{ id: staffId }]) : bookingsRepository.findActiveStaff(salonId, params.serviceIds),
         bookingsRepository.findAppointmentsForDate(salonId, dateStr),
         blockedTimesRepository.list({ salon_id: salonId, date: dateStr }),
         bookingsRepository.findBookingPolicy(salonId),
@@ -349,6 +378,7 @@ function assertManageToken(appointmentId: string, token: string | undefined | nu
 export const bookingsService = {
     async getSalonBySlug(slug: string) {
         const salon = await bookingsRepository.findSalonBySlug(slug);
+        if (salon) await assertSalonEntitled(salon.id);
         if (!salon) {
             // "Salon not found" is wrong — and actively misleading — when the
             // link is correct and the salon has simply turned online booking
@@ -387,14 +417,19 @@ export const bookingsService = {
         return { salon: fullSalon, services, staff };
     },
 
-    async getAvailability(params: { salon_id: string; date: string; staffId?: string; durationMinutes?: number }) {
+    async getAvailability(params: {
+        salon_id: string; date: string; staffId?: string;
+        durationMinutes?: number; serviceIds?: string[] | null;
+    }) {
         const salon = await bookingsRepository.findSalonById(params.salon_id);
         if (!salon) throw new AppError(404, "Salon not found", "NOT_FOUND");
+        await assertSalonEntitled(params.salon_id);
         const slots = await computeAvailableSlots({
             salonId: params.salon_id,
             dateStr: params.date,
             staffId: params.staffId,
             durationMinutes: Math.max(15, Number(params.durationMinutes) || 30),
+            serviceIds: params.serviceIds ?? null,
         });
         return { slots };
     },
@@ -405,6 +440,7 @@ export const bookingsService = {
         // via a direct link (the marketplace Unpublish toggle must actually work).
         const salon = await bookingsRepository.findSalonById(body.salon_id);
         if (!salon) throw new AppError(404, "This salon is not accepting online bookings", "NOT_FOUND");
+        await assertSalonEntitled(body.salon_id);
 
         // Same-day switch / minimum notice / past-date, checked before anything
         // is written. The offered slot list already excludes these, but a tab
@@ -441,63 +477,94 @@ export const bookingsService = {
             throw new AppError(404, "Service not found for this salon", "NOT_FOUND");
         }
 
-        if (body.staff_id) {
-            const staff = await bookingsRepository.findStaffById(body.staff_id, body.salon_id);
-            if (!staff) throw new AppError(404, "Staff member not found for this salon", "NOT_FOUND");
+        const durationMinutes = services.reduce((sum, s) => sum + (Number(s!.duration) || 30), 0);
 
-            // Mirror the same blocked-time guard the internal staff-facing booking
-            // flow enforces (appointments.service.ts) — public self-service booking
-            // must not be able to schedule over a stylist's declared time off.
-            const durationMinutes = services.reduce((sum, s) => sum + (Number(s!.duration) || 30), 0);
+        // Salon-local date and wall clock (resolved above) — blocked times and
+        // staff schedules are stored as local TIME values, so the requested
+        // instant has to be expressed in the same frame to be comparable.
+        const { dateStr, minutes: startMin } = requested;
+        const endMin = startMin + durationMinutes;
 
-            // Salon-local date and wall clock (resolved above) — blocked times and
-            // staff schedules are stored as local TIME values, so the requested
-            // instant has to be expressed in the same frame to be comparable.
-            const { dateStr, minutes: startMin } = requested;
-            const endMin   = startMin + durationMinutes;
-            const startStr = fmtHHMM(startMin);
-            const endStr   = fmtHHMM(endMin);
-
-            const blocked = await blockedTimesRepository.hasOverlap({
-                staffId: body.staff_id,
-                date: dateStr,
-                startTime: startStr,
-                endTime: endStr,
-            });
-            if (blocked) {
-                throw new AppError(409, "This time is no longer available for the selected staff member.", "BLOCKED_TIME");
-            }
-
-            // Re-validate against the staff member's actual working hours for this
-            // date — the same check computeAvailableSlots uses to build the list the
-            // client picked from, so a stale slot list (or a direct API call) can't
-            // book outside it.
-            const { windowByStaff } = await getStaffWindowsForDate(body.salon_id, [body.staff_id], dateStr);
-            const win = windowByStaff.get(body.staff_id);
-            if (!win || startMin < win.open || endMin > win.close) {
-                throw new AppError(409, "This staff member is not working at the selected time.", "OUTSIDE_WORKING_HOURS");
-            }
-            if (overlapsBreak(win.breaks, startMin, endMin)) {
-                throw new AppError(409, "This staff member is on a break at the selected time.", "STAFF_ON_BREAK");
-            }
-
-            // And re-check the stylist's existing appointments. computeAvailableSlots
-            // already excludes booked ranges from the list the client sees, but that
-            // list is a snapshot: two people can hold the same slot at once, a tab can
-            // sit open while someone books over it, and a direct API call skips the
-            // list entirely. Nothing in the database prevents the overlap underneath,
-            // so this is the guard.
-            const alreadyBooked = await bookingsRepository.hasAppointmentOverlap({
-                salonId: body.salon_id,
-                staffId: body.staff_id,
-                dateStr,
-                startMinute: startMin,
-                endMinute: endMin,
-            });
-            if (alreadyBooked) {
-                throw new AppError(409, "This time has just been booked with the selected staff member. Please pick another slot.", "SLOT_TAKEN");
-            }
+        // Which stylists could take this booking at all: active, allowed to take
+        // calendar bookings, and able to perform every selected service
+        // (BUG-OB-013 / BUG-OB-014).
+        const eligible = await bookingsRepository.findActiveStaff(body.salon_id, body.service_ids);
+        if (eligible.length === 0) {
+            throw new AppError(409, "No stylist at this salon can perform the selected services online.", "NO_ELIGIBLE_STAFF");
         }
+
+        if (body.staff_id && !eligible.some((s: any) => s.id === body.staff_id)) {
+            // Either the stylist isn't at this salon, isn't bookable online, or
+            // doesn't perform one of these services. All the same to the
+            // customer, and none of them worth leaking individually.
+            throw new AppError(409, "That stylist isn't available for the selected services.", "STAFF_NOT_ELIGIBLE");
+        }
+
+        // BUG-OB-002 + BUG-OB-003: serialise concurrent attempts for this salon
+        // and date, then choose/verify the stylist inside that lock. Two requests
+        // could otherwise both pass the overlap check before either inserts — a
+        // read-then-write can't close that window and there's no exclusion
+        // constraint underneath.
+        const assignment = await bookingsRepository.withBookingLock(
+            body.salon_id,
+            dateStr,
+            async (dbClient) => {
+                const candidates: string[] = body.staff_id
+                    ? [body.staff_id]
+                    : eligible.map((s: any) => String(s.id));
+
+                const { windowByStaff } = await getStaffWindowsForDate(body.salon_id, candidates, dateStr);
+                let lastReason: { message: string; code: string } | null = null;
+
+                for (const staffId of candidates) {
+                    const win = windowByStaff.get(staffId);
+                    if (!win || startMin < win.open || endMin > win.close) {
+                        lastReason = { message: "This stylist isn't working at the selected time.", code: "OUTSIDE_WORKING_HOURS" };
+                        continue;
+                    }
+                    if (overlapsBreak(win.breaks, startMin, endMin)) {
+                        lastReason = { message: "This stylist is on a break at the selected time.", code: "STAFF_ON_BREAK" };
+                        continue;
+                    }
+
+                    const blocked = await blockedTimesRepository.hasOverlap({
+                        staffId,
+                        date: dateStr,
+                        startTime: fmtHHMM(startMin),
+                        endTime: fmtHHMM(endMin),
+                    });
+                    if (blocked) {
+                        lastReason = { message: "This time is no longer available for the selected stylist.", code: "BLOCKED_TIME" };
+                        continue;
+                    }
+
+                    const taken = await bookingsRepository.hasAppointmentOverlap(
+                        { salonId: body.salon_id, staffId, dateStr, startMinute: startMin, endMinute: endMin },
+                        dbClient
+                    );
+                    if (taken) {
+                        lastReason = { message: "This time has just been booked. Please pick another slot.", code: "SLOT_TAKEN" };
+                        continue;
+                    }
+
+                    return { staffId, lastReason: null as { message: string; code: string } | null };
+                }
+
+                return { staffId: null as string | null, lastReason };
+            }
+        );
+
+        if (!assignment.staffId) {
+            const reason = assignment.lastReason ?? {
+                message: "This time is no longer available. Please pick another slot.",
+                code: "SLOT_TAKEN",
+            };
+            throw new AppError(409, reason.message, reason.code);
+        }
+
+        // Every booking created here now carries a real stylist — "Any Stylist"
+        // no longer leaves an unassigned row for someone to notice later.
+        const assignedStaffId: string = assignment.staffId;
 
         // Find or create the client for this salon
         let client = await clientsRepository.findExistingByEmailOrPhone(
@@ -525,13 +592,13 @@ export const bookingsService = {
             throw new AppError(403, "This client is blocked from booking online. Please contact the salon directly.", "CLIENT_BLOCKED");
         }
 
-        const durationMinutes = services.reduce((sum, s) => sum + (Number(s!.duration) || 30), 0);
+        // durationMinutes is computed once above, before the availability checks.
         const title = services.map((s) => s!.name).join(", ");
 
         const appointment = await bookingsRepository.createAppointment({
             salonId: body.salon_id,
             clientId: client.id,
-            staffId: body.staff_id || null,
+            staffId: assignedStaffId,
             serviceId: body.service_ids[0],
             title,
             scheduledAt: body.scheduled_at,
@@ -542,7 +609,7 @@ export const bookingsService = {
                 name: s!.name,
                 price: Number(s!.price) || 0,
                 quantity: 1,
-                staff_id: body.staff_id || null,
+                staff_id: assignedStaffId,
             })),
         });
 
@@ -690,6 +757,28 @@ export const bookingsService = {
 
     async cancelManagedAppointment(appointmentId: string, token: string | undefined | null, reason?: string | null) {
         assertManageToken(appointmentId, token);
+
+        // BUG-OB-007: the cancellation notice period was shown to the customer
+        // on the booking page as a promise and then enforced nowhere — cancel
+        // went through no matter how close to the appointment it was. The
+        // public policy text and the actual behaviour now agree.
+        const appointment = await appointmentsRepository.findById(appointmentId);
+        if (!appointment) throw new AppError(404, "Booking not found", "NOT_FOUND");
+
+        const policy = await bookingsRepository.findBookingPolicy(appointment.salon_id);
+        const noticeHours = Math.max(0, Number(policy.cancellation_notice_hours) || 0);
+        if (noticeHours > 0) {
+            const startsAt = new Date(appointment.scheduled_at).getTime();
+            const cutoff = startsAt - noticeHours * 60 * 60 * 1000;
+            if (Date.now() > cutoff) {
+                throw new AppError(
+                    409,
+                    `This salon asks for at least ${noticeHours} hour${noticeHours === 1 ? "" : "s"} notice to cancel online. Please contact the salon directly.`,
+                    "CANCELLATION_TOO_LATE"
+                );
+            }
+        }
+
         // The reason the customer picked is stored against the appointment, so
         // the salon can see why a slot freed up rather than only that it did.
         return appointmentsService.cancel({

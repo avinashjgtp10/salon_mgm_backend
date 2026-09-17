@@ -84,10 +84,17 @@ const PUBLIC_SALON_SELECT = `
     LEFT JOIN marketplace_locations ml ON ml.profile_id = mp.id
 `;
 
-// No marketplace profile row at all (mp.is_published IS NULL) means this salon
-// never touched the Marketplace Profile feature — treated as published so
-// salons that only ever used Link Builder / direct booking links keep working.
-const PUBLISHED_CONDITION = `(mp.is_published IS NULL OR mp.is_published = true)`;
+// Online Booking is OPT-IN (DECISION-OB-001): a salon is publicly bookable only
+// once it has explicitly published. A salon that never touched the Marketplace
+// Profile feature is NOT bookable — which is the opposite of the old rule, where
+// a missing profile row counted as published and left most salons publicly
+// listed without ever having asked.
+//
+// Salons already live when this shipped are grandfathered by
+// Migration/backfill_online_booking_opt_in.sql, which publishes any salon that
+// already has online bookings or saved booking links, so no working link goes
+// dark. Run that migration BEFORE deploying this, or currently-live salons 404.
+const PUBLISHED_CONDITION = `(mp.is_published = true)`;
 
 export const bookingsRepository = {
     async findSalonBySlug(slug: string) {
@@ -156,11 +163,25 @@ export const bookingsRepository = {
         return rows;
     },
 
-    // Ratings come from the real `reviews` rows attributed to each staff member
-    // (the feedback-token flow already records staff_id). A stylist with no
-    // reviews yet returns null rather than a flattering default — the booking
-    // page shows nothing in that case instead of inventing a score.
-    async findActiveStaff(salonId: string) {
+    // Staff a customer is actually allowed to book online.
+    //
+    // Three gates:
+    //   • is_active               — obviously.
+    //   • allow_calendar_bookings — the salon's own "this person takes
+    //     bookings" switch, which online booking previously ignored entirely.
+    //   • service_staff mapping   — who performs the selected services.
+    //
+    // The mapping gate is deliberately conditional: a service with NO rows in
+    // service_staff imposes no restriction, because in practice almost nothing
+    // is mapped (1 row across the whole dev database). Treating "unmapped" as
+    // "nobody can do it" would empty every salon's stylist list and take online
+    // booking down. So a staff member is excluded only for services that have
+    // been explicitly mapped to someone else.
+    //
+    // Ratings come from real `reviews` rows attributed to the staff member; a
+    // stylist with no reviews returns null rather than a flattering default.
+    async findActiveStaff(salonId: string, serviceIds?: string[] | null) {
+        const ids = Array.isArray(serviceIds) && serviceIds.length > 0 ? serviceIds : null;
         const { rows } = await pool.query(
             `SELECT s.id, s.first_name, s.last_name, s.designation, s.avatar_url,
                     ROUND(r.avg_rating::numeric, 1)::float8 AS rating,
@@ -172,11 +193,54 @@ export const bookingsRepository = {
                  WHERE salon_id = $1 AND staff_id IS NOT NULL AND rating IS NOT NULL
                  GROUP BY staff_id
              ) r ON r.staff_id = s.id
-             WHERE s.salon_id = $1 AND s.is_active = true
+             WHERE s.salon_id = $1
+               AND s.is_active = true
+               AND COALESCE(s.allow_calendar_bookings, true) = true
+               AND (
+                 $2::uuid[] IS NULL
+                 OR NOT EXISTS (
+                   SELECT 1
+                   FROM unnest($2::uuid[]) AS req(service_id)
+                   WHERE EXISTS (SELECT 1 FROM service_staff m WHERE m.service_id = req.service_id)
+                     AND NOT EXISTS (
+                       SELECT 1 FROM service_staff m2
+                       WHERE m2.service_id = req.service_id AND m2.staff_id = s.id
+                     )
+                 )
+               )
              ORDER BY s.first_name ASC`,
-            [salonId]
+            [salonId, ids]
         );
         return rows;
+    },
+
+    // Is this specific staff member bookable online for these services? Mirrors
+    // findActiveStaff's gates so the list a customer sees and the submission
+    // that's accepted can't disagree.
+    async isStaffEligible(staffId: string, salonId: string, serviceIds?: string[] | null): Promise<boolean> {
+        const ids = Array.isArray(serviceIds) && serviceIds.length > 0 ? serviceIds : null;
+        const { rows } = await pool.query(
+            `SELECT 1
+             FROM staff s
+             WHERE s.id = $1 AND s.salon_id = $2
+               AND s.is_active = true
+               AND COALESCE(s.allow_calendar_bookings, true) = true
+               AND (
+                 $3::uuid[] IS NULL
+                 OR NOT EXISTS (
+                   SELECT 1
+                   FROM unnest($3::uuid[]) AS req(service_id)
+                   WHERE EXISTS (SELECT 1 FROM service_staff m WHERE m.service_id = req.service_id)
+                     AND NOT EXISTS (
+                       SELECT 1 FROM service_staff m2
+                       WHERE m2.service_id = req.service_id AND m2.staff_id = s.id
+                     )
+                 )
+               )
+             LIMIT 1`,
+            [staffId, salonId, ids]
+        );
+        return rows.length > 0;
     },
 
     async findServiceById(id: string, salonId: string) {
@@ -232,6 +296,45 @@ export const bookingsRepository = {
     // the time it's submitted (or bypassed entirely by a direct API call), so
     // the same question has to be asked again at write time. `excludeId` lets
     // a reschedule ignore the appointment being moved.
+    // Serialises concurrent public bookings for one salon on one date.
+    //
+    // BUG-OB-002 asks for real concurrency protection, and a read-then-write
+    // overlap check can't provide it: two requests can both read "free" before
+    // either inserts. A transaction-scoped advisory lock keyed on
+    // (salon, local date) makes those requests queue instead — narrow enough
+    // that unrelated salons and other dates never contend, and released
+    // automatically when the transaction ends, including on error.
+    //
+    // An exclusion constraint over a tsrange would be stronger still, but it
+    // needs btree_gist plus a generated range column and would also police the
+    // internal staff-facing calendar, where staff deliberately double-book at
+    // times. Deliberately scoped to the public flow.
+    async withBookingLock<T>(
+        salonId: string,
+        dateStr: string,
+        work: (client: import("pg").PoolClient) => Promise<T>
+    ): Promise<T> {
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            // Two 32-bit keys rather than one hashed string: salon and date stay
+            // independently distinguishable, so collisions can't silently
+            // serialise unrelated salons.
+            await client.query(
+                `SELECT pg_advisory_xact_lock(hashtext($1)::int, hashtext($2)::int)`,
+                [salonId, dateStr]
+            );
+            const result = await work(client);
+            await client.query("COMMIT");
+            return result;
+        } catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        } finally {
+            client.release();
+        }
+    },
+
     async hasAppointmentOverlap(params: {
         salonId: string;
         staffId: string;
@@ -239,8 +342,9 @@ export const bookingsRepository = {
         startMinute: number;
         endMinute: number;
         excludeId?: string | null;
-    }): Promise<boolean> {
-        const { rows } = await pool.query(
+    }, client?: import("pg").PoolClient): Promise<boolean> {
+        const db = client ?? pool;
+        const { rows } = await db.query(
             `SELECT 1
              FROM appointments
              WHERE salon_id = $1
