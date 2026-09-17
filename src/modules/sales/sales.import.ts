@@ -159,6 +159,39 @@ function parseDateCell(value: any): string | undefined {
     return INVALID_DATE;
 }
 
+// Files exported by other software (not authored in Excel itself) sometimes
+// declare a worksheet dimension/`!ref` that undercounts the real row count
+// by one — the exporter's own row-count bookkeeping is off, not anything
+// about the cell data. Excel itself ignores a wrong dimension hint when
+// rendering (so the row is visibly there when a human opens the file), but
+// `sheet_to_json` trusts `!ref` to know where to stop reading, and silently
+// drops whatever real data sits just past it — one whole invoice vanishing
+// from a 8,000+ row import with no error at all. Recomputing the true range
+// from the worksheet's actual cell addresses (unioned with whatever was
+// declared, so this can only grow the range, never shrink a correct one)
+// makes an undercount impossible to hit.
+function recomputeSheetRange(ws: XLSX.WorkSheet): void {
+    const CELL_ADDR_RE = /^([A-Z]+)([0-9]+)$/;
+    let minR = Infinity, minC = Infinity, maxR = -Infinity, maxC = -Infinity;
+    for (const key of Object.keys(ws)) {
+        if (key[0] === "!") continue;
+        const m = CELL_ADDR_RE.exec(key);
+        if (!m) continue;
+        const c = XLSX.utils.decode_col(m[1]);
+        const r = Number(m[2]) - 1;
+        if (r < minR) minR = r;
+        if (r > maxR) maxR = r;
+        if (c < minC) minC = c;
+        if (c > maxC) maxC = c;
+    }
+    if (maxR < 0) return; // no actual cells found — nothing to fix
+    const declared = ws["!ref"] ? XLSX.utils.decode_range(ws["!ref"]) : null;
+    ws["!ref"] = XLSX.utils.encode_range({
+        s: { r: Math.min(minR, declared?.s.r ?? minR), c: Math.min(minC, declared?.s.c ?? minC) },
+        e: { r: Math.max(maxR, declared?.e.r ?? maxR), c: Math.max(maxC, declared?.e.c ?? maxC) },
+    });
+}
+
 // cellDates: true — makes XLSX hand back JS Date objects for date-formatted
 // cells instead of raw serial numbers, so the `instanceof Date` branch in
 // parseDateCell handles the common case directly; parseDateCell's own
@@ -168,6 +201,7 @@ function parseDateCell(value: any): string | undefined {
 function readExcelRawRows(buffer: Buffer): Record<string, any>[] {
     const wb = XLSX.read(buffer, { type: "buffer", cellDates: true });
     const ws = wb.Sheets[wb.SheetNames[0]];
+    recomputeSheetRange(ws);
     return XLSX.utils.sheet_to_json(ws, { defval: null }) as Record<string, any>[];
 }
 
@@ -616,44 +650,63 @@ export const salesImportService = {
                     paymentMethod = resolved;
                 }
 
-                // Bill Amount = the sale itself (amount - discount), excluding
-                // tax — Total Sale is Bill Amount + Tax Amount, computed from
-                // these same two rounded figures so the three displayed cards
-                // (Bill Amount / Tax Amount / Total Sale) always add up
-                // exactly, with no tax silently folded into Bill Amount.
-                const billAmount = Math.round((row.amount - discount) * 100) / 100;
-                const totalAmount = Math.round((billAmount + tax) * 100) / 100;
+                // The sheet's Amount column is the row's TAX-INCLUSIVE final
+                // total (confirmed against real Salonist export data: source
+                // "Total Value" == this Amount column, with Tax already
+                // embedded in it) — NOT a pre-tax figure to add tax onto.
+                // Getting this backwards was the previous bug: it added Tax
+                // on top of an already-tax-inclusive Amount, silently
+                // double-counting tax in every created invoice's total, not
+                // just in the summary cards.
+                //   Total Sale  = Amount - Discount              (matches source "Total Value")
+                //   Bill Amount = Total Sale - Tax                (net of tax — the true bill amount)
+                //   Subtotal for line items = Amount - Tax        (pre-tax, pre-discount base; see below)
+                const totalSale = Math.round((row.amount - discount) * 100) / 100;
+                const billAmount = Math.round((totalSale - tax) * 100) / 100;
 
                 if (dry_run) {
                     result.success++;
                     result.total_bill_amount += billAmount;
                     result.total_tax_amount += tax;
-                    result.total_billed += totalAmount;
+                    result.total_billed += totalSale;
                     preview.status = "valid";
                     if (previewRows.length < PREVIEW_ROW_CAP) previewRows.push(preview);
                     continue;
                 }
 
-                // ── Split the row's single Amount across the matched items
-                // in whole paise — never inventing an individual item price,
-                // just guaranteeing the invoice's total matches the source
-                // row exactly (see sales.import.logic.ts's allocateAmountPaise
-                // doc comment). Discount/tax stay at the invoice level, not
-                // per item, so they're subtracted/added exactly once
-                // regardless of how many items the row contains. ──────────
-                const totalPaise = Math.round(row.amount * 100);
-                const paiseShares = allocateAmountPaise(totalPaise, matchedItems.length);
+                // ── Split the row's amount across the matched items in whole
+                // paise — never inventing an individual item price, just
+                // guaranteeing the resulting totals match the source row
+                // exactly (see sales.import.logic.ts's allocateAmountPaise
+                // doc comment). Two DIFFERENT targets, deliberately:
+                //   - Sale line items (saleItemsInput) sum to Amount - Tax —
+                //     salesRepository.create()'s own total formula is
+                //     `subtotal - discount + tax`, so pre-tax items here plus
+                //     the top-level discount/tax below reconstructs exactly
+                //     Total Sale (Amount - Discount), while sales.tax_amount
+                //     still correctly records the real historical Tax instead
+                //     of silently reporting 0 (it would if tax had already
+                //     been baked into the items and then added again here).
+                //   - Appointment line items (below) sum to Total Sale
+                //     directly, since the appointment is created with
+                //     include_gst:false (no tax computed on its own side) —
+                //     its own grand total must equal Total Sale/sales.total_amount
+                //     for the Payment Collection / Appointment Detail reports
+                //     that key off it to agree with the sale, not the pre-tax base. ──
+                const subtotalForItems = Math.round((row.amount - tax) * 100) / 100;
+                const itemPaise = allocateAmountPaise(Math.round(subtotalForItems * 100), matchedItems.length);
                 const saleItemsInput = matchedItems.map((it, idx) => ({
                     item_type: it.type,
                     item_id: it.id,
                     staff_id: staffPerItem[idx].id,
                     name: it.name,
                     quantity: 1,
-                    unit_price: (paiseShares[idx] / 100).toFixed(2),
+                    unit_price: (itemPaise[idx] / 100).toFixed(2),
                     discount_amount: "0",
                     tax_amount: "0",
-                    taxable_amount: (paiseShares[idx] / 100).toFixed(2),
+                    taxable_amount: (itemPaise[idx] / 100).toFixed(2),
                 }));
+                const appointmentPaise = allocateAmountPaise(Math.round(totalSale * 100), matchedItems.length);
 
                 // ── Create a real Appointment first ──────────────────────
                 // Payment Collection Report and Detailed Appointment Report
@@ -671,7 +724,7 @@ export const salesImportService = {
                 const scheduledAt = `${row.date}T00:00:00.000Z`;
                 const itemsWithShares = matchedItems.map((it, idx) => ({
                     ...it,
-                    price: Number((paiseShares[idx] / 100).toFixed(2)),
+                    price: Number((appointmentPaise[idx] / 100).toFixed(2)),
                     staff: staffPerItem[idx],
                 }));
                 const appointmentServices = itemsWithShares
@@ -760,8 +813,8 @@ export const salesImportService = {
                         appointment_id: appointment.id,
                         gross_amount: row.amount,
                         discount_amount: discount,
-                        net_amount: totalAmount,
-                        paid_amount: totalAmount,
+                        net_amount: totalSale,
+                        paid_amount: totalSale,
                         due_amount: 0,
                         payment_method: paymentMethod,
                         status: "completed",
@@ -799,7 +852,7 @@ export const salesImportService = {
                 result.success++;
                 result.total_bill_amount += billAmount;
                 result.total_tax_amount += tax;
-                result.total_billed += totalAmount;
+                result.total_billed += totalSale;
             } catch (err: any) {
                 fail(err?.message || "Unexpected error");
                 logger.error("[sales/import] row processing failed:", { row: rowNum, error: err?.message ?? err });
