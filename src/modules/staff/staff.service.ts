@@ -951,9 +951,9 @@ export const staffSchedulesService = {
         await _ensureStaff(staffId, salonId);
         return staffSchedulesRepository.upsertBulk(staffId, body);
     },
-    async deleteByDate(staffId: string, salonId: string, date: string): Promise<void> {
+    async deleteByDate(staffId: string, salonId: string, date: string): Promise<"deleted" | "overridden" | "noop"> {
         await _ensureStaff(staffId, salonId);
-        await staffSchedulesRepository.deleteByDate(staffId, date);
+        return staffSchedulesRepository.deleteByDate(staffId, date);
     },
 };
 

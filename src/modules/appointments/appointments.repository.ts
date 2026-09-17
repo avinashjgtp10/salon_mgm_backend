@@ -415,6 +415,29 @@ export const appointmentsRepository = {
         return rows[0];
     },
 
+    // Cancels and records *why* and *when*. `cancelled_at` and `cancel_reason`
+    // have existed on this table for a long time but nothing ever wrote to
+    // them — the Manage Booking page was reduced to inferring the cancellation
+    // time from `updated_at`. Falls back to a plain status update on a database
+    // where those columns are missing (42703), so cancelling never fails on an
+    // environment that's behind on migrations.
+    async cancelWithReason(id: string, reason?: string | null): Promise<Appointment> {
+        try {
+            const { rows } = await pool.query(
+                `UPDATE appointments
+                    SET status = 'cancelled',
+                        cancelled_at = NOW(),
+                        cancel_reason = COALESCE(NULLIF($2, ''), cancel_reason)
+                  WHERE id = $1 RETURNING *`,
+                [id, reason ?? null]
+            );
+            return rows[0];
+        } catch (err: any) {
+            if (err?.code !== "42703") throw err;
+            return this.updateStatus(id, "cancelled");
+        }
+    },
+
     // ─── Appointment Consumables (current-state, relational) ───────────────────
     // Deliberately a separate table rather than a field inside the `services`
     // JSONB column above — see appointment_service_consumables' migration

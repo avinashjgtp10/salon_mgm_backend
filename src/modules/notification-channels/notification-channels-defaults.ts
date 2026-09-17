@@ -85,9 +85,14 @@ export const DEFAULT_EMAIL_TEMPLATES: Record<DefaultPurchaseEventType, { subject
     subject: "Thank you for visiting {{salon_name}}",
     body: "Hi {{customer_name}},\n\nThank you for visiting {{salon_name}}. We hope you had a great experience! Your bill is attached with this email.\n\n{{items}}\n\n{{feedback_line}}\n\nThank you for choosing {{salon_name}} — we appreciate you!",
   },
+  // Tokens beyond the six shared with WhatsApp (amounts, address, maps link,
+  // booking id, cancellation policy, manage link) are supplied per-send via
+  // extraVariables. Any of them can be absent — an unmatched {{token}} renders
+  // as an empty string — so this body stays valid for call sites that don't
+  // provide them, e.g. a staff-created calendar appointment.
   appointment_confirmation: {
-    subject: "Appointment Confirmed at {{salon_name}}",
-    body: "Hi {{customer_name}},\n\nYour appointment has been successfully confirmed.\n\nAppointment Details:\nSalon: {{salon_name}}\nDate: {{appointment_date}}\nTime: {{appointment_time}}\nService: {{service_name}}\nStaff: {{staff_name}}\n\nWe look forward to seeing you!",
+    subject: "Appointment Confirmed at {{salon_name}} — {{appointment_date}}",
+    body: "Hi {{customer_name}},\n\nYour appointment has been successfully confirmed.\n\nAppointment Details:\nSalon: {{salon_name}}\nDate: {{appointment_date}}\nTime: {{appointment_time}}\nService: {{service_name}}\nStaff: {{staff_name}}\nBooking ID: {{booking_id}}\n\nPayment:\nTotal: {{appointment_amount}}\nPaid: {{paid_amount}}\nDue at the salon: {{remaining_amount}}\n\nWhere to find us:\n{{salon_address}}\n{{google_maps_link}}\n\nNeed to make a change?\n{{manage_booking_link}}\n\n{{cancellation_policy}}\n\nWe look forward to seeing you!",
   },
   appointment_rescheduled: {
     subject: "Your appointment at {{salon_name}} has been rescheduled",

@@ -73,22 +73,38 @@ export const marketplaceProfileRepo = {
   },
 
   async upsertBookingPolicy(salonId: string, data: UpsertBookingPolicyBody): Promise<MarketplaceProfile | null> {
-    try {
-      const { rows } = await pool.query(
-        `UPDATE marketplace_profiles SET
+    const BASE_SET = `
            max_advance_days          = COALESCE($1, max_advance_days),
            min_notice_hours          = COALESCE($2, min_notice_hours),
            cancellation_notice_hours = COALESCE($3, cancellation_notice_hours),
-           slot_interval_minutes     = COALESCE($4, slot_interval_minutes),
-           updated_at                = NOW()
+           slot_interval_minutes     = COALESCE($4, slot_interval_minutes)`;
+    const baseParams = [
+      data.max_advance_days          ?? null,
+      data.min_notice_hours          ?? null,
+      data.cancellation_notice_hours ?? null,
+      data.slot_interval_minutes     ?? null,
+    ];
+
+    try {
+      const { rows } = await pool.query(
+        `UPDATE marketplace_profiles SET ${BASE_SET},
+           allow_same_day_booking  = COALESCE($5::boolean, allow_same_day_booking),
+           allow_multiple_services = COALESCE($6::boolean, allow_multiple_services),
+           updated_at              = NOW()
+         WHERE salon_id = $7 RETURNING *`,
+        [...baseParams, data.allow_same_day_booking ?? null, data.allow_multiple_services ?? null, salonId]
+      );
+      return rows[0] || null;
+    } catch (err: any) {
+      if (err?.code !== UNDEFINED_COLUMN) throw err;
+    }
+    // allow_same_day_booking column not added yet — still save the rest rather
+    // than dropping the whole Booking Settings save on the floor.
+    try {
+      const { rows } = await pool.query(
+        `UPDATE marketplace_profiles SET ${BASE_SET}, updated_at = NOW()
          WHERE salon_id = $5 RETURNING *`,
-        [
-          data.max_advance_days          ?? null,
-          data.min_notice_hours          ?? null,
-          data.cancellation_notice_hours ?? null,
-          data.slot_interval_minutes     ?? null,
-          salonId,
-        ]
+        [...baseParams, salonId]
       );
       return rows[0] || null;
     } catch (err: any) {
@@ -100,12 +116,41 @@ export const marketplaceProfileRepo = {
   async upsertAbout(salonId: string, data: UpsertAboutBody): Promise<MarketplaceProfile> {
     // Callers always run this after _ensureProfile(), so the row already
     // exists — a straight UPDATE, not an upsert-with-a-guessed-display_name.
+    //
+    // The social/toggle columns arrived in a later migration, so they're written
+    // in a separate statement that tolerates their absence (42703). The
+    // description must save either way — a missing optional column must never
+    // cost the owner the About text they just typed.
     const { rows } = await pool.query(
       `UPDATE marketplace_profiles SET venue_description = $1, updated_at = NOW()
        WHERE salon_id = $2 RETURNING *`,
       [data.venue_description, salonId]
     );
-    return rows[0];
+
+    const touchesExtras =
+      data.instagram_url !== undefined || data.facebook_url !== undefined || data.about_enabled !== undefined;
+    if (!touchesExtras) return rows[0];
+
+    try {
+      const { rows: extraRows } = await pool.query(
+        `UPDATE marketplace_profiles SET
+           instagram_url = COALESCE($1, instagram_url),
+           facebook_url  = COALESCE($2, facebook_url),
+           about_enabled = COALESCE($3::boolean, about_enabled),
+           updated_at    = NOW()
+         WHERE salon_id = $4 RETURNING *`,
+        [
+          data.instagram_url ?? null,
+          data.facebook_url ?? null,
+          data.about_enabled ?? null,
+          salonId,
+        ]
+      );
+      return extraRows[0] ?? rows[0];
+    } catch (err: any) {
+      if (err?.code !== UNDEFINED_COLUMN) throw err;
+      return rows[0]; // columns not migrated yet — description still saved
+    }
   },
 
   async updateLogo(salonId: string, logoUrl: string): Promise<MarketplaceProfile | null> {
