@@ -132,6 +132,14 @@ export const superAdminRepository = {
 
   // ── SALONS ────────────────────────────────────────────────────────────────────
 
+  // Every salon's subscription lifecycle (trial or paid) is tracked in the
+  // Razorpay-integrated `subscriptions` table, not `billing_subscriptions`
+  // (that one is only ever written by the legacy/manual-comp paid-checkout
+  // path and a super-admin "grant days" action, so it's empty for almost
+  // every real account) — same reasoning as
+  // searchSalonsForSubscriptionPermissions/getSubscriptionPermissionsById
+  // above. trial_end/current_period_end cover trial and paid accounts
+  // respectively.
   async getAllSalons(search?: string) {
     const param = search ? `%${search}%` : null;
     const { rows } = await pool.query(`
@@ -150,18 +158,18 @@ export const superAdminRepository = {
           SELECT SUM(net_amount) FROM payments
           WHERE salon_id = s.id AND status IN ('completed','partial')
         ), 0)::numeric                                                                    AS revenue,
-        (SELECT bs.status FROM billing_subscriptions bs
-           WHERE bs.salon_id = s.id AND bs.status IN ('active','trialing')
-           ORDER BY bs.created_at DESC LIMIT 1)                                           AS subscription_status,
-        (SELECT bp.name FROM billing_subscriptions bs
-           JOIN billing_plans bp ON bp.id = bs.plan_id
-           WHERE bs.salon_id = s.id AND bs.status IN ('active','trialing')
-           ORDER BY bs.created_at DESC LIMIT 1)                                           AS plan_name,
-        (SELECT bs.current_period_end FROM billing_subscriptions bs
-           WHERE bs.salon_id = s.id AND bs.status IN ('active','trialing')
-           ORDER BY bs.created_at DESC LIMIT 1)                                           AS plan_expires_at
+        sub.status                                                                        AS subscription_status,
+        sp.name                                                                           AS plan_name,
+        COALESCE(sub.trial_end, sub.current_period_end)                                   AS plan_expires_at
       FROM salons s
       LEFT JOIN users u ON u.id = s.owner_id
+      LEFT JOIN LATERAL (
+        SELECT * FROM subscriptions
+        WHERE salon_id = s.id
+        ORDER BY created_at DESC
+        LIMIT 1
+      ) sub ON true
+      LEFT JOIN subscription_plans sp ON sp.id = sub.plan_id
       WHERE ($1::text IS NULL
          OR s.business_name ILIKE $1
          OR s.slug          ILIKE $1
