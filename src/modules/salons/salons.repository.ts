@@ -98,6 +98,28 @@ const SALON_CLEAR_DATA_TABLES = [
   "purchase_items", "purchases", "stock_movements", "wa_review_prompts",
   "bundle_services", "bundles",
 
+  // Reviews — review_service_ratings.staff_id -> staff and
+  // reviews.booking_id -> appointments are both plain (NO ACTION) FKs, so
+  // both must be cleared before the Appointments/Staff sections below (they
+  // used to sit near the bottom of this list, after both, which aborted the
+  // delete with a foreign-key violation). wa_review_prompts (above) already
+  // references reviews and is cleared first.
+  "review_service_ratings", "reviews",
+
+  // Payment Machine (POS terminal) integration — pos_payment_requests has
+  // plain (NO ACTION) FKs to appointments/clients/sales/payments/
+  // payment_terminals, so it must be cleared before any of those tables
+  // below or the delete aborts with a foreign-key violation ("This can't be
+  // deleted because other records still depend on it"). pos_payment_events
+  // is NOT listed here — it has no salon_id/source_salon_id/dest_salon_id
+  // column of its own (it's only reachable via pos_payment_request_id, a
+  // NO ACTION FK), so the generic salon_id-column delete loop below would
+  // silently skip it, leaving rows that then block deleting
+  // pos_payment_requests. It's deleted explicitly by join, right before
+  // this list is processed — see clearSalonData.
+  "pos_payment_requests", "payment_terminals",
+  "payment_provider_configs",
+
   // Clients & their sub-records (cascade from clients, listed for clarity —
   // harmless to delete explicitly even though clients cascade would too).
   "client_addresses", "client_emergency_contacts", "client_preferences",
@@ -108,7 +130,31 @@ const SALON_CLEAR_DATA_TABLES = [
   "booking_services", "bookings", "bookings_archive",
 
   // Sales / Quick Sale / invoices / payments
-  "sale_items", "sales", "invoices", "invoices_archive", "payments",
+  // sales_import_batches must come after sales — sales.import_batch_id has a
+  // plain (NO ACTION) FK to it, so a batch row still referenced by a sale
+  // would abort the delete if cleared first.
+  "sale_items", "sales", "sales_import_batches", "invoices", "invoices_archive", "payments",
+
+  // Purchase Orders — order_items.product_id references products (NO
+  // ACTION) and orders.supplier_id references suppliers (NO ACTION), so
+  // both must be cleared before the catalog/inventory sections below.
+  "order_items", "orders", "order_signatures",
+
+  // Product audits & stock ledger — product_audit_items.product_id and
+  // stock_ledger.product_id/.supplier_id are all plain (NO ACTION) FKs, and
+  // supplier_payments.supplier_id likewise, so all four must be cleared
+  // before products (catalog section below) and suppliers (Inventory
+  // section further down) or the delete aborts with a foreign-key
+  // violation. product_audit_items also cascades from product_audits.
+  "product_audit_items", "product_audits", "stock_ledger", "supplier_payments",
+
+  // client_package_services.catalog_service_id -> services is a plain
+  // (NO ACTION) FK, so it (and its CASCADE children) must be cleared before
+  // the Services & products catalog below — used to sit in the Packages &
+  // memberships section further down, after services, which aborted the
+  // delete with a foreign-key violation.
+  "client_package_service_schedules", "client_package_session_history",
+  "client_package_services",
 
   // Services & products sold (catalog)
   "service_add_on_options", "service_add_on_groups", "service_consultation_forms",
@@ -117,8 +163,7 @@ const SALON_CLEAR_DATA_TABLES = [
   "taxes",
 
   // Packages & memberships
-  "client_package_service_schedules", "client_package_session_history",
-  "client_package_services", "client_packages", "package_offers",
+  "client_packages", "package_offers",
   "package_services", "packages", "package_template_services",
   "package_templates", "membership_services", "membership_usage_log",
   "client_memberships", "memberships",
@@ -166,13 +211,13 @@ const SALON_CLEAR_DATA_TABLES = [
   // Marketing
   "campaign_recipients", "campaigns", "coupon_designs", "coupons",
   "wa_campaign_contacts", "wa_campaigns", "wa_messages", "wa_conversations",
-  "wa_templates", "wa_automation_logs", "wa_automation_templates",
+  "wa_templates",
+  // wa_scheduled_messages.automation_log_id -> wa_automation_logs is a plain
+  // (NO ACTION) FK, so it must be cleared before wa_automation_logs.
+  "wa_scheduled_messages", "wa_automation_logs", "wa_automation_templates",
   "wa_automation_sent_guard", "wa_salon_automation_settings",
   "whatsapp_configs", "whatsapp_credits",
   "loyalty_settings", "reward_points_ledger", "referral_ledger", "ewallet_ledger",
-
-  // Reviews
-  "review_service_ratings", "reviews",
 
   // Marketplace listings tied to this salon (operational, not onboarding)
   "marketplace_bookings", "marketplace_booking_settings", "marketplace_features",
@@ -201,6 +246,17 @@ const SALON_CLEAR_DATA_TABLES = [
 export async function clearSalonData(client: PoolClient, salonId: string): Promise<boolean> {
   const { rows: salons } = await client.query(`SELECT id FROM salons WHERE id = $1`, [salonId]);
   if (!salons[0]) return false;
+
+  // pos_payment_events has no salon-scope column of its own — it's only
+  // reachable via pos_payment_request_id (NO ACTION FK) — so it can't go
+  // through the generic salon_id-column loop below (SALON_CLEAR_DATA_TABLES
+  // comment above explains why) and must be deleted by join before
+  // pos_payment_requests is cleared.
+  await client.query(
+    `DELETE FROM pos_payment_events
+     WHERE pos_payment_request_id IN (SELECT id FROM pos_payment_requests WHERE salon_id = $1)`,
+    [salonId]
+  );
 
   // One bulk lookup instead of two information_schema round-trips per table
   // (was ~280 sequential queries against a remote DB, slow enough to blow
