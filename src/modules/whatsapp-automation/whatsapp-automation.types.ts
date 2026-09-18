@@ -196,6 +196,17 @@ export type AutomationTriggerPayload = {
   // call site, which already has the PDF buffer built for the WhatsApp send.
   email?: string | null
   emailAttachment?: { buffer: Buffer; filename: string } | null
+  // Extra named variables for the SMS/Email templates only — merged over the
+  // names derived from `variables` by positionalToNamed().
+  //
+  // These deliberately never reach WhatsApp. A Meta template is approved with
+  // a fixed parameter count and a send whose count doesn't match is rejected
+  // outright, so anything richer than the approved 6 placeholders cannot go
+  // into `variables` without breaking every salon's existing approved
+  // template. Email has no such constraint — an unused {{token}} simply
+  // renders empty — so richer content (amounts, address, maps link, manage
+  // link, cancellation policy) travels here instead.
+  extraVariables?: Record<string, string>
 }
 
 // ── API Bodies ────────────────────────────────────────────────────────────────

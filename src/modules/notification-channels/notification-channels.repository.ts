@@ -3,6 +3,11 @@
 // ============================================================
 
 import pool from "../../config/database"
+
+// Postgres check_violation — raised when the status CHECK constraint still
+// predates PENDING (see logPending below).
+const CHECK_VIOLATION = "23514"
+
 import { AutomationEventType } from "../whatsapp-automation/whatsapp-automation.types"
 import { Channel, NotificationChannelTemplate } from "./notification-channels.types"
 import { canSendEmail } from "../utils/notif-prefs"
@@ -143,6 +148,51 @@ export const notificationChannelsRepository = {
         params.status, params.providerMessageId ?? null, params.failureReason ?? null,
         params.referenceId ?? null, params.referenceType ?? null,
       ]
+    )
+  },
+
+  // Records a send that is about to be attempted, returning the row id so the
+  // outcome can be written back to the same row. Returns null when the status
+  // CHECK constraint doesn't allow PENDING yet (Migration/add_pending_status_
+  // to_notification_channel_logs.sql not run) — the caller then falls back to
+  // logging only the final outcome, exactly as before.
+  async logPending(params: {
+    salonId: string
+    clientId: string | null
+    channel: Channel
+    eventType: AutomationEventType
+    recipient: string
+    referenceId?: string | null
+    referenceType?: string | null
+  }): Promise<string | null> {
+    try {
+      const { rows } = await pool.query(
+        `INSERT INTO notification_channel_logs
+           (salon_id, client_id, channel, event_type, recipient, status, reference_id, reference_type)
+         VALUES ($1,$2,$3,$4,$5,'PENDING',$6,$7)
+         RETURNING id`,
+        [
+          params.salonId, params.clientId, params.channel, params.eventType,
+          params.recipient, params.referenceId ?? null, params.referenceType ?? null,
+        ]
+      )
+      return rows[0]?.id ?? null
+    } catch (err: any) {
+      if (err?.code === CHECK_VIOLATION) return null
+      throw err
+    }
+  },
+
+  async finalizeLog(logId: string, params: {
+    status: "SENT" | "FAILED"
+    providerMessageId?: string | null
+    failureReason?: string | null
+  }): Promise<void> {
+    await pool.query(
+      `UPDATE notification_channel_logs
+         SET status = $2, provider_message_id = $3, failure_reason = $4
+       WHERE id = $1`,
+      [logId, params.status, params.providerMessageId ?? null, params.failureReason ?? null]
     )
   },
 }

@@ -409,8 +409,42 @@ export const staffSchedulesRepository = {
         return rows;
     },
 
-    async deleteByDate(staffId: string, date: string): Promise<void> {
-        await pool.query(`DELETE FROM staff_schedules WHERE staff_id = $1 AND date = $2::date`, [staffId, date]);
+    // Clears one date's schedule. If that date had no row of its own but the
+    // staff member has a recurring weekly baseline covering it, deleting
+    // nothing would leave the grid (and Online Booking) still showing hours
+    // for a day the user just cleared — and it would come straight back on
+    // refresh. In that case record an explicit unavailable override for the
+    // date instead, which is what "remove this day" means to the person
+    // looking at the cell. Returns how the delete resolved.
+    async deleteByDate(staffId: string, date: string): Promise<"deleted" | "overridden" | "noop"> {
+        const del = await pool.query(
+            `DELETE FROM staff_schedules WHERE staff_id = $1 AND date = $2::date`,
+            [staffId, date]
+        );
+        if ((del.rowCount ?? 0) > 0) return "deleted";
+
+        const dayOfWeek = new Date(`${date}T12:00:00Z`).getUTCDay();
+        const { rows } = await pool.query(
+            `SELECT 1 FROM staff_schedules
+             WHERE staff_id = $1 AND date IS NULL AND day_of_week = $2 AND is_available = true
+             LIMIT 1`,
+            [staffId, dayOfWeek]
+        );
+        if (rows.length === 0) return "noop";
+
+        await pool.query(
+            `INSERT INTO staff_schedules (staff_id, day_of_week, is_available, start_time, end_time, notes, breaks, date)
+             VALUES ($1, $2, false, NULL, NULL, NULL, '[]'::jsonb, $3::date)
+             ON CONFLICT (staff_id, date) DO UPDATE SET
+                 is_available = false,
+                 start_time   = NULL,
+                 end_time     = NULL,
+                 breaks       = '[]'::jsonb,
+                 day_of_week  = EXCLUDED.day_of_week,
+                 updated_at   = NOW()`,
+            [staffId, dayOfWeek, date]
+        );
+        return "overridden";
     },
 
     async upsertBulk(staffId: string, body: UpsertStaffSchedulesBody): Promise<StaffSchedule[]> {
