@@ -33,6 +33,10 @@ router.get("/cashdashboard", ...guard, viewCash, cashManagementController.getDas
 router.get("/", ...guard, viewCash, cashManagementController.listCounters);
 router.get("/income", ...guard, viewCash, cashManagementController.listCashIncomeEntries);
 router.get("/expenses", ...guard, viewCash, cashManagementController.listExpenses);
+// Consolidates GET /cashdashboard, GET / (counters), GET /expenses and
+// GET /api/v1/dashboard/summary into one call — payload's `sections` picks
+// which of those to run.
+router.post("/summary-bundle", ...guard, viewCash, cashManagementController.getSummaryBundle);
 router.post("/expenses", ...guard, addExpense, cashManagementController.createExpense);
 router.put("/expenses/:id", ...guard, editExpense, cashManagementController.updateExpense);
 router.delete("/expenses/:id", ...guard, deleteExpense, cashManagementController.deleteExpense);

@@ -1,13 +1,23 @@
 import { AppError } from "../../middleware/error.middleware";
 import { cashManagementRepository } from "./cash-management.repository";
+import { salonDashboardService } from "../salon-dashboard/salon-dashboard.service";
 import type {
   CloseCounterBody,
   CounterListFilters,
   CreateExpenseBody,
   ExpenseListFilters,
   OpenCounterBody,
+  SummaryBundleBody,
+  SummaryBundleSection,
   UpdateExpenseBody,
 } from "./cash-management.types";
+
+const SUMMARY_BUNDLE_SECTIONS: SummaryBundleSection[] = [
+  "cash_dashboard",
+  "cash_counters",
+  "cash_expenses",
+  "dashboard_summary",
+];
 
 export const cashManagementService = {
   async openCounter(salonId: string, createdBy: string, body: OpenCounterBody) {
@@ -111,5 +121,58 @@ export const cashManagementService = {
       remarks: body.remarks,
       closedBy,
     });
+  },
+
+  // Fetches only the sections the caller asked for, in parallel, so a page
+  // that needs several of the cash-management/dashboard widgets at once can
+  // do it in one round trip instead of four.
+  async getSummaryBundle(salonId: string, body: SummaryBundleBody) {
+    const sections = Array.isArray(body.sections) ? body.sections : [];
+    if (!sections.length) {
+      throw new AppError(400, "sections must be a non-empty array", "VALIDATION_ERROR");
+    }
+    const invalid = sections.filter((s) => !SUMMARY_BUNDLE_SECTIONS.includes(s));
+    if (invalid.length) {
+      throw new AppError(400, `Invalid section(s): ${invalid.join(", ")}`, "VALIDATION_ERROR");
+    }
+
+    const tasks: Partial<Record<SummaryBundleSection, Promise<unknown>>> = {};
+
+    if (sections.includes("cash_dashboard")) {
+      tasks.cash_dashboard = this.getDashboardSummary(salonId, body.cash_management_id);
+    }
+    if (sections.includes("cash_counters")) {
+      tasks.cash_counters = this.listCounters({
+        salonId,
+        status: body.counters?.status,
+        search: body.counters?.search,
+        from: body.counters?.from,
+        to: body.counters?.to,
+        sortBy: body.counters?.sort_by,
+        sortOrder: body.counters?.sort_order === "asc" ? "asc" : "desc",
+        page: body.counters?.page,
+        limit: body.counters?.limit,
+      });
+    }
+    if (sections.includes("cash_expenses")) {
+      tasks.cash_expenses = this.listExpenses({
+        salonId,
+        cashManagementId: body.expenses?.cash_management_id ?? body.cash_management_id,
+        search: body.expenses?.search,
+        sortBy: body.expenses?.sort_by,
+        sortOrder: body.expenses?.sort_order === "asc" ? "asc" : "desc",
+        page: body.expenses?.page,
+        limit: body.expenses?.limit,
+      });
+    }
+    if (sections.includes("dashboard_summary")) {
+      tasks.dashboard_summary = salonDashboardService.getSummary(salonId);
+    }
+
+    const keys = Object.keys(tasks) as SummaryBundleSection[];
+    const values = await Promise.all(keys.map((key) => tasks[key]));
+    const result: Partial<Record<SummaryBundleSection, unknown>> = {};
+    keys.forEach((key, i) => { result[key] = values[i]; });
+    return result;
   },
 };
