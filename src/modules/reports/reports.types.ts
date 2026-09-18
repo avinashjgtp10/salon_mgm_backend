@@ -637,6 +637,8 @@ export interface SalesSummaryReportStats {
     total_package: number;
     total_rewards: number;
     total_referral: number;
+    total_discount: number;
+    total_gst: number;
 }
 
 export interface SalesSummaryReportPagination {
@@ -651,6 +653,81 @@ export interface SalesSummaryReportResponse {
     pagination: SalesSummaryReportPagination;
     stats: SalesSummaryReportStats;
     filters_available: SalesSummaryFiltersAvailable;
+}
+
+// Day-wise breakdown for the Sales Summary report's graph icon — same
+// filters as the table/stats above, just grouped by IST calendar date
+// instead of collapsed into one total.
+export interface SalesSummaryChartPoint {
+    date: string; // YYYY-MM-DD, IST calendar date (or IST week/month start, depending on the requested granularity)
+    total_bill: number;
+    total_sale: number;
+    received_amount: number;
+    due_amount: number;
+}
+
+export interface SalesSummaryPaymentModePoint {
+    payment_mode: string;
+    total_bill: number;
+    received_amount: number;
+}
+
+export interface SalesSummaryItemTypePoint {
+    item_type: string;
+    total_sale: number;
+}
+
+export interface SalesSummaryPaymentStatusPoint {
+    payment_status: string;
+    total_bill: number;
+    total_sale: number;
+}
+
+export interface SalesSummaryStaffPoint {
+    staff_id: string | null;
+    staff_name: string;
+    total_sale: number;
+}
+
+export interface SalesSummaryServicePoint {
+    service_id: string | null;
+    service_name: string;
+    total_sale: number;
+}
+
+export interface SalesSummaryCategoryPoint {
+    category_id: string;
+    category_name: string;
+    total_sale: number;
+}
+
+export interface SalesSummaryHeatmapPoint {
+    day_of_week: number; // ISO: 1 = Monday .. 7 = Sunday
+    time_bucket: "morning" | "afternoon" | "evening";
+    total_bill: number;
+    total_sale: number;
+}
+
+export interface SalesSummaryPeriodStats {
+    total_bill: number;
+    total_sale: number;
+    received_amount: number;
+}
+
+// Everything the Sales Summary graph page's Overview tab needs, fetched in
+// one call — each section grouped by its own dimension but sharing the
+// exact same filters (_buildSalesSummaryWhere) as the report's own table.
+export interface SalesSummaryChartResponse {
+    daily: SalesSummaryChartPoint[];
+    payment_modes: SalesSummaryPaymentModePoint[];
+    item_types: SalesSummaryItemTypePoint[];
+    payment_status: SalesSummaryPaymentStatusPoint[];
+    top_staff: SalesSummaryStaffPoint[];
+    top_services: SalesSummaryServicePoint[];
+    categories: SalesSummaryCategoryPoint[];
+    heatmap: SalesSummaryHeatmapPoint[];
+    current_period: SalesSummaryPeriodStats;
+    previous_period: SalesSummaryPeriodStats | null;
 }
 
 export interface SaleDetailHeader {
