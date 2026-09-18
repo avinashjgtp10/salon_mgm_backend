@@ -5,6 +5,8 @@ import pool from "../../config/database";
 // wrapped to fall back to defaults on this specific error so the core public
 // booking flow (which must not depend on that migration) keeps working either way.
 const UNDEFINED_COLUMN = "42703";
+// Postgres undefined_table — an environment that is behind on migrations.
+const UNDEFINED_TABLE = "42P01";
 
 // The one timezone every wall-clock comparison in online booking is done in.
 // `appointments.scheduled_at` is a timestamptz (an instant), while staff
@@ -150,17 +152,57 @@ export const bookingsRepository = {
         return rows.map((r) => r.feature_key as string);
     },
 
+    // Ordered the way the booking page browses them — by the salon's own
+    // category ordering, then name — rather than by creation date, which is
+    // meaningless to a customer scrolling a 500-service catalogue.
+    //
+    // `booking_count` is how many appointments this service actually appears
+    // on, used for the "Most booked" shortcut. Real usage, not a guess: a
+    // catalogue this size is unusable without a way in.
     async findActiveServices(salonId: string) {
         const { rows } = await pool.query(
             `SELECT s.id, s.name, s.description, s.price, s.price_type,
-                    s.duration_minutes AS duration, s.category_id, c.name AS category_name
+                    s.duration_minutes AS duration,
+                    s.category_id,
+                    COALESCE(NULLIF(TRIM(c.name), ''), 'Other') AS category_name,
+                    NULLIF(TRIM(COALESCE(s.image_url, '')), '') AS image_url,
+                    COALESCE(b.booking_count, 0)::int AS booking_count
              FROM services s
              LEFT JOIN service_categories c ON c.id = s.category_id
+             LEFT JOIN (
+                 SELECT service_id, COUNT(*) AS booking_count
+                 FROM appointments
+                 WHERE salon_id = $1
+                   AND service_id IS NOT NULL
+                   AND status NOT IN ('cancelled', 'deleted')
+                 GROUP BY service_id
+             ) b ON b.service_id = s.id
              WHERE s.salon_id = $1 AND s.is_active = true AND s.online_booking = true
-             ORDER BY s.created_at DESC`,
+             ORDER BY COALESCE(c.display_order, 2147483647), c.name NULLS LAST, s.name ASC`,
             [salonId]
         );
         return rows;
+    },
+
+    // Per-salon brand colours/fonts for the public booking page, so it reads as
+    // the salon's rather than ours. The table is currently empty across the
+    // board — its editing UI was removed — so in practice this returns null and
+    // the page falls back to its neutral palette. Wired anyway: the moment a
+    // brand kit is populated the booking page picks it up with no code change.
+    // Tolerates the table being absent on an environment that's behind.
+    async findBrandKit(salonId: string) {
+        try {
+            const { rows } = await pool.query(
+                `SELECT primary_color, secondary_color, accent_color, text_color,
+                        heading_font, body_font
+                 FROM salon_brand_kits WHERE salon_id = $1`,
+                [salonId]
+            );
+            return rows[0] || null;
+        } catch (err: any) {
+            if (err?.code === UNDEFINED_TABLE || err?.code === UNDEFINED_COLUMN) return null;
+            throw err;
+        }
     },
 
     // Staff a customer is actually allowed to book online.
