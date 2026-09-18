@@ -228,6 +228,7 @@ const mapTopPackages = (
 import {
     SalesSummaryReportFilters,
     SalesSummaryReportResponse,
+    SalesSummaryChartResponse,
     SaleDetailResponse,
     DailySheetReportFilters,
     DailySheetReportResponse,
@@ -1326,6 +1327,41 @@ async getSalesSummaryReport(
 
 async getSaleDetail(salonId: string, saleId: string): Promise<SaleDetailResponse> {
     return reportsRepository.getSaleDetail(salonId, saleId);
+},
+
+async getSalesSummaryReportChart(
+    salonId: string,
+    filters: SalesSummaryReportFilters,
+    granularity: "day" | "week" | "month" = "day",
+    topLimit: number = 5
+): Promise<SalesSummaryChartResponse> {
+    const [
+        daily, payment_modes, item_types, payment_status,
+        top_staff, top_services, categories, heatmap,
+        current_period, previous_period,
+    ] = await Promise.all([
+        reportsRepository.getSalesSummaryReportChart(salonId, filters, granularity),
+        reportsRepository.getSalesSummaryPaymentModeBreakdown(salonId, filters),
+        reportsRepository.getSalesSummaryByItemType(salonId, filters),
+        reportsRepository.getSalesSummaryByPaymentStatus(salonId, filters),
+        reportsRepository.getSalesSummaryTopStaff(salonId, filters, topLimit),
+        reportsRepository.getSalesSummaryTopServices(salonId, filters, topLimit),
+        reportsRepository.getSalesSummaryByCategory(salonId, filters),
+        reportsRepository.getSalesSummaryHeatmap(salonId, filters),
+        reportsRepository.getSalesSummaryReportStats(salonId, filters),
+        reportsRepository.getSalesSummaryPreviousPeriodStats(salonId, filters),
+    ]);
+
+    return {
+        daily, payment_modes, item_types, payment_status,
+        top_staff, top_services, categories, heatmap,
+        current_period: {
+            total_bill: current_period.total_bill,
+            total_sale: current_period.total_sale,
+            received_amount: current_period.received_amount,
+        },
+        previous_period,
+    };
 },
 
 // ======================================================
