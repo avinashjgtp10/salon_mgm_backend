@@ -1371,6 +1371,69 @@ export interface PurchaseVsSalesReportResponse {
     stats: PurchaseVsSalesReportStats;
 }
 
+// ===============================
+// STOCK MOVEMENT REPORT (independent report API)
+// Reads stock_ledger directly, one row per individual transaction — never
+// merged/aggregated across entries, even for the same product on the same
+// day. Each row carries its own opening balance (before that entry),
+// in/out quantity, and closing balance (after). Never calls the Appointment
+// API/service.
+// ===============================
+
+export interface StockMovementReportFilters {
+    search?: string;
+    category_id?: string;
+    category_ids?: string[];
+    brand_id?: string;
+    brand_ids?: string[];
+    // Snapshot of the PRODUCT's current stock level (not this transaction's
+    // own quantity) — same in_stock/low_stock/out_of_stock semantics as
+    // Product Inventory Report, computed off products.amount/qty_alert.
+    stock_status?: "in_stock" | "low_stock" | "out_of_stock";
+    product_type?: "retail" | "consumable" | "both";
+    branch_id?: string;
+    product_id?: string;
+    date_from?: string;
+    date_to?: string;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface StockMovementReportRow {
+    id: string;
+    product_id: string;
+    product_name: string;
+    category_name: string;
+    measure_unit: string | null;
+    bottle_size: number | null;
+    movement_date: string;
+    opening_stock: number;
+    stock_in: number;
+    stock_out: number;
+    closing_stock: number;
+}
+
+export interface StockMovementReportStats {
+    total_products: number;
+    total_stock_in: number;
+    total_stock_out: number;
+    net_change: number;
+}
+
+export interface StockMovementReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface StockMovementReportResponse {
+    rows: StockMovementReportRow[];
+    pagination: StockMovementReportPagination;
+    stats: StockMovementReportStats;
+}
+
 export interface EwalletReportRow {
     client_id: string;
     client_name: string;

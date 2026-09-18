@@ -150,6 +150,12 @@ router.post(
     reportsController.getPurchaseVsSalesReport
 );
 
+router.post(
+    "/stock-movement",
+    ...baseGuard, viewReport("view_report_stock_movement"),
+    reportsController.getStockMovementReport
+);
+
 // ======================================================
 // PRODUCT MARGIN REPORT (independent report API)
 // Reads sale_items/products directly — never calls the Appointment

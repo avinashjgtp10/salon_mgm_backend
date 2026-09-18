@@ -148,7 +148,17 @@ export const stockLedgerRepository = {
 
             const isInType = STOCK_LEDGER_IN_TYPES.includes(data.transaction_type);
             const signedQty = isInType ? Math.abs(data.quantity) : -Math.abs(data.quantity);
-            const balanceAfter = parseFloat(prodRows[0].amount) + signedQty;
+            const currentAmount = parseFloat(prodRows[0].amount);
+            const balanceAfter = currentAmount + signedQty;
+
+            // Server-side backstop for the frontend's own "can't exceed
+            // current stock" check on Stock Adjustment — enforced here (inside
+            // the same FOR UPDATE lock) rather than only client-side, so a
+            // stale current-stock read or a direct API call can't drive stock
+            // negative.
+            if (!isInType && balanceAfter < 0) {
+                throw new Error("Quantity exceeds current stock");
+            }
 
             const { rows } = await client.query(
                 `INSERT INTO stock_ledger (
