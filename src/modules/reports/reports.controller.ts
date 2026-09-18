@@ -1500,6 +1500,50 @@ async getPurchaseVsSalesReport(
 },
 
 // ======================================================
+// STOCK MOVEMENT REPORT (independent report API)
+// POST /api/report/stock-movement
+// ======================================================
+
+async getStockMovementReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            search: asString(body.search),
+            category_id: asString(body.category_id),
+            category_ids: Array.isArray(body.category_ids) ? body.category_ids.map(String) : undefined,
+            brand_id: asString(body.brand_id),
+            brand_ids: Array.isArray(body.brand_ids) ? body.brand_ids.map(String) : undefined,
+            stock_status: body.stock_status as "in_stock" | "low_stock" | "out_of_stock" | undefined,
+            product_type: body.product_type as "retail" | "consumable" | "both" | undefined,
+            branch_id: asString(body.branch_id),
+            product_id: asString(body.product_id),
+            date_from: asString(body.date_from),
+            date_to: asString(body.date_to),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getStockMovementReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Stock movement report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
 // CLIENT REVENUE REPORT (independent report API)
 // POST /api/report/client-revenue
 // ======================================================

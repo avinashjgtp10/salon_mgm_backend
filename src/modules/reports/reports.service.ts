@@ -251,6 +251,8 @@ import {
     BrandPerformanceReportResponse,
     PurchaseVsSalesReportFilters,
     PurchaseVsSalesReportResponse,
+    StockMovementReportFilters,
+    StockMovementReportResponse,
     ClientRevenueReportFilters,
     ClientRevenueReportResponse,
     AllClientsReportFilters,
@@ -1573,6 +1575,26 @@ async getPurchaseVsSalesReport(
     const [stats, rowsResult] = await Promise.all([
         reportsRepository.getPurchaseVsSalesReportStats(salonId, filters),
         reportsRepository.getPurchaseVsSalesReportRows(salonId, filters),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+    };
+},
+
+// ======================================================
+// STOCK MOVEMENT REPORT (independent report API)
+// ======================================================
+
+async getStockMovementReport(
+    salonId: string,
+    filters: StockMovementReportFilters
+): Promise<StockMovementReportResponse> {
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getStockMovementReportStats(salonId, filters),
+        reportsRepository.getStockMovementReportRows(salonId, filters),
     ]);
 
     return {

@@ -57,7 +57,12 @@ export const purchasesRepository = {
      * Records a purchase from a supplier: one header row, one row per product
      * line, a stock_movements 'in' row per line (so PurchaseVsSalesReport and
      * the existing Stock History modal pick this up with zero changes to
-     * either), and applies the added quantity straight to products.amount.
+     * either), a matching stock_ledger 'purchase' row per line (so the Stock
+     * Ledger page and Stock Movement Report's "Added (In)" figure also
+     * reflect Receive Stock/Receive Against Order — previously only
+     * stock_movements got written here, so those two ledger-backed views
+     * never saw a Receive Stock purchase at all), and applies the added
+     * quantity straight to products.amount.
      *
      * Single transaction for the single POST this whole feature is built
      * around — no per-item round trips, no follow-up requests needed to see
@@ -80,6 +85,17 @@ export const purchasesRepository = {
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
+
+            // Purchases (and the products they add stock to) aren't scoped to
+            // a branch, but stock_ledger.branch_id is NOT NULL — resolve the
+            // salon's main branch (falling back to any branch) once, the same
+            // way the ledger's own manual "Add Stock" flow requires a branch
+            // to be picked.
+            const { rows: branchRows } = await client.query(
+                `SELECT id FROM branches WHERE salon_id = $1 ORDER BY is_main DESC, created_at ASC LIMIT 1`,
+                [salonId],
+            );
+            const branchId: string | null = branchRows[0]?.id ?? null;
 
             // Per-salon sequential purchase numbers — identical retry pattern to
             // sales.repository.ts's invoice numbers (see next_invoice_seq).
@@ -172,6 +188,25 @@ export const purchasesRepository = {
                         afterBase / running.baseUnitsPerPack,
                     ],
                 );
+
+                // Mirrors the stock_movements row above into stock_ledger (base
+                // units, same as balance_after everywhere else in that table)
+                // so Receive Stock/Receive Against Order show up in the Stock
+                // Ledger page and Stock Movement Report exactly like every
+                // other "purchase" transaction_type entry does.
+                if (branchId) {
+                    await client.query(
+                        `INSERT INTO stock_ledger (
+                            salon_id, branch_id, product_id, transaction_type,
+                            reference, quantity, unit_cost, balance_after, supplier_id, created_by
+                         ) VALUES ($1,$2,$3,'purchase',$4,$5,$6,$7,$8,$9)`,
+                        [
+                            salonId, branchId, line.product_id,
+                            purchase.purchase_number, addedBase, line.purchase_price,
+                            afterBase, data.supplier_id, createdBy,
+                        ],
+                    );
+                }
 
                 const { rows: itemRows } = await client.query(
                     `INSERT INTO purchase_items

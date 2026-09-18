@@ -1,4 +1,5 @@
 import pool, { safeQuery } from "../../config/database";
+import { STOCK_LEDGER_IN_TYPES } from "../inventory/stock-ledger.types";
 import {
     SalesSummaryReportRow,
     SalesSummaryFiltersAvailable,
@@ -28,6 +29,8 @@ import {
     BrandPerformanceReportStats,
     PurchaseVsSalesReportRow,
     PurchaseVsSalesReportStats,
+    StockMovementReportRow,
+    StockMovementReportStats,
     WaCampaignReportRow,
     WaCampaignReportStats,
     WaCampaignFiltersAvailable,
@@ -5028,6 +5031,194 @@ async getPurchaseVsSalesReportRows(
     consumption_value: Number(row.consumption_value ?? 0),
     net_movement: Number(row.net_movement ?? 0),
     turnover_ratio: Number(row.turnover_ratio ?? 0),
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// ======================================================
+// STOCK MOVEMENT REPORT (independent report API)
+// POST /api/report/stock-movement — reads stock_ledger directly, one row per
+// individual transaction (never merged/aggregated across entries): opening
+// balance immediately before that entry, the quantity it added or removed,
+// and the closing balance immediately after. Never calls the Appointment
+// API/service.
+// ======================================================
+
+_buildStockMovementWhere(
+  salonId: string,
+  filters: {
+    search?: string; category_id?: string; category_ids?: string[]; brand_id?: string; brand_ids?: string[];
+    stock_status?: "in_stock" | "low_stock" | "out_of_stock"; product_type?: "retail" | "consumable" | "both";
+    branch_id?: string; product_id?: string;
+  }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["sl.salon_id = $1"];
+  let idx = 2;
+
+  if (filters.branch_id) {
+    where.push(`sl.branch_id = $${idx++}`);
+    values.push(filters.branch_id);
+  }
+  if (filters.product_id) {
+    where.push(`sl.product_id = $${idx++}`);
+    values.push(filters.product_id);
+  }
+  if (filters.category_ids && filters.category_ids.length > 0) {
+    where.push(`p.category_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.category_ids);
+  } else if (filters.category_id) {
+    where.push(`p.category_id = $${idx++}`);
+    values.push(filters.category_id);
+  }
+  if (filters.brand_ids && filters.brand_ids.length > 0) {
+    where.push(`p.brand_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.brand_ids);
+  } else if (filters.brand_id) {
+    where.push(`p.brand_id = $${idx++}`);
+    values.push(filters.brand_id);
+  }
+  if (filters.product_type) {
+    where.push(`p.product_type = $${idx++}`);
+    values.push(filters.product_type);
+  }
+  if (filters.stock_status === "low_stock") {
+    where.push(`(p.amount > 0 AND (${STOCK_IN_ALERT_UNITS_SQL}) <= p.qty_alert)`);
+  } else if (filters.stock_status === "out_of_stock") {
+    where.push(`p.amount = 0`);
+  } else if (filters.stock_status === "in_stock") {
+    where.push(`(${STOCK_IN_ALERT_UNITS_SQL}) > p.qty_alert`);
+  }
+  if (filters.search?.trim()) {
+    where.push(`p.name ILIKE $${idx++}`);
+    values.push(`%${filters.search.trim()}%`);
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+async getStockMovementReportStats(
+  salonId: string,
+  filters: {
+    search?: string; category_id?: string; category_ids?: string[]; brand_id?: string; brand_ids?: string[];
+    stock_status?: "in_stock" | "low_stock" | "out_of_stock"; product_type?: "retail" | "consumable" | "both";
+    branch_id?: string; product_id?: string; date_from?: string; date_to?: string;
+  }
+): Promise<StockMovementReportStats> {
+  const { where, values, nextIndex } = this._buildStockMovementWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const dateConds: string[] = [];
+  const dateValues: any[] = [];
+  if (filters.date_from) { dateConds.push(`sl.created_at >= $${idx++}::date`); dateValues.push(filters.date_from); }
+  if (filters.date_to) { dateConds.push(`sl.created_at < ($${idx++}::date + interval '1 day')`); dateValues.push(filters.date_to); }
+  const dateWhere = dateConds.length ? ` AND ${dateConds.join(" AND ")}` : "";
+
+  const inTypesList = STOCK_LEDGER_IN_TYPES.map((t) => `'${t}'`).join(", ");
+
+  const query = `
+    SELECT
+      COUNT(DISTINCT sl.product_id) AS total_products,
+      COALESCE(SUM(sl.quantity) FILTER (WHERE sl.transaction_type IN (${inTypesList})), 0) AS total_stock_in,
+      COALESCE(ABS(SUM(sl.quantity) FILTER (WHERE sl.transaction_type NOT IN (${inTypesList}))), 0) AS total_stock_out
+    FROM stock_ledger sl
+    JOIN products p ON p.id = sl.product_id
+    WHERE ${where}${dateWhere}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...dateValues]));
+  const r = rows[0] ?? {};
+  const totalIn = Number(r.total_stock_in ?? 0);
+  const totalOut = Number(r.total_stock_out ?? 0);
+  return {
+    total_products: parseInt(r.total_products, 10) || 0,
+    total_stock_in: totalIn,
+    total_stock_out: totalOut,
+    net_change: totalIn - totalOut,
+  };
+},
+
+async getStockMovementReportRows(
+  salonId: string,
+  filters: {
+    search?: string; category_id?: string; category_ids?: string[]; brand_id?: string; brand_ids?: string[];
+    stock_status?: "in_stock" | "low_stock" | "out_of_stock"; product_type?: "retail" | "consumable" | "both";
+    branch_id?: string; product_id?: string;
+    date_from?: string; date_to?: string;
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: StockMovementReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildStockMovementWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const dateConds: string[] = [];
+  const dateValues: any[] = [];
+  if (filters.date_from) { dateConds.push(`sl.created_at >= $${idx++}::date`); dateValues.push(filters.date_from); }
+  if (filters.date_to) { dateConds.push(`sl.created_at < ($${idx++}::date + interval '1 day')`); dateValues.push(filters.date_to); }
+  const dateWhere = dateConds.length ? ` AND ${dateConds.join(" AND ")}` : "";
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  // One row per individual stock_ledger entry — never merged across entries,
+  // even for the same product on the same day. balance_after already holds
+  // the running balance right after that entry, so this row's opening
+  // balance is just balance_after minus its own signed quantity (i.e. the
+  // balance immediately before it was applied); no separate running-total
+  // computation or grouping needed.
+  const inTypesList = STOCK_LEDGER_IN_TYPES.map((t) => `'${t}'`).join(", ");
+  const query = `
+    SELECT
+      sl.id,
+      sl.product_id,
+      sl.created_at AS movement_date,
+      (sl.balance_after - sl.quantity) AS opening_stock,
+      sl.balance_after AS closing_stock,
+      CASE WHEN sl.transaction_type IN (${inTypesList}) THEN sl.quantity ELSE 0 END AS stock_in,
+      CASE WHEN sl.transaction_type IN (${inTypesList}) THEN 0 ELSE ABS(sl.quantity) END AS stock_out,
+      p.name AS product_name,
+      COALESCE(sc.name, '—') AS category_name,
+      p.measure_unit,
+      p.bottle_size,
+      COUNT(*) OVER() AS total_count
+    FROM stock_ledger sl
+    JOIN products p ON p.id = sl.product_id
+    LEFT JOIN service_categories sc ON sc.id = p.category_id
+    WHERE ${where}${dateWhere}
+    ORDER BY sl.created_at DESC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...dateValues, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: StockMovementReportRow[] = rows.map((row: any) => ({
+    id: row.id,
+    product_id: row.product_id,
+    product_name: row.product_name,
+    category_name: row.category_name,
+    measure_unit: row.measure_unit ?? null,
+    bottle_size: row.bottle_size !== null && row.bottle_size !== undefined ? Number(row.bottle_size) : null,
+    movement_date: row.movement_date instanceof Date ? row.movement_date.toISOString() : String(row.movement_date),
+    opening_stock: Number(row.opening_stock ?? 0),
+    stock_in: Number(row.stock_in ?? 0),
+    stock_out: Number(row.stock_out ?? 0),
+    closing_stock: Number(row.closing_stock ?? 0),
   }));
   const effectiveLimit = limit ?? Math.max(total, 1);
   return {
