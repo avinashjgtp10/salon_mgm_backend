@@ -20,7 +20,7 @@ import logger from "../../config/logger";
 // falling back to its hardcoded placeholder defaults (4.8 rating, sample
 // reviews, generic amenities).
 async function attachPublicExtras(salon: any) {
-    const [marketplaceExtras, reviewSummary, bookingPolicy] = await Promise.all([
+    const [marketplaceExtras, reviewSummary, bookingPolicy, brandKit] = await Promise.all([
         salon?.marketplace_profile_id
             ? Promise.all([
                 bookingsRepository.findWorkingHours(salon.marketplace_profile_id),
@@ -29,11 +29,15 @@ async function attachPublicExtras(salon: any) {
             : Promise.resolve({}),
         reviewsService.getPublicSummary(salon.id),
         bookingsRepository.findBookingPolicy(salon.id),
+        bookingsRepository.findBrandKit(salon.id),
     ]);
     return {
         ...salon,
         ...marketplaceExtras,
         ...bookingPolicy,
+        // null for every salon today (the brand-kit editor was removed), in
+        // which case the booking page uses its own neutral palette.
+        brand_kit: brandKit,
         rating: reviewSummary.averageRating,
         review_count: reviewSummary.totalReviews,
         rating_breakdown: reviewSummary.breakdown,
