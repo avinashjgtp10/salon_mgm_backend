@@ -657,6 +657,30 @@ export const superAdminRepository = {
     return rows[0];
   },
 
+  // Excludes the row being edited so saving a user's own unchanged email
+  // doesn't falsely flag itself as a duplicate.
+  async emailTakenByAnotherUser(email: string, excludeUserId: string) {
+    const { rows } = await pool.query(
+      `SELECT id FROM users WHERE email = $1 AND id != $2 LIMIT 1`,
+      [email.toLowerCase().trim(), excludeUserId]
+    );
+    return !!rows[0];
+  },
+
+  // Profile-only edit (name/email/phone) — role, password, and business
+  // details each already have their own dedicated flows (setUserRole,
+  // resetUserPassword, salon edit), so this deliberately doesn't touch them.
+  async updateUser(id: string, data: { first_name: string; last_name?: string; email: string; phone?: string }) {
+    const { rows } = await pool.query(
+      `UPDATE users
+       SET first_name = $1, last_name = $2, email = $3, phone = $4, updated_at = NOW()
+       WHERE id = $5
+       RETURNING id, first_name, last_name, email, phone, role, is_active`,
+      [data.first_name, data.last_name ?? null, data.email.toLowerCase().trim(), data.phone ?? null, id]
+    );
+    return rows[0];
+  },
+
   async setUserRole(id: string, role: string) {
     const { rows } = await pool.query(
       `UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2 RETURNING id, role`,
