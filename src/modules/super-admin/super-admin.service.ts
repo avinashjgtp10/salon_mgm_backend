@@ -399,6 +399,23 @@ export const superAdminService = {
     return result;
   },
 
+  async updateUser(id: string, data: { first_name: string; last_name?: string; email: string; phone?: string }) {
+    if (!data.first_name?.trim()) throw new AppError(400, "First name is required", "VALIDATION_ERROR");
+    if (!data.email?.trim()) throw new AppError(400, "Email is required", "VALIDATION_ERROR");
+
+    const taken = await superAdminRepository.emailTakenByAnotherUser(data.email, id);
+    if (taken) throw new AppError(409, "Another account already uses this email address", "DUPLICATE_EMAIL");
+
+    const result = await superAdminRepository.updateUser(id, {
+      first_name: data.first_name.trim(),
+      last_name: data.last_name?.trim(),
+      email: data.email,
+      phone: data.phone?.trim(),
+    });
+    if (!result) throw new AppError(404, "User not found", "NOT_FOUND");
+    return result;
+  },
+
   async setUserRole(id: string, role: string) {
     const allowed = ["salon_owner", "admin", "staff", "client", "branch_owner"];
     if (!allowed.includes(role)) throw new AppError(400, "Invalid role", "VALIDATION_ERROR");

@@ -302,6 +302,15 @@ export const superAdminController = {
     } catch (err) { return next(err); }
   },
 
+  async updateUser(req: Request, res: Response, next: NextFunction) {
+    try {
+      const id = String(req.params.id);
+      const { first_name, last_name, email, phone } = req.body ?? {};
+      const data = await superAdminService.updateUser(id, { first_name, last_name, email, phone });
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
   async setUserRole(req: Request, res: Response, next: NextFunction) {
     try {
       const id = String(req.params.id);

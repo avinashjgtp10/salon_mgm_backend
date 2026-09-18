@@ -56,6 +56,7 @@ router.patch("/demo-requests/:id/status",   superAdminController.setDemoRequestS
 router.post("/users/create",                superAdminController.createUser);
 router.get("/users",                        superAdminController.getAllUsers);
 router.delete("/users/:id",                 superAdminController.deleteUser);
+router.put("/users/:id",                    superAdminController.updateUser);
 router.patch("/users/:id/status",           superAdminController.setUserStatus);
 router.patch("/users/:id/role",             superAdminController.setUserRole);
 router.post("/users/:id/reset-password",    superAdminController.resetUserPassword);
