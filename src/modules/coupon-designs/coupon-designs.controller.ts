@@ -80,6 +80,34 @@ export const couponDesignsController = {
       if (perPage !== null && ![1, 2, 4, 6, 8, 10, 12].includes(perPage))
         throw new AppError(400, "perPage must be 1, 2, 4, 6, 8, 10 or 12", "VALIDATION_ERROR");
 
+      // Real physical size (mm) — the Download button's own size picker on
+      // the frontend, same Small/Medium/Large/Custom concept as the Print
+      // Coupon modal (see couponPrintSheet.ts). Takes priority over perPage
+      // when both are somehow sent — see SheetOptions.sizeMm's doc comment.
+      const rawSize = req.body?.sizeMm;
+      let sizeMm: { width: number; height: number } | null = null;
+      if (rawSize !== undefined && rawSize !== null) {
+        const w = Number(rawSize.width), h = Number(rawSize.height);
+        // 15mm–190mm mirrors couponPrintSheet.ts's resolveCouponSize() floor/
+        // ceiling on the frontend — a card under that is illegible, one over
+        // the A4 usable width can never fit even alone.
+        if (!Number.isFinite(w) || !Number.isFinite(h) || w < 15 || h < 15 || w > 190 || h > 277)
+          throw new AppError(400, "sizeMm must have a valid width and height", "VALIDATION_ERROR");
+        sizeMm = { width: w, height: h };
+      }
+
+      // Total copies across as many A4 pages as it takes — mirrors the Print
+      // Coupon modal's own quantity field/cap (couponPrintSheet.ts /
+      // MAX_QUANTITY in PrintCouponModal.tsx), same 500 ceiling for the same
+      // reason: a sane bound on how much one export request renders.
+      let quantity: number | null = null;
+      if (req.body?.quantity !== undefined && req.body?.quantity !== null) {
+        const q = Number(req.body.quantity);
+        if (!Number.isInteger(q) || q < 1 || q > 500)
+          throw new AppError(400, "quantity must be an integer between 1 and 500", "VALIDATION_ERROR");
+        quantity = q;
+      }
+
       const result = await designExportService.export(
         design.doc as unknown as Record<string, unknown>,
         {
@@ -87,7 +115,9 @@ export const couponDesignsController = {
           dpi: dpi as 72 | 150 | 300,
           values: (req.body?.values ?? {}) as Record<string, string>,
           title: design.name,
-          sheet: perPage ? { perPage: perPage as 1, cropMarks: Boolean(req.body?.cropMarks) } : null,
+          sheet: sizeMm
+            ? { sizeMm, cropMarks: Boolean(req.body?.cropMarks), quantity: quantity ?? undefined }
+            : perPage ? { perPage: perPage as 1, cropMarks: Boolean(req.body?.cropMarks), quantity: quantity ?? undefined } : null,
         },
       );
 
