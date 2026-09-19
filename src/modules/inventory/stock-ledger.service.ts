@@ -33,6 +33,9 @@ export const stockLedgerService = {
             if (err instanceof Error && err.message === "Product not found in this salon") {
                 throw new AppError(404, "Product not found", "PRODUCT_NOT_FOUND");
             }
+            if (err instanceof Error && err.message === "Quantity exceeds current stock") {
+                throw new AppError(400, "Quantity exceeds current stock", "QUANTITY_EXCEEDS_STOCK");
+            }
             throw err;
         }
 

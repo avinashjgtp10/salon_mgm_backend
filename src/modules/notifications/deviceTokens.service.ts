@@ -47,12 +47,12 @@ export const deviceTokensService = {
     return this.registerExpoPushToken(data);
   },
 
-  async removeToken(expoPushToken: string): Promise<void> {
+  async removeToken(expoPushToken: string, userId?: string): Promise<void> {
     const token = expoPushToken?.trim();
     if (!token) {
       throw new AppError(400, "expo_push_token is required", "VALIDATION_ERROR");
     }
-    await deviceTokensRepository.removeToken(token);
+    await deviceTokensRepository.removeToken(token, userId);
   },
 
   async getSalonTokens(salonId: string): Promise<DeviceToken[]> {

@@ -1,4 +1,5 @@
 import pool, { safeQuery } from "../../config/database";
+import { STOCK_LEDGER_IN_TYPES } from "../inventory/stock-ledger.types";
 import {
     SalesSummaryReportRow,
     SalesSummaryFiltersAvailable,
@@ -28,6 +29,8 @@ import {
     BrandPerformanceReportStats,
     PurchaseVsSalesReportRow,
     PurchaseVsSalesReportStats,
+    StockMovementReportRow,
+    StockMovementReportStats,
     WaCampaignReportRow,
     WaCampaignReportStats,
     WaCampaignFiltersAvailable,
@@ -1330,6 +1333,19 @@ const STOCK_IN_ALERT_UNITS_SQL = `
 // (via sales.appointment_id) for wallet/reward context that lives on payments.
 // ======================================================
 
+// Shared by every Sales Summary graph-page query — same shape
+// getSalesSummaryReportStats/Rows already take, minus page/limit/is_export
+// (nothing here paginates; each groups the WHOLE filtered set by something).
+type SalesSummaryChartFilters = {
+  start_date?: string; end_date?: string; staff_id?: string; staff_ids?: string[];
+  search?: string; status?: string; category_id?: string; category_ids?: string[];
+  payment_mode?: string; payment_modes?: string[];
+  item_type?: string; item_types?: string[];
+  service_id?: string; service_ids?: string[];
+  payment_status?: string; payment_statuses?: string[];
+  include_gst?: boolean;
+};
+
 export const reportsRepository = {
 
 _buildSalesSummaryWhere(
@@ -1965,6 +1981,7 @@ async getSalesSummaryReportStats(
 ): Promise<{
   total_bill: number; total_sale: number; received_amount: number; total_tip: number;
   total_ewallet: number; total_membership: number; total_package: number; total_rewards: number; total_referral: number;
+  total_discount: number; total_gst: number;
 }> {
   const { where, values, nextIndex } = this._buildSalesSummaryWhere(salonId, filters);
   const unbilled = this._UNBILLED_APPOINTMENT_ROWS_CTE(filters, nextIndex);
@@ -1987,7 +2004,9 @@ async getSalesSummaryReportStats(
         END AS paid_amount,
         s.tip_amount::numeric AS tip_amount,
         pay.ewallet_used, pay.membership_wallet_used, pay.package_used,
-        pay.reward_points_value, pay.referral_credit_used
+        pay.reward_points_value, pay.referral_credit_used,
+        COALESCE(s.discount_amount, 0)::numeric AS discount_amount,
+        COALESCE(s.tax_amount, 0)::numeric AS tax_amount
       FROM sales s
       LEFT JOIN clients c ON s.client_id = c.id
       ${this._PAYMENT_LATERAL}
@@ -1998,7 +2017,9 @@ async getSalesSummaryReportStats(
       SELECT
         ${unbilledPriceExpr} AS price, u.paid_amount, u.tip_amount,
         u.ewallet_used, u.membership_wallet_used, u.package_used,
-        u.reward_points_value, u.referral_credit_used
+        u.reward_points_value, u.referral_credit_used,
+        COALESCE(u.discount_amount, 0)::numeric AS discount_amount,
+        COALESCE(u.tax_amount, 0)::numeric AS tax_amount
       FROM (${unbilled.sql}) u
     ),
     unified AS (
@@ -2015,7 +2036,9 @@ async getSalesSummaryReportStats(
       COALESCE(SUM(membership_wallet_used), 0) AS total_membership,
       COALESCE(SUM(package_used), 0) AS total_package,
       COALESCE(SUM(reward_points_value), 0) AS total_rewards,
-      COALESCE(SUM(referral_credit_used), 0) AS total_referral
+      COALESCE(SUM(referral_credit_used), 0) AS total_referral,
+      COALESCE(SUM(discount_amount), 0) AS total_discount,
+      COALESCE(SUM(tax_amount), 0) AS total_gst
     FROM unified
   `;
 
@@ -2031,6 +2054,360 @@ async getSalesSummaryReportStats(
     total_package: Number(r.total_package ?? 0),
     total_rewards: Number(r.total_rewards ?? 0),
     total_referral: Number(r.total_referral ?? 0),
+    total_discount: Number(r.total_discount ?? 0),
+    total_gst: Number(r.total_gst ?? 0),
+  };
+},
+
+// Day/week/month Total Sale, Received Amount and Due Amount for the Sales
+// Summary graph page's trend chart — same filters (_buildSalesSummaryWhere)
+// and same gross-vs-net-of-GST toggle as getSalesSummaryReportStats above,
+// just grouped by date bucket instead of collapsed into one figure. Scoped
+// to billed sales only (sales_side) — an unbilled open-partial deposit has
+// no invoice date of its own to plot, and is a rare enough case that folding
+// it into stats.received_amount (not this chart) is enough.
+async getSalesSummaryReportChart(
+  salonId: string,
+  filters: SalesSummaryChartFilters,
+  granularity: "day" | "week" | "month" = "day"
+): Promise<{ date: string; total_bill: number; total_sale: number; received_amount: number; due_amount: number }[]> {
+  const { where, values } = this._buildSalesSummaryWhere(salonId, filters);
+  const priceExpr = filters.include_gst === false
+    ? "(s.total_amount::numeric - COALESCE(s.tax_amount, 0))"
+    : "s.total_amount::numeric";
+  // Bucketed by the same IST wall-clock instant as the filter's own date
+  // range, then formatted as text (not a bare date column) — node-pg parses
+  // a raw "date" result relative to the driver's own local timezone setting,
+  // which has already caused a real off-by-one bug elsewhere in this
+  // codebase this same session (see salon-dashboard.repository.ts).
+  const istInstant = `COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata'`;
+  const dayExpr = granularity === "month"
+    ? `TO_CHAR(date_trunc('month', ${istInstant}), 'YYYY-MM-DD')`
+    : granularity === "week"
+    ? `TO_CHAR(date_trunc('week', ${istInstant}), 'YYYY-MM-DD')`
+    : `TO_CHAR(${istInstant}, 'YYYY-MM-DD')`;
+
+  const query = `
+    SELECT
+      ${dayExpr} AS day,
+      COUNT(*)::int AS total_bill,
+      COALESCE(SUM(${priceExpr}), 0) AS total_sale,
+      COALESCE(SUM(
+        CASE
+          WHEN s.appointment_id IS NOT NULL THEN pay.paid_from_payments
+          WHEN s.status = 'completed' THEN s.total_amount::numeric
+          ELSE 0
+        END
+      ), 0) AS received_amount,
+      COALESCE(SUM(pay.latest_due), 0) AS due_amount
+    FROM sales s
+    LEFT JOIN clients c ON s.client_id = c.id
+    ${this._PAYMENT_LATERAL}
+    ${this._APPOINTMENT_STATUS_JOIN}
+    WHERE ${where}
+    GROUP BY day
+    ORDER BY day ASC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => ({
+    date: String(r.day),
+    total_bill: Number(r.total_bill ?? 0),
+    total_sale: Number(r.total_sale ?? 0),
+    received_amount: Number(r.received_amount ?? 0),
+    due_amount: Number(r.due_amount ?? 0),
+  }));
+},
+
+// Payment-mode split for the Sales Summary graph page's pie chart — same
+// filters and same billed-sales-only scope as getSalesSummaryReportChart
+// above, just grouped by sales.payment_method instead of by day. A 'split'
+// bill (part-Cash, part-UPI, etc.) is its own bucket rather than decomposed
+// into its legs, matching what the report's own "Payment Mode" filter
+// already means (it filters on this exact column, not on split legs).
+async getSalesSummaryPaymentModeBreakdown(
+  salonId: string,
+  filters: SalesSummaryChartFilters
+): Promise<{ payment_mode: string; total_bill: number; received_amount: number }[]> {
+  const { where, values } = this._buildSalesSummaryWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      COALESCE(s.payment_method, 'unknown') AS payment_mode,
+      COUNT(*)::int AS total_bill,
+      COALESCE(SUM(
+        CASE
+          WHEN s.appointment_id IS NOT NULL THEN pay.paid_from_payments
+          WHEN s.status = 'completed' THEN s.total_amount::numeric
+          ELSE 0
+        END
+      ), 0) AS received_amount
+    FROM sales s
+    LEFT JOIN clients c ON s.client_id = c.id
+    ${this._PAYMENT_LATERAL}
+    ${this._APPOINTMENT_STATUS_JOIN}
+    WHERE ${where}
+    GROUP BY payment_mode
+    ORDER BY received_amount DESC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => ({
+    payment_mode: String(r.payment_mode),
+    total_bill: Number(r.total_bill ?? 0),
+    received_amount: Number(r.received_amount ?? 0),
+  }));
+},
+
+// Sales by Item Type — used by both the graph page's "Sales by Item Type"
+// bar chart AND its "Revenue Composition" donut (same figures, just two
+// renderings — a donut of these same total_sale values as percentages is
+// exactly what "composition" means here, so there's no separate query for
+// it). sale_items.total_price is the line item's own final amount (already
+// net of its own discount, gross-of-tax) — Total Sale by item type doesn't
+// have a GST toggle of its own the way the sale-level figures above do,
+// since GST is invoice-level, not allocated per line item.
+async getSalesSummaryByItemType(
+  salonId: string,
+  filters: SalesSummaryChartFilters
+): Promise<{ item_type: string; total_sale: number }[]> {
+  const { where, values } = this._buildSalesSummaryWhere(salonId, filters);
+
+  const query = `
+    SELECT li.item_type, COALESCE(SUM(li.total_price), 0) AS total_sale
+    FROM sales s
+    JOIN sale_items li ON li.sale_id = s.id
+    LEFT JOIN clients c ON s.client_id = c.id
+    ${this._APPOINTMENT_STATUS_JOIN}
+    WHERE ${where}
+    GROUP BY li.item_type
+    ORDER BY total_sale DESC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => ({
+    item_type: String(r.item_type),
+    total_sale: Number(r.total_sale ?? 0),
+  }));
+},
+
+// Paid vs Partial bill counts/totals — same displayed-status vocabulary as
+// the report's own Payment Status filter (_buildSalesSummaryWhere's
+// payment_statuses), grouped instead of filtered.
+async getSalesSummaryByPaymentStatus(
+  salonId: string,
+  filters: SalesSummaryChartFilters
+): Promise<{ payment_status: string; total_bill: number; total_sale: number }[]> {
+  const { where, values } = this._buildSalesSummaryWhere(salonId, filters);
+  const priceExpr = filters.include_gst === false
+    ? "(s.total_amount::numeric - COALESCE(s.tax_amount, 0))"
+    : "s.total_amount::numeric";
+
+  const query = `
+    SELECT
+      (CASE
+        WHEN s.appointment_id IS NOT NULL THEN COALESCE(a.status::text, 'booked')
+        WHEN s.status = 'completed' THEN 'paid'
+        WHEN s.status = 'cancelled' THEN 'cancelled'
+        WHEN s.status = 'refunded' THEN 'refunded'
+        ELSE 'booked'
+      END) AS payment_status,
+      COUNT(*)::int AS total_bill,
+      COALESCE(SUM(${priceExpr}), 0) AS total_sale
+    FROM sales s
+    LEFT JOIN clients c ON s.client_id = c.id
+    ${this._APPOINTMENT_STATUS_JOIN}
+    WHERE ${where}
+    GROUP BY payment_status
+    ORDER BY total_bill DESC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => ({
+    payment_status: String(r.payment_status),
+    total_bill: Number(r.total_bill ?? 0),
+    total_sale: Number(r.total_sale ?? 0),
+  }));
+},
+
+// Top Staff by Sales — line-item-level (sale_items.staff_id, falling back
+// to sales.staff_id), same convention _buildSalesSummaryWhere's own Staff
+// filter already uses, since a sale's line items can each carry their own
+// staff (membership/package/product-only sales record staff per line item,
+// not on the sale itself).
+async getSalesSummaryTopStaff(
+  salonId: string,
+  filters: SalesSummaryChartFilters,
+  limit: number = 5
+): Promise<{ staff_id: string | null; staff_name: string; total_sale: number }[]> {
+  const { where, values, nextIndex } = this._buildSalesSummaryWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      COALESCE(li.staff_id, s.staff_id) AS staff_id,
+      TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))) AS staff_name,
+      COALESCE(SUM(li.total_price), 0) AS total_sale
+    FROM sales s
+    JOIN sale_items li ON li.sale_id = s.id
+    LEFT JOIN staff st ON st.id = COALESCE(li.staff_id, s.staff_id)
+    LEFT JOIN clients c ON s.client_id = c.id
+    ${this._APPOINTMENT_STATUS_JOIN}
+    WHERE ${where} AND COALESCE(li.staff_id, s.staff_id) IS NOT NULL
+    -- Grouped by the full expressions, not the "staff_id"/"staff_name"
+    -- output aliases — sale_items itself has a real staff_id column, so the
+    -- bare alias is ambiguous between the SELECT-list name and that column.
+    GROUP BY COALESCE(li.staff_id, s.staff_id), TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, '')))
+    ORDER BY total_sale DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    staff_id: r.staff_id ? String(r.staff_id) : null,
+    staff_name: r.staff_name?.trim() || "Unknown",
+    total_sale: Number(r.total_sale ?? 0),
+  }));
+},
+
+// Top Services by Sales — li.name is the line item's own captured name at
+// time of sale (not a live join to `services`), so a since-renamed or
+// deleted service still shows correctly under whatever it was called then.
+async getSalesSummaryTopServices(
+  salonId: string,
+  filters: SalesSummaryChartFilters,
+  limit: number = 5
+): Promise<{ service_id: string | null; service_name: string; total_sale: number }[]> {
+  const { where, values, nextIndex } = this._buildSalesSummaryWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      li.item_id AS service_id,
+      li.name AS service_name,
+      COALESCE(SUM(li.total_price), 0) AS total_sale
+    FROM sales s
+    JOIN sale_items li ON li.sale_id = s.id AND li.item_type = 'service'
+    LEFT JOIN clients c ON s.client_id = c.id
+    ${this._APPOINTMENT_STATUS_JOIN}
+    WHERE ${where}
+    GROUP BY li.item_id, li.name
+    ORDER BY total_sale DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    service_id: r.service_id ? String(r.service_id) : null,
+    service_name: String(r.service_name ?? "Unknown"),
+    total_sale: Number(r.total_sale ?? 0),
+  }));
+},
+
+// Sales by Service Category — unlike Top Services above, this needs the
+// live `services`/`service_categories` join (not the line item's own
+// captured name) since category membership isn't captured on the line item
+// itself, only derivable from the service's current category.
+async getSalesSummaryByCategory(
+  salonId: string,
+  filters: SalesSummaryChartFilters
+): Promise<{ category_id: string; category_name: string; total_sale: number }[]> {
+  const { where, values } = this._buildSalesSummaryWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      sc.id AS category_id,
+      sc.name AS category_name,
+      COALESCE(SUM(li.total_price), 0) AS total_sale
+    FROM sales s
+    JOIN sale_items li ON li.sale_id = s.id AND li.item_type = 'service'
+    JOIN services sv ON sv.id = li.item_id
+    JOIN service_categories sc ON sc.id = sv.category_id
+    LEFT JOIN clients c ON s.client_id = c.id
+    ${this._APPOINTMENT_STATUS_JOIN}
+    WHERE ${where}
+    GROUP BY sc.id, sc.name
+    ORDER BY total_sale DESC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => ({
+    category_id: String(r.category_id),
+    category_name: String(r.category_name),
+    total_sale: Number(r.total_sale ?? 0),
+  }));
+},
+
+// Day-of-week × time-of-day volume matrix for the graph page's heatmap.
+// Buckets are fixed thirds of the business day in IST (Morning < 12pm,
+// Afternoon 12-5pm, Evening >= 5pm) — coarse on purpose, matching what the
+// heatmap actually needs to show (a shape, not exact hours).
+async getSalesSummaryHeatmap(
+  salonId: string,
+  filters: SalesSummaryChartFilters
+): Promise<{ day_of_week: number; time_bucket: "morning" | "afternoon" | "evening"; total_bill: number; total_sale: number }[]> {
+  const { where, values } = this._buildSalesSummaryWhere(salonId, filters);
+  const priceExpr = filters.include_gst === false
+    ? "(s.total_amount::numeric - COALESCE(s.tax_amount, 0))"
+    : "s.total_amount::numeric";
+  const istInstant = `COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata'`;
+
+  const query = `
+    SELECT
+      EXTRACT(ISODOW FROM (${istInstant}))::int AS day_of_week,
+      (CASE
+        WHEN EXTRACT(HOUR FROM (${istInstant})) < 12 THEN 'morning'
+        WHEN EXTRACT(HOUR FROM (${istInstant})) < 17 THEN 'afternoon'
+        ELSE 'evening'
+      END) AS time_bucket,
+      COUNT(*)::int AS total_bill,
+      COALESCE(SUM(${priceExpr}), 0) AS total_sale
+    FROM sales s
+    LEFT JOIN clients c ON s.client_id = c.id
+    ${this._APPOINTMENT_STATUS_JOIN}
+    WHERE ${where}
+    GROUP BY day_of_week, time_bucket
+    ORDER BY day_of_week, time_bucket
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => ({
+    day_of_week: Number(r.day_of_week),
+    time_bucket: r.time_bucket as "morning" | "afternoon" | "evening",
+    total_bill: Number(r.total_bill ?? 0),
+    total_sale: Number(r.total_sale ?? 0),
+  }));
+},
+
+// "Sales vs Previous Period" — same filters, shifted to the equal-length
+// window immediately before the current start_date. Returns null when the
+// current range has no start/end (nothing to shift relative to).
+async getSalesSummaryPreviousPeriodStats(
+  salonId: string,
+  filters: SalesSummaryChartFilters
+): Promise<{ total_bill: number; total_sale: number; received_amount: number } | null> {
+  if (!filters.start_date || !filters.end_date) return null;
+
+  // Pure calendar-date arithmetic (UTC-anchored via the "Z" suffix so it
+  // never depends on the server process's own local timezone) — these are
+  // "YYYY-MM-DD" strings, not real instants, so there's no IST conversion
+  // to get wrong here, just day counting.
+  const start = new Date(`${filters.start_date}T00:00:00Z`);
+  const end = new Date(`${filters.end_date}T00:00:00Z`);
+  const dayMs = 24 * 60 * 60 * 1000;
+  const rangeDays = Math.max(1, Math.round((end.getTime() - start.getTime()) / dayMs) + 1);
+  const prevEnd = new Date(start.getTime() - dayMs);
+  const prevStart = new Date(prevEnd.getTime() - (rangeDays - 1) * dayMs);
+  const toISO = (d: Date) => d.toISOString().slice(0, 10);
+
+  const stats = await this.getSalesSummaryReportStats(salonId, {
+    ...filters,
+    start_date: toISO(prevStart),
+    end_date: toISO(prevEnd),
+  });
+
+  return {
+    total_bill: stats.total_bill,
+    total_sale: stats.total_sale,
+    received_amount: stats.received_amount,
   };
 },
 
@@ -5028,6 +5405,194 @@ async getPurchaseVsSalesReportRows(
     consumption_value: Number(row.consumption_value ?? 0),
     net_movement: Number(row.net_movement ?? 0),
     turnover_ratio: Number(row.turnover_ratio ?? 0),
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// ======================================================
+// STOCK MOVEMENT REPORT (independent report API)
+// POST /api/report/stock-movement — reads stock_ledger directly, one row per
+// individual transaction (never merged/aggregated across entries): opening
+// balance immediately before that entry, the quantity it added or removed,
+// and the closing balance immediately after. Never calls the Appointment
+// API/service.
+// ======================================================
+
+_buildStockMovementWhere(
+  salonId: string,
+  filters: {
+    search?: string; category_id?: string; category_ids?: string[]; brand_id?: string; brand_ids?: string[];
+    stock_status?: "in_stock" | "low_stock" | "out_of_stock"; product_type?: "retail" | "consumable" | "both";
+    branch_id?: string; product_id?: string;
+  }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["sl.salon_id = $1"];
+  let idx = 2;
+
+  if (filters.branch_id) {
+    where.push(`sl.branch_id = $${idx++}`);
+    values.push(filters.branch_id);
+  }
+  if (filters.product_id) {
+    where.push(`sl.product_id = $${idx++}`);
+    values.push(filters.product_id);
+  }
+  if (filters.category_ids && filters.category_ids.length > 0) {
+    where.push(`p.category_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.category_ids);
+  } else if (filters.category_id) {
+    where.push(`p.category_id = $${idx++}`);
+    values.push(filters.category_id);
+  }
+  if (filters.brand_ids && filters.brand_ids.length > 0) {
+    where.push(`p.brand_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.brand_ids);
+  } else if (filters.brand_id) {
+    where.push(`p.brand_id = $${idx++}`);
+    values.push(filters.brand_id);
+  }
+  if (filters.product_type) {
+    where.push(`p.product_type = $${idx++}`);
+    values.push(filters.product_type);
+  }
+  if (filters.stock_status === "low_stock") {
+    where.push(`(p.amount > 0 AND (${STOCK_IN_ALERT_UNITS_SQL}) <= p.qty_alert)`);
+  } else if (filters.stock_status === "out_of_stock") {
+    where.push(`p.amount = 0`);
+  } else if (filters.stock_status === "in_stock") {
+    where.push(`(${STOCK_IN_ALERT_UNITS_SQL}) > p.qty_alert`);
+  }
+  if (filters.search?.trim()) {
+    where.push(`p.name ILIKE $${idx++}`);
+    values.push(`%${filters.search.trim()}%`);
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+async getStockMovementReportStats(
+  salonId: string,
+  filters: {
+    search?: string; category_id?: string; category_ids?: string[]; brand_id?: string; brand_ids?: string[];
+    stock_status?: "in_stock" | "low_stock" | "out_of_stock"; product_type?: "retail" | "consumable" | "both";
+    branch_id?: string; product_id?: string; date_from?: string; date_to?: string;
+  }
+): Promise<StockMovementReportStats> {
+  const { where, values, nextIndex } = this._buildStockMovementWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const dateConds: string[] = [];
+  const dateValues: any[] = [];
+  if (filters.date_from) { dateConds.push(`sl.created_at >= $${idx++}::date`); dateValues.push(filters.date_from); }
+  if (filters.date_to) { dateConds.push(`sl.created_at < ($${idx++}::date + interval '1 day')`); dateValues.push(filters.date_to); }
+  const dateWhere = dateConds.length ? ` AND ${dateConds.join(" AND ")}` : "";
+
+  const inTypesList = STOCK_LEDGER_IN_TYPES.map((t) => `'${t}'`).join(", ");
+
+  const query = `
+    SELECT
+      COUNT(DISTINCT sl.product_id) AS total_products,
+      COALESCE(SUM(sl.quantity) FILTER (WHERE sl.transaction_type IN (${inTypesList})), 0) AS total_stock_in,
+      COALESCE(ABS(SUM(sl.quantity) FILTER (WHERE sl.transaction_type NOT IN (${inTypesList}))), 0) AS total_stock_out
+    FROM stock_ledger sl
+    JOIN products p ON p.id = sl.product_id
+    WHERE ${where}${dateWhere}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...dateValues]));
+  const r = rows[0] ?? {};
+  const totalIn = Number(r.total_stock_in ?? 0);
+  const totalOut = Number(r.total_stock_out ?? 0);
+  return {
+    total_products: parseInt(r.total_products, 10) || 0,
+    total_stock_in: totalIn,
+    total_stock_out: totalOut,
+    net_change: totalIn - totalOut,
+  };
+},
+
+async getStockMovementReportRows(
+  salonId: string,
+  filters: {
+    search?: string; category_id?: string; category_ids?: string[]; brand_id?: string; brand_ids?: string[];
+    stock_status?: "in_stock" | "low_stock" | "out_of_stock"; product_type?: "retail" | "consumable" | "both";
+    branch_id?: string; product_id?: string;
+    date_from?: string; date_to?: string;
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: StockMovementReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildStockMovementWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const dateConds: string[] = [];
+  const dateValues: any[] = [];
+  if (filters.date_from) { dateConds.push(`sl.created_at >= $${idx++}::date`); dateValues.push(filters.date_from); }
+  if (filters.date_to) { dateConds.push(`sl.created_at < ($${idx++}::date + interval '1 day')`); dateValues.push(filters.date_to); }
+  const dateWhere = dateConds.length ? ` AND ${dateConds.join(" AND ")}` : "";
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  // One row per individual stock_ledger entry — never merged across entries,
+  // even for the same product on the same day. balance_after already holds
+  // the running balance right after that entry, so this row's opening
+  // balance is just balance_after minus its own signed quantity (i.e. the
+  // balance immediately before it was applied); no separate running-total
+  // computation or grouping needed.
+  const inTypesList = STOCK_LEDGER_IN_TYPES.map((t) => `'${t}'`).join(", ");
+  const query = `
+    SELECT
+      sl.id,
+      sl.product_id,
+      sl.created_at AS movement_date,
+      (sl.balance_after - sl.quantity) AS opening_stock,
+      sl.balance_after AS closing_stock,
+      CASE WHEN sl.transaction_type IN (${inTypesList}) THEN sl.quantity ELSE 0 END AS stock_in,
+      CASE WHEN sl.transaction_type IN (${inTypesList}) THEN 0 ELSE ABS(sl.quantity) END AS stock_out,
+      p.name AS product_name,
+      COALESCE(sc.name, '—') AS category_name,
+      p.measure_unit,
+      p.bottle_size,
+      COUNT(*) OVER() AS total_count
+    FROM stock_ledger sl
+    JOIN products p ON p.id = sl.product_id
+    LEFT JOIN service_categories sc ON sc.id = p.category_id
+    WHERE ${where}${dateWhere}
+    ORDER BY sl.created_at DESC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...dateValues, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: StockMovementReportRow[] = rows.map((row: any) => ({
+    id: row.id,
+    product_id: row.product_id,
+    product_name: row.product_name,
+    category_name: row.category_name,
+    measure_unit: row.measure_unit ?? null,
+    bottle_size: row.bottle_size !== null && row.bottle_size !== undefined ? Number(row.bottle_size) : null,
+    movement_date: row.movement_date instanceof Date ? row.movement_date.toISOString() : String(row.movement_date),
+    opening_stock: Number(row.opening_stock ?? 0),
+    stock_in: Number(row.stock_in ?? 0),
+    stock_out: Number(row.stock_out ?? 0),
+    closing_stock: Number(row.closing_stock ?? 0),
   }));
   const effectiveLimit = limit ?? Math.max(total, 1);
   return {

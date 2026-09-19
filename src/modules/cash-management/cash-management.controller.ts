@@ -3,10 +3,12 @@ import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { emailService } from "../utils/email.service";
 import { cashManagementService } from "./cash-management.service";
+import { checkDashboardSubPermission, redactFinancialSummaryFields } from "../salon-dashboard/salon-dashboard.controller";
 import type {
   CloseCounterBody,
   CreateExpenseBody,
   OpenCounterBody,
+  SummaryBundleBody,
   UpdateExpenseBody,
 } from "./cash-management.types";
 
@@ -212,6 +214,33 @@ export const cashManagementController = {
       });
 
       return sendSuccess(res, 200, result, "Cash counter closed successfully");
+    } catch (error) {
+      return next(error);
+    }
+  },
+
+  async getSummaryBundle(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = getSalonId(req);
+      const body = (req.body || {}) as SummaryBundleBody;
+
+      if (Array.isArray(body.sections) && body.sections.includes("dashboard_summary")) {
+        const canViewDashboard = await checkDashboardSubPermission(req, "view_dashboard");
+        if (!canViewDashboard) {
+          throw new AppError(403, "You do not have permission to view the dashboard summary", "FORBIDDEN");
+        }
+      }
+
+      const result = await cashManagementService.getSummaryBundle(salonId, body);
+
+      if (result.dashboard_summary) {
+        const canFinancials = await checkDashboardSubPermission(req, "view_dashboard_financials");
+        if (!canFinancials) {
+          result.dashboard_summary = redactFinancialSummaryFields(result.dashboard_summary as Record<string, unknown>);
+        }
+      }
+
+      return sendSuccess(res, 200, result, "Summary bundle fetched successfully");
     } catch (error) {
       return next(error);
     }

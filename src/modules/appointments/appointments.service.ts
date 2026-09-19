@@ -1119,7 +1119,10 @@ export const appointmentsService = {
         if (["paid", "cancelled", "deleted"].includes(existing.status))
             throw new AppError(400, `Appointment is already '${existing.status}'`, "BAD_REQUEST");
 
-        const cancelled = await appointmentsRepository.updateStatus(params.appointmentId, "cancelled");
+        const cancelled = await appointmentsRepository.cancelWithReason(
+            params.appointmentId,
+            params.body?.reason ?? null
+        );
 
         // ── Package linkage: cancel never deducts the reserved session — the
         // service becomes reschedulable again. No-op for any appointment not

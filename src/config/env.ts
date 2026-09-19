@@ -79,6 +79,15 @@ interface Config {
   mistral: {
     apiKey: string;
   };
+
+  // MSG91 — transactional SMS. Indian transactional SMS is DLT-gated, so a
+  // send is addressed by a carrier-approved DLT template id plus variables,
+  // never by free text — dltTemplateIds maps our event types onto those ids.
+  msg91: {
+    authKey: string;
+    senderId: string;
+    dltTemplateIds: Record<string, string>;
+  };
 }
 
 const config: Config = {
@@ -145,6 +154,25 @@ const config: Config = {
 
   mistral: {
     apiKey: process.env.MISTRAL_API_KEY || '',
+  },
+
+  msg91: {
+    authKey:  process.env.MSG91_AUTH_KEY  || '',
+    senderId: process.env.MSG91_SENDER_ID || '',
+    // JSON object of { "<event_type>": "<dlt_template_id>" }. Malformed JSON
+    // is treated as "none configured" rather than crashing boot — a bad SMS
+    // env var must not take the whole API down.
+    dltTemplateIds: (() => {
+      const raw = process.env.MSG91_DLT_TEMPLATE_IDS;
+      if (!raw) return {};
+      try {
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+      } catch {
+        console.warn('⚠️  MSG91_DLT_TEMPLATE_IDS is not valid JSON — treating as unconfigured');
+        return {};
+      }
+    })(),
   },
 };
 

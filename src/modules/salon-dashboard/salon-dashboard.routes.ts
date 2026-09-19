@@ -8,9 +8,6 @@ const router = Router();
 
 const guard = [authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), requirePermission("view_dashboard")];
 
-// GET /api/v1/dashboard/summary
-router.get("/summary", ...guard, salonDashboardController.getSummary);
-
 // GET /api/v1/dashboard/revenue
 router.get("/revenue", ...guard, requirePermission("view_dashboard_financials"), salonDashboardController.getRevenueChart);
 

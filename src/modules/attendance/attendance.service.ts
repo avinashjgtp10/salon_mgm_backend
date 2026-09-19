@@ -5,7 +5,6 @@ import {
     Attendance,
     AttendanceSettings,
     AttendanceStatus,
-    AttendanceSource,
     CheckInBody,
     CheckOutBody,
     PushAttendanceBody,
@@ -117,7 +116,7 @@ export const attendanceService = {
     // ── Check In ──────────────────────────────────────────────────────────────
 
     async checkIn(salonId: string, body: CheckInBody): Promise<Attendance> {
-        const { staff_id, check_in, status: clientStatus, note } = body;
+        const { staff_id, check_in, status: clientStatus, note, location } = body;
         const checkInTs = check_in || new Date().toISOString();
         const date = new Date(checkInTs).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
 
@@ -139,6 +138,7 @@ export const attendanceService = {
 
         const record = await attendanceRepository.upsertCheckIn({
             salonId, staffId: staff_id, date, checkIn: checkInTs, status, source: "manual", note,
+            location: location?.trim() || undefined,
         });
         logger.info("attendance.checkIn", { salonId, staffId: staff_id, date, status });
         return record;
@@ -147,7 +147,7 @@ export const attendanceService = {
     // ── Check Out ─────────────────────────────────────────────────────────────
 
     async checkOut(salonId: string, body: CheckOutBody): Promise<Attendance> {
-        const { staff_id, check_out, note } = body;
+        const { staff_id, check_out, note, location } = body;
         const checkOutTs = check_out || new Date().toISOString();
         const date = new Date(checkOutTs).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
 
@@ -169,6 +169,7 @@ export const attendanceService = {
 
         const record = await attendanceRepository.upsertCheckOut({
             salonId, staffId: staff_id, date, checkOut: checkOutTs, status, hoursWorked: hours, note,
+            location: location?.trim() || undefined,
         });
         logger.info("attendance.checkOut", { salonId, staffId: staff_id, date, status, hours });
         return record;
@@ -269,6 +270,8 @@ export const attendanceService = {
                 status: rec ? rec.status : "not_marked",
                 check_in: rec?.check_in ?? null,
                 check_out: rec?.check_out ?? null,
+                check_in_location: (rec as Attendance & { check_in_location?: string | null })?.check_in_location ?? null,
+                check_out_location: (rec as Attendance & { check_out_location?: string | null })?.check_out_location ?? null,
                 hours_worked: rec?.hours_worked ?? null,
                 scheduled_hours: scheduledMap.get(s.id) ?? null,
                 attendance_id: rec?.id ?? null,

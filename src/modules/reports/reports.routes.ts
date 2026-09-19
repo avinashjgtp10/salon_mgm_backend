@@ -30,6 +30,12 @@ router.post(
     reportsController.getSalesSummaryReport
 );
 
+router.post(
+    "/sales-summary/chart",
+    ...baseGuard, viewReport("view_report_sales_summary"),
+    reportsController.getSalesSummaryReportChart
+);
+
 router.get(
     "/sales-summary/:saleId",
     ...baseGuard, viewReport("view_report_sales_summary"),
@@ -148,6 +154,12 @@ router.post(
     "/purchase-vs-sales",
     ...baseGuard, viewReport("view_report_purchase_vs_sales"),
     reportsController.getPurchaseVsSalesReport
+);
+
+router.post(
+    "/stock-movement",
+    ...baseGuard, viewReport("view_report_stock_movement"),
+    reportsController.getStockMovementReport
 );
 
 // ======================================================

@@ -637,6 +637,8 @@ export interface SalesSummaryReportStats {
     total_package: number;
     total_rewards: number;
     total_referral: number;
+    total_discount: number;
+    total_gst: number;
 }
 
 export interface SalesSummaryReportPagination {
@@ -651,6 +653,81 @@ export interface SalesSummaryReportResponse {
     pagination: SalesSummaryReportPagination;
     stats: SalesSummaryReportStats;
     filters_available: SalesSummaryFiltersAvailable;
+}
+
+// Day-wise breakdown for the Sales Summary report's graph icon — same
+// filters as the table/stats above, just grouped by IST calendar date
+// instead of collapsed into one total.
+export interface SalesSummaryChartPoint {
+    date: string; // YYYY-MM-DD, IST calendar date (or IST week/month start, depending on the requested granularity)
+    total_bill: number;
+    total_sale: number;
+    received_amount: number;
+    due_amount: number;
+}
+
+export interface SalesSummaryPaymentModePoint {
+    payment_mode: string;
+    total_bill: number;
+    received_amount: number;
+}
+
+export interface SalesSummaryItemTypePoint {
+    item_type: string;
+    total_sale: number;
+}
+
+export interface SalesSummaryPaymentStatusPoint {
+    payment_status: string;
+    total_bill: number;
+    total_sale: number;
+}
+
+export interface SalesSummaryStaffPoint {
+    staff_id: string | null;
+    staff_name: string;
+    total_sale: number;
+}
+
+export interface SalesSummaryServicePoint {
+    service_id: string | null;
+    service_name: string;
+    total_sale: number;
+}
+
+export interface SalesSummaryCategoryPoint {
+    category_id: string;
+    category_name: string;
+    total_sale: number;
+}
+
+export interface SalesSummaryHeatmapPoint {
+    day_of_week: number; // ISO: 1 = Monday .. 7 = Sunday
+    time_bucket: "morning" | "afternoon" | "evening";
+    total_bill: number;
+    total_sale: number;
+}
+
+export interface SalesSummaryPeriodStats {
+    total_bill: number;
+    total_sale: number;
+    received_amount: number;
+}
+
+// Everything the Sales Summary graph page's Overview tab needs, fetched in
+// one call — each section grouped by its own dimension but sharing the
+// exact same filters (_buildSalesSummaryWhere) as the report's own table.
+export interface SalesSummaryChartResponse {
+    daily: SalesSummaryChartPoint[];
+    payment_modes: SalesSummaryPaymentModePoint[];
+    item_types: SalesSummaryItemTypePoint[];
+    payment_status: SalesSummaryPaymentStatusPoint[];
+    top_staff: SalesSummaryStaffPoint[];
+    top_services: SalesSummaryServicePoint[];
+    categories: SalesSummaryCategoryPoint[];
+    heatmap: SalesSummaryHeatmapPoint[];
+    current_period: SalesSummaryPeriodStats;
+    previous_period: SalesSummaryPeriodStats | null;
 }
 
 export interface SaleDetailHeader {
@@ -1369,6 +1446,69 @@ export interface PurchaseVsSalesReportResponse {
     rows: PurchaseVsSalesReportRow[];
     pagination: PurchaseVsSalesReportPagination;
     stats: PurchaseVsSalesReportStats;
+}
+
+// ===============================
+// STOCK MOVEMENT REPORT (independent report API)
+// Reads stock_ledger directly, one row per individual transaction — never
+// merged/aggregated across entries, even for the same product on the same
+// day. Each row carries its own opening balance (before that entry),
+// in/out quantity, and closing balance (after). Never calls the Appointment
+// API/service.
+// ===============================
+
+export interface StockMovementReportFilters {
+    search?: string;
+    category_id?: string;
+    category_ids?: string[];
+    brand_id?: string;
+    brand_ids?: string[];
+    // Snapshot of the PRODUCT's current stock level (not this transaction's
+    // own quantity) — same in_stock/low_stock/out_of_stock semantics as
+    // Product Inventory Report, computed off products.amount/qty_alert.
+    stock_status?: "in_stock" | "low_stock" | "out_of_stock";
+    product_type?: "retail" | "consumable" | "both";
+    branch_id?: string;
+    product_id?: string;
+    date_from?: string;
+    date_to?: string;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface StockMovementReportRow {
+    id: string;
+    product_id: string;
+    product_name: string;
+    category_name: string;
+    measure_unit: string | null;
+    bottle_size: number | null;
+    movement_date: string;
+    opening_stock: number;
+    stock_in: number;
+    stock_out: number;
+    closing_stock: number;
+}
+
+export interface StockMovementReportStats {
+    total_products: number;
+    total_stock_in: number;
+    total_stock_out: number;
+    net_change: number;
+}
+
+export interface StockMovementReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface StockMovementReportResponse {
+    rows: StockMovementReportRow[];
+    pagination: StockMovementReportPagination;
+    stats: StockMovementReportStats;
 }
 
 export interface EwalletReportRow {

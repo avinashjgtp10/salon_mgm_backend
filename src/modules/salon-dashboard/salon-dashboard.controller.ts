@@ -17,7 +17,7 @@ const FINANCIAL_SUMMARY_FIELDS = [
 // performance and client-PII data in one response — there's no separate
 // route per sub-section to gate at the middleware level (see
 // salon-dashboard.routes.ts), so this redacts fields in place instead.
-async function checkDashboardSubPermission(req: AuthRequest, permKey: string): Promise<boolean> {
+export async function checkDashboardSubPermission(req: AuthRequest, permKey: string): Promise<boolean> {
   const role = req.user?.role;
   if (role === "salon_owner" || role === "admin") return true;
   const userId = req.user?.userId;
@@ -26,7 +26,7 @@ async function checkDashboardSubPermission(req: AuthRequest, permKey: string): P
   return staffHasPermission({ userId, role, salonId }, permKey);
 }
 
-function redactFinancialSummaryFields(summary: Record<string, unknown>): Record<string, unknown> {
+export function redactFinancialSummaryFields(summary: Record<string, unknown>): Record<string, unknown> {
   const redacted = { ...summary };
   for (const field of FINANCIAL_SUMMARY_FIELDS) {
     if (field in redacted) redacted[field] = null;
@@ -44,18 +44,6 @@ function redactRevenueChart(chart: Array<Record<string, unknown>>): Array<Record
 }
 
 export const salonDashboardController = {
-  async getSummary(req: AuthRequest, res: Response, next: NextFunction) {
-    try {
-      const salonId = await getSalonId(req);
-      const data = await salonDashboardService.getSummary(salonId);
-      const canFinancials = await checkDashboardSubPermission(req, "view_dashboard_financials");
-      const result = canFinancials ? data : redactFinancialSummaryFields(data as unknown as Record<string, unknown>);
-      return sendSuccess(res, 200, result, "Dashboard summary fetched successfully");
-    } catch (err) {
-      return next(err);
-    }
-  },
-
   async getTodayAppointments(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = await getSalonId(req);
