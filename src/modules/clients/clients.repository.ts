@@ -121,6 +121,41 @@ export const clientsRepository = {
             where.push(`COALESCE(ts.total_sales, 0) <= $${params.length}`);
         }
 
+        // "Has an active package" / "has an active membership" — no $n
+        // placeholders needed, both correlate straight against c.id/c.salon_id.
+        // "Active" is re-derived here rather than trusted off the stored
+        // status column: client_packages.status is only ever written
+        // 'Active'/'Completed' (nothing flips it to 'Expired' once expiry_date
+        // passes — see client-packages.repository.ts's effectiveStatus()), and
+        // client_memberships.status can likewise sit on 'active' long past its
+        // own expiry. Mirrors the same "active" definition the frontend already
+        // uses for its own badges (ClientDetailsDrawer.tsx's activeMemberships,
+        // ClientHistoryDetail.tsx's displayPkgStatus()) so this filter can't
+        // disagree with what the client's own detail view calls active.
+        const hasActivePackageSql = `EXISTS (
+      SELECT 1 FROM client_packages cp
+      WHERE cp.client_id = c.id AND cp.salon_id = c.salon_id
+        AND cp.status = 'Active'
+        AND (cp.expiry_date IS NULL OR cp.expiry_date >= CURRENT_DATE)
+    )`;
+        const hasActiveMembershipSql = `EXISTS (
+      SELECT 1 FROM client_memberships cm
+      WHERE cm.client_id = c.id AND cm.salon_id = c.salon_id
+        AND cm.status = 'active'
+        AND (cm.expires_at IS NULL OR cm.expires_at >= NOW())
+    )`;
+        if (q.package_membership === "has_package") {
+            where.push(hasActivePackageSql);
+        } else if (q.package_membership === "has_membership") {
+            where.push(hasActiveMembershipSql);
+        } else if (q.package_membership === "has_both") {
+            where.push(hasActivePackageSql);
+            where.push(hasActiveMembershipSql);
+        } else if (q.package_membership === "has_none") {
+            where.push(`NOT ${hasActivePackageSql}`);
+            where.push(`NOT ${hasActiveMembershipSql}`);
+        }
+
         const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
         // clients.total_sales is a dead column, never written anywhere — every
@@ -189,6 +224,26 @@ export const clientsRepository = {
         GROUP BY client_id
       ) ts ON ts.client_id = c.id`;
 
+        // Total ₹ this client has EARNED via the referral program — lifetime,
+        // not the current spendable referral_balance (which nets out
+        // redemptions). Sums every 'earn' row in referral_ledger regardless of
+        // which side of a referral it came from: a 'referral_payout' row
+        // (this client referred someone who then paid a qualifying bill) and
+        // a 'referral_welcome' row (this client was themselves referred, and
+        // got their own welcome bonus credited here instead of applied as an
+        // instant bill discount) are both genuinely "referral points this
+        // client earned" — see referral.repository.ts's applyLedgerEntry() and
+        // payments.service.ts's two crediting call sites. Not needed in
+        // countSql: nothing filters on it, only the data query displays it,
+        // and a LEFT JOIN to a client_id-keyed GROUP BY can't fan out rows.
+        const referralPointsJoin = `
+      LEFT JOIN (
+        SELECT client_id, SUM(amount) AS points_earned
+        FROM referral_ledger
+        WHERE salon_id = $1 AND type = 'earn'
+        GROUP BY client_id
+      ) rp ON rp.client_id = c.id`;
+
         const countSql = `SELECT COUNT(*)::int AS total FROM clients c ${tsJoin} ${whereSql}`;
 
         // Aliased separately from clients.total_sales (not overwritten in the
@@ -196,9 +251,11 @@ export const clientsRepository = {
         // sorting by it.
         const orderCol = sb === "total_sales" ? "computed_total_sales" : `c.${sb}`;
         const dataSql = `
-      SELECT c.*, COALESCE(ts.total_sales, 0) AS computed_total_sales
+      SELECT c.*, COALESCE(ts.total_sales, 0) AS computed_total_sales,
+             COALESCE(rp.points_earned, 0) AS referral_points_earned
       FROM clients c
       ${tsJoin}
+      ${referralPointsJoin}
       ${whereSql}
       ORDER BY ${orderCol} ${so}
       OFFSET $${params.length + 1}
@@ -368,12 +425,6 @@ export const clientsRepository = {
         );
     },
 
-    // Aggregated off ewallet_ledger (rather than a denormalized counter) so it
-    // can never drift from what was actually credited. Scoped through the
-    // referred clients themselves (c.referred_by_client_id = this client) so a
-    // client's own one-time "referee welcome bonus" ledger entry — which also
-    // has source_type='referral' but belongs to a *different* referral — is
-    // never counted as this client's referrer earnings.
     // Basic info about the client who referred this one — for display only
     // (e.g. "Referred By" panel), so no salon_id scoping needed beyond the
     // caller already having resolved referredByClientId from a scoped row.
@@ -386,12 +437,22 @@ export const clientsRepository = {
     },
 
     async getReferralStats(clientId: string): Promise<{ total_referral_earnings: number; total_successful_referrals: number }> {
+        // Referral rewards moved to their own dedicated referral_ledger/
+        // referral_balance (see referral.repository.ts's applyLedgerEntry) —
+        // "no longer eWallet money" per payments.service.ts's crediting code.
+        // This used to join ewallet_ledger for source_type='referral', which
+        // nothing writes to anymore post-migration; it silently returned 0 for
+        // every client regardless of real referral activity. total_earnings is
+        // every 'earn' row this client has ever received (as a referrer being
+        // paid out, OR as a referee getting their own welcome bonus credited
+        // here instead of applied as an instant bill discount — both are
+        // genuinely this client's own referral earnings). total_count is
+        // markReferralRewarded()'s own completion flag, read directly rather
+        // than re-derived from the ledger.
         const { rows } = await pool.query(
-            `SELECT COALESCE(SUM(el.amount), 0)::numeric AS total_earnings, COUNT(DISTINCT c.id)::int AS total_count
-       FROM clients c
-       JOIN ewallet_ledger el
-         ON el.client_id = $1 AND el.source_type = 'referral' AND el.source_id = c.id
-       WHERE c.referred_by_client_id = $1 AND c.referral_reward_status = 'completed'`,
+            `SELECT
+         COALESCE((SELECT SUM(amount) FROM referral_ledger WHERE client_id = $1 AND type = 'earn'), 0)::numeric AS total_earnings,
+         (SELECT COUNT(*)::int FROM clients WHERE referred_by_client_id = $1 AND referral_reward_status = 'completed') AS total_count`,
             [clientId]
         );
         return {
