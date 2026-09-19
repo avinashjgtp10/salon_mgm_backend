@@ -122,12 +122,19 @@ export async function resolveMembershipDiscount(
   applyPercentage: boolean,
   applyLoyalty: boolean,
   // Staff's edit of the discount RATE for this bill, from the Available
-  // Benefits panel — e.g. a 20% plan applied at 10% just this once. It
-  // replaces the plan's own percentage and nothing else: the eligible rows,
-  // the restrictions and the discount balance all still decide the rest.
-  // null/undefined (the normal case) means "use the plan's own %". Clamped to
-  // the plan's rate, so this can only reduce — the same rule as every other
-  // amount in that panel, none of which may exceed what's available.
+  // Benefits panel — e.g. a 20% plan applied at 10%, or at 30%, just this
+  // once. It replaces the plan's own percentage and nothing else: the eligible
+  // rows, the restrictions and the discount balance all still decide the rest.
+  // null/undefined (the normal case) means "use the plan's own %".
+  //
+  // It may go ABOVE the plan's rate — that's a deliberate goodwill gesture,
+  // same as the manual bill discount — but two hard limits still hold, and
+  // both are the allocator's, not this function's: no row can be discounted
+  // past its own value (the rate is capped at 100%), and a discount-balance
+  // plan still can't hand out more than it has left, so a raised rate just
+  // drains the pool faster and then stops. A validity plan has no pool, so
+  // there the rate is the only limit.
+  //
   // It does NOT touch the Loyalty discount, which is a separate plan behind
   // its own card with its own rate.
   requestedPercent?: number | null,
@@ -191,10 +198,13 @@ export async function resolveMembershipDiscount(
       ? Infinity
       : percentageMembership.discountBalanceRemaining;
     previews.push(allocate(
-      // Staff's rate for this bill, never above what the plan actually grants.
+      // Staff's rate for this bill, or the plan's own when they haven't set
+      // one. 100% is the ceiling because that's a full write-off of the line;
+      // allocateMembershipDiscount clamps there too, so anything higher would
+      // silently mean the same thing.
       requestedPercent === null || requestedPercent === undefined
         ? planPercent
-        : Math.max(0, Math.min(planPercent, requestedPercent)),
+        : Math.max(0, Math.min(100, requestedPercent)),
       planBalance,
       percentageMembership.appliesTo,
       percentageMembership.serviceCategoryIds,
