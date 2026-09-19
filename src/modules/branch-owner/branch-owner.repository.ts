@@ -373,11 +373,15 @@ export const branchOwnerRepository = {
         p.id, p.amount, p.status, p.payment_method, p.created_at,
         s.id                                        AS salon_id,
         COALESCE(s.business_name, s.slug, 'Unnamed') AS salon_name,
-        sa.invoice_number                            AS invoice_number
+        sa.invoice_number                            AS invoice_number,
+        COALESCE(c.full_name, 'Walk-in Client')      AS client_name,
+        c.phone_number                               AS client_phone
       FROM payments p
       JOIN branch_owner_salons bos ON bos.salon_id = p.salon_id
       JOIN salons s ON s.id = p.salon_id
       LEFT JOIN sales sa ON sa.appointment_id = p.appointment_id AND sa.status = 'completed'
+      LEFT JOIN appointments a ON a.id = p.appointment_id
+      LEFT JOIN clients c ON c.id = a.client_id
       WHERE bos.branch_owner_id = $1 ${statusClause}
       ORDER BY p.created_at DESC
       LIMIT $${values.length}
