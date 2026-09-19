@@ -1100,6 +1100,56 @@ async getProductRetailReport(
     }
 },
 
+// Powers the Product Retail report's Graph page (same "click the graph icon
+// next to the table" pattern as Sales Summary) — trend, payment mode split,
+// and top products/brands/categories/staff, all for the same filters
+// currently applied to the table.
+async getProductRetailReportChart(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            search: asString(body.search),
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            brand_id: asString(body.brand_id),
+            brand_ids: Array.isArray(body.brand_ids)
+                ? body.brand_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            category_id: asString(body.category_id),
+            category_ids: Array.isArray(body.category_ids)
+                ? body.category_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            min_price: body.min_price !== undefined ? Number(body.min_price) : undefined,
+            max_price: body.max_price !== undefined ? Number(body.max_price) : undefined,
+        };
+        const granularity: "day" | "week" | "month" =
+            body.granularity === "week" || body.granularity === "month" ? body.granularity : "day";
+        const topLimit = Number.isFinite(Number(body.top_limit)) && Number(body.top_limit) > 0
+            ? Math.min(Math.floor(Number(body.top_limit)), 50)
+            : 5;
+
+        const data = await reportsService.getProductRetailReportChart(salonId, filters, granularity, topLimit);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Product retail chart fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
 // ======================================================
 // SERVICE SALE REPORT (independent report API)
 // POST /api/report/service-sale
