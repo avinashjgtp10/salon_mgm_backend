@@ -28,6 +28,7 @@ const deleteCommissionRule = requirePermission("delete_commission_rule");
 
 router.get("/",    auth, ownerAdminStaff, viewCommissionRules, commissionRulesController.list);
 router.get("/:id", auth, ownerAdminStaff, viewCommissionRules, commissionRulesController.getById);
+router.get("/:id/progress", auth, ownerAdminStaff, viewCommissionRules, commissionRulesController.getTieredTargetProgress);
 
 router.post("/",   auth, ownerAdminStaff, addCommissionRule, validateCreateCommissionRule, commissionRulesController.create);
 router.patch("/:id", auth, ownerAdminStaff, editCommissionRule, validateUpdateCommissionRule, commissionRulesController.update);

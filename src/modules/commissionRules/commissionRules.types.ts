@@ -1,5 +1,5 @@
 export type CommissionRuleSource = "services" | "products" | "memberships" | "packages";
-export type CommissionRuleType = "percentage" | "fixed" | "milestone";
+export type CommissionRuleType = "percentage" | "fixed" | "milestone" | "tiered_target";
 export type ConditionMetric = "revenue" | "count";
 export type CommissionFrequency = "daily" | "weekly" | "biweekly" | "monthly" | "custom";
 export type CommissionScopeType = "salon" | "staff" | "role";
@@ -11,10 +11,14 @@ export type CommissionRule = {
     name: string;
     source: CommissionRuleSource;
     type: CommissionRuleType;
-    /** Percentage value, fixed ₹ amount, or milestone reward — same field for all three types. */
+    /** Percentage value, fixed ₹ amount, or milestone reward — same field for all three types.
+     *  For tiered_target, this is the commission rate BELOW the monthly target. */
     rate: number | null;
+    /** tiered_target only: the commission rate AT/ABOVE the monthly target. */
+    rate_after_target: number | null;
     /** Optional threshold gate: "they receive [rate] when they generate [condition_target] based on [condition_metric]".
-     *  Required for milestone; optional for percentage/fixed (null/0 target = always applies). */
+     *  Required for milestone and tiered_target (the monthly target amount); optional for
+     *  percentage/fixed (null/0 target = always applies). */
     condition_target: number | null;
     condition_metric: ConditionMetric | null;
     frequency: CommissionFrequency;
@@ -30,6 +34,8 @@ export type CreateCommissionRuleBody = {
     source: CommissionRuleSource;
     type: CommissionRuleType;
     rate: number;
+    /** tiered_target only: the commission rate AT/ABOVE the monthly target. */
+    rate_after_target?: number | null;
     condition_target?: number | null;
     condition_metric?: ConditionMetric | null;
     frequency?: CommissionFrequency;

@@ -39,6 +39,14 @@ export const commissionRulesController = {
         } catch (err) { return next(err); }
     },
 
+    async getTieredTargetProgress(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const salonId = getSalonId(req);
+            const progress = await commissionRulesService.getTieredTargetProgress(String(req.params.id), salonId);
+            return sendSuccess(res, 200, progress, "Monthly target progress fetched successfully");
+        } catch (err) { return next(err); }
+    },
+
     async create(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const salonId = getSalonId(req);

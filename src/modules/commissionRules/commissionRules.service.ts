@@ -19,6 +19,15 @@ export const commissionRulesService = {
         return rule;
     },
 
+    async getTieredTargetProgress(id: string, salonId: string) {
+        const progress = await commissionRulesRepository.getTieredTargetProgress(id, salonId);
+        if (!progress) throw new AppError(404, "No monthly target progress for this rule", "NOT_FOUND");
+        const { target, achieved } = progress;
+        const remaining = Math.max(0, target - achieved);
+        const progressPct = target > 0 ? Math.min(100, Math.round((achieved / target) * 100)) : 0;
+        return { target, achieved, remaining, progressPct, targetReached: achieved >= target };
+    },
+
     /** Fans out into one rule row per selected staff member when scope_ids has more
      *  than one entry — each staff gets an independently-tracked rule (consistent
      *  with how the calculation engine matches rules per staff). */
