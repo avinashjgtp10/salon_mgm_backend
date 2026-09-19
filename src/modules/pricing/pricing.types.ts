@@ -39,10 +39,13 @@ export interface CalculateTotalsBody {
   // (pricing.service.ts). Omit to default to the full available balance.
   membershipWalletRequested?: number;
 
-  // Percentage/loyalty membership discount. Intent only — there is no requested
-  // amount because the figure is fully determined by the plan's percentage, the
-  // eligible line total, and whatever discount balance is left.
+  // Percentage/loyalty membership discount.
   applyMembershipDiscount?: boolean;
+  // Staff's edit of the discount RATE for this bill (Available Benefits
+  // panel) — a percentage, not an amount: "apply this 20% plan at 10% today".
+  // Omit to use the plan's own rate, which is what it was before this became
+  // editable. Clamped server-side to the plan's rate, so it can only reduce.
+  membershipDiscountPercentRequested?: number;
   // Independent sibling flag for the salon-wide Loyalty discount — stacks
   // additively with applyMembershipDiscount above when both are set.
   applyLoyaltyDiscount?: boolean;

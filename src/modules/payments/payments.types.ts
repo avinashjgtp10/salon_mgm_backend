@@ -85,6 +85,9 @@ export type CreatePaymentBody = {
   // deductWalletForBooking still caps further by real balance/eligible items.
   // Omitted/undefined preserves the old "use as much as needed" behavior.
   membership_wallet_requested?: number;
+  /** Staff's edit of the membership discount RATE for this bill (Available
+   *  Benefits panel), as a percentage. Omitted = charge the plan's own rate. */
+  membership_discount_percent_requested?: number;
   // Intent flag for a percentage/loyalty membership discount. There is no
   // matching "requested" field — the amount follows entirely from the plan's
   // percentage, the eligible line total, and the remaining discount balance.

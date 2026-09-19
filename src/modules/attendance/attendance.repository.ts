@@ -161,19 +161,21 @@ export const attendanceRepository = {
         status: AttendanceStatus;
         source: AttendanceSource;
         note?: string;
+        location?: string;
     }): Promise<Attendance> {
-        const { salonId, staffId, date, checkIn, status, source, note } = params;
+        const { salonId, staffId, date, checkIn, status, source, note, location } = params;
         const { rows } = await pool.query(
-            `INSERT INTO attendance (salon_id, staff_id, date, check_in, status, source, note)
-             VALUES ($1, $2, $3::date, $4::timestamptz, $5, $6, $7)
+            `INSERT INTO attendance (salon_id, staff_id, date, check_in, status, source, note, check_in_location)
+             VALUES ($1, $2, $3::date, $4::timestamptz, $5, $6, $7, $8)
              ON CONFLICT (salon_id, staff_id, date) DO UPDATE
              SET check_in  = EXCLUDED.check_in,
                  status    = EXCLUDED.status,
                  source    = EXCLUDED.source,
                  note      = COALESCE(EXCLUDED.note, attendance.note),
+                 check_in_location = COALESCE(EXCLUDED.check_in_location, attendance.check_in_location),
                  updated_at = NOW()
              RETURNING *`,
-            [salonId, staffId, date, checkIn, status, source, note ?? null]
+            [salonId, staffId, date, checkIn, status, source, note ?? null, location ?? null]
         );
         return rows[0];
     },
@@ -188,18 +190,20 @@ export const attendanceRepository = {
         status: AttendanceStatus;
         hoursWorked: number;
         note?: string;
+        location?: string;
     }): Promise<Attendance> {
-        const { salonId, staffId, date, checkOut, status, hoursWorked, note } = params;
+        const { salonId, staffId, date, checkOut, status, hoursWorked, note, location } = params;
         const { rows } = await pool.query(
             `UPDATE attendance
              SET check_out    = $4::timestamptz,
                  hours_worked = $5,
                  status       = $6,
                  note         = COALESCE($7, note),
+                 check_out_location = COALESCE($8, check_out_location),
                  updated_at   = NOW()
              WHERE salon_id = $1 AND staff_id = $2 AND date = $3::date
              RETURNING *`,
-            [salonId, staffId, date, checkOut, hoursWorked, status, note ?? null]
+            [salonId, staffId, date, checkOut, hoursWorked, status, note ?? null, location ?? null]
         );
         return rows[0];
     },

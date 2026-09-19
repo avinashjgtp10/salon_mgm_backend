@@ -73,7 +73,17 @@ export const salonDashboardRepository = {
            -- stale, or a bill can still be partially paid), falling back to
            -- the sale's own total_amount only for a walk-in/no-appointment
            -- sale that has no payments row to read from.
-           SELECT s.created_at AS event_at,
+           --
+           -- Dated by the appointment's scheduled visit, falling back to
+           -- s.created_at only for a walk-in sale with no linked appointment
+           -- — same convention reports.repository.ts's _buildSalesSummaryWhere
+           -- uses for its own date filter, and for the exact same reason:
+           -- checkout can lag the visit by a day or more (a bill for
+           -- yesterday's appointment closed out today), so s.created_at alone
+           -- silently misdated it — a bill that Sales Summary's "Yesterday"
+           -- filter correctly counted as yesterday's revenue, this Dashboard
+           -- card was showing under today's instead.
+           SELECT COALESCE(a.scheduled_at, s.created_at) AS event_at,
              CASE
                WHEN s.appointment_id IS NOT NULL THEN COALESCE(pay.paid_from_payments, 0)
                ELSE ROUND(s.total_amount)
@@ -87,22 +97,22 @@ export const salonDashboardRepository = {
            ) pay ON s.appointment_id IS NOT NULL
            WHERE s.salon_id = $1
              AND s.status = 'completed'
-             AND s.created_at >= date_trunc('month', NOW() - INTERVAL '1 month')
+             AND COALESCE(a.scheduled_at, s.created_at) >= date_trunc('month', NOW() - INTERVAL '1 month')
              AND (a.id IS NULL OR (a.status IN ('paid', 'partial') AND a.deleted_at IS NULL))
          ),
          -- Money genuinely collected on a bill still short of the full total
          -- (a real deposit, not yet settled) — no sales row exists for these
          -- yet, so without this branch that money is invisible to revenue
-         -- until (if ever) the remainder gets paid. Dated by when it was
-         -- actually collected. Excluded once the appointment gets a completed
-         -- sale, so the deposit isn't double-counted against the full total.
+         -- until (if ever) the remainder gets paid. Dated by the appointment's
+         -- scheduled visit, same as sales_rows above, not by when the deposit
+         -- happened to be collected.
          open_partial_rows AS (
-           SELECT p.created_at AS event_at, p.paid_amount AS amount
+           SELECT COALESCE(a.scheduled_at, p.created_at) AS event_at, p.paid_amount AS amount
            FROM payments p
            JOIN appointments a ON a.id = p.appointment_id
            WHERE p.salon_id = $1
              AND p.status = 'partial'
-             AND p.created_at >= date_trunc('month', NOW() - INTERVAL '1 month')
+             AND COALESCE(a.scheduled_at, p.created_at) >= date_trunc('month', NOW() - INTERVAL '1 month')
              AND a.deleted_at IS NULL
              AND a.status NOT IN ('cancelled', 'no-show')
              AND NOT EXISTS (
@@ -114,25 +124,39 @@ export const salonDashboardRepository = {
            SELECT event_at, amount FROM sales_rows
            UNION ALL
            SELECT event_at, amount FROM open_partial_rows
+         ),
+         -- The DB session runs in UTC (see database.ts), but the salon's
+         -- business day is Asia/Kolkata (IST, UTC+5:30) — bare CURRENT_DATE/
+         -- DATE(event_at) rolled over at UTC midnight, i.e. 5:30am IST, so a
+         -- bill completed in the first ~5.5 hours of an IST day (e.g. a late
+         -- checkout just after midnight) landed a full calendar day earlier
+         -- than its true business date, dropping it out of both "today" and
+         -- "yesterday" and into the day before. Same fix as
+         -- cash-management.repository.ts's openCounter once-per-day check.
+         bounds AS (
+           SELECT (NOW() AT TIME ZONE 'Asia/Kolkata')::date AS ist_today
          )
          SELECT
-           COALESCE(SUM(CASE WHEN date_trunc('month', event_at) = date_trunc('month', NOW())
+           COALESCE(SUM(CASE WHEN date_trunc('month', event_at AT TIME ZONE 'Asia/Kolkata') = date_trunc('month', bounds.ist_today)
              THEN amount ELSE 0 END), 0)::numeric AS total_revenue,
-           COALESCE(SUM(CASE WHEN date_trunc('month', event_at) = date_trunc('month', NOW() - INTERVAL '1 month')
+           COALESCE(SUM(CASE WHEN date_trunc('month', event_at AT TIME ZONE 'Asia/Kolkata') = date_trunc('month', bounds.ist_today - INTERVAL '1 month')
              THEN amount ELSE 0 END), 0)::numeric AS last_month_revenue,
-           COALESCE(SUM(CASE WHEN DATE(event_at) = CURRENT_DATE
+           COALESCE(SUM(CASE WHEN (event_at AT TIME ZONE 'Asia/Kolkata')::date = bounds.ist_today
              THEN amount ELSE 0 END), 0)::numeric AS today_revenue,
-           COALESCE(SUM(CASE WHEN DATE(event_at) = (CURRENT_DATE - INTERVAL '1 month')::date
+           COALESCE(SUM(CASE WHEN (event_at AT TIME ZONE 'Asia/Kolkata')::date = (bounds.ist_today - INTERVAL '1 month')::date
              THEN amount ELSE 0 END), 0)::numeric AS last_month_today_revenue,
-           COALESCE(SUM(CASE WHEN DATE(event_at) = CURRENT_DATE - INTERVAL '1 day'
+           COALESCE(SUM(CASE WHEN (event_at AT TIME ZONE 'Asia/Kolkata')::date = bounds.ist_today - INTERVAL '1 day'
              THEN amount ELSE 0 END), 0)::numeric AS yesterday_revenue,
            -- avg-bill-value stays scoped to actual completed sales — a still-
            -- open deposit isn't a finished transaction, so it doesn't count as
            -- one more "sale" in that denominator even though its money now
            -- shows up in the revenue totals above.
-           (SELECT COUNT(*) FROM sales_rows WHERE date_trunc('month', event_at) = date_trunc('month', NOW())) AS sales_count,
-           (SELECT COUNT(*) FROM sales_rows WHERE date_trunc('month', event_at) = date_trunc('month', NOW() - INTERVAL '1 month')) AS last_month_sales_count
-         FROM revenue_events`,
+           -- Scalar subqueries can't reference bounds.ist_today from the
+           -- outer aggregate query without a GROUP BY, so these two recompute
+           -- "IST today" inline instead of joining against bounds.
+           (SELECT COUNT(*) FROM sales_rows WHERE date_trunc('month', event_at AT TIME ZONE 'Asia/Kolkata') = date_trunc('month', (NOW() AT TIME ZONE 'Asia/Kolkata')::date)) AS sales_count,
+           (SELECT COUNT(*) FROM sales_rows WHERE date_trunc('month', event_at AT TIME ZONE 'Asia/Kolkata') = date_trunc('month', (NOW() AT TIME ZONE 'Asia/Kolkata')::date - INTERVAL '1 month')) AS last_month_sales_count
+         FROM revenue_events, bounds`,
         [salonId]
       ),
 

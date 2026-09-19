@@ -32,32 +32,20 @@ export const notificationsService = {
       eventKey: data.event_key,
     });
 
-    if (data.event_key) {
-      const allowed = await canSendPush(data.salon_id, data.event_key);
-      logger.info("Notification push preference result", {
-        salonId: data.salon_id,
-        type: data.type,
-        eventKey: data.event_key,
-        allowed,
-      });
-
-      if (!allowed) {
-        logger.info("Notification skipped by push preference", {
-          salonId: data.salon_id,
-          eventKey: data.event_key,
-          type: data.type,
-        });
-        return null;
-      }
-    } else {
-      logger.info("Notification push preference result", {
-        salonId: data.salon_id,
-        type: data.type,
-        allowed: true,
-        reason: "no_event_key",
-      });
+    const fallbackEvents: Record<string, string> = {
+      appointment: "newAppointment",
+      payment: "newPayment",
+      payment_complete: "newPayment",
+      payment_completed: "newPayment",
+      product_audit: "productAudit",
+      inventory_audit: "productAudit",
+    };
+    const preferenceEvent = data.event_key ?? fallbackEvents[data.type] ?? "otherUpdates";
+    const allowed = await canSendPush(data.salon_id, preferenceEvent);
+    if (!allowed) {
+      logger.info("Notification skipped by push preference", { salonId: data.salon_id, eventKey: preferenceEvent });
+      return null;
     }
-
     const notification = await notificationsRepository.create({
       salon_id: data.salon_id,
       type: data.type,
@@ -128,6 +116,7 @@ export const notificationsService = {
             notification_id: notification.id,
             salon_id: notification.salon_id,
             type: notification.type,
+            event_key: preferenceEvent,
           },
           sound: "default",
           priority: "high",

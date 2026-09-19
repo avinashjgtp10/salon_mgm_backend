@@ -56,10 +56,14 @@ router.patch("/demo-requests/:id/status",   superAdminController.setDemoRequestS
 router.post("/users/create",                superAdminController.createUser);
 router.get("/users",                        superAdminController.getAllUsers);
 router.delete("/users/:id",                 superAdminController.deleteUser);
+router.put("/users/:id",                    superAdminController.updateUser);
 router.patch("/users/:id/status",           superAdminController.setUserStatus);
 router.patch("/users/:id/role",             superAdminController.setUserRole);
 router.post("/users/:id/reset-password",    superAdminController.resetUserPassword);
 router.post("/users/:id/impersonate",       superAdminController.impersonateUser);
+router.get("/users/:id/branch-salons",              superAdminController.getBranchOwnerSalons);
+router.put("/users/:id/branch-salons",              superAdminController.assignBranchOwnerSalons);
+router.delete("/users/:id/branch-salons/:salonId",  superAdminController.unassignBranchOwnerSalon);
 
 // Payments
 router.get("/payments",                     superAdminController.getAllPayments);

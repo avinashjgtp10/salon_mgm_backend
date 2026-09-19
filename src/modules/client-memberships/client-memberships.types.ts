@@ -33,7 +33,14 @@ export interface ClientMembership {
   description?: string;
   pricingType: 'value' | 'percentage' | 'loyalty';
   discountPercent?: number;
-  /** 'percentage' only — discount still available to hand out, depletes by discount given. */
+  /** 'percentage' only — which benefit model this membership was SOLD under,
+   *  snapshotted from the plan at purchase so a later plan edit can't change
+   *  it. 'validity' ignores discountBalanceRemaining entirely and lasts until
+   *  expiry; 'discount_balance' (the default, and every pre-existing row)
+   *  spends the pool down. See memberships.types.ts's MembershipBenefitType. */
+  benefitType: 'discount_balance' | 'validity';
+  /** 'percentage' + 'discount_balance' only — discount still available to hand
+   *  out, depletes by discount given. Always 0 on a validity membership. */
   discountBalanceRemaining: number;
   usageLog?: UsageLogEntry[];
   // Set only when this row was auto-created as a byproduct of paying an
@@ -164,6 +171,7 @@ export interface ClientMembershipRow {
   product_ids?: string[] | null;
   description?: string | null;
   pricing_type?: string | null;
+  benefit_type?: string | null;
   discount_percent?: string | number | null;
   discount_balance_remaining?: string | number | null;
   appointment_id?: string | null;

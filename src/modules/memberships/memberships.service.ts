@@ -17,6 +17,23 @@ const parseTaxRate = (val?: string | number): number | undefined => {
   return undefined;
 };
 
+// The two benefit models are mutually exclusive, and that has to hold at the
+// API too — not just in the modal, which a direct call or a stale tab bypasses.
+// A validity plan is stripped of any pool it was sent: with no balance column
+// set, there is nothing for the discount engine to read even if some other
+// caller later looks at the wrong field.
+function applyBenefitTypeRules(data: CreateMembershipDTO | UpdateMembershipDTO): void {
+  if (data.benefitType === undefined) return;
+  if (data.benefitType !== 'discount_balance' && data.benefitType !== 'validity') {
+    throw new AppError(
+      400,
+      "Benefit type must be either 'discount_balance' or 'validity'.",
+      "VALIDATION_ERROR",
+    );
+  }
+  if (data.benefitType === 'validity') data.discountBalance = undefined;
+}
+
 export const membershipsService = {
 
   async list(query: any, salonId: string) {
@@ -50,6 +67,7 @@ export const membershipsService = {
   },
 
   async create(data: CreateMembershipDTO, salonId: string) {
+    applyBenefitTypeRules(data);
     data.sessionType = normalize(data.sessionType)!;
     data.validFor    = normalize(data.validFor)!;
     data.colour      = normalize(data.colour)!;
@@ -72,6 +90,7 @@ export const membershipsService = {
   },
 
   async update(id: string, data: UpdateMembershipDTO, salonId: string) {
+    applyBenefitTypeRules(data);
     // Pricing type is immutable once the plan exists. Each type funds a
     // different benefit, and every sold copy snapshots the type it was bought
     // under (client_memberships.pricing_type) — so changing it here can't

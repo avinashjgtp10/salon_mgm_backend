@@ -18,6 +18,44 @@ const asString = (value: unknown): string | undefined => {
         : undefined;
 };
 
+// Shared between getSalesSummaryReport and getSalesSummaryReportChart — same
+// filter set (both read the same table/date range), the chart endpoint just
+// omits page/limit/is_export since it groups everything by day instead of
+// paginating individual rows.
+function parseSalesSummaryFilters(body: any) {
+    return {
+        start_date: asString(body.start_date),
+        end_date: asString(body.end_date),
+        staff_id: asString(body.staff_id),
+        staff_ids: Array.isArray(body.staff_ids)
+            ? body.staff_ids.map((v: unknown) => String(v)).filter(Boolean)
+            : undefined,
+        search: asString(body.search),
+        status: asString(body.status),
+        category_id: asString(body.category_id),
+        category_ids: Array.isArray(body.category_ids)
+            ? body.category_ids.map((v: unknown) => String(v)).filter(Boolean)
+            : undefined,
+        payment_mode: asString(body.payment_mode),
+        payment_modes: Array.isArray(body.payment_modes)
+            ? body.payment_modes.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+            : undefined,
+        item_type: asString(body.item_type),
+        item_types: Array.isArray(body.item_types)
+            ? body.item_types.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+            : undefined,
+        service_id: asString(body.service_id),
+        service_ids: Array.isArray(body.service_ids)
+            ? body.service_ids.map((v: unknown) => String(v)).filter(Boolean)
+            : undefined,
+        payment_status: asString(body.payment_status),
+        payment_statuses: Array.isArray(body.payment_statuses)
+            ? body.payment_statuses.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+            : undefined,
+        include_gst: body.include_gst !== false,
+    };
+}
+
 // ======================================================
 // LEGACY REPORTS (pre-existing GET-based reports module)
 // Mounted at /api/v1/reports via legacyReports.routes.ts — kept alongside
@@ -881,35 +919,7 @@ async getSalesSummaryReport(
         const body = req.body ?? {};
 
         const filters = {
-            start_date: asString(body.start_date),
-            end_date: asString(body.end_date),
-            staff_id: asString(body.staff_id),
-            staff_ids: Array.isArray(body.staff_ids)
-                ? body.staff_ids.map((v: unknown) => String(v)).filter(Boolean)
-                : undefined,
-            search: asString(body.search),
-            status: asString(body.status),
-            category_id: asString(body.category_id),
-            category_ids: Array.isArray(body.category_ids)
-                ? body.category_ids.map((v: unknown) => String(v)).filter(Boolean)
-                : undefined,
-            payment_mode: asString(body.payment_mode),
-            payment_modes: Array.isArray(body.payment_modes)
-                ? body.payment_modes.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
-                : undefined,
-            item_type: asString(body.item_type),
-            item_types: Array.isArray(body.item_types)
-                ? body.item_types.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
-                : undefined,
-            service_id: asString(body.service_id),
-            service_ids: Array.isArray(body.service_ids)
-                ? body.service_ids.map((v: unknown) => String(v)).filter(Boolean)
-                : undefined,
-            payment_status: asString(body.payment_status),
-            payment_statuses: Array.isArray(body.payment_statuses)
-                ? body.payment_statuses.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
-                : undefined,
-            include_gst: body.include_gst !== false,
+            ...parseSalesSummaryFilters(body),
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,
@@ -922,6 +932,38 @@ async getSalesSummaryReport(
             200,
             data,
             "Sales summary report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// Powers the Sales Summary report's Graph page (Overview tab) — trend,
+// payment mode split, item type / category / staff / service breakdowns,
+// payment status split, day/time heatmap, and period-over-period comparison,
+// all for the same filters currently applied to the table.
+async getSalesSummaryReportChart(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+        const filters = parseSalesSummaryFilters(body);
+        const granularity: "day" | "week" | "month" =
+            body.granularity === "week" || body.granularity === "month" ? body.granularity : "day";
+        const topLimit = Number.isFinite(Number(body.top_limit)) && Number(body.top_limit) > 0
+            ? Math.min(Math.floor(Number(body.top_limit)), 50)
+            : 5;
+
+        const data = await reportsService.getSalesSummaryReportChart(salonId, filters, granularity, topLimit);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Sales summary chart fetched successfully"
         );
     } catch (error) {
         next(error);
@@ -1493,6 +1535,50 @@ async getPurchaseVsSalesReport(
             200,
             data,
             "Purchase vs sales inventory report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// STOCK MOVEMENT REPORT (independent report API)
+// POST /api/report/stock-movement
+// ======================================================
+
+async getStockMovementReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            search: asString(body.search),
+            category_id: asString(body.category_id),
+            category_ids: Array.isArray(body.category_ids) ? body.category_ids.map(String) : undefined,
+            brand_id: asString(body.brand_id),
+            brand_ids: Array.isArray(body.brand_ids) ? body.brand_ids.map(String) : undefined,
+            stock_status: body.stock_status as "in_stock" | "low_stock" | "out_of_stock" | undefined,
+            product_type: body.product_type as "retail" | "consumable" | "both" | undefined,
+            branch_id: asString(body.branch_id),
+            product_id: asString(body.product_id),
+            date_from: asString(body.date_from),
+            date_to: asString(body.date_to),
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getStockMovementReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Stock movement report fetched successfully"
         );
     } catch (error) {
         next(error);

@@ -82,3 +82,32 @@ export type ExpenseListFilters = {
   limit?: number;
 };
 
+// Sections the caller can request from POST /cash-management/summary-bundle —
+// one request in place of separately hitting GET /cashdashboard, GET /
+// (counters), GET /expenses and GET /dashboard/summary.
+export type SummaryBundleSection = "cash_dashboard" | "cash_counters" | "cash_expenses" | "dashboard_summary";
+
+export type SummaryBundleBody = {
+  sections: SummaryBundleSection[];
+  // Shared default for cash_dashboard + cash_expenses; expenses.cash_management_id overrides it.
+  cash_management_id?: string;
+  counters?: {
+    status?: CashManagementStatus;
+    search?: string;
+    from?: string;
+    to?: string;
+    sort_by?: string;
+    sort_order?: "asc" | "desc";
+    page?: number;
+    limit?: number;
+  };
+  expenses?: {
+    cash_management_id?: string;
+    search?: string;
+    sort_by?: string;
+    sort_order?: "asc" | "desc";
+    page?: number;
+    limit?: number;
+  };
+};
+
