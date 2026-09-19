@@ -25,8 +25,9 @@ async function attachPublicExtras(salon: any) {
             ? Promise.all([
                 bookingsRepository.findWorkingHours(salon.marketplace_profile_id),
                 bookingsRepository.findAmenities(salon.marketplace_profile_id),
-            ]).then(([hourRows, amenities]) => ({ working_hours: groupWorkingHours(hourRows), amenities }))
-            : Promise.resolve({}),
+                bookingsRepository.findGalleryImages(salon.marketplace_profile_id),
+            ]).then(([hourRows, amenities, gallery]) => ({ working_hours: groupWorkingHours(hourRows), amenities, gallery }))
+            : Promise.resolve({ gallery: [] as string[] }),
         reviewsService.getPublicSummary(salon.id),
         bookingsRepository.findBookingPolicy(salon.id),
         bookingsRepository.findBrandKit(salon.id),
