@@ -86,8 +86,9 @@ export const couponsRepository = {
 
   async create(body: CreateCouponBody, salonId: string): Promise<Coupon> {
     const { rows } = await pool.query(
-      `INSERT INTO coupons (salon_id, code, type, value, min_order_amount, max_uses, expires_at, is_active)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO coupons (salon_id, code, type, value, min_order_amount, max_uses, expires_at, is_active,
+                            name, valid_from, max_discount, terms, show_barcode)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
        RETURNING *`,
       [
         salonId,
@@ -98,6 +99,11 @@ export const couponsRepository = {
         body.max_uses ?? null,
         body.expires_at,
         body.is_active ?? true,
+        body.name?.trim() || null,
+        body.valid_from ?? null,
+        body.max_discount ?? null,
+        body.terms?.trim() || null,
+        body.show_barcode ?? true,
       ]
     );
     return rows[0];
@@ -120,6 +126,11 @@ export const couponsRepository = {
     if (patch.max_uses !== undefined) add('max_uses', patch.max_uses);
     if (patch.expires_at !== undefined) add('expires_at', patch.expires_at);
     if (patch.is_active !== undefined) add('is_active', patch.is_active);
+    if (patch.name !== undefined) add('name', patch.name?.trim() || null);
+    if (patch.valid_from !== undefined) add('valid_from', patch.valid_from);
+    if (patch.max_discount !== undefined) add('max_discount', patch.max_discount);
+    if (patch.terms !== undefined) add('terms', patch.terms?.trim() || null);
+    if (patch.show_barcode !== undefined) add('show_barcode', patch.show_barcode);
 
     if (setParts.length === 0) {
       return this.findByIdOwn(id, salonId);
