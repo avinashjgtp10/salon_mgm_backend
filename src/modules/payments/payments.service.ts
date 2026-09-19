@@ -78,6 +78,14 @@ async function applyMembershipDiscountForBooking(
   productItems: DiscountEligibleItem[],
   applyPercentage: boolean,
   applyLoyalty: boolean,
+  // Staff's edit of the discount RATE for this bill, as typed in the
+  // Available Benefits panel and sent with the payment. Replaces the
+  // percentage plan's own rate (clamped to it, so it can only reduce) and
+  // leaves Loyalty's rate alone — same rule as the preview in
+  // resolveMembershipDiscount, so the charge lands on the same figure.
+  // null/undefined = charge the plan's own rate, as it did before this was
+  // editable.
+  requestedPercent?: number | null,
 ): Promise<MembershipDiscountResult> {
   let total = 0;
   const perItem = new Map<string, number>();
@@ -99,7 +107,9 @@ async function applyMembershipDiscountForBooking(
           salonId,
           {
             appointmentId,
-            discountPercent: percentageMembership.discountPercent ?? 0,
+            discountPercent: requestedPercent === null || requestedPercent === undefined
+              ? (percentageMembership.discountPercent ?? 0)
+              : Math.max(0, Math.min(percentageMembership.discountPercent ?? 0, requestedPercent)),
             services: eligible.map((i) => ({ serviceId: i.itemId, serviceName: i.name, amount: i.amount })),
           },
         );
@@ -406,6 +416,7 @@ export const paymentsService = {
                 })),
                 !!data.apply_membership_discount,
                 !!data.apply_loyalty_discount,
+                data.membership_discount_percent_requested,
               );
               membershipDiscountUsed = result.total;
               membershipDiscountByItem = result.perItem;

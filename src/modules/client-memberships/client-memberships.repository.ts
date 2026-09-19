@@ -254,6 +254,7 @@ function toClientMembership(row: ClientMembershipRow, log: UsageLogRow[] = []): 
     productIds:         row.product_ids ?? [],
     description:        row.description ?? undefined,
     pricingType:        (row.pricing_type as ClientMembership['pricingType']) ?? 'value',
+    benefitType:        (row.benefit_type as ClientMembership['benefitType']) ?? 'discount_balance',
     discountPercent:    row.discount_percent != null ? Number(row.discount_percent) : undefined,
     discountBalanceRemaining: Number(row.discount_balance_remaining) || 0,
     appointmentId:      row.appointment_id ?? null,
@@ -400,7 +401,7 @@ export const clientMembershipsRepository = {
     // always funded as (catalog price + bonusCredit) no matter which of the
     // several sell flows created this row.
     const memRes = await pool.query(
-      `SELECT valid_for, price, description, pricing_type, discount_percent, discount_balance, applies_to, service_category_ids, product_category_ids, service_ids, product_ids
+      `SELECT valid_for, price, description, pricing_type, benefit_type, discount_percent, discount_balance, applies_to, service_category_ids, product_category_ids, service_ids, product_ids
        FROM memberships WHERE id = $1`,
       [dto.membershipId],
     );
@@ -444,10 +445,16 @@ export const clientMembershipsRepository = {
     // Only a 'value' plan funds a spendable wallet. A 'percentage' plan's fee buys
     // a discount pool instead, so leaving its wallet at 0 is what keeps it out of
     // deductWalletAcrossMemberships and the wallet benefit card entirely.
+    // Snapshotted at purchase, like pricing_type/applies_to above: editing the
+    // catalog plan later must never change the terms of a membership someone
+    // already paid for.
+    const benefitType = memRow?.benefit_type ?? 'discount_balance';
     let walletBalance = 0;
     let discountBalance = 0;
     if (pricingType === 'percentage') {
-      discountBalance = Number(memRow?.discount_balance) || 0;
+      // A validity plan has no pool to spend — its discount is bounded by the
+      // expiry date instead, so this stays 0 and nothing ever decrements it.
+      discountBalance = benefitType === 'validity' ? 0 : (Number(memRow?.discount_balance) || 0);
     } else {
       walletBalance = dto.pricePaid ?? 0;
       if (memRow) {
@@ -464,8 +471,8 @@ export const clientMembershipsRepository = {
          membership_id, membership_name, colour, total_sessions, used_sessions,
          expires_at, end_date, status, price_paid, membership_wallet_balance, appointment_id,
          pricing_type, discount_percent, discount_balance_remaining, applies_to, service_category_ids, product_category_ids, description, staff_id,
-         service_ids, product_ids)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$11,$14,'active',$12,$13,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
+         service_ids, product_ids, benefit_type)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$11,$14,'active',$12,$13,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
        RETURNING *`,
       [
         id, salonId, dto.clientId, clientName, mobile, email,
@@ -491,6 +498,7 @@ export const clientMembershipsRepository = {
         dto.staffId ?? null,
         serviceIds,
         productIds,
+        benefitType,
       ],
     );
     return toClientMembership(rows[0]);
@@ -521,7 +529,7 @@ export const clientMembershipsRepository = {
     }
 
     const memRes = await pool.query(
-      `SELECT valid_for, price, description, pricing_type, discount_balance
+      `SELECT valid_for, price, description, pricing_type, benefit_type, discount_balance
        FROM memberships WHERE id = $1`,
       [dto.membershipId],
     );
@@ -531,7 +539,11 @@ export const clientMembershipsRepository = {
     let walletTopUp = 0;
     let discountTopUp = 0;
     if (pricingType === 'percentage') {
-      discountTopUp = Number(memRow?.discount_balance) || 0;
+      // Re-buying a validity plan buys more TIME, not more pool — the expiry
+      // extension below is the whole of what the client gets. Topping a pool
+      // up here would quietly turn it into a hybrid of both models.
+      const benefitType = memRow?.benefit_type ?? 'discount_balance';
+      discountTopUp = benefitType === 'validity' ? 0 : (Number(memRow?.discount_balance) || 0);
     } else if (memRow) {
       let bonusCredit = 0;
       try { bonusCredit = Number(JSON.parse(memRow.description ?? "{}").bonusCredit) || 0; } catch { /* plain text description */ }
@@ -883,13 +895,35 @@ export const clientMembershipsRepository = {
   // The single active percentage membership with discount left to give, richest
   // first. Unlike the wallet, a bill only ever draws from one — stacking two
   // percentage discounts on one service has no coherent meaning.
+  // The client's usable percentage-discount membership, if any. What makes
+  // one "usable" depends on its benefit model:
+  //
+  //   discount_balance — there is still pool left to spend (the original rule).
+  //   validity         — no pool at all; it lasts until the membership expires.
+  //
+  // Expiry is now checked for BOTH. It always should have been, but until the
+  // validity model existed the pool was the only thing that ever stopped a
+  // percentage plan, and nothing in the app writes status='expired' — so an
+  // expired-but-funded membership kept discounting. A validity plan with no
+  // expiry check would never stop at all, so the check can't be optional here.
+  // end_date is written on every purchase (see computeExpiryDate) and
+  // expires_at mirrors it; COALESCE covers either being absent on old rows,
+  // and a row with neither is treated as non-expiring exactly as it is today.
   async findActivePercentageForClient(clientId: string, salonId: string): Promise<ClientMembership | null> {
     const { rows } = await pool.query(
       `SELECT * FROM client_memberships
        WHERE client_id = $1 AND salon_id = $2 AND status = 'active'
-         AND pricing_type = 'percentage' AND discount_balance_remaining > 0
+         AND pricing_type = 'percentage'
          AND COALESCE(discount_percent, 0) > 0
-       ORDER BY discount_balance_remaining DESC
+         AND (COALESCE(benefit_type, 'discount_balance') = 'validity'
+              OR discount_balance_remaining > 0)
+         AND (COALESCE(end_date, expires_at) IS NULL
+              OR COALESCE(end_date, expires_at) >= CURRENT_DATE)
+       -- A validity plan has no balance to rank by, so it sorts last on that
+       -- column; order by it first so an unexpired validity plan is preferred
+       -- over a nearly-drained pool rather than losing to one on NULL.
+       ORDER BY (COALESCE(benefit_type, 'discount_balance') = 'validity') DESC,
+                discount_balance_remaining DESC
        LIMIT 1`,
       [clientId, salonId],
     );
@@ -971,11 +1005,18 @@ export const clientMembershipsRepository = {
         };
       }
 
+      // Validity-model membership: the discount isn't funded by a pool, so
+      // there's nothing to cap the allocation with and nothing to spend. The
+      // usage-log rows below are still written (they're what recovers the
+      // per-row split when a partial payment is completed later, and what
+      // keeps GST honest on that second call) — only the balance/status
+      // UPDATE at the bottom is skipped.
+      const isValidityBased = (cm.benefit_type ?? 'discount_balance') === 'validity';
       const balanceBefore = Number(cm.discount_balance_remaining) || 0;
       const { total: totalDiscountGiven, discounts } = allocateMembershipDiscount(
         params.services.map((s) => Number(s.amount) || 0),
         params.discountPercent,
-        balanceBefore,
+        isValidityBased ? Infinity : balanceBefore,
       );
       const perService: DiscountDeductionResult['perService'] = [];
       let remaining = balanceBefore;
@@ -984,7 +1025,9 @@ export const clientMembershipsRepository = {
         const discount = discounts[i];
         if (discount <= 0) continue;
         const svc = params.services[i];
-        remaining = round2(remaining - discount);
+        // Only a pool-backed membership draws down; a validity one logs the
+        // same rows with its balance left untouched (always 0 there anyway).
+        if (!isValidityBased) remaining = round2(remaining - discount);
 
         const isUuid = typeof svc.serviceId === 'string' &&
           /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(svc.serviceId);
@@ -1001,7 +1044,11 @@ export const clientMembershipsRepository = {
         perService.push({ serviceId: svc.serviceId, discountGiven: discount });
       }
 
-      if (totalDiscountGiven > 0) {
+      // A validity membership can never be exhausted by usage — it ends on its
+      // expiry date and nothing else, so it must never be written to
+      // 'exhausted' (which would permanently kill a plan the client has paid
+      // for the rest of the year of).
+      if (totalDiscountGiven > 0 && !isValidityBased) {
         const newStatus = remaining <= 0 ? 'exhausted' : cm.status;
         await client.query(
           `UPDATE client_memberships

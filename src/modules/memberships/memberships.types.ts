@@ -20,6 +20,13 @@ export interface MembershipsListQuery {
  */
 export type MembershipPricingType = 'value' | 'percentage' | 'loyalty';
 
+// The two mutually exclusive ways a percentage plan's discount can end.
+// 'discount_balance': spend down a monetary pool, stop at ₹0 (the original
+// and only behaviour before this type existed — hence the default everywhere).
+// 'validity': no pool, no consumption; the % applies to every eligible bill
+// until the membership itself expires.
+export type MembershipBenefitType = 'discount_balance' | 'validity';
+
 /**
  * Which line items a membership's benefit (wallet, discount, or loyalty
  * unlock) is eligible to cover. Replaces an older `appliesToProducts`
@@ -100,7 +107,15 @@ export interface CreateMembershipDTO {
   productIds?:            string[];
   pricingType?:           MembershipPricingType;
   discountPercent?:       number;
-  /** 'percentage' only — the depleting pool of discount this plan may hand out. */
+  /** 'percentage' only — which of the two mutually exclusive benefit models
+   *  this plan runs on. 'discount_balance' spends down discountBalance below
+   *  and stops at ₹0; 'validity' ignores the pool entirely and keeps giving
+   *  the % until the membership expires. Defaults to 'discount_balance', so
+   *  every plan written before this existed behaves exactly as it always has. */
+  benefitType?:           MembershipBenefitType;
+  /** 'percentage' + benefitType 'discount_balance' only — the depleting pool
+   *  of discount this plan may hand out. Meaningless (and not written) for a
+   *  'validity' plan, which consumes nothing. */
   discountBalance?:       number;
   /** 'loyalty' only — the tier ladder (visits → discount%), ascending by
    *  thresholdValue. Replaces the old single loyaltyThresholdValue/discountPercent
@@ -135,6 +150,7 @@ export interface MembershipRow {
   service_ids:              string[] | null;
   product_ids:              string[] | null;
   pricing_type:             MembershipPricingType;
+  benefit_type:             MembershipBenefitType;
   discount_percent:         string | null;
   discount_balance:         string | null;
   loyalty_threshold_value:  number | null;

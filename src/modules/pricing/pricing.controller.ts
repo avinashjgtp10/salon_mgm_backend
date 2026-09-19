@@ -38,6 +38,13 @@ export const pricingController = {
           ? Number(body.membershipWalletRequested) || 0
           : undefined,
         applyMembershipDiscount: !!body.applyMembershipDiscount,
+        // Same undefined-vs-0 care as membershipWalletRequested above: 0% is a
+        // real instruction ("give no membership discount on this bill"), so it
+        // must not collapse into "not specified" and quietly restore the
+        // plan's full rate.
+        membershipDiscountPercentRequested: body.membershipDiscountPercentRequested !== undefined
+          ? Number(body.membershipDiscountPercentRequested) || 0
+          : undefined,
         applyLoyaltyDiscount: !!body.applyLoyaltyDiscount,
         applyRewardPoints: !!body.applyRewardPoints,
         rewardPointsToRedeem: Number(body.rewardPointsToRedeem) || 0,

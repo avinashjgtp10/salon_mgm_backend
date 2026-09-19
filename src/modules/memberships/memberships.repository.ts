@@ -38,6 +38,10 @@ function toMembership(row: MembershipRow): Membership {
     serviceIds: row.service_ids ?? undefined,
     productIds: row.product_ids ?? undefined,
     pricingType: row.pricing_type,
+    // Older rows predate the column; the DB default covers them, but a plan
+    // read through a projection that omits it shouldn't collapse to undefined
+    // and silently look like a validity plan to a `!== 'validity'` test.
+    benefitType: row.benefit_type ?? 'discount_balance',
     discountPercent: row.discount_percent ? parseFloat(row.discount_percent) : undefined,
     discountBalance: row.discount_balance ? parseFloat(row.discount_balance) : undefined,
     loyaltyTiers: row.loyalty_tiers ?? undefined,
@@ -236,8 +240,8 @@ export const membershipsRepository = {
            valid_for, price, tax_rate, colour,
            enable_online_sales, enable_online_redemption, terms_and_conditions,
            applies_to, service_category_ids, product_category_ids, pricing_type, discount_percent,
-           discount_balance, loyalty_tiers, service_ids, product_ids)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20::jsonb,$21,$22)`,
+           discount_balance, loyalty_tiers, service_ids, product_ids, benefit_type)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20::jsonb,$21,$22,$23)`,
         [
           membershipId, salonId, data.name, data.description ?? null,
           data.sessionType, data.numberOfSessions ?? null,
@@ -248,10 +252,14 @@ export const membershipsRepository = {
           data.serviceCategoryIds?.length ? data.serviceCategoryIds : null,
           data.productCategoryIds?.length ? data.productCategoryIds : null,
           data.pricingType ?? 'value', data.discountPercent ?? null,
-          data.discountBalance ?? null,
+          // A validity plan has no pool by definition — store NULL rather than
+          // a number nothing will ever read, so the two models can't be half
+          // configured at once in the data itself, not just in the UI.
+          data.benefitType === 'validity' ? null : (data.discountBalance ?? null),
           data.loyaltyTiers ? JSON.stringify(data.loyaltyTiers) : null,
           data.serviceIds?.length ? data.serviceIds : null,
           data.productIds?.length ? data.productIds : null,
+          data.benefitType ?? 'discount_balance',
         ]
       );
       await _linkServices(client, membershipId, data.includedServices);
@@ -285,6 +293,7 @@ export const membershipsRepository = {
         serviceIds: "service_ids",
         productIds: "product_ids",
         pricingType: "pricing_type",
+        benefitType: "benefit_type",
         discountPercent: "discount_percent",
         discountBalance: "discount_balance",
         loyaltyTiers: "loyalty_tiers",
@@ -296,6 +305,10 @@ export const membershipsRepository = {
         if (key in data) {
           const cast = key === "loyaltyTiers" ? "::jsonb" : "";
           let raw = (data as any)[key] ?? null;
+          // Switching a plan to the validity model clears its pool, even if
+          // the caller still sent one — the two models are exclusive, and a
+          // leftover balance would otherwise sit in the row looking live.
+          if (key === "discountBalance" && data.benefitType === 'validity') raw = null;
           if ((key === "serviceCategoryIds" || key === "productCategoryIds" || key === "serviceIds" || key === "productIds") && Array.isArray(raw) && raw.length === 0) raw = null;
           fields.push(`${col} = $${idx++}${cast}`);
           values.push(key === "loyaltyTiers" && raw ? JSON.stringify(raw) : raw);

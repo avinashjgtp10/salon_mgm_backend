@@ -121,6 +121,16 @@ export async function resolveMembershipDiscount(
   productRows: LineItem[],
   applyPercentage: boolean,
   applyLoyalty: boolean,
+  // Staff's edit of the discount RATE for this bill, from the Available
+  // Benefits panel — e.g. a 20% plan applied at 10% just this once. It
+  // replaces the plan's own percentage and nothing else: the eligible rows,
+  // the restrictions and the discount balance all still decide the rest.
+  // null/undefined (the normal case) means "use the plan's own %". Clamped to
+  // the plan's rate, so this can only reduce — the same rule as every other
+  // amount in that panel, none of which may exceed what's available.
+  // It does NOT touch the Loyalty discount, which is a separate plan behind
+  // its own card with its own rate.
+  requestedPercent?: number | null,
 ): Promise<MembershipDiscountPreview> {
   const empty = (): MembershipDiscountPreview => ({
     total: 0,
@@ -172,9 +182,20 @@ export async function resolveMembershipDiscount(
   const previews: MembershipDiscountPreview[] = [];
 
   if (percentageMembership) {
+    const planPercent = percentageMembership.discountPercent ?? 0;
+    // Validity model: nothing is consumed, so there is no pool to bound the
+    // allocation — same uncapped treatment loyalty already gets below. The
+    // membership's expiry is what ends it, and that's enforced upstream in
+    // findActivePercentageForClient (an expired one isn't returned at all).
+    const planBalance = percentageMembership.benefitType === 'validity'
+      ? Infinity
+      : percentageMembership.discountBalanceRemaining;
     previews.push(allocate(
-      percentageMembership.discountPercent ?? 0,
-      percentageMembership.discountBalanceRemaining,
+      // Staff's rate for this bill, never above what the plan actually grants.
+      requestedPercent === null || requestedPercent === undefined
+        ? planPercent
+        : Math.max(0, Math.min(planPercent, requestedPercent)),
+      planBalance,
       percentageMembership.appliesTo,
       percentageMembership.serviceCategoryIds,
       percentageMembership.productCategoryIds,
@@ -184,6 +205,8 @@ export async function resolveMembershipDiscount(
   }
 
   // Loyalty is uncapped once unlocked, so there is no balance to bound it.
+  // Its rate is its own — the Membership Discount card's editable % belongs
+  // to the percentage plan above and must not silently re-rate this one.
   if (loyalty?.eligible) {
     previews.push(allocate(
       loyalty.discountPercent, Infinity, loyalty.appliesTo,
@@ -290,6 +313,7 @@ export const pricingService = {
           return await resolveMembershipDiscount(
             salonId, body.client_id, serviceRows, productRows,
             !!body.applyMembershipDiscount, !!body.applyLoyaltyDiscount,
+            body.membershipDiscountPercentRequested,
           );
         } catch {
           return zeroDiscountPreview; // non-fatal — preview simply shows no discount
