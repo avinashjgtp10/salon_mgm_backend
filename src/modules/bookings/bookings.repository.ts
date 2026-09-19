@@ -152,6 +152,28 @@ export const bookingsRepository = {
         return rows.map((r) => r.feature_key as string);
     },
 
+    // Gallery photos for the public hero carousel. Cover first, then the salon's
+    // own ordering — the same order the Marketplace Profile editor shows.
+    // Tolerant of a missing table so an un-migrated environment renders the page
+    // without a carousel rather than 500ing the whole booking flow.
+    async findGalleryImages(marketplaceProfileId: string) {
+        try {
+            const { rows } = await pool.query(
+                `SELECT image_url
+                 FROM marketplace_images
+                 WHERE profile_id = $1
+                   AND NULLIF(TRIM(COALESCE(image_url, '')), '') IS NOT NULL
+                 ORDER BY is_cover DESC, sort_order ASC NULLS LAST, created_at ASC
+                 LIMIT 12`,
+                [marketplaceProfileId]
+            );
+            return rows.map((r) => r.image_url as string);
+        } catch (err: any) {
+            if (err?.code === "42P01" || err?.code === "42703") return [];
+            throw err;
+        }
+    },
+
     // Ordered the way the booking page browses them — by the salon's own
     // category ordering, then name — rather than by creation date, which is
     // meaningless to a customer scrolling a 500-service catalogue.
