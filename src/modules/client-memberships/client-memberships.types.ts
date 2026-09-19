@@ -80,6 +80,14 @@ export interface CreateClientMembershipDTO {
   colour?: string;
   totalSessions: number;
   expiresAt?: string;
+  /** When this membership was actually bought/granted. Omitted on every live
+   *  sale — purchased_at then defaults to NOW() as it always has. Set only
+   *  when back-dating a historical record (the bulk assign import, which
+   *  loads memberships a salon sold before they started using the system):
+   *  without it every imported row is stamped with the moment of import, so
+   *  the whole batch looks like it was sold on one day. Accepts a plain
+   *  "YYYY-MM-DD" or a full ISO timestamp. */
+  purchasedAt?: string;
   pricePaid?: number;
   notes?: string;
   // Optional here since clientMembershipsRepository.create() is also called

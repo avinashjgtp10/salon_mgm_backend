@@ -130,6 +130,39 @@ export function buildReceiptHtml(params: {
     // split applied to what's actually collectible at checkout.
     const grandTotal = (Number(sale.total_amount) || 0) + tipAmt;
 
+    // A split payment stores its real per-method breakdown as JSON in
+    // sales.payment_reference — {"Cash":600,"UPI":660}, written by
+    // normalizePaymentMethod() in transactions/payment-method.util.ts. Keys
+    // can also be "Package"/"Membership"/"eWallet" when those covered part of
+    // the bill. Without reading it, the invoice printed a bare "SPLIT" and a
+    // single Amount Paid, which tells the client nothing about how their own
+    // money was taken.
+    const METHOD_LABELS: Record<string, string> = {
+        cash: "Cash", card: "Card", upi: "UPI", wallet: "E-Wallet", ewallet: "E-Wallet",
+        gift_card: "Gift Card", package: "Package", membership: "Membership",
+        pos_machine: "Payment Machine",
+    };
+    const prettyMethod = (raw: string) =>
+        METHOD_LABELS[raw.trim().toLowerCase()]
+        ?? raw.trim().replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+
+    const splitLegs: Array<{ label: string; amount: number }> = (() => {
+        if ((sale.payment_method ?? "").trim().toLowerCase() !== "split") return [];
+        try {
+            const parsed = JSON.parse(sale.payment_reference ?? "") as Record<string, unknown>;
+            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
+            return Object.entries(parsed)
+                .map(([key, value]) => ({ label: prettyMethod(key), amount: Number(value) || 0 }))
+                // A ₹0 leg is noise on paper, and a legacy reference that stored
+                // only method NAMES (no amounts) parses to 0 for every leg — in
+                // that case nothing is listed and the single Amount Paid row
+                // below stands on its own, exactly as it does today.
+                .filter((leg) => leg.amount > 0);
+        } catch {
+            return []; // malformed/legacy reference — fall back to today's output
+        }
+    })();
+
     const summaryRows = [
         subtotalAmt > 0 ? sumRow("Subtotal", fmt(subtotalAmt)) : "",
         discountAmt > 0 ? sumRow(couponCode ? `Coupon (${couponCode})` : "Discount", `−${fmt(discountAmt)}`, false, "#dc2626") : "",
@@ -138,7 +171,13 @@ export function buildReceiptHtml(params: {
         // rather than the dashboard's itemized per-tax-type breakdown.
         taxAmt > 0 ? sumRow("Tax", `+${fmt(taxAmt)}`) : "",
         sumRow("Grand Total", fmt(grandTotal), true, "#111827", true),
-        paidAmount > 0 ? sumRow("Amount Paid", fmt(paidAmount), false, "#15803d") : "",
+        // Each method the client actually paid with, then the total they add
+        // up to. Indented under the total so the two read as one group rather
+        // than as more bill lines.
+        ...splitLegs.map((leg) => sumRow(`&nbsp;&nbsp;${leg.label}`, fmt(leg.amount), false, "#6b7280")),
+        paidAmount > 0
+            ? sumRow(splitLegs.length > 0 ? "Total Amount Paid" : "Amount Paid", fmt(paidAmount), false, "#15803d")
+            : "",
         dueAmount > 0 ? sumRow("Balance Due", fmt(dueAmount), true, "#dc2626") : "",
     ]
         .filter(Boolean)
@@ -253,7 +292,9 @@ export function buildReceiptHtml(params: {
         ${infoCell("Date", apptDate)}
         ${infoCell("Time", apptTime)}
         ${infoCell("Staff", allStaffDisplay)}
-        ${infoCell("Payment Method", (sale.payment_method ?? "—").toUpperCase())}
+        ${infoCell("Payment Method", splitLegs.length > 0
+            ? splitLegs.map((leg) => leg.label).join(" + ").toUpperCase()
+            : (sale.payment_method ?? "—").toUpperCase())}
         ${infoCell("Booking Status", appointment?.status ?? "Completed")}
         ${infoCell("Payment Status", `<span class="pay-badge" style="background:${payBg};color:${payColor}">${rawPs}</span>`)}
       </div>
