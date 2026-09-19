@@ -250,12 +250,22 @@ export const clientsRepository = {
         // same SELECT) to avoid an ambiguous-column error from ORDER BY when
         // sorting by it.
         const orderCol = sb === "total_sales" ? "computed_total_sales" : `c.${sb}`;
+
+        // "list" mode is the Client List table's own opt-in — it renders only
+        // name/referral/mobile/gender/reviews/sales/created_at, so the extra
+        // referral_points_earned join (needed by Client Loyalty, another
+        // caller of this same method) is skipped too, not just projected out.
+        const isListView = q.fields === "list";
+        const selectCols = isListView
+            ? `c.id, c.first_name, c.last_name, c.email, c.referral_code,
+               c.phone_country_code, c.phone_number, c.gender, c.is_blocked,
+               c.reviews_avg, c.reviews_count, c.created_at`
+            : `c.*, COALESCE(rp.points_earned, 0) AS referral_points_earned`;
         const dataSql = `
-      SELECT c.*, COALESCE(ts.total_sales, 0) AS computed_total_sales,
-             COALESCE(rp.points_earned, 0) AS referral_points_earned
+      SELECT ${selectCols}, COALESCE(ts.total_sales, 0) AS computed_total_sales
       FROM clients c
       ${tsJoin}
-      ${referralPointsJoin}
+      ${isListView ? "" : referralPointsJoin}
       ${whereSql}
       ORDER BY ${orderCol} ${so}
       OFFSET $${params.length + 1}
