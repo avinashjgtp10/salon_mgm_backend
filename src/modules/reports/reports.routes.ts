@@ -68,6 +68,12 @@ router.post(
     reportsController.getProductRetailReport
 );
 
+router.post(
+    "/product-retail/chart",
+    ...baseGuard, requireAnyPermission(["view_report_product_sale", "view_report_product_sale_inventory"]),
+    reportsController.getProductRetailReportChart
+);
+
 // ======================================================
 // SERVICE SALE REPORT (independent report API)
 // Reads sales/sale_items directly — never calls the Appointment API/service.

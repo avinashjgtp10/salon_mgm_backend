@@ -12,6 +12,7 @@ import {
     ProductRetailReportRow,
     ProductRetailReportStats,
     ProductRetailFilterOption,
+    ProductRetailChartFilters,
     ServiceSaleReportRow,
     ServiceSaleReportStats,
     ServiceSaleFilterOption,
@@ -3641,6 +3642,244 @@ async getProductRetailFiltersAvailable(salonId: string): Promise<{
     brands: brandRows.map((r: any) => ({ id: r.id, label: r.label })),
     categories: categoryRows.map((r: any) => ({ id: r.id, label: r.label })),
   };
+},
+
+// Same prorated-paid-amount expression getProductRetailReportStats/Rows use
+// (an appointment-linked sale's collected total via _PAYMENT_LATERAL, or a
+// walk-in sale's own total_amount once completed — never the billed/taxed
+// amount) — a line item's share is its own total_price against the sale's
+// subtotal. Reused across every Product Retail graph query below so "Revenue"
+// means the exact same thing on the graph as it does on the table/stat cards.
+_PRODUCT_RETAIL_REVENUE_EXPR: `
+  CASE WHEN COALESCE(s.subtotal, 0) > 0
+    THEN (CASE WHEN s.appointment_id IS NOT NULL THEN pay.paid_from_payments
+               WHEN s.status = 'completed' THEN s.total_amount::numeric
+               ELSE 0 END) * (si.total_price / s.subtotal)
+    ELSE 0
+  END
+`,
+
+// Powers the Product Retail report's Graph page — Quantity/Revenue trend,
+// same day/week/month bucketing as getSalesSummaryReportChart.
+async getProductRetailChartTrend(
+  salonId: string,
+  filters: ProductRetailChartFilters,
+  granularity: "day" | "week" | "month" = "day"
+): Promise<{ date: string; quantity: number; revenue: number }[]> {
+  const { where, values } = this._buildProductRetailWhere(salonId, filters);
+  const revenueExpr = this._PRODUCT_RETAIL_REVENUE_EXPR;
+  // Text-formatted (not a bare date column) — node-pg parses a raw "date"
+  // result relative to the driver's own local timezone, which has already
+  // caused a real off-by-one bug elsewhere in this codebase this session.
+  const istInstant = `s.created_at AT TIME ZONE 'Asia/Kolkata'`;
+  const dayExpr = granularity === "month"
+    ? `TO_CHAR(date_trunc('month', ${istInstant}), 'YYYY-MM-DD')`
+    : granularity === "week"
+    ? `TO_CHAR(date_trunc('week', ${istInstant}), 'YYYY-MM-DD')`
+    : `TO_CHAR(${istInstant}, 'YYYY-MM-DD')`;
+
+  const query = `
+    SELECT
+      ${dayExpr} AS day,
+      COALESCE(SUM(si.quantity), 0)::int AS quantity,
+      COALESCE(SUM(${revenueExpr}), 0) AS revenue
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    LEFT JOIN clients c ON s.client_id = c.id
+    LEFT JOIN products p ON p.id = si.item_id
+    ${this._PAYMENT_LATERAL}
+    WHERE ${where}
+    GROUP BY day
+    ORDER BY day ASC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => ({
+    date: String(r.day),
+    quantity: Number(r.quantity ?? 0),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+// Payment-mode split for the graph page's pie chart — same revenue
+// definition as the trend above, grouped by sales.payment_method instead of
+// by day.
+async getProductRetailPaymentModeBreakdown(
+  salonId: string,
+  filters: ProductRetailChartFilters
+): Promise<{ payment_mode: string; revenue: number }[]> {
+  const { where, values } = this._buildProductRetailWhere(salonId, filters);
+  const revenueExpr = this._PRODUCT_RETAIL_REVENUE_EXPR;
+
+  const query = `
+    SELECT
+      COALESCE(s.payment_method, 'unknown') AS payment_mode,
+      COALESCE(SUM(${revenueExpr}), 0) AS revenue
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    LEFT JOIN clients c ON s.client_id = c.id
+    LEFT JOIN products p ON p.id = si.item_id
+    ${this._PAYMENT_LATERAL}
+    WHERE ${where}
+    GROUP BY payment_mode
+    ORDER BY revenue DESC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => ({
+    payment_mode: String(r.payment_mode),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+// Top Products by Revenue — si.item_id/si.name (the line item's own captured
+// name at time of sale), so a since-renamed or deleted product still shows
+// correctly under whatever it was called then, same convention
+// getSalesSummaryTopServices uses for services.
+async getProductRetailTopProducts(
+  salonId: string,
+  filters: ProductRetailChartFilters,
+  limit: number = 5
+): Promise<{ product_id: string | null; product_name: string; quantity: number; revenue: number }[]> {
+  const { where, values, nextIndex } = this._buildProductRetailWhere(salonId, filters);
+  const revenueExpr = this._PRODUCT_RETAIL_REVENUE_EXPR;
+
+  const query = `
+    SELECT
+      si.item_id AS product_id,
+      si.name AS product_name,
+      COALESCE(SUM(si.quantity), 0)::int AS quantity,
+      COALESCE(SUM(${revenueExpr}), 0) AS revenue
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    LEFT JOIN clients c ON s.client_id = c.id
+    LEFT JOIN products p ON p.id = si.item_id
+    ${this._PAYMENT_LATERAL}
+    WHERE ${where}
+    GROUP BY si.item_id, si.name
+    ORDER BY revenue DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    product_id: r.product_id ? String(r.product_id) : null,
+    product_name: String(r.product_name ?? "Unknown"),
+    quantity: Number(r.quantity ?? 0),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+// Top Brands by Revenue — LEFT JOIN product_brands, excluding products with
+// no brand assigned (same "just drop unassigned rows" convention
+// getProductRetailFiltersAvailable's brand list uses) rather than lumping
+// them into a misleading "Unknown" bucket.
+async getProductRetailTopBrands(
+  salonId: string,
+  filters: ProductRetailChartFilters,
+  limit: number = 5
+): Promise<{ brand_id: string | null; brand_name: string; revenue: number }[]> {
+  const { where, values, nextIndex } = this._buildProductRetailWhere(salonId, filters);
+  const revenueExpr = this._PRODUCT_RETAIL_REVENUE_EXPR;
+
+  const query = `
+    SELECT
+      pb.id AS brand_id,
+      pb.name AS brand_name,
+      COALESCE(SUM(${revenueExpr}), 0) AS revenue
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    LEFT JOIN clients c ON s.client_id = c.id
+    LEFT JOIN products p ON p.id = si.item_id
+    LEFT JOIN product_brands pb ON pb.id = p.brand_id
+    ${this._PAYMENT_LATERAL}
+    WHERE ${where} AND pb.id IS NOT NULL
+    GROUP BY pb.id, pb.name
+    ORDER BY revenue DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    brand_id: r.brand_id ? String(r.brand_id) : null,
+    brand_name: String(r.brand_name ?? "Unknown"),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+// Top Categories by Revenue — same live products.category_id ->
+// service_categories join getProductRetailReportRows/FiltersAvailable use
+// (category membership isn't captured on the line item itself).
+async getProductRetailTopCategories(
+  salonId: string,
+  filters: ProductRetailChartFilters,
+  limit: number = 5
+): Promise<{ category_id: string | null; category_name: string; revenue: number }[]> {
+  const { where, values, nextIndex } = this._buildProductRetailWhere(salonId, filters);
+  const revenueExpr = this._PRODUCT_RETAIL_REVENUE_EXPR;
+
+  const query = `
+    SELECT
+      sc.id AS category_id,
+      sc.name AS category_name,
+      COALESCE(SUM(${revenueExpr}), 0) AS revenue
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    LEFT JOIN clients c ON s.client_id = c.id
+    LEFT JOIN products p ON p.id = si.item_id
+    LEFT JOIN service_categories sc ON sc.id = p.category_id
+    ${this._PAYMENT_LATERAL}
+    WHERE ${where} AND sc.id IS NOT NULL
+    GROUP BY sc.id, sc.name
+    ORDER BY revenue DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    category_id: r.category_id ? String(r.category_id) : null,
+    category_name: String(r.category_name ?? "Unknown"),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+// Top Staff by Product Sales Revenue — line-item-level staff (si.staff_id,
+// falling back to s.staff_id), same convention _buildProductRetailWhere's
+// own Staff filter and getProductRetailFiltersAvailable's staff list use.
+async getProductRetailTopStaff(
+  salonId: string,
+  filters: ProductRetailChartFilters,
+  limit: number = 5
+): Promise<{ staff_id: string | null; staff_name: string; revenue: number }[]> {
+  const { where, values, nextIndex } = this._buildProductRetailWhere(salonId, filters);
+  const revenueExpr = this._PRODUCT_RETAIL_REVENUE_EXPR;
+
+  const query = `
+    SELECT
+      COALESCE(si.staff_id, s.staff_id) AS staff_id,
+      TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))) AS staff_name,
+      COALESCE(SUM(${revenueExpr}), 0) AS revenue
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    LEFT JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
+    LEFT JOIN clients c ON s.client_id = c.id
+    LEFT JOIN products p ON p.id = si.item_id
+    ${this._PAYMENT_LATERAL}
+    WHERE ${where} AND COALESCE(si.staff_id, s.staff_id) IS NOT NULL
+    -- Grouped by the full expressions, not the "staff_id"/"staff_name" output
+    -- aliases — sale_items itself has a real staff_id column, so the bare
+    -- alias is ambiguous between the SELECT-list name and that column.
+    GROUP BY COALESCE(si.staff_id, s.staff_id), TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, '')))
+    ORDER BY revenue DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    staff_id: r.staff_id ? String(r.staff_id) : null,
+    staff_name: r.staff_name?.trim() || "Unknown",
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
 },
 
 // ======================================================

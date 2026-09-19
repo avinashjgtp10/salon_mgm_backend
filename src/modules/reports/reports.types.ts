@@ -955,6 +955,32 @@ export interface ProductRetailReportResponse {
     };
 }
 
+// Powers the Product Retail report's Graph page — same shape/scope as
+// SalesSummaryChartResponse below, generalized to this report's own filters
+// (ProductRetailReportFilters, minus page/limit/is_export/product_id, which
+// the chart doesn't use) instead of the Sales Summary ones.
+export interface ProductRetailChartFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    brand_id?: string;
+    brand_ids?: string[];
+    category_id?: string;
+    category_ids?: string[];
+    min_price?: number;
+    max_price?: number;
+}
+
+export interface ProductRetailChartResponse {
+    daily: { date: string; quantity: number; revenue: number }[];
+    payment_modes: { payment_mode: string; revenue: number }[];
+    top_products: { product_id: string | null; product_name: string; quantity: number; revenue: number }[];
+    top_brands: { brand_id: string | null; brand_name: string; revenue: number }[];
+    top_categories: { category_id: string | null; category_name: string; revenue: number }[];
+    top_staff: { staff_id: string | null; staff_name: string; revenue: number }[];
+}
+
 // ===============================
 // Service Sale (independent report API — POST /api/report/service-sale)
 // Reads directly from sales/sale_items (item_type = 'service'), one row per

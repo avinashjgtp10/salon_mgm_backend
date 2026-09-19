@@ -234,6 +234,8 @@ import {
     DailySheetReportResponse,
     ProductRetailReportFilters,
     ProductRetailReportResponse,
+    ProductRetailChartFilters,
+    ProductRetailChartResponse,
     ServiceSaleReportFilters,
     ServiceSaleReportResponse,
     GstReportFilters,
@@ -1412,6 +1414,27 @@ async getProductRetailReport(
         stats,
         filters_available: filtersAvailable,
     };
+},
+
+// Powers the Product Retail report's Graph page — same shape as
+// getSalesSummaryReportChart above, generalized to this report's own
+// filters/tables instead.
+async getProductRetailReportChart(
+    salonId: string,
+    filters: ProductRetailChartFilters,
+    granularity: "day" | "week" | "month" = "day",
+    topLimit: number = 5
+): Promise<ProductRetailChartResponse> {
+    const [daily, payment_modes, top_products, top_brands, top_categories, top_staff] = await Promise.all([
+        reportsRepository.getProductRetailChartTrend(salonId, filters, granularity),
+        reportsRepository.getProductRetailPaymentModeBreakdown(salonId, filters),
+        reportsRepository.getProductRetailTopProducts(salonId, filters, topLimit),
+        reportsRepository.getProductRetailTopBrands(salonId, filters, topLimit),
+        reportsRepository.getProductRetailTopCategories(salonId, filters, topLimit),
+        reportsRepository.getProductRetailTopStaff(salonId, filters, topLimit),
+    ]);
+
+    return { daily, payment_modes, top_products, top_brands, top_categories, top_staff };
 },
 
 // ======================================================
