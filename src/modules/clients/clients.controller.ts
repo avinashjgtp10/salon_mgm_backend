@@ -95,6 +95,7 @@ export const clientsController = {
                 min_sales: parseMoney(req.query.min_sales),
                 max_sales: parseMoney(req.query.max_sales),
                 package_membership: parsePackageMembershipFilter(req.query.package_membership),
+                fields: req.query.fields === "list" ? "list" : undefined,
             };
             const raw = await clientsService.list(q, salonId);
             const currentPage = page ?? Math.max(1, Math.floor(resolvedOffset / resolvedLimit) + 1);

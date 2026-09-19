@@ -241,6 +241,13 @@ export type ClientsListQuery = {
     min_sales?: number;    // revenue range (lifetime paid, wallet-settled excluded)
     max_sales?: number;
     package_membership?: PackageMembershipFilter;
+
+    // "list" trims the SELECT to only what the Client List table renders
+    // (skips address/notes/tags/ltv/ewallet/reward-balance columns and the
+    // referral-points join) — opt-in so every other GET /clients caller
+    // (Client Loyalty, Staff Customers, the Redux client thunk...) keeps
+    // getting the full row it already relies on. Omitted/anything else = full.
+    fields?: "list" | "full";
 };
 
 export type Paginated<T> = {

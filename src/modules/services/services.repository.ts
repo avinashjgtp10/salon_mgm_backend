@@ -1,4 +1,5 @@
 import pool from "../../config/database";
+import { AppError } from "../../middleware/error.middleware";
 import {
   AddOnGroup,
   AddOnGroupDetail,
@@ -207,38 +208,79 @@ export const servicesRepository = {
   },
 
   async create(data: CreateServiceBody, salonId: string): Promise<Service> {
-    const { rows } = await pool.query(
+    // servicesService.create() already runs an optimistic findDuplicate()
+    // check before calling this — fast path, good UX for the common case.
+    // But that's a plain SELECT-then-INSERT with nothing serializing it: two
+    // near-simultaneous requests for the exact same (salon, name, duration,
+    // price) — a rapid double-click beating React's disabled-state re-render,
+    // a client-side network retry, or a stray duplicate submit — can both
+    // pass that check before either has committed, creating two identical
+    // rows. A DB-level UNIQUE index would close this too, but 158 existing
+    // duplicate groups already live in production data (checked directly),
+    // so adding one now would fail to apply and would also retroactively
+    // forbid a pattern this salon's own historical data shows was tolerated.
+    // A transaction-scoped Postgres advisory lock, keyed on the same dedupe
+    // fields, serializes concurrent creates without touching schema or any
+    // existing row: the second request blocks until the first's transaction
+    // commits or rolls back, then its own re-check inside the lock correctly
+    // sees the just-inserted row and rejects as a duplicate instead of
+    // creating a second one. pg_advisory_xact_lock auto-releases at
+    // COMMIT/ROLLBACK, so no manual unlock is needed.
+    const dedupeKey = `service|${salonId}|${data.name.trim().toLowerCase()}|${data.duration ?? 60}|${data.price ?? 0}`;
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [dedupeKey]);
+
+      const { rows: existing } = await client.query(
+        `SELECT id FROM services WHERE LOWER(TRIM(name)) = LOWER($1) AND duration_minutes = $2 AND price = $3 AND salon_id = $4`,
+        [data.name.trim(), data.duration ?? 60, data.price ?? 0, salonId]
+      );
+      if (existing[0]) {
+        await client.query("ROLLBACK");
+        throw new AppError(400, "A service with the same name, duration, and price already exists.", "DUPLICATE_SERVICE");
+      }
+
       // is_active is written explicitly rather than left to the column
       // default: the form has an Active checkbox, and relying on DEFAULT TRUE
       // meant creating a service as inactive silently did nothing.
-      `INSERT INTO services (
-        salon_id, name, category_id, treatment_type, description,
-        price_type, price, duration_minutes,
-        online_booking, commission_enabled, resource_required, is_active,
-        commission_rate, commission_kind, reminder_after_days
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-      RETURNING *, duration_minutes AS duration`,
-      [
-        salonId,
-        data.name,
-        data.category_id,
-        data.treatment_type ?? null,
-        data.description ?? null,
-        data.price_type ?? "fixed",
-        data.price ?? 0,
-        data.duration ?? 60,
-        data.online_booking ?? true,
-        data.commission_enabled ?? false,
-        data.resource_required ?? false,
-        data.is_active ?? true,
-        // NULL = no per-service override; the service earns under the staff's
-        // commission rules, which is the behaviour every existing service has.
-        data.commission_rate ?? null,
-        data.commission_kind ?? null,
-        data.reminder_after_days ?? null,
-      ]
-    );
-    return rows[0];
+      const { rows } = await client.query(
+        `INSERT INTO services (
+          salon_id, name, category_id, treatment_type, description,
+          price_type, price, duration_minutes,
+          online_booking, commission_enabled, resource_required, is_active,
+          commission_rate, commission_kind, reminder_after_days
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+        RETURNING *, duration_minutes AS duration`,
+        [
+          salonId,
+          data.name,
+          data.category_id,
+          data.treatment_type ?? null,
+          data.description ?? null,
+          data.price_type ?? "fixed",
+          data.price ?? 0,
+          data.duration ?? 60,
+          data.online_booking ?? true,
+          data.commission_enabled ?? false,
+          data.resource_required ?? false,
+          data.is_active ?? true,
+          // NULL = no per-service override; the service earns under the staff's
+          // commission rules, which is the behaviour every existing service has.
+          data.commission_rate ?? null,
+          data.commission_kind ?? null,
+          data.reminder_after_days ?? null,
+        ]
+      );
+      await client.query("COMMIT");
+      return rows[0];
+    } catch (e) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
   },
 
   async update(id: string, patch: UpdateServiceBody, salonId: string): Promise<Service> {
