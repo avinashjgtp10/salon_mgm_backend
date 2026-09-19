@@ -36,18 +36,10 @@ export const deviceTokensRepository = {
       if (data.installation_id) {
         await client.query(
           `DELETE FROM device_tokens
-           WHERE user_id = $1
-             AND salon_id = $2
-             AND platform = $3
-             AND installation_id = $4
-             AND expo_push_token <> $5`,
-          [
-            data.user_id,
-            data.salon_id,
-            data.platform,
-            data.installation_id,
-            data.expo_push_token,
-          ]
+           WHERE platform = $1
+             AND installation_id = $2
+             AND expo_push_token <> $3`,
+          [data.platform, data.installation_id, data.expo_push_token]
         );
       }
 
@@ -84,11 +76,11 @@ export const deviceTokensRepository = {
     }
   },
 
-  async removeToken(expoPushToken: string): Promise<void> {
+  async removeToken(expoPushToken: string, userId?: string): Promise<void> {
     await pool.query(
       `DELETE FROM device_tokens
-       WHERE expo_push_token = $1`,
-      [expoPushToken]
+       WHERE expo_push_token = $1 AND ($2::uuid IS NULL OR user_id = $2::uuid)`,
+      [expoPushToken, userId ?? null]
     );
   },
 

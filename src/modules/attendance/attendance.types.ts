@@ -8,10 +8,17 @@ export type Attendance = {
     date: string;            // YYYY-MM-DD
     status: AttendanceStatus;
     check_in: string | null;   // ISO timestamp
+    check_in_location: string | null;
+    check_out_location: string | null;
     check_out: string | null;  // ISO timestamp
     hours_worked: number | null;
     source: AttendanceSource;
     note: string | null;
+    // Human-readable place name captured on the staff member's device at the
+    // moment of the punch (e.g. "Lakme Salon, Baramati"). Coordinates are
+    // resolved to this label on the device and deliberately never stored.
+    // Legacy location is retained only for compatibility with older records.
+    location?: string | null;
     created_at: string;
     updated_at: string;
     // joined
@@ -46,12 +53,14 @@ export type CheckInBody = {
     check_in?: string;   // ISO timestamp; defaults to NOW()
     status?: AttendanceStatus; // caller-supplied status (e.g. frontend's owner-configured Half Day Rule); falls back to server-side calc if omitted/invalid
     note?: string;
+    location?: string;   // device-resolved place name, e.g. "Lakme Salon, Baramati"
 };
 
 export type CheckOutBody = {
     staff_id: string;
     check_out?: string;  // ISO timestamp; defaults to NOW()
     note?: string;
+    location?: string;   // device-resolved place name, e.g. "Lakme Salon, Baramati"
 };
 
 export type PushAttendanceBody = {
@@ -105,6 +114,8 @@ export type TodayStaffRecord = {
     staff_role: string;
     status: AttendanceStatus | 'not_marked';
     check_in: string | null;
+    check_in_location: string | null;
+    check_out_location: string | null;
     check_out: string | null;
     hours_worked: number | null;
     scheduled_hours: number | null;

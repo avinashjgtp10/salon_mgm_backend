@@ -51,14 +51,13 @@ export const notificationsController = {
       const userId = req.user?.userId;
       if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
 
-      await getSalonId(req);
       const { token } = req.body ?? {};
 
       if (typeof token !== "string" || !token.trim()) {
         throw new AppError(400, "token is required", "VALIDATION_ERROR");
       }
 
-      await deviceTokensService.removeToken(token);
+      await deviceTokensService.removeToken(token, userId);
       return res.json({ success: true });
     } catch (err) { return next(err); }
   },
