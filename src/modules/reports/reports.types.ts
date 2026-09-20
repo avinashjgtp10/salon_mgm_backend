@@ -1758,6 +1758,123 @@ export interface AllClientsReportResponse {
 }
 
 // ===============================
+// Birthday Report (independent report API — POST /api/report/birthday)
+// One row per client with a birthday on file (clients.birthday_day_month,
+// "MM-DD"), with each row's NEXT occurrence of that birthday computed
+// server-side (this year's date if it hasn't passed yet, otherwise next
+// year's) so the report can surface "who's coming up" for outreach, not just
+// a static calendar field. Never touches the Appointment API.
+// ===============================
+
+export interface BirthdayReportFilters {
+    search?: string;
+    genders?: string[];
+    status?: "active" | "blocked";
+    // Calendar month (1-12) the birthday falls in, independent of whether
+    // that occurrence has already passed this year.
+    birth_month?: number;
+    // Narrows to clients whose NEXT birthday occurrence is within this many
+    // days from today (0 = today only).
+    upcoming_within_days?: number;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface BirthdayReportRow {
+    client_id: string;
+    client_name: string;
+    contact: string;
+    email: string | null;
+    gender: string | null;
+    // "MM-DD" as stored.
+    birthday: string;
+    // Year of birth, when known — used to compute turning_age. Many salons
+    // never collect it, so this (and turning_age) are frequently null.
+    birthday_year: number | null;
+    turning_age: number | null;
+    // This year's occurrence if it hasn't passed yet, otherwise next year's —
+    // "YYYY-MM-DD".
+    next_occurrence: string;
+    days_until_next: number;
+    client_source: string | null;
+    status: "Active" | "Blocked";
+}
+
+export interface BirthdayReportStats {
+    total_with_birthday: number;
+    birthdays_today: number;
+    birthdays_this_week: number;
+    birthdays_this_month: number;
+}
+
+export interface BirthdayReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface BirthdayReportResponse {
+    rows: BirthdayReportRow[];
+    pagination: BirthdayReportPagination;
+    stats: BirthdayReportStats;
+}
+
+// ===============================
+// Anniversary Report (independent report API — POST /api/report/anniversary)
+// One row per client with an anniversary on file (clients.anniversary, a
+// full date), with each row's NEXT occurrence computed the same way the
+// Birthday Report computes next_occurrence. Never touches the Appointment
+// API.
+// ===============================
+
+export interface AnniversaryReportFilters {
+    search?: string;
+    status?: "active" | "blocked";
+    anniversary_month?: number;
+    upcoming_within_days?: number;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface AnniversaryReportRow {
+    client_id: string;
+    client_name: string;
+    contact: string;
+    email: string | null;
+    // "YYYY-MM-DD" as stored — the original anniversary date, year included.
+    anniversary: string;
+    // Years since the original anniversary date, as of next_occurrence.
+    years_count: number;
+    next_occurrence: string;
+    days_until_next: number;
+    client_source: string | null;
+    status: "Active" | "Blocked";
+}
+
+export interface AnniversaryReportStats {
+    total_with_anniversary: number;
+    anniversaries_today: number;
+    anniversaries_this_week: number;
+    anniversaries_this_month: number;
+}
+
+export interface AnniversaryReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface AnniversaryReportResponse {
+    rows: AnniversaryReportRow[];
+    pagination: AnniversaryReportPagination;
+    stats: AnniversaryReportStats;
+}
+
+// ===============================
 // New Client Follow-Up Report (independent report API —
 // POST /api/report/new-client-follow-up)
 // "New" = joined within the last `new_within_days` days (default 7).

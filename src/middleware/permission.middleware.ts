@@ -420,6 +420,8 @@ const DEFAULT_STAFF_PERMS: Record<string, boolean> = {
     view_report_open_rate: false, download_report_open_rate: false,
     view_report_reply_rate: false, download_report_reply_rate: false,
     view_report_birthday_campaign: false, download_report_birthday_campaign: false,
+    view_report_birthday: false, download_report_birthday: false,
+    view_report_anniversary: false, download_report_anniversary: false,
     view_report_new_client_follow_up: false, download_report_new_client_follow_up: false,
     view_report_cancellation_recovery: false, download_report_cancellation_recovery: false,
     view_report_membership_opportunity: false, download_report_membership_opportunity: false,

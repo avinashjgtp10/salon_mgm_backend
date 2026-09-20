@@ -1868,6 +1868,88 @@ async getAllClientsReport(
 },
 
 // ======================================================
+// BIRTHDAY REPORT (independent report API)
+// POST /api/report/birthday
+// ======================================================
+
+async getBirthdayReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const asStringArray = (value: unknown): string[] | undefined =>
+            Array.isArray(value)
+                ? value.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined;
+
+        const filters = {
+            search: asString(body.search),
+            genders: asStringArray(body.genders),
+            status: body.status === "active" ? "active" as const : body.status === "blocked" ? "blocked" as const : undefined,
+            birth_month: body.birth_month !== undefined ? Number(body.birth_month) : undefined,
+            upcoming_within_days: body.upcoming_within_days !== undefined && body.upcoming_within_days !== null && body.upcoming_within_days !== ""
+                ? Number(body.upcoming_within_days) : undefined,
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getBirthdayReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Birthday report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// ANNIVERSARY REPORT (independent report API)
+// POST /api/report/anniversary
+// ======================================================
+
+async getAnniversaryReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            search: asString(body.search),
+            status: body.status === "active" ? "active" as const : body.status === "blocked" ? "blocked" as const : undefined,
+            anniversary_month: body.anniversary_month !== undefined ? Number(body.anniversary_month) : undefined,
+            upcoming_within_days: body.upcoming_within_days !== undefined && body.upcoming_within_days !== null && body.upcoming_within_days !== ""
+                ? Number(body.upcoming_within_days) : undefined,
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getAnniversaryReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Anniversary report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
 // NEW CLIENT FOLLOW-UP REPORT (independent report API)
 // POST /api/report/new-client-follow-up
 // ======================================================
