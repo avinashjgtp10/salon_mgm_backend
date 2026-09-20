@@ -274,8 +274,12 @@ import {
     NoShowRecoveryResponse,
     EnquiryReportFilters,
     EnquiryReportResponse,
+    EnquiryChartFilters,
+    EnquiryChartResponse,
     CustomerFrequencyReportFilters,
     CustomerFrequencyReportResponse,
+    CustomerFrequencyChartFilters,
+    CustomerFrequencyChartResponse,
     LostCustomersReportFilters,
     LostCustomersReportResponse,
     ReferralReportFilters,
@@ -288,16 +292,24 @@ import {
     PendingPaymentReportResponse,
     CashManagementReportFilters,
     CashManagementReportResponse,
+    CashManagementChartFilters,
+    CashManagementChartResponse,
     MembershipHistoryReportFilters,
     MembershipHistoryReportResponse,
     ServiceFrequencyReportFilters,
     ServiceFrequencyReportResponse,
+    ServiceFrequencyChartFilters,
+    ServiceFrequencyChartResponse,
     CustomerSpendReportFilters,
     CustomerSpendReportResponse,
     StaffSalesReportFilters,
     StaffSalesReportResponse,
+    StaffSalesChartFilters,
+    StaffSalesChartResponse,
     StaffPerformanceReportFilters,
     StaffPerformanceReportResponse,
+    StaffPerformanceChartFilters,
+    StaffPerformanceChartResponse,
     StaffItemSalesReportFilters,
     StaffItemSalesReportResponse,
     PackageSaleReportFilters,
@@ -1852,6 +1864,23 @@ async getEnquiryReport(
     };
 },
 
+// Powers the Enquiry Report's Graph page.
+async getEnquiryReportChart(
+    salonId: string,
+    filters: EnquiryChartFilters,
+    granularity: "day" | "week" | "month" = "day",
+    topLimit: number = 5
+): Promise<EnquiryChartResponse> {
+    const [daily, status, source, top_staff] = await Promise.all([
+        reportsRepository.getEnquiryChartTrend(salonId, filters, granularity),
+        reportsRepository.getEnquiryChartByStatus(salonId, filters),
+        reportsRepository.getEnquiryChartBySource(salonId, filters),
+        reportsRepository.getEnquiryChartTopStaff(salonId, filters, topLimit),
+    ]);
+
+    return { daily, status, source, top_staff };
+},
+
 // ======================================================
 // CUSTOMER FREQUENCY REPORT (independent report API)
 // ======================================================
@@ -1870,6 +1899,23 @@ async getCustomerFrequencyReport(
         pagination: rowsResult.pagination,
         stats,
     };
+},
+
+// Powers the Client Frequency report's Graph page.
+async getCustomerFrequencyReportChart(
+    salonId: string,
+    filters: CustomerFrequencyChartFilters,
+    granularity: "day" | "week" | "month" = "day",
+    topLimit: number = 5
+): Promise<CustomerFrequencyChartResponse> {
+    const [daily, customer_type, visitor_type, top_clients] = await Promise.all([
+        reportsRepository.getCustomerFrequencyChartTrend(salonId, filters, granularity),
+        reportsRepository.getCustomerFrequencyByType(salonId, filters),
+        reportsRepository.getCustomerFrequencyByVisitorType(salonId, filters),
+        reportsRepository.getCustomerFrequencyTopClients(salonId, filters, topLimit),
+    ]);
+
+    return { daily, customer_type, visitor_type, top_clients };
 },
 
 // ======================================================
@@ -1950,6 +1996,23 @@ async getServiceFrequencyReport(
         pagination: rowsResult.pagination,
         stats,
     };
+},
+
+// Powers the Service Frequency report's Graph page.
+async getServiceFrequencyReportChart(
+    salonId: string,
+    filters: ServiceFrequencyChartFilters,
+    granularity: "day" | "week" | "month" = "day",
+    topLimit: number = 5
+): Promise<ServiceFrequencyChartResponse> {
+    const [daily, pair_frequency, category_breakdown, top_services] = await Promise.all([
+        reportsRepository.getServiceFrequencyChartTrend(salonId, filters, granularity),
+        reportsRepository.getServiceFrequencyChartPairFrequency(salonId, filters),
+        reportsRepository.getServiceFrequencyChartByCategory(salonId, filters),
+        reportsRepository.getServiceFrequencyChartTopServices(salonId, filters, topLimit),
+    ]);
+
+    return { daily, pair_frequency, category_breakdown, top_services };
 },
 
 // ======================================================
@@ -2067,6 +2130,23 @@ async getCashManagementReport(
     };
 },
 
+// Powers the Cash Management report's Graph page.
+async getCashManagementReportChart(
+    salonId: string,
+    filters: CashManagementChartFilters,
+    granularity: "day" | "week" | "month" = "day",
+    topLimit: number = 5
+): Promise<CashManagementChartResponse> {
+    const [daily, status, top_variance, revenue_by_opened_by] = await Promise.all([
+        reportsRepository.getCashManagementChartTrend(salonId, filters, granularity),
+        reportsRepository.getCashManagementByStatus(salonId, filters),
+        reportsRepository.getCashManagementTopVariance(salonId, filters, topLimit),
+        reportsRepository.getCashManagementByOpenedBy(salonId, filters, topLimit),
+    ]);
+
+    return { daily, status, top_variance, revenue_by_opened_by };
+},
+
 // ======================================================
 // STAFF SALES REPORT (independent report API)
 // ======================================================
@@ -2088,6 +2168,21 @@ async getStaffSalesReport(
     };
 },
 
+// Powers the Staff Sales report's Graph page.
+async getStaffSalesReportChart(
+    salonId: string,
+    filters: StaffSalesChartFilters,
+    granularity: "day" | "week" | "month" = "day",
+    topLimit: number = 5
+): Promise<StaffSalesChartResponse> {
+    const [daily, by_item_type, top_staff] = await Promise.all([
+        reportsRepository.getStaffSalesChartTrend(salonId, filters, granularity),
+        reportsRepository.getStaffSalesChartByItemType(salonId, filters),
+        reportsRepository.getStaffSalesChartTopStaff(salonId, filters, topLimit),
+    ]);
+    return { daily, by_item_type, top_staff };
+},
+
 // ======================================================
 // STAFF PERFORMANCE REPORT (independent report API)
 // ======================================================
@@ -2107,6 +2202,21 @@ async getStaffPerformanceReport(
         stats,
         filters_available: filtersAvailable,
     };
+},
+
+// Powers the Staff Performance report's Graph page.
+async getStaffPerformanceReportChart(
+    salonId: string,
+    filters: StaffPerformanceChartFilters,
+    granularity: "day" | "week" | "month" = "day",
+    topLimit: number = 5
+): Promise<StaffPerformanceChartResponse> {
+    const [daily, by_item_type, top_staff] = await Promise.all([
+        reportsRepository.getStaffPerformanceChartTrend(salonId, filters, granularity),
+        reportsRepository.getStaffPerformanceChartByItemType(salonId, filters),
+        reportsRepository.getStaffPerformanceChartTopStaff(salonId, filters, topLimit),
+    ]);
+    return { daily, by_item_type, top_staff };
 },
 
 // ======================================================
