@@ -126,6 +126,12 @@ router.post(
     reportsController.getProductInventoryReport
 );
 
+router.post(
+    "/product-inventory/chart",
+    ...baseGuard, viewReport("view_report_product_inventory"),
+    reportsController.getProductInventoryChart
+);
+
 // ======================================================
 // SLOW MOVING / FAST MOVING PRODUCTS REPORTS (independent report APIs)
 // Reads products directly (sales aggregated from sale_items/sales within
@@ -542,6 +548,12 @@ router.post(
     reportsController.getPackageSaleReport
 );
 
+router.post(
+    "/package-sale/chart",
+    ...baseGuard, viewReport("view_report_package_sale"),
+    reportsController.getPackageSaleChart
+);
+
 // ======================================================
 // PACKAGE HISTORY REPORT (independent report API)
 // Reads client_package_session_history directly — never calls the
@@ -563,6 +575,12 @@ router.post(
     "/member-sale",
     ...baseGuard, viewReport("view_report_member_sale"),
     reportsController.getMemberSaleReport
+);
+
+router.post(
+    "/member-sale/chart",
+    ...baseGuard, viewReport("view_report_member_sale"),
+    reportsController.getMemberSaleChart
 );
 
 // ======================================================

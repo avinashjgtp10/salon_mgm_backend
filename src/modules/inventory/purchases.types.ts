@@ -60,3 +60,17 @@ export interface ListPurchaseFilters {
     page?: number;
     limit?: number;
 }
+
+// Powers the Purchase History report's Graph page.
+export interface PurchaseChartFilters {
+    search?: string;
+    supplier_id?: string;
+    date_from?: string;
+    date_to?: string;
+}
+
+export interface PurchaseChartResponse {
+    daily: { date: string; count: number; amount: number }[];
+    top_suppliers: { supplier_id: string | null; supplier_name: string; amount: number }[];
+    top_products: { product_name: string; quantity: number; amount: number }[];
+}

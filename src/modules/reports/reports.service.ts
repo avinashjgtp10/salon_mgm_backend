@@ -250,6 +250,8 @@ import {
     EwalletReportResponse,
     ProductInventoryReportFilters,
     ProductInventoryReportResponse,
+    ProductInventoryChartFilters,
+    ProductInventoryChartResponse,
     ProductMovementReportFilters,
     ProductMovementReportResponse,
     BrandPerformanceReportFilters,
@@ -316,12 +318,16 @@ import {
     StaffItemSalesChartResponse,
     PackageSaleReportFilters,
     PackageSaleReportResponse,
+    PackageSaleChartFilters,
+    PackageSaleChartResponse,
     PayrollHistoryReportFilters,
     PayrollHistoryReportResponse,
     PackageHistoryReportFilters,
     PackageHistoryReportResponse,
     MemberSaleReportFilters,
     MemberSaleReportResponse,
+    MemberSaleChartFilters,
+    MemberSaleChartResponse,
     AppointmentDetailReportFilters,
     AppointmentDetailReportResponse,
     UpcomingAppointmentsReportFilters,
@@ -1604,6 +1610,20 @@ async getProductInventoryReport(
     };
 },
 
+// Powers the Product Inventory report's Graph page.
+async getProductInventoryChart(
+    salonId: string,
+    filters: ProductInventoryChartFilters,
+    topLimit: number = 5
+): Promise<ProductInventoryChartResponse> {
+    const [by_status, by_category, top_products] = await Promise.all([
+        reportsRepository.getProductInventoryChartByStatus(salonId, filters),
+        reportsRepository.getProductInventoryChartByCategory(salonId, filters, topLimit),
+        reportsRepository.getProductInventoryChartTopProducts(salonId, filters, topLimit),
+    ]);
+    return { by_status, by_category, top_products };
+},
+
 // ======================================================
 // SLOW MOVING / FAST MOVING PRODUCTS REPORTS (independent report APIs)
 // Same repository query for both — only the default sort direction differs.
@@ -2278,6 +2298,21 @@ async getPackageSaleReport(
     };
 },
 
+// Powers the Package Sale report's Graph page.
+async getPackageSaleChart(
+    salonId: string,
+    filters: PackageSaleChartFilters,
+    granularity: "day" | "week" | "month" = "day",
+    topLimit: number = 5
+): Promise<PackageSaleChartResponse> {
+    const [daily, top_packages, top_staff] = await Promise.all([
+        reportsRepository.getPackageSaleChartTrend(salonId, filters, granularity),
+        reportsRepository.getPackageSaleChartTopPackages(salonId, filters, topLimit),
+        reportsRepository.getPackageSaleChartTopStaff(salonId, filters, topLimit),
+    ]);
+    return { daily, top_packages, top_staff };
+},
+
 // ======================================================
 // PACKAGE HISTORY REPORT (independent report API)
 // ======================================================
@@ -2320,6 +2355,21 @@ async getMemberSaleReport(
         stats,
         filters_available: filtersAvailable,
     };
+},
+
+// Powers the Membership Sale report's Graph page.
+async getMemberSaleChart(
+    salonId: string,
+    filters: MemberSaleChartFilters,
+    granularity: "day" | "week" | "month" = "day",
+    topLimit: number = 5
+): Promise<MemberSaleChartResponse> {
+    const [daily, top_memberships, top_staff] = await Promise.all([
+        reportsRepository.getMemberSaleChartTrend(salonId, filters, granularity),
+        reportsRepository.getMemberSaleChartTopMemberships(salonId, filters, topLimit),
+        reportsRepository.getMemberSaleChartTopStaff(salonId, filters, topLimit),
+    ]);
+    return { daily, top_memberships, top_staff };
 },
 
 // ======================================================
