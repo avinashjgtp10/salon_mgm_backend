@@ -1064,6 +1064,32 @@ export interface ServiceSaleReportResponse {
     };
 }
 
+// Powers the Service Sale report's Graph page — same shape/scope as
+// ProductRetailChartResponse above, generalized to this report's own
+// filters/tables.
+export interface ServiceSaleChartFilters {
+    start_date?: string;
+    end_date?: string;
+    staff_ids?: string[];
+    category_id?: string;
+    category_ids?: string[];
+    service_id?: string;
+    service_ids?: string[];
+    min_price?: number;
+    max_price?: number;
+    payment_method?: string;
+    payment_methods?: string[];
+    search?: string;
+}
+
+export interface ServiceSaleChartResponse {
+    daily: { date: string; count: number; revenue: number }[];
+    payment_modes: { payment_mode: string; revenue: number }[];
+    top_services: { service_id: string | null; service_name: string; revenue: number }[];
+    top_categories: { category_id: string | null; category_name: string; revenue: number }[];
+    top_staff: { staff_id: string | null; staff_name: string; revenue: number }[];
+}
+
 // ===============================
 // GST / Taxes Report (independent report API — POST /api/report/gst)
 // Reads directly from sales, one row per invoice. sales.tax_amount is a
@@ -1619,6 +1645,27 @@ export interface ClientRevenueReportResponse {
     rows: ClientRevenueReportRow[];
     pagination: ClientRevenueReportPagination;
     stats: ClientRevenueReportStats;
+}
+
+// Powers the Client Revenue report's Graph page.
+export interface ClientRevenueChartFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    gender?: string;
+    membership_status?: string;
+    last_visit_from?: string;
+    last_visit_to?: string;
+}
+
+export interface ClientRevenueChartResponse {
+    // Bucketed by each client's own last-visit date in range (same semantic
+    // the table's own "Last Visit" column uses) — not a per-transaction date.
+    daily: { date: string; revenue: number; clients: number }[];
+    gender: { gender: string; revenue: number }[];
+    membership_status: { status: string; revenue: number }[];
+    top_clients: { client_id: string | null; client_name: string; revenue: number }[];
 }
 
 // ===============================
@@ -2367,6 +2414,26 @@ export interface PaymentCollectionReportResponse {
     pagination: PaymentCollectionReportPagination;
     stats: PaymentCollectionReportStats;
     filters_available: PaymentCollectionFiltersAvailable;
+}
+
+// Powers the Payment Collection report's Graph page.
+export interface PaymentCollectionChartFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    payment_statuses?: string[];
+    payment_methods?: string[];
+}
+
+export interface PaymentCollectionChartResponse {
+    daily: { date: string; pending: number; collected: number }[];
+    payment_status: { status: string; amount: number }[];
+    // Reuses PaymentCollectionReportStats.collected_by_method — same
+    // transaction-level source, not duplicated SQL.
+    payment_modes: { method: string; amount: number }[];
+    top_staff_pending: { staff_name: string; amount: number }[];
+    top_clients_due: { client_id: string | null; customer_name: string; amount: number }[];
 }
 
 // ===============================
