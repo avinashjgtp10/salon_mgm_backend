@@ -2894,6 +2894,45 @@ async getStaffItemSalesReport(
     }
 },
 
+// Powers the Staff Item Sales report's Graph page.
+async getStaffItemSalesReportChart(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const itemType = asString(body.item_type);
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            item_type: (["service", "product", "membership", "package"].includes(itemType ?? "")
+                ? itemType : "service") as "service" | "product" | "membership" | "package",
+            staff_id: asString(body.staff_id),
+            staff_ids: Array.isArray(body.staff_ids) ? body.staff_ids.map(String) : undefined,
+            search: asString(body.search),
+        };
+        const granularity: "day" | "week" | "month" =
+            body.granularity === "week" || body.granularity === "month" ? body.granularity : "day";
+        const topLimit = Number.isFinite(Number(body.top_limit)) && Number(body.top_limit) > 0
+            ? Math.min(Math.floor(Number(body.top_limit)), 50)
+            : 5;
+
+        const data = await reportsService.getStaffItemSalesReportChart(salonId, filters, granularity, topLimit);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Staff item sales chart fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
 // ======================================================
 // PACKAGE SALE REPORT (independent report API)
 // POST /api/report/package-sale
