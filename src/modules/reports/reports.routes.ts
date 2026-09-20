@@ -85,6 +85,12 @@ router.post(
     reportsController.getServiceSaleReport
 );
 
+router.post(
+    "/service-sale/chart",
+    ...baseGuard, viewReport("view_report_service_sale"),
+    reportsController.getServiceSaleReportChart
+);
+
 // ======================================================
 // GST / TAXES REPORT (independent report API)
 // Reads sales directly — never calls the Appointment API/service.
@@ -214,6 +220,12 @@ router.post(
     "/client-revenue",
     ...baseGuard, viewReport("view_report_client_revenue"),
     reportsController.getClientRevenueReport
+);
+
+router.post(
+    "/client-revenue/chart",
+    ...baseGuard, viewReport("view_report_client_revenue"),
+    reportsController.getClientRevenueReportChart
 );
 
 // ======================================================
@@ -359,6 +371,12 @@ router.post(
     "/payment-collection",
     ...baseGuard, viewReport("view_report_payment_collection"),
     reportsController.getPaymentCollectionReport
+);
+
+router.post(
+    "/payment-collection/chart",
+    ...baseGuard, viewReport("view_report_payment_collection"),
+    reportsController.getPaymentCollectionReportChart
 );
 
 // ======================================================

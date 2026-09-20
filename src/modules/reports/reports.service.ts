@@ -238,6 +238,8 @@ import {
     ProductRetailChartResponse,
     ServiceSaleReportFilters,
     ServiceSaleReportResponse,
+    ServiceSaleChartFilters,
+    ServiceSaleChartResponse,
     GstReportFilters,
     GstReportResponse,
     ProductMarginReportFilters,
@@ -258,6 +260,8 @@ import {
     StockMovementReportResponse,
     ClientRevenueReportFilters,
     ClientRevenueReportResponse,
+    ClientRevenueChartFilters,
+    ClientRevenueChartResponse,
     AllClientsReportFilters,
     AllClientsReportResponse,
     NewClientFollowUpFilters,
@@ -278,6 +282,8 @@ import {
     ReferralReportResponse,
     PaymentCollectionReportFilters,
     PaymentCollectionReportResponse,
+    PaymentCollectionChartFilters,
+    PaymentCollectionChartResponse,
     PendingPaymentReportFilters,
     PendingPaymentReportResponse,
     CashManagementReportFilters,
@@ -1459,6 +1465,24 @@ async getServiceSaleReport(
     };
 },
 
+// Powers the Service Sale report's Graph page.
+async getServiceSaleReportChart(
+    salonId: string,
+    filters: ServiceSaleChartFilters,
+    granularity: "day" | "week" | "month" = "day",
+    topLimit: number = 5
+): Promise<ServiceSaleChartResponse> {
+    const [daily, payment_modes, top_services, top_categories, top_staff] = await Promise.all([
+        reportsRepository.getServiceSaleChartTrend(salonId, filters, granularity),
+        reportsRepository.getServiceSalePaymentModeBreakdown(salonId, filters),
+        reportsRepository.getServiceSaleTopServices(salonId, filters, topLimit),
+        reportsRepository.getServiceSaleTopCategories(salonId, filters, topLimit),
+        reportsRepository.getServiceSaleTopStaff(salonId, filters, topLimit),
+    ]);
+
+    return { daily, payment_modes, top_services, top_categories, top_staff };
+},
+
 // ======================================================
 // GST / TAXES REPORT (independent report API)
 // ======================================================
@@ -1681,6 +1705,23 @@ async getClientRevenueReport(
         pagination: rowsResult.pagination,
         stats,
     };
+},
+
+// Powers the Client Revenue report's Graph page.
+async getClientRevenueReportChart(
+    salonId: string,
+    filters: ClientRevenueChartFilters,
+    granularity: "day" | "week" | "month" = "day",
+    topLimit: number = 5
+): Promise<ClientRevenueChartResponse> {
+    const [daily, gender, membership_status, top_clients] = await Promise.all([
+        reportsRepository.getClientRevenueChartTrend(salonId, filters, granularity),
+        reportsRepository.getClientRevenueByGender(salonId, filters),
+        reportsRepository.getClientRevenueByMembership(salonId, filters),
+        reportsRepository.getClientRevenueTopClients(salonId, filters, topLimit),
+    ]);
+
+    return { daily, gender, membership_status, top_clients };
 },
 
 // ======================================================
@@ -1952,6 +1993,33 @@ async getPaymentCollectionReport(
         pagination: rowsResult.pagination,
         stats,
         filters_available: filtersAvailable,
+    };
+},
+
+// Powers the Payment Collection report's Graph page. payment_modes reuses
+// getPaymentCollectionReportStats's own collected_by_method (same
+// transaction-level source the "Total Paid" stat card already trusts)
+// instead of a duplicated query.
+async getPaymentCollectionReportChart(
+    salonId: string,
+    filters: PaymentCollectionChartFilters,
+    granularity: "day" | "week" | "month" = "day",
+    topLimit: number = 5
+): Promise<PaymentCollectionChartResponse> {
+    const [daily, payment_status, stats, top_staff_pending, top_clients_due] = await Promise.all([
+        reportsRepository.getPaymentCollectionChartTrend(salonId, filters, granularity),
+        reportsRepository.getPaymentCollectionByStatus(salonId, filters),
+        reportsRepository.getPaymentCollectionReportStats(salonId, filters),
+        reportsRepository.getPaymentCollectionTopStaffPending(salonId, filters, topLimit),
+        reportsRepository.getPaymentCollectionTopClientsDue(salonId, filters, topLimit),
+    ]);
+
+    return {
+        daily,
+        payment_status,
+        payment_modes: stats.collected_by_method.map((m) => ({ method: m.method, amount: m.amount })),
+        top_staff_pending,
+        top_clients_due,
     };
 },
 
