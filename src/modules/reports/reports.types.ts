@@ -1334,6 +1334,27 @@ export interface ProductInventoryReportResponse {
     stats: ProductInventoryReportStats;
 }
 
+// Powers the Product Inventory report's Graph page. Snapshot data (no date-
+// series trend) — same filter set as the table, minus pagination.
+export interface ProductInventoryChartFilters {
+    search?: string;
+    category_id?: string;
+    category_ids?: string[];
+    brand_id?: string;
+    brand_ids?: string[];
+    stock_status?: "in_stock" | "low_stock" | "out_of_stock";
+    date_from?: string;
+    date_to?: string;
+    expiry_from?: string;
+    expiry_to?: string;
+}
+
+export interface ProductInventoryChartResponse {
+    by_status: { status: "in_stock" | "low_stock" | "out_of_stock"; count: number; value: number }[];
+    by_category: { category_name: string; value: number }[];
+    top_products: { product_name: string; value: number; current_stock: number }[];
+}
+
 // ===============================
 // SLOW MOVING / FAST MOVING PRODUCTS REPORTS (independent report APIs)
 // Both share the exact same row/stats shape and repository query — one row
@@ -3010,6 +3031,30 @@ export interface PackageSaleReportResponse {
     };
 }
 
+// Powers the Package Sale report's Graph page.
+export interface PackageSaleChartFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    package_name?: string;
+    package_names?: string[];
+    package_status?: string;
+    package_statuses?: string[];
+    payment_status?: string;
+    payment_statuses?: string[];
+    payment_method?: string;
+    payment_methods?: string[];
+    min_amount?: number;
+    max_amount?: number;
+}
+
+export interface PackageSaleChartResponse {
+    daily: { date: string; count: number; revenue: number }[];
+    top_packages: { package_name: string; count: number; revenue: number }[];
+    top_staff: { staff_id: string | null; staff_name: string; revenue: number }[];
+}
+
 // ===============================
 // Package History Report (independent report API —
 // POST /api/report/package-history)
@@ -3279,6 +3324,28 @@ export interface MemberSaleReportResponse {
     pagination: MemberSaleReportPagination;
     stats: MemberSaleReportStats;
     filters_available: MemberSaleFiltersAvailable;
+}
+
+// Powers the Membership Sale report's Graph page.
+export interface MemberSaleChartFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    status?: MemberSaleStatus;
+    statuses?: string[];
+    membership_id?: string;
+    membership_ids?: string[];
+    staff_ids?: string[];
+    pricing_type?: string;
+    pricing_types?: string[];
+    price_min?: number;
+    price_max?: number;
+}
+
+export interface MemberSaleChartResponse {
+    daily: { date: string; count: number; revenue: number }[];
+    top_memberships: { membership_name: string; count: number; revenue: number }[];
+    top_staff: { staff_id: string | null; staff_name: string; revenue: number }[];
 }
 
 // ===============================

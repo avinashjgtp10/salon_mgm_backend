@@ -27,6 +27,7 @@ import {
     EwalletReportStats,
     ProductInventoryReportRow,
     ProductInventoryReportStats,
+    ProductInventoryChartFilters,
     BrandPerformanceReportRow,
     BrandPerformanceReportStats,
     PurchaseVsSalesReportRow,
@@ -102,6 +103,7 @@ import {
     PackageSaleReportRow,
     PackageSaleReportStats,
     PackageSaleFilterOption,
+    PackageSaleChartFilters,
     PayrollHistoryReportFilters,
     PayrollHistoryReportRow,
     PayrollHistoryReportStats,
@@ -112,6 +114,7 @@ import {
     MemberSaleReportRow,
     MemberSaleReportStats,
     MemberSaleFiltersAvailable,
+    MemberSaleChartFilters,
     AppointmentDetailReportRow,
     UpcomingAppointmentsReportRow,
     UpcomingAppointmentsFiltersAvailable,
@@ -5233,6 +5236,89 @@ async getProductInventoryReportRows(
       total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
     },
   };
+},
+
+// Powers the Product Inventory report's Graph page. Snapshot aggregates over
+// the whole filtered set — no date-series trend (inventory is a point-in-
+// time snapshot, not a stream of events).
+async getProductInventoryChartByStatus(
+  salonId: string,
+  filters: ProductInventoryChartFilters
+): Promise<{ status: "in_stock" | "low_stock" | "out_of_stock"; count: number; value: number }[]> {
+  const { where, values } = this._buildProductInventoryWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      CASE
+        WHEN COALESCE(p.amount, 0) = 0 THEN 'out_of_stock'
+        WHEN (${STOCK_IN_ALERT_UNITS_SQL}) <= p.qty_alert THEN 'low_stock'
+        ELSE 'in_stock'
+      END AS status,
+      COUNT(*)::int AS count,
+      COALESCE(SUM((${STOCK_IN_PRICING_UNITS_SQL}) * ${UNIT_COST_SQL}), 0) AS value
+    FROM products p
+    WHERE ${where}
+    GROUP BY status
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => ({
+    status: r.status,
+    count: Number(r.count ?? 0),
+    value: Math.round(Number(r.value ?? 0)),
+  }));
+},
+
+async getProductInventoryChartByCategory(
+  salonId: string,
+  filters: ProductInventoryChartFilters,
+  limit: number = 5
+): Promise<{ category_name: string; value: number }[]> {
+  const { where, values, nextIndex } = this._buildProductInventoryWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      COALESCE(sc.name, '—') AS category_name,
+      COALESCE(SUM((${STOCK_IN_PRICING_UNITS_SQL}) * ${UNIT_COST_SQL}), 0) AS value
+    FROM products p
+    LEFT JOIN service_categories sc ON p.category_id = sc.id
+    WHERE ${where}
+    GROUP BY category_name
+    ORDER BY value DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    category_name: String(r.category_name ?? "—"),
+    value: Math.round(Number(r.value ?? 0)),
+  }));
+},
+
+async getProductInventoryChartTopProducts(
+  salonId: string,
+  filters: ProductInventoryChartFilters,
+  limit: number = 5
+): Promise<{ product_name: string; value: number; current_stock: number }[]> {
+  const { where, values, nextIndex } = this._buildProductInventoryWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      p.name AS product_name,
+      (${STOCK_IN_PRICING_UNITS_SQL}) * ${UNIT_COST_SQL} AS value,
+      (${STOCK_IN_PRICING_UNITS_SQL}) AS current_stock
+    FROM products p
+    WHERE ${where}
+    ORDER BY value DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    product_name: String(r.product_name ?? "—"),
+    value: Math.round(Number(r.value ?? 0)),
+    current_stock: Number(r.current_stock ?? 0),
+  }));
 },
 
 // ======================================================
@@ -11486,6 +11572,97 @@ async getPackageSaleReportRows(
   };
 },
 
+// Powers the Package Sale report's Graph page.
+async getPackageSaleChartTrend(
+  salonId: string,
+  filters: PackageSaleChartFilters,
+  granularity: "day" | "week" | "month" = "day"
+): Promise<{ date: string; count: number; revenue: number }[]> {
+  const { where, values } = this._buildPackageSaleWhere(salonId, filters);
+  const istInstant = `cp.created_date AT TIME ZONE 'Asia/Kolkata'`;
+  const dayExpr = granularity === "month"
+    ? `TO_CHAR(date_trunc('month', ${istInstant}), 'YYYY-MM-DD')`
+    : granularity === "week"
+    ? `TO_CHAR(date_trunc('week', ${istInstant}), 'YYYY-MM-DD')`
+    : `TO_CHAR(${istInstant}, 'YYYY-MM-DD')`;
+
+  const query = `
+    SELECT
+      ${dayExpr} AS day,
+      COUNT(*)::int AS count,
+      COALESCE(SUM(cp.total_amount::numeric), 0) AS revenue
+    FROM client_packages cp
+    LEFT JOIN sales s ON s.id = cp.sale_id
+    WHERE ${where}
+    GROUP BY day
+    ORDER BY day ASC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => ({
+    date: String(r.day),
+    count: Number(r.count ?? 0),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+async getPackageSaleChartTopPackages(
+  salonId: string,
+  filters: PackageSaleChartFilters,
+  limit: number = 5
+): Promise<{ package_name: string; count: number; revenue: number }[]> {
+  const { where, values, nextIndex } = this._buildPackageSaleWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      cp.package_name,
+      COUNT(*)::int AS count,
+      COALESCE(SUM(cp.total_amount::numeric), 0) AS revenue
+    FROM client_packages cp
+    LEFT JOIN sales s ON s.id = cp.sale_id
+    WHERE ${where}
+    GROUP BY cp.package_name
+    ORDER BY revenue DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    package_name: String(r.package_name ?? "—"),
+    count: Number(r.count ?? 0),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+async getPackageSaleChartTopStaff(
+  salonId: string,
+  filters: PackageSaleChartFilters,
+  limit: number = 5
+): Promise<{ staff_id: string | null; staff_name: string; revenue: number }[]> {
+  const { where, values, nextIndex } = this._buildPackageSaleWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      cp.staff_id,
+      COALESCE(NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), ''), 'Unknown') AS staff_name,
+      COALESCE(SUM(cp.total_amount::numeric), 0) AS revenue
+    FROM client_packages cp
+    LEFT JOIN sales s ON s.id = cp.sale_id
+    LEFT JOIN staff st ON st.id = cp.staff_id
+    WHERE ${where}
+    GROUP BY cp.staff_id, staff_name
+    ORDER BY revenue DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    staff_id: r.staff_id ? String(r.staff_id) : null,
+    staff_name: r.staff_name,
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
 // Distinct staff/package names that have EVER appeared in this salon's
 // package sales — scoped only to salon_id, not the current date/filters, so
 // the dropdowns stay complete.
@@ -12463,6 +12640,94 @@ async getMemberSaleReportRows(
       total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
     },
   };
+},
+
+// Powers the Membership Sale report's Graph page.
+async getMemberSaleChartTrend(
+  salonId: string,
+  filters: MemberSaleChartFilters,
+  granularity: "day" | "week" | "month" = "day"
+): Promise<{ date: string; count: number; revenue: number }[]> {
+  const { where, values } = this._buildMemberSaleWhere(salonId, filters);
+  const istInstant = `cm.purchased_at AT TIME ZONE 'Asia/Kolkata'`;
+  const dayExpr = granularity === "month"
+    ? `TO_CHAR(date_trunc('month', ${istInstant}), 'YYYY-MM-DD')`
+    : granularity === "week"
+    ? `TO_CHAR(date_trunc('week', ${istInstant}), 'YYYY-MM-DD')`
+    : `TO_CHAR(${istInstant}, 'YYYY-MM-DD')`;
+
+  const query = `
+    SELECT
+      ${dayExpr} AS day,
+      COUNT(*)::int AS count,
+      COALESCE(SUM(cm.price_paid::numeric), 0) AS revenue
+    FROM client_memberships cm
+    WHERE ${where}
+    GROUP BY day
+    ORDER BY day ASC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => ({
+    date: String(r.day),
+    count: Number(r.count ?? 0),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+async getMemberSaleChartTopMemberships(
+  salonId: string,
+  filters: MemberSaleChartFilters,
+  limit: number = 5
+): Promise<{ membership_name: string; count: number; revenue: number }[]> {
+  const { where, values, nextIndex } = this._buildMemberSaleWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      cm.membership_name,
+      COUNT(*)::int AS count,
+      COALESCE(SUM(cm.price_paid::numeric), 0) AS revenue
+    FROM client_memberships cm
+    WHERE ${where}
+    GROUP BY cm.membership_name
+    ORDER BY revenue DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    membership_name: String(r.membership_name ?? "—"),
+    count: Number(r.count ?? 0),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+async getMemberSaleChartTopStaff(
+  salonId: string,
+  filters: MemberSaleChartFilters,
+  limit: number = 5
+): Promise<{ staff_id: string | null; staff_name: string; revenue: number }[]> {
+  const { where, values, nextIndex } = this._buildMemberSaleWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      cm.staff_id,
+      COALESCE(NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), ''), 'Unknown') AS staff_name,
+      COALESCE(SUM(cm.price_paid::numeric), 0) AS revenue
+    FROM client_memberships cm
+    LEFT JOIN staff st ON st.id = cm.staff_id
+    WHERE ${where}
+    GROUP BY cm.staff_id, staff_name
+    ORDER BY revenue DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    staff_id: r.staff_id ? String(r.staff_id) : null,
+    staff_name: r.staff_name,
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
 },
 
 // ======================================================

@@ -292,6 +292,16 @@ router.get(
     purchasesController.list
 );
 
+// Registered ahead of /purchases/:id — Express matches route registration
+// order, and "chart" would otherwise be swallowed as an :id param.
+router.get(
+    "/product-inventory/purchases/chart",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewProductInventoryOrPurchaseHistoryReport,
+    purchasesController.chart
+);
+
 router.get(
     "/product-inventory/purchases/:id",
     authMiddleware,
