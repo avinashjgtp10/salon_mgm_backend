@@ -225,8 +225,13 @@ export const ordersRepository = {
             idx++;
         }
         if (filters.status) {
-            conditions.push(`o.status = $${idx++}`);
-            values.push(filters.status);
+            if (Array.isArray(filters.status)) {
+                conditions.push(`o.status = ANY($${idx++}::varchar[])`);
+                values.push(filters.status);
+            } else {
+                conditions.push(`o.status = $${idx++}`);
+                values.push(filters.status);
+            }
         }
 
         const where = `WHERE ${conditions.join(" AND ")}`;

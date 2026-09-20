@@ -87,15 +87,19 @@ export const purchasesRepository = {
             await client.query("BEGIN");
 
             // Purchases (and the products they add stock to) aren't scoped to
-            // a branch, but stock_ledger.branch_id is NOT NULL — resolve the
-            // salon's main branch (falling back to any branch) once, the same
-            // way the ledger's own manual "Add Stock" flow requires a branch
-            // to be picked.
-            const { rows: branchRows } = await client.query(
-                `SELECT id FROM branches WHERE salon_id = $1 ORDER BY is_main DESC, created_at ASC LIMIT 1`,
-                [salonId],
-            );
-            const branchId: string | null = branchRows[0]?.id ?? null;
+            // a branch, but stock_ledger.branch_id is NOT NULL — use the
+            // caller's explicit branch_id when given (Confirm Receiving picks
+            // one), else fall back to resolving the salon's main branch (or
+            // any branch), the same way the ledger's own manual "Add Stock"
+            // flow requires a branch to be picked.
+            let branchId: string | null = data.branch_id ?? null;
+            if (!branchId) {
+                const { rows: branchRows } = await client.query(
+                    `SELECT id FROM branches WHERE salon_id = $1 ORDER BY is_main DESC, created_at ASC LIMIT 1`,
+                    [salonId],
+                );
+                branchId = branchRows[0]?.id ?? null;
+            }
 
             // Per-salon sequential purchase numbers — identical retry pattern to
             // sales.repository.ts's invoice numbers (see next_invoice_seq).
