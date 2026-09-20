@@ -247,6 +247,28 @@ router.post(
 );
 
 // ======================================================
+// BIRTHDAY REPORT (independent report API)
+// Reads clients directly — never calls the Appointment API/service.
+// ======================================================
+
+router.post(
+    "/birthday",
+    ...baseGuard, viewReport("view_report_birthday"),
+    reportsController.getBirthdayReport
+);
+
+// ======================================================
+// ANNIVERSARY REPORT (independent report API)
+// Reads clients directly — never calls the Appointment API/service.
+// ======================================================
+
+router.post(
+    "/anniversary",
+    ...baseGuard, viewReport("view_report_anniversary"),
+    reportsController.getAnniversaryReport
+);
+
+// ======================================================
 // NEW CLIENT FOLLOW-UP REPORT (independent report API)
 // "New" clients (joined within the last N days) who have never had a
 // completed/paid appointment yet — same "new" convention as All Clients'

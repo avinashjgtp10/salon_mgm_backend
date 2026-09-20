@@ -266,6 +266,10 @@ import {
     ClientRevenueChartResponse,
     AllClientsReportFilters,
     AllClientsReportResponse,
+    BirthdayReportFilters,
+    BirthdayReportResponse,
+    AnniversaryReportFilters,
+    AnniversaryReportResponse,
     NewClientFollowUpFilters,
     NewClientFollowUpResponse,
     CancellationRecoveryFilters,
@@ -1777,6 +1781,46 @@ async getAllClientsReport(
         pagination: rowsResult.pagination,
         stats,
         filters_available: filtersAvailable,
+    };
+},
+
+// ======================================================
+// BIRTHDAY REPORT (independent report API)
+// ======================================================
+
+async getBirthdayReport(
+    salonId: string,
+    filters: BirthdayReportFilters
+): Promise<BirthdayReportResponse> {
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getBirthdayReportStats(salonId, filters),
+        reportsRepository.getBirthdayReportRows(salonId, filters),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+    };
+},
+
+// ======================================================
+// ANNIVERSARY REPORT (independent report API)
+// ======================================================
+
+async getAnniversaryReport(
+    salonId: string,
+    filters: AnniversaryReportFilters
+): Promise<AnniversaryReportResponse> {
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getAnniversaryReportStats(salonId, filters),
+        reportsRepository.getAnniversaryReportRows(salonId, filters),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
     };
 },
 

@@ -57,6 +57,10 @@ import {
     AllClientsReportRow,
     AllClientsReportStats,
     AllClientsFiltersAvailable,
+    BirthdayReportRow,
+    BirthdayReportStats,
+    AnniversaryReportRow,
+    AnniversaryReportStats,
     NewClientFollowUpRow,
     NewClientFollowUpStats,
     CancellationRecoveryRow,
@@ -7014,6 +7018,347 @@ async getAllClientsFiltersAvailable(salonId: string): Promise<AllClientsFiltersA
   ));
   return {
     client_sources: rows.map((r: any) => ({ id: r.id, label: r.label })),
+  };
+},
+
+// ======================================================
+// BIRTHDAY REPORT (independent report API)
+// POST /api/report/birthday — one row per client with a birthday on file
+// (clients.birthday_day_month, "MM-DD"), NEXT occurrence computed
+// server-side (this year's date if it hasn't passed yet, otherwise next
+// year's) — same "MM-DD guarded parse" convention _buildAllClientsWhere's
+// birth_month filter uses. Never calls the Appointment API/service.
+// ======================================================
+
+_buildBirthdayWhere(
+  salonId: string,
+  filters: { search?: string; genders?: string[]; status?: "active" | "blocked"; birth_month?: number }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  // Only clients with a well-formed "MM-DD" birthday are ever eligible —
+  // malformed/legacy values (e.g. a full date) are excluded rather than
+  // silently parsed wrong.
+  const where = ["c.salon_id = $1", `c.birthday_day_month ~ '^\\d{2}-\\d{2}$'`];
+  let idx = 2;
+
+  if (filters.status === "active") where.push("c.is_active = true AND c.is_blocked = false");
+  else if (filters.status === "blocked") where.push("c.is_blocked = true");
+
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+      OR COALESCE(c.email, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+  if (filters.genders && filters.genders.length > 0) {
+    where.push(`LOWER(c.gender) = ANY($${idx++}::text[])`);
+    values.push(filters.genders.map(g => g.toLowerCase()));
+  }
+  if (filters.birth_month) {
+    where.push(`EXTRACT(MONTH FROM TO_DATE(c.birthday_day_month, 'MM-DD')) = $${idx++}`);
+    values.push(filters.birth_month);
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+// Shared by stats/rows below — wraps the filtered client set with each
+// row's computed next birthday occurrence. Building the occurrence date via
+// "first of month + (day - 1) days" rather than make_date(year, month, day)
+// directly means a Feb 29 birthday never throws in a non-leap target year —
+// it rolls over to Mar 1 instead of erroring the whole query.
+_BIRTHDAY_OCCURRENCE_CTE(where: string): string {
+  return `
+    WITH base AS (
+      SELECT c.*, TO_DATE(c.birthday_day_month, 'MM-DD') AS bday_md
+      FROM clients c
+      WHERE ${where}
+    ),
+    occ AS (
+      SELECT *,
+        (
+          MAKE_DATE(EXTRACT(YEAR FROM CURRENT_DATE)::int, EXTRACT(MONTH FROM bday_md)::int, 1)
+          + (EXTRACT(DAY FROM bday_md)::int - 1) * INTERVAL '1 day'
+        )::date AS occ_this_year
+      FROM base
+    ),
+    next_occ AS (
+      SELECT *,
+        CASE
+          WHEN occ_this_year >= CURRENT_DATE THEN occ_this_year
+          ELSE (
+            MAKE_DATE(EXTRACT(YEAR FROM CURRENT_DATE)::int + 1, EXTRACT(MONTH FROM bday_md)::int, 1)
+            + (EXTRACT(DAY FROM bday_md)::int - 1) * INTERVAL '1 day'
+          )::date
+        END AS next_occurrence
+      FROM occ
+    )
+  `;
+},
+
+async getBirthdayReportStats(
+  salonId: string,
+  filters: { search?: string; genders?: string[]; status?: "active" | "blocked"; birth_month?: number }
+): Promise<BirthdayReportStats> {
+  const { where, values } = this._buildBirthdayWhere(salonId, filters);
+  const query = `
+    ${this._BIRTHDAY_OCCURRENCE_CTE(where)}
+    SELECT
+      COUNT(*)::int AS total_with_birthday,
+      COUNT(*) FILTER (WHERE next_occurrence = CURRENT_DATE)::int AS birthdays_today,
+      COUNT(*) FILTER (WHERE next_occurrence BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '6 days')::int AS birthdays_this_week,
+      COUNT(*) FILTER (WHERE EXTRACT(MONTH FROM bday_md) = EXTRACT(MONTH FROM CURRENT_DATE))::int AS birthdays_this_month
+    FROM next_occ
+  `;
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  return {
+    total_with_birthday: Number(r.total_with_birthday ?? 0),
+    birthdays_today: Number(r.birthdays_today ?? 0),
+    birthdays_this_week: Number(r.birthdays_this_week ?? 0),
+    birthdays_this_month: Number(r.birthdays_this_month ?? 0),
+  };
+},
+
+async getBirthdayReportRows(
+  salonId: string,
+  filters: {
+    search?: string; genders?: string[]; status?: "active" | "blocked"; birth_month?: number;
+    upcoming_within_days?: number; page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: BirthdayReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildBirthdayWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const extraWhere: string[] = [];
+  if (filters.upcoming_within_days != null) {
+    extraWhere.push(`next_occurrence <= CURRENT_DATE + $${idx++} * INTERVAL '1 day'`);
+    values.push(Math.max(0, Math.floor(filters.upcoming_within_days)));
+  }
+  const outerWhere = extraWhere.length > 0 ? `WHERE ${extraWhere.join(" AND ")}` : "";
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    ${this._BIRTHDAY_OCCURRENCE_CTE(where)}
+    SELECT
+      id AS client_id,
+      COALESCE(NULLIF(TRIM(full_name), ''), 'Unnamed Client') AS client_name,
+      COALESCE(NULLIF(TRIM(CONCAT(COALESCE(phone_country_code, ''), ' ', COALESCE(phone_number, ''))), ''), '—') AS contact,
+      NULLIF(TRIM(email), '') AS email,
+      NULLIF(TRIM(gender), '') AS gender,
+      birthday_day_month AS birthday,
+      birthday_year,
+      CASE WHEN birthday_year IS NOT NULL THEN EXTRACT(YEAR FROM next_occurrence)::int - birthday_year ELSE NULL END AS turning_age,
+      TO_CHAR(next_occurrence, 'YYYY-MM-DD') AS next_occurrence,
+      (next_occurrence - CURRENT_DATE)::int AS days_until_next,
+      NULLIF(TRIM(client_source), '') AS client_source,
+      CASE WHEN is_blocked = true THEN 'Blocked' ELSE 'Active' END AS status,
+      COUNT(*) OVER() AS total_count
+    FROM next_occ
+    ${outerWhere}
+    ORDER BY next_occurrence ASC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: BirthdayReportRow[] = rows.map((row: any) => ({
+    client_id: row.client_id,
+    client_name: row.client_name,
+    contact: row.contact,
+    email: row.email,
+    gender: row.gender,
+    birthday: row.birthday,
+    birthday_year: row.birthday_year != null ? Number(row.birthday_year) : null,
+    turning_age: row.turning_age != null ? Number(row.turning_age) : null,
+    next_occurrence: row.next_occurrence,
+    days_until_next: Number(row.days_until_next ?? 0),
+    client_source: row.client_source,
+    status: row.status,
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// ======================================================
+// ANNIVERSARY REPORT (independent report API)
+// POST /api/report/anniversary — one row per client with an anniversary on
+// file (clients.anniversary, a full date). Same NEXT-occurrence computation
+// as the Birthday Report above, minus the "MM-DD" text parsing since
+// anniversary is already a real date column. Never calls the Appointment
+// API/service.
+// ======================================================
+
+_buildAnniversaryWhere(
+  salonId: string,
+  filters: { search?: string; status?: "active" | "blocked"; anniversary_month?: number }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["c.salon_id = $1", "c.anniversary IS NOT NULL"];
+  let idx = 2;
+
+  if (filters.status === "active") where.push("c.is_active = true AND c.is_blocked = false");
+  else if (filters.status === "blocked") where.push("c.is_blocked = true");
+
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+      OR COALESCE(c.email, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+  if (filters.anniversary_month) {
+    where.push(`EXTRACT(MONTH FROM c.anniversary) = $${idx++}`);
+    values.push(filters.anniversary_month);
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+_ANNIVERSARY_OCCURRENCE_CTE(where: string): string {
+  return `
+    WITH base AS (
+      SELECT c.* FROM clients c
+      WHERE ${where}
+    ),
+    occ AS (
+      SELECT *,
+        (
+          MAKE_DATE(EXTRACT(YEAR FROM CURRENT_DATE)::int, EXTRACT(MONTH FROM anniversary)::int, 1)
+          + (EXTRACT(DAY FROM anniversary)::int - 1) * INTERVAL '1 day'
+        )::date AS occ_this_year
+      FROM base
+    ),
+    next_occ AS (
+      SELECT *,
+        CASE
+          WHEN occ_this_year >= CURRENT_DATE THEN occ_this_year
+          ELSE (
+            MAKE_DATE(EXTRACT(YEAR FROM CURRENT_DATE)::int + 1, EXTRACT(MONTH FROM anniversary)::int, 1)
+            + (EXTRACT(DAY FROM anniversary)::int - 1) * INTERVAL '1 day'
+          )::date
+        END AS next_occurrence
+      FROM occ
+    )
+  `;
+},
+
+async getAnniversaryReportStats(
+  salonId: string,
+  filters: { search?: string; status?: "active" | "blocked"; anniversary_month?: number }
+): Promise<AnniversaryReportStats> {
+  const { where, values } = this._buildAnniversaryWhere(salonId, filters);
+  const query = `
+    ${this._ANNIVERSARY_OCCURRENCE_CTE(where)}
+    SELECT
+      COUNT(*)::int AS total_with_anniversary,
+      COUNT(*) FILTER (WHERE next_occurrence = CURRENT_DATE)::int AS anniversaries_today,
+      COUNT(*) FILTER (WHERE next_occurrence BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '6 days')::int AS anniversaries_this_week,
+      COUNT(*) FILTER (WHERE EXTRACT(MONTH FROM anniversary) = EXTRACT(MONTH FROM CURRENT_DATE))::int AS anniversaries_this_month
+    FROM next_occ
+  `;
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  return {
+    total_with_anniversary: Number(r.total_with_anniversary ?? 0),
+    anniversaries_today: Number(r.anniversaries_today ?? 0),
+    anniversaries_this_week: Number(r.anniversaries_this_week ?? 0),
+    anniversaries_this_month: Number(r.anniversaries_this_month ?? 0),
+  };
+},
+
+async getAnniversaryReportRows(
+  salonId: string,
+  filters: {
+    search?: string; status?: "active" | "blocked"; anniversary_month?: number;
+    upcoming_within_days?: number; page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: AnniversaryReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildAnniversaryWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const extraWhere: string[] = [];
+  if (filters.upcoming_within_days != null) {
+    extraWhere.push(`next_occurrence <= CURRENT_DATE + $${idx++} * INTERVAL '1 day'`);
+    values.push(Math.max(0, Math.floor(filters.upcoming_within_days)));
+  }
+  const outerWhere = extraWhere.length > 0 ? `WHERE ${extraWhere.join(" AND ")}` : "";
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    ${this._ANNIVERSARY_OCCURRENCE_CTE(where)}
+    SELECT
+      id AS client_id,
+      COALESCE(NULLIF(TRIM(full_name), ''), 'Unnamed Client') AS client_name,
+      COALESCE(NULLIF(TRIM(CONCAT(COALESCE(phone_country_code, ''), ' ', COALESCE(phone_number, ''))), ''), '—') AS contact,
+      NULLIF(TRIM(email), '') AS email,
+      TO_CHAR(anniversary, 'YYYY-MM-DD') AS anniversary,
+      (EXTRACT(YEAR FROM next_occurrence)::int - EXTRACT(YEAR FROM anniversary)::int) AS years_count,
+      TO_CHAR(next_occurrence, 'YYYY-MM-DD') AS next_occurrence,
+      (next_occurrence - CURRENT_DATE)::int AS days_until_next,
+      NULLIF(TRIM(client_source), '') AS client_source,
+      CASE WHEN is_blocked = true THEN 'Blocked' ELSE 'Active' END AS status,
+      COUNT(*) OVER() AS total_count
+    FROM next_occ
+    ${outerWhere}
+    ORDER BY next_occurrence ASC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: AnniversaryReportRow[] = rows.map((row: any) => ({
+    client_id: row.client_id,
+    client_name: row.client_name,
+    contact: row.contact,
+    email: row.email,
+    anniversary: row.anniversary,
+    years_count: Number(row.years_count ?? 0),
+    next_occurrence: row.next_occurrence,
+    days_until_next: Number(row.days_until_next ?? 0),
+    client_source: row.client_source,
+    status: row.status,
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
   };
 },
 
