@@ -17,6 +17,7 @@ import { productInventoryController } from "./product-inventory.controller";
 import { purchasesController } from "./purchases.controller";
 import { supplierPaymentsController } from "./supplier-payments.controller";
 import { ordersController } from "./orders.controller";
+import { orderReceiptsController } from "./order-receipts.controller";
 import { productAuditController } from "./product-audit.controller";
 import { stockLedgerController } from "./stock-ledger.controller";
 import {
@@ -28,6 +29,7 @@ import {
 import { validateCreatePurchase, validateListPurchases } from "./purchases.validator";
 import { validateCreateSupplierPayment } from "./supplier-payments.validator";
 import { validateCreateOrder, validateReceiveOrder, validateCorrectReceivedQty } from "./orders.validator";
+import { validateSaveReceiptDraft, validateConfirmReceipt } from "./order-receipts.validator";
 import {
     validateCreateProductAudit,
     validateAddAuditItems,
@@ -376,6 +378,37 @@ router.post(
     receiveOrder,
     validateCorrectReceivedQty,
     ordersController.correctReceivedQty
+);
+
+// ─── Order Receiving (draft -> confirm) — replaces the single-shot Receive
+// above with a session the clerk can save as a draft (zero stock effect) and
+// only Confirm Receiving moves stock. See order-receipts.repository.ts.
+// Same receive_order permission — no new key, per this repo's rule against
+// drive-by permission additions.
+router.get(
+    "/orders/:id/receipts/draft",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    receiveOrder,
+    orderReceiptsController.getOrCreateDraft
+);
+
+router.post(
+    "/orders/:id/receipts/:receiptId/items",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    receiveOrder,
+    validateSaveReceiptDraft,
+    orderReceiptsController.saveDraft
+);
+
+router.post(
+    "/orders/:id/receipts/:receiptId/confirm",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    receiveOrder,
+    validateConfirmReceipt,
+    orderReceiptsController.confirm
 );
 
 // Cancel and Delete share one "Delete/Cancel Order" permission per the

@@ -49,6 +49,11 @@ export interface CreatePurchaseDTO {
     // created to record delivery against a Purchase Order — links the two
     // without duplicating purchasesRepository.create()'s transaction logic.
     order_id?: string | null;
+    // Explicit receiving location — set by order-receipts.repository.ts's
+    // confirmReceipt() so stock lands on the branch the clerk actually
+    // picked. Omitted (standalone Purchase / old receive()) falls back to
+    // the salon's main-branch auto-resolution, unchanged.
+    branch_id?: string | null;
     items: CreatePurchaseItemDTO[];
 }
 

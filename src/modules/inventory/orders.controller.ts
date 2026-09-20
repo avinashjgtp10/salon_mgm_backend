@@ -19,6 +19,20 @@ const asPositiveInt = (value: unknown, fallback: number): number => {
     return Number.isFinite(n) && n > 0 ? n : fallback;
 };
 
+const VALID_STATUSES = ["draft", "sent", "partially_received", "received", "cancelled"] as const;
+
+// Same comma-separated convention as consumable-inventory.controller.ts's
+// parseCsvEnum — powers the Orders page's "Receiving" tab
+// (?status=sent,partially_received) while a single value still works
+// unchanged for the plain status-filter dropdown.
+function parseStatusFilter(value: unknown): (typeof VALID_STATUSES)[number] | (typeof VALID_STATUSES)[number][] | undefined {
+    if (typeof value !== "string" || !value.trim()) return undefined;
+    const list = value.split(",").map((v) => v.trim()).filter((v): v is (typeof VALID_STATUSES)[number] =>
+        (VALID_STATUSES as readonly string[]).includes(v));
+    if (!list.length) return undefined;
+    return list.length === 1 ? list[0] : list;
+}
+
 export const ordersController = {
     async create(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
         try {
@@ -40,7 +54,7 @@ export const ordersController = {
             const result = await ordersRepository.list(
                 {
                     search: (req.query.search as string) || undefined,
-                    status: (req.query.status as any) || undefined,
+                    status: parseStatusFilter(req.query.status),
                     page: asPositiveInt(req.query.page, 1),
                     limit: asPositiveInt(req.query.limit, 20),
                 },
