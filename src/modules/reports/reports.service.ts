@@ -312,6 +312,8 @@ import {
     StaffPerformanceChartResponse,
     StaffItemSalesReportFilters,
     StaffItemSalesReportResponse,
+    StaffItemSalesChartFilters,
+    StaffItemSalesChartResponse,
     PackageSaleReportFilters,
     PackageSaleReportResponse,
     PayrollHistoryReportFilters,
@@ -2237,6 +2239,21 @@ async getStaffItemSalesReport(
         pagination: rowsResult.pagination,
         stats,
     };
+},
+
+// Powers the Staff Item Sales report's Graph page.
+async getStaffItemSalesReportChart(
+    salonId: string,
+    filters: StaffItemSalesChartFilters,
+    granularity: "day" | "week" | "month" = "day",
+    topLimit: number = 5
+): Promise<StaffItemSalesChartResponse> {
+    const [daily, top_items, top_staff] = await Promise.all([
+        reportsRepository.getStaffItemSalesChartTrend(salonId, filters, granularity),
+        reportsRepository.getStaffItemSalesChartTopItems(salonId, filters, topLimit),
+        reportsRepository.getStaffItemSalesChartTopStaff(salonId, filters, topLimit),
+    ]);
+    return { daily, top_items, top_staff };
 },
 
 // ======================================================

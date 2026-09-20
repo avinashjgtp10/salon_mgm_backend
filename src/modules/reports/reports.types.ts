@@ -2912,6 +2912,22 @@ export interface StaffItemSalesReportResponse {
     stats: StaffItemSalesReportStats;
 }
 
+// Powers the Staff Item Sales report's Graph page.
+export interface StaffItemSalesChartFilters {
+    start_date?: string;
+    end_date?: string;
+    item_type?: StaffItemSalesType;
+    staff_id?: string;
+    staff_ids?: string[];
+    search?: string;
+}
+
+export interface StaffItemSalesChartResponse {
+    daily: { date: string; quantity: number; revenue: number }[];
+    top_items: { item_name: string; quantity: number; revenue: number }[];
+    top_staff: { staff_id: string | null; staff_name: string; revenue: number }[];
+}
+
 // ===============================
 // Package Sale Report (independent report API — POST /api/report/package-sale)
 // Reads directly from client_packages, one row per package sale. Never

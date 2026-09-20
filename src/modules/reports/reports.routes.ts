@@ -501,6 +501,12 @@ router.post(
     reportsController.getStaffItemSalesReport
 );
 
+router.post(
+    "/staff-item-sales/chart",
+    ...baseGuard, viewReport("view_report_staff_item_sales"),
+    reportsController.getStaffItemSalesReportChart
+);
+
 // ======================================================
 // REBOOKING RATE REPORT (independent report API)
 // Reads sales/sale_items/clients directly — never calls the Appointment

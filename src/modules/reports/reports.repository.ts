@@ -98,6 +98,7 @@ import {
     StaffPerformanceChartFilters,
     StaffItemSalesReportRow,
     StaffItemSalesReportStats,
+    StaffItemSalesChartFilters,
     PackageSaleReportRow,
     PackageSaleReportStats,
     PackageSaleFilterOption,
@@ -11161,6 +11162,126 @@ async getStaffItemSalesReportRows(
       total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
     },
   };
+},
+
+// Powers the Staff Item Sales report's Graph page. Same package/membership-
+// redeemed 0-revenue treatment as getStaffItemSalesReportStats/Rows above —
+// must stay in sync with that CASE expression.
+_STAFF_ITEM_SALES_REVENUE_EXPR: `
+  CASE
+    WHEN LOWER(COALESCE(s.payment_method, '')) = 'package' THEN 0
+    WHEN COALESCE(mw.membership_wallet_used, 0) > 0 THEN 0
+    ELSE si.total_price + (
+      CASE WHEN COALESCE(s.subtotal, 0) > 0
+           THEN COALESCE(s.tax_amount, 0) * (si.total_price / s.subtotal)
+           ELSE 0
+      END
+    )
+  END
+`,
+
+_STAFF_ITEM_SALES_MW_JOIN: `
+  LEFT JOIN LATERAL (
+    SELECT COALESCE(SUM(p.membership_wallet_used), 0) AS membership_wallet_used
+    FROM payments p
+    WHERE p.appointment_id = s.appointment_id AND s.appointment_id IS NOT NULL
+      AND p.status IN ('completed', 'partial')
+  ) mw ON TRUE
+`,
+
+async getStaffItemSalesChartTrend(
+  salonId: string,
+  filters: StaffItemSalesChartFilters,
+  granularity: "day" | "week" | "month" = "day"
+): Promise<{ date: string; quantity: number; revenue: number }[]> {
+  const { where, values } = this._buildStaffItemSalesWhere(salonId, filters);
+  const istInstant = `s.created_at AT TIME ZONE 'Asia/Kolkata'`;
+  const dayExpr = granularity === "month"
+    ? `TO_CHAR(date_trunc('month', ${istInstant}), 'YYYY-MM-DD')`
+    : granularity === "week"
+    ? `TO_CHAR(date_trunc('week', ${istInstant}), 'YYYY-MM-DD')`
+    : `TO_CHAR(${istInstant}, 'YYYY-MM-DD')`;
+
+  const query = `
+    SELECT
+      ${dayExpr} AS day,
+      COALESCE(SUM(si.quantity), 0)::int AS quantity,
+      COALESCE(SUM(${this._STAFF_ITEM_SALES_REVENUE_EXPR}), 0) AS revenue
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    LEFT JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
+    ${this._STAFF_ITEM_SALES_MW_JOIN}
+    WHERE ${where}
+    GROUP BY day
+    ORDER BY day ASC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => ({
+    date: String(r.day),
+    quantity: Number(r.quantity ?? 0),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+async getStaffItemSalesChartTopItems(
+  salonId: string,
+  filters: StaffItemSalesChartFilters,
+  limit: number = 5
+): Promise<{ item_name: string; quantity: number; revenue: number }[]> {
+  const { where, values, nextIndex } = this._buildStaffItemSalesWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      si.name AS item_name,
+      COALESCE(SUM(si.quantity), 0)::int AS quantity,
+      COALESCE(SUM(${this._STAFF_ITEM_SALES_REVENUE_EXPR}), 0) AS revenue
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    LEFT JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
+    ${this._STAFF_ITEM_SALES_MW_JOIN}
+    WHERE ${where}
+    GROUP BY si.name
+    ORDER BY revenue DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    item_name: String(r.item_name ?? "—"),
+    quantity: Number(r.quantity ?? 0),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+async getStaffItemSalesChartTopStaff(
+  salonId: string,
+  filters: StaffItemSalesChartFilters,
+  limit: number = 5
+): Promise<{ staff_id: string | null; staff_name: string; revenue: number }[]> {
+  const { where, values, nextIndex } = this._buildStaffItemSalesWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      COALESCE(si.staff_id, s.staff_id) AS staff_id,
+      COALESCE(NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), ''), 'Unknown') AS staff_name,
+      COALESCE(SUM(${this._STAFF_ITEM_SALES_REVENUE_EXPR}), 0) AS revenue
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    LEFT JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
+    ${this._STAFF_ITEM_SALES_MW_JOIN}
+    WHERE ${where}
+    GROUP BY COALESCE(si.staff_id, s.staff_id), staff_name
+    ORDER BY revenue DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    staff_id: r.staff_id ? String(r.staff_id) : null,
+    staff_name: r.staff_name,
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
 },
 
 // ======================================================
