@@ -2000,6 +2000,27 @@ export interface EnquiryReportResponse {
     filters_available: EnquiryReportFiltersAvailable;
 }
 
+// Powers the Enquiry Report's Graph page.
+export interface EnquiryChartFilters {
+    start_date?: string;
+    end_date?: string;
+    staff_ids?: string[];
+    service_ids?: string[];
+    statuses?: string[];
+    sources?: string[];
+    follow_up_date?: string;
+    search?: string;
+}
+
+export interface EnquiryChartResponse {
+    // Bucketed by e.created_at — same field _buildEnquiryReportWhere filters
+    // on, so the trend's day boundaries can never disagree with the table.
+    daily: { date: string; total: number; converted: number }[];
+    status: { status: string; count: number }[];
+    source: { source: string; count: number }[];
+    top_staff: { staff_id: string | null; staff_name: string; count: number }[];
+}
+
 // ===============================
 // Customer Spend Segments Report (POST /api/report/customer-spend)
 //
@@ -2143,6 +2164,24 @@ export interface CustomerFrequencyReportResponse {
     stats: CustomerFrequencyReportStats;
 }
 
+// Powers the Client Frequency report's Graph page.
+export interface CustomerFrequencyChartFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    customer_type?: "most_frequent" | "least_frequent" | "most_spending" | "least_spending" | "new" | "old" | "lost";
+}
+
+export interface CustomerFrequencyChartResponse {
+    // Bucketed by each client's own last-visit date in range (same semantic
+    // Client Revenue's own trend uses) — not a per-transaction date.
+    daily: { date: string; clients: number; visits: number }[];
+    customer_type: { type: string; count: number }[];
+    visitor_type: { type: string; count: number }[];
+    top_clients: { client_id: string | null; client_name: string; visits: number }[];
+}
+
 // ===============================
 // Service Frequency Report (POST /api/report/service-frequency)
 //
@@ -2213,6 +2252,28 @@ export interface ServiceFrequencyReportResponse {
     rows: ServiceFrequencyReportRow[];
     pagination: ServiceFrequencyReportPagination;
     stats: ServiceFrequencyReportStats;
+}
+
+// Powers the Service Frequency report's Graph page.
+export interface ServiceFrequencyChartFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    service_ids?: string[];
+    category_ids?: string[];
+    staff_ids?: string[];
+}
+
+export interface ServiceFrequencyChartResponse {
+    // Bucketed by s.created_at — same field _buildServiceFrequencyWhere
+    // filters on (no IST zone conversion there), so the trend's day
+    // boundaries can never disagree with the table.
+    daily: { date: string; visits: number; revenue: number }[];
+    // One-time vs repeat client+service pairs — same `visits > 1` cutoff the
+    // table's own repeat_pairs stat uses.
+    pair_frequency: { type: "one_time" | "repeat"; count: number }[];
+    category_breakdown: { category: string; visits: number }[];
+    top_services: { service_id: string | null; service_name: string; visits: number }[];
 }
 
 // ===============================
@@ -2559,6 +2620,21 @@ export interface CashManagementReportResponse {
     filters_available: CashManagementFiltersAvailable;
 }
 
+// Powers the Cash Management report's Graph page.
+export interface CashManagementChartFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    statuses?: string[];
+}
+
+export interface CashManagementChartResponse {
+    daily: { date: string; revenue: number; expense: number; closing: number }[];
+    status: { status: string; count: number }[];
+    top_variance: { id: string; date: string; opened_by: string; amount: number }[];
+    revenue_by_opened_by: { name: string; revenue: number }[];
+}
+
 // ===============================
 // Staff Sales Report (independent report API — POST /api/report/staff-sales)
 // Reads directly from sales/sale_items/payments, one row per transaction,
@@ -2634,6 +2710,27 @@ export interface StaffSalesReportResponse {
     pagination: StaffSalesReportPagination;
     stats: StaffSalesReportStats;
     filters_available: { payment_modes: string[] };
+}
+
+// Powers the Staff Sales report's Graph page.
+export interface StaffSalesChartFilters {
+    start_date?: string;
+    end_date?: string;
+    staff_id?: string;
+    staff_ids?: string[];
+    search?: string;
+    payment_mode?: string;
+    payment_modes?: string[];
+    item_type?: string;
+    item_types?: string[];
+    payment_status?: string;
+    payment_statuses?: string[];
+}
+
+export interface StaffSalesChartResponse {
+    daily: { date: string; revenue: number; commission: number }[];
+    by_item_type: { item_type: string; revenue: number }[];
+    top_staff: { staff_id: string | null; staff_name: string; revenue: number }[];
 }
 
 // ===============================
@@ -2731,6 +2828,34 @@ export interface StaffPerformanceReportResponse {
     pagination: StaffPerformanceReportPagination;
     stats: StaffPerformanceReportStats;
     filters_available: StaffPerformanceFiltersAvailable;
+}
+
+// Powers the Staff Performance report's Graph page.
+export interface StaffPerformanceChartFilters {
+    start_date?: string;
+    end_date?: string;
+    staff_ids?: string[];
+    branch_id?: string;
+    payment_mode?: string;
+    payment_modes?: string[];
+    payment_status?: string;
+    payment_statuses?: string[];
+    item_type?: string;
+    item_types?: string[];
+    service_id?: string;
+    product_id?: string;
+    package_id?: string;
+    package_ids?: string[];
+    membership_id?: string;
+    membership_ids?: string[];
+    search?: string;
+    include_gst?: boolean;
+}
+
+export interface StaffPerformanceChartResponse {
+    daily: { date: string; revenue: number; commission: number }[];
+    by_item_type: { item_type: string; revenue: number }[];
+    top_staff: { staff_id: string; staff_name: string; revenue: number }[];
 }
 
 // ===============================

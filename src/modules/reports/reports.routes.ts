@@ -300,6 +300,12 @@ router.post(
     reportsController.getEnquiryReport
 );
 
+router.post(
+    "/enquiries/chart",
+    ...baseGuard, viewReport("view_report_enquiry_report"),
+    reportsController.getEnquiryReportChart
+);
+
 // ======================================================
 // CUSTOMER FREQUENCY REPORT (independent report API)
 // Reads clients/sales directly — never calls the Appointment API/service.
@@ -309,6 +315,12 @@ router.post(
     "/customer-frequency",
     ...baseGuard, viewReport("view_report_customer_frequency"),
     reportsController.getCustomerFrequencyReport
+);
+
+router.post(
+    "/customer-frequency/chart",
+    ...baseGuard, viewReport("view_report_customer_frequency"),
+    reportsController.getCustomerFrequencyReportChart
 );
 
 // ======================================================
@@ -346,6 +358,12 @@ router.post(
     "/service-frequency",
     ...baseGuard, viewReport("view_report_service_frequency"),
     reportsController.getServiceFrequencyReport
+);
+
+router.post(
+    "/service-frequency/chart",
+    ...baseGuard, viewReport("view_report_service_frequency"),
+    reportsController.getServiceFrequencyReportChart
 );
 
 // ======================================================
@@ -404,6 +422,12 @@ router.post(
     reportsController.getCashManagementReport
 );
 
+router.post(
+    "/cash-management/chart",
+    ...baseGuard, viewReport("view_report_cash_management"),
+    reportsController.getCashManagementReportChart
+);
+
 // ======================================================
 // REFERRAL REPORT (independent report API)
 // One row per referred client, joined back to the referrer. Reads
@@ -443,6 +467,12 @@ router.post(
     reportsController.getStaffSalesReport
 );
 
+router.post(
+    "/staff-sales/chart",
+    ...baseGuard, viewReport("view_report_staff_sales"),
+    reportsController.getStaffSalesReportChart
+);
+
 // ======================================================
 // STAFF PERFORMANCE REPORT (independent report API)
 // Reads sales/sale_items directly — never calls the Appointment API/service.
@@ -452,6 +482,12 @@ router.post(
     "/staff-performance",
     ...baseGuard, viewReport("view_report_staff_performance"),
     reportsController.getStaffPerformanceReport
+);
+
+router.post(
+    "/staff-performance/chart",
+    ...baseGuard, viewReport("view_report_staff_performance"),
+    reportsController.getStaffPerformanceReportChart
 );
 
 // ======================================================
