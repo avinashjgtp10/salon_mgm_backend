@@ -24,7 +24,11 @@ const BALANCE_COLUMNS = `
       WHEN GREATEST(COALESCE(agg.total_purchase_amount, 0) - COALESCE(pay.total_paid, 0), 0) <= 0 THEN 'paid'
       WHEN agg.earliest_unpaid_date IS NOT NULL AND agg.earliest_unpaid_date < CURRENT_DATE THEN 'overdue'
       ELSE 'due'
-    END AS status
+    END AS status,
+    -- Operationally open (not yet fully received) — a DIFFERENT concept from
+    -- pending_order_count above, which is about unpaid balance, not
+    -- fulfillment. Suppliers list's "Open Orders" column uses this one.
+    COALESCE(open_orders.open_order_count, 0) AS open_order_count
 `;
 
 const BALANCE_JOINS = `
@@ -60,6 +64,12 @@ const BALANCE_JOINS = `
        WHERE salon_id = $1
        GROUP BY supplier_id
     ) pay ON pay.supplier_id = s.id
+    LEFT JOIN (
+      SELECT supplier_id, COUNT(*) AS open_order_count
+        FROM orders
+       WHERE salon_id = $1 AND status IN ('sent', 'partially_received')
+       GROUP BY supplier_id
+    ) open_orders ON open_orders.supplier_id = s.id
 `;
 
 export const suppliersRepository = {
@@ -177,10 +187,11 @@ export const suppliersRepository = {
         street, suburb, city, state, zip_code, country,
         same_as_physical,
         postal_street, postal_suburb, postal_city,
-        postal_state, postal_zip_code, postal_country
+        postal_state, postal_zip_code, postal_country,
+        is_active
       ) VALUES (
         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
-        $19,$20,$21,$22,$23,$24
+        $19,$20,$21,$22,$23,$24,$25
       ) RETURNING *`,
             [
                 salonId, data.name, data.description ?? null,
@@ -193,6 +204,7 @@ export const suppliersRepository = {
                 data.same_as_physical ?? true,
                 data.postal_street ?? null, data.postal_suburb ?? null, data.postal_city ?? null,
                 data.postal_state ?? null, data.postal_zip_code ?? null, data.postal_country ?? null,
+                data.is_active ?? true,
             ]
         );
         return rows[0];

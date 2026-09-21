@@ -91,6 +91,17 @@ export const productInventoryController = {
         }
     },
 
+    async detail(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const salonId = getSalonId(req);
+            const result = await productInventoryRepository.getDetail(String(req.params.id), salonId);
+            if (!result) { next(new AppError(404, "Product not found", "PRODUCT_NOT_FOUND")); return; }
+            sendSuccess(res, 200, result, "Product detail fetched");
+        } catch (err) {
+            next(err);
+        }
+    },
+
     async history(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             const salonId = getSalonId(req);

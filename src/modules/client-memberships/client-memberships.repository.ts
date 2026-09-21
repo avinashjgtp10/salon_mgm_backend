@@ -407,8 +407,28 @@ export const clientMembershipsRepository = {
     );
     const memRow = memRes.rows[0];
 
+    // Back-dated purchase (bulk import of memberships sold before this system
+    // existed). Anything unparseable is treated as "not given" rather than
+    // failing the row — the membership still gets created, just stamped now,
+    // which is exactly what happened before this was supported. NULL is
+    // deliberate for the absent case: the INSERT COALESCEs it back to NOW(),
+    // so the column default keeps applying to every live sale.
+    const purchasedAt: Date | null = (() => {
+      const raw = (dto.purchasedAt ?? '').trim();
+      if (!raw) return null;
+      // A bare "YYYY-MM-DD" is parsed as UTC midnight by Date; pin it to local
+      // noon instead so the stored day can't slide to the previous one for a
+      // salon behind UTC.
+      const d = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? new Date(`${raw}T12:00:00`) : new Date(raw);
+      return isNaN(d.getTime()) ? null : d;
+    })();
+
     let expiresAt: Date | string | null = dto.expiresAt ?? null;
-    if (!expiresAt) expiresAt = computeExpiryDate(memRow?.valid_for);
+    // A plan's validity is a relative "N days" duration, counted from when the
+    // membership was bought — so a back-dated import with no explicit expiry
+    // must count from that date, not from today, or a year-old membership
+    // would be handed another full year of life.
+    if (!expiresAt) expiresAt = computeExpiryDate(memRow?.valid_for, purchasedAt ?? undefined);
 
     const pricingType = memRow?.pricing_type ?? 'value';
     // Loyalty plans enroll every client automatically off their visit count
@@ -471,8 +491,12 @@ export const clientMembershipsRepository = {
          membership_id, membership_name, colour, total_sessions, used_sessions,
          expires_at, end_date, status, price_paid, membership_wallet_balance, appointment_id,
          pricing_type, discount_percent, discount_balance_remaining, applies_to, service_category_ids, product_category_ids, description, staff_id,
-         service_ids, product_ids, benefit_type)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$11,$14,'active',$12,$13,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
+         service_ids, product_ids, benefit_type, purchased_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$11,$14,'active',$12,$13,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,
+               -- COALESCE, not a bare parameter: naming the column in the
+               -- INSERT overrides its DEFAULT NOW(), so passing NULL for an
+               -- ordinary sale would blank the purchase date entirely.
+               COALESCE($27::timestamptz, NOW()))
        RETURNING *`,
       [
         id, salonId, dto.clientId, clientName, mobile, email,
@@ -499,6 +523,7 @@ export const clientMembershipsRepository = {
         serviceIds,
         productIds,
         benefitType,
+        purchasedAt,
       ],
     );
     return toClientMembership(rows[0]);

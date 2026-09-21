@@ -20,7 +20,12 @@ router.delete("/salons/:id",     branchOwnerController.deleteSalon);
 
 router.get("/salons/:salonId/staff", branchOwnerController.getSalonStaff);
 router.post("/staff/list",           branchOwnerController.listAllStaff);
-router.patch("/salons/:salonId/staff/:staffId/permissions", branchOwnerController.updateSalonStaffPermissions);
+
+// ── Roles & Permissions (real system) ──────────────────────────────────────
+router.get("/salons/:salonId/roles", branchOwnerController.listSalonRoles);
+router.get("/salons/:salonId/staff/:staffId/permissions",   branchOwnerController.getSalonStaffPermissions);
+router.patch("/salons/:salonId/staff/:staffId/permissions", branchOwnerController.setSalonStaffOverrides);
+router.patch("/salons/:salonId/staff/:staffId/role",        branchOwnerController.assignSalonStaffRole);
 
 router.get("/salons/:salonId/subscription", branchOwnerController.getSalonSubscription);
 router.get("/salons/:salonId/invoices",     branchOwnerController.getSalonInvoices);

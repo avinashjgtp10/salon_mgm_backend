@@ -1100,6 +1100,56 @@ async getProductRetailReport(
     }
 },
 
+// Powers the Product Retail report's Graph page (same "click the graph icon
+// next to the table" pattern as Sales Summary) — trend, payment mode split,
+// and top products/brands/categories/staff, all for the same filters
+// currently applied to the table.
+async getProductRetailReportChart(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            search: asString(body.search),
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            brand_id: asString(body.brand_id),
+            brand_ids: Array.isArray(body.brand_ids)
+                ? body.brand_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            category_id: asString(body.category_id),
+            category_ids: Array.isArray(body.category_ids)
+                ? body.category_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            min_price: body.min_price !== undefined ? Number(body.min_price) : undefined,
+            max_price: body.max_price !== undefined ? Number(body.max_price) : undefined,
+        };
+        const granularity: "day" | "week" | "month" =
+            body.granularity === "week" || body.granularity === "month" ? body.granularity : "day";
+        const topLimit = Number.isFinite(Number(body.top_limit)) && Number(body.top_limit) > 0
+            ? Math.min(Math.floor(Number(body.top_limit)), 50)
+            : 5;
+
+        const data = await reportsService.getProductRetailReportChart(salonId, filters, granularity, topLimit);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Product retail chart fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
 // ======================================================
 // SERVICE SALE REPORT (independent report API)
 // POST /api/report/service-sale
@@ -1151,6 +1201,57 @@ async getServiceSaleReport(
             200,
             data,
             "Service sale report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// Powers the Service Sale report's Graph page.
+async getServiceSaleReportChart(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            category_id: asString(body.category_id),
+            category_ids: Array.isArray(body.category_ids)
+                ? body.category_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            service_id: asString(body.service_id),
+            service_ids: Array.isArray(body.service_ids)
+                ? body.service_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            min_price: body.min_price !== undefined ? Number(body.min_price) : undefined,
+            max_price: body.max_price !== undefined ? Number(body.max_price) : undefined,
+            payment_method: asString(body.payment_method),
+            payment_methods: Array.isArray(body.payment_methods)
+                ? body.payment_methods.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            search: asString(body.search),
+        };
+        const granularity: "day" | "week" | "month" =
+            body.granularity === "week" || body.granularity === "month" ? body.granularity : "day";
+        const topLimit = Number.isFinite(Number(body.top_limit)) && Number(body.top_limit) > 0
+            ? Math.min(Math.floor(Number(body.top_limit)), 50)
+            : 5;
+
+        const data = await reportsService.getServiceSaleReportChart(salonId, filters, granularity, topLimit);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Service sale chart fetched successfully"
         );
     } catch (error) {
         next(error);
@@ -1395,6 +1496,47 @@ async getProductInventoryReport(
     }
 },
 
+// Powers the Product Inventory report's Graph page.
+async getProductInventoryChart(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            search: asString(body.search),
+            category_id: asString(body.category_id),
+            category_ids: Array.isArray(body.category_ids) ? body.category_ids.map(String) : undefined,
+            brand_id: asString(body.brand_id),
+            brand_ids: Array.isArray(body.brand_ids) ? body.brand_ids.map(String) : undefined,
+            stock_status: (body.stock_status === "in_stock" || body.stock_status === "low_stock" || body.stock_status === "out_of_stock")
+                ? body.stock_status
+                : undefined,
+            date_from: asString(body.date_from),
+            date_to: asString(body.date_to),
+            expiry_from: asString(body.expiry_from),
+            expiry_to: asString(body.expiry_to),
+        };
+        const topLimit = Number.isFinite(Number(body.top_limit)) && Number(body.top_limit) > 0
+            ? Math.min(Math.floor(Number(body.top_limit)), 50)
+            : 5;
+
+        const data = await reportsService.getProductInventoryChart(salonId, filters, topLimit);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Product inventory chart fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
 // ======================================================
 // SLOW MOVING / FAST MOVING PRODUCTS REPORTS (independent report APIs)
 // ======================================================
@@ -1630,6 +1772,47 @@ async getClientRevenueReport(
     }
 },
 
+// Powers the Client Revenue report's Graph page.
+async getClientRevenueReportChart(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            search: asString(body.search),
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+            gender: asString(body.gender),
+            membership_status: asString(body.membership_status),
+            last_visit_from: asString(body.last_visit_from),
+            last_visit_to: asString(body.last_visit_to),
+        };
+        const granularity: "day" | "week" | "month" =
+            body.granularity === "week" || body.granularity === "month" ? body.granularity : "day";
+        const topLimit = Number.isFinite(Number(body.top_limit)) && Number(body.top_limit) > 0
+            ? Math.min(Math.floor(Number(body.top_limit)), 50)
+            : 5;
+
+        const data = await reportsService.getClientRevenueReportChart(salonId, filters, granularity, topLimit);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Client revenue chart fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
 // ======================================================
 // ALL CLIENTS REPORT (independent report API)
 // POST /api/report/all-clients
@@ -1678,6 +1861,88 @@ async getAllClientsReport(
             200,
             data,
             "All clients report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// BIRTHDAY REPORT (independent report API)
+// POST /api/report/birthday
+// ======================================================
+
+async getBirthdayReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const asStringArray = (value: unknown): string[] | undefined =>
+            Array.isArray(value)
+                ? value.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined;
+
+        const filters = {
+            search: asString(body.search),
+            genders: asStringArray(body.genders),
+            status: body.status === "active" ? "active" as const : body.status === "blocked" ? "blocked" as const : undefined,
+            birth_month: body.birth_month !== undefined ? Number(body.birth_month) : undefined,
+            upcoming_within_days: body.upcoming_within_days !== undefined && body.upcoming_within_days !== null && body.upcoming_within_days !== ""
+                ? Number(body.upcoming_within_days) : undefined,
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getBirthdayReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Birthday report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// ANNIVERSARY REPORT (independent report API)
+// POST /api/report/anniversary
+// ======================================================
+
+async getAnniversaryReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            search: asString(body.search),
+            status: body.status === "active" ? "active" as const : body.status === "blocked" ? "blocked" as const : undefined,
+            anniversary_month: body.anniversary_month !== undefined ? Number(body.anniversary_month) : undefined,
+            upcoming_within_days: body.upcoming_within_days !== undefined && body.upcoming_within_days !== null && body.upcoming_within_days !== ""
+                ? Number(body.upcoming_within_days) : undefined,
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getAnniversaryReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Anniversary report fetched successfully"
         );
     } catch (error) {
         next(error);
@@ -1889,6 +2154,50 @@ async getEnquiryReport(
     }
 },
 
+// Powers the Enquiry Report's Graph page.
+async getEnquiryReportChart(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const asStringArray = (value: unknown): string[] | undefined =>
+            Array.isArray(value)
+                ? value.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined;
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            staff_ids: asStringArray(body.staff_ids),
+            service_ids: asStringArray(body.service_ids),
+            statuses: asStringArray(body.statuses),
+            sources: asStringArray(body.sources),
+            follow_up_date: asString(body.follow_up_date),
+            search: asString(body.search),
+        };
+        const granularity: "day" | "week" | "month" =
+            body.granularity === "week" || body.granularity === "month" ? body.granularity : "day";
+        const topLimit = Number.isFinite(Number(body.top_limit)) && Number(body.top_limit) > 0
+            ? Math.min(Math.floor(Number(body.top_limit)), 50)
+            : 5;
+
+        const data = await reportsService.getEnquiryReportChart(salonId, filters, granularity, topLimit);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Enquiry chart fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
 // ======================================================
 // CUSTOMER FREQUENCY REPORT (independent report API)
 // POST /api/report/customer-frequency
@@ -1928,6 +2237,49 @@ async getCustomerFrequencyReport(
             200,
             data,
             "Customer frequency report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// Powers the Client Frequency report's Graph page.
+async getCustomerFrequencyReportChart(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const allowedCustomerTypes = ["most_frequent", "least_frequent", "most_spending", "least_spending", "new", "old", "lost"];
+        const customerType = asString(body.customer_type);
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            search: asString(body.search),
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+            customer_type: customerType && allowedCustomerTypes.includes(customerType)
+                ? customerType as "most_frequent" | "least_frequent" | "most_spending" | "least_spending" | "new" | "old" | "lost"
+                : undefined,
+        };
+        const granularity: "day" | "week" | "month" =
+            body.granularity === "week" || body.granularity === "month" ? body.granularity : "day";
+        const topLimit = Number.isFinite(Number(body.top_limit)) && Number(body.top_limit) > 0
+            ? Math.min(Math.floor(Number(body.top_limit)), 50)
+            : 5;
+
+        const data = await reportsService.getCustomerFrequencyReportChart(salonId, filters, granularity, topLimit);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Customer frequency chart fetched successfully"
         );
     } catch (error) {
         next(error);
@@ -2109,6 +2461,48 @@ async getServiceFrequencyReport(
     }
 },
 
+// Powers the Service Frequency report's Graph page.
+async getServiceFrequencyReportChart(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const asStringArray = (value: unknown): string[] | undefined =>
+            Array.isArray(value)
+                ? value.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined;
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            search: asString(body.search),
+            service_ids: asStringArray(body.service_ids),
+            category_ids: asStringArray(body.category_ids),
+            staff_ids: asStringArray(body.staff_ids),
+        };
+        const granularity: "day" | "week" | "month" =
+            body.granularity === "week" || body.granularity === "month" ? body.granularity : "day";
+        const topLimit = Number.isFinite(Number(body.top_limit)) && Number(body.top_limit) > 0
+            ? Math.min(Math.floor(Number(body.top_limit)), 50)
+            : 5;
+
+        const data = await reportsService.getServiceFrequencyReportChart(salonId, filters, granularity, topLimit);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Service frequency chart fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
 // ======================================================
 // MEMBERSHIP HISTORY REPORT (independent report API)
 // POST /api/report/membership-history
@@ -2193,6 +2587,48 @@ async getPaymentCollectionReport(
             200,
             data,
             "Payment collection report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// Powers the Payment Collection report's Graph page.
+async getPaymentCollectionReportChart(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const asStringArray = (value: unknown): string[] | undefined =>
+            Array.isArray(value)
+                ? value.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined;
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            search: asString(body.search),
+            staff_ids: asStringArray(body.staff_ids),
+            payment_statuses: asStringArray(body.payment_statuses),
+            payment_methods: asStringArray(body.payment_methods),
+        };
+        const granularity: "day" | "week" | "month" =
+            body.granularity === "week" || body.granularity === "month" ? body.granularity : "day";
+        const topLimit = Number.isFinite(Number(body.top_limit)) && Number(body.top_limit) > 0
+            ? Math.min(Math.floor(Number(body.top_limit)), 50)
+            : 5;
+
+        const data = await reportsService.getPaymentCollectionReportChart(salonId, filters, granularity, topLimit);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Payment collection chart fetched successfully"
         );
     } catch (error) {
         next(error);
@@ -2284,6 +2720,46 @@ async getCashManagementReport(
     }
 },
 
+// Powers the Cash Management report's Graph page.
+async getCashManagementReportChart(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const asStringArray = (value: unknown): string[] | undefined =>
+            Array.isArray(value)
+                ? value.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined;
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            search: asString(body.search),
+            statuses: asStringArray(body.statuses),
+        };
+        const granularity: "day" | "week" | "month" =
+            body.granularity === "week" || body.granularity === "month" ? body.granularity : "day";
+        const topLimit = Number.isFinite(Number(body.top_limit)) && Number(body.top_limit) > 0
+            ? Math.min(Math.floor(Number(body.top_limit)), 50)
+            : 5;
+
+        const data = await reportsService.getCashManagementReportChart(salonId, filters, granularity, topLimit);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Cash management chart fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
 // ======================================================
 // STAFF SALES REPORT (independent report API)
 // POST /api/report/staff-sales
@@ -2330,6 +2806,53 @@ async getStaffSalesReport(
             200,
             data,
             "Staff sales report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// Powers the Staff Sales report's Graph page.
+async getStaffSalesReportChart(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const asStringArray = (value: unknown): string[] | undefined =>
+            Array.isArray(value)
+                ? value.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined;
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            staff_id: asString(body.staff_id),
+            staff_ids: asStringArray(body.staff_ids),
+            search: asString(body.search),
+            payment_mode: asString(body.payment_mode),
+            payment_modes: asStringArray(body.payment_modes),
+            item_type: asString(body.item_type),
+            item_types: asStringArray(body.item_types),
+            payment_status: asString(body.payment_status),
+            payment_statuses: asStringArray(body.payment_statuses),
+        };
+        const granularity: "day" | "week" | "month" =
+            body.granularity === "week" || body.granularity === "month" ? body.granularity : "day";
+        const topLimit = Number.isFinite(Number(body.top_limit)) && Number(body.top_limit) > 0
+            ? Math.min(Math.floor(Number(body.top_limit)), 50)
+            : 5;
+
+        const data = await reportsService.getStaffSalesReportChart(salonId, filters, granularity, topLimit);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Staff sales chart fetched successfully"
         );
     } catch (error) {
         next(error);
@@ -2399,6 +2922,60 @@ async getStaffPerformanceReport(
     }
 },
 
+// Powers the Staff Performance report's Graph page.
+async getStaffPerformanceReportChart(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const asStringArray = (value: unknown): string[] | undefined =>
+            Array.isArray(value)
+                ? value.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined;
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            staff_ids: asStringArray(body.staff_ids),
+            branch_id: asString(body.branch_id),
+            payment_mode: asString(body.payment_mode),
+            payment_modes: asStringArray(body.payment_modes),
+            payment_status: asString(body.payment_status),
+            payment_statuses: asStringArray(body.payment_statuses),
+            item_type: asString(body.item_type),
+            item_types: asStringArray(body.item_types),
+            service_id: asString(body.service_id),
+            product_id: asString(body.product_id),
+            package_id: asString(body.package_id),
+            package_ids: asStringArray(body.package_ids),
+            membership_id: asString(body.membership_id),
+            membership_ids: asStringArray(body.membership_ids),
+            search: asString(body.search),
+            include_gst: body.include_gst !== false,
+        };
+        const granularity: "day" | "week" | "month" =
+            body.granularity === "week" || body.granularity === "month" ? body.granularity : "day";
+        const topLimit = Number.isFinite(Number(body.top_limit)) && Number(body.top_limit) > 0
+            ? Math.min(Math.floor(Number(body.top_limit)), 50)
+            : 5;
+
+        const data = await reportsService.getStaffPerformanceReportChart(salonId, filters, granularity, topLimit);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Staff performance chart fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
 // ======================================================
 // STAFF ITEM SALES REPORT (independent report API)
 // POST /api/report/staff-item-sales
@@ -2434,6 +3011,45 @@ async getStaffItemSalesReport(
             200,
             data,
             "Staff item sales report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// Powers the Staff Item Sales report's Graph page.
+async getStaffItemSalesReportChart(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const itemType = asString(body.item_type);
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            item_type: (["service", "product", "membership", "package"].includes(itemType ?? "")
+                ? itemType : "service") as "service" | "product" | "membership" | "package",
+            staff_id: asString(body.staff_id),
+            staff_ids: Array.isArray(body.staff_ids) ? body.staff_ids.map(String) : undefined,
+            search: asString(body.search),
+        };
+        const granularity: "day" | "week" | "month" =
+            body.granularity === "week" || body.granularity === "month" ? body.granularity : "day";
+        const topLimit = Number.isFinite(Number(body.top_limit)) && Number(body.top_limit) > 0
+            ? Math.min(Math.floor(Number(body.top_limit)), 50)
+            : 5;
+
+        const data = await reportsService.getStaffItemSalesReportChart(salonId, filters, granularity, topLimit);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Staff item sales chart fetched successfully"
         );
     } catch (error) {
         next(error);
@@ -2483,6 +3099,53 @@ async getPackageSaleReport(
             200,
             data,
             "Package sale report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// Powers the Package Sale report's Graph page.
+async getPackageSaleChart(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            search: asString(body.search),
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
+                : undefined,
+            package_name: asString(body.package_name),
+            package_names: Array.isArray(body.package_names) ? body.package_names.map(String) : undefined,
+            package_status: asString(body.package_status),
+            package_statuses: Array.isArray(body.package_statuses) ? body.package_statuses.map(String) : undefined,
+            payment_status: asString(body.payment_status),
+            payment_statuses: Array.isArray(body.payment_statuses) ? body.payment_statuses.map(String) : undefined,
+            payment_method: asString(body.payment_method),
+            payment_methods: Array.isArray(body.payment_methods) ? body.payment_methods.map(String) : undefined,
+            min_amount: body.min_amount !== undefined ? Number(body.min_amount) : undefined,
+            max_amount: body.max_amount !== undefined ? Number(body.max_amount) : undefined,
+        };
+        const granularity: "day" | "week" | "month" =
+            body.granularity === "week" || body.granularity === "month" ? body.granularity : "day";
+        const topLimit = Number.isFinite(Number(body.top_limit)) && Number(body.top_limit) > 0
+            ? Math.min(Math.floor(Number(body.top_limit)), 50)
+            : 5;
+
+        const data = await reportsService.getPackageSaleChart(salonId, filters, granularity, topLimit);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Package sale chart fetched successfully"
         );
     } catch (error) {
         next(error);
@@ -2577,6 +3240,53 @@ async getMemberSaleReport(
             200,
             data,
             "Member sale report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// Powers the Membership Sale report's Graph page.
+async getMemberSaleChart(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            search: asString(body.search),
+            status: asString(body.status) as any,
+            statuses: Array.isArray(body.statuses) ? body.statuses.map(String) : undefined,
+            membership_id: asString(body.membership_id),
+            membership_ids: Array.isArray(body.membership_ids) ? body.membership_ids.map(String) : undefined,
+            staff_ids: Array.isArray(body.staff_ids)
+                ? body.staff_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+            pricing_type: asString(body.pricing_type),
+            pricing_types: Array.isArray(body.pricing_types) ? body.pricing_types.map(String) : undefined,
+            price_min: body.price_min !== undefined && body.price_min !== null && body.price_min !== ""
+                ? Number(body.price_min) : undefined,
+            price_max: body.price_max !== undefined && body.price_max !== null && body.price_max !== ""
+                ? Number(body.price_max) : undefined,
+        };
+        const granularity: "day" | "week" | "month" =
+            body.granularity === "week" || body.granularity === "month" ? body.granularity : "day";
+        const topLimit = Number.isFinite(Number(body.top_limit)) && Number(body.top_limit) > 0
+            ? Math.min(Math.floor(Number(body.top_limit)), 50)
+            : 5;
+
+        const data = await reportsService.getMemberSaleChart(salonId, filters, granularity, topLimit);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Member sale chart fetched successfully"
         );
     } catch (error) {
         next(error);

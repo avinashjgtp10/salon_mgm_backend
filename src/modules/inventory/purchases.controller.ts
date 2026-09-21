@@ -74,6 +74,32 @@ export const purchasesController = {
         }
     },
 
+    async chart(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const salonId = getSalonId(req);
+            const filters = {
+                search: (req.query.search as string) || undefined,
+                supplier_id: (req.query.supplier_id as string) || undefined,
+                date_from: (req.query.date_from as string) || undefined,
+                date_to: (req.query.date_to as string) || undefined,
+            };
+            const granularity: "day" | "week" | "month" =
+                req.query.granularity === "week" || req.query.granularity === "month" ? req.query.granularity : "day";
+            const topLimitRaw = Number(req.query.top_limit);
+            const topLimit = Number.isFinite(topLimitRaw) && topLimitRaw > 0 ? Math.min(Math.floor(topLimitRaw), 50) : 5;
+
+            const [daily, top_suppliers, top_products] = await Promise.all([
+                purchasesRepository.chartTrend(filters, salonId, granularity),
+                purchasesRepository.chartTopSuppliers(filters, salonId, topLimit),
+                purchasesRepository.chartTopProducts(filters, salonId, topLimit),
+            ]);
+
+            sendSuccess(res, 200, { daily, top_suppliers, top_products });
+        } catch (err) {
+            next(err);
+        }
+    },
+
     async getById(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             const salonId = getSalonId(req);

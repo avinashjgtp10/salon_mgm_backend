@@ -17,6 +17,9 @@ import { productInventoryController } from "./product-inventory.controller";
 import { purchasesController } from "./purchases.controller";
 import { supplierPaymentsController } from "./supplier-payments.controller";
 import { ordersController } from "./orders.controller";
+import { orderReceiptsController } from "./order-receipts.controller";
+import { supplierProductsController } from "./supplier-products.controller";
+import { productSuppliersController } from "./product-suppliers.controller";
 import { productAuditController } from "./product-audit.controller";
 import { stockLedgerController } from "./stock-ledger.controller";
 import {
@@ -28,6 +31,10 @@ import {
 import { validateCreatePurchase, validateListPurchases } from "./purchases.validator";
 import { validateCreateSupplierPayment } from "./supplier-payments.validator";
 import { validateCreateOrder, validateReceiveOrder, validateCorrectReceivedQty } from "./orders.validator";
+import { validateSaveReceiptDraft, validateConfirmReceipt } from "./order-receipts.validator";
+import { validateResolveSupplierProduct } from "./supplier-products.validator";
+import { validateAddProductSupplier, validateUpdateProductSupplier } from "./product-suppliers.validator";
+import { supplierCatalogUpload } from "./supplier-products.upload";
 import {
     validateCreateProductAudit,
     validateAddAuditItems,
@@ -230,6 +237,36 @@ router.get(
     supplierPaymentsController.list
 );
 
+// ─── Supplier Products Catalog (Excel/CSV import + Suggested Products on
+// New Order) — reuses the existing view_suppliers/edit_suppliers keys, no
+// new permission key. See supplier-products.import.service.ts for the
+// two-stage matching this powers.
+router.get(
+    "/suppliers/:id/products",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewSuppliers,
+    supplierProductsController.list
+);
+
+router.post(
+    "/suppliers/:id/products/import",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    editSuppliers,
+    supplierCatalogUpload.single("file"),
+    supplierProductsController.import
+);
+
+router.patch(
+    "/suppliers/:id/products/:catalogId/resolve",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    editSuppliers,
+    validateResolveSupplierProduct,
+    supplierProductsController.resolve
+);
+
 // ─── Product Inventory (retail stock) ─────────────────────────────────────────
 // Registered ahead of the generic /stock-movements routes so these more
 // specific paths are matched first.
@@ -268,6 +305,52 @@ router.post(
     productInventoryController.stockIn
 );
 
+// Drawer aggregate: current stock, on-order, last purchase price, suppliers.
+router.get(
+    "/product-inventory/:id/detail",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewProductInventory,
+    productInventoryController.detail
+);
+
+// ─── Product Suppliers (multi-supplier pricing per product) — additive
+// alongside products.supplier_id/supply_price, which stay the "preferred/
+// default supplier" for every existing reader. No new permission key.
+router.get(
+    "/product-inventory/:id/suppliers",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewProductInventory,
+    productSuppliersController.list
+);
+
+router.post(
+    "/product-inventory/:id/suppliers",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    adjustProductStock,
+    validateAddProductSupplier,
+    productSuppliersController.add
+);
+
+router.patch(
+    "/product-inventory/:id/suppliers/:mappingId",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    adjustProductStock,
+    validateUpdateProductSupplier,
+    productSuppliersController.update
+);
+
+router.delete(
+    "/product-inventory/:id/suppliers/:mappingId",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    adjustProductStock,
+    productSuppliersController.remove
+);
+
 // ─── Purchases (supplier deliveries — multi-product, adds stock) ─────────────
 // Registered ahead of /stock-movements for the same "more specific first"
 // reason as the block above. A Purchase adds stock exactly like Add Stock
@@ -290,6 +373,16 @@ router.get(
     viewProductInventoryOrPurchaseHistoryReport,
     validateListPurchases,
     purchasesController.list
+);
+
+// Registered ahead of /purchases/:id — Express matches route registration
+// order, and "chart" would otherwise be swallowed as an :id param.
+router.get(
+    "/product-inventory/purchases/chart",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    viewProductInventoryOrPurchaseHistoryReport,
+    purchasesController.chart
 );
 
 router.get(
@@ -366,6 +459,37 @@ router.post(
     receiveOrder,
     validateCorrectReceivedQty,
     ordersController.correctReceivedQty
+);
+
+// ─── Order Receiving (draft -> confirm) — replaces the single-shot Receive
+// above with a session the clerk can save as a draft (zero stock effect) and
+// only Confirm Receiving moves stock. See order-receipts.repository.ts.
+// Same receive_order permission — no new key, per this repo's rule against
+// drive-by permission additions.
+router.get(
+    "/orders/:id/receipts/draft",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    receiveOrder,
+    orderReceiptsController.getOrCreateDraft
+);
+
+router.post(
+    "/orders/:id/receipts/:receiptId/items",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    receiveOrder,
+    validateSaveReceiptDraft,
+    orderReceiptsController.saveDraft
+);
+
+router.post(
+    "/orders/:id/receipts/:receiptId/confirm",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    receiveOrder,
+    validateConfirmReceipt,
+    orderReceiptsController.confirm
 );
 
 // Cancel and Delete share one "Delete/Cancel Order" permission per the

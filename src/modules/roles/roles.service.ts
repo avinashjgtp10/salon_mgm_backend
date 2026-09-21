@@ -53,7 +53,10 @@ async function assertNoEscalation(actor: ActorContext, keysBeingGrantedTrue: str
 // permission false) — deliberately NOT seeded from DEFAULT_STAFF_PERMS. Once
 // a staff member is touched through the new system at all, they should be on
 // an explicit-grant model, not silently inheriting the old legacy defaults.
-async function ensureDefaultRole(salonId: string, name: string): Promise<string> {
+// Exported for sales.import.ts's auto-created staff (Bulk Historical Data
+// Import) — same "give them the salon's real default Staff role, not a bare
+// role_id NULL" need as the override-assignment path below.
+export async function ensureDefaultRole(salonId: string, name: string): Promise<string> {
     const existing = await rolesRepository.findRoleByName(salonId, name);
     if (existing) return existing.id;
     const created = await rolesRepository.createRole(salonId, name, `Default ${name} role`);

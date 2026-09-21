@@ -167,11 +167,25 @@ export function renderDesign(doc: Dict, values: Record<string, string> = {}): Re
 }
 
 export interface SheetOptions {
-  /** Coupons per A4 page. Drives the grid, not the card size. */
+  /** Coupons per A4 page. Drives the grid, not the card size. Ignored when
+   *  sizeMm is present — see cellsForSize() below. */
   perPage?: 1 | 2 | 4 | 6 | 8 | 10 | 12;
+  /** Real physical cell size to print at — e.g. the Print Coupon modal's own
+   *  Small/Medium/Large/Custom (see couponPrintSheet.ts on the frontend,
+   *  same concept, re-derived here since this module has no shared package
+   *  with it). When set, this DRIVES the grid (how many of this exact size
+   *  fit on A4), the inverse of perPage above (which fixes the grid and lets
+   *  the cell size fall out of it). The two are mutually exclusive; sizeMm
+   *  wins if both are somehow sent. */
+  sizeMm?: { width: number; height: number };
   cropMarks?: boolean;
   /** mm of bleed on each edge. 0 disables the bleed box entirely. */
   bleedMm?: number;
+  /** Total copies wanted, spanning as many A4 pages as it takes. Omitted =
+   *  exactly one page's worth (however many fit — see cellsForSize()), the
+   *  original single-page behaviour. A value bigger than one page's worth is
+   *  what makes this a MULTI-page download, not a bigger single page. */
+  quantity?: number;
 }
 
 const A4_W_MM = 210, A4_H_MM = 297, PAGE_PAD_MM = 10, GAP_MM = 4;
@@ -190,22 +204,73 @@ export function sheetGrid(perPage: number): { cols: number; rows: number } {
   }
 }
 
+/** How many cells of a REAL physical size fit on one A4 page — the inverse
+ *  of sheetGrid(): there the grid shape is fixed and the cell size falls
+ *  out of it; here the cell size is fixed (whatever the user picked) and the
+ *  grid shape falls out of how many actually fit, floor-rounded so a partial
+ *  cell is never drawn. Same formula as the frontend's couponsPerSheet()
+ *  (couponPrintSheet.ts) — kept in sync deliberately, since disagreeing here
+ *  would mean the print modal and this designer export report a different
+ *  "N per page" for the identical physical size. */
+export function cellsForSize(widthMm: number, heightMm: number): { cols: number; rows: number; perPage: number } {
+  const usableW = A4_W_MM - PAGE_PAD_MM * 2;
+  const usableH = A4_H_MM - PAGE_PAD_MM * 2;
+  const cols = Math.max(1, Math.floor((usableW + GAP_MM) / (widthMm + GAP_MM)));
+  const rows = Math.max(1, Math.floor((usableH + GAP_MM) / (heightMm + GAP_MM)));
+  return { cols, rows, perPage: cols * rows };
+}
+
+/** Cell dimensions in mm for whichever sheet mode is active — sizeMm's own
+ *  values directly if given (the whole point: print AT that real size, not a
+ *  size derived from slicing the page), otherwise A4 divided evenly by
+ *  sheetGrid(perPage) as before. Single source both renderSheet() and
+ *  buildDocument() read from, so the grid CSS and the per-cell scale factor
+ *  can never disagree about how big a cell actually is. */
+function resolveCellMm(opts: SheetOptions): { cols: number; rows: number; cellW: number; cellH: number } {
+  if (opts.sizeMm) {
+    const { cols, rows } = cellsForSize(opts.sizeMm.width, opts.sizeMm.height);
+    return { cols, rows, cellW: opts.sizeMm.width, cellH: opts.sizeMm.height };
+  }
+  const { cols, rows } = sheetGrid(opts.perPage ?? 4);
+  return {
+    cols, rows,
+    cellW: (A4_W_MM - PAGE_PAD_MM * 2 - GAP_MM * (cols - 1)) / cols,
+    cellH: (A4_H_MM - PAGE_PAD_MM * 2 - GAP_MM * (rows - 1)) / rows,
+  };
+}
+
 /**
- * A4 sheet of N copies.
+ * One or more A4 pages of copies, `quantity` total (default: exactly one
+ * page's worth).
  *
  * Each cell is a fixed physical size derived from the page, and the artboard is
  * SCALED to fit it — dividing the page without scaling would clip a 384px-wide
  * design into a 52mm cell at 12-up.
+ *
+ * Multi-page is just repeating the same single-page block N times and
+ * marking every page but the last with break-after:page — Puppeteer's
+ * page.pdf({format:'A4'}) paginates a tall HTML document exactly the way a
+ * browser's own print-to-PDF does, so there's no separate "generate page 2"
+ * call or loop over pdf() itself; one render, one PDF, however many pages
+ * that document naturally contains.
  */
 export function renderSheet(doc: Dict, values: Record<string, string>, opts: SheetOptions = {}): RenderResult {
-  const perPage = opts.perPage ?? 4;
-  const { cols, rows } = sheetGrid(perPage);
+  const { cols, rows, cellW, cellH } = resolveCellMm(opts);
+  const perPage = cols * rows;
+  // Never below perPage — a quantity smaller than one page's worth still
+  // fills that one page's grid to keep the existing single-page look
+  // (a lone coupon centered alone on an otherwise-empty A4 sheet), same as
+  // before this option existed.
+  const quantity = Math.max(perPage, Math.floor(opts.quantity ?? perPage));
+  const totalPages = Math.ceil(quantity / perPage);
   const canvas = (doc.canvas ?? {}) as Dict;
   const dw = num(canvas.width, 384), dh = num(canvas.height, 240);
 
-  const cellW = (A4_W_MM - PAGE_PAD_MM * 2 - GAP_MM * (cols - 1)) / cols;
-  const cellH = (A4_H_MM - PAGE_PAD_MM * 2 - GAP_MM * (rows - 1)) / rows;
-  // mm → px at 96dpi, then the scale that makes the artboard fit its cell.
+  // mm → px at 96dpi, then the scale that makes the artboard fit its cell —
+  // Math.min (not the average, not width-only) so the design is never
+  // stretched or overflows on whichever axis is more constraining; the design
+  // keeps its own aspect ratio and any leftover space in the cell is blank
+  // rather than cropped.
   const cellWpx = (cellW / 25.4) * 96, cellHpx = (cellH / 25.4) * 96;
   const scale = Math.min(cellWpx / dw, cellHpx / dh);
 
@@ -213,13 +278,20 @@ export function renderSheet(doc: Dict, values: Record<string, string>, opts: She
   const marks = opts.cropMarks
     ? `<span class="cm cm--tl"></span><span class="cm cm--tr"></span><span class="cm cm--bl"></span><span class="cm cm--br"></span>`
     : "";
+  const cellHtml = `<div class="cell">${marks}<div class="fit" style="transform:scale(${scale.toFixed(4)})">${one.html}</div></div>`;
 
-  const cells = Array.from({ length: perPage }, () =>
-    `<div class="cell">${marks}<div class="fit" style="transform:scale(${scale.toFixed(4)})">${one.html}</div></div>`,
-  ).join("");
+  // Last page only gets however many cells are actually left over — an
+  // empty trailing cell (e.g. quantity=5 at 4-per-page) would otherwise
+  // render as a blank card rather than just a shorter final page.
+  const pages = Array.from({ length: totalPages }, (_, pageIndex) => {
+    const remaining = quantity - pageIndex * perPage;
+    const onThisPage = Math.min(perPage, remaining);
+    const cells = Array.from({ length: onThisPage }, () => cellHtml).join("");
+    const isLast = pageIndex === totalPages - 1;
+    return `<div class="sheet${isLast ? "" : " sheet--break"}">${cells}</div>`;
+  }).join("");
 
-  const html = `<div class="sheet">${cells}</div>`;
-  return { html, missing: one.missing };
+  return { html: pages, missing: one.missing };
 }
 
 export interface DocumentOptions {
@@ -232,9 +304,7 @@ export interface DocumentOptions {
 
 export function buildDocument(inner: string, opts: DocumentOptions = {}): string {
   const sheet = opts.sheet;
-  const { cols, rows } = sheetGrid(sheet?.perPage ?? 4);
-  const cellW = (A4_W_MM - PAGE_PAD_MM * 2 - GAP_MM * (cols - 1)) / cols;
-  const cellH = (A4_H_MM - PAGE_PAD_MM * 2 - GAP_MM * (rows - 1)) / rows;
+  const { cols, rows, cellW, cellH } = sheet ? resolveCellMm(sheet) : { cols: 2, rows: 2, cellW: 0, cellH: 0 };
 
   const pageCss = sheet
     ? `@page{size:A4;margin:0}`
@@ -248,6 +318,14 @@ export function buildDocument(inner: string, opts: DocumentOptions = {}): string
   .sheet{width:${A4_W_MM}mm;height:${A4_H_MM}mm;padding:${PAGE_PAD_MM}mm;
          display:grid;grid-template-columns:repeat(${cols},${cellW}mm);
          grid-template-rows:repeat(${rows},${cellH}mm);gap:${GAP_MM}mm;justify-content:center}
+  /* Multi-page: every page but the last carries this, so Puppeteer's
+     page.pdf({format:'A4'}) (and a real browser's print-to-PDF, identical
+     engine) starts a fresh physical page right after it instead of letting
+     two consecutive 297mm-tall .sheet blocks run together and mis-paginate
+     by a fraction of a millimetre. break-after is the modern property;
+     page-break-after is the same rule for Chrome/Chromium versions that
+     still only understand the old name. */
+  .sheet--break{break-after:page;page-break-after:always}
   .cell{position:relative;width:${cellW}mm;height:${cellH}mm;overflow:hidden;
         display:flex;align-items:center;justify-content:center;break-inside:avoid}
   .fit{transform-origin:center center}

@@ -1,6 +1,7 @@
 import { AppError } from "../../middleware/error.middleware";
 import { salonsRepository } from "../salons/salons.repository";
 import { salonsService } from "../salons/salons.service";
+import { bookingsRepository } from "../bookings/bookings.repository";
 import { digitalMenuRepository } from "./digital-menu.repository";
 import {
   DigitalMenuWithCounts,
@@ -111,6 +112,16 @@ export const digitalMenuService = {
 
     const salonWithSlug = await salonsService.ensureSlug(salon);
 
+    // Online booking is opt-in (DECISION-OB-001), so a slug alone doesn't mean
+    // /book/<slug> will open — an unpublished salon renders "Booking
+    // unavailable". Only advertise the booking page when the customer can
+    // actually reach it; the menu is the fallback otherwise.
+    const slug: string | null = salonWithSlug.slug ?? null;
+    const state = slug ? await bookingsRepository.findSalonStateBySlug(slug) : null;
+    const bookingSlug = slug && state?.is_active === true && state?.is_published === true
+      ? slug
+      : null;
+
     return {
       status: "active",
       name: menu.name,
@@ -123,7 +134,7 @@ export const digitalMenuService = {
       },
       currency: salon.currency,
       categories: Array.from(byCategory.values()),
-      booking_slug: salonWithSlug.slug,
+      booking_slug: bookingSlug,
     };
   },
 };

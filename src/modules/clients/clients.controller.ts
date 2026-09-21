@@ -10,7 +10,7 @@ import { sendSuccess } from "../utils/response.util";
 import { uploadAvatarToS3 } from "../utils/avatar.upload";
 import { clientsService } from "./clients.service";
 import { clientsRepository } from "./clients.repository";
-import { ClientsListQuery, CreateClientBody, UpdateClientBody, CampaignFilterParams } from "./clients.types";
+import { ClientsListQuery, CreateClientBody, UpdateClientBody, CampaignFilterParams, PackageMembershipFilter } from "./clients.types";
 import pool from "../../config/database";
 
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string } };
@@ -50,6 +50,15 @@ const parseMoney = (v: unknown): number | undefined => {
     return Number.isFinite(n) && n >= 0 ? n : undefined;
 };
 
+const PACKAGE_MEMBERSHIP_VALUES = new Set(["has_package", "has_membership", "has_both", "has_none"]);
+// Unrecognized/absent value -> undefined (filter skipped), same permissive
+// pattern as the other query-string filters above, rather than rejecting the
+// whole request over one bad param.
+const parsePackageMembershipFilter = (v: unknown): PackageMembershipFilter | undefined => {
+    const s = String(v ?? "").trim();
+    return PACKAGE_MEMBERSHIP_VALUES.has(s) ? (s as PackageMembershipFilter) : undefined;
+};
+
 export const clientsController = {
     // GET /api/v1/clients
     async list(req: AuthRequest, res: Response, next: NextFunction) {
@@ -85,6 +94,8 @@ export const clientsController = {
                 gender: req.query.gender ? (String(req.query.gender) as any) : undefined,
                 min_sales: parseMoney(req.query.min_sales),
                 max_sales: parseMoney(req.query.max_sales),
+                package_membership: parsePackageMembershipFilter(req.query.package_membership),
+                fields: req.query.fields === "list" ? "list" : undefined,
             };
             const raw = await clientsService.list(q, salonId);
             const currentPage = page ?? Math.max(1, Math.floor(resolvedOffset / resolvedLimit) + 1);
@@ -296,6 +307,7 @@ export const clientsController = {
                 gender: req.query.gender ? (String(req.query.gender) as any) : undefined,
                 min_sales: parseMoney(req.query.min_sales),
                 max_sales: parseMoney(req.query.max_sales),
+                package_membership: parsePackageMembershipFilter(req.query.package_membership),
             };
             const data = await clientsService.list(q, salonId);
             const rows = data.items.map((c: any) => ({

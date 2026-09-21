@@ -68,6 +68,12 @@ router.post(
     reportsController.getProductRetailReport
 );
 
+router.post(
+    "/product-retail/chart",
+    ...baseGuard, requireAnyPermission(["view_report_product_sale", "view_report_product_sale_inventory"]),
+    reportsController.getProductRetailReportChart
+);
+
 // ======================================================
 // SERVICE SALE REPORT (independent report API)
 // Reads sales/sale_items directly — never calls the Appointment API/service.
@@ -77,6 +83,12 @@ router.post(
     "/service-sale",
     ...baseGuard, viewReport("view_report_service_sale"),
     reportsController.getServiceSaleReport
+);
+
+router.post(
+    "/service-sale/chart",
+    ...baseGuard, viewReport("view_report_service_sale"),
+    reportsController.getServiceSaleReportChart
 );
 
 // ======================================================
@@ -112,6 +124,12 @@ router.post(
     "/product-inventory",
     ...baseGuard, viewReport("view_report_product_inventory"),
     reportsController.getProductInventoryReport
+);
+
+router.post(
+    "/product-inventory/chart",
+    ...baseGuard, viewReport("view_report_product_inventory"),
+    reportsController.getProductInventoryChart
 );
 
 // ======================================================
@@ -210,6 +228,12 @@ router.post(
     reportsController.getClientRevenueReport
 );
 
+router.post(
+    "/client-revenue/chart",
+    ...baseGuard, viewReport("view_report_client_revenue"),
+    reportsController.getClientRevenueReportChart
+);
+
 // ======================================================
 // ALL CLIENTS REPORT (independent report API)
 // Reads clients directly — never calls the Appointment API/service. Pure
@@ -220,6 +244,28 @@ router.post(
     "/all-clients",
     ...baseGuard, viewReport("view_report_all_clients"),
     reportsController.getAllClientsReport
+);
+
+// ======================================================
+// BIRTHDAY REPORT (independent report API)
+// Reads clients directly — never calls the Appointment API/service.
+// ======================================================
+
+router.post(
+    "/birthday",
+    ...baseGuard, viewReport("view_report_birthday"),
+    reportsController.getBirthdayReport
+);
+
+// ======================================================
+// ANNIVERSARY REPORT (independent report API)
+// Reads clients directly — never calls the Appointment API/service.
+// ======================================================
+
+router.post(
+    "/anniversary",
+    ...baseGuard, viewReport("view_report_anniversary"),
+    reportsController.getAnniversaryReport
 );
 
 // ======================================================
@@ -282,6 +328,12 @@ router.post(
     reportsController.getEnquiryReport
 );
 
+router.post(
+    "/enquiries/chart",
+    ...baseGuard, viewReport("view_report_enquiry_report"),
+    reportsController.getEnquiryReportChart
+);
+
 // ======================================================
 // CUSTOMER FREQUENCY REPORT (independent report API)
 // Reads clients/sales directly — never calls the Appointment API/service.
@@ -291,6 +343,12 @@ router.post(
     "/customer-frequency",
     ...baseGuard, viewReport("view_report_customer_frequency"),
     reportsController.getCustomerFrequencyReport
+);
+
+router.post(
+    "/customer-frequency/chart",
+    ...baseGuard, viewReport("view_report_customer_frequency"),
+    reportsController.getCustomerFrequencyReportChart
 );
 
 // ======================================================
@@ -330,6 +388,12 @@ router.post(
     reportsController.getServiceFrequencyReport
 );
 
+router.post(
+    "/service-frequency/chart",
+    ...baseGuard, viewReport("view_report_service_frequency"),
+    reportsController.getServiceFrequencyReportChart
+);
+
 // ======================================================
 // MEMBERSHIP HISTORY REPORT (independent report API)
 // One row per membership benefit redemption, read from
@@ -355,6 +419,12 @@ router.post(
     reportsController.getPaymentCollectionReport
 );
 
+router.post(
+    "/payment-collection/chart",
+    ...baseGuard, viewReport("view_report_payment_collection"),
+    reportsController.getPaymentCollectionReportChart
+);
+
 // ======================================================
 // PENDING PAYMENT REPORT (independent report API)
 // Reads appointments + payments directly (never sales — an unpaid bill has
@@ -378,6 +448,12 @@ router.post(
     "/cash-management",
     ...baseGuard, viewReport("view_report_cash_management"),
     reportsController.getCashManagementReport
+);
+
+router.post(
+    "/cash-management/chart",
+    ...baseGuard, viewReport("view_report_cash_management"),
+    reportsController.getCashManagementReportChart
 );
 
 // ======================================================
@@ -419,6 +495,12 @@ router.post(
     reportsController.getStaffSalesReport
 );
 
+router.post(
+    "/staff-sales/chart",
+    ...baseGuard, viewReport("view_report_staff_sales"),
+    reportsController.getStaffSalesReportChart
+);
+
 // ======================================================
 // STAFF PERFORMANCE REPORT (independent report API)
 // Reads sales/sale_items directly — never calls the Appointment API/service.
@@ -430,6 +512,12 @@ router.post(
     reportsController.getStaffPerformanceReport
 );
 
+router.post(
+    "/staff-performance/chart",
+    ...baseGuard, viewReport("view_report_staff_performance"),
+    reportsController.getStaffPerformanceReportChart
+);
+
 // ======================================================
 // STAFF ITEM SALES REPORT (independent report API)
 // Reads sale_items directly — never calls the Appointment API/service.
@@ -439,6 +527,12 @@ router.post(
     "/staff-item-sales",
     ...baseGuard, viewReport("view_report_staff_item_sales"),
     reportsController.getStaffItemSalesReport
+);
+
+router.post(
+    "/staff-item-sales/chart",
+    ...baseGuard, viewReport("view_report_staff_item_sales"),
+    reportsController.getStaffItemSalesReportChart
 );
 
 // ======================================================
@@ -476,6 +570,12 @@ router.post(
     reportsController.getPackageSaleReport
 );
 
+router.post(
+    "/package-sale/chart",
+    ...baseGuard, viewReport("view_report_package_sale"),
+    reportsController.getPackageSaleChart
+);
+
 // ======================================================
 // PACKAGE HISTORY REPORT (independent report API)
 // Reads client_package_session_history directly — never calls the
@@ -497,6 +597,12 @@ router.post(
     "/member-sale",
     ...baseGuard, viewReport("view_report_member_sale"),
     reportsController.getMemberSaleReport
+);
+
+router.post(
+    "/member-sale/chart",
+    ...baseGuard, viewReport("view_report_member_sale"),
+    reportsController.getMemberSaleChart
 );
 
 // ======================================================

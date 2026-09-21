@@ -457,6 +457,29 @@ async function tryNewEngineRule(params: {
         periodMetric = priorMetric + (rule.condition_metric === "count" ? 1 : revenue);
 
         if (periodMetric < Number(rule.condition_target)) {
+            if (rule.type === "tiered_target") {
+                // Below the monthly target — pay the lower "before target" rate
+                // (rule.rate) instead of nothing, unlike milestone's all-or-nothing gate.
+                const beforeRate = Number(rule.rate);
+                const commissionAmount = parseFloat((revenue * beforeRate / 100).toFixed(2));
+                if (commissionAmount > 0) {
+                    inserts.push(
+                        commissionEarnedRepository.insert({
+                            salon_id: salonId, staff_id, sale_id: saleId,
+                            appointment_id: appointmentId ?? null,
+                            category, revenue_amount: parseFloat(revenue.toFixed(2)),
+                            commission_kind: "percentage",
+                            commission_rate: beforeRate,
+                            commission_amount: commissionAmount,
+                            rule_id: rule.id,
+                        })
+                    );
+                }
+                logger.info("commissionCalculationService: tiered_target below monthly target", {
+                    staff_id, saleId, category, ruleId: rule.id, beforeRate, periodMetric, target: rule.condition_target,
+                });
+                return true;
+            }
             logger.info("commissionCalculationService: below condition threshold", {
                 staff_id, category, ruleId: rule.id, periodMetric, target: rule.condition_target,
             });
@@ -490,6 +513,30 @@ async function tryNewEngineRule(params: {
         );
         logger.info("commissionCalculationService: milestone bonus awarded", {
             staff_id, saleId, category, ruleId: rule.id, reward: rate, periodMetric,
+        });
+        return true;
+    }
+
+    if (rule.type === "tiered_target") {
+        // Reached here only once monthly cumulative revenue has hit the target
+        // (the gate above returns early below it) — pay the higher rate.
+        const afterRate = Number(rule.rate_after_target ?? rule.rate);
+        const commissionAmount = parseFloat((revenue * afterRate / 100).toFixed(2));
+        if (commissionAmount > 0) {
+            inserts.push(
+                commissionEarnedRepository.insert({
+                    salon_id: salonId, staff_id, sale_id: saleId,
+                    appointment_id: appointmentId ?? null,
+                    category, revenue_amount: parseFloat(revenue.toFixed(2)),
+                    commission_kind: "percentage",
+                    commission_rate: afterRate,
+                    commission_amount: commissionAmount,
+                    rule_id: rule.id,
+                })
+            );
+        }
+        logger.info("commissionCalculationService: tiered_target at/above monthly target", {
+            staff_id, saleId, category, ruleId: rule.id, afterRate, periodMetric,
         });
         return true;
     }

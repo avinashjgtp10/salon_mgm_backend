@@ -1,6 +1,6 @@
 import pool from "../../config/database";
 import { productInventoryRepository, ProductInventoryRow } from "./product-inventory.repository";
-import { CreatePurchaseDTO, ListPurchaseFilters, Purchase, PurchaseItem } from "./purchases.types";
+import { CreatePurchaseDTO, ListPurchaseFilters, Purchase, PurchaseItem, PurchaseChartFilters } from "./purchases.types";
 import { inventoryAlertsService } from "./inventory-alerts.service";
 
 // Schema (purchases, purchase_items, salons.next_purchase_seq) is NOT
@@ -87,15 +87,19 @@ export const purchasesRepository = {
             await client.query("BEGIN");
 
             // Purchases (and the products they add stock to) aren't scoped to
-            // a branch, but stock_ledger.branch_id is NOT NULL — resolve the
-            // salon's main branch (falling back to any branch) once, the same
-            // way the ledger's own manual "Add Stock" flow requires a branch
-            // to be picked.
-            const { rows: branchRows } = await client.query(
-                `SELECT id FROM branches WHERE salon_id = $1 ORDER BY is_main DESC, created_at ASC LIMIT 1`,
-                [salonId],
-            );
-            const branchId: string | null = branchRows[0]?.id ?? null;
+            // a branch, but stock_ledger.branch_id is NOT NULL — use the
+            // caller's explicit branch_id when given (Confirm Receiving picks
+            // one), else fall back to resolving the salon's main branch (or
+            // any branch), the same way the ledger's own manual "Add Stock"
+            // flow requires a branch to be picked.
+            let branchId: string | null = data.branch_id ?? null;
+            if (!branchId) {
+                const { rows: branchRows } = await client.query(
+                    `SELECT id FROM branches WHERE salon_id = $1 ORDER BY is_main DESC, created_at ASC LIMIT 1`,
+                    [salonId],
+                );
+                branchId = branchRows[0]?.id ?? null;
+            }
 
             // Per-salon sequential purchase numbers — identical retry pattern to
             // sales.repository.ts's invoice numbers (see next_invoice_seq).
@@ -257,6 +261,10 @@ export const purchasesRepository = {
             conditions.push(`pu.supplier_id = $${idx++}`);
             values.push(filters.supplier_id);
         }
+        if (filters.product_id) {
+            conditions.push(`EXISTS (SELECT 1 FROM purchase_items pi WHERE pi.purchase_id = pu.id AND pi.product_id = $${idx++})`);
+            values.push(filters.product_id);
+        }
         if (filters.date_from) {
             conditions.push(`pu.purchase_date >= $${idx++}`);
             values.push(filters.date_from);
@@ -344,6 +352,115 @@ export const purchasesRepository = {
             if (linkedIds.has(p.id)) amountPaid += applied;
         }
         return { amount_paid: amountPaid };
+    },
+
+    // Powers the Purchase History report's Graph page. Same filter set as
+    // list() above, minus pagination.
+    _buildChartWhere(filters: PurchaseChartFilters, salonId: string): { where: string; values: unknown[]; nextIndex: number } {
+        const conditions: string[] = [`pu.salon_id = $1`];
+        const values: unknown[] = [salonId];
+        let idx = 2;
+
+        if (filters.search) {
+            conditions.push(`(pu.purchase_number ILIKE $${idx} OR sup.name ILIKE $${idx})`);
+            values.push(`%${filters.search}%`);
+            idx++;
+        }
+        if (filters.supplier_id) {
+            conditions.push(`pu.supplier_id = $${idx++}`);
+            values.push(filters.supplier_id);
+        }
+        if (filters.date_from) {
+            conditions.push(`pu.purchase_date >= $${idx++}`);
+            values.push(filters.date_from);
+        }
+        if (filters.date_to) {
+            conditions.push(`pu.purchase_date <= $${idx++}`);
+            values.push(filters.date_to);
+        }
+
+        return { where: `WHERE ${conditions.join(" AND ")}`, values, nextIndex: idx };
+    },
+
+    async chartTrend(
+        filters: PurchaseChartFilters,
+        salonId: string,
+        granularity: "day" | "week" | "month" = "day",
+    ): Promise<{ date: string; count: number; amount: number }[]> {
+        const { where, values } = this._buildChartWhere(filters, salonId);
+        const dayExpr = granularity === "month"
+            ? `TO_CHAR(date_trunc('month', pu.purchase_date), 'YYYY-MM-DD')`
+            : granularity === "week"
+            ? `TO_CHAR(date_trunc('week', pu.purchase_date), 'YYYY-MM-DD')`
+            : `TO_CHAR(pu.purchase_date, 'YYYY-MM-DD')`;
+
+        const { rows } = await pool.query(
+            `SELECT ${dayExpr} AS day, COUNT(*)::int AS count, COALESCE(SUM(pu.total_amount), 0) AS amount
+               FROM purchases pu
+               LEFT JOIN suppliers sup ON sup.id = pu.supplier_id
+               ${where}
+              GROUP BY day
+              ORDER BY day ASC`,
+            values,
+        );
+        return rows.map((r: any) => ({
+            date: String(r.day),
+            count: Number(r.count ?? 0),
+            amount: Math.round(Number(r.amount ?? 0)),
+        }));
+    },
+
+    async chartTopSuppliers(
+        filters: PurchaseChartFilters,
+        salonId: string,
+        limit: number = 5,
+    ): Promise<{ supplier_id: string | null; supplier_name: string; amount: number }[]> {
+        const { where, values, nextIndex } = this._buildChartWhere(filters, salonId);
+
+        const { rows } = await pool.query(
+            `SELECT pu.supplier_id, COALESCE(sup.name, 'Unknown') AS supplier_name,
+                    COALESCE(SUM(pu.total_amount), 0) AS amount
+               FROM purchases pu
+               LEFT JOIN suppliers sup ON sup.id = pu.supplier_id
+               ${where}
+              GROUP BY pu.supplier_id, sup.name
+              ORDER BY amount DESC
+              LIMIT $${nextIndex}`,
+            [...values, limit],
+        );
+        return rows.map((r: any) => ({
+            supplier_id: r.supplier_id ? String(r.supplier_id) : null,
+            supplier_name: r.supplier_name,
+            amount: Math.round(Number(r.amount ?? 0)),
+        }));
+    },
+
+    async chartTopProducts(
+        filters: PurchaseChartFilters,
+        salonId: string,
+        limit: number = 5,
+    ): Promise<{ product_name: string; quantity: number; amount: number }[]> {
+        const { where, values, nextIndex } = this._buildChartWhere(filters, salonId);
+
+        const { rows } = await pool.query(
+            `SELECT p.name AS product_name,
+                    COALESCE(SUM(pi.quantity), 0) AS quantity,
+                    COALESCE(SUM(pi.total_price), 0) AS amount
+               FROM purchase_items pi
+               JOIN purchases pu ON pu.id = pi.purchase_id
+               LEFT JOIN suppliers sup ON sup.id = pu.supplier_id
+               JOIN products p ON p.id = pi.product_id
+               ${where}
+              GROUP BY p.name
+              ORDER BY amount DESC
+              LIMIT $${nextIndex}`,
+            [...values, limit],
+        );
+        return rows.map((r: any) => ({
+            product_name: String(r.product_name ?? "—"),
+            quantity: Number(r.quantity ?? 0),
+            amount: Math.round(Number(r.amount ?? 0)),
+        }));
     },
 
     async getById(id: string, salonId: string): Promise<Purchase | null> {

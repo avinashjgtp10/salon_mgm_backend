@@ -119,10 +119,17 @@ export const waPurchaseTemplatesService = {
             const metaError = err?.response?.data?.error;
             const code = metaError?.code ?? "—";
             const subcode = metaError?.error_subcode ?? "—";
-            const msg = metaError?.error_user_msg || metaError?.message || err?.message || "Unknown error";
+            // Meta's Graph API error body isn't always JSON-shaped the way
+            // metaError expects (e.g. a raw HTML error page, or a genuine
+            // network-level failure with no response at all) — fall back to
+            // the HTTP status/statusText instead of a bare "Unknown error" so
+            // there's still something actionable without needing server logs.
+            const msg = metaError?.error_user_msg || metaError?.message || err?.message
+                || (err?.response?.status ? `HTTP ${err.response.status} ${err.response.statusText ?? ""}`.trim() : "Unknown error");
             logger.error(`[WA-TRACE] template SUBMIT FAILED ${eventType} — Meta [${code}/${subcode}] ${msg}`, {
                 fbtrace_id: metaError?.fbtrace_id,
                 error_data: metaError?.error_data,
+                responseData: metaError ? undefined : err?.response?.data,
                 bodyText: bodyText.slice(0, 500),
             });
             // Surface Meta's actual rejection reason to the caller instead of
