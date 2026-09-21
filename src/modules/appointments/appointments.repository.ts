@@ -552,6 +552,18 @@ export const appointmentsRepository = {
                 await client.query(`DELETE FROM client_packages WHERE id = ANY($1::uuid[])`, [pkgIds]);
             }
 
+            // Same reasoning for a membership sold on this bill —
+            // membership_usage_log cascades on its own (ON DELETE CASCADE on
+            // client_membership_id), but client_memberships.appointment_id
+            // itself is only ON DELETE SET NULL, not cascade, so without this
+            // it would survive the appointment delete as an orphan (nulled
+            // appointment_id, still showing on the Membership Sale Report).
+            await client.query(
+                `DELETE FROM client_memberships
+                 WHERE appointment_id = $1 OR ($2::uuid IS NOT NULL AND sale_id = $2)`,
+                [id, saleId]
+            );
+
             await client.query(
                 `DELETE FROM commission_earned WHERE appointment_id = $1 OR ($2::uuid IS NOT NULL AND sale_id = $2)`,
                 [id, saleId]
