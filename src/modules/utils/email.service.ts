@@ -1007,6 +1007,58 @@ export const emailService = {
     });
   },
 
+  // Sent both the moment super admin deactivates a salon
+  // (super-admin.service.ts::setSalonStatus) and daily at 8am IST as a
+  // reminder for any salon still deactivated (salon-deactivation-reminder.scheduler.ts).
+  async sendSalonDeactivatedEmail(params: { to: string; salonName: string; ownerName?: string | null }) {
+    const { to, salonName, ownerName } = params;
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to,
+      subject: `Your SalonOx account has been deactivated`,
+      html: `
+        <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
+        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
+            <tr><td align="center">
+              <table width="560" cellpadding="0" cellspacing="0"
+                style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.07);max-width:560px;width:100%;">
+                <tr>
+                  <td style="background:#dc2626;padding:28px 36px;">
+                    <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.8;">${escapeHtml(salonName)}</p>
+                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">Account Deactivated</h1>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:32px 36px;">
+                    <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
+                      ${ownerName ? `Hi ${escapeHtml(ownerName)},` : "Hi,"} your account is deactivated. Kindly contact the Salonox team.
+                    </p>
+                    <table width="100%" cellpadding="0" cellspacing="0"
+                      style="background:#fef2f2;border-radius:10px;border:1px solid #fecaca;">
+                      <tr>
+                        <td style="padding:20px 24px;">
+                          <p style="margin:0;color:#991b1b;font-size:14px;"><strong>Salon:</strong> ${escapeHtml(salonName)}</p>
+                        </td>
+                      </tr>
+                    </table>
+                    <p style="margin:20px 0 0;color:#6b7280;font-size:13px;line-height:1.6;">
+                      You won't be able to sign in until your account is reactivated. Please reach out to the Salonox team for assistance.
+                    </p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="background:#f9fafb;padding:16px 36px;border-top:1px solid #e5e7eb;">
+                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">© ${new Date().getFullYear()} SalonOx. Automated notification.</p>
+                  </td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
+        </body></html>`,
+    });
+  },
+
   async sendStaffInvitation(params: {
     to: string;
     token: string;

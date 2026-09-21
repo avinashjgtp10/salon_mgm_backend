@@ -176,9 +176,22 @@ export const authService = {
       throw new AppError(401, "Invalid credentials", "INVALID_CREDENTIALS");
     }
 
-    await authRepository.updateLastLogin(user.id);
-
     const salonId = await authRepository.findSalonIdByUserId(user.id);
+
+    // Mirrors the user.is_active check above, but for the salon itself —
+    // Super Admin's "Deactivate" action on a salon (super-admin.repository.ts
+    // setSalonStatus) only ever flipped salons.is_active; nothing previously
+    // consulted that flag at login, so a deactivated salon's owner/staff
+    // could still sign in and use the app normally.
+    if (salonId) {
+      const salon = await salonsRepository.findById(salonId);
+      if (salon && salon.is_active === false) {
+        logger.warn("[authService.login] Salon is inactive", { email, userId: user.id, salonId });
+        throw new AppError(403, "Your account is deactivated. Kindly contact the Salonox team.", "SALON_INACTIVE");
+      }
+    }
+
+    await authRepository.updateLastLogin(user.id);
     // Informational only — see findStaffRoleNameByUserId's own comment for
     // why this must never replace user.role in the token or response below.
     const staffRoleName = await authRepository.findStaffRoleNameByUserId(user.id);
