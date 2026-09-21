@@ -261,6 +261,10 @@ export const purchasesRepository = {
             conditions.push(`pu.supplier_id = $${idx++}`);
             values.push(filters.supplier_id);
         }
+        if (filters.product_id) {
+            conditions.push(`EXISTS (SELECT 1 FROM purchase_items pi WHERE pi.purchase_id = pu.id AND pi.product_id = $${idx++})`);
+            values.push(filters.product_id);
+        }
         if (filters.date_from) {
             conditions.push(`pu.purchase_date >= $${idx++}`);
             values.push(filters.date_from);

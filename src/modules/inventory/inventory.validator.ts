@@ -53,6 +53,9 @@ export const validateCreateSupplier = (
         if (!isOptionalBoolean(b.same_as_physical)) {
             throw new AppError(400, "same_as_physical must be a boolean", "VALIDATION_ERROR");
         }
+        if (!isOptionalBoolean(b.is_active)) {
+            throw new AppError(400, "is_active must be a boolean", "VALIDATION_ERROR");
+        }
 
         return next();
     } catch (err) {
@@ -90,6 +93,9 @@ export const validateUpdateSupplier = (
 
         if (!isOptionalBoolean(b.same_as_physical)) {
             throw new AppError(400, "same_as_physical must be a boolean", "VALIDATION_ERROR");
+        }
+        if (!isOptionalBoolean(b.is_active)) {
+            throw new AppError(400, "is_active must be a boolean", "VALIDATION_ERROR");
         }
 
         return next();
