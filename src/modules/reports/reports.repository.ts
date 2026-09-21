@@ -11037,8 +11037,22 @@ _buildStaffPerformanceWhere(
 // once per staff who happened to touch it — that would inflate total money
 // collected across the report). commission comes straight from
 // commission_earned, already computed per staff per sale at checkout time.
-_STAFF_PERFORMANCE_AGG(where: string, includeGst: boolean = true): string {
+//
+// staffIds/staffIdsParamIndex: the `where` clause's own staff_ids filter
+// (built by _buildStaffPerformanceWhere) only decides which SALES are
+// included — via EXISTS, a sale stays in if ANY of its line items belongs to
+// a selected staff. Without a second restriction here, item_agg/sale_agg/
+// comm_agg then aggregate EVERY staff who touched those sales, so a staff
+// member who merely shares an invoice with a selected staff (e.g. a
+// multi-staff checkout) showed up in the report/charts too, with their own
+// full revenue — not filtered out as the staff picker implies. These three
+// extra clauses restrict the aggregation itself to the selected staff.
+_STAFF_PERFORMANCE_AGG(where: string, includeGst: boolean = true, staffIds?: string[], staffIdsParamIndex?: number): string {
   const itemRevenue = includeGst ? "(si.total_price + COALESCE(si.tax_amount, 0))" : "si.total_price";
+  const hasStaffFilter = !!(staffIds && staffIds.length > 0 && staffIdsParamIndex);
+  const itemStaffFilter = hasStaffFilter ? `AND COALESCE(si.staff_id, fs.resolved_staff_id) = ANY($${staffIdsParamIndex}::uuid[])` : "";
+  const saleStaffFilter = hasStaffFilter ? `WHERE resolved_staff_id = ANY($${staffIdsParamIndex}::uuid[])` : "";
+  const commStaffFilter = hasStaffFilter ? `AND ce.staff_id = ANY($${staffIdsParamIndex}::uuid[])` : "";
   return `
     WITH filtered_sales AS (
       SELECT
@@ -11073,6 +11087,7 @@ _STAFF_PERFORMANCE_AGG(where: string, includeGst: boolean = true): string {
         COALESCE(SUM(${itemRevenue}) FILTER (WHERE si.item_type = 'membership'), 0) AS membership_revenue
       FROM sale_items si
       JOIN filtered_sales fs ON fs.id = si.sale_id
+      WHERE true ${itemStaffFilter}
       GROUP BY COALESCE(si.staff_id, fs.resolved_staff_id)
     ),
     sale_agg AS (
@@ -11081,12 +11096,13 @@ _STAFF_PERFORMANCE_AGG(where: string, includeGst: boolean = true): string {
         COALESCE(SUM(paid_amount), 0) AS collected,
         COALESCE(SUM(due_amount), 0) AS due
       FROM filtered_sales
+      ${saleStaffFilter}
       GROUP BY resolved_staff_id
     ),
     comm_agg AS (
       SELECT ce.staff_id, COALESCE(SUM(ce.commission_amount), 0) AS commission
       FROM commission_earned ce
-      WHERE ce.sale_id IN (SELECT id FROM filtered_sales)
+      WHERE ce.sale_id IN (SELECT id FROM filtered_sales) ${commStaffFilter}
       GROUP BY ce.staff_id
     ),
     combined AS (
@@ -11129,10 +11145,12 @@ async getStaffPerformanceReportStats(
     include_gst?: boolean;
   }
 ): Promise<StaffPerformanceReportStats> {
-  const { where, values } = this._buildStaffPerformanceWhere(salonId, filters);
+  const { where, values, nextIndex } = this._buildStaffPerformanceWhere(salonId, filters);
+  const hasStaffFilter = !!(filters.staff_ids && filters.staff_ids.length > 0);
+  const queryValues = hasStaffFilter ? [...values, filters.staff_ids] : values;
 
   const query = `
-    ${this._STAFF_PERFORMANCE_AGG(where, filters.include_gst !== false)}
+    ${this._STAFF_PERFORMANCE_AGG(where, filters.include_gst !== false, filters.staff_ids, hasStaffFilter ? nextIndex : undefined)}
     SELECT
       COUNT(*)::int AS total_staff,
       COALESCE(SUM(total_revenue), 0) AS total_revenue,
@@ -11144,7 +11162,7 @@ async getStaffPerformanceReportStats(
     FROM combined
   `;
 
-  const { rows } = await safeQuery(() => pool.query(query, values));
+  const { rows } = await safeQuery(() => pool.query(query, queryValues));
   const r = rows[0] ?? {};
   const totalStaff = Number(r.total_staff ?? 0);
   const totalRevenue = Number(r.total_revenue ?? 0);
@@ -11178,7 +11196,8 @@ async getStaffPerformanceReport(
   pagination: { total: number; page: number; limit: number; total_pages: number };
 }> {
   const { where, values, nextIndex } = this._buildStaffPerformanceWhere(salonId, filters);
-  let idx = nextIndex;
+  const hasStaffFilter = !!(filters.staff_ids && filters.staff_ids.length > 0);
+  let idx = hasStaffFilter ? nextIndex + 1 : nextIndex;
 
   const page = Math.max(1, Number(filters.page ?? 1));
   const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
@@ -11186,16 +11205,17 @@ async getStaffPerformanceReport(
   const offset = limit ? (page - 1) * limit : 0;
   const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
   const limitValues = limit ? [limit, offset] : [];
+  const staffIdsValues = hasStaffFilter ? [filters.staff_ids] : [];
 
   const query = `
-    ${this._STAFF_PERFORMANCE_AGG(where, filters.include_gst !== false)}
+    ${this._STAFF_PERFORMANCE_AGG(where, filters.include_gst !== false, filters.staff_ids, hasStaffFilter ? nextIndex : undefined)}
     SELECT *, COUNT(*) OVER() AS total_count
     FROM combined
     ORDER BY total_revenue DESC
     ${limitClause}
   `;
 
-  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...staffIdsValues, ...limitValues]));
   const total = rows.length ? Number(rows[0].total_count) : 0;
   const items: StaffPerformanceReportRow[] = rows.map((row: any) => {
     const invoiceCount = Number(row.invoice_count ?? 0);
@@ -11312,7 +11332,7 @@ async getStaffPerformanceChartTrend(
   filters: StaffPerformanceChartFilters,
   granularity: "day" | "week" | "month" = "day"
 ): Promise<{ date: string; revenue: number; commission: number }[]> {
-  const { where, values } = this._buildStaffPerformanceWhere(salonId, filters);
+  const { where, values, nextIndex } = this._buildStaffPerformanceWhere(salonId, filters);
   const includeGst = filters.include_gst !== false;
   const itemRevenue = includeGst ? "(si.total_price + COALESCE(si.tax_amount, 0))" : "si.total_price";
   const dayExpr = granularity === "month"
@@ -11320,10 +11340,22 @@ async getStaffPerformanceChartTrend(
     : granularity === "week"
     ? `TO_CHAR(date_trunc('week', fs.created_at::date), 'YYYY-MM-DD')`
     : `TO_CHAR(fs.created_at::date, 'YYYY-MM-DD')`;
+  // Same reasoning as _STAFF_PERFORMANCE_AGG: `where`'s own staff_ids filter
+  // only keeps sales with ANY matching item, so a co-staffed sale's OTHER
+  // staff's items/commission must be excluded here too, not just the sale
+  // itself included.
+  const hasStaffFilter = !!(filters.staff_ids && filters.staff_ids.length > 0);
+  const staffIdsValues = hasStaffFilter ? [filters.staff_ids] : [];
+  const itemStaffFilter = hasStaffFilter ? `AND COALESCE(si.staff_id, fs.resolved_staff_id) = ANY($${nextIndex}::uuid[])` : "";
+  const commStaffFilter = hasStaffFilter ? `AND ce.staff_id = ANY($${nextIndex}::uuid[])` : "";
 
   const query = `
     WITH filtered_sales AS (
-      SELECT s.id, s.created_at
+      SELECT s.id, s.created_at,
+        COALESCE(
+          s.staff_id,
+          (SELECT si.staff_id FROM sale_items si WHERE si.sale_id = s.id AND si.staff_id IS NOT NULL LIMIT 1)
+        ) AS resolved_staff_id
       FROM sales s
       LEFT JOIN clients c ON s.client_id = c.id
       ${this._PAYMENT_LATERAL}
@@ -11334,12 +11366,13 @@ async getStaffPerformanceChartTrend(
       SELECT fs.id, fs.created_at, COALESCE(SUM(${itemRevenue}), 0) AS revenue
       FROM filtered_sales fs
       JOIN sale_items si ON si.sale_id = fs.id
+      WHERE true ${itemStaffFilter}
       GROUP BY fs.id, fs.created_at
     ),
     commission_per_sale AS (
       SELECT fs.id, COALESCE(SUM(ce.commission_amount), 0) AS commission
       FROM filtered_sales fs
-      LEFT JOIN commission_earned ce ON ce.sale_id = fs.id
+      LEFT JOIN commission_earned ce ON ce.sale_id = fs.id ${commStaffFilter}
       GROUP BY fs.id
     )
     SELECT
@@ -11353,7 +11386,7 @@ async getStaffPerformanceChartTrend(
     ORDER BY day ASC
   `;
 
-  const { rows } = await safeQuery(() => pool.query(query, values));
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...staffIdsValues]));
   return rows.map((r: any) => ({
     date: String(r.day),
     revenue: Math.round(Number(r.revenue ?? 0)),
@@ -11365,13 +11398,20 @@ async getStaffPerformanceChartByItemType(
   salonId: string,
   filters: StaffPerformanceChartFilters
 ): Promise<{ item_type: string; revenue: number }[]> {
-  const { where, values } = this._buildStaffPerformanceWhere(salonId, filters);
+  const { where, values, nextIndex } = this._buildStaffPerformanceWhere(salonId, filters);
   const includeGst = filters.include_gst !== false;
   const itemRevenue = includeGst ? "(si.total_price + COALESCE(si.tax_amount, 0))" : "si.total_price";
+  const hasStaffFilter = !!(filters.staff_ids && filters.staff_ids.length > 0);
+  const staffIdsValues = hasStaffFilter ? [filters.staff_ids] : [];
+  const itemStaffFilter = hasStaffFilter ? `AND COALESCE(si.staff_id, fs.resolved_staff_id) = ANY($${nextIndex}::uuid[])` : "";
 
   const query = `
     WITH filtered_sales AS (
-      SELECT s.id
+      SELECT s.id,
+        COALESCE(
+          s.staff_id,
+          (SELECT si.staff_id FROM sale_items si WHERE si.sale_id = s.id AND si.staff_id IS NOT NULL LIMIT 1)
+        ) AS resolved_staff_id
       FROM sales s
       LEFT JOIN clients c ON s.client_id = c.id
       ${this._PAYMENT_LATERAL}
@@ -11381,11 +11421,12 @@ async getStaffPerformanceChartByItemType(
     SELECT si.item_type, COALESCE(SUM(${itemRevenue}), 0) AS revenue
     FROM sale_items si
     JOIN filtered_sales fs ON fs.id = si.sale_id
+    WHERE true ${itemStaffFilter}
     GROUP BY si.item_type
     ORDER BY revenue DESC
   `;
 
-  const { rows } = await safeQuery(() => pool.query(query, values));
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...staffIdsValues]));
   return rows.map((r: any) => ({
     item_type: String(r.item_type),
     revenue: Math.round(Number(r.revenue ?? 0)),
@@ -11397,18 +11438,20 @@ async getStaffPerformanceChartTopStaff(
   filters: StaffPerformanceChartFilters,
   limit: number = 5
 ): Promise<{ staff_id: string; staff_name: string; revenue: number }[]> {
-  const { where, values } = this._buildStaffPerformanceWhere(salonId, filters);
+  const { where, values, nextIndex } = this._buildStaffPerformanceWhere(salonId, filters);
   const includeGst = filters.include_gst !== false;
+  const hasStaffFilter = !!(filters.staff_ids && filters.staff_ids.length > 0);
+  const staffIdsValues = hasStaffFilter ? [filters.staff_ids] : [];
 
   const query = `
-    ${this._STAFF_PERFORMANCE_AGG(where, includeGst)}
+    ${this._STAFF_PERFORMANCE_AGG(where, includeGst, filters.staff_ids, hasStaffFilter ? nextIndex : undefined)}
     SELECT staff_id, staff_name, total_revenue AS revenue
     FROM combined
     ORDER BY total_revenue DESC
-    LIMIT $${values.length + 1}
+    LIMIT $${values.length + staffIdsValues.length + 1}
   `;
 
-  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...staffIdsValues, limit]));
   return rows.map((r: any) => ({
     staff_id: String(r.staff_id),
     staff_name: r.staff_name ?? "—",
