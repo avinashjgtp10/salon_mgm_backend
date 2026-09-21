@@ -228,6 +228,7 @@ const DEFAULT_STAFF_PERMS: Record<string, boolean> = {
     view_digital_menu: true,
     create_digital_menu: false,
     edit_digital_menu: false,
+    delete_digital_menu: false,
     manage_digital_menu_qr: false,
     enable_disable_digital_menu: false,
     view_products: true,
