@@ -55,8 +55,11 @@ export const branchOwnerService = {
     return branchOwnerRepository.getRevenueTrend(branchOwnerId, period);
   },
 
+  // No limit here (unlike the dashboard's 10-row preview above) — the
+  // Payments page's summary cards must total every matching payment, and a
+  // fixed cap silently truncated older ones out of that total.
   async getPayments(branchOwnerId: string, status?: string) {
-    return branchOwnerRepository.getRecentPayments(branchOwnerId, 200, status);
+    return branchOwnerRepository.getRecentPayments(branchOwnerId, undefined, status);
   },
 
   async listSalonProducts(branchOwnerId: string, salonId: string, search?: string) {

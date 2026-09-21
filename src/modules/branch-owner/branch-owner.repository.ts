@@ -385,31 +385,56 @@ export const branchOwnerRepository = {
     };
   },
 
-  async getRecentPayments(branchOwnerId: string, limit = 10, status?: string) {
+  // limit is optional: the dashboard's "recent payments" preview passes a
+  // small number, but the Payments page (limit omitted) needs every matching
+  // row so its summary cards total correctly instead of silently truncating.
+  //
+  // branch_owner_salons is checked via EXISTS rather than JOINed directly —
+  // a JOIN would multiply a payment's row once per matching assignment row,
+  // double-counting it if that salon was ever assigned to this branch owner
+  // more than once. Same reasoning for the sales lookup below: it's a
+  // LATERAL picking at most one row per payment (the appointment's latest
+  // completed sale) instead of a LEFT JOIN, which would multiply the payment
+  // row for every completed sale on that appointment.
+  async getRecentPayments(branchOwnerId: string, limit?: number, status?: string) {
     const values: any[] = [branchOwnerId];
     let statusClause = "";
     if (status) {
       values.push(status);
       statusClause = `AND p.status = $${values.length}`;
     }
-    values.push(limit);
+    let limitClause = "";
+    if (limit) {
+      values.push(limit);
+      limitClause = `LIMIT $${values.length}`;
+    }
     const { rows } = await pool.query(`
       SELECT
-        p.id, p.amount, p.status, p.payment_method, p.created_at,
+        p.id,
+        COALESCE(p.paid_amount, p.net_amount, p.amount, 0)::numeric AS amount,
+        p.status, p.payment_method, p.created_at,
+        COALESCE(p.paid_at, p.created_at)            AS payment_date,
         s.id                                        AS salon_id,
         COALESCE(s.business_name, s.slug, 'Unnamed') AS salon_name,
         sa.invoice_number                            AS invoice_number,
         COALESCE(c.full_name, 'Walk-in Client')      AS client_name,
         c.phone_number                               AS client_phone
       FROM payments p
-      JOIN branch_owner_salons bos ON bos.salon_id = p.salon_id
       JOIN salons s ON s.id = p.salon_id
-      LEFT JOIN sales sa ON sa.appointment_id = p.appointment_id AND sa.status = 'completed'
+      LEFT JOIN LATERAL (
+        SELECT invoice_number FROM sales
+        WHERE sales.appointment_id = p.appointment_id AND sales.status = 'completed'
+        ORDER BY sales.created_at DESC
+        LIMIT 1
+      ) sa ON TRUE
       LEFT JOIN appointments a ON a.id = p.appointment_id
       LEFT JOIN clients c ON c.id = a.client_id
-      WHERE bos.branch_owner_id = $1 ${statusClause}
-      ORDER BY p.created_at DESC
-      LIMIT $${values.length}
+      WHERE EXISTS (
+        SELECT 1 FROM branch_owner_salons bos
+        WHERE bos.branch_owner_id = $1 AND bos.salon_id = p.salon_id
+      ) ${statusClause}
+      ORDER BY COALESCE(p.paid_at, p.created_at) DESC
+      ${limitClause}
     `, values);
     return rows;
   },
