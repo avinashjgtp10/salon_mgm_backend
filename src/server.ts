@@ -15,6 +15,7 @@ import { startBotQuestionsCleanupScheduler, stopBotQuestionsCleanupScheduler } f
 import { startExpiryWriteOffScheduler, stopExpiryWriteOffScheduler } from './modules/inventory/expiry-write-off.scheduler'
 import { startInventoryAlertsScheduler, stopInventoryAlertsScheduler } from './modules/inventory/inventory-alerts.scheduler'
 import { startPosPaymentsScheduler, stopPosPaymentsScheduler } from './modules/pos-payments/pos-payments.scheduler'
+import { startSalonDeactivationReminderScheduler, stopSalonDeactivationReminderScheduler } from './modules/super-admin/salon-deactivation-reminder.scheduler'
 
 const PORT = config.port
 
@@ -67,6 +68,9 @@ httpServer.listen(PORT, () => {
   // Confirm/expire in-flight Payment Machine requests — the only durable
   // confirmation path for providers with no webhook (Paytm today).
   startPosPaymentsScheduler()
+
+  // Daily 8am IST reminder email for every currently-deactivated salon
+  startSalonDeactivationReminderScheduler()
 })
 
 // Graceful shutdown
@@ -81,6 +85,7 @@ process.on('SIGTERM', () => {
   stopExpiryWriteOffScheduler()
   stopInventoryAlertsScheduler()
   stopPosPaymentsScheduler()
+  stopSalonDeactivationReminderScheduler()
   httpServer.close(() => {
     logger.info('HTTP server closed')
     db.end()

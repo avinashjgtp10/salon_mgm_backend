@@ -318,7 +318,7 @@ export const salonsRepository = {
 
     async findOwnerEmailById(id: string): Promise<string | null> {
         const { rows } = await pool.query(
-            `SELECT COALESCE(s.email, u.email) AS email
+            `SELECT COALESCE(NULLIF(s.email, ''), u.email) AS email
              FROM salons s
              LEFT JOIN users u ON s.owner_id = u.id
              WHERE s.id = $1`,
