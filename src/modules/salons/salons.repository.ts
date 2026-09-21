@@ -53,6 +53,26 @@ export async function purgeSalon(client: PoolClient, salonId: string): Promise<{
     await client.query(`DELETE FROM ${table} WHERE salon_id = $1`, [salonId]);
   }
 
+  // roles.salon_id / permission_audit_log.salon_id both reference salons(id)
+  // with NO ON DELETE CASCADE (confirmed in create_permissions_system_tables.sql
+  // — unlike the true no-FK tables in SALON_ORPHAN_RISK_TABLES above, these
+  // DO have a real FK, it's just not a cascading one), so leaving them for
+  // the final DELETE FROM salons below throws a hard FK violation
+  // (roles_salon_id_fkey) instead of silently orphaning anything. staff.role_id
+  // -> roles(id) is the same story — also no cascade — so it has to be
+  // nulled out before roles can be deleted (staff rows themselves still
+  // exist here; they're only removed by the salons cascade further down).
+  // role_permissions/staff_permission_overrides both cascade automatically
+  // once their parent role/staff row goes, so nothing extra needed for those.
+  for (const table of ["roles", "permission_audit_log"]) {
+    const { rows: exists } = await client.query(`SELECT to_regclass($1) AS reg`, [table]);
+    if (!exists[0]?.reg) continue;
+    if (table === "roles") {
+      await client.query(`UPDATE staff SET role_id = NULL WHERE salon_id = $1`, [salonId]);
+    }
+    await client.query(`DELETE FROM ${table} WHERE salon_id = $1`, [salonId]);
+  }
+
   // Cascades everything else with a direct salon_id FK: staff, clients,
   // services, categories, salon_settings, bookings, packages, products,
   // payments, and more.
