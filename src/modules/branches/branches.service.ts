@@ -30,12 +30,20 @@ export const branchesService = {
         if (branches.length === 0) {
             try {
                 logger.info("Auto-creating Main Branch for salon", { salonId });
+                // address_line1/city/state/pincode are NOT NULL columns, but an
+                // empty string satisfies that just fine and — unlike the literal
+                // "Default City"/"000000" placeholders this used to write — gets
+                // correctly filtered out (.filter(Boolean)) everywhere a branch
+                // address is rendered (receipts, WhatsApp templates, etc.),
+                // exactly like the salon's own blank address fields already do.
+                // Previously these fake-looking values were printed verbatim on
+                // customer-facing documents until someone filled in real ones.
                 const mainBranch = await branchesRepository.create(salonId, {
                     name: "Main Branch",
-                    address_line1: "Main Location",
-                    city: "Default City",
-                    state: "Default State",
-                    pincode: "000000",
+                    address_line1: "",
+                    city: "",
+                    state: "",
+                    pincode: "",
                     phone: "",
                     is_main: true,
                 });

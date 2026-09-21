@@ -1393,6 +1393,17 @@ export const paymentsService = {
                 paidAmount: Number(data.paid_amount) || 0,
                 dueAmount: Number(data.due_amount) || 0,
                 couponCode: data.coupon_code ?? null,
+                // Redemption/tax figures already computed for this exact
+                // payment — see receipt-send.helper.ts's ReceiptContextParams
+                // comment for why these are threaded through instead of
+                // re-derived.
+                taxBreakdown: data.tax_breakdown ?? null,
+                membershipWalletUsed: Number(data.membership_wallet_used) || 0,
+                membershipDiscountUsed: Number(data.membership_discount_used) || 0,
+                ewalletUsed: Number(data.ewallet_used) || 0,
+                rewardPointsValue: Number(data.reward_points_value) || 0,
+                referralCreditUsed: Number(data.referral_credit_used) || 0,
+                packageCoveredAmount: Number(data.package_used) || 0,
               });
             })().catch(() => {});
           }

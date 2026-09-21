@@ -34,10 +34,20 @@ export type AutomationEventType =
   | 'ewallet_used'
   | 'referral_credit_used'
   | 'reward_points_used'
+  // Salon-owner-editable "Upcoming" lifecycle-date events — same per-salon
+  // template model as PURCHASE_EVENTS above (moved out of the legacy
+  // global/admin-only model; see PURCHASE_EVENTS' own comment).
+  | 'birthday_wishes'
+  | 'anniversary_wishes'
+  // Owner-facing operational alerts — sent to the SALON OWNER's own WhatsApp
+  // number (clientId is always null for these), not to a client. Still a
+  // real Meta-approved template like everything else in PURCHASE_EVENTS,
+  // since the owner may not be inside Meta's 24h customer-service window.
+  | 'cash_counter_opened'
+  | 'cash_counter_closed'
   // Legacy global (admin-managed, salon_id IS NULL) events, untouched by the
   // trigger-template rework.
   | 'pending_payment_reminder'
-  | 'birthday_wishes'
   | 'new_year_campaign'
   | 'we_miss_you_30d'
   | 'we_miss_you_60d'
@@ -68,6 +78,16 @@ export const PURCHASE_EVENTS: AutomationEventType[] = [
   'ewallet_used',
   'referral_credit_used',
   'reward_points_used',
+  // birthday_wishes used to be a single global admin-managed template (one
+  // wording for every salon on the platform) — moved here so each salon
+  // edits and submits their own copy to Meta, same as everything else above.
+  // A salon that hasn't yet submitted+had their own copy approved simply
+  // won't send birthday_wishes until they do (findTemplate() below no longer
+  // falls back to a global row for a PURCHASE_EVENTS member).
+  'birthday_wishes',
+  'anniversary_wishes',
+  'cash_counter_opened',
+  'cash_counter_closed',
 ]
 
 // PURCHASE_EVENTS members that skip Meta template submission entirely (sent
@@ -84,6 +104,7 @@ export const TRANSACTIONAL_EVENTS: AutomationEventType[] = [
 // Marketing events — controlled by client.whatsapp_marketing
 export const MARKETING_EVENTS: AutomationEventType[] = [
   'birthday_wishes',
+  'anniversary_wishes',
   'new_year_campaign',
   'we_miss_you_30d',
   'we_miss_you_60d',
@@ -238,6 +259,7 @@ export const SCHEDULABLE_GROUP_A: AutomationEventType[] = [
   'package_appointment_reminder_24h',
   'service_reminder_24h',
   'birthday_wishes',
+  'anniversary_wishes',
   'new_year_campaign',
 ]
 
