@@ -665,7 +665,9 @@ export const superAdminRepository = {
         COALESCE(u.login_count, 0)                               AS login_count,
         CASE WHEN u.is_active THEN 'active' ELSE 'inactive' END AS status,
         COALESCE(s.business_name, s.slug)                        AS salon_name,
-        s.id                                                      AS salon_id
+        s.id                                                      AS salon_id,
+        (SELECT COUNT(*)::int FROM branch_owner_salons bos
+          WHERE bos.branch_owner_id = u.id)                       AS branch_count
       FROM users u
       LEFT JOIN salons s ON s.owner_id = u.id
       WHERE u.role != 'super_admin'
