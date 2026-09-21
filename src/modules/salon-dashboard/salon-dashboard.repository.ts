@@ -347,10 +347,28 @@ export const salonDashboardRepository = {
     // bounded while covering every period branch that reads from it.
     const eventsCte = `
       WITH sales_rows AS (
-        -- ROUND — see getSummary's sales_rows for why.
-        SELECT s.created_at AS event_at, ROUND(s.total_amount) AS amount
+        -- Revenue here means money actually RECEIVED, not the bill's Grand
+        -- Total — same convention as getSummary's sales_rows (Today's/Total
+        -- Revenue stat cards) and Sales Summary's received_amount: for an
+        -- appointment-linked sale, sum whatever payments were actually
+        -- collected against it, falling back to the sale's own total_amount
+        -- only for a walk-in/no-appointment sale with no payments row to
+        -- read from. This chart used to sum s.total_amount unconditionally,
+        -- so a bill left partially paid showed its full quoted price here
+        -- instead of what was actually received — disagreeing with the
+        -- stat cards right above it on the same dashboard.
+        SELECT s.created_at AS event_at,
+          CASE
+            WHEN s.appointment_id IS NOT NULL THEN COALESCE(pay.paid_from_payments, 0)
+            ELSE ROUND(s.total_amount)
+          END AS amount
         FROM sales s
         LEFT JOIN appointments a ON a.id = s.appointment_id
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(SUM(p.paid_amount) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS paid_from_payments
+          FROM payments p
+          WHERE p.appointment_id = s.appointment_id
+        ) pay ON s.appointment_id IS NOT NULL
         WHERE s.salon_id = $1
           AND s.status = 'completed'
           AND s.created_at >= NOW() - INTERVAL '13 months'
@@ -460,10 +478,21 @@ export const salonDashboardRepository = {
 
     const { rows } = await pool.query<{ id: string; name: string; role: string; revenue: string }>(
       `WITH sales_rows AS (
-         -- ROUND — see getSummary's sales_rows for why.
-         SELECT sl.staff_id, sl.created_at AS event_at, ROUND(sl.total_amount) AS amount
+         -- Received amount, not the bill's Grand Total — same convention as
+         -- getSummary/getRevenueChart's sales_rows (see getRevenueChart's
+         -- comment for why).
+         SELECT sl.staff_id, sl.created_at AS event_at,
+           CASE
+             WHEN sl.appointment_id IS NOT NULL THEN COALESCE(pay.paid_from_payments, 0)
+             ELSE ROUND(sl.total_amount)
+           END AS amount
          FROM sales sl
          LEFT JOIN appointments a ON a.id = sl.appointment_id
+         LEFT JOIN LATERAL (
+           SELECT COALESCE(SUM(p.paid_amount) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS paid_from_payments
+           FROM payments p
+           WHERE p.appointment_id = sl.appointment_id
+         ) pay ON sl.appointment_id IS NOT NULL
          WHERE sl.salon_id = $1
            AND sl.status = 'completed'
            AND (a.id IS NULL OR (a.status IN ('paid', 'partial') AND a.deleted_at IS NULL))
@@ -538,10 +567,21 @@ export const salonDashboardRepository = {
          GROUP BY staff_id
        ),
        sales_rows AS (
-         -- ROUND — see getSummary's sales_rows for why.
-         SELECT sl.staff_id, ROUND(sl.total_amount) AS amount
+         -- Received amount, not the bill's Grand Total — same convention as
+         -- getSummary/getRevenueChart's sales_rows (see getRevenueChart's
+         -- comment for why).
+         SELECT sl.staff_id,
+           CASE
+             WHEN sl.appointment_id IS NOT NULL THEN COALESCE(pay.paid_from_payments, 0)
+             ELSE ROUND(sl.total_amount)
+           END AS amount
          FROM sales sl
          LEFT JOIN appointments a ON a.id = sl.appointment_id
+         LEFT JOIN LATERAL (
+           SELECT COALESCE(SUM(p.paid_amount) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS paid_from_payments
+           FROM payments p
+           WHERE p.appointment_id = sl.appointment_id
+         ) pay ON sl.appointment_id IS NOT NULL
          WHERE sl.salon_id = $1
            AND date_trunc('month', sl.created_at) = date_trunc('month', NOW())
            AND sl.status = 'completed'
