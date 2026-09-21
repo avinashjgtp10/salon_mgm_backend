@@ -528,10 +528,14 @@ export const branchOwnerRepository = {
     return rows[0];
   },
 
-  async listTransfers(branchOwnerId: string, status?: string) {
+  async listTransfers(branchOwnerId: string, status?: string, salonId?: string) {
     const values: unknown[] = [branchOwnerId];
     let where = "t.branch_owner_id = $1";
     if (status) { values.push(status); where += ` AND t.status = $${values.length}`; }
+    // A transfer touches two salons — "belongs to the selected branch"
+    // means either side, not just the source (a branch is just as much
+    // affected by stock arriving as by stock leaving).
+    if (salonId) { values.push(salonId); where += ` AND (t.source_salon_id = $${values.length} OR t.dest_salon_id = $${values.length})`; }
     const { rows } = await pool.query(
       `SELECT
          t.*,
@@ -568,7 +572,10 @@ export const branchOwnerRepository = {
     return rows;
   },
 
-  async getInventorySummary(branchOwnerId: string) {
+  async getInventorySummary(branchOwnerId: string, salonId?: string) {
+    const values: unknown[] = [branchOwnerId];
+    let salonFilter = "";
+    if (salonId) { values.push(salonId); salonFilter = ` AND bos.salon_id = $${values.length}`; }
     const { rows } = await pool.query(
       `SELECT
          COUNT(p.id)::int AS total_products,
@@ -576,17 +583,23 @@ export const branchOwnerRepository = {
          COUNT(p.id) FILTER (WHERE p.qty_alert IS NOT NULL AND p.amount <= p.qty_alert)::int AS low_stock_count
        FROM branch_owner_salons bos
        JOIN products p ON p.salon_id = bos.salon_id AND p.is_active = true
-       WHERE bos.branch_owner_id = $1`,
-      [branchOwnerId]
+       WHERE bos.branch_owner_id = $1${salonFilter}`,
+      values
     );
+    const pendingValues: unknown[] = [branchOwnerId];
+    let pendingSalonFilter = "";
+    if (salonId) { pendingValues.push(salonId); pendingSalonFilter = ` AND (source_salon_id = $${pendingValues.length} OR dest_salon_id = $${pendingValues.length})`; }
     const { rows: pendingRows } = await pool.query(
-      `SELECT COUNT(*)::int AS pending_count FROM branch_stock_transfers WHERE branch_owner_id = $1 AND status = 'pending'`,
-      [branchOwnerId]
+      `SELECT COUNT(*)::int AS pending_count FROM branch_stock_transfers WHERE branch_owner_id = $1 AND status = 'pending'${pendingSalonFilter}`,
+      pendingValues
     );
     return { ...rows[0], pending_transfers_count: pendingRows[0]?.pending_count ?? 0 };
   },
 
-  async getLowStockAlerts(branchOwnerId: string) {
+  async getLowStockAlerts(branchOwnerId: string, salonId?: string) {
+    const values: unknown[] = [branchOwnerId];
+    let salonFilter = "";
+    if (salonId) { values.push(salonId); salonFilter = ` AND bos.salon_id = $${values.length}`; }
     const { rows } = await pool.query(
       `SELECT
          p.id AS product_id, p.name AS product_name, p.amount, p.qty_alert,
@@ -594,10 +607,10 @@ export const branchOwnerRepository = {
        FROM branch_owner_salons bos
        JOIN salons s ON s.id = bos.salon_id
        JOIN products p ON p.salon_id = s.id AND p.is_active = true
-       WHERE bos.branch_owner_id = $1 AND p.qty_alert IS NOT NULL AND p.amount <= p.qty_alert
+       WHERE bos.branch_owner_id = $1 AND p.qty_alert IS NOT NULL AND p.amount <= p.qty_alert${salonFilter}
        ORDER BY p.amount ASC
        LIMIT 50`,
-      [branchOwnerId]
+      values
     );
     return rows;
   },

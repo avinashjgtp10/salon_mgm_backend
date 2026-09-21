@@ -234,14 +234,16 @@ export const branchOwnerController = {
     try {
       const branchOwnerId = req.user!.userId;
       const status = req.query.status ? String(req.query.status) : undefined;
-      const data = await branchOwnerService.listTransfers(branchOwnerId, status);
+      const salonId = req.query.salon_id ? String(req.query.salon_id) : undefined;
+      const data = await branchOwnerService.listTransfers(branchOwnerId, status, salonId);
       return res.json({ success: true, data });
     } catch (err) { return next(err); }
   },
 
   async getInventorySummary(req: AuthedRequest, res: Response, next: NextFunction) {
     try {
-      const data = await branchOwnerService.getInventorySummary(req.user!.userId);
+      const salonId = req.query.salon_id ? String(req.query.salon_id) : undefined;
+      const data = await branchOwnerService.getInventorySummary(req.user!.userId, salonId);
       return res.json({ success: true, data });
     } catch (err) { return next(err); }
   },
@@ -255,7 +257,8 @@ export const branchOwnerController = {
 
   async getLowStockAlerts(req: AuthedRequest, res: Response, next: NextFunction) {
     try {
-      const data = await branchOwnerService.getLowStockAlerts(req.user!.userId);
+      const salonId = req.query.salon_id ? String(req.query.salon_id) : undefined;
+      const data = await branchOwnerService.getLowStockAlerts(req.user!.userId, salonId);
       return res.json({ success: true, data });
     } catch (err) { return next(err); }
   },
