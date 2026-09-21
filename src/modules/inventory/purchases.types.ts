@@ -60,6 +60,9 @@ export interface CreatePurchaseDTO {
 export interface ListPurchaseFilters {
     search?: string;
     supplier_id?: string;
+    // Powers Product Inventory's detail drawer "Purchase History" tab —
+    // every purchase with at least one line item for this product.
+    product_id?: string;
     date_from?: string;
     date_to?: string;
     page?: number;

@@ -1,4 +1,6 @@
 import pool from "../../config/database";
+import { productSuppliersRepository } from "./product-suppliers.repository";
+import { ProductSupplier } from "./product-suppliers.types";
 
 /**
  * Product Inventory — stock management for RETAIL products.
@@ -216,6 +218,49 @@ export const productInventoryRepository = {
             [salonId, productIds],
         );
         return rows;
+    },
+
+    /**
+     * Drawer aggregate for one product: the row itself, plus On Order, Last
+     * Purchase Price, and its multi-supplier list — one call instead of the
+     * drawer firing four separate requests.
+     */
+    async getDetail(productId: string, salonId: string): Promise<{
+        row: ProductInventoryRow;
+        on_order: number;
+        last_purchase_price: number | null;
+        suppliers: ProductSupplier[];
+    } | null> {
+        const rows = await this.getRowsByProductIds([productId], salonId);
+        if (!rows.length) return null;
+
+        const [onOrderRes, lastPriceRes, suppliers] = await Promise.all([
+            pool.query(
+                `SELECT COALESCE(SUM(oi.qty - oi.received_qty - oi.damaged_qty), 0)::float8 AS on_order
+                   FROM order_items oi
+                   JOIN orders o ON o.id = oi.order_id
+                  WHERE oi.product_id = $1 AND o.salon_id = $2
+                    AND o.status IN ('sent', 'partially_received')`,
+                [productId, salonId],
+            ),
+            pool.query(
+                `SELECT pi.purchase_price::float8 AS purchase_price
+                   FROM purchase_items pi
+                   JOIN purchases pu ON pu.id = pi.purchase_id
+                  WHERE pi.product_id = $1 AND pu.salon_id = $2
+                  ORDER BY pu.purchase_date DESC, pi.created_at DESC
+                  LIMIT 1`,
+                [productId, salonId],
+            ),
+            productSuppliersRepository.list(productId, salonId),
+        ]);
+
+        return {
+            row: rows[0],
+            on_order: Number(onOrderRes.rows[0]?.on_order) || 0,
+            last_purchase_price: lastPriceRes.rows[0]?.purchase_price ?? null,
+            suppliers,
+        };
     },
 
     /** Categories/brands that actually have a product in scope — so the filter

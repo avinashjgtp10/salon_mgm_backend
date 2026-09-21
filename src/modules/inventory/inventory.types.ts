@@ -25,6 +25,7 @@ export type Supplier = {
     postal_state: string | null;
     postal_zip_code: string | null;
     postal_country: string | null;
+    is_active: boolean;
     created_at: string;
     updated_at: string;
 };
@@ -53,6 +54,7 @@ export type CreateSupplierBody = {
     postal_state?: string | null;
     postal_zip_code?: string | null;
     postal_country?: string | null;
+    is_active?: boolean;
 };
 
 export type UpdateSupplierBody = Partial<CreateSupplierBody>;
@@ -67,6 +69,9 @@ export type SupplierWithBalance = Supplier & {
     due_amount: number;
     due_date: string | null;
     status: SupplierPaymentStatus;
+    // Operationally open (Sent/Partially Received) orders — a different
+    // count from pending_order_count above (unpaid-balance orders).
+    open_order_count: number;
 };
 
 export type PayoutMethod = "cash" | "upi" | "bank_transfer" | "cheque" | "card" | "other";
