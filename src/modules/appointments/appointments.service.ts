@@ -34,6 +34,8 @@ import { paymentsRepository } from "../payments/payments.repository";
 import { clientPackagesService } from "../client-packages/client-packages.service";
 import { clientPackagesRepository } from "../client-packages/client-packages.repository";
 import { autoCreatePackagesForBill } from "../transactions/package-autocreate.helper";
+import { clientMembershipsService } from "../client-memberships/client-memberships.service";
+import { clientMembershipsRepository } from "../client-memberships/client-memberships.repository";
 import {
     Appointment,
     AppointmentServiceConsumableRecord,
@@ -875,6 +877,32 @@ export const appointmentsService = {
                             if (removedId) await clientPackagesService.delete(removedId, existing.salon_id);
                         } catch (err) {
                             logger.error(`[${logTag}] Failed to remove client_packages row for a package dropped from the bill`, {
+                                appointmentId, removedName, message: (err as any)?.message,
+                            });
+                        }
+                    }
+
+                    // Same removal-on-edit handling for memberships — a
+                    // membership dropped from the bill must have its
+                    // client_memberships row removed too, or it survives as
+                    // an orphan still shown on the Membership Sale Report.
+                    // Scoped to appointment_id (see
+                    // findIdByAppointmentAndName's own comment) so a renewal
+                    // of a pre-existing membership from a different, earlier
+                    // appointment is never touched by this — only a
+                    // membership this specific appointment's bill itself
+                    // created.
+                    const oldMembershipNames = new Set((existing.membership_items ?? []).map((m: any) => m.name).filter(Boolean));
+                    const newMembershipNames = new Set((merged.membership_items ?? []).map((m: any) => m.name).filter(Boolean));
+                    const removedMembershipNames = [...oldMembershipNames].filter((n) => !newMembershipNames.has(n));
+                    for (const removedName of removedMembershipNames) {
+                        try {
+                            const removedId = await clientMembershipsRepository.findIdByAppointmentAndName(
+                                existing.salon_id, appointmentId, removedName as string,
+                            );
+                            if (removedId) await clientMembershipsService.delete(removedId, existing.salon_id);
+                        } catch (err) {
+                            logger.error(`[${logTag}] Failed to remove client_memberships row for a membership dropped from the bill`, {
                                 appointmentId, removedName, message: (err as any)?.message,
                             });
                         }

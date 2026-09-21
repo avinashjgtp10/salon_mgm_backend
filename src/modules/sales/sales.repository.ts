@@ -257,6 +257,10 @@ export const salesRepository = {
                 await client.query(`DELETE FROM client_packages WHERE id = ANY($1::uuid[])`, [pkgIds]);
             }
 
+            // Same for a membership sold on this sale — membership_usage_log
+            // cascades on its own; client_memberships itself does not.
+            await client.query(`DELETE FROM client_memberships WHERE sale_id = $1`, [id]);
+
             await client.query(`DELETE FROM commission_earned WHERE sale_id = $1`, [id]);
             await client.query(`DELETE FROM payments WHERE appointment_id IN (SELECT appointment_id FROM sales WHERE id = $1 AND appointment_id IS NOT NULL)`, [id]);
             await client.query(`DELETE FROM sale_items WHERE sale_id = $1`, [id]);

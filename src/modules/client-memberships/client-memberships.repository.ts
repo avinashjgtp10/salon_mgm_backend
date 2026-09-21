@@ -375,6 +375,31 @@ export const clientMembershipsRepository = {
     return rows.length ? toClientMembership(rows[0]) : null;
   },
 
+  // Mirrors clientPackagesRepository.findIdByAppointmentAndName() — the
+  // identifying key needed by appointments.service.ts's edit flow to find
+  // "the client_memberships row THIS appointment's bill produced" so it can
+  // be deleted when the membership is removed from the bill on edit.
+  // Deliberately scoped to appointment_id, not just (client, membership) —
+  // autoCreateFromPayment's own idempotency check (findActiveByClientAndMembership
+  // above) dedupes by client+membership globally and RENEWS a pre-existing
+  // active membership without updating its appointment_id, so a renewed row
+  // from an earlier, different appointment must never be matched (and
+  // deleted) here just because its membership_name matches what's being
+  // removed from a later, unrelated appointment's edit.
+  async findIdByAppointmentAndName(
+    salonId: string,
+    appointmentId: string,
+    membershipName: string,
+  ): Promise<string | null> {
+    const { rows } = await pool.query(
+      `SELECT id FROM client_memberships
+        WHERE salon_id = $1 AND appointment_id = $2 AND membership_name = $3
+        LIMIT 1`,
+      [salonId, appointmentId, membershipName],
+    );
+    return rows[0]?.id ?? null;
+  },
+
   async create(salonId: string, dto: CreateClientMembershipDTO): Promise<ClientMembership> {
     // Try to resolve client info; proceed even if client row is missing (fire-and-forget calls)
     let clientName = '';
@@ -1086,6 +1111,82 @@ export const clientMembershipsRepository = {
       return { totalDiscountGiven, remainingBalance: remaining, perService, reused: false };
     } catch (err) {
       await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  },
+
+  // Deleting a membership assignment (e.g. from the Membership Sale Report)
+  // must also reverse the sale it created — mirrors
+  // clientPackagesRepository.delete()'s exact reasoning/shape:
+  //   - Standalone "Sell Membership" purchase (appointment_id IS NULL): its
+  //     sale is dedicated to just this membership, safe to hard-delete
+  //     whole (sale_items/sales/commission).
+  //   - Membership sold as one line item on a bigger appointment bill
+  //     (appointment_id IS NOT NULL): only this membership's own sale_item
+  //     row and its own commission portion (category='membership') are
+  //     removed, and the parent sale's totals reduced by exactly that row's
+  //     own stored amounts, leaving the rest of that invoice intact.
+  // membership_usage_log rows cascade automatically (ON DELETE CASCADE on
+  // client_membership_id) — no explicit child cleanup needed here, unlike
+  // packages' non-cascading child tables.
+  async delete(id: string, salonId: string): Promise<boolean> {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const { rows: memRows } = await client.query(
+        `SELECT id, sale_id, appointment_id, membership_name
+         FROM client_memberships WHERE id = $1 AND salon_id = $2 FOR UPDATE`,
+        [id, salonId],
+      );
+      const membership = memRows[0];
+      if (!membership) {
+        await client.query("ROLLBACK");
+        return false;
+      }
+
+      if (membership.sale_id) {
+        if (!membership.appointment_id) {
+          await client.query(`DELETE FROM commission_earned WHERE sale_id = $1`, [membership.sale_id]);
+          await client.query(`DELETE FROM sale_items WHERE sale_id = $1`, [membership.sale_id]);
+          await client.query(`DELETE FROM sales WHERE id = $1`, [membership.sale_id]);
+        } else {
+          await client.query(
+            `DELETE FROM commission_earned WHERE sale_id = $1 AND category = 'membership'`,
+            [membership.sale_id]
+          );
+          const { rows: itemRows } = await client.query(
+            `DELETE FROM sale_items
+             WHERE id = (
+               SELECT id FROM sale_items
+               WHERE sale_id = $1 AND item_type = 'membership' AND name = $2
+               ORDER BY created_at DESC LIMIT 1
+             )
+             RETURNING total_price, tax_amount, taxable_amount`,
+            [membership.sale_id, membership.membership_name]
+          );
+          const item = itemRows[0];
+          if (item) {
+            await client.query(
+              `UPDATE sales
+               SET subtotal = GREATEST(subtotal - $1, 0),
+                   tax_amount = GREATEST(tax_amount - $2, 0),
+                   total_amount = GREATEST(total_amount - $3, 0)
+               WHERE id = $4`,
+              [Number(item.taxable_amount) || 0, Number(item.tax_amount) || 0, Number(item.total_price) || 0, membership.sale_id]
+            );
+          }
+        }
+      }
+
+      await client.query(`DELETE FROM client_memberships WHERE id = $1 AND salon_id = $2`, [id, salonId]);
+
+      await client.query("COMMIT");
+      return true;
+    } catch (err) {
+      await client.query("ROLLBACK");
       throw err;
     } finally {
       client.release();

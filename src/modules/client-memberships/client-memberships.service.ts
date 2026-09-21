@@ -270,6 +270,17 @@ export const clientMembershipsService = {
     return result;
   },
 
+  // Hard delete (e.g. from the Membership Sale Report) — distinct from
+  // cancel() above, which only flips status and leaves the sale/revenue
+  // trail untouched. This removes the assignment entirely and reverses the
+  // sale it created, mirroring clientPackagesService.delete() exactly.
+  async delete(id: string, salonId: string): Promise<void> {
+    const deleted = await clientMembershipsRepository.delete(id, salonId);
+    if (!deleted) throw { statusCode: 404, message: "Client membership not found" };
+    waScheduledMessagesService.cancelForReference('membership', id)
+      .catch((err: any) => logger.error('[wa-scheduled] cancel-on-delete failed:', err?.message ?? err));
+  },
+
   // Automatic wallet redemption at checkout: draws from ALL of the client's
   // active memberships with a balance, highest-balance first, moving to the
   // next one once the current is exhausted. No-op (all zeros) if the client

@@ -73,6 +73,14 @@ export const clientMembershipsController = {
     } catch (e) { return next(e); }
   },
 
+  async delete(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = getSalonId(req);
+      await clientMembershipsService.delete(req.params.id as string, salonId);
+      return sendSuccess(res, 200, null, 'Client membership deleted successfully');
+    } catch (e) { return next(e); }
+  },
+
   async sync(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = getSalonId(req);
