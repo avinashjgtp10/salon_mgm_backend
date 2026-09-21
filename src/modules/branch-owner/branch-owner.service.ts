@@ -173,20 +173,20 @@ export const branchOwnerService = {
       return branchOwnerRepository.setTransferStatus(transferId, "cancelled");
   },
 
-  async listTransfers(branchOwnerId: string, status?: string) {
-      return branchOwnerRepository.listTransfers(branchOwnerId, status);
+  async listTransfers(branchOwnerId: string, status?: string, salonId?: string) {
+      return branchOwnerRepository.listTransfers(branchOwnerId, status, salonId);
   },
 
-  async getInventorySummary(branchOwnerId: string) {
-      return branchOwnerRepository.getInventorySummary(branchOwnerId);
+  async getInventorySummary(branchOwnerId: string, salonId?: string) {
+      return branchOwnerRepository.getInventorySummary(branchOwnerId, salonId);
   },
 
   async getBranchOverview(branchOwnerId: string) {
       return branchOwnerRepository.getBranchOverview(branchOwnerId);
   },
 
-  async getLowStockAlerts(branchOwnerId: string) {
-      return branchOwnerRepository.getLowStockAlerts(branchOwnerId);
+  async getLowStockAlerts(branchOwnerId: string, salonId?: string) {
+      return branchOwnerRepository.getLowStockAlerts(branchOwnerId, salonId);
   },
 
   async getCategoryBreakdown(branchOwnerId: string) {
