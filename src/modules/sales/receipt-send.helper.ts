@@ -1,8 +1,11 @@
 import { Sale, SaleItem } from "./sales.types";
+import { TaxBreakdownEntry } from "../payments/payments.types";
 import { salonsRepository } from "../salons/salons.repository";
 import { branchesRepository } from "../branches/branches.repository";
 import { staffRepository } from "../staff/staff.repository";
 import { clientsRepository } from "../clients/clients.repository";
+import { clientPackagesService } from "../client-packages/client-packages.service";
+import { clientMembershipsService } from "../client-memberships/client-memberships.service";
 import { sendReceiptDocument } from "./receipt-whatsapp.service";
 import { renderReceiptPdf } from "./receipt-pdf.service";
 import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
@@ -53,6 +56,26 @@ type ReceiptContextParams = {
     paidAmount: number;
     dueAmount?: number;
     couponCode?: string | null;
+    // ── Redemption/tax figures that live on the PAYMENT row, not the sale —
+    // present on the frontend's Calendar/ViewBillModal print (via
+    // totalsUtils.ts's computeTotals) but previously never threaded through
+    // to this PDF at all, so a bill partly paid via wallet/points/credit, or
+    // fully covered by a package, looked wrong or incomplete on the WhatsApp
+    // copy even though the calendar printout showed it correctly. Every
+    // field here is already computed server-side at checkout time by the
+    // caller (payments.service.ts et al) — this only threads it through, it
+    // never recomputes pricing itself. ─────────────────────────────────────
+    taxBreakdown?: TaxBreakdownEntry[] | null;
+    membershipWalletUsed?: number;
+    /** ₹ pre-tax reduction from a Discount Balance/Loyalty membership benefit — matches Payment.membership_discount_used. */
+    membershipDiscountUsed?: number;
+    ewalletUsed?: number;
+    rewardPointsValue?: number;
+    referralCreditUsed?: number;
+    /** ₹ of this bill covered by an already-purchased package's sessions —
+     *  matches Payment.package_used. Zeroes the printed Grand Total, same as
+     *  the calendar print's isPackagePaid branch, when > 0. */
+    packageCoveredAmount?: number;
 };
 
 // Shared by every purchase-completion call site (sales, packages, memberships,
@@ -60,11 +83,18 @@ type ReceiptContextParams = {
 // receipt template needs. Used by both the Meta-document send and the raw-
 // bytes generator below, so every path renders an identical receipt.
 async function gatherReceiptContext(params: ReceiptContextParams) {
-    const [salonRecord, branches, staffList, clientRecord] = await Promise.all([
+    const [salonRecord, branches, staffList, clientRecord, referralStats, activePackages, activeMemberships] = await Promise.all([
         salonsRepository.findById(params.salonId),
         branchesRepository.listBySalonId(params.salonId),
         staffRepository.list(params.salonId, { limit: 100, is_active: true } as any),
         params.clientId ? clientsRepository.findById(params.clientId, params.salonId) : Promise.resolve(null),
+        // Client's overall standing — distinct from what's on THIS bill, same
+        // "if had" fields the calendar print shows (referral code/earnings,
+        // active packages/memberships). Never blocks the receipt on failure —
+        // a lookup error here just omits these optional sections.
+        params.clientId ? clientsRepository.getReferralStats(params.clientId).catch(() => null) : Promise.resolve(null),
+        params.clientId ? clientPackagesService.list(params.salonId, { clientId: params.clientId, limit: 500 } as any).catch(() => null) : Promise.resolve(null),
+        params.clientId ? clientMembershipsService.list(params.salonId, { clientId: params.clientId, limit: 200 } as any).catch(() => null) : Promise.resolve(null),
     ]);
 
     const branch = branches.find((b: any) => b.is_main) ?? branches[0] ?? null;
@@ -76,6 +106,18 @@ async function gatherReceiptContext(params: ReceiptContextParams) {
     for (const s of (staffList as any).data as any[]) {
         staffNames[s.id] = [s.first_name, s.last_name].filter(Boolean).join(" ").trim() || s.email;
     }
+
+    const activePackagesForBill = ((activePackages as any)?.items ?? [])
+        .filter((p: any) => p.status === "Active")
+        .map((p: any) => ({
+            packageName: p.packageName,
+            remaining: (p.services ?? []).reduce((s: number, sv: any) => s + (sv.remainingSessions ?? 0), 0),
+            total: (p.services ?? []).reduce((s: number, sv: any) => s + (sv.totalSessions ?? 0), 0),
+        }))
+        .filter((p: any) => p.remaining > 0);
+    const activeMembershipsForBill = ((activeMemberships as any)?.items ?? (activeMemberships as any) ?? [])
+        .filter((m: any) => m.status === "active")
+        .map((m: any) => ({ membershipName: m.membershipName, expiresAt: m.expiresAt ?? null }));
 
     return {
         salonId: params.salonId,
@@ -94,7 +136,12 @@ async function gatherReceiptContext(params: ReceiptContextParams) {
             name: clientRecord?.full_name ?? params.clientName,
             phone: clientRecord?.phone_number ?? params.phone,
             email: clientRecord?.email ?? null,
+            gst_number: clientRecord?.gst_number ?? null,
+            referral_code: clientRecord?.referral_code ?? null,
+            referral_earnings: referralStats ? (referralStats as any).total_referral_earnings : null,
         },
+        activePackages: activePackagesForBill,
+        activeMemberships: activeMembershipsForBill,
         sale: params.sale,
         items: params.items,
         staffNames,
@@ -102,6 +149,13 @@ async function gatherReceiptContext(params: ReceiptContextParams) {
         paidAmount: params.paidAmount,
         dueAmount: params.dueAmount ?? 0,
         couponCode: params.couponCode ?? null,
+        taxBreakdown: params.taxBreakdown ?? null,
+        membershipWalletUsed: params.membershipWalletUsed ?? 0,
+        membershipDiscountUsed: params.membershipDiscountUsed ?? 0,
+        ewalletUsed: params.ewalletUsed ?? 0,
+        rewardPointsValue: params.rewardPointsValue ?? 0,
+        referralCreditUsed: params.referralCreditUsed ?? 0,
+        packageCoveredAmount: params.packageCoveredAmount ?? 0,
     };
 }
 

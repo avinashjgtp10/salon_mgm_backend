@@ -239,6 +239,7 @@ export const clientsService = {
                         variables: {
                             "1": `${created.first_name} ${created.last_name ?? ""}`.trim() || "there",
                             "2": salon?.business_name ?? "our salon",
+                            "3": created.referral_code ?? "",
                         },
                         referenceId:   created.id,
                         referenceType: "client",
@@ -267,6 +268,27 @@ export const clientsService = {
                     });
                 } catch (err: any) {
                     logger.error("[wa-scheduled] birthday_wishes schedule failed:", err?.message ?? err);
+                }
+            })();
+        }
+
+        // ── Scheduled Templates: anniversary_wishes ───────────────────────────
+        // Same self-perpetuating pattern as birthday_wishes above. `anniversary`
+        // is stored as a full "YYYY-MM-DD" date (unlike birthday, which is
+        // already split into birthday_day_month/birthday_year) — slice(5) pulls
+        // the "MM-DD" portion straight off it.
+        if (created.phone_number && created.anniversary) {
+            (async () => {
+                try {
+                    const salon = await salonsRepository.findById(salonId);
+                    await waScheduledMessagesService.scheduleAnniversary({
+                        salonId, clientId: created.id, phone: created.phone_number!, countryCode: created.phone_country_code ?? null,
+                        fullName: `${created.first_name} ${created.last_name ?? ""}`.trim() || "there",
+                        salonName: salon?.business_name ?? "our salon",
+                        anniversaryDayMonth: created.anniversary!.slice(5),
+                    });
+                } catch (err: any) {
+                    logger.error("[wa-scheduled] anniversary_wishes schedule failed:", err?.message ?? err);
                 }
             })();
         }
@@ -417,6 +439,24 @@ export const clientsService = {
                     });
                 } catch (err: any) {
                     logger.error("[wa-scheduled] birthday_wishes reschedule-on-edit failed:", err?.message ?? err);
+                }
+            })();
+        }
+
+        // An anniversary added/changed after creation needs its own schedule
+        // row too — same reasoning as the birthday reschedule-on-edit above.
+        if (patch.anniversary && withRel?.phone_number) {
+            (async () => {
+                try {
+                    const salon = await salonsRepository.findById(salonId);
+                    await waScheduledMessagesService.scheduleAnniversary({
+                        salonId, clientId, phone: withRel.phone_number!, countryCode: withRel.phone_country_code ?? null,
+                        fullName: `${withRel.first_name} ${withRel.last_name ?? ""}`.trim() || "there",
+                        salonName: salon?.business_name ?? "our salon",
+                        anniversaryDayMonth: patch.anniversary!.slice(5),
+                    });
+                } catch (err: any) {
+                    logger.error("[wa-scheduled] anniversary_wishes reschedule-on-edit failed:", err?.message ?? err);
                 }
             })();
         }

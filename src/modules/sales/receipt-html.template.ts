@@ -1,11 +1,16 @@
-import { Sale, SaleItem } from "./sales.types";
+import { Sale, SaleItem, TipBreakdownEntry } from "./sales.types";
+import { TaxBreakdownEntry } from "../payments/payments.types";
 import config from "../../config/env";
 
 // Ported from the dashboard's ViewBillModal.tsx `printReceipt()` — same visual
-// invoice staff see when they print/save a bill, adapted from the frontend's
-// Booking-shaped data to the backend's Sale/SaleItem records. One real gap:
-// the backend only stores a single blended tax_amount (no CGST/SGST split),
-// so tax renders as one "Tax" line instead of itemized per-tax-type rows.
+// invoice staff see when they print/save a bill from the Calendar, adapted
+// from the frontend's Booking-shaped data to the backend's Sale/SaleItem/
+// Payment records. Kept in parity deliberately: every field the calendar
+// print shows (referral code/earnings, active packages/memberships,
+// itemized tax, wallet/points/credit redemption lines, package-covered
+// handling, round-off, per-staff tip) is rendered here too, from the same
+// already-computed figures the calendar reads — this never recomputes
+// pricing itself, it only renders numbers the caller already trusts.
 export function buildReceiptHtml(params: {
     salon: {
         business_name: string;
@@ -16,7 +21,16 @@ export function buildReceiptHtml(params: {
         gst_number: string | null;
     };
     salonAddress: string | null;
-    client: { name: string; phone: string | null; email: string | null };
+    client: {
+        name: string;
+        phone: string | null;
+        email: string | null;
+        gst_number?: string | null;
+        referral_code?: string | null;
+        referral_earnings?: number | null;
+    };
+    activePackages?: Array<{ packageName: string; remaining: number; total: number }>;
+    activeMemberships?: Array<{ membershipName: string; expiresAt: string | null }>;
     sale: Sale;
     items: SaleItem[];
     staffNames: Record<string, string>;
@@ -30,8 +44,18 @@ export function buildReceiptHtml(params: {
     paidAmount: number;
     dueAmount: number;
     couponCode: string | null;
+    taxBreakdown?: TaxBreakdownEntry[] | null;
+    membershipWalletUsed?: number;
+    membershipDiscountUsed?: number;
+    ewalletUsed?: number;
+    rewardPointsValue?: number;
+    referralCreditUsed?: number;
+    packageCoveredAmount?: number;
 }): string {
-    const { salon, salonAddress, client, sale, items, staffNames, appointment, paidAmount, dueAmount, couponCode } = params;
+    const {
+        salon, salonAddress, client, sale, items, staffNames, appointment, paidAmount, dueAmount, couponCode,
+        activePackages = [], activeMemberships = [],
+    } = params;
 
     const findStaffName = (id: string | null) => (id && staffNames[id]) || "";
 
@@ -50,17 +74,25 @@ export function buildReceiptHtml(params: {
         ? `http://localhost:${config.port}${rawLogoUrl}`
         : rawLogoUrl;
 
+    // Puppeteer runs on the backend server, which isn't guaranteed to be in
+    // IST (commonly UTC on cloud hosts) — unlike the Calendar print, which
+    // runs in the salon owner's own (India-based) browser and gets IST for
+    // free from the system clock. Every date/time below pins timeZone:
+    // "Asia/Kolkata" explicitly so the WhatsApp PDF always shows the same
+    // wall-clock time as the Calendar one, regardless of the server's TZ.
+    const IST = "Asia/Kolkata";
     const now = new Date();
-    const printDate = now.toLocaleDateString("en-IN", { year: "numeric", month: "long", day: "numeric" });
-    const printTime = now.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
+    const printDate = now.toLocaleDateString("en-IN", { timeZone: IST, year: "numeric", month: "long", day: "numeric" });
+    const printTime = now.toLocaleTimeString("en-IN", { timeZone: IST, hour: "2-digit", minute: "2-digit" });
     const invoiceNo = sale.invoice_number ?? "Not billed yet";
 
     const formatTime12 = (iso: string) =>
-        new Date(iso).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true });
+        new Date(iso).toLocaleTimeString("en-IN", { timeZone: IST, hour: "2-digit", minute: "2-digit", hour12: true });
 
     const apptDate = appointment
-        ? new Date(appointment.scheduledAt).toLocaleDateString("en-IN", { year: "numeric", month: "long", day: "numeric" })
+        ? new Date(appointment.scheduledAt).toLocaleDateString("en-IN", { timeZone: IST, year: "numeric", month: "long", day: "numeric" })
         : "—";
+    const apptStartTime = appointment ? formatTime12(appointment.scheduledAt) : null;
     const apptTime = appointment
         ? `${formatTime12(appointment.scheduledAt)} – ${formatTime12(new Date(new Date(appointment.scheduledAt).getTime() + appointment.durationMinutes * 60000).toISOString())}`
         : "—";
@@ -74,7 +106,18 @@ export function buildReceiptHtml(params: {
     const allStaffIds = Array.from(new Set(items.map((i) => i.staff_id).filter(Boolean))) as string[];
     const allStaffDisplay = allStaffIds.map((id) => findStaffName(id)).filter(Boolean).join(", ") || "—";
 
-    const fmt = (n: number) => n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    // Every amount on the printed page goes through this — the previous
+    // version of this file never prepended a currency symbol at all, so
+    // every figure on the WhatsApp-sent PDF read as a bare number.
+    const fmt = (n: number) => `₹${n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+    // A package-covered visit collects no new money (the package's price was
+    // already booked as revenue at purchase time) — same isPackagePaid
+    // detection the calendar print uses, so a session paid entirely from a
+    // package's included sessions prints "Package Covered" and zeroes the
+    // bill here too, instead of showing the full price as newly charged.
+    const packageCoveredAmt = Number(params.packageCoveredAmount ?? 0);
+    const isPackagePaid = packageCoveredAmt > 0;
 
     const TYPE_LABEL: Record<string, string> = {
         service: "Service",
@@ -91,12 +134,27 @@ export function buildReceiptHtml(params: {
         "Quick Sale": ["#f3f4f6", "#374151"],
     };
 
+    const taxBreakdown = params.taxBreakdown ?? [];
+    const taxLabel = taxBreakdown.length > 0
+        ? taxBreakdown.map((t) => `${t.name} ${t.rate}%`).join(" + ")
+        : "Tax";
+
+    // Running sum of every row's gross (tax-inclusive) amount, read back by
+    // the "Items Total" footer — same reconciliation the calendar print does,
+    // instead of the previous version's footer which just repeated the
+    // overall subtotal/grand-total regardless of what the rows actually add
+    // up to.
+    let grossItemsTotal = 0;
     const allItemRows = items
         .map((item, idx) => {
             const type = TYPE_LABEL[item.item_type] ?? item.item_type;
             const [badgeBg, badgeColor] = BADGE[type] ?? ["#f3f4f6", "#374151"];
             const rowBg = idx % 2 === 0 ? "#f9fafb" : "#ffffff";
             const discount = Number(item.discount_amount) || 0;
+            const rowTax = Number(item.tax_amount) || 0;
+            const total = isPackagePaid ? 0 : Number(item.total_price) || 0;
+            const grossAmount = total + rowTax;
+            grossItemsTotal += grossAmount;
             return `
     <tr style="background:${rowBg};-webkit-print-color-adjust:exact;print-color-adjust:exact">
       <td style="padding:8px 8px;border:1px solid #e5e7eb;text-align:center;color:#6b7280;font-size:11px">${idx + 1}</td>
@@ -105,10 +163,14 @@ export function buildReceiptHtml(params: {
         <span style="display:inline-block;font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;background:${badgeBg};color:${badgeColor};letter-spacing:0.3px;text-transform:uppercase;-webkit-print-color-adjust:exact;print-color-adjust:exact">${type}</span>
       </td>
       <td style="padding:8px 8px;border:1px solid #e5e7eb;text-align:center;font-size:11px;color:#374151">${findStaffName(item.staff_id) || "—"}</td>
+      <td style="padding:8px 8px;border:1px solid #e5e7eb;text-align:center;font-size:11px;color:#374151">${apptStartTime || "—"}</td>
       <td style="padding:8px 8px;border:1px solid #e5e7eb;text-align:center;font-size:12px;color:#111827">${item.quantity}</td>
       <td style="padding:8px 8px;border:1px solid #e5e7eb;text-align:right;font-size:12px;color:#111827">${fmt(Number(item.unit_price))}</td>
       <td style="padding:8px 8px;border:1px solid #e5e7eb;text-align:right;font-size:12px;color:${discount > 0 ? "#dc2626" : "#9ca3af"}">${discount > 0 ? `−${fmt(discount)}` : "—"}</td>
-      <td style="padding:8px 10px;border:1px solid #e5e7eb;text-align:right;font-weight:700;font-size:12px;color:#111827">${fmt(Number(item.total_price))}</td>
+      <td style="padding:8px 8px;border:1px solid #e5e7eb;text-align:right;font-size:11px;color:#374151">
+        ${rowTax > 0 ? `${fmt(rowTax)}<div style="font-size:9px;color:#9ca3af;margin-top:1px">${taxLabel}</div>` : "—"}
+      </td>
+      <td style="padding:8px 10px;border:1px solid #e5e7eb;text-align:right;font-weight:700;font-size:12px;color:#111827">${fmt(grossAmount)}</td>
     </tr>`;
         })
         .join("");
@@ -119,24 +181,49 @@ export function buildReceiptHtml(params: {
       <td style="padding:6px 12px;text-align:right;font-size:12px;font-weight:${bold ? 700 : 500};color:${color};border:1px solid #e5e7eb;${borderDouble ? "border-top:2px solid #111827;" : ""}">${value}</td>
     </tr>`;
 
+    // ── Payment summary ───────────────────────────────────────────────────────
+    const itemsCatalogTotal = items.reduce((s, i) => s + (Number(i.unit_price) || 0) * (Number(i.quantity) || 1), 0);
+    const itemsNetTotal = items.reduce((s, i) => s + (Number(i.total_price) || 0), 0);
+    const itemDiscountAmt = Math.max(0, itemsCatalogTotal - itemsNetTotal);
+
     const subtotalAmt = Number(sale.subtotal) || 0;
-    const discountAmt = Number(sale.discount_amount) || 0;
+    const manualDisc = Number(sale.manual_discount_amount) || 0;
+    const couponDisc = Number(sale.coupon_discount_amount) || 0;
+    const resolvedCouponCode = couponCode || sale.coupon_code || "";
+    const referralDisc = Number(sale.referral_discount_amount) || 0;
+    const membershipDiscountAmt = Number(params.membershipDiscountUsed ?? 0);
+    const exCharges = Number(sale.ex_charges) || 0;
     const tipAmt = Number(sale.tip_amount) || 0;
-    const taxAmt = Number(sale.tax_amount) || 0;
+    const tipBreakdown: TipBreakdownEntry[] = sale.tip_breakdown ?? [];
+    const membershipWalletUsedAmt = Number(params.membershipWalletUsed ?? 0);
+    const ewalletUsedAmt = Number(params.ewalletUsed ?? 0);
+    const rewardPointsValuePaid = Number(params.rewardPointsValue ?? 0);
+    const referralCreditUsedAmt = Number(params.referralCreditUsed ?? 0);
+
+    const exclusiveTaxTotal = taxBreakdown.length > 0
+        ? taxBreakdown.filter((t) => !t.inclusive && t.amount > 0).reduce((s, t) => s + t.amount, 0)
+        : Number(sale.tax_amount) || 0;
+
     // sale.total_amount is the revenue figure (tip-exclusive — matches every
     // dashboard/report reading of this same column). The printed Grand Total
     // is what the client actually paid, so tip is added back on here only,
-    // display-side — see payments.service.ts's payableCeiling for the same
-    // split applied to what's actually collectible at checkout.
-    const grandTotal = (Number(sale.total_amount) || 0) + tipAmt;
+    // display-side.
+    const grandTotal = isPackagePaid ? 0 : (Number(sale.total_amount) || 0) + tipAmt;
+
+    // Same waterfall identity totalsUtils.ts/the calendar print uses,
+    // flattened into one pass — every term here is a figure already computed
+    // by the caller (never re-derived), so this is purely a display
+    // reconciliation, not a re-run of pricing logic.
+    const rawGrandTotal = subtotalAmt - couponDisc - membershipDiscountAmt - packageCoveredAmt + exclusiveTaxTotal
+        - manualDisc + exCharges + tipAmt - referralDisc
+        - membershipWalletUsedAmt - ewalletUsedAmt - rewardPointsValuePaid - referralCreditUsedAmt;
+    const roundOff = grandTotal - rawGrandTotal;
 
     // A split payment stores its real per-method breakdown as JSON in
     // sales.payment_reference — {"Cash":600,"UPI":660}, written by
     // normalizePaymentMethod() in transactions/payment-method.util.ts. Keys
     // can also be "Package"/"Membership"/"eWallet" when those covered part of
-    // the bill. Without reading it, the invoice printed a bare "SPLIT" and a
-    // single Amount Paid, which tells the client nothing about how their own
-    // money was taken.
+    // the bill.
     const METHOD_LABELS: Record<string, string> = {
         cash: "Cash", card: "Card", upi: "UPI", wallet: "E-Wallet", ewallet: "E-Wallet",
         gift_card: "Gift Card", package: "Package", membership: "Membership",
@@ -153,30 +240,51 @@ export function buildReceiptHtml(params: {
             if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
             return Object.entries(parsed)
                 .map(([key, value]) => ({ label: prettyMethod(key), amount: Number(value) || 0 }))
-                // A ₹0 leg is noise on paper, and a legacy reference that stored
-                // only method NAMES (no amounts) parses to 0 for every leg — in
-                // that case nothing is listed and the single Amount Paid row
-                // below stands on its own, exactly as it does today.
                 .filter((leg) => leg.amount > 0);
         } catch {
-            return []; // malformed/legacy reference — fall back to today's output
+            return [];
         }
     })();
 
     const summaryRows = [
+        itemDiscountAmt > 0 ? sumRow("Items Total", fmt(itemsCatalogTotal)) : "",
+        itemDiscountAmt > 0 ? sumRow("Item Discount", `−${fmt(itemDiscountAmt)}`, false, "#dc2626") : "",
         subtotalAmt > 0 ? sumRow("Subtotal", fmt(subtotalAmt)) : "",
-        discountAmt > 0 ? sumRow(couponCode ? `Coupon (${couponCode})` : "Discount", `−${fmt(discountAmt)}`, false, "#dc2626") : "",
-        tipAmt > 0 ? sumRow("Tip (Staff)", `+${fmt(tipAmt)}`) : "",
-        // No CGST/SGST split is stored server-side, so tax is a single blended line
-        // rather than the dashboard's itemized per-tax-type breakdown.
-        taxAmt > 0 ? sumRow("Tax", `+${fmt(taxAmt)}`) : "",
+        couponDisc > 0 ? sumRow(resolvedCouponCode ? `Coupon (${resolvedCouponCode})` : "Coupon", `−${fmt(couponDisc)}`, false, "#dc2626") : "",
+        packageCoveredAmt > 0 ? sumRow("Package Covered", `−${fmt(packageCoveredAmt)}`, false, "#7c3aed") : "",
+        membershipDiscountAmt > 0 ? sumRow("Membership Discount", `−${fmt(membershipDiscountAmt)}`, false, "#dc2626") : "",
+        // Itemized per-tax lines (CGST/SGST/etc.) + a "Total Tax" subtotal when
+        // the caller provided a real breakdown; falls back to the single
+        // blended "Tax" line (sale.tax_amount) when it didn't — same fallback
+        // the calendar print itself uses for a bill saved before per-tax
+        // breakdown existed.
+        ...(taxBreakdown.length > 0
+            ? [
+                ...taxBreakdown
+                    .filter((t) => t.amount > 0)
+                    .map((t) => sumRow(`${t.name} ${t.rate}%${t.inclusive ? " (incl.)" : ""}`, `${t.inclusive ? "" : "+"}${fmt(t.amount)}`)),
+                sumRow("Total Tax", fmt(taxBreakdown.reduce((s, t) => s + (t.amount > 0 ? t.amount : 0), 0))),
+            ]
+            : [exclusiveTaxTotal > 0 ? sumRow("Tax", `+${fmt(exclusiveTaxTotal)}`) : ""]),
+        exCharges > 0 ? sumRow("Extra Charges", `+${fmt(exCharges)}`) : "",
+        manualDisc > 0 ? sumRow("Bill Discount", `−${fmt(manualDisc)}`, false, "#dc2626") : "",
+        referralDisc > 0 ? sumRow("Referral Discount", `−${fmt(referralDisc)}`, false, "#dc2626") : "",
+        rewardPointsValuePaid > 0 ? sumRow("Reward Points Used", `−${fmt(rewardPointsValuePaid)}`, false, "#7c3aed") : "",
+        membershipWalletUsedAmt > 0 ? sumRow("Membership Wallet Used", `−${fmt(membershipWalletUsedAmt)}`, false, "#15803d") : "",
+        ewalletUsedAmt > 0 ? sumRow("eWallet Used", `−${fmt(ewalletUsedAmt)}`, false, "#2563eb") : "",
+        referralCreditUsedAmt > 0 ? sumRow("Referral Credit Used", `−${fmt(referralCreditUsedAmt)}`, false, "#0891b2") : "",
+        !isPackagePaid && Math.abs(roundOff) >= 0.005
+            ? sumRow("Round Off", `${roundOff >= 0 ? "+" : "−"}${fmt(Math.abs(roundOff))}`)
+            : "",
         sumRow("Grand Total", fmt(grandTotal), true, "#111827", true),
-        // Each method the client actually paid with, then the total they add
-        // up to. Indented under the total so the two read as one group rather
-        // than as more bill lines.
-        ...splitLegs.map((leg) => sumRow(`&nbsp;&nbsp;${leg.label}`, fmt(leg.amount), false, "#6b7280")),
+        sumRow("Amount to Pay", fmt(grandTotal), true, "#111827"),
+        tipAmt > 0 ? sumRow("Staff Tip (included above)", fmt(tipAmt), false, "#6b7280") : "",
+        tipAmt > 0 ? tipBreakdown.map((t) => sumRow(`&nbsp;&nbsp;&nbsp;${t.staff_name}`, fmt(Number(t.amount) || 0), false, "#9ca3af")).join("") : "",
+        splitLegs.length > 1
+            ? splitLegs.map((leg) => sumRow(`Paid via ${leg.label}`, fmt(leg.amount), false, "#111827")).join("")
+            : "",
         paidAmount > 0
-            ? sumRow(splitLegs.length > 0 ? "Total Amount Paid" : "Amount Paid", fmt(paidAmount), false, "#15803d")
+            ? sumRow(splitLegs.length > 1 ? "Total Amount Paid" : "Amount Paid", fmt(paidAmount), false, "#15803d")
             : "",
         dueAmount > 0 ? sumRow("Balance Due", fmt(dueAmount), true, "#dc2626") : "",
     ]
@@ -188,6 +296,16 @@ export function buildReceiptHtml(params: {
       <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#6b7280;margin-bottom:2px">${label}</div>
       <div style="font-size:12px;font-weight:600;color:#111827;line-height:1.4">${value || "—"}</div>
     </div>`;
+
+    const fmtDate = (raw: string | null) => {
+        if (!raw) return "";
+        const d = new Date(raw);
+        return isNaN(d.getTime()) ? "" : d.toLocaleDateString("en-IN", { timeZone: IST, year: "numeric", month: "short", day: "2-digit" });
+    };
+    const primaryMembershipName = activeMemberships[0]?.membershipName || "";
+    const clientGst = client.gst_number || "";
+    const referralCode = client.referral_code || null;
+    const referralEarnings = client.referral_earnings ?? null;
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -204,8 +322,8 @@ export function buildReceiptHtml(params: {
   .inv-logo-placeholder{width:68px;height:68px;border-radius:8px;background:#f3f4f6;border:1px solid #e5e7eb;display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:800;color:#374151;flex-shrink:0}
   .inv-salon-block{display:flex;align-items:flex-start;gap:14px}
   .inv-salon-name{font-size:20px;font-weight:800;color:#111827;letter-spacing:-0.3px;margin-bottom:4px}
-  .inv-salon-meta{font-size:10.5px;color:#6b7280;line-height:1.8}
-  .inv-salon-meta span{display:block}
+  .inv-salon-meta{font-size:10.5px;color:#6b7280;line-height:1.8;max-width:360px}
+  .inv-salon-meta span{display:block;word-break:break-word}
   .inv-title-block{text-align:right;flex-shrink:0}
   .inv-title-word{font-size:26px;font-weight:800;color:#111827;text-transform:uppercase;letter-spacing:2px;line-height:1}
   .inv-meta-table{margin-top:10px;font-size:11px;color:#374151;border-collapse:collapse}
@@ -216,7 +334,7 @@ export function buildReceiptHtml(params: {
   .inv-info-col{padding:16px 32px}
   .inv-info-col+.inv-info-col{border-left:1px solid #e5e7eb}
   .inv-section-label{font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:1px;color:#111827;background:#f3f4f6;display:inline-block;padding:2px 8px;border-radius:3px;margin-bottom:12px}
-  .inv-info-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 20px}
+  .inv-info-grid{display:grid;grid-template-columns:1fr;gap:0}
 
   .pay-badge{display:inline-block;padding:2px 10px;border-radius:20px;font-size:10px;font-weight:700;letter-spacing:0.3px;text-transform:uppercase;border:1px solid currentColor}
 
@@ -228,10 +346,11 @@ export function buildReceiptHtml(params: {
   table.inv-table thead th:nth-child(2){text-align:left}
   table.inv-table thead th:nth-child(3){text-align:center}
   table.inv-table thead th:nth-child(4){text-align:center}
-  table.inv-table thead th:nth-child(5){text-align:center;width:36px}
-  table.inv-table thead th:nth-child(6){text-align:right}
+  table.inv-table thead th:nth-child(5){text-align:center}
+  table.inv-table thead th:nth-child(6){text-align:center;width:36px}
   table.inv-table thead th:nth-child(7){text-align:right}
   table.inv-table thead th:nth-child(8){text-align:right}
+  table.inv-table thead th:nth-child(9){text-align:right}
   table.inv-table tbody td{border:1px solid #e5e7eb}
   table.inv-table tfoot td{padding:8px 12px;font-size:11.5px;font-weight:700;color:#111827;border:1px solid #d1d5db;background:#f9fafb}
 
@@ -244,7 +363,6 @@ export function buildReceiptHtml(params: {
   .inv-footer{margin-top:auto;border-top:2px solid #111827;padding:16px 32px 18px;display:flex;justify-content:space-between;align-items:center;gap:16px}
   .inv-footer-left{font-size:12px;color:#111827}
   .inv-footer-left strong{font-size:13px;font-weight:800}
-  .inv-footer-center{font-size:10px;color:#6b7280;text-align:center;line-height:1.8}
   .inv-footer-right{font-size:10px;color:#6b7280;text-align:right;line-height:1.8}
 </style>
 </head>
@@ -284,6 +402,10 @@ export function buildReceiptHtml(params: {
         ${infoCell("Name", client.name || "Walk-In")}
         ${infoCell("Phone", client.phone || "—")}
         ${infoCell("Email", client.email || "—")}
+        ${clientGst ? infoCell("GST No", clientGst) : ""}
+        ${primaryMembershipName ? infoCell("Membership", primaryMembershipName) : ""}
+        ${referralCode ? infoCell("Your Referral Code", referralCode) : ""}
+        ${referralEarnings !== null ? infoCell("Referral Earnings", fmt(Number(referralEarnings))) : ""}
       </div>
     </div>
     <div class="inv-info-col">
@@ -306,16 +428,16 @@ export function buildReceiptHtml(params: {
     <table class="inv-table">
       <thead>
         <tr>
-          <th>#</th><th>Item Name</th><th>Type</th><th>Staff</th><th>Qty</th><th>Rate</th><th>Disc.</th><th>Amount</th>
+          <th>#</th><th>Item Name</th><th>Type</th><th>Staff</th><th>Time</th><th>Qty</th><th>Rate</th><th>Disc.</th><th>Tax</th><th>Amount</th>
         </tr>
       </thead>
       <tbody>
-        ${allItemRows || `<tr><td colspan="8" style="text-align:center;padding:20px;color:#9ca3af;border:1px solid #e5e7eb">No items</td></tr>`}
+        ${allItemRows || `<tr><td colspan="10" style="text-align:center;padding:20px;color:#9ca3af;border:1px solid #e5e7eb">No items</td></tr>`}
       </tbody>
       <tfoot>
         <tr>
-          <td colspan="7" style="text-align:right;padding:8px 12px;font-size:11px;color:#374151">Items Total</td>
-          <td style="text-align:right;padding:8px 12px;font-weight:700;color:#111827">${fmt(subtotalAmt || grandTotal)}</td>
+          <td colspan="9" style="text-align:right;padding:8px 12px;font-size:11px;color:#374151">Items Total</td>
+          <td style="text-align:right;padding:8px 12px;font-weight:700;color:#111827">${fmt(grossItemsTotal)}</td>
         </tr>
       </tfoot>
     </table>
@@ -324,6 +446,8 @@ export function buildReceiptHtml(params: {
   <div class="inv-bottom">
     <div>
       ${appointment?.notes ? `<div class="inv-notes"><div class="inv-notes-title">Notes</div>${appointment.notes}</div>` : ""}
+      ${activePackages.length > 0 ? `<div class="inv-notes" style="margin-top:8px"><div class="inv-notes-title">Active Packages</div>${activePackages.map((p) => `${p.packageName} — ${p.remaining}/${p.total} sessions left`).join("<br>")}</div>` : ""}
+      ${activeMemberships.length > 0 ? `<div class="inv-notes" style="margin-top:8px"><div class="inv-notes-title">Active Memberships</div>${activeMemberships.map((m) => `${m.membershipName}${m.expiresAt ? ` — Expires: ${fmtDate(m.expiresAt)}` : ""}`).join("<br>")}</div>` : ""}
     </div>
     <div>
       <div style="font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:0.8px;color:#111827;margin-bottom:8px;padding-bottom:5px;border-bottom:2px solid #111827">Payment Summary</div>
@@ -337,11 +461,6 @@ export function buildReceiptHtml(params: {
     <div class="inv-footer-left">
       <strong>Thank you for choosing ${salonName}!</strong><br>
       <span style="font-size:11px;color:#6b7280">We look forward to seeing you again.</span>
-    </div>
-    <div class="inv-footer-center">
-      ${[salonPhone, salonEmail].filter(Boolean).join(" &nbsp;|&nbsp; ")}<br>
-      ${salonAddress || ""}
-      ${gst ? `<br>GSTIN: ${gst}` : ""}
     </div>
     <div class="inv-footer-right">
       This is a computer-generated receipt.<br>

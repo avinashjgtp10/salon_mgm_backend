@@ -148,6 +148,24 @@ export const waScheduledMessagesService = {
     })
   },
 
+  // Same shape as scheduleBirthday — anniversaryDayMonth is "MM-DD" sliced
+  // from the client's full `anniversary` date column (unlike birthday, which
+  // is already stored split as birthday_day_month/birthday_year).
+  async scheduleAnniversary(params: {
+    salonId: string; clientId: string; phone: string; countryCode?: string | null
+    fullName: string; salonName: string; anniversaryDayMonth: string
+  }): Promise<void> {
+    const scheduledAt = nextOccurrenceIST(params.anniversaryDayMonth, 9)
+    await waScheduledMessagesRepository.upsertScheduled({
+      salonId: params.salonId, clientId: params.clientId, phone: params.phone, countryCode: params.countryCode,
+      eventType: 'anniversary_wishes', referenceId: params.clientId, referenceType: 'client',
+      scheduledAt,
+      variables: { '1': params.fullName, '2': params.salonName },
+      messagePreview: `Happy Anniversary, ${params.fullName}!`,
+      isPreview: false,
+    })
+  },
+
   // ── Group B — 1-day rolling preview, called from the nightly poll slot ─────
 
   async upsertGroupBPreview(eventType: 'pending_payment_reminder' | 'we_miss_you_30d' | 'we_miss_you_60d' | 'we_miss_you_90d'): Promise<void> {
@@ -325,18 +343,22 @@ export const waScheduledMessagesService = {
       await waScheduledMessagesRepository.markSkipped(row.id, 'No approved template, WhatsApp not configured, or client opted out')
     }
 
-    // Birthday self-perpetuates: on a successful send, schedule next year's
-    // occurrence for the same client so it recurs without a broad daily scan.
-    if (row.event_type === 'birthday_wishes' && log?.status && ['SENT', 'DELIVERED', 'READ'].includes(log.status) && row.client_id) {
-      // birthday_day_month itself isn't carried on this row (variables hold
-      // the rendered message values, not raw source data) — re-derive next
+    // Birthday/Anniversary self-perpetuate: on a successful send, schedule
+    // next year's occurrence for the same client so it recurs without a
+    // broad daily scan.
+    if (
+      (row.event_type === 'birthday_wishes' || row.event_type === 'anniversary_wishes') &&
+      log?.status && ['SENT', 'DELIVERED', 'READ'].includes(log.status) && row.client_id
+    ) {
+      // The day/month itself isn't carried on this row (variables hold the
+      // rendered message values, not raw source data) — re-derive next
       // year's date directly from this row's own scheduled_at, which already
       // encodes the correct month/day.
       const nextYear = new Date(row.scheduled_at)
       nextYear.setFullYear(nextYear.getFullYear() + 1)
       await waScheduledMessagesRepository.upsertScheduled({
         salonId: row.salon_id, clientId: row.client_id, phone: row.phone_number, countryCode: row.phone_country_code,
-        eventType: 'birthday_wishes', referenceId: row.client_id, referenceType: 'client',
+        eventType: row.event_type, referenceId: row.client_id, referenceType: 'client',
         scheduledAt: nextYear, variables: row.variables, messagePreview: row.message_preview ?? '', isPreview: false,
       })
     }
