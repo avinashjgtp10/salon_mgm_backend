@@ -23,6 +23,7 @@ export const branchOwnerRepository = {
         COALESCE(appt_counts.appointments_today, 0)                                      AS appointments_today,
         COALESCE(revenue.revenue_today, 0)                                               AS revenue_today,
         sub.status                                                                        AS subscription_status,
+        sp.name                                                                           AS plan_name,
         COALESCE(sub.trial_end, sub.current_period_end)                                  AS plan_expires_at,
         (
           (sub.status = 'active'   AND (sub.current_period_end IS NULL OR sub.current_period_end > NOW()))
@@ -43,6 +44,7 @@ export const branchOwnerRepository = {
         ORDER BY created_at DESC
         LIMIT 1
       ) sub ON true
+      LEFT JOIN subscription_plans sp ON sp.id = sub.plan_id
       LEFT JOIN (
         SELECT salon_id, COUNT(*)::int AS staff_count
         FROM staff
