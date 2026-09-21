@@ -441,19 +441,51 @@ export const clientPackagesRepository = {
     }
   },
 
+  // Deleting a package assignment (e.g. from the Package Sale Report) must
+  // also reverse the sale it created — otherwise the invoice/revenue stays
+  // on the books for a package the client no longer has. Two cases, same
+  // reasoning appointments.repository.ts's deleteById() already established
+  // for "delete a sale and everything derived from it":
+  //
+  //   - Standalone "Sell Package" purchase (appointment_id IS NULL): its
+  //     sale was created via a dedicated single-item recordTransaction()
+  //     call (see client-packages.service.ts) — nothing else is on that
+  //     invoice, so the whole sale/sale_item/commission trail for it is
+  //     safe to hard-delete, exactly like the appointment-delete precedent.
+  //   - Package sold as one line item on a bigger appointment bill
+  //     (appointment_id IS NOT NULL, via autoCreateFromPayment) — its
+  //     sale_id is the SAME sale as the bill's other services/products, so
+  //     only this package's own sale_item row (and its own commission
+  //     portion, identified by category='package') can be removed; the
+  //     rest of that invoice must survive. The sale's own totals are
+  //     reduced by exactly the amounts the package's sale_item row
+  //     contributed, rather than a full recompute of the invoice.
   async delete(id: string, salonId: string): Promise<boolean> {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
 
-      // Verify ownership
-      const check = await client.query(
-        `SELECT id FROM client_packages WHERE id = $1 AND salon_id = $2`,
+      const { rows: pkgRows } = await client.query(
+        `SELECT id, sale_id, appointment_id, staff_id, package_name
+         FROM client_packages WHERE id = $1 AND salon_id = $2 FOR UPDATE`,
         [id, salonId],
       );
-      if (!check.rows.length) return false;
+      const pkg = pkgRows[0];
+      if (!pkg) {
+        await client.query("ROLLBACK");
+        return false;
+      }
 
-      // Delete session history, then services, then the package (child rows first)
+      // Future-booked sessions for this package must go too — not deleted
+      // previously (see class comment above delete() in the version this
+      // replaces), which left client_package_service_schedules rows orphaned.
+      await client.query(
+        `DELETE FROM client_package_service_schedules
+         WHERE client_package_service_id IN (
+           SELECT id FROM client_package_services WHERE client_package_id = $1
+         )`,
+        [id],
+      );
       await client.query(
         `DELETE FROM client_package_session_history
          WHERE client_package_service_id IN (
@@ -465,10 +497,49 @@ export const clientPackagesRepository = {
         `DELETE FROM client_package_services WHERE client_package_id = $1`,
         [id],
       );
-      await client.query(
-        `DELETE FROM client_packages WHERE id = $1 AND salon_id = $2`,
-        [id, salonId],
-      );
+
+      if (pkg.sale_id) {
+        if (!pkg.appointment_id) {
+          // Standalone purchase — dedicated sale, safe to remove entirely.
+          await client.query(`DELETE FROM commission_earned WHERE sale_id = $1`, [pkg.sale_id]);
+          await client.query(`DELETE FROM sale_items WHERE sale_id = $1`, [pkg.sale_id]);
+          await client.query(`DELETE FROM sales WHERE id = $1`, [pkg.sale_id]);
+        } else {
+          // Line item on a shared bill — remove only this package's own
+          // slice: its commission portion (by category, since sale_items
+          // has no direct commission_earned FK), its own sale_item row, and
+          // subtract that row's own stored amounts from the parent sale's
+          // totals so the remaining invoice/revenue is still internally
+          // consistent without touching the other line items on it.
+          await client.query(
+            `DELETE FROM commission_earned WHERE sale_id = $1 AND category = 'package' AND staff_id = $2`,
+            [pkg.sale_id, pkg.staff_id]
+          );
+          const { rows: itemRows } = await client.query(
+            `DELETE FROM sale_items
+             WHERE id = (
+               SELECT id FROM sale_items
+               WHERE sale_id = $1 AND item_type = 'package' AND name = $2
+               ORDER BY created_at DESC LIMIT 1
+             )
+             RETURNING total_price, tax_amount, taxable_amount`,
+            [pkg.sale_id, pkg.package_name]
+          );
+          const item = itemRows[0];
+          if (item) {
+            await client.query(
+              `UPDATE sales
+               SET subtotal = GREATEST(subtotal - $1, 0),
+                   tax_amount = GREATEST(tax_amount - $2, 0),
+                   total_amount = GREATEST(total_amount - $3, 0)
+               WHERE id = $4`,
+              [Number(item.taxable_amount) || 0, Number(item.tax_amount) || 0, Number(item.total_price) || 0, pkg.sale_id]
+            );
+          }
+        }
+      }
+
+      await client.query(`DELETE FROM client_packages WHERE id = $1 AND salon_id = $2`, [id, salonId]);
 
       await client.query("COMMIT");
       return true;

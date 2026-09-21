@@ -519,6 +519,39 @@ export const appointmentsRepository = {
             }
             const saleId: string | null = appointment.sale_id ?? null;
 
+            // A package sold on this bill (standalone client_packages.sale_id
+            // = saleId, or a line item auto-created via autoCreateFromPayment
+            // with client_packages.appointment_id = this appointment) must be
+            // removed along with the sale — otherwise deleting the bill still
+            // left the client's assigned package behind, still showing up on
+            // the Package Sale Report with no sale to back it, and still
+            // redeemable even though the purchase that paid for it is gone.
+            // Same child-row order as clientPackagesRepository.delete().
+            const { rows: pkgRows } = await client.query(
+                `SELECT id FROM client_packages
+                 WHERE appointment_id = $1 OR ($2::uuid IS NOT NULL AND sale_id = $2)`,
+                [id, saleId]
+            );
+            if (pkgRows.length > 0) {
+                const pkgIds = pkgRows.map((r: any) => r.id);
+                await client.query(
+                    `DELETE FROM client_package_service_schedules
+                     WHERE client_package_service_id IN (
+                       SELECT id FROM client_package_services WHERE client_package_id = ANY($1::uuid[])
+                     )`,
+                    [pkgIds]
+                );
+                await client.query(
+                    `DELETE FROM client_package_session_history
+                     WHERE client_package_service_id IN (
+                       SELECT id FROM client_package_services WHERE client_package_id = ANY($1::uuid[])
+                     )`,
+                    [pkgIds]
+                );
+                await client.query(`DELETE FROM client_package_services WHERE client_package_id = ANY($1::uuid[])`, [pkgIds]);
+                await client.query(`DELETE FROM client_packages WHERE id = ANY($1::uuid[])`, [pkgIds]);
+            }
+
             await client.query(
                 `DELETE FROM commission_earned WHERE appointment_id = $1 OR ($2::uuid IS NOT NULL AND sale_id = $2)`,
                 [id, saleId]
