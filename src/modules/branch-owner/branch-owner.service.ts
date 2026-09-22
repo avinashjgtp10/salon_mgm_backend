@@ -5,6 +5,7 @@ import { superAdminRepository } from "../super-admin/super-admin.repository";
 import { AppError } from "../../middleware/error.middleware";
 import { salonDashboardRepository } from "../salon-dashboard/salon-dashboard.repository";
 import { staffCommissionsService, staffService } from "../staff/staff.service";
+import { rolesService } from "../roles/roles.service";
 import { billingService } from "../billing/billing.service";
 import { supportService } from "../support/support.service";
 import { notificationsService } from "../notifications/notifications.service";
@@ -54,8 +55,11 @@ export const branchOwnerService = {
     return branchOwnerRepository.getRevenueTrend(branchOwnerId, period);
   },
 
+  // No limit here (unlike the dashboard's 10-row preview above) — the
+  // Payments page's summary cards must total every matching payment, and a
+  // fixed cap silently truncated older ones out of that total.
   async getPayments(branchOwnerId: string, status?: string) {
-    return branchOwnerRepository.getRecentPayments(branchOwnerId, 200, status);
+    return branchOwnerRepository.getRecentPayments(branchOwnerId, undefined, status);
   },
 
   async listSalonProducts(branchOwnerId: string, salonId: string, search?: string) {
@@ -92,6 +96,18 @@ export const branchOwnerService = {
       if (source_salon_id === dest_salon_id) throw new AppError(400, "Source and destination salon must differ", "VALIDATION_ERROR");
       if (!(quantity > 0)) throw new AppError(400, "Quantity must be greater than zero", "VALIDATION_ERROR");
       await assertSalonsAssigned(branchOwnerId, [source_salon_id, dest_salon_id]);
+
+      // Mirrors the frontend's From/To pickers (only active branches are
+      // offered there) — enforced here too since this is the actual gate
+      // against a stale page or a direct API call still naming an inactive
+      // salon a client-side filter alone wouldn't catch.
+      const [sourceActive, destActive] = await Promise.all([
+        branchOwnerRepository.isSalonActive(source_salon_id),
+        branchOwnerRepository.isSalonActive(dest_salon_id),
+      ]);
+      if (!sourceActive || !destActive) {
+        throw new AppError(400, "Stock can only be transferred between active salons", "VALIDATION_ERROR");
+      }
 
       const source = await branchOwnerRepository.findProduct(source_product_id, source_salon_id);
       if (!source) throw new AppError(404, "Source product not found", "NOT_FOUND");
@@ -172,20 +188,20 @@ export const branchOwnerService = {
       return branchOwnerRepository.setTransferStatus(transferId, "cancelled");
   },
 
-  async listTransfers(branchOwnerId: string, status?: string) {
-      return branchOwnerRepository.listTransfers(branchOwnerId, status);
+  async listTransfers(branchOwnerId: string, status?: string, salonId?: string) {
+      return branchOwnerRepository.listTransfers(branchOwnerId, status, salonId);
   },
 
-  async getInventorySummary(branchOwnerId: string) {
-      return branchOwnerRepository.getInventorySummary(branchOwnerId);
+  async getInventorySummary(branchOwnerId: string, salonId?: string) {
+      return branchOwnerRepository.getInventorySummary(branchOwnerId, salonId);
   },
 
   async getBranchOverview(branchOwnerId: string) {
       return branchOwnerRepository.getBranchOverview(branchOwnerId);
   },
 
-  async getLowStockAlerts(branchOwnerId: string) {
-      return branchOwnerRepository.getLowStockAlerts(branchOwnerId);
+  async getLowStockAlerts(branchOwnerId: string, salonId?: string) {
+      return branchOwnerRepository.getLowStockAlerts(branchOwnerId, salonId);
   },
 
   async getCategoryBreakdown(branchOwnerId: string) {
@@ -352,15 +368,38 @@ export const branchOwnerService = {
     return perSalon.flat();
   },
 
-  // Only custom_permissions is writable through this route — same narrow
-  // surface as the salon owner's "Customize permissions" modal, just called
-  // with a branch_owner token instead of a salon_owner one.
-  async updateSalonStaffPermissions(branchOwnerId: string, salonId: string, staffId: string, customPermissions: Record<string, boolean> | null) {
+  // ── Roles & Permissions (real system) ──────────────────────────────────────
+  // Thin proxies into rolesService, scoped by the same assertSalonsAssigned()
+  // gate every other salon-scoped method here uses, with an ActorContext that
+  // stands in for the branch owner's own identity (real userId, for the
+  // audit log) — see roles.service.ts's assertNoEscalation for why role:
+  // "branch_owner" must be recognized there too.
+  async listSalonRoles(branchOwnerId: string, salonId: string) {
     await assertSalonsAssigned(branchOwnerId, [salonId]);
-    return staffService.update({
-      id: staffId, salonId, requesterUserId: branchOwnerId, requesterRole: "branch_owner",
-      patch: { custom_permissions: customPermissions },
-    });
+    return rolesService.listRoles(salonId);
+  },
+
+  async getStaffPermissions(branchOwnerId: string, salonId: string, staffId: string) {
+    await assertSalonsAssigned(branchOwnerId, [salonId]);
+    return rolesService.getStaffEffectivePermissions(staffId, salonId);
+  },
+
+  async setStaffOverrides(
+    branchOwnerId: string, salonId: string, staffId: string,
+    overrides: Record<string, boolean | null>, ipAddress: string | null, userAgent: string | null,
+  ) {
+    await assertSalonsAssigned(branchOwnerId, [salonId]);
+    const actor = { userId: branchOwnerId, role: "branch_owner", salonId, ipAddress, userAgent };
+    return rolesService.setStaffOverrides(staffId, salonId, actor, overrides);
+  },
+
+  async assignStaffRole(
+    branchOwnerId: string, salonId: string, staffId: string,
+    roleId: string, ipAddress: string | null, userAgent: string | null,
+  ) {
+    await assertSalonsAssigned(branchOwnerId, [salonId]);
+    const actor = { userId: branchOwnerId, role: "branch_owner", salonId, ipAddress, userAgent };
+    return rolesService.assignStaffRole(staffId, salonId, actor, roleId);
   },
 
   // ── Subscription (read-only) ──────────────────────────────────────────────

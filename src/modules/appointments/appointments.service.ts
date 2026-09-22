@@ -32,7 +32,10 @@ import { computeBillTotals, rowsTotal, normalizeDiscountAppliesTo, ActiveTaxRow 
 import { getActiveTaxes } from "../settings/tax.util";
 import { paymentsRepository } from "../payments/payments.repository";
 import { clientPackagesService } from "../client-packages/client-packages.service";
+import { clientPackagesRepository } from "../client-packages/client-packages.repository";
 import { autoCreatePackagesForBill } from "../transactions/package-autocreate.helper";
+import { clientMembershipsService } from "../client-memberships/client-memberships.service";
+import { clientMembershipsRepository } from "../client-memberships/client-memberships.repository";
 import {
     Appointment,
     AppointmentServiceConsumableRecord,
@@ -465,6 +468,13 @@ async function resolveReceiptContext(appointmentId: string, salonId: string) {
     if (!sale) throw new AppError(400, "No invoice found for this appointment yet", "BAD_REQUEST");
     const items = await salesRepository.findItemsBySaleId(sale.id);
 
+    // Redemption/tax figures live on the PAYMENT row, not the sale — same
+    // fields payments.service.ts's own call site reads straight off the
+    // payment it just created; this fetches the latest one for this
+    // appointment instead, since this resolver runs after the fact (on-demand
+    // "Send to WhatsApp" / re-download).
+    const payment = await paymentsRepository.findByAppointmentId(appointmentId);
+
     const totalAmount = Number(sale.total_amount) || 0;
     const paidAmount = Number((existing as any).paid_amount) || 0;
     const dueAmount = Math.max(0, totalAmount - paidAmount);
@@ -487,6 +497,13 @@ async function resolveReceiptContext(appointmentId: string, salonId: string) {
         paidAmount,
         dueAmount,
         couponCode: sale.coupon_code ?? null,
+        taxBreakdown: (payment as any)?.tax_breakdown ?? null,
+        membershipWalletUsed: Number((payment as any)?.membership_wallet_used) || 0,
+        membershipDiscountUsed: Number((payment as any)?.membership_discount_used) || 0,
+        ewalletUsed: Number((payment as any)?.ewallet_used) || 0,
+        rewardPointsValue: Number((payment as any)?.reward_points_value) || 0,
+        referralCreditUsed: Number((payment as any)?.referral_credit_used) || 0,
+        packageCoveredAmount: Number((payment as any)?.package_used) || 0,
     };
 }
 
@@ -831,6 +848,66 @@ export const appointmentsService = {
                         created_at: existing.scheduled_at,
                     });
 
+                    // The reverse case: a package REMOVED on this edit (or
+                    // the last one, emptying package_items entirely) leaves
+                    // its client_packages row behind untouched —
+                    // recordTransaction() above only rewrites sales/
+                    // sale_items, which has no idea client_packages exists,
+                    // and there was previously no teardown path for this at
+                    // all (only whole-appointment delete and the Package
+                    // Sale Report's own manual delete covered removal).
+                    // Diffed by name — the only identifying key package_items
+                    // entries and client_packages rows share (see
+                    // findIdByAppointmentAndName, the same lookup
+                    // autoCreateFromPayment's own idempotency check below
+                    // uses) — so a package dropped from the bill has its
+                    // assignment (and everything client-packages.service's
+                    // delete() cleans up: session history, future-booked
+                    // schedules, and its own slice of this sale/commission)
+                    // removed to match, instead of surviving as an orphan
+                    // still shown on the Package Sale Report.
+                    const oldNames = new Set((existing.package_items ?? []).map((p: any) => p.name).filter(Boolean));
+                    const newNames = new Set((merged.package_items ?? []).map((p: any) => p.name).filter(Boolean));
+                    const removedNames = [...oldNames].filter((n) => !newNames.has(n));
+                    for (const removedName of removedNames) {
+                        try {
+                            const removedId = await clientPackagesRepository.findIdByAppointmentAndName(
+                                existing.salon_id, appointmentId, removedName as string,
+                            );
+                            if (removedId) await clientPackagesService.delete(removedId, existing.salon_id);
+                        } catch (err) {
+                            logger.error(`[${logTag}] Failed to remove client_packages row for a package dropped from the bill`, {
+                                appointmentId, removedName, message: (err as any)?.message,
+                            });
+                        }
+                    }
+
+                    // Same removal-on-edit handling for memberships — a
+                    // membership dropped from the bill must have its
+                    // client_memberships row removed too, or it survives as
+                    // an orphan still shown on the Membership Sale Report.
+                    // Scoped to appointment_id (see
+                    // findIdByAppointmentAndName's own comment) so a renewal
+                    // of a pre-existing membership from a different, earlier
+                    // appointment is never touched by this — only a
+                    // membership this specific appointment's bill itself
+                    // created.
+                    const oldMembershipNames = new Set((existing.membership_items ?? []).map((m: any) => m.name).filter(Boolean));
+                    const newMembershipNames = new Set((merged.membership_items ?? []).map((m: any) => m.name).filter(Boolean));
+                    const removedMembershipNames = [...oldMembershipNames].filter((n) => !newMembershipNames.has(n));
+                    for (const removedName of removedMembershipNames) {
+                        try {
+                            const removedId = await clientMembershipsRepository.findIdByAppointmentAndName(
+                                existing.salon_id, appointmentId, removedName as string,
+                            );
+                            if (removedId) await clientMembershipsService.delete(removedId, existing.salon_id);
+                        } catch (err) {
+                            logger.error(`[${logTag}] Failed to remove client_memberships row for a membership dropped from the bill`, {
+                                appointmentId, removedName, message: (err as any)?.message,
+                            });
+                        }
+                    }
+
                     // A package added/changed on this edit needs its own
                     // client_packages row too — recordTransaction() above only
                     // refreshes sales/sale_items, which the Package Sale
@@ -1069,9 +1146,35 @@ export const appointmentsService = {
                 .catch((err: any) => logger.error("[client-packages] rescheduleForAppointment failed:", err?.message ?? err));
             // service_reminder_24h (the non-package-linked reminder) — the
             // package-linked one is handled inside rescheduleForAppointment above.
-            const newReminderAt = new Date(new Date(patch.scheduled_at).getTime() - 24 * 3600_000);
-            waScheduledMessagesService.rescheduleForReference('appointment', appointmentId, 'service_reminder_24h', newReminderAt)
-                .catch((err: any) => logger.error("[wa-scheduled] reschedule-on-move failed:", err?.message ?? err));
+            // Re-runs scheduleAppointmentReminder() itself (the same call the
+            // create() path above makes) instead of a plain UPDATE — that used
+            // to be rescheduleForReference(), which only moves a row that
+            // ALREADY exists. An appointment first booked too soon for a
+            // reminder row (scheduleAppointmentReminder's own <24h-out guard
+            // at creation) never got one, so moving it out to a future date
+            // later left it with no reminder at all, invisible on Scheduled
+            // Templates even though it now clearly qualifies. upsertScheduled's
+            // ON CONFLICT DO UPDATE underneath this covers both "move an
+            // existing row" and "create the missing one" identically.
+            (async () => {
+                try {
+                    const full = await appointmentsRepository.findById(appointmentId);
+                    if (!full || !(full as any).client_phone) return;
+                    const isPackageLinked = (full.services ?? []).some((s: any) => s.is_package_service);
+                    if (isPackageLinked) return;
+                    await waScheduledMessagesService.scheduleAppointmentReminder({
+                        salonId: full.salon_id, clientId: full.client_id,
+                        phone: (full as any).client_phone, countryCode: (full as any).client_phone_code ?? null,
+                        appointmentId: full.id, scheduledAt: full.scheduled_at,
+                        clientName: full.client_name ?? "Valued Customer",
+                        salonName: (full as any).salon_name ?? "our salon",
+                        serviceName: full.services?.[0]?.name ?? full.title ?? "your service",
+                        staffName: full.staff_name ?? "our team",
+                    });
+                } catch (err: any) {
+                    logger.error("[wa-scheduled] reschedule-on-move failed:", err?.message ?? err);
+                }
+            })();
         }
 
         // ── WhatsApp Automation: Appointment Rescheduled ──────────────────────
@@ -1392,6 +1495,12 @@ export const appointmentsService = {
                         console.log(`[BILL_RECEIPT] appointments.service.ts checkout() preExistingSale branch — guard won=${won} saleId=${preExistingSale.id}`);
                         if (!won) return;
 
+                        // Same redemption/tax figures resolveReceiptContext()
+                        // above reads for the on-demand re-send — this fallback
+                        // branch builds its own context inline rather than
+                        // reusing that helper, so it needs its own fetch.
+                        const fallbackPayment = await paymentsRepository.findByAppointmentId(existing.id);
+
                         await sendPurchaseReceipt({
                             salonId:     existing.salon_id,
                             phone:       (existing as any).client_phone,
@@ -1412,6 +1521,13 @@ export const appointmentsService = {
                             paidAmount:  Number(preExistingSale.total_amount ?? 0) + Number(preExistingSale.tip_amount ?? 0),
                             dueAmount:   0,
                             couponCode:  null,
+                            taxBreakdown: (fallbackPayment as any)?.tax_breakdown ?? null,
+                            membershipWalletUsed: Number((fallbackPayment as any)?.membership_wallet_used) || 0,
+                            membershipDiscountUsed: Number((fallbackPayment as any)?.membership_discount_used) || 0,
+                            ewalletUsed: Number((fallbackPayment as any)?.ewallet_used) || 0,
+                            rewardPointsValue: Number((fallbackPayment as any)?.reward_points_value) || 0,
+                            referralCreditUsed: Number((fallbackPayment as any)?.referral_credit_used) || 0,
+                            packageCoveredAmount: Number((fallbackPayment as any)?.package_used) || 0,
                         });
                     } catch (err: any) {
                         logger.error("[WA-AUTO] preExistingSale purchase-confirmation fallback failed:", err?.message);

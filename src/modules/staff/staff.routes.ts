@@ -127,6 +127,13 @@ const viewTeamOrBooking = requireAnyPermission(["view_team", "create_sales", "ma
 router.get("/", auth, ownerAdminStaff, viewTeamOrBooking, staffController.list);
 router.post("/", auth, ownerAdminStaff, createStaff, validateCreateStaff, staffController.create);
 
+// ─── Scheduler staff sequence (must be BEFORE /:id — see the Commissions
+// comment above for why a literal path segment loses to an earlier /:id
+// route otherwise) — gated by manage_calendar, the same permission that
+// already governs every other calendar-display action, rather than minting
+// a new catalog key for one endpoint. ─────────────────────────────────────
+router.put("/scheduler-order", auth, ownerAdminStaff, requirePermission("manage_calendar"), staffController.updateSchedulerOrder);
+
 // ─── Avatar upload (stateless — must be BEFORE /:id) ─────────────────────────
 router.post("/upload-avatar", auth, ownerAdmin, uploadMiddleware.single("avatar"), staffController.uploadAvatar);
 

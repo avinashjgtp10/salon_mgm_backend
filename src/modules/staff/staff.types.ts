@@ -108,6 +108,10 @@ export type Staff = {
     address: string | null;
     working_hours_per_day: number | null;
     holidays: number | null;
+    // Salon-owner-defined column order for the Scheduler's staff columns
+    // (Reorder Staff popup) — independent of Staff List's own default sort.
+    // NULL = never explicitly sequenced, sorts after any staff that have been.
+    scheduler_order: number | null;
     // Populated only on the list endpoint (LEFT JOIN LATERAL against
     // staff_schedules — see staffRepository.list) so callers that already
     // fetch the staff list don't also need a separate per-staff
@@ -424,4 +428,11 @@ export type StaffListQuery = {
     allow_calendar_bookings?: boolean;
     sort_by?: "first_name" | "last_name" | "email" | "created_at" | "invitation_status" | "designation" | "joined_date";
     sort_order?: "ASC" | "DESC";
+};
+
+// ─── Scheduler staff order ──────────────────────────────────────────────────
+
+export type UpdateSchedulerOrderBody = {
+    /** Staff ids in the desired display order — index becomes scheduler_order. */
+    staffIds: string[];
 };

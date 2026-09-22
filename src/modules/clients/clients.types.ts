@@ -215,6 +215,15 @@ export type UpdateClientBody = Partial<CreateClientBody> & {
 export type ClientGroupFilter = "all" | "fresha_accounts" | "manually_added";
 export type GenderFilter = "all" | "female" | "male" | "other" | "non_binary" | "prefer_not_to_say";
 
+// "Active" is deliberately re-derived at query time (status column +
+// not-yet-expired), not read straight off `status` — client_packages.status
+// is only ever written 'Active'/'Completed' (never flipped to 'Expired' by
+// date), and client_memberships.status can likewise sit on 'active' long
+// past its own expiry. Same convention the frontend already uses for its own
+// "active" badges — see ClientDetailsDrawer.tsx's activeMemberships filter
+// and ClientHistoryDetail.tsx's displayPkgStatus().
+export type PackageMembershipFilter = "has_package" | "has_membership" | "has_both" | "has_none";
+
 export type ClientsListQuery = {
     offset?: number;
     limit?: number;
@@ -231,6 +240,14 @@ export type ClientsListQuery = {
     gender?: GenderFilter;
     min_sales?: number;    // revenue range (lifetime paid, wallet-settled excluded)
     max_sales?: number;
+    package_membership?: PackageMembershipFilter;
+
+    // "list" trims the SELECT to only what the Client List table renders
+    // (skips address/notes/tags/ltv/ewallet/reward-balance columns and the
+    // referral-points join) — opt-in so every other GET /clients caller
+    // (Client Loyalty, Staff Customers, the Redux client thunk...) keeps
+    // getting the full row it already relies on. Omitted/anything else = full.
+    fields?: "list" | "full";
 };
 
 export type Paginated<T> = {

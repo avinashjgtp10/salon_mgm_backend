@@ -10,7 +10,7 @@ import {
 } from "./commissionRules.types";
 
 const VALID_SOURCES: CommissionRuleSource[] = ["services", "products", "memberships", "packages"];
-const VALID_TYPES: CommissionRuleType[] = ["percentage", "fixed", "milestone"];
+const VALID_TYPES: CommissionRuleType[] = ["percentage", "fixed", "milestone", "tiered_target"];
 const VALID_METRICS: ConditionMetric[] = ["revenue", "count"];
 const VALID_FREQUENCIES: CommissionFrequency[] = ["daily", "weekly", "biweekly", "monthly", "custom"];
 const VALID_SCOPE_TYPES: CommissionScopeType[] = ["salon", "staff", "role"];
@@ -43,15 +43,29 @@ const validateShared = (b: any, isCreate: boolean) => {
     if (isCreate || b.rate !== undefined) {
         if (!isPositiveNumber(b.rate))
             throw new AppError(400, "rate is required and must be a positive number", "VALIDATION_ERROR");
-        if (type === "percentage" && b.rate > 100)
+        if ((type === "percentage" || type === "tiered_target") && b.rate > 100)
             throw new AppError(400, "rate cannot exceed 100 for percentage rules", "VALIDATION_ERROR");
     }
 
-    // Milestone rules always need a threshold condition — that's what makes it a "milestone" at all.
-    if (type === "milestone") {
+    // tiered_target's "before target" rate lives in `rate` (checked above); its
+    // "at/above target" rate is its own column, validated the same way.
+    if (type === "tiered_target" && (isCreate || b.rate_after_target !== undefined)) {
+        if (!isPositiveNumber(b.rate_after_target))
+            throw new AppError(400, "rate_after_target is required and must be a positive number for tiered_target rules", "VALIDATION_ERROR");
+        if (b.rate_after_target > 100)
+            throw new AppError(400, "rate_after_target cannot exceed 100", "VALIDATION_ERROR");
+    }
+
+    // Milestone and tiered_target rules always need a threshold condition — for
+    // tiered_target this IS the monthly sales target.
+    if (type === "milestone" || type === "tiered_target") {
         if (!isPositiveNumber(b.condition_target))
-            throw new AppError(400, "condition_target is required and must be a positive number for milestone rules", "VALIDATION_ERROR");
-        if (!isEnum(b.condition_metric, VALID_METRICS))
+            throw new AppError(400, type === "tiered_target"
+                ? "condition_target is required and must be a positive number — this is the monthly sales target"
+                : "condition_target is required and must be a positive number for milestone rules", "VALIDATION_ERROR");
+        if (type === "tiered_target" && b.condition_metric !== undefined && b.condition_metric !== "revenue")
+            throw new AppError(400, "condition_metric must be 'revenue' for tiered_target rules", "VALIDATION_ERROR");
+        if (type === "milestone" && !isEnum(b.condition_metric, VALID_METRICS))
             throw new AppError(400, `condition_metric is required and must be one of: ${VALID_METRICS.join(", ")}`, "VALIDATION_ERROR");
     } else {
         if (b.condition_target !== undefined && b.condition_target !== null && !isPositiveNumber(b.condition_target))

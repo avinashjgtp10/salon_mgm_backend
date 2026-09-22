@@ -234,8 +234,12 @@ import {
     DailySheetReportResponse,
     ProductRetailReportFilters,
     ProductRetailReportResponse,
+    ProductRetailChartFilters,
+    ProductRetailChartResponse,
     ServiceSaleReportFilters,
     ServiceSaleReportResponse,
+    ServiceSaleChartFilters,
+    ServiceSaleChartResponse,
     GstReportFilters,
     GstReportResponse,
     ProductMarginReportFilters,
@@ -246,6 +250,8 @@ import {
     EwalletReportResponse,
     ProductInventoryReportFilters,
     ProductInventoryReportResponse,
+    ProductInventoryChartFilters,
+    ProductInventoryChartResponse,
     ProductMovementReportFilters,
     ProductMovementReportResponse,
     BrandPerformanceReportFilters,
@@ -256,8 +262,14 @@ import {
     StockMovementReportResponse,
     ClientRevenueReportFilters,
     ClientRevenueReportResponse,
+    ClientRevenueChartFilters,
+    ClientRevenueChartResponse,
     AllClientsReportFilters,
     AllClientsReportResponse,
+    BirthdayReportFilters,
+    BirthdayReportResponse,
+    AnniversaryReportFilters,
+    AnniversaryReportResponse,
     NewClientFollowUpFilters,
     NewClientFollowUpResponse,
     CancellationRecoveryFilters,
@@ -268,38 +280,58 @@ import {
     NoShowRecoveryResponse,
     EnquiryReportFilters,
     EnquiryReportResponse,
+    EnquiryChartFilters,
+    EnquiryChartResponse,
     CustomerFrequencyReportFilters,
     CustomerFrequencyReportResponse,
+    CustomerFrequencyChartFilters,
+    CustomerFrequencyChartResponse,
     LostCustomersReportFilters,
     LostCustomersReportResponse,
     ReferralReportFilters,
     ReferralReportResponse,
     PaymentCollectionReportFilters,
     PaymentCollectionReportResponse,
+    PaymentCollectionChartFilters,
+    PaymentCollectionChartResponse,
     PendingPaymentReportFilters,
     PendingPaymentReportResponse,
     CashManagementReportFilters,
     CashManagementReportResponse,
+    CashManagementChartFilters,
+    CashManagementChartResponse,
     MembershipHistoryReportFilters,
     MembershipHistoryReportResponse,
     ServiceFrequencyReportFilters,
     ServiceFrequencyReportResponse,
+    ServiceFrequencyChartFilters,
+    ServiceFrequencyChartResponse,
     CustomerSpendReportFilters,
     CustomerSpendReportResponse,
     StaffSalesReportFilters,
     StaffSalesReportResponse,
+    StaffSalesChartFilters,
+    StaffSalesChartResponse,
     StaffPerformanceReportFilters,
     StaffPerformanceReportResponse,
+    StaffPerformanceChartFilters,
+    StaffPerformanceChartResponse,
     StaffItemSalesReportFilters,
     StaffItemSalesReportResponse,
+    StaffItemSalesChartFilters,
+    StaffItemSalesChartResponse,
     PackageSaleReportFilters,
     PackageSaleReportResponse,
+    PackageSaleChartFilters,
+    PackageSaleChartResponse,
     PayrollHistoryReportFilters,
     PayrollHistoryReportResponse,
     PackageHistoryReportFilters,
     PackageHistoryReportResponse,
     MemberSaleReportFilters,
     MemberSaleReportResponse,
+    MemberSaleChartFilters,
+    MemberSaleChartResponse,
     AppointmentDetailReportFilters,
     AppointmentDetailReportResponse,
     UpcomingAppointmentsReportFilters,
@@ -1414,6 +1446,27 @@ async getProductRetailReport(
     };
 },
 
+// Powers the Product Retail report's Graph page — same shape as
+// getSalesSummaryReportChart above, generalized to this report's own
+// filters/tables instead.
+async getProductRetailReportChart(
+    salonId: string,
+    filters: ProductRetailChartFilters,
+    granularity: "day" | "week" | "month" = "day",
+    topLimit: number = 5
+): Promise<ProductRetailChartResponse> {
+    const [daily, payment_modes, top_products, top_brands, top_categories, top_staff] = await Promise.all([
+        reportsRepository.getProductRetailChartTrend(salonId, filters, granularity),
+        reportsRepository.getProductRetailPaymentModeBreakdown(salonId, filters),
+        reportsRepository.getProductRetailTopProducts(salonId, filters, topLimit),
+        reportsRepository.getProductRetailTopBrands(salonId, filters, topLimit),
+        reportsRepository.getProductRetailTopCategories(salonId, filters, topLimit),
+        reportsRepository.getProductRetailTopStaff(salonId, filters, topLimit),
+    ]);
+
+    return { daily, payment_modes, top_products, top_brands, top_categories, top_staff };
+},
+
 // ======================================================
 // SERVICE SALE REPORT (independent report API)
 // ======================================================
@@ -1434,6 +1487,24 @@ async getServiceSaleReport(
         stats,
         filters_available: filtersAvailable,
     };
+},
+
+// Powers the Service Sale report's Graph page.
+async getServiceSaleReportChart(
+    salonId: string,
+    filters: ServiceSaleChartFilters,
+    granularity: "day" | "week" | "month" = "day",
+    topLimit: number = 5
+): Promise<ServiceSaleChartResponse> {
+    const [daily, payment_modes, top_services, top_categories, top_staff] = await Promise.all([
+        reportsRepository.getServiceSaleChartTrend(salonId, filters, granularity),
+        reportsRepository.getServiceSalePaymentModeBreakdown(salonId, filters),
+        reportsRepository.getServiceSaleTopServices(salonId, filters, topLimit),
+        reportsRepository.getServiceSaleTopCategories(salonId, filters, topLimit),
+        reportsRepository.getServiceSaleTopStaff(salonId, filters, topLimit),
+    ]);
+
+    return { daily, payment_modes, top_services, top_categories, top_staff };
 },
 
 // ======================================================
@@ -1541,6 +1612,20 @@ async getProductInventoryReport(
         pagination: rowsResult.pagination,
         stats,
     };
+},
+
+// Powers the Product Inventory report's Graph page.
+async getProductInventoryChart(
+    salonId: string,
+    filters: ProductInventoryChartFilters,
+    topLimit: number = 5
+): Promise<ProductInventoryChartResponse> {
+    const [by_status, by_category, top_products] = await Promise.all([
+        reportsRepository.getProductInventoryChartByStatus(salonId, filters),
+        reportsRepository.getProductInventoryChartByCategory(salonId, filters, topLimit),
+        reportsRepository.getProductInventoryChartTopProducts(salonId, filters, topLimit),
+    ]);
+    return { by_status, by_category, top_products };
 },
 
 // ======================================================
@@ -1660,6 +1745,23 @@ async getClientRevenueReport(
     };
 },
 
+// Powers the Client Revenue report's Graph page.
+async getClientRevenueReportChart(
+    salonId: string,
+    filters: ClientRevenueChartFilters,
+    granularity: "day" | "week" | "month" = "day",
+    topLimit: number = 5
+): Promise<ClientRevenueChartResponse> {
+    const [daily, gender, membership_status, top_clients] = await Promise.all([
+        reportsRepository.getClientRevenueChartTrend(salonId, filters, granularity),
+        reportsRepository.getClientRevenueByGender(salonId, filters),
+        reportsRepository.getClientRevenueByMembership(salonId, filters),
+        reportsRepository.getClientRevenueTopClients(salonId, filters, topLimit),
+    ]);
+
+    return { daily, gender, membership_status, top_clients };
+},
+
 // ======================================================
 // ALL CLIENTS REPORT (independent report API)
 // ======================================================
@@ -1679,6 +1781,46 @@ async getAllClientsReport(
         pagination: rowsResult.pagination,
         stats,
         filters_available: filtersAvailable,
+    };
+},
+
+// ======================================================
+// BIRTHDAY REPORT (independent report API)
+// ======================================================
+
+async getBirthdayReport(
+    salonId: string,
+    filters: BirthdayReportFilters
+): Promise<BirthdayReportResponse> {
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getBirthdayReportStats(salonId, filters),
+        reportsRepository.getBirthdayReportRows(salonId, filters),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
+    };
+},
+
+// ======================================================
+// ANNIVERSARY REPORT (independent report API)
+// ======================================================
+
+async getAnniversaryReport(
+    salonId: string,
+    filters: AnniversaryReportFilters
+): Promise<AnniversaryReportResponse> {
+    const [stats, rowsResult] = await Promise.all([
+        reportsRepository.getAnniversaryReportStats(salonId, filters),
+        reportsRepository.getAnniversaryReportRows(salonId, filters),
+    ]);
+
+    return {
+        rows: rowsResult.items,
+        pagination: rowsResult.pagination,
+        stats,
     };
 },
 
@@ -1788,6 +1930,23 @@ async getEnquiryReport(
     };
 },
 
+// Powers the Enquiry Report's Graph page.
+async getEnquiryReportChart(
+    salonId: string,
+    filters: EnquiryChartFilters,
+    granularity: "day" | "week" | "month" = "day",
+    topLimit: number = 5
+): Promise<EnquiryChartResponse> {
+    const [daily, status, source, top_staff] = await Promise.all([
+        reportsRepository.getEnquiryChartTrend(salonId, filters, granularity),
+        reportsRepository.getEnquiryChartByStatus(salonId, filters),
+        reportsRepository.getEnquiryChartBySource(salonId, filters),
+        reportsRepository.getEnquiryChartTopStaff(salonId, filters, topLimit),
+    ]);
+
+    return { daily, status, source, top_staff };
+},
+
 // ======================================================
 // CUSTOMER FREQUENCY REPORT (independent report API)
 // ======================================================
@@ -1806,6 +1965,23 @@ async getCustomerFrequencyReport(
         pagination: rowsResult.pagination,
         stats,
     };
+},
+
+// Powers the Client Frequency report's Graph page.
+async getCustomerFrequencyReportChart(
+    salonId: string,
+    filters: CustomerFrequencyChartFilters,
+    granularity: "day" | "week" | "month" = "day",
+    topLimit: number = 5
+): Promise<CustomerFrequencyChartResponse> {
+    const [daily, customer_type, visitor_type, top_clients] = await Promise.all([
+        reportsRepository.getCustomerFrequencyChartTrend(salonId, filters, granularity),
+        reportsRepository.getCustomerFrequencyByType(salonId, filters),
+        reportsRepository.getCustomerFrequencyByVisitorType(salonId, filters),
+        reportsRepository.getCustomerFrequencyTopClients(salonId, filters, topLimit),
+    ]);
+
+    return { daily, customer_type, visitor_type, top_clients };
 },
 
 // ======================================================
@@ -1888,6 +2064,23 @@ async getServiceFrequencyReport(
     };
 },
 
+// Powers the Service Frequency report's Graph page.
+async getServiceFrequencyReportChart(
+    salonId: string,
+    filters: ServiceFrequencyChartFilters,
+    granularity: "day" | "week" | "month" = "day",
+    topLimit: number = 5
+): Promise<ServiceFrequencyChartResponse> {
+    const [daily, pair_frequency, category_breakdown, top_services] = await Promise.all([
+        reportsRepository.getServiceFrequencyChartTrend(salonId, filters, granularity),
+        reportsRepository.getServiceFrequencyChartPairFrequency(salonId, filters),
+        reportsRepository.getServiceFrequencyChartByCategory(salonId, filters),
+        reportsRepository.getServiceFrequencyChartTopServices(salonId, filters, topLimit),
+    ]);
+
+    return { daily, pair_frequency, category_breakdown, top_services };
+},
+
 // ======================================================
 // MEMBERSHIP HISTORY REPORT (independent report API)
 // ======================================================
@@ -1929,6 +2122,33 @@ async getPaymentCollectionReport(
         pagination: rowsResult.pagination,
         stats,
         filters_available: filtersAvailable,
+    };
+},
+
+// Powers the Payment Collection report's Graph page. payment_modes reuses
+// getPaymentCollectionReportStats's own collected_by_method (same
+// transaction-level source the "Total Paid" stat card already trusts)
+// instead of a duplicated query.
+async getPaymentCollectionReportChart(
+    salonId: string,
+    filters: PaymentCollectionChartFilters,
+    granularity: "day" | "week" | "month" = "day",
+    topLimit: number = 5
+): Promise<PaymentCollectionChartResponse> {
+    const [daily, payment_status, stats, top_staff_pending, top_clients_due] = await Promise.all([
+        reportsRepository.getPaymentCollectionChartTrend(salonId, filters, granularity),
+        reportsRepository.getPaymentCollectionByStatus(salonId, filters),
+        reportsRepository.getPaymentCollectionReportStats(salonId, filters),
+        reportsRepository.getPaymentCollectionTopStaffPending(salonId, filters, topLimit),
+        reportsRepository.getPaymentCollectionTopClientsDue(salonId, filters, topLimit),
+    ]);
+
+    return {
+        daily,
+        payment_status,
+        payment_modes: stats.collected_by_method.map((m) => ({ method: m.method, amount: m.amount })),
+        top_staff_pending,
+        top_clients_due,
     };
 },
 
@@ -1976,6 +2196,23 @@ async getCashManagementReport(
     };
 },
 
+// Powers the Cash Management report's Graph page.
+async getCashManagementReportChart(
+    salonId: string,
+    filters: CashManagementChartFilters,
+    granularity: "day" | "week" | "month" = "day",
+    topLimit: number = 5
+): Promise<CashManagementChartResponse> {
+    const [daily, status, top_variance, revenue_by_opened_by] = await Promise.all([
+        reportsRepository.getCashManagementChartTrend(salonId, filters, granularity),
+        reportsRepository.getCashManagementByStatus(salonId, filters),
+        reportsRepository.getCashManagementTopVariance(salonId, filters, topLimit),
+        reportsRepository.getCashManagementByOpenedBy(salonId, filters, topLimit),
+    ]);
+
+    return { daily, status, top_variance, revenue_by_opened_by };
+},
+
 // ======================================================
 // STAFF SALES REPORT (independent report API)
 // ======================================================
@@ -1995,6 +2232,21 @@ async getStaffSalesReport(
         stats,
         filters_available: { payment_modes: filtersAvailable.payment_modes },
     };
+},
+
+// Powers the Staff Sales report's Graph page.
+async getStaffSalesReportChart(
+    salonId: string,
+    filters: StaffSalesChartFilters,
+    granularity: "day" | "week" | "month" = "day",
+    topLimit: number = 5
+): Promise<StaffSalesChartResponse> {
+    const [daily, by_item_type, top_staff] = await Promise.all([
+        reportsRepository.getStaffSalesChartTrend(salonId, filters, granularity),
+        reportsRepository.getStaffSalesChartByItemType(salonId, filters),
+        reportsRepository.getStaffSalesChartTopStaff(salonId, filters, topLimit),
+    ]);
+    return { daily, by_item_type, top_staff };
 },
 
 // ======================================================
@@ -2018,6 +2270,21 @@ async getStaffPerformanceReport(
     };
 },
 
+// Powers the Staff Performance report's Graph page.
+async getStaffPerformanceReportChart(
+    salonId: string,
+    filters: StaffPerformanceChartFilters,
+    granularity: "day" | "week" | "month" = "day",
+    topLimit: number = 5
+): Promise<StaffPerformanceChartResponse> {
+    const [daily, by_item_type, top_staff] = await Promise.all([
+        reportsRepository.getStaffPerformanceChartTrend(salonId, filters, granularity),
+        reportsRepository.getStaffPerformanceChartByItemType(salonId, filters),
+        reportsRepository.getStaffPerformanceChartTopStaff(salonId, filters, topLimit),
+    ]);
+    return { daily, by_item_type, top_staff };
+},
+
 // ======================================================
 // STAFF ITEM SALES REPORT (independent report API)
 // ======================================================
@@ -2036,6 +2303,21 @@ async getStaffItemSalesReport(
         pagination: rowsResult.pagination,
         stats,
     };
+},
+
+// Powers the Staff Item Sales report's Graph page.
+async getStaffItemSalesReportChart(
+    salonId: string,
+    filters: StaffItemSalesChartFilters,
+    granularity: "day" | "week" | "month" = "day",
+    topLimit: number = 5
+): Promise<StaffItemSalesChartResponse> {
+    const [daily, top_items, top_staff] = await Promise.all([
+        reportsRepository.getStaffItemSalesChartTrend(salonId, filters, granularity),
+        reportsRepository.getStaffItemSalesChartTopItems(salonId, filters, topLimit),
+        reportsRepository.getStaffItemSalesChartTopStaff(salonId, filters, topLimit),
+    ]);
+    return { daily, top_items, top_staff };
 },
 
 // ======================================================
@@ -2058,6 +2340,21 @@ async getPackageSaleReport(
         stats,
         filters_available: filtersAvailable,
     };
+},
+
+// Powers the Package Sale report's Graph page.
+async getPackageSaleChart(
+    salonId: string,
+    filters: PackageSaleChartFilters,
+    granularity: "day" | "week" | "month" = "day",
+    topLimit: number = 5
+): Promise<PackageSaleChartResponse> {
+    const [daily, top_packages, top_staff] = await Promise.all([
+        reportsRepository.getPackageSaleChartTrend(salonId, filters, granularity),
+        reportsRepository.getPackageSaleChartTopPackages(salonId, filters, topLimit),
+        reportsRepository.getPackageSaleChartTopStaff(salonId, filters, topLimit),
+    ]);
+    return { daily, top_packages, top_staff };
 },
 
 // ======================================================
@@ -2102,6 +2399,21 @@ async getMemberSaleReport(
         stats,
         filters_available: filtersAvailable,
     };
+},
+
+// Powers the Membership Sale report's Graph page.
+async getMemberSaleChart(
+    salonId: string,
+    filters: MemberSaleChartFilters,
+    granularity: "day" | "week" | "month" = "day",
+    topLimit: number = 5
+): Promise<MemberSaleChartResponse> {
+    const [daily, top_memberships, top_staff] = await Promise.all([
+        reportsRepository.getMemberSaleChartTrend(salonId, filters, granularity),
+        reportsRepository.getMemberSaleChartTopMemberships(salonId, filters, topLimit),
+        reportsRepository.getMemberSaleChartTopStaff(salonId, filters, topLimit),
+    ]);
+    return { daily, top_memberships, top_staff };
 },
 
 // ======================================================

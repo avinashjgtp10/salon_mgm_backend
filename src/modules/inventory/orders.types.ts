@@ -23,6 +23,10 @@ export interface OrderItem {
     // How much of `qty` has actually arrived so far, via the Receive action.
     // Never exceeds qty (receive() clamps it).
     received_qty: number;
+    // Cumulative confirmed-damaged total, set only by a confirmed
+    // order_receipts item (see order-receipts.repository.ts). received_qty +
+    // damaged_qty never exceeds qty.
+    damaged_qty: number;
     created_at: string;
 }
 
@@ -115,7 +119,10 @@ export interface CorrectReceivedQtyDTO {
 
 export interface ListOrderFilters {
     search?: string;
-    status?: OrderStatus;
+    // Array form powers the Orders page's "Receiving" tab (a queue of
+    // Sent/Partially Received orders) — a single OrderStatus still works for
+    // the plain status-filter dropdown.
+    status?: OrderStatus | OrderStatus[];
     page?: number;
     limit?: number;
 }

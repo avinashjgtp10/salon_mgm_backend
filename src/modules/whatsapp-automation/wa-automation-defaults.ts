@@ -24,10 +24,12 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
     | "appointment_cancelled" | "payment_received" | "package_expiring_7d" | "package_expiring_24h"
     | "membership_expiring_7d" | "membership_expiring_24h" | "package_session_used"
     | "membership_session_used" | "package_appointment_reminder_24h" | "service_reminder_24h"
-    | "reward_points_earned" | "referral_reward" | "ewallet_used" | "referral_credit_used" | "reward_points_used",
+    | "reward_points_earned" | "referral_reward" | "ewallet_used" | "referral_credit_used" | "reward_points_used"
+    | "birthday_wishes" | "anniversary_wishes"
+    | "cash_counter_opened" | "cash_counter_closed",
     {
         label: string;
-        category: "UTILITY";
+        category: "UTILITY" | "MARKETING";
         language: string;
         bodyText: string;
         button?: { text: string; urlBase: string };
@@ -37,7 +39,11 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         label: "New Client Welcome",
         category: "UTILITY",
         language: "en",
-        bodyText: "Hi {{customer_name}},\nWelcome to {{salon_name}}!\nWe're happy to have you with us.\nThank you for choosing {{salon_name}} — we appreciate you!",
+        // Deliberately factual, not promotional ("share with friends, you'll
+        // both get rewarded" reads as marketing copy) — this event submits
+        // under category UTILITY, and Meta's content-policy check rejects a
+        // UTILITY submission whose wording looks like a MARKETING message.
+        bodyText: "Hi {{customer_name}},\nWelcome to {{salon_name}}!\nWe're happy to have you with us.\nYour referral code: {{referral_code}}\nThank you for choosing {{salon_name}} — we appreciate you!",
     },
     package_purchased: {
         label: "Package Purchased",
@@ -167,6 +173,46 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         language: "en",
         bodyText: "Hi {{customer_name}},\nYour Reward Points were used for a payment at {{salon_name}}.\nPoints Used: {{points_used}}\nRemaining Points: {{remaining_points}}\nThank you for choosing {{salon_name}} — we appreciate you!",
     },
+    // "Upcoming" lifecycle-date events — MARKETING category (not UTILITY):
+    // these are proactive wishes, not tied to a transaction, so they're
+    // gated by the client's marketing opt-in (see MARKETING_EVENTS) and
+    // billed/approved by Meta as marketing messages.
+    birthday_wishes: {
+        label: "Birthday Wishes",
+        category: "MARKETING",
+        language: "en",
+        bodyText: "Hi {{customer_name}},\n🎉 Happy Birthday from all of us at {{salon_name}}!\nWishing you a wonderful day — we'd love to help you celebrate. Come visit us soon!",
+    },
+    anniversary_wishes: {
+        label: "Anniversary Wishes",
+        category: "MARKETING",
+        language: "en",
+        bodyText: "Hi {{customer_name}},\n🎉 Happy Anniversary from all of us at {{salon_name}}!\nWishing you many more wonderful years — we'd love to help you celebrate. Come visit us soon!",
+    },
+    // Owner-facing operational alerts — UTILITY (not MARKETING): a factual
+    // record of a cash-register action, not a promotional message. Sent to
+    // the salon owner's own WhatsApp number, never to a client.
+    // Meta rejects a template whose body is too short relative to its
+    // variable count ("too many variables for its length") — these two
+    // originally packed 4-8 variables into terse "Label: {{var}}" lines with
+    // almost no static text around them. Fixed two ways: more descriptive
+    // static sentences, and (on the close side) collapsing the Cash/Card/UPI
+    // lines into ONE pre-built multi-line variable instead of three separate
+    // ones — same "one variable, multi-line value" trick bill_receipt's
+    // {{items}} already uses, so the rendered message still shows each
+    // payment method on its own line.
+    cash_counter_opened: {
+        label: "Cash Counter Opened",
+        category: "UTILITY",
+        language: "en",
+        bodyText: "*Cash Counter Opened — {{salon_name}}*\n\nYour cash counter has been opened and is now ready for today's transactions.\n\nDate: {{opening_date}}\nTime: {{opening_time}}\nOpening Cash Amount: {{opening_amount}}\n\nHave a great business day ahead!",
+    },
+    cash_counter_closed: {
+        label: "Cash Counter Closed",
+        category: "UTILITY",
+        language: "en",
+        bodyText: "*Cash Counter Closed — {{salon_name}}*\n\nYour cash counter has been closed for the day. Here is the collection summary for this session.\n\nDate: {{closing_date}}\nTime: {{closing_time}}\n\n*Collection Summary*\n{{collection_breakdown}}\n━━━━━━━━━━━━━━\n*Total Collection: {{total_collection}}*\n\nThank you for reconciling today's cash counter.",
+    },
 };
 
 export type DefaultPurchaseEventType = keyof typeof DEFAULT_PURCHASE_TEMPLATES;
@@ -179,7 +225,7 @@ export function isPurchaseEventType(eventType: AutomationEventType): eventType i
 // Ordered so index+1 == the Meta template position — MUST match exactly what
 // each event's trigger() call site fills positionally ('1', '2', '3', ...).
 export const EVENT_VARIABLE_NAMES: Record<DefaultPurchaseEventType, string[]> = {
-    client_welcome:       ["customer_name", "salon_name"],
+    client_welcome:       ["customer_name", "salon_name", "referral_code"],
     package_purchased:    ["customer_name", "package_name", "services", "total_sessions", "expiry_date", "package_value", "invoice_number"],
     membership_purchased: ["customer_name", "membership_name", "benefit", "start_date", "expiry_date", "membership_price", "invoice_number"],
     bill_receipt:         ["customer_name", "salon_name", "items", "feedback_line"],
@@ -200,6 +246,10 @@ export const EVENT_VARIABLE_NAMES: Record<DefaultPurchaseEventType, string[]> = 
     ewallet_used:         ["customer_name", "amount_used", "salon_name", "remaining_balance"],
     referral_credit_used: ["customer_name", "amount_used", "salon_name", "remaining_balance"],
     reward_points_used:   ["customer_name", "points_used", "salon_name", "remaining_points"],
+  birthday_wishes:      ["customer_name", "salon_name"],
+  anniversary_wishes:   ["customer_name", "salon_name"],
+  cash_counter_opened:  ["salon_name", "opening_date", "opening_time", "opening_amount"],
+  cash_counter_closed:  ["salon_name", "closing_date", "closing_time", "collection_breakdown", "total_collection"],
 };
 
 // Converts a salon's named-placeholder wording into Meta's required

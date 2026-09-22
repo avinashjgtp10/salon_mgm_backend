@@ -49,14 +49,36 @@ export interface CreatePurchaseDTO {
     // created to record delivery against a Purchase Order — links the two
     // without duplicating purchasesRepository.create()'s transaction logic.
     order_id?: string | null;
+    // Explicit receiving location — set by order-receipts.repository.ts's
+    // confirmReceipt() so stock lands on the branch the clerk actually
+    // picked. Omitted (standalone Purchase / old receive()) falls back to
+    // the salon's main-branch auto-resolution, unchanged.
+    branch_id?: string | null;
     items: CreatePurchaseItemDTO[];
 }
 
 export interface ListPurchaseFilters {
     search?: string;
     supplier_id?: string;
+    // Powers Product Inventory's detail drawer "Purchase History" tab —
+    // every purchase with at least one line item for this product.
+    product_id?: string;
     date_from?: string;
     date_to?: string;
     page?: number;
     limit?: number;
+}
+
+// Powers the Purchase History report's Graph page.
+export interface PurchaseChartFilters {
+    search?: string;
+    supplier_id?: string;
+    date_from?: string;
+    date_to?: string;
+}
+
+export interface PurchaseChartResponse {
+    daily: { date: string; count: number; amount: number }[];
+    top_suppliers: { supplier_id: string | null; supplier_name: string; amount: number }[];
+    top_products: { product_name: string; quantity: number; amount: number }[];
 }

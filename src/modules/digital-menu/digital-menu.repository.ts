@@ -87,6 +87,16 @@ export const digitalMenuRepository = {
     return rows[0] || null;
   },
 
+  // digital_menu_services rows cascade away automatically (ON DELETE CASCADE
+  // on menu_id above) — no separate child-table cleanup needed here.
+  async deleteById(id: string, salonId: string): Promise<boolean> {
+    const { rowCount } = await pool.query(
+      `DELETE FROM digital_menus WHERE id = $1 AND salon_id = $2`,
+      [id, salonId],
+    );
+    return (rowCount ?? 0) > 0;
+  },
+
   async replaceSelectedServices(menuId: string, serviceIds: string[]): Promise<void> {
     const client = await pool.connect();
     try {

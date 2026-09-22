@@ -112,13 +112,59 @@ export const branchOwnerController = {
     } catch (err) { return next(err); }
   },
 
-  async updateSalonStaffPermissions(req: AuthedRequest, res: Response, next: NextFunction) {
+  // ── Roles & Permissions (real system) ─────────────────────────────────────
+  // Proxies straight into rolesService with the path salonId in place of the
+  // JWT-derived one roles.controller.ts normally uses — a branch_owner token
+  // has no single salonId of its own. Authorization is the same
+  // assertSalonsAssigned() gate every other salon-scoped branch-owner route
+  // already uses, checked inside branchOwnerService before anything else.
+  async listSalonRoles(req: AuthedRequest, res: Response, next: NextFunction) {
+    try {
+      const branchOwnerId = req.user!.userId;
+      const salonId = String(req.params.salonId);
+      const data = await branchOwnerService.listSalonRoles(branchOwnerId, salonId);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
+  async getSalonStaffPermissions(req: AuthedRequest, res: Response, next: NextFunction) {
     try {
       const branchOwnerId = req.user!.userId;
       const salonId = String(req.params.salonId);
       const staffId = String(req.params.staffId);
-      const { custom_permissions } = req.body ?? {};
-      const data = await branchOwnerService.updateSalonStaffPermissions(branchOwnerId, salonId, staffId, custom_permissions ?? null);
+      const data = await branchOwnerService.getStaffPermissions(branchOwnerId, salonId, staffId);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
+  async setSalonStaffOverrides(req: AuthedRequest, res: Response, next: NextFunction) {
+    try {
+      const branchOwnerId = req.user!.userId;
+      const salonId = String(req.params.salonId);
+      const staffId = String(req.params.staffId);
+      const { overrides } = req.body ?? {};
+      if (!overrides || typeof overrides !== "object") {
+        throw new AppError(400, "overrides is required and must be an object", "VALIDATION_ERROR");
+      }
+      const data = await branchOwnerService.setStaffOverrides(
+        branchOwnerId, salonId, staffId, overrides,
+        req.ip ?? null, (req.headers["user-agent"] as string) ?? null,
+      );
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
+  async assignSalonStaffRole(req: AuthedRequest, res: Response, next: NextFunction) {
+    try {
+      const branchOwnerId = req.user!.userId;
+      const salonId = String(req.params.salonId);
+      const staffId = String(req.params.staffId);
+      const { role_id } = req.body ?? {};
+      if (!role_id) throw new AppError(400, "role_id is required", "VALIDATION_ERROR");
+      const data = await branchOwnerService.assignStaffRole(
+        branchOwnerId, salonId, staffId, String(role_id),
+        req.ip ?? null, (req.headers["user-agent"] as string) ?? null,
+      );
       return res.json({ success: true, data });
     } catch (err) { return next(err); }
   },
@@ -188,14 +234,16 @@ export const branchOwnerController = {
     try {
       const branchOwnerId = req.user!.userId;
       const status = req.query.status ? String(req.query.status) : undefined;
-      const data = await branchOwnerService.listTransfers(branchOwnerId, status);
+      const salonId = req.query.salon_id ? String(req.query.salon_id) : undefined;
+      const data = await branchOwnerService.listTransfers(branchOwnerId, status, salonId);
       return res.json({ success: true, data });
     } catch (err) { return next(err); }
   },
 
   async getInventorySummary(req: AuthedRequest, res: Response, next: NextFunction) {
     try {
-      const data = await branchOwnerService.getInventorySummary(req.user!.userId);
+      const salonId = req.query.salon_id ? String(req.query.salon_id) : undefined;
+      const data = await branchOwnerService.getInventorySummary(req.user!.userId, salonId);
       return res.json({ success: true, data });
     } catch (err) { return next(err); }
   },
@@ -209,7 +257,8 @@ export const branchOwnerController = {
 
   async getLowStockAlerts(req: AuthedRequest, res: Response, next: NextFunction) {
     try {
-      const data = await branchOwnerService.getLowStockAlerts(req.user!.userId);
+      const salonId = req.query.salon_id ? String(req.query.salon_id) : undefined;
+      const data = await branchOwnerService.getLowStockAlerts(req.user!.userId, salonId);
       return res.json({ success: true, data });
     } catch (err) { return next(err); }
   },

@@ -284,6 +284,39 @@ export const superAdminRepository = {
     return rows[0];
   },
 
+  // Owner contact for the "salon deactivated" email (super-admin.service.ts::
+  // setSalonStatus) — separate from setSalonStatus's own RETURNING since that
+  // one only touches the salons row and has no reason to join users normally.
+  async getSalonOwnerContact(id: string): Promise<{ name: string; owner_email: string | null; owner_name: string | null } | null> {
+    const { rows } = await pool.query(`
+      SELECT
+        COALESCE(s.business_name, s.slug, 'Unnamed')                       AS name,
+        COALESCE(NULLIF(s.email, ''), u.email)                             AS owner_email,
+        NULLIF(TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,''))), '') AS owner_name
+      FROM salons s
+      LEFT JOIN users u ON u.id = s.owner_id
+      WHERE s.id = $1
+      LIMIT 1
+    `, [id]);
+    return rows[0] || null;
+  },
+
+  // Every salon currently deactivated, for the daily 8am reminder email
+  // (salon-deactivation-reminder.scheduler.ts).
+  async getAllInactiveSalonsWithOwner() {
+    const { rows } = await pool.query(`
+      SELECT
+        s.id,
+        COALESCE(s.business_name, s.slug, 'Unnamed')                       AS name,
+        COALESCE(NULLIF(s.email, ''), u.email)                             AS owner_email,
+        NULLIF(TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,''))), '') AS owner_name
+      FROM salons s
+      LEFT JOIN users u ON u.id = s.owner_id
+      WHERE s.is_active = false
+    `);
+    return rows;
+  },
+
   async forceCompleteOnboarding(id: string) {
     const { rows } = await pool.query(
       `UPDATE users SET is_onboarding_complete = true, updated_at = NOW()
@@ -632,7 +665,9 @@ export const superAdminRepository = {
         COALESCE(u.login_count, 0)                               AS login_count,
         CASE WHEN u.is_active THEN 'active' ELSE 'inactive' END AS status,
         COALESCE(s.business_name, s.slug)                        AS salon_name,
-        s.id                                                      AS salon_id
+        s.id                                                      AS salon_id,
+        (SELECT COUNT(*)::int FROM branch_owner_salons bos
+          WHERE bos.branch_owner_id = u.id)                       AS branch_count
       FROM users u
       LEFT JOIN salons s ON s.owner_id = u.id
       WHERE u.role != 'super_admin'

@@ -15,6 +15,16 @@ export type Coupon = {
   batch_label: string | null;
   created_at: string;
   updated_at: string;
+  // ── Print/display customization (added for the Print Coupon flow) ────────
+  // All nullable/defaulted — coupons carry redeemable value, so a lagging
+  // client (or one row created before these existed) must keep validating
+  // exactly as it always has. NULL max_discount = uncapped; NULL valid_from
+  // = valid immediately (no start-date gate).
+  name: string | null;
+  valid_from: string | null;
+  max_discount: number | null;
+  terms: string | null;
+  show_barcode: boolean;
 };
 
 export type ValidateCouponBody = {
@@ -31,6 +41,11 @@ export type CreateCouponBody = {
   max_uses?: number | null;
   expires_at: string;
   is_active?: boolean;
+  name?: string | null;
+  valid_from?: string | null;
+  max_discount?: number | null;
+  terms?: string | null;
+  show_barcode?: boolean;
 };
 
 export type UpdateCouponBody = Partial<CreateCouponBody>;

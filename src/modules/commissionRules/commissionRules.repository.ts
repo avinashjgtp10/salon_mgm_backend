@@ -38,12 +38,13 @@ export const commissionRulesRepository = {
     async create(salonId: string, data: CreateCommissionRuleBody, scopeId: string | null): Promise<CommissionRule> {
         const { rows } = await pool.query(
             `INSERT INTO commission_rules (
-                salon_id, name, source, type, rate, condition_target, condition_metric,
+                salon_id, name, source, type, rate, rate_after_target, condition_target, condition_metric,
                 frequency, scope_type, scope_id, status
-             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
              RETURNING *`,
             [
                 salonId, data.name, data.source, data.type, data.rate,
+                data.rate_after_target ?? null,
                 data.condition_target ?? null,
                 data.condition_metric ?? null,
                 data.frequency ?? "monthly",
@@ -61,6 +62,7 @@ export const commissionRulesRepository = {
             source: "source",
             type: "type",
             rate: "rate",
+            rate_after_target: "rate_after_target",
             condition_target: "condition_target",
             condition_metric: "condition_metric",
             frequency: "frequency",
@@ -101,6 +103,27 @@ export const commissionRulesRepository = {
             [id, salonId]
         );
         return (rowCount ?? 0) > 0;
+    },
+
+    /**
+     * tiered_target progress for one rule row — reuses the exact same IST-month
+     * cumulative-revenue query the calculation engine's threshold gate uses, so
+     * the number shown here always matches what checkout actually applies.
+     * Returns null for anything that isn't a staff-scoped tiered_target rule.
+     */
+    async getTieredTargetProgress(id: string, salonId: string): Promise<{ target: number; achieved: number } | null> {
+        const rule = await this.findById(id, salonId);
+        if (!rule || rule.type !== "tiered_target" || rule.condition_target == null || !rule.scope_id) return null;
+
+        const IST = "Asia/Kolkata";
+        const { rows } = await pool.query(
+            `SELECT COALESCE(SUM(revenue_amount),0)::float AS total
+             FROM commission_earned
+             WHERE staff_id = $1 AND rule_id = $2
+               AND date_trunc('month', earned_at AT TIME ZONE '${IST}') = date_trunc('month', NOW() AT TIME ZONE '${IST}')`,
+            [rule.scope_id, id]
+        );
+        return { target: Number(rule.condition_target), achieved: parseFloat(rows[0]?.total ?? "0") };
     },
 
     /**

@@ -1,11 +1,22 @@
 import { Queue } from 'bullmq'
 import Redis from 'ioredis'
 
-export const redisConnection = new Redis({
-  host:                 process.env.REDIS_HOST     ?? 'localhost',
-  port:                 parseInt(process.env.REDIS_PORT ?? '6379'),
-  password:             process.env.REDIS_PASSWORD  ?? undefined,
+// Same REDIS_URL every other Redis client in this app uses (config/redis.ts) —
+// this used to build its own connection from REDIS_HOST/REDIS_PORT/REDIS_PASSWORD,
+// none of which this project ever sets (only REDIS_URL exists in .env), so on
+// any environment where Redis isn't literally on localhost:6379 this connection
+// silently pointed nowhere. That's why a campaign of even a handful of contacts
+// could sit PENDING for minutes or fail outright on deployed environments while
+// working fine locally (where Redis happens to be on localhost).
+// maxRetriesPerRequest stays null — BullMQ's own requirement for its blocking
+// commands, not something config/redis.ts needs.
+export const redisConnection = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
   maxRetriesPerRequest: null,
+  tls: process.env.REDIS_URL?.startsWith('rediss://') ? {} : undefined,
+})
+
+redisConnection.on('error', (err) => {
+  console.error('❌ Campaign queue Redis error:', err)
 })
 
 export type CampaignJobData = {

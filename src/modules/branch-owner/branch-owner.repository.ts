@@ -22,16 +22,29 @@ export const branchOwnerRepository = {
         COALESCE(client_counts.client_count, 0)                                          AS client_count,
         COALESCE(appt_counts.appointments_today, 0)                                      AS appointments_today,
         COALESCE(revenue.revenue_today, 0)                                               AS revenue_today,
-        COALESCE(sub.has_active_plan, false)                                             AS has_active_plan
+        sub.status                                                                        AS subscription_status,
+        sp.name                                                                           AS plan_name,
+        COALESCE(sub.trial_end, sub.current_period_end)                                  AS plan_expires_at,
+        (
+          (sub.status = 'active'   AND (sub.current_period_end IS NULL OR sub.current_period_end > NOW()))
+          OR
+          (sub.status = 'trialing' AND (sub.trial_end          IS NULL OR sub.trial_end          > NOW()))
+        )                                                                                AS has_active_plan
       FROM branch_owner_salons bos
       JOIN salons s ON s.id = bos.salon_id
       LEFT JOIN users u ON u.id = s.owner_id
-      LEFT JOIN (
-        SELECT salon_id, true AS has_active_plan
-        FROM billing_subscriptions
-        WHERE status IN ('trialing', 'active')
-        GROUP BY salon_id
-      ) sub ON sub.salon_id = s.id
+      -- Authoritative subscription source (Razorpay-hosted) — same table/
+      -- pattern used by subscription.middleware.ts and the super-admin
+      -- salons query. billing_subscriptions is the legacy/manual-comp path
+      -- and is empty for almost every real account, so a plan/expiry read
+      -- from it here was silently stale for real branch-owner accounts.
+      LEFT JOIN LATERAL (
+        SELECT * FROM subscriptions
+        WHERE salon_id = s.id
+        ORDER BY created_at DESC
+        LIMIT 1
+      ) sub ON true
+      LEFT JOIN subscription_plans sp ON sp.id = sub.plan_id
       LEFT JOIN (
         SELECT salon_id, COUNT(*)::int AS staff_count
         FROM staff
@@ -183,11 +196,23 @@ export const branchOwnerRepository = {
           )
       `, [branchOwnerId]),
 
+      // Same authoritative `subscriptions` source as getMySalons() above —
+      // billing_subscriptions is the legacy/empty table.
       pool.query<{ active_subscriptions: string }>(`
-        SELECT COUNT(DISTINCT bs.salon_id)::int AS active_subscriptions
-        FROM billing_subscriptions bs
-        JOIN branch_owner_salons bos ON bos.salon_id = bs.salon_id
-        WHERE bos.branch_owner_id = $1 AND bs.status IN ('trialing', 'active')
+        SELECT COUNT(DISTINCT bos.salon_id)::int AS active_subscriptions
+        FROM branch_owner_salons bos
+        JOIN LATERAL (
+          SELECT * FROM subscriptions
+          WHERE salon_id = bos.salon_id
+          ORDER BY created_at DESC
+          LIMIT 1
+        ) sub ON true
+        WHERE bos.branch_owner_id = $1
+          AND (
+            (sub.status = 'active'   AND (sub.current_period_end IS NULL OR sub.current_period_end > NOW()))
+            OR
+            (sub.status = 'trialing' AND (sub.trial_end          IS NULL OR sub.trial_end          > NOW()))
+          )
       `, [branchOwnerId]),
     ]);
 
@@ -360,27 +385,56 @@ export const branchOwnerRepository = {
     };
   },
 
-  async getRecentPayments(branchOwnerId: string, limit = 10, status?: string) {
+  // limit is optional: the dashboard's "recent payments" preview passes a
+  // small number, but the Payments page (limit omitted) needs every matching
+  // row so its summary cards total correctly instead of silently truncating.
+  //
+  // branch_owner_salons is checked via EXISTS rather than JOINed directly —
+  // a JOIN would multiply a payment's row once per matching assignment row,
+  // double-counting it if that salon was ever assigned to this branch owner
+  // more than once. Same reasoning for the sales lookup below: it's a
+  // LATERAL picking at most one row per payment (the appointment's latest
+  // completed sale) instead of a LEFT JOIN, which would multiply the payment
+  // row for every completed sale on that appointment.
+  async getRecentPayments(branchOwnerId: string, limit?: number, status?: string) {
     const values: any[] = [branchOwnerId];
     let statusClause = "";
     if (status) {
       values.push(status);
       statusClause = `AND p.status = $${values.length}`;
     }
-    values.push(limit);
+    let limitClause = "";
+    if (limit) {
+      values.push(limit);
+      limitClause = `LIMIT $${values.length}`;
+    }
     const { rows } = await pool.query(`
       SELECT
-        p.id, p.amount, p.status, p.payment_method, p.created_at,
+        p.id,
+        COALESCE(p.paid_amount, p.net_amount, p.amount, 0)::numeric AS amount,
+        p.status, p.payment_method, p.created_at,
+        COALESCE(p.paid_at, p.created_at)            AS payment_date,
         s.id                                        AS salon_id,
         COALESCE(s.business_name, s.slug, 'Unnamed') AS salon_name,
-        sa.invoice_number                            AS invoice_number
+        sa.invoice_number                            AS invoice_number,
+        COALESCE(c.full_name, 'Walk-in Client')      AS client_name,
+        c.phone_number                               AS client_phone
       FROM payments p
-      JOIN branch_owner_salons bos ON bos.salon_id = p.salon_id
       JOIN salons s ON s.id = p.salon_id
-      LEFT JOIN sales sa ON sa.appointment_id = p.appointment_id AND sa.status = 'completed'
-      WHERE bos.branch_owner_id = $1 ${statusClause}
-      ORDER BY p.created_at DESC
-      LIMIT $${values.length}
+      LEFT JOIN LATERAL (
+        SELECT invoice_number FROM sales
+        WHERE sales.appointment_id = p.appointment_id AND sales.status = 'completed'
+        ORDER BY sales.created_at DESC
+        LIMIT 1
+      ) sa ON TRUE
+      LEFT JOIN appointments a ON a.id = p.appointment_id
+      LEFT JOIN clients c ON c.id = a.client_id
+      WHERE EXISTS (
+        SELECT 1 FROM branch_owner_salons bos
+        WHERE bos.branch_owner_id = $1 AND bos.salon_id = p.salon_id
+      ) ${statusClause}
+      ORDER BY COALESCE(p.paid_at, p.created_at) DESC
+      ${limitClause}
     `, values);
     return rows;
   },
@@ -391,6 +445,11 @@ export const branchOwnerRepository = {
       [branchOwnerId, salonId]
     );
     return rows.length > 0;
+  },
+
+  async isSalonActive(salonId: string): Promise<boolean> {
+    const { rows } = await pool.query(`SELECT is_active FROM salons WHERE id = $1`, [salonId]);
+    return rows[0]?.is_active === true;
   },
 
   // Cash counter session totals per assigned salon — same source columns as
@@ -499,10 +558,14 @@ export const branchOwnerRepository = {
     return rows[0];
   },
 
-  async listTransfers(branchOwnerId: string, status?: string) {
+  async listTransfers(branchOwnerId: string, status?: string, salonId?: string) {
     const values: unknown[] = [branchOwnerId];
     let where = "t.branch_owner_id = $1";
     if (status) { values.push(status); where += ` AND t.status = $${values.length}`; }
+    // A transfer touches two salons — "belongs to the selected branch"
+    // means either side, not just the source (a branch is just as much
+    // affected by stock arriving as by stock leaving).
+    if (salonId) { values.push(salonId); where += ` AND (t.source_salon_id = $${values.length} OR t.dest_salon_id = $${values.length})`; }
     const { rows } = await pool.query(
       `SELECT
          t.*,
@@ -539,7 +602,10 @@ export const branchOwnerRepository = {
     return rows;
   },
 
-  async getInventorySummary(branchOwnerId: string) {
+  async getInventorySummary(branchOwnerId: string, salonId?: string) {
+    const values: unknown[] = [branchOwnerId];
+    let salonFilter = "";
+    if (salonId) { values.push(salonId); salonFilter = ` AND bos.salon_id = $${values.length}`; }
     const { rows } = await pool.query(
       `SELECT
          COUNT(p.id)::int AS total_products,
@@ -547,28 +613,48 @@ export const branchOwnerRepository = {
          COUNT(p.id) FILTER (WHERE p.qty_alert IS NOT NULL AND p.amount <= p.qty_alert)::int AS low_stock_count
        FROM branch_owner_salons bos
        JOIN products p ON p.salon_id = bos.salon_id AND p.is_active = true
-       WHERE bos.branch_owner_id = $1`,
-      [branchOwnerId]
+       WHERE bos.branch_owner_id = $1${salonFilter}`,
+      values
     );
+    const pendingValues: unknown[] = [branchOwnerId];
+    let pendingSalonFilter = "";
+    if (salonId) { pendingValues.push(salonId); pendingSalonFilter = ` AND (source_salon_id = $${pendingValues.length} OR dest_salon_id = $${pendingValues.length})`; }
     const { rows: pendingRows } = await pool.query(
-      `SELECT COUNT(*)::int AS pending_count FROM branch_stock_transfers WHERE branch_owner_id = $1 AND status = 'pending'`,
-      [branchOwnerId]
+      `SELECT COUNT(*)::int AS pending_count FROM branch_stock_transfers WHERE branch_owner_id = $1 AND status = 'pending'${pendingSalonFilter}`,
+      pendingValues
     );
     return { ...rows[0], pending_transfers_count: pendingRows[0]?.pending_count ?? 0 };
   },
 
-  async getLowStockAlerts(branchOwnerId: string) {
+  // "Most relevant" = out-of-stock ranks above merely-low-on-stock (it's the
+  // more urgent condition regardless of when it happened); "latest" breaks
+  // ties within each severity by how recently the product's stock last
+  // changed (p.updated_at, bumped on every stock mutation — see
+  // product-inventory.repository.ts) — an item that just ran out belongs
+  // above one that's been sitting at the same low count for weeks. `message`
+  // mirrors inventory-alerts.service.ts's buildNotificationCopy() wording so
+  // this panel and the real low-stock notifications never disagree.
+  async getLowStockAlerts(branchOwnerId: string, salonId?: string) {
+    const values: unknown[] = [branchOwnerId];
+    let salonFilter = "";
+    if (salonId) { values.push(salonId); salonFilter = ` AND bos.salon_id = $${values.length}`; }
     const { rows } = await pool.query(
       `SELECT
          p.id AS product_id, p.name AS product_name, p.amount, p.qty_alert,
-         COALESCE(s.business_name, s.slug, 'Unnamed') AS salon_name
+         COALESCE(s.business_name, s.slug, 'Unnamed') AS salon_name,
+         p.updated_at,
+         CASE WHEN p.amount <= 0 THEN 'out_of_stock' ELSE 'low_stock' END AS severity,
+         CASE
+           WHEN p.amount <= 0 THEN p.name || ' is out of stock (0 remaining).'
+           ELSE p.name || ' is low on stock — ' || p.amount || ' left (threshold: ' || p.qty_alert || ').'
+         END AS message
        FROM branch_owner_salons bos
        JOIN salons s ON s.id = bos.salon_id
        JOIN products p ON p.salon_id = s.id AND p.is_active = true
-       WHERE bos.branch_owner_id = $1 AND p.qty_alert IS NOT NULL AND p.amount <= p.qty_alert
-       ORDER BY p.amount ASC
+       WHERE bos.branch_owner_id = $1 AND p.qty_alert IS NOT NULL AND p.amount <= p.qty_alert${salonFilter}
+       ORDER BY (p.amount <= 0) DESC, p.updated_at DESC, p.amount ASC
        LIMIT 50`,
-      [branchOwnerId]
+      values
     );
     return rows;
   },

@@ -25,5 +25,6 @@ router.get('/debug',         ...auth, clientMembershipsController.debug);
 router.get('/:id',           ...auth, readPurchaseHistory, clientMembershipsController.getById);
 router.patch('/:id/consume', ...auth, clientMembershipsController.consume);
 router.patch('/:id/cancel',  ...auth, clientMembershipsController.cancel);
+router.delete('/:id',        ...auth, clientMembershipsController.delete);
 
 export default router;

@@ -5,6 +5,7 @@ import { emailService } from "../utils/email.service";
 import { AppError } from "../../middleware/error.middleware";
 import { invalidateSubscriptionPermCache } from "../../middleware/subscriptionPermission.middleware";
 import { subscriptionsRepository } from "../subscriptions/subscriptions.repository";
+import logger from "../../config/logger";
 import bcrypt from "bcrypt";
 import jwt, { Secret, SignOptions } from "jsonwebtoken";
 
@@ -83,6 +84,29 @@ export const superAdminService = {
   async setSalonStatus(id: string, isActive: boolean) {
     const result = await superAdminRepository.setSalonStatus(id, isActive);
     if (!result) throw new AppError(404, "Salon not found", "NOT_FOUND");
+
+    // Fire-and-forget, like the staff-login alert email above — a slow or
+    // broken SMTP server must never delay/fail this admin action.
+    if (isActive === false) {
+      (async () => {
+        try {
+          const contact = await superAdminRepository.getSalonOwnerContact(id);
+          if (!contact?.owner_email) {
+            logger.warn("[EMAIL] sendSalonDeactivatedEmail skipped — no owner email on file", { salonId: id });
+            return;
+          }
+          await emailService.sendSalonDeactivatedEmail({
+            to: contact.owner_email,
+            salonName: contact.name,
+            ownerName: contact.owner_name,
+          });
+          logger.info("[EMAIL] sendSalonDeactivatedEmail sent", { salonId: id, to: contact.owner_email });
+        } catch (err: any) {
+          logger.error("[EMAIL] sendSalonDeactivatedEmail FAILED", { salonId: id, error: err?.message });
+        }
+      })();
+    }
+
     return result;
   },
 

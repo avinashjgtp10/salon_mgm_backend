@@ -375,6 +375,31 @@ export const clientMembershipsRepository = {
     return rows.length ? toClientMembership(rows[0]) : null;
   },
 
+  // Mirrors clientPackagesRepository.findIdByAppointmentAndName() — the
+  // identifying key needed by appointments.service.ts's edit flow to find
+  // "the client_memberships row THIS appointment's bill produced" so it can
+  // be deleted when the membership is removed from the bill on edit.
+  // Deliberately scoped to appointment_id, not just (client, membership) —
+  // autoCreateFromPayment's own idempotency check (findActiveByClientAndMembership
+  // above) dedupes by client+membership globally and RENEWS a pre-existing
+  // active membership without updating its appointment_id, so a renewed row
+  // from an earlier, different appointment must never be matched (and
+  // deleted) here just because its membership_name matches what's being
+  // removed from a later, unrelated appointment's edit.
+  async findIdByAppointmentAndName(
+    salonId: string,
+    appointmentId: string,
+    membershipName: string,
+  ): Promise<string | null> {
+    const { rows } = await pool.query(
+      `SELECT id FROM client_memberships
+        WHERE salon_id = $1 AND appointment_id = $2 AND membership_name = $3
+        LIMIT 1`,
+      [salonId, appointmentId, membershipName],
+    );
+    return rows[0]?.id ?? null;
+  },
+
   async create(salonId: string, dto: CreateClientMembershipDTO): Promise<ClientMembership> {
     // Try to resolve client info; proceed even if client row is missing (fire-and-forget calls)
     let clientName = '';
@@ -407,8 +432,28 @@ export const clientMembershipsRepository = {
     );
     const memRow = memRes.rows[0];
 
+    // Back-dated purchase (bulk import of memberships sold before this system
+    // existed). Anything unparseable is treated as "not given" rather than
+    // failing the row — the membership still gets created, just stamped now,
+    // which is exactly what happened before this was supported. NULL is
+    // deliberate for the absent case: the INSERT COALESCEs it back to NOW(),
+    // so the column default keeps applying to every live sale.
+    const purchasedAt: Date | null = (() => {
+      const raw = (dto.purchasedAt ?? '').trim();
+      if (!raw) return null;
+      // A bare "YYYY-MM-DD" is parsed as UTC midnight by Date; pin it to local
+      // noon instead so the stored day can't slide to the previous one for a
+      // salon behind UTC.
+      const d = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? new Date(`${raw}T12:00:00`) : new Date(raw);
+      return isNaN(d.getTime()) ? null : d;
+    })();
+
     let expiresAt: Date | string | null = dto.expiresAt ?? null;
-    if (!expiresAt) expiresAt = computeExpiryDate(memRow?.valid_for);
+    // A plan's validity is a relative "N days" duration, counted from when the
+    // membership was bought — so a back-dated import with no explicit expiry
+    // must count from that date, not from today, or a year-old membership
+    // would be handed another full year of life.
+    if (!expiresAt) expiresAt = computeExpiryDate(memRow?.valid_for, purchasedAt ?? undefined);
 
     const pricingType = memRow?.pricing_type ?? 'value';
     // Loyalty plans enroll every client automatically off their visit count
@@ -471,8 +516,12 @@ export const clientMembershipsRepository = {
          membership_id, membership_name, colour, total_sessions, used_sessions,
          expires_at, end_date, status, price_paid, membership_wallet_balance, appointment_id,
          pricing_type, discount_percent, discount_balance_remaining, applies_to, service_category_ids, product_category_ids, description, staff_id,
-         service_ids, product_ids, benefit_type)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$11,$14,'active',$12,$13,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
+         service_ids, product_ids, benefit_type, purchased_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$11,$14,'active',$12,$13,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,
+               -- COALESCE, not a bare parameter: naming the column in the
+               -- INSERT overrides its DEFAULT NOW(), so passing NULL for an
+               -- ordinary sale would blank the purchase date entirely.
+               COALESCE($27::timestamptz, NOW()))
        RETURNING *`,
       [
         id, salonId, dto.clientId, clientName, mobile, email,
@@ -499,6 +548,7 @@ export const clientMembershipsRepository = {
         serviceIds,
         productIds,
         benefitType,
+        purchasedAt,
       ],
     );
     return toClientMembership(rows[0]);
@@ -1061,6 +1111,82 @@ export const clientMembershipsRepository = {
       return { totalDiscountGiven, remainingBalance: remaining, perService, reused: false };
     } catch (err) {
       await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  },
+
+  // Deleting a membership assignment (e.g. from the Membership Sale Report)
+  // must also reverse the sale it created — mirrors
+  // clientPackagesRepository.delete()'s exact reasoning/shape:
+  //   - Standalone "Sell Membership" purchase (appointment_id IS NULL): its
+  //     sale is dedicated to just this membership, safe to hard-delete
+  //     whole (sale_items/sales/commission).
+  //   - Membership sold as one line item on a bigger appointment bill
+  //     (appointment_id IS NOT NULL): only this membership's own sale_item
+  //     row and its own commission portion (category='membership') are
+  //     removed, and the parent sale's totals reduced by exactly that row's
+  //     own stored amounts, leaving the rest of that invoice intact.
+  // membership_usage_log rows cascade automatically (ON DELETE CASCADE on
+  // client_membership_id) — no explicit child cleanup needed here, unlike
+  // packages' non-cascading child tables.
+  async delete(id: string, salonId: string): Promise<boolean> {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const { rows: memRows } = await client.query(
+        `SELECT id, sale_id, appointment_id, membership_name
+         FROM client_memberships WHERE id = $1 AND salon_id = $2 FOR UPDATE`,
+        [id, salonId],
+      );
+      const membership = memRows[0];
+      if (!membership) {
+        await client.query("ROLLBACK");
+        return false;
+      }
+
+      if (membership.sale_id) {
+        if (!membership.appointment_id) {
+          await client.query(`DELETE FROM commission_earned WHERE sale_id = $1`, [membership.sale_id]);
+          await client.query(`DELETE FROM sale_items WHERE sale_id = $1`, [membership.sale_id]);
+          await client.query(`DELETE FROM sales WHERE id = $1`, [membership.sale_id]);
+        } else {
+          await client.query(
+            `DELETE FROM commission_earned WHERE sale_id = $1 AND category = 'membership'`,
+            [membership.sale_id]
+          );
+          const { rows: itemRows } = await client.query(
+            `DELETE FROM sale_items
+             WHERE id = (
+               SELECT id FROM sale_items
+               WHERE sale_id = $1 AND item_type = 'membership' AND name = $2
+               ORDER BY created_at DESC LIMIT 1
+             )
+             RETURNING total_price, tax_amount, taxable_amount`,
+            [membership.sale_id, membership.membership_name]
+          );
+          const item = itemRows[0];
+          if (item) {
+            await client.query(
+              `UPDATE sales
+               SET subtotal = GREATEST(subtotal - $1, 0),
+                   tax_amount = GREATEST(tax_amount - $2, 0),
+                   total_amount = GREATEST(total_amount - $3, 0)
+               WHERE id = $4`,
+              [Number(item.taxable_amount) || 0, Number(item.tax_amount) || 0, Number(item.total_price) || 0, membership.sale_id]
+            );
+          }
+        }
+      }
+
+      await client.query(`DELETE FROM client_memberships WHERE id = $1 AND salon_id = $2`, [id, salonId]);
+
+      await client.query("COMMIT");
+      return true;
+    } catch (err) {
+      await client.query("ROLLBACK");
       throw err;
     } finally {
       client.release();

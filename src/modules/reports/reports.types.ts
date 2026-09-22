@@ -777,6 +777,13 @@ export interface SaleDetailPayment {
     due_amount: number;
     ewallet_used: number;
     membership_wallet_used: number;
+    // Percentage/loyalty membership discount already baked into sale.total_amount
+    // (a pre-tax price cut, unlike the four redemptions above, which are
+    // subtracted AFTER total_amount) — needed so the Sale Detail panel's own
+    // computeBillBreakdown() waterfall recompute lands on the same reduced
+    // figure total_amount already reflects, instead of reconstructing the
+    // bill as if no membership discount had ever been applied.
+    membership_discount_used: number;
     reward_points_value: number;
     referral_credit_used: number;
     tax_breakdown: any[] | null;
@@ -955,6 +962,32 @@ export interface ProductRetailReportResponse {
     };
 }
 
+// Powers the Product Retail report's Graph page — same shape/scope as
+// SalesSummaryChartResponse below, generalized to this report's own filters
+// (ProductRetailReportFilters, minus page/limit/is_export/product_id, which
+// the chart doesn't use) instead of the Sales Summary ones.
+export interface ProductRetailChartFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    brand_id?: string;
+    brand_ids?: string[];
+    category_id?: string;
+    category_ids?: string[];
+    min_price?: number;
+    max_price?: number;
+}
+
+export interface ProductRetailChartResponse {
+    daily: { date: string; quantity: number; revenue: number }[];
+    payment_modes: { payment_mode: string; revenue: number }[];
+    top_products: { product_id: string | null; product_name: string; quantity: number; revenue: number }[];
+    top_brands: { brand_id: string | null; brand_name: string; revenue: number }[];
+    top_categories: { category_id: string | null; category_name: string; revenue: number }[];
+    top_staff: { staff_id: string | null; staff_name: string; revenue: number }[];
+}
+
 // ===============================
 // Service Sale (independent report API — POST /api/report/service-sale)
 // Reads directly from sales/sale_items (item_type = 'service'), one row per
@@ -1036,6 +1069,32 @@ export interface ServiceSaleReportResponse {
     filters_available: {
         staff: ServiceSaleFilterOption[];
     };
+}
+
+// Powers the Service Sale report's Graph page — same shape/scope as
+// ProductRetailChartResponse above, generalized to this report's own
+// filters/tables.
+export interface ServiceSaleChartFilters {
+    start_date?: string;
+    end_date?: string;
+    staff_ids?: string[];
+    category_id?: string;
+    category_ids?: string[];
+    service_id?: string;
+    service_ids?: string[];
+    min_price?: number;
+    max_price?: number;
+    payment_method?: string;
+    payment_methods?: string[];
+    search?: string;
+}
+
+export interface ServiceSaleChartResponse {
+    daily: { date: string; count: number; revenue: number }[];
+    payment_modes: { payment_mode: string; revenue: number }[];
+    top_services: { service_id: string | null; service_name: string; revenue: number }[];
+    top_categories: { category_id: string | null; category_name: string; revenue: number }[];
+    top_staff: { staff_id: string | null; staff_name: string; revenue: number }[];
 }
 
 // ===============================
@@ -1280,6 +1339,27 @@ export interface ProductInventoryReportResponse {
     rows: ProductInventoryReportRow[];
     pagination: ProductInventoryReportPagination;
     stats: ProductInventoryReportStats;
+}
+
+// Powers the Product Inventory report's Graph page. Snapshot data (no date-
+// series trend) — same filter set as the table, minus pagination.
+export interface ProductInventoryChartFilters {
+    search?: string;
+    category_id?: string;
+    category_ids?: string[];
+    brand_id?: string;
+    brand_ids?: string[];
+    stock_status?: "in_stock" | "low_stock" | "out_of_stock";
+    date_from?: string;
+    date_to?: string;
+    expiry_from?: string;
+    expiry_to?: string;
+}
+
+export interface ProductInventoryChartResponse {
+    by_status: { status: "in_stock" | "low_stock" | "out_of_stock"; count: number; value: number }[];
+    by_category: { category_name: string; value: number }[];
+    top_products: { product_name: string; value: number; current_stock: number }[];
 }
 
 // ===============================
@@ -1595,6 +1675,27 @@ export interface ClientRevenueReportResponse {
     stats: ClientRevenueReportStats;
 }
 
+// Powers the Client Revenue report's Graph page.
+export interface ClientRevenueChartFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    gender?: string;
+    membership_status?: string;
+    last_visit_from?: string;
+    last_visit_to?: string;
+}
+
+export interface ClientRevenueChartResponse {
+    // Bucketed by each client's own last-visit date in range (same semantic
+    // the table's own "Last Visit" column uses) — not a per-transaction date.
+    daily: { date: string; revenue: number; clients: number }[];
+    gender: { gender: string; revenue: number }[];
+    membership_status: { status: string; revenue: number }[];
+    top_clients: { client_id: string | null; client_name: string; revenue: number }[];
+}
+
 // ===============================
 // All Clients Report (independent report API — POST /api/report/all-clients)
 // Pure client-profile listing — name, contact, DOB, gender, source, status,
@@ -1661,6 +1762,123 @@ export interface AllClientsReportResponse {
     pagination: AllClientsReportPagination;
     stats: AllClientsReportStats;
     filters_available: AllClientsFiltersAvailable;
+}
+
+// ===============================
+// Birthday Report (independent report API — POST /api/report/birthday)
+// One row per client with a birthday on file (clients.birthday_day_month,
+// "MM-DD"), with each row's NEXT occurrence of that birthday computed
+// server-side (this year's date if it hasn't passed yet, otherwise next
+// year's) so the report can surface "who's coming up" for outreach, not just
+// a static calendar field. Never touches the Appointment API.
+// ===============================
+
+export interface BirthdayReportFilters {
+    search?: string;
+    genders?: string[];
+    status?: "active" | "blocked";
+    // Calendar month (1-12) the birthday falls in, independent of whether
+    // that occurrence has already passed this year.
+    birth_month?: number;
+    // Narrows to clients whose NEXT birthday occurrence is within this many
+    // days from today (0 = today only).
+    upcoming_within_days?: number;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface BirthdayReportRow {
+    client_id: string;
+    client_name: string;
+    contact: string;
+    email: string | null;
+    gender: string | null;
+    // "MM-DD" as stored.
+    birthday: string;
+    // Year of birth, when known — used to compute turning_age. Many salons
+    // never collect it, so this (and turning_age) are frequently null.
+    birthday_year: number | null;
+    turning_age: number | null;
+    // This year's occurrence if it hasn't passed yet, otherwise next year's —
+    // "YYYY-MM-DD".
+    next_occurrence: string;
+    days_until_next: number;
+    client_source: string | null;
+    status: "Active" | "Blocked";
+}
+
+export interface BirthdayReportStats {
+    total_with_birthday: number;
+    birthdays_today: number;
+    birthdays_this_week: number;
+    birthdays_this_month: number;
+}
+
+export interface BirthdayReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface BirthdayReportResponse {
+    rows: BirthdayReportRow[];
+    pagination: BirthdayReportPagination;
+    stats: BirthdayReportStats;
+}
+
+// ===============================
+// Anniversary Report (independent report API — POST /api/report/anniversary)
+// One row per client with an anniversary on file (clients.anniversary, a
+// full date), with each row's NEXT occurrence computed the same way the
+// Birthday Report computes next_occurrence. Never touches the Appointment
+// API.
+// ===============================
+
+export interface AnniversaryReportFilters {
+    search?: string;
+    status?: "active" | "blocked";
+    anniversary_month?: number;
+    upcoming_within_days?: number;
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface AnniversaryReportRow {
+    client_id: string;
+    client_name: string;
+    contact: string;
+    email: string | null;
+    // "YYYY-MM-DD" as stored — the original anniversary date, year included.
+    anniversary: string;
+    // Years since the original anniversary date, as of next_occurrence.
+    years_count: number;
+    next_occurrence: string;
+    days_until_next: number;
+    client_source: string | null;
+    status: "Active" | "Blocked";
+}
+
+export interface AnniversaryReportStats {
+    total_with_anniversary: number;
+    anniversaries_today: number;
+    anniversaries_this_week: number;
+    anniversaries_this_month: number;
+}
+
+export interface AnniversaryReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface AnniversaryReportResponse {
+    rows: AnniversaryReportRow[];
+    pagination: AnniversaryReportPagination;
+    stats: AnniversaryReportStats;
 }
 
 // ===============================
@@ -1927,6 +2145,27 @@ export interface EnquiryReportResponse {
     filters_available: EnquiryReportFiltersAvailable;
 }
 
+// Powers the Enquiry Report's Graph page.
+export interface EnquiryChartFilters {
+    start_date?: string;
+    end_date?: string;
+    staff_ids?: string[];
+    service_ids?: string[];
+    statuses?: string[];
+    sources?: string[];
+    follow_up_date?: string;
+    search?: string;
+}
+
+export interface EnquiryChartResponse {
+    // Bucketed by e.created_at — same field _buildEnquiryReportWhere filters
+    // on, so the trend's day boundaries can never disagree with the table.
+    daily: { date: string; total: number; converted: number }[];
+    status: { status: string; count: number }[];
+    source: { source: string; count: number }[];
+    top_staff: { staff_id: string | null; staff_name: string; count: number }[];
+}
+
 // ===============================
 // Customer Spend Segments Report (POST /api/report/customer-spend)
 //
@@ -2070,6 +2309,24 @@ export interface CustomerFrequencyReportResponse {
     stats: CustomerFrequencyReportStats;
 }
 
+// Powers the Client Frequency report's Graph page.
+export interface CustomerFrequencyChartFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    customer_type?: "most_frequent" | "least_frequent" | "most_spending" | "least_spending" | "new" | "old" | "lost";
+}
+
+export interface CustomerFrequencyChartResponse {
+    // Bucketed by each client's own last-visit date in range (same semantic
+    // Client Revenue's own trend uses) — not a per-transaction date.
+    daily: { date: string; clients: number; visits: number }[];
+    customer_type: { type: string; count: number }[];
+    visitor_type: { type: string; count: number }[];
+    top_clients: { client_id: string | null; client_name: string; visits: number }[];
+}
+
 // ===============================
 // Service Frequency Report (POST /api/report/service-frequency)
 //
@@ -2140,6 +2397,28 @@ export interface ServiceFrequencyReportResponse {
     rows: ServiceFrequencyReportRow[];
     pagination: ServiceFrequencyReportPagination;
     stats: ServiceFrequencyReportStats;
+}
+
+// Powers the Service Frequency report's Graph page.
+export interface ServiceFrequencyChartFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    service_ids?: string[];
+    category_ids?: string[];
+    staff_ids?: string[];
+}
+
+export interface ServiceFrequencyChartResponse {
+    // Bucketed by s.created_at — same field _buildServiceFrequencyWhere
+    // filters on (no IST zone conversion there), so the trend's day
+    // boundaries can never disagree with the table.
+    daily: { date: string; visits: number; revenue: number }[];
+    // One-time vs repeat client+service pairs — same `visits > 1` cutoff the
+    // table's own repeat_pairs stat uses.
+    pair_frequency: { type: "one_time" | "repeat"; count: number }[];
+    category_breakdown: { category: string; visits: number }[];
+    top_services: { service_id: string | null; service_name: string; visits: number }[];
 }
 
 // ===============================
@@ -2343,6 +2622,26 @@ export interface PaymentCollectionReportResponse {
     filters_available: PaymentCollectionFiltersAvailable;
 }
 
+// Powers the Payment Collection report's Graph page.
+export interface PaymentCollectionChartFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    payment_statuses?: string[];
+    payment_methods?: string[];
+}
+
+export interface PaymentCollectionChartResponse {
+    daily: { date: string; pending: number; collected: number }[];
+    payment_status: { status: string; amount: number }[];
+    // Reuses PaymentCollectionReportStats.collected_by_method — same
+    // transaction-level source, not duplicated SQL.
+    payment_modes: { method: string; amount: number }[];
+    top_staff_pending: { staff_name: string; amount: number }[];
+    top_clients_due: { client_id: string | null; customer_name: string; amount: number }[];
+}
+
 // ===============================
 // PENDING PAYMENT REPORT
 // One row per bill still carrying a due balance (partial or unpaid).
@@ -2466,6 +2765,21 @@ export interface CashManagementReportResponse {
     filters_available: CashManagementFiltersAvailable;
 }
 
+// Powers the Cash Management report's Graph page.
+export interface CashManagementChartFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    statuses?: string[];
+}
+
+export interface CashManagementChartResponse {
+    daily: { date: string; revenue: number; expense: number; closing: number }[];
+    status: { status: string; count: number }[];
+    top_variance: { id: string; date: string; opened_by: string; amount: number }[];
+    revenue_by_opened_by: { name: string; revenue: number }[];
+}
+
 // ===============================
 // Staff Sales Report (independent report API — POST /api/report/staff-sales)
 // Reads directly from sales/sale_items/payments, one row per transaction,
@@ -2490,6 +2804,10 @@ export interface StaffSalesReportFilters {
     payment_status?: string;
     payment_statuses?: string[];
     sort?: "sales_desc" | "sales_asc";
+    // Whether each line item's price/revenue is gross (total_price + tax_amount)
+    // or net (total_price only). Defaults to true (gross) when omitted — same
+    // convention as StaffPerformanceReportFilters.include_gst.
+    include_gst?: boolean;
 }
 
 export interface StaffSalesReportRow {
@@ -2541,6 +2859,28 @@ export interface StaffSalesReportResponse {
     pagination: StaffSalesReportPagination;
     stats: StaffSalesReportStats;
     filters_available: { payment_modes: string[] };
+}
+
+// Powers the Staff Sales report's Graph page.
+export interface StaffSalesChartFilters {
+    start_date?: string;
+    end_date?: string;
+    staff_id?: string;
+    staff_ids?: string[];
+    search?: string;
+    payment_mode?: string;
+    payment_modes?: string[];
+    item_type?: string;
+    item_types?: string[];
+    payment_status?: string;
+    payment_statuses?: string[];
+    include_gst?: boolean;
+}
+
+export interface StaffSalesChartResponse {
+    daily: { date: string; revenue: number; commission: number }[];
+    by_item_type: { item_type: string; revenue: number }[];
+    top_staff: { staff_id: string | null; staff_name: string; revenue: number }[];
 }
 
 // ===============================
@@ -2640,6 +2980,34 @@ export interface StaffPerformanceReportResponse {
     filters_available: StaffPerformanceFiltersAvailable;
 }
 
+// Powers the Staff Performance report's Graph page.
+export interface StaffPerformanceChartFilters {
+    start_date?: string;
+    end_date?: string;
+    staff_ids?: string[];
+    branch_id?: string;
+    payment_mode?: string;
+    payment_modes?: string[];
+    payment_status?: string;
+    payment_statuses?: string[];
+    item_type?: string;
+    item_types?: string[];
+    service_id?: string;
+    product_id?: string;
+    package_id?: string;
+    package_ids?: string[];
+    membership_id?: string;
+    membership_ids?: string[];
+    search?: string;
+    include_gst?: boolean;
+}
+
+export interface StaffPerformanceChartResponse {
+    daily: { date: string; revenue: number; commission: number }[];
+    by_item_type: { item_type: string; revenue: number }[];
+    top_staff: { staff_id: string; staff_name: string; revenue: number }[];
+}
+
 // ===============================
 // Staff Item Sales Report (independent report API —
 // POST /api/report/staff-item-sales)
@@ -2692,6 +3060,22 @@ export interface StaffItemSalesReportResponse {
     rows: StaffItemSalesReportRow[];
     pagination: StaffItemSalesReportPagination;
     stats: StaffItemSalesReportStats;
+}
+
+// Powers the Staff Item Sales report's Graph page.
+export interface StaffItemSalesChartFilters {
+    start_date?: string;
+    end_date?: string;
+    item_type?: StaffItemSalesType;
+    staff_id?: string;
+    staff_ids?: string[];
+    search?: string;
+}
+
+export interface StaffItemSalesChartResponse {
+    daily: { date: string; quantity: number; revenue: number }[];
+    top_items: { item_name: string; quantity: number; revenue: number }[];
+    top_staff: { staff_id: string | null; staff_name: string; revenue: number }[];
 }
 
 // ===============================
@@ -2774,6 +3158,30 @@ export interface PackageSaleReportResponse {
         staff: PackageSaleFilterOption[];
         packages: string[];
     };
+}
+
+// Powers the Package Sale report's Graph page.
+export interface PackageSaleChartFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    staff_ids?: string[];
+    package_name?: string;
+    package_names?: string[];
+    package_status?: string;
+    package_statuses?: string[];
+    payment_status?: string;
+    payment_statuses?: string[];
+    payment_method?: string;
+    payment_methods?: string[];
+    min_amount?: number;
+    max_amount?: number;
+}
+
+export interface PackageSaleChartResponse {
+    daily: { date: string; count: number; revenue: number }[];
+    top_packages: { package_name: string; count: number; revenue: number }[];
+    top_staff: { staff_id: string | null; staff_name: string; revenue: number }[];
 }
 
 // ===============================
@@ -3045,6 +3453,28 @@ export interface MemberSaleReportResponse {
     pagination: MemberSaleReportPagination;
     stats: MemberSaleReportStats;
     filters_available: MemberSaleFiltersAvailable;
+}
+
+// Powers the Membership Sale report's Graph page.
+export interface MemberSaleChartFilters {
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+    status?: MemberSaleStatus;
+    statuses?: string[];
+    membership_id?: string;
+    membership_ids?: string[];
+    staff_ids?: string[];
+    pricing_type?: string;
+    pricing_types?: string[];
+    price_min?: number;
+    price_max?: number;
+}
+
+export interface MemberSaleChartResponse {
+    daily: { date: string; count: number; revenue: number }[];
+    top_memberships: { membership_name: string; count: number; revenue: number }[];
+    top_staff: { staff_id: string | null; staff_name: string; revenue: number }[];
 }
 
 // ===============================

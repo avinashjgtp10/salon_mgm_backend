@@ -52,6 +52,8 @@ import { clientsService } from "../clients/clients.service";
 import { CreateClientBody } from "../clients/clients.types";
 import { clientPhoneKey } from "../clients/clients.phone";
 import { staffRepository } from "../staff/staff.repository";
+import { rolesRepository } from "../roles/roles.repository";
+import { ensureDefaultRole } from "../roles/roles.service";
 import { appointmentsService } from "../appointments/appointments.service";
 import { appointmentsRepository } from "../appointments/appointments.repository";
 import { PaymentMethod } from "./sales.types";
@@ -331,6 +333,13 @@ export const salesImportService = {
         result.total = rows.length;
         if (rows.length === 0) return result;
 
+        // Looked up (or created, if this salon has never had one before) once
+        // per import, not per row — every staff member this import
+        // auto-creates gets the salon's real default "Staff" role instead of
+        // a bare role_id NULL, which otherwise showed as "No Role Assigned"
+        // on the Staff page regardless of how many rows named that person.
+        const defaultStaffRoleId = await ensureDefaultRole(salonId, "Staff");
+
         // ── Prefetch reference data once — same reasoning as
         // products.import.ts's own prefetch: per-row lookups on a
         // thousand-row sheet is slow enough to trip a gateway timeout. ──────
@@ -586,11 +595,32 @@ export const salesImportService = {
                                 const parts = staffNameInput.split(/\s+/);
                                 const firstName = parts[0];
                                 const lastName = parts.length > 1 ? parts.slice(1).join(" ") : null;
+                                // activateImmediately: true (4th arg) — this
+                                // staff member was never "invited" (no email
+                                // to invite), so leaving it to default
+                                // (undefined here) marked invitation_status
+                                // 'pending' as if a real invite were awaiting
+                                // acceptance, with nothing behind it to ever
+                                // accept. Explicit true keeps is_active true
+                                // (already the case either way) and makes
+                                // invitation_status 'accepted' instead —
+                                // matching what this row actually is: a real,
+                                // already-active staff member, just one with
+                                // no login set up yet.
                                 const createdStaff = await staffRepository.create(salonId, {
                                     first_name: firstName,
                                     last_name: lastName,
                                     email: undefined,
-                                } as any, null);
+                                } as any, null, true);
+                                // role_id has no column in the staff INSERT
+                                // itself (see staffRepository.create) — every
+                                // staff member's role is a separate
+                                // assignment, same as the Roles & Permissions
+                                // page's own "no role yet" self-heal path.
+                                // Without this, an auto-created staff member
+                                // showed "No Role Assigned" on the Staff page
+                                // no matter how many bills named them.
+                                await rolesRepository.assignStaffRole(createdStaff.id, defaultStaffRoleId);
                                 matched = {
                                     id: createdStaff.id,
                                     name: `${createdStaff.first_name} ${createdStaff.last_name ?? ""}`.trim(),

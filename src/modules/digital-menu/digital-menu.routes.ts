@@ -10,6 +10,7 @@ const authBase = [authMiddleware, roleMiddleware("salon_owner", "admin", "staff"
 const viewDigitalMenu = requirePermission("view_digital_menu");
 const createDigitalMenu = requirePermission("create_digital_menu");
 const editDigitalMenu = requirePermission("edit_digital_menu");
+const deleteDigitalMenu = requirePermission("delete_digital_menu");
 
 // ─── Public — no auth, matches bookings.routes.ts's "no auth middleware
 // attached at all" pattern. Must stay ahead of nothing here since it's the
@@ -22,5 +23,6 @@ router.get("/public/:token", digitalMenuController.getPublic);
 router.get("/",   ...authBase, viewDigitalMenu, digitalMenuController.get);
 router.post("/",  ...authBase, createDigitalMenu, validateSaveDigitalMenu, digitalMenuController.create);
 router.patch("/:id", ...authBase, editDigitalMenu, validateSaveDigitalMenu, digitalMenuController.update);
+router.delete("/:id", ...authBase, deleteDigitalMenu, digitalMenuController.remove);
 
 export default router;

@@ -52,13 +52,30 @@ export const errorHandler = (
     });
   }
 
-  // Postgres unique-constraint violation (code 23505)
+  // Postgres unique-constraint violation (code 23505). This is a fallback
+  // for races the app's own pre-checks (e.g. couponsRepository.findByCodeOwn)
+  // didn't catch — most requests never reach here at all. `table` is
+  // populated by Postgres the same way it is for the FK-violation branch
+  // below, so the message can name the right entity instead of assuming
+  // every unique violation in the whole app is about a client (it used to,
+  // hardcoded, which mislabelled e.g. a duplicate coupon code as a
+  // duplicate client).
   if ((err as any).code === '23505') {
-    logger.warn(`Duplicate key error: ${err.message}`, { url: req.url, method: req.method });
+    const table: string | undefined = (err as any).table;
     const detail: string = (err as any).detail || '';
-    let message = 'A client with this value already exists.';
-    if (detail.includes('email')) message = 'A client with this email address already exists.';
-    else if (detail.includes('phone_number')) message = 'A client with this phone number already exists.';
+    logger.warn(`Duplicate key error: ${err.message}`, { url: req.url, method: req.method, table });
+    const FRIENDLY_ENTITY_NAMES: Record<string, string> = {
+      clients: 'client',
+      coupons: 'coupon',
+      services: 'service',
+      products: 'product',
+      staff: 'staff member',
+    };
+    const entity = (table && FRIENDLY_ENTITY_NAMES[table]) || 'record';
+    let message = `A ${entity} with this value already exists.`;
+    if (detail.includes('email')) message = `A ${entity} with this email address already exists.`;
+    else if (detail.includes('phone_number')) message = `A ${entity} with this phone number already exists.`;
+    else if (table === 'coupons' && detail.includes('code')) message = 'A coupon with this code already exists for this salon.';
     return res.status(409).json({
       success: false,
       error: {

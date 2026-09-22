@@ -43,6 +43,25 @@ function validateCouponFields(body: Partial<CreateCouponBody>, isCreate: boolean
     throw new AppError(400, 'expires_at is required', 'VALIDATION_ERROR');
   if (body.expires_at !== undefined && isNaN(new Date(body.expires_at).getTime()))
     throw new AppError(400, 'expires_at must be a valid date', 'VALIDATION_ERROR');
+  if (body.valid_from !== undefined && body.valid_from !== null && isNaN(new Date(body.valid_from).getTime()))
+    throw new AppError(400, 'valid_from must be a valid date', 'VALIDATION_ERROR');
+  // Cross-checked only when both dates are actually present in THIS request —
+  // a patch that only touches one of them has no reliable second date to
+  // compare against without an extra fetch, same as every other field here
+  // (min_order_amount/max_uses are never cross-validated against each other
+  // either); the DB CHECK-free schema still stores whatever's sent, so this
+  // is a courtesy, not the only guard.
+  if (body.valid_from && body.expires_at && new Date(body.valid_from).getTime() > new Date(body.expires_at).getTime())
+    throw new AppError(400, 'valid_from must be on or before expires_at', 'VALIDATION_ERROR');
+  if (body.max_discount !== undefined && body.max_discount !== null) {
+    if (typeof body.max_discount !== 'number' || body.max_discount < 0)
+      throw new AppError(400, 'max_discount must be >= 0', 'VALIDATION_ERROR');
+    // A flat-value coupon's discount IS the value — a "maximum discount" cap
+    // only means something for a percentage coupon, where the % could work
+    // out to more than the salon wants to give away on a big bill.
+    if (body.type === 'flat')
+      throw new AppError(400, 'max_discount only applies to percentage coupons', 'VALIDATION_ERROR');
+  }
 }
 
 export const couponsService = {
@@ -131,6 +150,16 @@ export const couponsService = {
     if (expiryEndOfDay < new Date())
       throw new AppError(400, 'This coupon has expired', 'COUPON_EXPIRED');
 
+    // Same DATE-column, start-of-day reasoning as expires_at above but at the
+    // opposite end — a coupon valid FROM a given day should already be usable
+    // at any time during that day, not just from UTC midnight onward.
+    if (coupon.valid_from) {
+      const validFromStart = new Date(coupon.valid_from);
+      validFromStart.setUTCHours(0, 0, 0, 0);
+      if (validFromStart > new Date())
+        throw new AppError(400, 'This coupon is not valid yet', 'COUPON_NOT_YET_VALID');
+    }
+
     if (coupon.max_uses !== null && coupon.used_count >= coupon.max_uses)
       throw new AppError(400, 'Coupon usage limit has been reached', 'COUPON_LIMIT_REACHED');
 
@@ -141,10 +170,16 @@ export const couponsService = {
         'MIN_ORDER_NOT_MET'
       );
 
-    const discountAmount =
+    let discountAmount =
       coupon.type === 'percentage'
         ? (orderAmount * Number(coupon.value)) / 100
         : Number(coupon.value);
+    // Percentage-only (validateCouponFields already rejects max_discount on a
+    // flat coupon) — the % of a big enough bill could otherwise exceed what
+    // the salon actually wants to give away on this coupon.
+    if (coupon.max_discount !== null && discountAmount > Number(coupon.max_discount)) {
+      discountAmount = Number(coupon.max_discount);
+    }
 
     const capped = Math.min(orderAmount, discountAmount);
     const finalAmount = Math.max(0, orderAmount - capped);

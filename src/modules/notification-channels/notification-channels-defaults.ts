@@ -22,7 +22,7 @@ export type { DefaultPurchaseEventType }
 
 export const DEFAULT_SMS_TEMPLATES: Record<DefaultPurchaseEventType, string> = {
   client_welcome:
-    "Hi {{customer_name}}, welcome to {{salon_name}}! We're happy to have you with us.",
+    "Hi {{customer_name}}, welcome to {{salon_name}}! Your referral code is {{referral_code}}.",
   package_purchased:
     "Hi {{customer_name}}, thanks for purchasing {{package_name}} ({{total_sessions}} sessions, valid till {{expiry_date}}). Invoice: {{invoice_number}}.",
   membership_purchased:
@@ -66,12 +66,20 @@ export const DEFAULT_SMS_TEMPLATES: Record<DefaultPurchaseEventType, string> = {
     "Hi {{customer_name}}, Rs.{{amount_used}} used from your Referral Balance at {{salon_name}}. Balance: Rs.{{remaining_balance}}.",
   reward_points_used:
     "Hi {{customer_name}}, {{points_used}} reward points used at {{salon_name}}. Remaining: {{remaining_points}}.",
+  birthday_wishes:
+    "Happy Birthday {{customer_name}}! Wishing you a wonderful day from all of us at {{salon_name}}. Come celebrate with us soon!",
+  anniversary_wishes:
+    "Happy Anniversary {{customer_name}}! Wishing you many more wonderful years from all of us at {{salon_name}}.",
+  cash_counter_opened:
+    "Cash Counter Opened - {{salon_name}}. {{opening_date}} {{opening_time}}. Opening Cash: {{opening_amount}}.",
+  cash_counter_closed:
+    "Cash Counter Closed - {{salon_name}}. {{closing_date}} {{closing_time}}. {{collection_breakdown}}. Total: {{total_collection}}.",
 }
 
 export const DEFAULT_EMAIL_TEMPLATES: Record<DefaultPurchaseEventType, { subject: string; body: string }> = {
   client_welcome: {
     subject: "Welcome to {{salon_name}}!",
-    body: "Hi {{customer_name}},\n\nWelcome to {{salon_name}}! We're happy to have you with us.\n\nThank you for choosing us — we look forward to seeing you soon.",
+    body: "Hi {{customer_name}},\n\nWelcome to {{salon_name}}! We're happy to have you with us.\n\nYour referral code: {{referral_code}}\n\nThank you for choosing us — we look forward to seeing you soon.",
   },
   package_purchased: {
     subject: "Your {{package_name}} purchase is confirmed",
@@ -162,6 +170,22 @@ export const DEFAULT_EMAIL_TEMPLATES: Record<DefaultPurchaseEventType, { subject
   reward_points_used: {
     subject: "Reward Points used at {{salon_name}}",
     body: "Hi {{customer_name}},\n\nYour Reward Points were used for a payment at {{salon_name}}.\n\nPoints Used: {{points_used}}\nRemaining Points: {{remaining_points}}\n\nThank you for choosing {{salon_name}} — we appreciate you!",
+  },
+  birthday_wishes: {
+    subject: "Happy Birthday from {{salon_name}}!",
+    body: "Hi {{customer_name}},\n\n🎉 Happy Birthday from all of us at {{salon_name}}!\n\nWishing you a wonderful day — we'd love to help you celebrate. Come visit us soon!",
+  },
+  anniversary_wishes: {
+    subject: "Happy Anniversary from {{salon_name}}!",
+    body: "Hi {{customer_name}},\n\n🎉 Happy Anniversary from all of us at {{salon_name}}!\n\nWishing you many more wonderful years — we'd love to help you celebrate. Come visit us soon!",
+  },
+  cash_counter_opened: {
+    subject: "Cash Counter Opened — {{salon_name}}",
+    body: "Cash Counter Opened — {{salon_name}}\n\nYour cash counter has been opened and is now ready for today's transactions.\n\nDate: {{opening_date}}\nTime: {{opening_time}}\nOpening Cash Amount: {{opening_amount}}\n\nHave a great business day ahead!",
+  },
+  cash_counter_closed: {
+    subject: "Cash Counter Closed — {{salon_name}}",
+    body: "Cash Counter Closed — {{salon_name}}\n\nYour cash counter has been closed for the day. Here is the collection summary for this session.\n\nDate: {{closing_date}}\nTime: {{closing_time}}\n\nCollection Summary\n{{collection_breakdown}}\n\nTotal Collection: {{total_collection}}\n\nThank you for reconciling today's cash counter.",
   },
 }
 

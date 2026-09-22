@@ -6,6 +6,7 @@ import type {
   DashboardSummary,
   TodayAppointment,
   RevenueDataPoint,
+  PaymentModeBreakdown,
   TopStaffMember,
   StaffRevenueEntry,
   ServiceMixItem,
@@ -340,26 +341,55 @@ export const salonDashboardRepository = {
   },
 
   // ── Revenue Chart (today / weekly / monthly / yearly) ───────────────────────
-  async getRevenueChart(salonId: string, period: string = "monthly"): Promise<RevenueDataPoint[]> {
+  async getRevenueChart(salonId: string, period: string = "monthly", gender?: string): Promise<RevenueDataPoint[]> {
+    // Gender is resolved via COALESCE(s.client_id, a.client_id)/a.client_id —
+    // a sale's own client_id when it has one (walk-in sales always do),
+    // falling back to its linked appointment's client for an appointment-
+    // billed sale. 'all'/empty means "no filter" (every event counted),
+    // same convention as the Client Revenue report's own gender filter.
+    const genderClause = gender && gender !== "all" ? `AND LOWER(cl.gender) = $2` : "";
+    const genderValues = gender && gender !== "all" ? [gender.toLowerCase()] : [];
+
     // Shared event source for every period below: completed sales (gated on
     // appointment status same as getSummary) UNION ALL still-open partial-
     // payment deposits with no sales row yet. 13-month floor keeps the scan
     // bounded while covering every period branch that reads from it.
     const eventsCte = `
       WITH sales_rows AS (
-        -- ROUND — see getSummary's sales_rows for why.
-        SELECT s.created_at AS event_at, ROUND(s.total_amount) AS amount
+        -- Revenue here means money actually RECEIVED, not the bill's Grand
+        -- Total — same convention as getSummary's sales_rows (Today's/Total
+        -- Revenue stat cards) and Sales Summary's received_amount: for an
+        -- appointment-linked sale, sum whatever payments were actually
+        -- collected against it, falling back to the sale's own total_amount
+        -- only for a walk-in/no-appointment sale with no payments row to
+        -- read from. This chart used to sum s.total_amount unconditionally,
+        -- so a bill left partially paid showed its full quoted price here
+        -- instead of what was actually received — disagreeing with the
+        -- stat cards right above it on the same dashboard.
+        SELECT s.created_at AS event_at,
+          CASE
+            WHEN s.appointment_id IS NOT NULL THEN COALESCE(pay.paid_from_payments, 0)
+            ELSE ROUND(s.total_amount)
+          END AS amount
         FROM sales s
         LEFT JOIN appointments a ON a.id = s.appointment_id
+        LEFT JOIN clients cl ON cl.id = COALESCE(s.client_id, a.client_id)
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(SUM(p.paid_amount) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS paid_from_payments
+          FROM payments p
+          WHERE p.appointment_id = s.appointment_id
+        ) pay ON s.appointment_id IS NOT NULL
         WHERE s.salon_id = $1
           AND s.status = 'completed'
           AND s.created_at >= NOW() - INTERVAL '13 months'
           AND (a.id IS NULL OR (a.status IN ('paid', 'partial') AND a.deleted_at IS NULL))
+          ${genderClause}
       ),
       open_partial_rows AS (
         SELECT p.created_at AS event_at, p.paid_amount AS amount
         FROM payments p
         JOIN appointments a ON a.id = p.appointment_id
+        LEFT JOIN clients cl ON cl.id = a.client_id
         WHERE p.salon_id = $1
           AND p.status = 'partial'
           AND p.created_at >= NOW() - INTERVAL '13 months'
@@ -369,6 +399,7 @@ export const salonDashboardRepository = {
             SELECT 1 FROM sales s2
             WHERE s2.appointment_id = p.appointment_id AND s2.status = 'completed'
           )
+          ${genderClause}
       ),
       revenue_events AS (
         SELECT event_at, amount FROM sales_rows
@@ -435,7 +466,7 @@ export const salonDashboardRepository = {
         ORDER BY sort_key ASC`;
     }
 
-    const { rows } = await pool.query<{ month: string; full_label: string; revenue: string }>(sql, [salonId]);
+    const { rows } = await pool.query<{ month: string; full_label: string; revenue: string }>(sql, [salonId, ...genderValues]);
 
     return rows.map((row) => ({
       month: row.month,
@@ -443,6 +474,82 @@ export const salonDashboardRepository = {
       revenue: parseFloat(row.revenue),
       expenses: 0,
     }));
+  },
+
+  // ── Payment Mode Breakdown ("Overall Collection" card) ──────────────────
+  // Powers the card that replaced the old appointment-status "Today's
+  // Summary" bar chart. Deliberately reuses the Sales Summary report's own
+  // filter/CTE building blocks (_buildSalesSummaryWhere,
+  // _UNBILLED_APPOINTMENT_ROWS_CTE, _PAYMENT_LATERAL,
+  // _APPOINTMENT_STATUS_JOIN) instead of a hand-rolled parallel definition —
+  // an earlier version summed its own "amount received" and even split a
+  // 'split' sale's JSON payment_reference across Cash/Card/UPI, so its
+  // numbers could never match Sales Summary filtered to the same payment
+  // mode: that report's own payment-mode filter is a plain
+  // `s.payment_method = 'cash'` equality (never split-aware). Grouping by
+  // the literal payment_method here, off the exact same query shape, is the
+  // only way to guarantee the two screens always agree.
+  async getPaymentModeBreakdown(salonId: string, period: string = "today"): Promise<PaymentModeBreakdown> {
+    // IST calendar date, computed from the UTC epoch directly (not the
+    // server process's local clock) — same "today" the date range picker and
+    // every report on this app means.
+    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+    const istDateString = (offsetDays: number) =>
+      new Date(Date.now() + IST_OFFSET_MS + offsetDays * 86_400_000).toISOString().slice(0, 10);
+
+    const dateFilters = period === "yesterday"
+      ? { start_date: istDateString(-1), end_date: istDateString(-1) }
+      : period === "week"
+      // Last 7 days inclusive of today — same "week" convention as
+      // getStaffRevenue's weekly bucket below.
+      ? { start_date: istDateString(-6), end_date: istDateString(0) }
+      : { start_date: istDateString(0), end_date: istDateString(0) };
+
+    const { where, values, nextIndex } = reportsRepository._buildSalesSummaryWhere(salonId, dateFilters);
+    const unbilled = reportsRepository._UNBILLED_APPOINTMENT_ROWS_CTE(dateFilters, nextIndex);
+
+    const { rows } = await pool.query<{ payment_method: string | null; amount: string }>(
+      `WITH sales_side AS (
+         SELECT
+           LOWER(s.payment_method) AS payment_method,
+           CASE
+             WHEN s.appointment_id IS NOT NULL THEN pay.paid_from_payments
+             WHEN s.status = 'completed' THEN s.total_amount::numeric
+             ELSE 0
+           END AS paid_amount
+         FROM sales s
+         LEFT JOIN clients c ON s.client_id = c.id
+         ${reportsRepository._PAYMENT_LATERAL}
+         ${reportsRepository._APPOINTMENT_STATUS_JOIN}
+         WHERE ${where}
+       ),
+       appt_side AS (
+         SELECT LOWER(u.payment_method) AS payment_method, u.paid_amount
+         FROM (${unbilled.sql}) u
+       ),
+       unified AS (
+         SELECT payment_method, paid_amount FROM sales_side
+         UNION ALL
+         SELECT payment_method, paid_amount FROM appt_side
+       )
+       SELECT payment_method, COALESCE(SUM(paid_amount), 0) AS amount
+       FROM unified
+       WHERE payment_method IS NOT NULL
+       GROUP BY payment_method`,
+      [...values, ...unbilled.values]
+    );
+
+    const total = rows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
+    const entries = rows
+      .map((r) => ({
+        method: String(r.payment_method),
+        amount: Number(r.amount) || 0,
+        percentage: total > 0 ? Math.round((Number(r.amount) / total) * 1000) / 10 : 0,
+      }))
+      .filter((e) => e.amount > 0)
+      .sort((a, b) => b.amount - a.amount);
+
+    return { entries, total };
   },
 
   // ── Staff Revenue (donut) — same period semantics as getRevenueChart ───────
@@ -460,10 +567,21 @@ export const salonDashboardRepository = {
 
     const { rows } = await pool.query<{ id: string; name: string; role: string; revenue: string }>(
       `WITH sales_rows AS (
-         -- ROUND — see getSummary's sales_rows for why.
-         SELECT sl.staff_id, sl.created_at AS event_at, ROUND(sl.total_amount) AS amount
+         -- Received amount, not the bill's Grand Total — same convention as
+         -- getSummary/getRevenueChart's sales_rows (see getRevenueChart's
+         -- comment for why).
+         SELECT sl.staff_id, sl.created_at AS event_at,
+           CASE
+             WHEN sl.appointment_id IS NOT NULL THEN COALESCE(pay.paid_from_payments, 0)
+             ELSE ROUND(sl.total_amount)
+           END AS amount
          FROM sales sl
          LEFT JOIN appointments a ON a.id = sl.appointment_id
+         LEFT JOIN LATERAL (
+           SELECT COALESCE(SUM(p.paid_amount) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS paid_from_payments
+           FROM payments p
+           WHERE p.appointment_id = sl.appointment_id
+         ) pay ON sl.appointment_id IS NOT NULL
          WHERE sl.salon_id = $1
            AND sl.status = 'completed'
            AND (a.id IS NULL OR (a.status IN ('paid', 'partial') AND a.deleted_at IS NULL))
@@ -538,10 +656,21 @@ export const salonDashboardRepository = {
          GROUP BY staff_id
        ),
        sales_rows AS (
-         -- ROUND — see getSummary's sales_rows for why.
-         SELECT sl.staff_id, ROUND(sl.total_amount) AS amount
+         -- Received amount, not the bill's Grand Total — same convention as
+         -- getSummary/getRevenueChart's sales_rows (see getRevenueChart's
+         -- comment for why).
+         SELECT sl.staff_id,
+           CASE
+             WHEN sl.appointment_id IS NOT NULL THEN COALESCE(pay.paid_from_payments, 0)
+             ELSE ROUND(sl.total_amount)
+           END AS amount
          FROM sales sl
          LEFT JOIN appointments a ON a.id = sl.appointment_id
+         LEFT JOIN LATERAL (
+           SELECT COALESCE(SUM(p.paid_amount) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS paid_from_payments
+           FROM payments p
+           WHERE p.appointment_id = sl.appointment_id
+         ) pay ON sl.appointment_id IS NOT NULL
          WHERE sl.salon_id = $1
            AND date_trunc('month', sl.created_at) = date_trunc('month', NOW())
            AND sl.status = 'completed'

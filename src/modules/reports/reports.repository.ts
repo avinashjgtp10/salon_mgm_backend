@@ -12,9 +12,11 @@ import {
     ProductRetailReportRow,
     ProductRetailReportStats,
     ProductRetailFilterOption,
+    ProductRetailChartFilters,
     ServiceSaleReportRow,
     ServiceSaleReportStats,
     ServiceSaleFilterOption,
+    ServiceSaleChartFilters,
     GstReportRow,
     GstReportStats,
     ProductMarginReportRow,
@@ -25,6 +27,7 @@ import {
     EwalletReportStats,
     ProductInventoryReportRow,
     ProductInventoryReportStats,
+    ProductInventoryChartFilters,
     BrandPerformanceReportRow,
     BrandPerformanceReportStats,
     PurchaseVsSalesReportRow,
@@ -50,9 +53,14 @@ import {
     ProductMovementReportStats,
     ClientRevenueReportRow,
     ClientRevenueReportStats,
+    ClientRevenueChartFilters,
     AllClientsReportRow,
     AllClientsReportStats,
     AllClientsFiltersAvailable,
+    BirthdayReportRow,
+    BirthdayReportStats,
+    AnniversaryReportRow,
+    AnniversaryReportStats,
     NewClientFollowUpRow,
     NewClientFollowUpStats,
     CancellationRecoveryRow,
@@ -63,8 +71,10 @@ import {
     NoShowRecoveryStats,
     EnquiryReportRow,
     EnquiryReportStats,
+    EnquiryChartFilters,
     CustomerFrequencyReportRow,
     CustomerFrequencyReportStats,
+    CustomerFrequencyChartFilters,
     LostCustomersReportRow,
     LostCustomersReportStats,
     ReferralReportRow,
@@ -72,6 +82,7 @@ import {
     PaymentCollectionReportRow,
     PaymentCollectionReportStats,
     PaymentCollectionFiltersAvailable,
+    PaymentCollectionChartFilters,
     PendingPaymentReportRow,
     PendingPaymentReportStats,
     PendingPaymentFiltersAvailable,
@@ -80,18 +91,23 @@ import {
     MembershipHistoryFiltersAvailable,
     ServiceFrequencyReportRow,
     ServiceFrequencyReportStats,
+    ServiceFrequencyChartFilters,
     CustomerSpendReportRow,
     CustomerSpendReportStats,
     StaffSalesReportRow,
     StaffSalesReportStats,
+    StaffSalesChartFilters,
     StaffPerformanceReportRow,
     StaffPerformanceReportStats,
     StaffPerformanceFiltersAvailable,
+    StaffPerformanceChartFilters,
     StaffItemSalesReportRow,
     StaffItemSalesReportStats,
+    StaffItemSalesChartFilters,
     PackageSaleReportRow,
     PackageSaleReportStats,
     PackageSaleFilterOption,
+    PackageSaleChartFilters,
     PayrollHistoryReportFilters,
     PayrollHistoryReportRow,
     PayrollHistoryReportStats,
@@ -102,6 +118,7 @@ import {
     MemberSaleReportRow,
     MemberSaleReportStats,
     MemberSaleFiltersAvailable,
+    MemberSaleChartFilters,
     AppointmentDetailReportRow,
     UpcomingAppointmentsReportRow,
     UpcomingAppointmentsFiltersAvailable,
@@ -119,6 +136,7 @@ import {
     CashManagementReportFilters,
     CashManagementReportRow,
     CashManagementReportStats,
+    CashManagementChartFilters,
     CashManagementFiltersAvailable,
 } from "./reports.types";
 
@@ -2668,6 +2686,11 @@ async getSaleDetail(salonId: string, saleId: string): Promise<SaleDetailResponse
         ), 0) AS due_amount,
         COALESCE(SUM(p.ewallet_used), 0) AS ewallet_used,
         COALESCE(SUM(p.membership_wallet_used), 0) AS membership_wallet_used,
+        -- MAX, not SUM — membership_discount_used is CUMULATIVE per
+        -- appointment (every payment row re-reads/re-writes the full
+        -- total-so-far, not a per-call delta), same contract as every other
+        -- MAX(p.membership_discount_used) read elsewhere in this file.
+        COALESCE(MAX(p.membership_discount_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS membership_discount_used,
         COALESCE(SUM(p.reward_points_value), 0) AS reward_points_value,
         COALESCE(SUM(p.referral_credit_used), 0) AS referral_credit_used,
         (ARRAY_AGG(p.tax_breakdown ORDER BY p.created_at DESC))[1] AS tax_breakdown
@@ -2682,6 +2705,7 @@ async getSaleDetail(salonId: string, saleId: string): Promise<SaleDetailResponse
         due_amount: Number(payRow.due_amount ?? 0),
         ewallet_used: Number(payRow.ewallet_used ?? 0),
         membership_wallet_used: Number(payRow.membership_wallet_used ?? 0),
+        membership_discount_used: Number(payRow.membership_discount_used ?? 0),
         reward_points_value: Number(payRow.reward_points_value ?? 0),
         referral_credit_used: Number(payRow.referral_credit_used ?? 0),
         tax_breakdown: payRow.tax_breakdown ?? null,
@@ -3643,6 +3667,244 @@ async getProductRetailFiltersAvailable(salonId: string): Promise<{
   };
 },
 
+// Same prorated-paid-amount expression getProductRetailReportStats/Rows use
+// (an appointment-linked sale's collected total via _PAYMENT_LATERAL, or a
+// walk-in sale's own total_amount once completed — never the billed/taxed
+// amount) — a line item's share is its own total_price against the sale's
+// subtotal. Reused across every Product Retail graph query below so "Revenue"
+// means the exact same thing on the graph as it does on the table/stat cards.
+_PRODUCT_RETAIL_REVENUE_EXPR: `
+  CASE WHEN COALESCE(s.subtotal, 0) > 0
+    THEN (CASE WHEN s.appointment_id IS NOT NULL THEN pay.paid_from_payments
+               WHEN s.status = 'completed' THEN s.total_amount::numeric
+               ELSE 0 END) * (si.total_price / s.subtotal)
+    ELSE 0
+  END
+`,
+
+// Powers the Product Retail report's Graph page — Quantity/Revenue trend,
+// same day/week/month bucketing as getSalesSummaryReportChart.
+async getProductRetailChartTrend(
+  salonId: string,
+  filters: ProductRetailChartFilters,
+  granularity: "day" | "week" | "month" = "day"
+): Promise<{ date: string; quantity: number; revenue: number }[]> {
+  const { where, values } = this._buildProductRetailWhere(salonId, filters);
+  const revenueExpr = this._PRODUCT_RETAIL_REVENUE_EXPR;
+  // Text-formatted (not a bare date column) — node-pg parses a raw "date"
+  // result relative to the driver's own local timezone, which has already
+  // caused a real off-by-one bug elsewhere in this codebase this session.
+  const istInstant = `s.created_at AT TIME ZONE 'Asia/Kolkata'`;
+  const dayExpr = granularity === "month"
+    ? `TO_CHAR(date_trunc('month', ${istInstant}), 'YYYY-MM-DD')`
+    : granularity === "week"
+    ? `TO_CHAR(date_trunc('week', ${istInstant}), 'YYYY-MM-DD')`
+    : `TO_CHAR(${istInstant}, 'YYYY-MM-DD')`;
+
+  const query = `
+    SELECT
+      ${dayExpr} AS day,
+      COALESCE(SUM(si.quantity), 0)::int AS quantity,
+      COALESCE(SUM(${revenueExpr}), 0) AS revenue
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    LEFT JOIN clients c ON s.client_id = c.id
+    LEFT JOIN products p ON p.id = si.item_id
+    ${this._PAYMENT_LATERAL}
+    WHERE ${where}
+    GROUP BY day
+    ORDER BY day ASC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => ({
+    date: String(r.day),
+    quantity: Number(r.quantity ?? 0),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+// Payment-mode split for the graph page's pie chart — same revenue
+// definition as the trend above, grouped by sales.payment_method instead of
+// by day.
+async getProductRetailPaymentModeBreakdown(
+  salonId: string,
+  filters: ProductRetailChartFilters
+): Promise<{ payment_mode: string; revenue: number }[]> {
+  const { where, values } = this._buildProductRetailWhere(salonId, filters);
+  const revenueExpr = this._PRODUCT_RETAIL_REVENUE_EXPR;
+
+  const query = `
+    SELECT
+      COALESCE(s.payment_method, 'unknown') AS payment_mode,
+      COALESCE(SUM(${revenueExpr}), 0) AS revenue
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    LEFT JOIN clients c ON s.client_id = c.id
+    LEFT JOIN products p ON p.id = si.item_id
+    ${this._PAYMENT_LATERAL}
+    WHERE ${where}
+    GROUP BY payment_mode
+    ORDER BY revenue DESC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => ({
+    payment_mode: String(r.payment_mode),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+// Top Products by Revenue — si.item_id/si.name (the line item's own captured
+// name at time of sale), so a since-renamed or deleted product still shows
+// correctly under whatever it was called then, same convention
+// getSalesSummaryTopServices uses for services.
+async getProductRetailTopProducts(
+  salonId: string,
+  filters: ProductRetailChartFilters,
+  limit: number = 5
+): Promise<{ product_id: string | null; product_name: string; quantity: number; revenue: number }[]> {
+  const { where, values, nextIndex } = this._buildProductRetailWhere(salonId, filters);
+  const revenueExpr = this._PRODUCT_RETAIL_REVENUE_EXPR;
+
+  const query = `
+    SELECT
+      si.item_id AS product_id,
+      si.name AS product_name,
+      COALESCE(SUM(si.quantity), 0)::int AS quantity,
+      COALESCE(SUM(${revenueExpr}), 0) AS revenue
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    LEFT JOIN clients c ON s.client_id = c.id
+    LEFT JOIN products p ON p.id = si.item_id
+    ${this._PAYMENT_LATERAL}
+    WHERE ${where}
+    GROUP BY si.item_id, si.name
+    ORDER BY revenue DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    product_id: r.product_id ? String(r.product_id) : null,
+    product_name: String(r.product_name ?? "Unknown"),
+    quantity: Number(r.quantity ?? 0),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+// Top Brands by Revenue — LEFT JOIN product_brands, excluding products with
+// no brand assigned (same "just drop unassigned rows" convention
+// getProductRetailFiltersAvailable's brand list uses) rather than lumping
+// them into a misleading "Unknown" bucket.
+async getProductRetailTopBrands(
+  salonId: string,
+  filters: ProductRetailChartFilters,
+  limit: number = 5
+): Promise<{ brand_id: string | null; brand_name: string; revenue: number }[]> {
+  const { where, values, nextIndex } = this._buildProductRetailWhere(salonId, filters);
+  const revenueExpr = this._PRODUCT_RETAIL_REVENUE_EXPR;
+
+  const query = `
+    SELECT
+      pb.id AS brand_id,
+      pb.name AS brand_name,
+      COALESCE(SUM(${revenueExpr}), 0) AS revenue
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    LEFT JOIN clients c ON s.client_id = c.id
+    LEFT JOIN products p ON p.id = si.item_id
+    LEFT JOIN product_brands pb ON pb.id = p.brand_id
+    ${this._PAYMENT_LATERAL}
+    WHERE ${where} AND pb.id IS NOT NULL
+    GROUP BY pb.id, pb.name
+    ORDER BY revenue DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    brand_id: r.brand_id ? String(r.brand_id) : null,
+    brand_name: String(r.brand_name ?? "Unknown"),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+// Top Categories by Revenue — same live products.category_id ->
+// service_categories join getProductRetailReportRows/FiltersAvailable use
+// (category membership isn't captured on the line item itself).
+async getProductRetailTopCategories(
+  salonId: string,
+  filters: ProductRetailChartFilters,
+  limit: number = 5
+): Promise<{ category_id: string | null; category_name: string; revenue: number }[]> {
+  const { where, values, nextIndex } = this._buildProductRetailWhere(salonId, filters);
+  const revenueExpr = this._PRODUCT_RETAIL_REVENUE_EXPR;
+
+  const query = `
+    SELECT
+      sc.id AS category_id,
+      sc.name AS category_name,
+      COALESCE(SUM(${revenueExpr}), 0) AS revenue
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    LEFT JOIN clients c ON s.client_id = c.id
+    LEFT JOIN products p ON p.id = si.item_id
+    LEFT JOIN service_categories sc ON sc.id = p.category_id
+    ${this._PAYMENT_LATERAL}
+    WHERE ${where} AND sc.id IS NOT NULL
+    GROUP BY sc.id, sc.name
+    ORDER BY revenue DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    category_id: r.category_id ? String(r.category_id) : null,
+    category_name: String(r.category_name ?? "Unknown"),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+// Top Staff by Product Sales Revenue — line-item-level staff (si.staff_id,
+// falling back to s.staff_id), same convention _buildProductRetailWhere's
+// own Staff filter and getProductRetailFiltersAvailable's staff list use.
+async getProductRetailTopStaff(
+  salonId: string,
+  filters: ProductRetailChartFilters,
+  limit: number = 5
+): Promise<{ staff_id: string | null; staff_name: string; revenue: number }[]> {
+  const { where, values, nextIndex } = this._buildProductRetailWhere(salonId, filters);
+  const revenueExpr = this._PRODUCT_RETAIL_REVENUE_EXPR;
+
+  const query = `
+    SELECT
+      COALESCE(si.staff_id, s.staff_id) AS staff_id,
+      TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))) AS staff_name,
+      COALESCE(SUM(${revenueExpr}), 0) AS revenue
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    LEFT JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
+    LEFT JOIN clients c ON s.client_id = c.id
+    LEFT JOIN products p ON p.id = si.item_id
+    ${this._PAYMENT_LATERAL}
+    WHERE ${where} AND COALESCE(si.staff_id, s.staff_id) IS NOT NULL
+    -- Grouped by the full expressions, not the "staff_id"/"staff_name" output
+    -- aliases — sale_items itself has a real staff_id column, so the bare
+    -- alias is ambiguous between the SELECT-list name and that column.
+    GROUP BY COALESCE(si.staff_id, s.staff_id), TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, '')))
+    ORDER BY revenue DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    staff_id: r.staff_id ? String(r.staff_id) : null,
+    staff_name: r.staff_name?.trim() || "Unknown",
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
 // ======================================================
 // SERVICE SALE REPORT (independent report API)
 // POST /api/report/service-sale — reads sales/sale_items directly
@@ -3932,6 +4194,195 @@ async getServiceSaleFiltersAvailable(salonId: string): Promise<{
   return {
     staff: staffRows.map((r: any) => ({ id: r.id, label: r.label })),
   };
+},
+
+// Same prorated-paid-amount expression getServiceSaleReportStats/Rows use —
+// reused across every Service Sale graph query below so "Revenue" means the
+// exact same thing on the graph as it does on the table/stat cards.
+_SERVICE_SALE_REVENUE_EXPR: `
+  CASE WHEN COALESCE(s.subtotal, 0) > 0
+    THEN (CASE WHEN s.appointment_id IS NOT NULL THEN pay.paid_from_payments
+               WHEN s.status = 'completed' THEN s.total_amount::numeric
+               ELSE 0 END) * (si.total_price / s.subtotal)
+    ELSE 0
+  END
+`,
+
+// Powers the Service Sale report's Graph page — Count/Revenue trend, same
+// day/week/month bucketing as getSalesSummaryReportChart.
+async getServiceSaleChartTrend(
+  salonId: string,
+  filters: ServiceSaleChartFilters,
+  granularity: "day" | "week" | "month" = "day"
+): Promise<{ date: string; count: number; revenue: number }[]> {
+  const { where, values } = this._buildServiceSaleWhere(salonId, filters);
+  const revenueExpr = this._SERVICE_SALE_REVENUE_EXPR;
+  const istInstant = `s.created_at AT TIME ZONE 'Asia/Kolkata'`;
+  const dayExpr = granularity === "month"
+    ? `TO_CHAR(date_trunc('month', ${istInstant}), 'YYYY-MM-DD')`
+    : granularity === "week"
+    ? `TO_CHAR(date_trunc('week', ${istInstant}), 'YYYY-MM-DD')`
+    : `TO_CHAR(${istInstant}, 'YYYY-MM-DD')`;
+
+  const query = `
+    SELECT
+      ${dayExpr} AS day,
+      COUNT(*)::int AS count,
+      COALESCE(SUM(${revenueExpr}), 0) AS revenue
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    LEFT JOIN clients c ON s.client_id = c.id
+    LEFT JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
+    LEFT JOIN services sv ON sv.id = si.item_id
+    ${this._PAYMENT_LATERAL}
+    WHERE ${where}
+    GROUP BY day
+    ORDER BY day ASC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => ({
+    date: String(r.day),
+    count: Number(r.count ?? 0),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+// Payment-mode split for the graph page's pie chart.
+async getServiceSalePaymentModeBreakdown(
+  salonId: string,
+  filters: ServiceSaleChartFilters
+): Promise<{ payment_mode: string; revenue: number }[]> {
+  const { where, values } = this._buildServiceSaleWhere(salonId, filters);
+  const revenueExpr = this._SERVICE_SALE_REVENUE_EXPR;
+
+  const query = `
+    SELECT
+      COALESCE(s.payment_method, 'unknown') AS payment_mode,
+      COALESCE(SUM(${revenueExpr}), 0) AS revenue
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    LEFT JOIN clients c ON s.client_id = c.id
+    LEFT JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
+    LEFT JOIN services sv ON sv.id = si.item_id
+    ${this._PAYMENT_LATERAL}
+    WHERE ${where}
+    GROUP BY payment_mode
+    ORDER BY revenue DESC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => ({
+    payment_mode: String(r.payment_mode),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+// Top Services by Revenue — si.item_id/si.name (the line item's own captured
+// name at time of sale), same convention getSalesSummaryTopServices uses.
+async getServiceSaleTopServices(
+  salonId: string,
+  filters: ServiceSaleChartFilters,
+  limit: number = 5
+): Promise<{ service_id: string | null; service_name: string; revenue: number }[]> {
+  const { where, values, nextIndex } = this._buildServiceSaleWhere(salonId, filters);
+  const revenueExpr = this._SERVICE_SALE_REVENUE_EXPR;
+
+  const query = `
+    SELECT
+      si.item_id AS service_id,
+      si.name AS service_name,
+      COALESCE(SUM(${revenueExpr}), 0) AS revenue
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    LEFT JOIN clients c ON s.client_id = c.id
+    LEFT JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
+    LEFT JOIN services sv ON sv.id = si.item_id
+    ${this._PAYMENT_LATERAL}
+    WHERE ${where}
+    GROUP BY si.item_id, si.name
+    ORDER BY revenue DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    service_id: r.service_id ? String(r.service_id) : null,
+    service_name: String(r.service_name ?? "Unknown"),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+// Top Categories by Revenue — live services.category_id -> service_categories
+// join (category membership isn't captured on the line item itself), same
+// convention getSalesSummaryByCategory uses.
+async getServiceSaleTopCategories(
+  salonId: string,
+  filters: ServiceSaleChartFilters,
+  limit: number = 5
+): Promise<{ category_id: string | null; category_name: string; revenue: number }[]> {
+  const { where, values, nextIndex } = this._buildServiceSaleWhere(salonId, filters);
+  const revenueExpr = this._SERVICE_SALE_REVENUE_EXPR;
+
+  const query = `
+    SELECT
+      sc.id AS category_id,
+      sc.name AS category_name,
+      COALESCE(SUM(${revenueExpr}), 0) AS revenue
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    LEFT JOIN clients c ON s.client_id = c.id
+    LEFT JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
+    LEFT JOIN services sv ON sv.id = si.item_id
+    LEFT JOIN service_categories sc ON sc.id = sv.category_id
+    ${this._PAYMENT_LATERAL}
+    WHERE ${where} AND sc.id IS NOT NULL
+    GROUP BY sc.id, sc.name
+    ORDER BY revenue DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    category_id: r.category_id ? String(r.category_id) : null,
+    category_name: String(r.category_name ?? "Unknown"),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+// Top Staff by Service Sales Revenue — same COALESCE(si.staff_id, s.staff_id)
+// convention _buildServiceSaleWhere's own Staff filter uses.
+async getServiceSaleTopStaff(
+  salonId: string,
+  filters: ServiceSaleChartFilters,
+  limit: number = 5
+): Promise<{ staff_id: string | null; staff_name: string; revenue: number }[]> {
+  const { where, values, nextIndex } = this._buildServiceSaleWhere(salonId, filters);
+  const revenueExpr = this._SERVICE_SALE_REVENUE_EXPR;
+
+  const query = `
+    SELECT
+      COALESCE(si.staff_id, s.staff_id) AS staff_id,
+      TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))) AS staff_name,
+      COALESCE(SUM(${revenueExpr}), 0) AS revenue
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    LEFT JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
+    LEFT JOIN clients c ON s.client_id = c.id
+    LEFT JOIN services sv ON sv.id = si.item_id
+    ${this._PAYMENT_LATERAL}
+    WHERE ${where} AND COALESCE(si.staff_id, s.staff_id) IS NOT NULL
+    GROUP BY COALESCE(si.staff_id, s.staff_id), TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, '')))
+    ORDER BY revenue DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    staff_id: r.staff_id ? String(r.staff_id) : null,
+    staff_name: r.staff_name?.trim() || "Unknown",
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
 },
 
 // ======================================================
@@ -4795,6 +5246,89 @@ async getProductInventoryReportRows(
       total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
     },
   };
+},
+
+// Powers the Product Inventory report's Graph page. Snapshot aggregates over
+// the whole filtered set — no date-series trend (inventory is a point-in-
+// time snapshot, not a stream of events).
+async getProductInventoryChartByStatus(
+  salonId: string,
+  filters: ProductInventoryChartFilters
+): Promise<{ status: "in_stock" | "low_stock" | "out_of_stock"; count: number; value: number }[]> {
+  const { where, values } = this._buildProductInventoryWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      CASE
+        WHEN COALESCE(p.amount, 0) = 0 THEN 'out_of_stock'
+        WHEN (${STOCK_IN_ALERT_UNITS_SQL}) <= p.qty_alert THEN 'low_stock'
+        ELSE 'in_stock'
+      END AS status,
+      COUNT(*)::int AS count,
+      COALESCE(SUM((${STOCK_IN_PRICING_UNITS_SQL}) * ${UNIT_COST_SQL}), 0) AS value
+    FROM products p
+    WHERE ${where}
+    GROUP BY status
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => ({
+    status: r.status,
+    count: Number(r.count ?? 0),
+    value: Math.round(Number(r.value ?? 0)),
+  }));
+},
+
+async getProductInventoryChartByCategory(
+  salonId: string,
+  filters: ProductInventoryChartFilters,
+  limit: number = 5
+): Promise<{ category_name: string; value: number }[]> {
+  const { where, values, nextIndex } = this._buildProductInventoryWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      COALESCE(sc.name, '—') AS category_name,
+      COALESCE(SUM((${STOCK_IN_PRICING_UNITS_SQL}) * ${UNIT_COST_SQL}), 0) AS value
+    FROM products p
+    LEFT JOIN service_categories sc ON p.category_id = sc.id
+    WHERE ${where}
+    GROUP BY category_name
+    ORDER BY value DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    category_name: String(r.category_name ?? "—"),
+    value: Math.round(Number(r.value ?? 0)),
+  }));
+},
+
+async getProductInventoryChartTopProducts(
+  salonId: string,
+  filters: ProductInventoryChartFilters,
+  limit: number = 5
+): Promise<{ product_name: string; value: number; current_stock: number }[]> {
+  const { where, values, nextIndex } = this._buildProductInventoryWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      p.name AS product_name,
+      (${STOCK_IN_PRICING_UNITS_SQL}) * ${UNIT_COST_SQL} AS value,
+      (${STOCK_IN_PRICING_UNITS_SQL}) AS current_stock
+    FROM products p
+    WHERE ${where}
+    ORDER BY value DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    product_name: String(r.product_name ?? "—"),
+    value: Math.round(Number(r.value ?? 0)),
+    current_stock: Number(r.current_stock ?? 0),
+  }));
 },
 
 // ======================================================
@@ -6099,6 +6633,141 @@ async getClientRevenueReportRows(
   };
 },
 
+// Powers the Client Revenue report's Graph page — revenue bucketed by each
+// client's own last-visit date (same semantic the table's "Last Visit"
+// column already uses; not a per-transaction date), same day/week/month
+// bucketing as getSalesSummaryReportChart. Built on the exact same
+// _CLIENT_REVENUE_AGG CTE the table/stats already use, so the graph can
+// never disagree with them about who a "client" or their "total_spend" is.
+async getClientRevenueChartTrend(
+  salonId: string,
+  filters: ClientRevenueChartFilters,
+  granularity: "day" | "week" | "month" = "day"
+): Promise<{ date: string; revenue: number; clients: number }[]> {
+  const { where, saleJoin, values, nextIndex } = this._buildClientRevenueWhere(salonId, filters);
+  const { having, values: havingValues } = this._buildClientRevenueHaving(filters, nextIndex);
+  const allValues = [...values, ...havingValues];
+
+  const dayExpr = granularity === "month"
+    ? `TO_CHAR(date_trunc('month', last_visit::date), 'YYYY-MM-DD')`
+    : granularity === "week"
+    ? `TO_CHAR(date_trunc('week', last_visit::date), 'YYYY-MM-DD')`
+    : `last_visit`;
+
+  const query = `
+    ${this._CLIENT_REVENUE_AGG(where, saleJoin, having)}
+    SELECT
+      ${dayExpr} AS day,
+      COALESCE(SUM(total_spend), 0) AS revenue,
+      COUNT(*)::int AS clients
+    FROM revenue_agg
+    WHERE last_visit IS NOT NULL AND total_spend > 0
+    GROUP BY day
+    ORDER BY day ASC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, allValues));
+  return rows.map((r: any) => ({
+    date: String(r.day),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+    clients: Number(r.clients ?? 0),
+  }));
+},
+
+// Revenue by Gender — direct clients/sales aggregation (revenue_agg has no
+// gender column), same where/saleJoin _buildClientRevenueWhere already
+// scopes for every other Client Revenue query.
+async getClientRevenueByGender(
+  salonId: string,
+  filters: ClientRevenueChartFilters
+): Promise<{ gender: string; revenue: number }[]> {
+  const { where, saleJoin, values } = this._buildClientRevenueWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      COALESCE(NULLIF(LOWER(c.gender), ''), 'unknown') AS gender,
+      COALESCE(SUM(s.total_amount::numeric), 0) AS revenue
+    FROM clients c
+    LEFT JOIN sales s ON ${saleJoin}
+    WHERE ${where}
+    GROUP BY gender
+    ORDER BY revenue DESC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => ({
+    gender: String(r.gender),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+// Revenue by Membership Status — same "has an active client_memberships
+// row" EXISTS check _buildClientRevenueWhere's own membership_status filter
+// uses, grouped instead of filtered.
+async getClientRevenueByMembership(
+  salonId: string,
+  filters: ClientRevenueChartFilters
+): Promise<{ status: string; revenue: number }[]> {
+  const { where, saleJoin, values } = this._buildClientRevenueWhere(salonId, filters);
+
+  // Per-client status/revenue grouped by c.id first (a correlated EXISTS
+  // referencing c.id in the SELECT list can't sit alongside a GROUP BY that
+  // doesn't include c.id — Postgres rejects it as an "ungrouped column"),
+  // then re-aggregated to status in the outer query.
+  const query = `
+    SELECT status, COALESCE(SUM(revenue), 0) AS revenue
+    FROM (
+      SELECT
+        c.id,
+        (CASE WHEN EXISTS (
+          SELECT 1 FROM client_memberships cm
+          WHERE cm.client_id = c.id AND cm.salon_id = c.salon_id AND cm.status = 'active'
+        ) THEN 'member' ELSE 'non_member' END) AS status,
+        COALESCE(SUM(s.total_amount::numeric), 0) AS revenue
+      FROM clients c
+      LEFT JOIN sales s ON ${saleJoin}
+      WHERE ${where}
+      GROUP BY c.id
+    ) per_client
+    GROUP BY status
+    ORDER BY revenue DESC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => ({
+    status: String(r.status),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+// Top Clients by Revenue — same revenue_agg source the table's own
+// "Highest Revenue" sort uses, just capped to the top N.
+async getClientRevenueTopClients(
+  salonId: string,
+  filters: ClientRevenueChartFilters,
+  limit: number = 5
+): Promise<{ client_id: string | null; client_name: string; revenue: number }[]> {
+  const { where, saleJoin, values, nextIndex } = this._buildClientRevenueWhere(salonId, filters);
+  const { having, values: havingValues, nextIndex: limitIdx } = this._buildClientRevenueHaving(filters, nextIndex);
+  const allValues = [...values, ...havingValues];
+
+  const query = `
+    ${this._CLIENT_REVENUE_AGG(where, saleJoin, having)}
+    SELECT client_id, client_name, total_spend AS revenue
+    FROM revenue_agg
+    WHERE total_spend > 0
+    ORDER BY total_spend DESC
+    LIMIT $${limitIdx}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...allValues, limit]));
+  return rows.map((r: any) => ({
+    client_id: r.client_id ? String(r.client_id) : null,
+    client_name: String(r.client_name ?? "Walk-in"),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
 // ======================================================
 // ALL CLIENTS REPORT (independent report API)
 // POST /api/report/all-clients — pure client-profile listing, deliberately
@@ -6355,6 +7024,347 @@ async getAllClientsFiltersAvailable(salonId: string): Promise<AllClientsFiltersA
   ));
   return {
     client_sources: rows.map((r: any) => ({ id: r.id, label: r.label })),
+  };
+},
+
+// ======================================================
+// BIRTHDAY REPORT (independent report API)
+// POST /api/report/birthday — one row per client with a birthday on file
+// (clients.birthday_day_month, "MM-DD"), NEXT occurrence computed
+// server-side (this year's date if it hasn't passed yet, otherwise next
+// year's) — same "MM-DD guarded parse" convention _buildAllClientsWhere's
+// birth_month filter uses. Never calls the Appointment API/service.
+// ======================================================
+
+_buildBirthdayWhere(
+  salonId: string,
+  filters: { search?: string; genders?: string[]; status?: "active" | "blocked"; birth_month?: number }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  // Only clients with a well-formed "MM-DD" birthday are ever eligible —
+  // malformed/legacy values (e.g. a full date) are excluded rather than
+  // silently parsed wrong.
+  const where = ["c.salon_id = $1", `c.birthday_day_month ~ '^\\d{2}-\\d{2}$'`];
+  let idx = 2;
+
+  if (filters.status === "active") where.push("c.is_active = true AND c.is_blocked = false");
+  else if (filters.status === "blocked") where.push("c.is_blocked = true");
+
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+      OR COALESCE(c.email, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+  if (filters.genders && filters.genders.length > 0) {
+    where.push(`LOWER(c.gender) = ANY($${idx++}::text[])`);
+    values.push(filters.genders.map(g => g.toLowerCase()));
+  }
+  if (filters.birth_month) {
+    where.push(`EXTRACT(MONTH FROM TO_DATE(c.birthday_day_month, 'MM-DD')) = $${idx++}`);
+    values.push(filters.birth_month);
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+// Shared by stats/rows below — wraps the filtered client set with each
+// row's computed next birthday occurrence. Building the occurrence date via
+// "first of month + (day - 1) days" rather than make_date(year, month, day)
+// directly means a Feb 29 birthday never throws in a non-leap target year —
+// it rolls over to Mar 1 instead of erroring the whole query.
+_BIRTHDAY_OCCURRENCE_CTE(where: string): string {
+  return `
+    WITH base AS (
+      SELECT c.*, TO_DATE(c.birthday_day_month, 'MM-DD') AS bday_md
+      FROM clients c
+      WHERE ${where}
+    ),
+    occ AS (
+      SELECT *,
+        (
+          MAKE_DATE(EXTRACT(YEAR FROM CURRENT_DATE)::int, EXTRACT(MONTH FROM bday_md)::int, 1)
+          + (EXTRACT(DAY FROM bday_md)::int - 1) * INTERVAL '1 day'
+        )::date AS occ_this_year
+      FROM base
+    ),
+    next_occ AS (
+      SELECT *,
+        CASE
+          WHEN occ_this_year >= CURRENT_DATE THEN occ_this_year
+          ELSE (
+            MAKE_DATE(EXTRACT(YEAR FROM CURRENT_DATE)::int + 1, EXTRACT(MONTH FROM bday_md)::int, 1)
+            + (EXTRACT(DAY FROM bday_md)::int - 1) * INTERVAL '1 day'
+          )::date
+        END AS next_occurrence
+      FROM occ
+    )
+  `;
+},
+
+async getBirthdayReportStats(
+  salonId: string,
+  filters: { search?: string; genders?: string[]; status?: "active" | "blocked"; birth_month?: number }
+): Promise<BirthdayReportStats> {
+  const { where, values } = this._buildBirthdayWhere(salonId, filters);
+  const query = `
+    ${this._BIRTHDAY_OCCURRENCE_CTE(where)}
+    SELECT
+      COUNT(*)::int AS total_with_birthday,
+      COUNT(*) FILTER (WHERE next_occurrence = CURRENT_DATE)::int AS birthdays_today,
+      COUNT(*) FILTER (WHERE next_occurrence BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '6 days')::int AS birthdays_this_week,
+      COUNT(*) FILTER (WHERE EXTRACT(MONTH FROM bday_md) = EXTRACT(MONTH FROM CURRENT_DATE))::int AS birthdays_this_month
+    FROM next_occ
+  `;
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  return {
+    total_with_birthday: Number(r.total_with_birthday ?? 0),
+    birthdays_today: Number(r.birthdays_today ?? 0),
+    birthdays_this_week: Number(r.birthdays_this_week ?? 0),
+    birthdays_this_month: Number(r.birthdays_this_month ?? 0),
+  };
+},
+
+async getBirthdayReportRows(
+  salonId: string,
+  filters: {
+    search?: string; genders?: string[]; status?: "active" | "blocked"; birth_month?: number;
+    upcoming_within_days?: number; page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: BirthdayReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildBirthdayWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const extraWhere: string[] = [];
+  if (filters.upcoming_within_days != null) {
+    extraWhere.push(`next_occurrence <= CURRENT_DATE + $${idx++} * INTERVAL '1 day'`);
+    values.push(Math.max(0, Math.floor(filters.upcoming_within_days)));
+  }
+  const outerWhere = extraWhere.length > 0 ? `WHERE ${extraWhere.join(" AND ")}` : "";
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    ${this._BIRTHDAY_OCCURRENCE_CTE(where)}
+    SELECT
+      id AS client_id,
+      COALESCE(NULLIF(TRIM(full_name), ''), 'Unnamed Client') AS client_name,
+      COALESCE(NULLIF(TRIM(CONCAT(COALESCE(phone_country_code, ''), ' ', COALESCE(phone_number, ''))), ''), '—') AS contact,
+      NULLIF(TRIM(email), '') AS email,
+      NULLIF(TRIM(gender), '') AS gender,
+      birthday_day_month AS birthday,
+      birthday_year,
+      CASE WHEN birthday_year IS NOT NULL THEN EXTRACT(YEAR FROM next_occurrence)::int - birthday_year ELSE NULL END AS turning_age,
+      TO_CHAR(next_occurrence, 'YYYY-MM-DD') AS next_occurrence,
+      (next_occurrence - CURRENT_DATE)::int AS days_until_next,
+      NULLIF(TRIM(client_source), '') AS client_source,
+      CASE WHEN is_blocked = true THEN 'Blocked' ELSE 'Active' END AS status,
+      COUNT(*) OVER() AS total_count
+    FROM next_occ
+    ${outerWhere}
+    ORDER BY next_occurrence ASC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: BirthdayReportRow[] = rows.map((row: any) => ({
+    client_id: row.client_id,
+    client_name: row.client_name,
+    contact: row.contact,
+    email: row.email,
+    gender: row.gender,
+    birthday: row.birthday,
+    birthday_year: row.birthday_year != null ? Number(row.birthday_year) : null,
+    turning_age: row.turning_age != null ? Number(row.turning_age) : null,
+    next_occurrence: row.next_occurrence,
+    days_until_next: Number(row.days_until_next ?? 0),
+    client_source: row.client_source,
+    status: row.status,
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// ======================================================
+// ANNIVERSARY REPORT (independent report API)
+// POST /api/report/anniversary — one row per client with an anniversary on
+// file (clients.anniversary, a full date). Same NEXT-occurrence computation
+// as the Birthday Report above, minus the "MM-DD" text parsing since
+// anniversary is already a real date column. Never calls the Appointment
+// API/service.
+// ======================================================
+
+_buildAnniversaryWhere(
+  salonId: string,
+  filters: { search?: string; status?: "active" | "blocked"; anniversary_month?: number }
+): { where: string; values: any[]; nextIndex: number } {
+  const values: any[] = [salonId];
+  const where = ["c.salon_id = $1", "c.anniversary IS NOT NULL"];
+  let idx = 2;
+
+  if (filters.status === "active") where.push("c.is_active = true AND c.is_blocked = false");
+  else if (filters.status === "blocked") where.push("c.is_blocked = true");
+
+  if (filters.search?.trim()) {
+    where.push(`(
+      COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.phone_number, '') ILIKE $${idx}
+      OR COALESCE(c.email, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+  if (filters.anniversary_month) {
+    where.push(`EXTRACT(MONTH FROM c.anniversary) = $${idx++}`);
+    values.push(filters.anniversary_month);
+  }
+
+  return { where: where.join(" AND "), values, nextIndex: idx };
+},
+
+_ANNIVERSARY_OCCURRENCE_CTE(where: string): string {
+  return `
+    WITH base AS (
+      SELECT c.* FROM clients c
+      WHERE ${where}
+    ),
+    occ AS (
+      SELECT *,
+        (
+          MAKE_DATE(EXTRACT(YEAR FROM CURRENT_DATE)::int, EXTRACT(MONTH FROM anniversary)::int, 1)
+          + (EXTRACT(DAY FROM anniversary)::int - 1) * INTERVAL '1 day'
+        )::date AS occ_this_year
+      FROM base
+    ),
+    next_occ AS (
+      SELECT *,
+        CASE
+          WHEN occ_this_year >= CURRENT_DATE THEN occ_this_year
+          ELSE (
+            MAKE_DATE(EXTRACT(YEAR FROM CURRENT_DATE)::int + 1, EXTRACT(MONTH FROM anniversary)::int, 1)
+            + (EXTRACT(DAY FROM anniversary)::int - 1) * INTERVAL '1 day'
+          )::date
+        END AS next_occurrence
+      FROM occ
+    )
+  `;
+},
+
+async getAnniversaryReportStats(
+  salonId: string,
+  filters: { search?: string; status?: "active" | "blocked"; anniversary_month?: number }
+): Promise<AnniversaryReportStats> {
+  const { where, values } = this._buildAnniversaryWhere(salonId, filters);
+  const query = `
+    ${this._ANNIVERSARY_OCCURRENCE_CTE(where)}
+    SELECT
+      COUNT(*)::int AS total_with_anniversary,
+      COUNT(*) FILTER (WHERE next_occurrence = CURRENT_DATE)::int AS anniversaries_today,
+      COUNT(*) FILTER (WHERE next_occurrence BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '6 days')::int AS anniversaries_this_week,
+      COUNT(*) FILTER (WHERE EXTRACT(MONTH FROM anniversary) = EXTRACT(MONTH FROM CURRENT_DATE))::int AS anniversaries_this_month
+    FROM next_occ
+  `;
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  const r = rows[0] ?? {};
+  return {
+    total_with_anniversary: Number(r.total_with_anniversary ?? 0),
+    anniversaries_today: Number(r.anniversaries_today ?? 0),
+    anniversaries_this_week: Number(r.anniversaries_this_week ?? 0),
+    anniversaries_this_month: Number(r.anniversaries_this_month ?? 0),
+  };
+},
+
+async getAnniversaryReportRows(
+  salonId: string,
+  filters: {
+    search?: string; status?: "active" | "blocked"; anniversary_month?: number;
+    upcoming_within_days?: number; page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: AnniversaryReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const { where, values, nextIndex } = this._buildAnniversaryWhere(salonId, filters);
+  let idx = nextIndex;
+
+  const extraWhere: string[] = [];
+  if (filters.upcoming_within_days != null) {
+    extraWhere.push(`next_occurrence <= CURRENT_DATE + $${idx++} * INTERVAL '1 day'`);
+    values.push(Math.max(0, Math.floor(filters.upcoming_within_days)));
+  }
+  const outerWhere = extraWhere.length > 0 ? `WHERE ${extraWhere.join(" AND ")}` : "";
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    ${this._ANNIVERSARY_OCCURRENCE_CTE(where)}
+    SELECT
+      id AS client_id,
+      COALESCE(NULLIF(TRIM(full_name), ''), 'Unnamed Client') AS client_name,
+      COALESCE(NULLIF(TRIM(CONCAT(COALESCE(phone_country_code, ''), ' ', COALESCE(phone_number, ''))), ''), '—') AS contact,
+      NULLIF(TRIM(email), '') AS email,
+      TO_CHAR(anniversary, 'YYYY-MM-DD') AS anniversary,
+      (EXTRACT(YEAR FROM next_occurrence)::int - EXTRACT(YEAR FROM anniversary)::int) AS years_count,
+      TO_CHAR(next_occurrence, 'YYYY-MM-DD') AS next_occurrence,
+      (next_occurrence - CURRENT_DATE)::int AS days_until_next,
+      NULLIF(TRIM(client_source), '') AS client_source,
+      CASE WHEN is_blocked = true THEN 'Blocked' ELSE 'Active' END AS status,
+      COUNT(*) OVER() AS total_count
+    FROM next_occ
+    ${outerWhere}
+    ORDER BY next_occurrence ASC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: AnniversaryReportRow[] = rows.map((row: any) => ({
+    client_id: row.client_id,
+    client_name: row.client_name,
+    contact: row.contact,
+    email: row.email,
+    anniversary: row.anniversary,
+    years_count: Number(row.years_count ?? 0),
+    next_occurrence: row.next_occurrence,
+    days_until_next: Number(row.days_until_next ?? 0),
+    client_source: row.client_source,
+    status: row.status,
+  }));
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
   };
 },
 
@@ -7132,6 +8142,119 @@ async getEnquiryReportFiltersAvailable(salonId: string): Promise<{
   };
 },
 
+// Powers the Enquiry Report's Graph page — enquiries/conversions trend, same
+// day/week/month bucketing as getSalesSummaryReportChart. e.created_at is
+// bucketed with a plain ::date cast, matching _buildEnquiryReportWhere's own
+// e.created_at filter exactly (no IST zone conversion anywhere else in this
+// report, so the graph must not introduce one either or its buckets could
+// disagree with the table's own date filter by a day).
+async getEnquiryChartTrend(
+  salonId: string,
+  filters: EnquiryChartFilters,
+  granularity: "day" | "week" | "month" = "day"
+): Promise<{ date: string; total: number; converted: number }[]> {
+  const { where, values } = this._buildEnquiryReportWhere(salonId, filters);
+  const dayExpr = granularity === "month"
+    ? `TO_CHAR(date_trunc('month', e.created_at::date), 'YYYY-MM-DD')`
+    : granularity === "week"
+    ? `TO_CHAR(date_trunc('week', e.created_at::date), 'YYYY-MM-DD')`
+    : `TO_CHAR(e.created_at::date, 'YYYY-MM-DD')`;
+
+  const query = `
+    SELECT
+      ${dayExpr} AS day,
+      COUNT(*)::int AS total,
+      COUNT(*) FILTER (WHERE e.status = 'Converted')::int AS converted
+    FROM enquiries e
+    WHERE ${where}
+    GROUP BY day
+    ORDER BY day ASC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => ({
+    date: String(r.day),
+    total: Number(r.total ?? 0),
+    converted: Number(r.converted ?? 0),
+  }));
+},
+
+// Enquiry count by Status — same vocabulary the table's own Status filter
+// dropdown (STATUS_OPTIONS) uses, grouped instead of filtered.
+async getEnquiryChartByStatus(
+  salonId: string,
+  filters: EnquiryChartFilters
+): Promise<{ status: string; count: number }[]> {
+  const { where, values } = this._buildEnquiryReportWhere(salonId, filters);
+
+  const query = `
+    SELECT e.status, COUNT(*)::int AS count
+    FROM enquiries e
+    WHERE ${where}
+    GROUP BY e.status
+    ORDER BY count DESC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => ({
+    status: String(r.status),
+    count: Number(r.count ?? 0),
+  }));
+},
+
+// Enquiry count by Source — blank/NULL sources folded into "Unknown" so the
+// pie always accounts for the full filtered total.
+async getEnquiryChartBySource(
+  salonId: string,
+  filters: EnquiryChartFilters
+): Promise<{ source: string; count: number }[]> {
+  const { where, values } = this._buildEnquiryReportWhere(salonId, filters);
+
+  const query = `
+    SELECT COALESCE(NULLIF(TRIM(e.source), ''), 'Unknown') AS source, COUNT(*)::int AS count
+    FROM enquiries e
+    WHERE ${where}
+    GROUP BY source
+    ORDER BY count DESC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => ({
+    source: String(r.source),
+    count: Number(r.count ?? 0),
+  }));
+},
+
+// Top Staff by Enquiries Handled — who's actually fielding the most
+// enquiries, to help balance follow-up load.
+async getEnquiryChartTopStaff(
+  salonId: string,
+  filters: EnquiryChartFilters,
+  limit: number = 5
+): Promise<{ staff_id: string | null; staff_name: string; count: number }[]> {
+  const { where, values, nextIndex } = this._buildEnquiryReportWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      e.staff_id,
+      COALESCE(NULLIF(TRIM(CONCAT_WS(' ', st.first_name, st.last_name)), ''), 'Unassigned') AS staff_name,
+      COUNT(*)::int AS count
+    FROM enquiries e
+    LEFT JOIN staff st ON st.id = e.staff_id
+    WHERE ${where}
+    GROUP BY e.staff_id, staff_name
+    ORDER BY count DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    staff_id: r.staff_id ? String(r.staff_id) : null,
+    staff_name: String(r.staff_name ?? "Unassigned"),
+    count: Number(r.count ?? 0),
+  }));
+},
+
 // ======================================================
 // CUSTOMER FREQUENCY REPORT (independent report API)
 // POST /api/report/customer-frequency — reads clients/sales directly, never
@@ -7343,6 +8466,154 @@ async getCustomerFrequencyReportRows(
       total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
     },
   };
+},
+
+// Shared date/segment param setup every Customer Frequency chart query
+// below needs — same startDateIdx/endDateIdx _CUSTOMER_FREQUENCY_AGG takes,
+// plus the same single-value customer_type segment filter
+// getCustomerFrequencyReportRows applies (new/old/lost only — the
+// most/least_frequent|spending values are a *sort*, not a segment, and have
+// no meaning against an aggregate breakdown, so they're deliberately
+// ignored here exactly like getCustomerFrequencyReportRows's own
+// segmentFilter check does).
+_customerFrequencyChartParams(
+  filters: CustomerFrequencyChartFilters,
+  nextIndex: number
+): { startDateIdx: number | null; endDateIdx: number | null; dateValues: any[]; segmentFilter: string; segmentValues: any[]; nextIndex: number } {
+  let idx = nextIndex;
+  const dateValues: any[] = [];
+  let startDateIdx: number | null = null;
+  let endDateIdx: number | null = null;
+  if (filters.start_date) { startDateIdx = idx++; dateValues.push(filters.start_date); }
+  if (filters.end_date)   { endDateIdx   = idx++; dateValues.push(filters.end_date); }
+
+  const segmentFilter = ["new", "old", "lost"].includes(filters.customer_type ?? "")
+    ? `WHERE customer_type = $${idx}`
+    : "";
+  const segmentValues: any[] = segmentFilter ? [filters.customer_type] : [];
+  if (segmentFilter) idx++;
+
+  return { startDateIdx, endDateIdx, dateValues, segmentFilter, segmentValues, nextIndex: idx };
+},
+
+// Powers the Client Frequency report's Graph page — clients/visits bucketed
+// by each client's own last-visit date (same semantic Client Revenue's own
+// trend uses), same day/week/month bucketing as getSalesSummaryReportChart.
+async getCustomerFrequencyChartTrend(
+  salonId: string,
+  filters: CustomerFrequencyChartFilters,
+  granularity: "day" | "week" | "month" = "day"
+): Promise<{ date: string; clients: number; visits: number }[]> {
+  const { where, saleJoin, values, nextIndex } = this._buildCustomerFrequencyWhere(salonId, filters);
+  const { startDateIdx, endDateIdx, dateValues, segmentFilter, segmentValues } =
+    this._customerFrequencyChartParams(filters, nextIndex);
+
+  const dayExpr = granularity === "month"
+    ? `TO_CHAR(date_trunc('month', last_visit), 'YYYY-MM-DD')`
+    : granularity === "week"
+    ? `TO_CHAR(date_trunc('week', last_visit), 'YYYY-MM-DD')`
+    : `TO_CHAR(last_visit, 'YYYY-MM-DD')`;
+
+  const query = `
+    ${this._CUSTOMER_FREQUENCY_AGG(where, saleJoin, startDateIdx, endDateIdx)}
+    SELECT
+      ${dayExpr} AS day,
+      COUNT(*)::int AS clients,
+      COALESCE(SUM(visits), 0)::int AS visits
+    FROM segmented
+    ${segmentFilter ? `${segmentFilter} AND last_visit IS NOT NULL` : "WHERE last_visit IS NOT NULL"}
+    GROUP BY day
+    ORDER BY day ASC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...dateValues, ...segmentValues]));
+  return rows.map((r: any) => ({
+    date: String(r.day),
+    clients: Number(r.clients ?? 0),
+    visits: Number(r.visits ?? 0),
+  }));
+},
+
+// Client count by Client Type (New/Old/Lost) — same segmentation
+// _CUSTOMER_FREQUENCY_AGG's own `segmented.customer_type` computes.
+async getCustomerFrequencyByType(
+  salonId: string,
+  filters: CustomerFrequencyChartFilters
+): Promise<{ type: string; count: number }[]> {
+  const { where, saleJoin, values, nextIndex } = this._buildCustomerFrequencyWhere(salonId, filters);
+  const { startDateIdx, endDateIdx, dateValues, segmentFilter, segmentValues } =
+    this._customerFrequencyChartParams(filters, nextIndex);
+
+  const query = `
+    ${this._CUSTOMER_FREQUENCY_AGG(where, saleJoin, startDateIdx, endDateIdx)}
+    SELECT customer_type AS type, COUNT(*)::int AS count
+    FROM segmented
+    ${segmentFilter}
+    GROUP BY type
+    ORDER BY count DESC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...dateValues, ...segmentValues]));
+  return rows.map((r: any) => ({
+    type: String(r.type),
+    count: Number(r.count ?? 0),
+  }));
+},
+
+// Client count by Visitor Type (New/Returning) — same segmentation
+// _CUSTOMER_FREQUENCY_AGG's own `segmented.visitor_type` computes.
+async getCustomerFrequencyByVisitorType(
+  salonId: string,
+  filters: CustomerFrequencyChartFilters
+): Promise<{ type: string; count: number }[]> {
+  const { where, saleJoin, values, nextIndex } = this._buildCustomerFrequencyWhere(salonId, filters);
+  const { startDateIdx, endDateIdx, dateValues, segmentFilter, segmentValues } =
+    this._customerFrequencyChartParams(filters, nextIndex);
+
+  const query = `
+    ${this._CUSTOMER_FREQUENCY_AGG(where, saleJoin, startDateIdx, endDateIdx)}
+    SELECT visitor_type AS type, COUNT(*)::int AS count
+    FROM segmented
+    ${segmentFilter}
+    GROUP BY type
+    ORDER BY count DESC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...dateValues, ...segmentValues]));
+  return rows.map((r: any) => ({
+    type: String(r.type),
+    count: Number(r.count ?? 0),
+  }));
+},
+
+// Top Clients by Visits — same revenue_agg/segmented source the table's own
+// "Most Frequent" sort uses, just capped to the top N.
+async getCustomerFrequencyTopClients(
+  salonId: string,
+  filters: CustomerFrequencyChartFilters,
+  limit: number = 5
+): Promise<{ client_id: string | null; client_name: string; visits: number }[]> {
+  const { where, saleJoin, values, nextIndex } = this._buildCustomerFrequencyWhere(salonId, filters);
+  const { startDateIdx, endDateIdx, dateValues, segmentFilter, segmentValues, nextIndex: limitIdx } =
+    this._customerFrequencyChartParams(filters, nextIndex);
+
+  const whereClause = segmentFilter ? `${segmentFilter} AND visits > 0` : "WHERE visits > 0";
+
+  const query = `
+    ${this._CUSTOMER_FREQUENCY_AGG(where, saleJoin, startDateIdx, endDateIdx)}
+    SELECT client_id, client_name, visits
+    FROM segmented
+    ${whereClause}
+    ORDER BY visits DESC
+    LIMIT $${limitIdx}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...dateValues, ...segmentValues, limit]));
+  return rows.map((r: any) => ({
+    client_id: r.client_id ? String(r.client_id) : null,
+    client_name: String(r.client_name ?? "Walk-in"),
+    visits: Number(r.visits ?? 0),
+  }));
 },
 
 // ======================================================
@@ -7557,6 +8828,123 @@ async getServiceFrequencyReportRows(
       total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
     },
   };
+},
+
+// Powers the Service Frequency report's Graph page — Visits/Revenue trend,
+// same day/week/month bucketing as getSalesSummaryReportChart. s.created_at
+// is bucketed with a plain ::date cast, matching _buildServiceFrequencyWhere's
+// own s.created_at filter exactly (no IST zone conversion in that WHERE, so
+// the graph must not introduce one either or its buckets could disagree with
+// the table's own date filter by a day). Queried directly off sale_items
+// rather than the _SERVICE_FREQUENCY_AGG CTE, since that CTE collapses each
+// client+service pair down to a single first/last visit and can't reproduce
+// a per-transaction daily trend.
+async getServiceFrequencyChartTrend(
+  salonId: string,
+  filters: ServiceFrequencyChartFilters,
+  granularity: "day" | "week" | "month" = "day"
+): Promise<{ date: string; visits: number; revenue: number }[]> {
+  const { where, values } = this._buildServiceFrequencyWhere(salonId, filters);
+  const dayExpr = granularity === "month"
+    ? `TO_CHAR(date_trunc('month', s.created_at::date), 'YYYY-MM-DD')`
+    : granularity === "week"
+    ? `TO_CHAR(date_trunc('week', s.created_at::date), 'YYYY-MM-DD')`
+    : `TO_CHAR(s.created_at::date, 'YYYY-MM-DD')`;
+
+  const query = `
+    SELECT
+      ${dayExpr} AS day,
+      COUNT(*)::int AS visits,
+      COALESCE(SUM(si.total_price::numeric), 0) AS revenue
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    JOIN clients c ON c.id = s.client_id
+    LEFT JOIN services sv ON sv.id = si.item_id
+    LEFT JOIN service_categories sc ON sc.id = sv.category_id
+    WHERE ${where}
+    GROUP BY day
+    ORDER BY day ASC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => ({
+    date: String(r.day),
+    visits: Number(r.visits ?? 0),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+// One-time vs repeat client+service pairs — same `visits > 1` cutoff
+// getServiceFrequencyReportStats's own repeat_pairs stat uses.
+async getServiceFrequencyChartPairFrequency(
+  salonId: string,
+  filters: ServiceFrequencyChartFilters
+): Promise<{ type: "one_time" | "repeat"; count: number }[]> {
+  const { where, values } = this._buildServiceFrequencyWhere(salonId, filters);
+
+  const query = `
+    ${this._SERVICE_FREQUENCY_AGG(where)}
+    SELECT
+      CASE WHEN visits > 1 THEN 'repeat' ELSE 'one_time' END AS type,
+      COUNT(*)::int AS count
+    FROM scored
+    GROUP BY type
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => ({
+    type: r.type === "repeat" ? "repeat" : "one_time",
+    count: Number(r.count ?? 0),
+  }));
+},
+
+// Visits by service Category — same category_name grain the table's own
+// Category column and filter use.
+async getServiceFrequencyChartByCategory(
+  salonId: string,
+  filters: ServiceFrequencyChartFilters
+): Promise<{ category: string; visits: number }[]> {
+  const { where, values } = this._buildServiceFrequencyWhere(salonId, filters);
+
+  const query = `
+    ${this._SERVICE_FREQUENCY_AGG(where)}
+    SELECT category_name AS category, COALESCE(SUM(visits), 0)::int AS visits
+    FROM scored
+    GROUP BY category
+    ORDER BY visits DESC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => ({
+    category: String(r.category),
+    visits: Number(r.visits ?? 0),
+  }));
+},
+
+// Top Services by Visits — same scored source the table itself reads,
+// re-aggregated across clients and capped to the top N.
+async getServiceFrequencyChartTopServices(
+  salonId: string,
+  filters: ServiceFrequencyChartFilters,
+  limit: number = 5
+): Promise<{ service_id: string | null; service_name: string; visits: number }[]> {
+  const { where, values, nextIndex } = this._buildServiceFrequencyWhere(salonId, filters);
+
+  const query = `
+    ${this._SERVICE_FREQUENCY_AGG(where)}
+    SELECT service_id, service_name, COALESCE(SUM(visits), 0)::int AS visits
+    FROM scored
+    GROUP BY service_id, service_name
+    ORDER BY visits DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    service_id: r.service_id ? String(r.service_id) : null,
+    service_name: String(r.service_name ?? "—"),
+    visits: Number(r.visits ?? 0),
+  }));
 },
 
 // ======================================================
@@ -8474,6 +9862,164 @@ async getPaymentCollectionFiltersAvailable(salonId: string): Promise<PaymentColl
   };
 },
 
+// Powers the Payment Collection report's Graph page — Pending/Collected
+// trend, same day/week/month bucketing as getSalesSummaryReportChart.
+// Reuses the same `filtered` CTE the table/stats already build on, so the
+// graph can never disagree with them about what's pending vs collected.
+async getPaymentCollectionChartTrend(
+  salonId: string,
+  filters: PaymentCollectionChartFilters,
+  granularity: "day" | "week" | "month" = "day"
+): Promise<{ date: string; pending: number; collected: number }[]> {
+  const { where, values, nextIndex } = this._buildPaymentCollectionWhere(salonId, filters);
+  let idx = nextIndex;
+  const extraValues: any[] = [];
+  let startDateIdx: number | null = null;
+  let endDateIdx: number | null = null;
+  let statusIdx: number | null = null;
+  let methodIdx: number | null = null;
+  if (filters.start_date) { startDateIdx = idx++; extraValues.push(filters.start_date); }
+  if (filters.end_date)   { endDateIdx   = idx++; extraValues.push(filters.end_date); }
+  if (filters.payment_statuses?.length) { statusIdx = idx++; extraValues.push(filters.payment_statuses); }
+  if (filters.payment_methods?.length)  { methodIdx = idx++; extraValues.push(filters.payment_methods.map(m => m.toLowerCase())); }
+
+  // payment_date is already IST-normalised 'YYYY-MM-DD' text (see
+  // _PAYMENT_COLLECTION_AGG) — cast to date before bucketing by week/month.
+  const dayExpr = granularity === "month"
+    ? `TO_CHAR(date_trunc('month', payment_date::date), 'YYYY-MM-DD')`
+    : granularity === "week"
+    ? `TO_CHAR(date_trunc('week', payment_date::date), 'YYYY-MM-DD')`
+    : `payment_date`;
+
+  const query = `
+    ${this._PAYMENT_COLLECTION_AGG(where, startDateIdx, endDateIdx, statusIdx, methodIdx)}
+    SELECT
+      ${dayExpr} AS day,
+      COALESCE(SUM(due_amount) FILTER (WHERE due_amount > 0), 0) AS pending,
+      COALESCE(SUM(paid_amount), 0) AS collected
+    FROM filtered
+    WHERE payment_date IS NOT NULL
+    GROUP BY day
+    ORDER BY day ASC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...extraValues]));
+  return rows.map((r: any) => ({
+    date: String(r.day),
+    pending: Math.round(Number(r.pending ?? 0)),
+    collected: Math.round(Number(r.collected ?? 0)),
+  }));
+},
+
+// Paid vs Partial bill split for the graph page's pie chart — same
+// vocabulary as the report's own Payment Status filter, grouped instead of
+// filtered.
+async getPaymentCollectionByStatus(
+  salonId: string,
+  filters: PaymentCollectionChartFilters
+): Promise<{ status: string; amount: number }[]> {
+  const { where, values, nextIndex } = this._buildPaymentCollectionWhere(salonId, filters);
+  let idx = nextIndex;
+  const extraValues: any[] = [];
+  let startDateIdx: number | null = null;
+  let endDateIdx: number | null = null;
+  let statusIdx: number | null = null;
+  let methodIdx: number | null = null;
+  if (filters.start_date) { startDateIdx = idx++; extraValues.push(filters.start_date); }
+  if (filters.end_date)   { endDateIdx   = idx++; extraValues.push(filters.end_date); }
+  if (filters.payment_statuses?.length) { statusIdx = idx++; extraValues.push(filters.payment_statuses); }
+  if (filters.payment_methods?.length)  { methodIdx = idx++; extraValues.push(filters.payment_methods.map(m => m.toLowerCase())); }
+
+  const query = `
+    ${this._PAYMENT_COLLECTION_AGG(where, startDateIdx, endDateIdx, statusIdx, methodIdx)}
+    SELECT payment_status AS status, COALESCE(SUM(total_amount), 0) AS amount
+    FROM filtered
+    GROUP BY payment_status
+    ORDER BY amount DESC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...extraValues]));
+  return rows.map((r: any) => ({
+    status: String(r.status),
+    amount: Math.round(Number(r.amount ?? 0)),
+  }));
+},
+
+// Top Staff by Pending Amount — same due_amount > 0 scope the "pending"
+// stat cards use.
+async getPaymentCollectionTopStaffPending(
+  salonId: string,
+  filters: PaymentCollectionChartFilters,
+  limit: number = 5
+): Promise<{ staff_name: string; amount: number }[]> {
+  const { where, values, nextIndex } = this._buildPaymentCollectionWhere(salonId, filters);
+  let idx = nextIndex;
+  const extraValues: any[] = [];
+  let startDateIdx: number | null = null;
+  let endDateIdx: number | null = null;
+  let statusIdx: number | null = null;
+  let methodIdx: number | null = null;
+  if (filters.start_date) { startDateIdx = idx++; extraValues.push(filters.start_date); }
+  if (filters.end_date)   { endDateIdx   = idx++; extraValues.push(filters.end_date); }
+  if (filters.payment_statuses?.length) { statusIdx = idx++; extraValues.push(filters.payment_statuses); }
+  if (filters.payment_methods?.length)  { methodIdx = idx++; extraValues.push(filters.payment_methods.map(m => m.toLowerCase())); }
+  const limitIdx = idx;
+
+  const query = `
+    ${this._PAYMENT_COLLECTION_AGG(where, startDateIdx, endDateIdx, statusIdx, methodIdx)}
+    SELECT staff_name, COALESCE(SUM(due_amount), 0) AS amount
+    FROM filtered
+    WHERE due_amount > 0
+    GROUP BY staff_name
+    ORDER BY amount DESC
+    LIMIT $${limitIdx}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...extraValues, limit]));
+  return rows.map((r: any) => ({
+    staff_name: r.staff_name?.trim() || "Unknown",
+    amount: Math.round(Number(r.amount ?? 0)),
+  }));
+},
+
+// Top Clients by Due Amount — the report's own "Clients With Due Amount"
+// stat card broken down per client instead of just counted.
+async getPaymentCollectionTopClientsDue(
+  salonId: string,
+  filters: PaymentCollectionChartFilters,
+  limit: number = 5
+): Promise<{ client_id: string | null; customer_name: string; amount: number }[]> {
+  const { where, values, nextIndex } = this._buildPaymentCollectionWhere(salonId, filters);
+  let idx = nextIndex;
+  const extraValues: any[] = [];
+  let startDateIdx: number | null = null;
+  let endDateIdx: number | null = null;
+  let statusIdx: number | null = null;
+  let methodIdx: number | null = null;
+  if (filters.start_date) { startDateIdx = idx++; extraValues.push(filters.start_date); }
+  if (filters.end_date)   { endDateIdx   = idx++; extraValues.push(filters.end_date); }
+  if (filters.payment_statuses?.length) { statusIdx = idx++; extraValues.push(filters.payment_statuses); }
+  if (filters.payment_methods?.length)  { methodIdx = idx++; extraValues.push(filters.payment_methods.map(m => m.toLowerCase())); }
+  const limitIdx = idx;
+
+  const query = `
+    ${this._PAYMENT_COLLECTION_AGG(where, startDateIdx, endDateIdx, statusIdx, methodIdx)}
+    SELECT client_id, customer_name, COALESCE(SUM(due_amount), 0) AS amount
+    FROM filtered
+    WHERE due_amount > 0
+    GROUP BY client_id, customer_name
+    ORDER BY amount DESC
+    LIMIT $${limitIdx}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...extraValues, limit]));
+  return rows.map((r: any) => ({
+    client_id: r.client_id ? String(r.client_id) : null,
+    customer_name: String(r.customer_name ?? "Walk-in"),
+    amount: Math.round(Number(r.amount ?? 0)),
+  }));
+},
+
 // ======================================================
 // PENDING PAYMENT REPORT (independent report API)
 // POST /api/report/pending-payment — one row per bill still carrying a due
@@ -8804,6 +10350,129 @@ async getCashManagementFiltersAvailable(): Promise<CashManagementFiltersAvailabl
   };
 },
 
+// Powers the Cash Management report's Graph page — Revenue/Expense/Closing
+// Balance trend, same day/week/month bucketing as getSalesSummaryReportChart.
+// cm.opened_at is bucketed with a plain ::date cast, matching
+// _buildCashManagementWhere's own DATE(cm.opened_at) filter exactly (no IST
+// zone conversion anywhere else in this report, so the graph must not
+// introduce one either or its buckets could disagree with the table's own
+// date filter by a day).
+async getCashManagementChartTrend(
+  salonId: string,
+  filters: CashManagementChartFilters,
+  granularity: "day" | "week" | "month" = "day"
+): Promise<{ date: string; revenue: number; expense: number; closing: number }[]> {
+  const { where, values } = this._buildCashManagementWhere(salonId, filters);
+  const dayExpr = granularity === "month"
+    ? `TO_CHAR(date_trunc('month', cm.opened_at::date), 'YYYY-MM-DD')`
+    : granularity === "week"
+    ? `TO_CHAR(date_trunc('week', cm.opened_at::date), 'YYYY-MM-DD')`
+    : `TO_CHAR(cm.opened_at::date, 'YYYY-MM-DD')`;
+
+  const query = `
+    SELECT
+      ${dayExpr} AS day,
+      COALESCE(SUM(cm.cash_revenue), 0) AS revenue,
+      COALESCE(SUM(cm.cash_expense), 0) AS expense,
+      COALESCE(SUM(cm.closing_balance), 0) AS closing
+    ${this._CASH_MANAGEMENT_JOIN()}
+    WHERE ${where}
+    GROUP BY day
+    ORDER BY day ASC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => ({
+    date: String(r.day),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+    expense: Math.round(Number(r.expense ?? 0)),
+    closing: Math.round(Number(r.closing ?? 0)),
+  }));
+},
+
+// Session count by Open/Closed status — same vocabulary
+// getCashManagementFiltersAvailable's status filter uses, grouped instead
+// of filtered.
+async getCashManagementByStatus(
+  salonId: string,
+  filters: CashManagementChartFilters
+): Promise<{ status: string; count: number }[]> {
+  const { where, values } = this._buildCashManagementWhere(salonId, filters);
+
+  const query = `
+    SELECT cm.status, COUNT(*)::int AS count
+    ${this._CASH_MANAGEMENT_JOIN()}
+    WHERE ${where}
+    GROUP BY cm.status
+    ORDER BY count DESC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => ({
+    status: String(r.status),
+    count: Number(r.count ?? 0),
+  }));
+},
+
+// Sessions with the largest cash discrepancy (|in-store cash - expected
+// closing balance|) — flags the counters most worth a manual double-check.
+// NULL reconciliation_amount (never closed with an in-store count) is
+// excluded, same as the table's own reconciliation column showing "—" there.
+async getCashManagementTopVariance(
+  salonId: string,
+  filters: CashManagementChartFilters,
+  limit: number = 5
+): Promise<{ id: string; date: string; opened_by: string; amount: number }[]> {
+  const { where, values, nextIndex } = this._buildCashManagementWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      cm.id,
+      TO_CHAR(cm.opened_at::date, 'YYYY-MM-DD') AS date,
+      COALESCE(ou.full_name, TRIM(COALESCE(ou.first_name, '') || ' ' || COALESCE(ou.last_name, ''))) AS opened_by,
+      ABS(cm.reconciliation_amount) AS amount
+    ${this._CASH_MANAGEMENT_JOIN()}
+    WHERE ${where} AND cm.reconciliation_amount IS NOT NULL
+    ORDER BY amount DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    id: String(r.id),
+    date: String(r.date),
+    opened_by: r.opened_by?.trim() || "System",
+    amount: Math.round(Number(r.amount ?? 0)),
+  }));
+},
+
+// Cash Revenue by whoever opened the counter — who's actually handling the
+// most cash, not just who has the most sessions.
+async getCashManagementByOpenedBy(
+  salonId: string,
+  filters: CashManagementChartFilters,
+  limit: number = 5
+): Promise<{ name: string; revenue: number }[]> {
+  const { where, values, nextIndex } = this._buildCashManagementWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      COALESCE(ou.full_name, TRIM(COALESCE(ou.first_name, '') || ' ' || COALESCE(ou.last_name, '')), 'System') AS name,
+      COALESCE(SUM(cm.cash_revenue), 0) AS revenue
+    ${this._CASH_MANAGEMENT_JOIN()}
+    WHERE ${where}
+    GROUP BY name
+    ORDER BY revenue DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    name: r.name?.trim() || "System",
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
 // ======================================================
 // STAFF SALES REPORT (independent report API)
 // POST /api/report/staff-sales — reads sale_items/sales directly, bucketed
@@ -8821,11 +10490,14 @@ async getStaffSalesReportStats(
     payment_mode?: string; payment_modes?: string[];
     item_type?: string; item_types?: string[];
     payment_status?: string; payment_statuses?: string[];
+    include_gst?: boolean;
   }
 ): Promise<StaffSalesReportStats> {
   const { where, values, nextIndex } = this._buildSalesSummaryWhere(salonId, filters);
   const unbilled = this._UNBILLED_APPOINTMENT_ROWS_CTE(filters, nextIndex);
   let idx = unbilled.nextIndex;
+  const includeGst = filters.include_gst !== false;
+  const itemPrice = includeGst ? "(sli.total_price + COALESCE(sli.tax_amount, 0))" : "sli.total_price";
 
   // Staff Sales report only (mirrors getStaffSalesReport): _buildSalesSummaryWhere's
   // EXISTS only gates which SALES qualify — it doesn't stop line items
@@ -8858,7 +10530,7 @@ async getStaffSalesReportStats(
     WITH sales_side AS (
       SELECT
         s.id,
-        (sli.total_price + COALESCE(sli.tax_amount, 0)) AS price,
+        ${itemPrice} AS price,
         CASE
           WHEN COALESCE(s.subtotal, 0) > 0
             THEN (CASE WHEN s.appointment_id IS NOT NULL THEN pay.paid_from_payments
@@ -8875,10 +10547,10 @@ async getStaffSalesReportStats(
         -- the matching comment in getStaffSalesReport for why this can
         -- repeat the same sale-level commission across that staff's rows.
         COALESCE(comm.commission_amount, 0) AS commission_amount,
-        CASE WHEN sli.item_type = 'service' THEN sli.total_price + COALESCE(sli.tax_amount, 0) ELSE 0 END AS service_revenue,
-        CASE WHEN sli.item_type = 'product' THEN sli.total_price + COALESCE(sli.tax_amount, 0) ELSE 0 END AS product_revenue,
-        CASE WHEN sli.item_type = 'package' THEN sli.total_price + COALESCE(sli.tax_amount, 0) ELSE 0 END AS package_revenue,
-        CASE WHEN sli.item_type = 'membership' THEN sli.total_price + COALESCE(sli.tax_amount, 0) ELSE 0 END AS membership_revenue
+        CASE WHEN sli.item_type = 'service' THEN ${itemPrice} ELSE 0 END AS service_revenue,
+        CASE WHEN sli.item_type = 'product' THEN ${itemPrice} ELSE 0 END AS product_revenue,
+        CASE WHEN sli.item_type = 'package' THEN ${itemPrice} ELSE 0 END AS package_revenue,
+        CASE WHEN sli.item_type = 'membership' THEN ${itemPrice} ELSE 0 END AS membership_revenue
       FROM sale_items sli
       JOIN sales s ON s.id = sli.sale_id
       LEFT JOIN clients c ON s.client_id = c.id
@@ -8895,7 +10567,8 @@ async getStaffSalesReportStats(
     appt_side AS (
       SELECT
         u.id,
-        u.price, u.paid_amount, u.due_amount, 0::numeric AS commission_amount,
+        ${includeGst ? "u.price" : "(u.price - u.tax_amount)"} AS price,
+        u.paid_amount, u.due_amount, 0::numeric AS commission_amount,
         0::numeric AS service_revenue, 0::numeric AS product_revenue,
         0::numeric AS package_revenue, 0::numeric AS membership_revenue
       FROM (${unbilled.sql}) u
@@ -8953,11 +10626,17 @@ async getStaffSalesReport(
     // 'sales_desc'/'sales_asc' = "Most/Least Staff Sales" (each row's own
     // Total Sales amount) — default is newest-first, matching prior behavior.
     sort?: "sales_desc" | "sales_asc";
+    // Whether price/revenue is gross (total_price + tax_amount) or net
+    // (total_price only). Defaults to true (gross) when omitted — same
+    // convention as Staff Performance's include_gst.
+    include_gst?: boolean;
   }
 ): Promise<{ items: StaffSalesReportRow[]; pagination: { total: number; page: number; limit: number; total_pages: number } }> {
   const { where, values, nextIndex } = this._buildSalesSummaryWhere(salonId, filters);
   const unbilled = this._UNBILLED_APPOINTMENT_ROWS_CTE(filters, nextIndex);
   let idx = unbilled.nextIndex;
+  const includeGst = filters.include_gst !== false;
+  const itemPrice = includeGst ? "(sli.total_price + COALESCE(sli.tax_amount, 0))" : "sli.total_price";
 
   // Staff Sales report only: _buildSalesSummaryWhere's EXISTS only gates
   // which SALES qualify (does this invoice have >=1 matching line item) —
@@ -9014,7 +10693,7 @@ async getStaffSalesReport(
         -- One row per line item, scoped to that item's own staff/amount —
         -- never the whole invoice's total_amount. See getProductRetailReport
         -- for the same one-row-per-line-item + proration pattern.
-        (sli.total_price + COALESCE(sli.tax_amount, 0)) AS price,
+        ${itemPrice} AS price,
         c.full_name AS client_name, c.phone_number AS client_phone,
         st.id AS staff_id,
         NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
@@ -9055,7 +10734,12 @@ async getStaffSalesReport(
     ),
     appt_side AS (
       SELECT
-        u.id, u.created_at, u.status, u.payment_method, u.price,
+        u.id, u.created_at, u.status, u.payment_method,
+        -- _UNBILLED_APPOINTMENT_ROWS_CTE always returns u.price gross of GST
+        -- (plus u.tax_amount separately) since it's shared by several other
+        -- reports that don't take this toggle — subtract it back out here
+        -- instead of touching the shared CTE.
+        ${includeGst ? "u.price" : "(u.price - u.tax_amount)"} AS price,
         u.client_name, u.client_phone, u.staff_id, u.staff_name,
         u.item_description, u.item_types,
         u.paid_amount, u.due_amount,
@@ -9103,6 +10787,155 @@ async getStaffSalesReport(
       total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
     },
   };
+},
+
+// Powers the Staff Sales report's Graph page — Revenue/Commission trend,
+// item-type breakdown and a Top N staff ranking. Reuses _buildSalesSummaryWhere
+// (the same filter builder getStaffSalesReport/getStaffSalesReportStats use)
+// plus the same sliConditions re-application against `sli` those two
+// functions already need (see the comment on getStaffSalesReport for why).
+// Scoped to billed sales only (sales_side) — same precedent as
+// getSalesSummaryReportChart, an unbilled open appointment has no invoice
+// date/commission of its own to plot.
+_buildStaffSalesSliWhere(
+  filters: {
+    staff_id?: string; staff_ids?: string[];
+    item_type?: string; item_types?: string[];
+  },
+  startIdx: number
+): { sliWhere: string; sliValues: any[]; nextIndex: number } {
+  const sliConditions: string[] = [];
+  const sliValues: any[] = [];
+  let idx = startIdx;
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    sliConditions.push(`COALESCE(sli.staff_id, s.staff_id) = ANY($${idx}::uuid[])`);
+    sliValues.push(filters.staff_ids);
+    idx++;
+  } else if (filters.staff_id) {
+    sliConditions.push(`COALESCE(sli.staff_id, s.staff_id) = $${idx}`);
+    sliValues.push(filters.staff_id);
+    idx++;
+  }
+  if (filters.item_types && filters.item_types.length > 0) {
+    sliConditions.push(`sli.item_type = ANY($${idx}::text[])`);
+    sliValues.push(filters.item_types);
+    idx++;
+  } else if (filters.item_type) {
+    sliConditions.push(`sli.item_type = $${idx}`);
+    sliValues.push(filters.item_type);
+    idx++;
+  }
+  return {
+    sliWhere: sliConditions.length > 0 ? `AND ${sliConditions.join(" AND ")}` : "",
+    sliValues,
+    nextIndex: idx,
+  };
+},
+
+async getStaffSalesChartTrend(
+  salonId: string,
+  filters: StaffSalesChartFilters,
+  granularity: "day" | "week" | "month" = "day"
+): Promise<{ date: string; revenue: number; commission: number }[]> {
+  const { where, values, nextIndex } = this._buildSalesSummaryWhere(salonId, filters);
+  const { sliWhere, sliValues } = this._buildStaffSalesSliWhere(filters, nextIndex);
+  // Same IST-bucketed instant as _buildSalesSummaryWhere's own start_date/
+  // end_date filter (COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE
+  // 'Asia/Kolkata') — must match exactly or the chart's buckets could
+  // disagree with which day a sale falls under vs. the table/filter.
+  const istInstant = `COALESCE(a.scheduled_at, s.created_at) AT TIME ZONE 'Asia/Kolkata'`;
+  const dayExpr = granularity === "month"
+    ? `TO_CHAR(date_trunc('month', ${istInstant}), 'YYYY-MM-DD')`
+    : granularity === "week"
+    ? `TO_CHAR(date_trunc('week', ${istInstant}), 'YYYY-MM-DD')`
+    : `TO_CHAR(${istInstant}, 'YYYY-MM-DD')`;
+  const itemPrice = filters.include_gst !== false ? "(sli.total_price + COALESCE(sli.tax_amount, 0))" : "sli.total_price";
+
+  const query = `
+    SELECT
+      ${dayExpr} AS day,
+      COALESCE(SUM(${itemPrice}), 0) AS revenue,
+      COALESCE(SUM(comm.commission_amount), 0) AS commission
+    FROM sale_items sli
+    JOIN sales s ON s.id = sli.sale_id
+    LEFT JOIN clients c ON s.client_id = c.id
+    ${this._APPOINTMENT_STATUS_JOIN}
+    LEFT JOIN LATERAL (
+      SELECT SUM(ce.commission_amount) AS commission_amount
+      FROM commission_earned ce
+      WHERE ce.sale_id = s.id
+        AND ce.staff_id = COALESCE(sli.staff_id, s.staff_id)
+    ) comm ON TRUE
+    WHERE ${where} ${sliWhere}
+    GROUP BY day
+    ORDER BY day ASC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...sliValues]));
+  return rows.map((r: any) => ({
+    date: String(r.day),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+    commission: Math.round(Number(r.commission ?? 0)),
+  }));
+},
+
+async getStaffSalesChartByItemType(
+  salonId: string,
+  filters: StaffSalesChartFilters
+): Promise<{ item_type: string; revenue: number }[]> {
+  const { where, values, nextIndex } = this._buildSalesSummaryWhere(salonId, filters);
+  const { sliWhere, sliValues } = this._buildStaffSalesSliWhere(filters, nextIndex);
+  const itemPrice = filters.include_gst !== false ? "(sli.total_price + COALESCE(sli.tax_amount, 0))" : "sli.total_price";
+
+  const query = `
+    SELECT sli.item_type, COALESCE(SUM(${itemPrice}), 0) AS revenue
+    FROM sale_items sli
+    JOIN sales s ON s.id = sli.sale_id
+    LEFT JOIN clients c ON s.client_id = c.id
+    ${this._APPOINTMENT_STATUS_JOIN}
+    WHERE ${where} ${sliWhere}
+    GROUP BY sli.item_type
+    ORDER BY revenue DESC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...sliValues]));
+  return rows.map((r: any) => ({
+    item_type: String(r.item_type),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+async getStaffSalesChartTopStaff(
+  salonId: string,
+  filters: StaffSalesChartFilters,
+  limit: number = 5
+): Promise<{ staff_id: string | null; staff_name: string; revenue: number }[]> {
+  const { where, values, nextIndex } = this._buildSalesSummaryWhere(salonId, filters);
+  const { sliWhere, sliValues, nextIndex: idxAfterSli } = this._buildStaffSalesSliWhere(filters, nextIndex);
+  const itemPrice = filters.include_gst !== false ? "(sli.total_price + COALESCE(sli.tax_amount, 0))" : "sli.total_price";
+
+  const query = `
+    SELECT
+      COALESCE(sli.staff_id, s.staff_id) AS staff_id,
+      COALESCE(NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), ''), 'Unassigned') AS staff_name,
+      COALESCE(SUM(${itemPrice}), 0) AS revenue
+    FROM sale_items sli
+    JOIN sales s ON s.id = sli.sale_id
+    LEFT JOIN clients c ON s.client_id = c.id
+    LEFT JOIN staff st ON st.id = COALESCE(sli.staff_id, s.staff_id)
+    ${this._APPOINTMENT_STATUS_JOIN}
+    WHERE ${where} ${sliWhere}
+    GROUP BY COALESCE(sli.staff_id, s.staff_id), staff_name
+    ORDER BY revenue DESC
+    LIMIT $${idxAfterSli}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...sliValues, limit]));
+  return rows.map((r: any) => ({
+    staff_id: r.staff_id ? String(r.staff_id) : null,
+    staff_name: r.staff_name,
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
 },
 
 // ======================================================
@@ -9228,8 +11061,22 @@ _buildStaffPerformanceWhere(
 // once per staff who happened to touch it — that would inflate total money
 // collected across the report). commission comes straight from
 // commission_earned, already computed per staff per sale at checkout time.
-_STAFF_PERFORMANCE_AGG(where: string, includeGst: boolean = true): string {
+//
+// staffIds/staffIdsParamIndex: the `where` clause's own staff_ids filter
+// (built by _buildStaffPerformanceWhere) only decides which SALES are
+// included — via EXISTS, a sale stays in if ANY of its line items belongs to
+// a selected staff. Without a second restriction here, item_agg/sale_agg/
+// comm_agg then aggregate EVERY staff who touched those sales, so a staff
+// member who merely shares an invoice with a selected staff (e.g. a
+// multi-staff checkout) showed up in the report/charts too, with their own
+// full revenue — not filtered out as the staff picker implies. These three
+// extra clauses restrict the aggregation itself to the selected staff.
+_STAFF_PERFORMANCE_AGG(where: string, includeGst: boolean = true, staffIds?: string[], staffIdsParamIndex?: number): string {
   const itemRevenue = includeGst ? "(si.total_price + COALESCE(si.tax_amount, 0))" : "si.total_price";
+  const hasStaffFilter = !!(staffIds && staffIds.length > 0 && staffIdsParamIndex);
+  const itemStaffFilter = hasStaffFilter ? `AND COALESCE(si.staff_id, fs.resolved_staff_id) = ANY($${staffIdsParamIndex}::uuid[])` : "";
+  const saleStaffFilter = hasStaffFilter ? `WHERE resolved_staff_id = ANY($${staffIdsParamIndex}::uuid[])` : "";
+  const commStaffFilter = hasStaffFilter ? `AND ce.staff_id = ANY($${staffIdsParamIndex}::uuid[])` : "";
   return `
     WITH filtered_sales AS (
       SELECT
@@ -9264,6 +11111,7 @@ _STAFF_PERFORMANCE_AGG(where: string, includeGst: boolean = true): string {
         COALESCE(SUM(${itemRevenue}) FILTER (WHERE si.item_type = 'membership'), 0) AS membership_revenue
       FROM sale_items si
       JOIN filtered_sales fs ON fs.id = si.sale_id
+      WHERE true ${itemStaffFilter}
       GROUP BY COALESCE(si.staff_id, fs.resolved_staff_id)
     ),
     sale_agg AS (
@@ -9272,12 +11120,13 @@ _STAFF_PERFORMANCE_AGG(where: string, includeGst: boolean = true): string {
         COALESCE(SUM(paid_amount), 0) AS collected,
         COALESCE(SUM(due_amount), 0) AS due
       FROM filtered_sales
+      ${saleStaffFilter}
       GROUP BY resolved_staff_id
     ),
     comm_agg AS (
       SELECT ce.staff_id, COALESCE(SUM(ce.commission_amount), 0) AS commission
       FROM commission_earned ce
-      WHERE ce.sale_id IN (SELECT id FROM filtered_sales)
+      WHERE ce.sale_id IN (SELECT id FROM filtered_sales) ${commStaffFilter}
       GROUP BY ce.staff_id
     ),
     combined AS (
@@ -9320,10 +11169,12 @@ async getStaffPerformanceReportStats(
     include_gst?: boolean;
   }
 ): Promise<StaffPerformanceReportStats> {
-  const { where, values } = this._buildStaffPerformanceWhere(salonId, filters);
+  const { where, values, nextIndex } = this._buildStaffPerformanceWhere(salonId, filters);
+  const hasStaffFilter = !!(filters.staff_ids && filters.staff_ids.length > 0);
+  const queryValues = hasStaffFilter ? [...values, filters.staff_ids] : values;
 
   const query = `
-    ${this._STAFF_PERFORMANCE_AGG(where, filters.include_gst !== false)}
+    ${this._STAFF_PERFORMANCE_AGG(where, filters.include_gst !== false, filters.staff_ids, hasStaffFilter ? nextIndex : undefined)}
     SELECT
       COUNT(*)::int AS total_staff,
       COALESCE(SUM(total_revenue), 0) AS total_revenue,
@@ -9335,7 +11186,7 @@ async getStaffPerformanceReportStats(
     FROM combined
   `;
 
-  const { rows } = await safeQuery(() => pool.query(query, values));
+  const { rows } = await safeQuery(() => pool.query(query, queryValues));
   const r = rows[0] ?? {};
   const totalStaff = Number(r.total_staff ?? 0);
   const totalRevenue = Number(r.total_revenue ?? 0);
@@ -9369,7 +11220,8 @@ async getStaffPerformanceReport(
   pagination: { total: number; page: number; limit: number; total_pages: number };
 }> {
   const { where, values, nextIndex } = this._buildStaffPerformanceWhere(salonId, filters);
-  let idx = nextIndex;
+  const hasStaffFilter = !!(filters.staff_ids && filters.staff_ids.length > 0);
+  let idx = hasStaffFilter ? nextIndex + 1 : nextIndex;
 
   const page = Math.max(1, Number(filters.page ?? 1));
   const requestedLimit = Math.max(1, Number(filters.limit ?? 25));
@@ -9377,16 +11229,17 @@ async getStaffPerformanceReport(
   const offset = limit ? (page - 1) * limit : 0;
   const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
   const limitValues = limit ? [limit, offset] : [];
+  const staffIdsValues = hasStaffFilter ? [filters.staff_ids] : [];
 
   const query = `
-    ${this._STAFF_PERFORMANCE_AGG(where, filters.include_gst !== false)}
+    ${this._STAFF_PERFORMANCE_AGG(where, filters.include_gst !== false, filters.staff_ids, hasStaffFilter ? nextIndex : undefined)}
     SELECT *, COUNT(*) OVER() AS total_count
     FROM combined
     ORDER BY total_revenue DESC
     ${limitClause}
   `;
 
-  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...staffIdsValues, ...limitValues]));
   const total = rows.length ? Number(rows[0].total_count) : 0;
   const items: StaffPerformanceReportRow[] = rows.map((row: any) => {
     const invoiceCount = Number(row.invoice_count ?? 0);
@@ -9487,6 +11340,147 @@ async getStaffPerformanceFiltersAvailable(salonId: string): Promise<StaffPerform
     packages: packageRows.map((r: any) => ({ id: r.id, label: r.label })),
     memberships: membershipRows.map((r: any) => ({ id: r.id, label: r.label })),
   };
+},
+
+// Powers the Staff Performance report's Graph page — Revenue/Commission
+// trend, item-type breakdown and a Top N staff-by-revenue ranking. Reuses
+// _buildStaffPerformanceWhere (the same filter builder
+// getStaffPerformanceReport/Stats and _STAFF_PERFORMANCE_AGG use), and the
+// same filtered_sales CTE shape _STAFF_PERFORMANCE_AGG builds, so the
+// chart's numbers can never disagree with the table's. s.created_at is
+// bucketed with a plain cast (no IST zone conversion) — matching
+// _buildStaffPerformanceWhere's own `s.created_at >= $x::date` filter
+// exactly, unlike Sales Summary/Staff Sales which do convert to IST.
+async getStaffPerformanceChartTrend(
+  salonId: string,
+  filters: StaffPerformanceChartFilters,
+  granularity: "day" | "week" | "month" = "day"
+): Promise<{ date: string; revenue: number; commission: number }[]> {
+  const { where, values, nextIndex } = this._buildStaffPerformanceWhere(salonId, filters);
+  const includeGst = filters.include_gst !== false;
+  const itemRevenue = includeGst ? "(si.total_price + COALESCE(si.tax_amount, 0))" : "si.total_price";
+  const dayExpr = granularity === "month"
+    ? `TO_CHAR(date_trunc('month', fs.created_at::date), 'YYYY-MM-DD')`
+    : granularity === "week"
+    ? `TO_CHAR(date_trunc('week', fs.created_at::date), 'YYYY-MM-DD')`
+    : `TO_CHAR(fs.created_at::date, 'YYYY-MM-DD')`;
+  // Same reasoning as _STAFF_PERFORMANCE_AGG: `where`'s own staff_ids filter
+  // only keeps sales with ANY matching item, so a co-staffed sale's OTHER
+  // staff's items/commission must be excluded here too, not just the sale
+  // itself included.
+  const hasStaffFilter = !!(filters.staff_ids && filters.staff_ids.length > 0);
+  const staffIdsValues = hasStaffFilter ? [filters.staff_ids] : [];
+  const itemStaffFilter = hasStaffFilter ? `AND COALESCE(si.staff_id, fs.resolved_staff_id) = ANY($${nextIndex}::uuid[])` : "";
+  const commStaffFilter = hasStaffFilter ? `AND ce.staff_id = ANY($${nextIndex}::uuid[])` : "";
+
+  const query = `
+    WITH filtered_sales AS (
+      SELECT s.id, s.created_at,
+        COALESCE(
+          s.staff_id,
+          (SELECT si.staff_id FROM sale_items si WHERE si.sale_id = s.id AND si.staff_id IS NOT NULL LIMIT 1)
+        ) AS resolved_staff_id
+      FROM sales s
+      LEFT JOIN clients c ON s.client_id = c.id
+      ${this._PAYMENT_LATERAL}
+      ${this._APPOINTMENT_STATUS_JOIN}
+      WHERE ${where}
+    ),
+    revenue_per_sale AS (
+      SELECT fs.id, fs.created_at, COALESCE(SUM(${itemRevenue}), 0) AS revenue
+      FROM filtered_sales fs
+      JOIN sale_items si ON si.sale_id = fs.id
+      WHERE true ${itemStaffFilter}
+      GROUP BY fs.id, fs.created_at
+    ),
+    commission_per_sale AS (
+      SELECT fs.id, COALESCE(SUM(ce.commission_amount), 0) AS commission
+      FROM filtered_sales fs
+      LEFT JOIN commission_earned ce ON ce.sale_id = fs.id ${commStaffFilter}
+      GROUP BY fs.id
+    )
+    SELECT
+      ${dayExpr} AS day,
+      COALESCE(SUM(rp.revenue), 0) AS revenue,
+      COALESCE(SUM(cp.commission), 0) AS commission
+    FROM filtered_sales fs
+    LEFT JOIN revenue_per_sale rp ON rp.id = fs.id
+    LEFT JOIN commission_per_sale cp ON cp.id = fs.id
+    GROUP BY day
+    ORDER BY day ASC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...staffIdsValues]));
+  return rows.map((r: any) => ({
+    date: String(r.day),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+    commission: Math.round(Number(r.commission ?? 0)),
+  }));
+},
+
+async getStaffPerformanceChartByItemType(
+  salonId: string,
+  filters: StaffPerformanceChartFilters
+): Promise<{ item_type: string; revenue: number }[]> {
+  const { where, values, nextIndex } = this._buildStaffPerformanceWhere(salonId, filters);
+  const includeGst = filters.include_gst !== false;
+  const itemRevenue = includeGst ? "(si.total_price + COALESCE(si.tax_amount, 0))" : "si.total_price";
+  const hasStaffFilter = !!(filters.staff_ids && filters.staff_ids.length > 0);
+  const staffIdsValues = hasStaffFilter ? [filters.staff_ids] : [];
+  const itemStaffFilter = hasStaffFilter ? `AND COALESCE(si.staff_id, fs.resolved_staff_id) = ANY($${nextIndex}::uuid[])` : "";
+
+  const query = `
+    WITH filtered_sales AS (
+      SELECT s.id,
+        COALESCE(
+          s.staff_id,
+          (SELECT si.staff_id FROM sale_items si WHERE si.sale_id = s.id AND si.staff_id IS NOT NULL LIMIT 1)
+        ) AS resolved_staff_id
+      FROM sales s
+      LEFT JOIN clients c ON s.client_id = c.id
+      ${this._PAYMENT_LATERAL}
+      ${this._APPOINTMENT_STATUS_JOIN}
+      WHERE ${where}
+    )
+    SELECT si.item_type, COALESCE(SUM(${itemRevenue}), 0) AS revenue
+    FROM sale_items si
+    JOIN filtered_sales fs ON fs.id = si.sale_id
+    WHERE true ${itemStaffFilter}
+    GROUP BY si.item_type
+    ORDER BY revenue DESC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...staffIdsValues]));
+  return rows.map((r: any) => ({
+    item_type: String(r.item_type),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+async getStaffPerformanceChartTopStaff(
+  salonId: string,
+  filters: StaffPerformanceChartFilters,
+  limit: number = 5
+): Promise<{ staff_id: string; staff_name: string; revenue: number }[]> {
+  const { where, values, nextIndex } = this._buildStaffPerformanceWhere(salonId, filters);
+  const includeGst = filters.include_gst !== false;
+  const hasStaffFilter = !!(filters.staff_ids && filters.staff_ids.length > 0);
+  const staffIdsValues = hasStaffFilter ? [filters.staff_ids] : [];
+
+  const query = `
+    ${this._STAFF_PERFORMANCE_AGG(where, includeGst, filters.staff_ids, hasStaffFilter ? nextIndex : undefined)}
+    SELECT staff_id, staff_name, total_revenue AS revenue
+    FROM combined
+    ORDER BY total_revenue DESC
+    LIMIT $${values.length + staffIdsValues.length + 1}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...staffIdsValues, limit]));
+  return rows.map((r: any) => ({
+    staff_id: String(r.staff_id),
+    staff_name: r.staff_name ?? "—",
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
 },
 
 // ======================================================
@@ -9666,6 +11660,126 @@ async getStaffItemSalesReportRows(
       total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
     },
   };
+},
+
+// Powers the Staff Item Sales report's Graph page. Same package/membership-
+// redeemed 0-revenue treatment as getStaffItemSalesReportStats/Rows above —
+// must stay in sync with that CASE expression.
+_STAFF_ITEM_SALES_REVENUE_EXPR: `
+  CASE
+    WHEN LOWER(COALESCE(s.payment_method, '')) = 'package' THEN 0
+    WHEN COALESCE(mw.membership_wallet_used, 0) > 0 THEN 0
+    ELSE si.total_price + (
+      CASE WHEN COALESCE(s.subtotal, 0) > 0
+           THEN COALESCE(s.tax_amount, 0) * (si.total_price / s.subtotal)
+           ELSE 0
+      END
+    )
+  END
+`,
+
+_STAFF_ITEM_SALES_MW_JOIN: `
+  LEFT JOIN LATERAL (
+    SELECT COALESCE(SUM(p.membership_wallet_used), 0) AS membership_wallet_used
+    FROM payments p
+    WHERE p.appointment_id = s.appointment_id AND s.appointment_id IS NOT NULL
+      AND p.status IN ('completed', 'partial')
+  ) mw ON TRUE
+`,
+
+async getStaffItemSalesChartTrend(
+  salonId: string,
+  filters: StaffItemSalesChartFilters,
+  granularity: "day" | "week" | "month" = "day"
+): Promise<{ date: string; quantity: number; revenue: number }[]> {
+  const { where, values } = this._buildStaffItemSalesWhere(salonId, filters);
+  const istInstant = `s.created_at AT TIME ZONE 'Asia/Kolkata'`;
+  const dayExpr = granularity === "month"
+    ? `TO_CHAR(date_trunc('month', ${istInstant}), 'YYYY-MM-DD')`
+    : granularity === "week"
+    ? `TO_CHAR(date_trunc('week', ${istInstant}), 'YYYY-MM-DD')`
+    : `TO_CHAR(${istInstant}, 'YYYY-MM-DD')`;
+
+  const query = `
+    SELECT
+      ${dayExpr} AS day,
+      COALESCE(SUM(si.quantity), 0)::int AS quantity,
+      COALESCE(SUM(${this._STAFF_ITEM_SALES_REVENUE_EXPR}), 0) AS revenue
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    LEFT JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
+    ${this._STAFF_ITEM_SALES_MW_JOIN}
+    WHERE ${where}
+    GROUP BY day
+    ORDER BY day ASC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => ({
+    date: String(r.day),
+    quantity: Number(r.quantity ?? 0),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+async getStaffItemSalesChartTopItems(
+  salonId: string,
+  filters: StaffItemSalesChartFilters,
+  limit: number = 5
+): Promise<{ item_name: string; quantity: number; revenue: number }[]> {
+  const { where, values, nextIndex } = this._buildStaffItemSalesWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      si.name AS item_name,
+      COALESCE(SUM(si.quantity), 0)::int AS quantity,
+      COALESCE(SUM(${this._STAFF_ITEM_SALES_REVENUE_EXPR}), 0) AS revenue
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    LEFT JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
+    ${this._STAFF_ITEM_SALES_MW_JOIN}
+    WHERE ${where}
+    GROUP BY si.name
+    ORDER BY revenue DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    item_name: String(r.item_name ?? "—"),
+    quantity: Number(r.quantity ?? 0),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+async getStaffItemSalesChartTopStaff(
+  salonId: string,
+  filters: StaffItemSalesChartFilters,
+  limit: number = 5
+): Promise<{ staff_id: string | null; staff_name: string; revenue: number }[]> {
+  const { where, values, nextIndex } = this._buildStaffItemSalesWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      COALESCE(si.staff_id, s.staff_id) AS staff_id,
+      COALESCE(NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), ''), 'Unknown') AS staff_name,
+      COALESCE(SUM(${this._STAFF_ITEM_SALES_REVENUE_EXPR}), 0) AS revenue
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    LEFT JOIN staff st ON st.id = COALESCE(si.staff_id, s.staff_id)
+    ${this._STAFF_ITEM_SALES_MW_JOIN}
+    WHERE ${where}
+    GROUP BY COALESCE(si.staff_id, s.staff_id), staff_name
+    ORDER BY revenue DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    staff_id: r.staff_id ? String(r.staff_id) : null,
+    staff_name: r.staff_name,
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
 },
 
 // ======================================================
@@ -9868,6 +11982,97 @@ async getPackageSaleReportRows(
       total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
     },
   };
+},
+
+// Powers the Package Sale report's Graph page.
+async getPackageSaleChartTrend(
+  salonId: string,
+  filters: PackageSaleChartFilters,
+  granularity: "day" | "week" | "month" = "day"
+): Promise<{ date: string; count: number; revenue: number }[]> {
+  const { where, values } = this._buildPackageSaleWhere(salonId, filters);
+  const istInstant = `cp.created_date AT TIME ZONE 'Asia/Kolkata'`;
+  const dayExpr = granularity === "month"
+    ? `TO_CHAR(date_trunc('month', ${istInstant}), 'YYYY-MM-DD')`
+    : granularity === "week"
+    ? `TO_CHAR(date_trunc('week', ${istInstant}), 'YYYY-MM-DD')`
+    : `TO_CHAR(${istInstant}, 'YYYY-MM-DD')`;
+
+  const query = `
+    SELECT
+      ${dayExpr} AS day,
+      COUNT(*)::int AS count,
+      COALESCE(SUM(cp.total_amount::numeric), 0) AS revenue
+    FROM client_packages cp
+    LEFT JOIN sales s ON s.id = cp.sale_id
+    WHERE ${where}
+    GROUP BY day
+    ORDER BY day ASC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => ({
+    date: String(r.day),
+    count: Number(r.count ?? 0),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+async getPackageSaleChartTopPackages(
+  salonId: string,
+  filters: PackageSaleChartFilters,
+  limit: number = 5
+): Promise<{ package_name: string; count: number; revenue: number }[]> {
+  const { where, values, nextIndex } = this._buildPackageSaleWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      cp.package_name,
+      COUNT(*)::int AS count,
+      COALESCE(SUM(cp.total_amount::numeric), 0) AS revenue
+    FROM client_packages cp
+    LEFT JOIN sales s ON s.id = cp.sale_id
+    WHERE ${where}
+    GROUP BY cp.package_name
+    ORDER BY revenue DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    package_name: String(r.package_name ?? "—"),
+    count: Number(r.count ?? 0),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+async getPackageSaleChartTopStaff(
+  salonId: string,
+  filters: PackageSaleChartFilters,
+  limit: number = 5
+): Promise<{ staff_id: string | null; staff_name: string; revenue: number }[]> {
+  const { where, values, nextIndex } = this._buildPackageSaleWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      cp.staff_id,
+      COALESCE(NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), ''), 'Unknown') AS staff_name,
+      COALESCE(SUM(cp.total_amount::numeric), 0) AS revenue
+    FROM client_packages cp
+    LEFT JOIN sales s ON s.id = cp.sale_id
+    LEFT JOIN staff st ON st.id = cp.staff_id
+    WHERE ${where}
+    GROUP BY cp.staff_id, staff_name
+    ORDER BY revenue DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    staff_id: r.staff_id ? String(r.staff_id) : null,
+    staff_name: r.staff_name,
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
 },
 
 // Distinct staff/package names that have EVER appeared in this salon's
@@ -10847,6 +13052,94 @@ async getMemberSaleReportRows(
       total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
     },
   };
+},
+
+// Powers the Membership Sale report's Graph page.
+async getMemberSaleChartTrend(
+  salonId: string,
+  filters: MemberSaleChartFilters,
+  granularity: "day" | "week" | "month" = "day"
+): Promise<{ date: string; count: number; revenue: number }[]> {
+  const { where, values } = this._buildMemberSaleWhere(salonId, filters);
+  const istInstant = `cm.purchased_at AT TIME ZONE 'Asia/Kolkata'`;
+  const dayExpr = granularity === "month"
+    ? `TO_CHAR(date_trunc('month', ${istInstant}), 'YYYY-MM-DD')`
+    : granularity === "week"
+    ? `TO_CHAR(date_trunc('week', ${istInstant}), 'YYYY-MM-DD')`
+    : `TO_CHAR(${istInstant}, 'YYYY-MM-DD')`;
+
+  const query = `
+    SELECT
+      ${dayExpr} AS day,
+      COUNT(*)::int AS count,
+      COALESCE(SUM(cm.price_paid::numeric), 0) AS revenue
+    FROM client_memberships cm
+    WHERE ${where}
+    GROUP BY day
+    ORDER BY day ASC
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, values));
+  return rows.map((r: any) => ({
+    date: String(r.day),
+    count: Number(r.count ?? 0),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+async getMemberSaleChartTopMemberships(
+  salonId: string,
+  filters: MemberSaleChartFilters,
+  limit: number = 5
+): Promise<{ membership_name: string; count: number; revenue: number }[]> {
+  const { where, values, nextIndex } = this._buildMemberSaleWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      cm.membership_name,
+      COUNT(*)::int AS count,
+      COALESCE(SUM(cm.price_paid::numeric), 0) AS revenue
+    FROM client_memberships cm
+    WHERE ${where}
+    GROUP BY cm.membership_name
+    ORDER BY revenue DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    membership_name: String(r.membership_name ?? "—"),
+    count: Number(r.count ?? 0),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+async getMemberSaleChartTopStaff(
+  salonId: string,
+  filters: MemberSaleChartFilters,
+  limit: number = 5
+): Promise<{ staff_id: string | null; staff_name: string; revenue: number }[]> {
+  const { where, values, nextIndex } = this._buildMemberSaleWhere(salonId, filters);
+
+  const query = `
+    SELECT
+      cm.staff_id,
+      COALESCE(NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), ''), 'Unknown') AS staff_name,
+      COALESCE(SUM(cm.price_paid::numeric), 0) AS revenue
+    FROM client_memberships cm
+    LEFT JOIN staff st ON st.id = cm.staff_id
+    WHERE ${where}
+    GROUP BY cm.staff_id, staff_name
+    ORDER BY revenue DESC
+    LIMIT $${nextIndex}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, limit]));
+  return rows.map((r: any) => ({
+    staff_id: r.staff_id ? String(r.staff_id) : null,
+    staff_name: r.staff_name,
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
 },
 
 // ======================================================
