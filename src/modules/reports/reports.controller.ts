@@ -2797,6 +2797,7 @@ async getStaffSalesReport(
                 ? body.payment_statuses.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
                 : undefined,
             sort: body.sort === "sales_desc" || body.sort === "sales_asc" ? body.sort : undefined,
+            include_gst: body.include_gst !== false,
         };
 
         const data = await reportsService.getStaffSalesReport(salonId, filters);
@@ -2839,6 +2840,7 @@ async getStaffSalesReportChart(
             item_types: asStringArray(body.item_types),
             payment_status: asString(body.payment_status),
             payment_statuses: asStringArray(body.payment_statuses),
+            include_gst: body.include_gst !== false,
         };
         const granularity: "day" | "week" | "month" =
             body.granularity === "week" || body.granularity === "month" ? body.granularity : "day";

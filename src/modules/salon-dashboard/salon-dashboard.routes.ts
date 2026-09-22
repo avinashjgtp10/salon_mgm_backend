@@ -11,6 +11,9 @@ const guard = [authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), 
 // GET /api/v1/dashboard/revenue
 router.get("/revenue", ...guard, requirePermission("view_dashboard_financials"), salonDashboardController.getRevenueChart);
 
+// GET /api/v1/dashboard/payment-mode-breakdown — "Overall Collection" card
+router.get("/payment-mode-breakdown", ...guard, requirePermission("view_dashboard_financials"), salonDashboardController.getPaymentModeBreakdown);
+
 // GET /api/v1/dashboard/appointments/today
 router.get("/appointments/today", ...guard, salonDashboardController.getTodayAppointments);
 

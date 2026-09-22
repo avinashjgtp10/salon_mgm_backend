@@ -59,8 +59,20 @@ export const salonDashboardController = {
     try {
       const salonId = await getSalonId(req);
       const period = typeof req.query.period === "string" ? req.query.period : undefined;
-      const data = await salonDashboardService.getRevenueChart(salonId, period);
+      const gender = typeof req.query.gender === "string" ? req.query.gender : undefined;
+      const data = await salonDashboardService.getRevenueChart(salonId, period, gender);
       return sendSuccess(res, 200, data, "Revenue chart data fetched successfully");
+    } catch (err) {
+      return next(err);
+    }
+  },
+
+  async getPaymentModeBreakdown(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = await getSalonId(req);
+      const period = typeof req.query.period === "string" ? req.query.period : undefined;
+      const data = await salonDashboardService.getPaymentModeBreakdown(salonId, period);
+      return sendSuccess(res, 200, data, "Payment mode breakdown fetched successfully");
     } catch (err) {
       return next(err);
     }

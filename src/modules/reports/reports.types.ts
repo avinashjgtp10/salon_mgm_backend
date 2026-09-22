@@ -2797,6 +2797,10 @@ export interface StaffSalesReportFilters {
     payment_status?: string;
     payment_statuses?: string[];
     sort?: "sales_desc" | "sales_asc";
+    // Whether each line item's price/revenue is gross (total_price + tax_amount)
+    // or net (total_price only). Defaults to true (gross) when omitted — same
+    // convention as StaffPerformanceReportFilters.include_gst.
+    include_gst?: boolean;
 }
 
 export interface StaffSalesReportRow {
@@ -2863,6 +2867,7 @@ export interface StaffSalesChartFilters {
     item_types?: string[];
     payment_status?: string;
     payment_statuses?: string[];
+    include_gst?: boolean;
 }
 
 export interface StaffSalesChartResponse {

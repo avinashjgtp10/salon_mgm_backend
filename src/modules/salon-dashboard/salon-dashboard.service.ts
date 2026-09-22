@@ -4,6 +4,7 @@ import type {
   DashboardSummary,
   TodayAppointment,
   RevenueDataPoint,
+  PaymentModeBreakdown,
   TopStaffMember,
   StaffRevenueEntry,
   ServiceMixItem,
@@ -22,9 +23,14 @@ export const salonDashboardService = {
     return salonDashboardRepository.getTodayAppointments(salonId, date);
   },
 
-  async getRevenueChart(salonId: string, period?: string): Promise<RevenueDataPoint[]> {
+  async getRevenueChart(salonId: string, period?: string, gender?: string): Promise<RevenueDataPoint[]> {
     if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR");
-    return salonDashboardRepository.getRevenueChart(salonId, period);
+    return salonDashboardRepository.getRevenueChart(salonId, period, gender);
+  },
+
+  async getPaymentModeBreakdown(salonId: string, period?: string): Promise<PaymentModeBreakdown> {
+    if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR");
+    return salonDashboardRepository.getPaymentModeBreakdown(salonId, period);
   },
 
   async getTopStaff(salonId: string): Promise<TopStaffMember[]> {
