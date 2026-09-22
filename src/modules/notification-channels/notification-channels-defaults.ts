@@ -73,7 +73,7 @@ export const DEFAULT_SMS_TEMPLATES: Record<DefaultPurchaseEventType, string> = {
   cash_counter_opened:
     "Cash Counter Opened - {{salon_name}}. {{opening_date}} {{opening_time}}. Opening Cash: {{opening_amount}}.",
   cash_counter_closed:
-    "Cash Counter Closed - {{salon_name}}. {{closing_date}} {{closing_time}}. {{collection_breakdown}}. Total: {{total_collection}}, Variance: {{variance}}.",
+    "Cash Counter Closed - {{salon_name}}. {{closing_date}} {{closing_time}}. {{collection_breakdown}}. Total: {{total_collection}}.",
 }
 
 export const DEFAULT_EMAIL_TEMPLATES: Record<DefaultPurchaseEventType, { subject: string; body: string }> = {
@@ -185,7 +185,7 @@ export const DEFAULT_EMAIL_TEMPLATES: Record<DefaultPurchaseEventType, { subject
   },
   cash_counter_closed: {
     subject: "Cash Counter Closed — {{salon_name}}",
-    body: "Cash Counter Closed — {{salon_name}}\n\nYour cash counter has been closed for the day. Here is the collection summary for this session.\n\nDate: {{closing_date}}\nTime: {{closing_time}}\n\nCollection Summary\n{{collection_breakdown}}\n\nTotal Collection: {{total_collection}}\n\nVariance: {{variance}}\n\nThank you for reconciling today's cash counter.",
+    body: "Cash Counter Closed — {{salon_name}}\n\nYour cash counter has been closed for the day. Here is the collection summary for this session.\n\nDate: {{closing_date}}\nTime: {{closing_time}}\n\nCollection Summary\n{{collection_breakdown}}\n\nTotal Collection: {{total_collection}}\n\nThank you for reconciling today's cash counter.",
   },
 }
 
