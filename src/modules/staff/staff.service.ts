@@ -26,6 +26,7 @@ import {
     CreateEmergencyContactBody, UpdateEmergencyContactBody, CreateStaffLeaveBody,
     UpdateStaffLeaveBody, UpdateWageSettingsBody, UpdateCommissionBody, UpdatePayRunBody,
     UpsertStaffSchedulesBody, AcceptInvitationBody, StaffListQuery, StaffImportResult,
+    UpdateSchedulerOrderBody,
 } from "./staff.types";
 
 // ─── Staff ────────────────────────────────────────────────────────────────────
@@ -351,6 +352,16 @@ export const staffService = {
         const deleted = await staffRepository.delete(id, salonId);
         if (!deleted) throw new AppError(500, "Failed to delete staff member", "DELETE_FAILED");
         logger.info("staffService.delete success", { staffId: id });
+    },
+
+    async updateSchedulerOrder(salonId: string, body: UpdateSchedulerOrderBody): Promise<void> {
+        const staffIds = Array.isArray(body.staffIds) ? body.staffIds.filter((id) => typeof id === "string" && id) : [];
+        if (staffIds.length === 0) throw new AppError(400, "staffIds is required", "VALIDATION_ERROR");
+        if (new Set(staffIds).size !== staffIds.length) {
+            throw new AppError(400, "staffIds must not contain duplicates", "VALIDATION_ERROR");
+        }
+        await staffRepository.updateSchedulerOrder(salonId, staffIds);
+        logger.info("staffService.updateSchedulerOrder success", { salonId, count: staffIds.length });
     },
 
     async importStaff(params: {
