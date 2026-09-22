@@ -96,6 +96,23 @@ export interface RevenueDataPoint {
   expenses: number;
 }
 
+// Replaces the old appointment-status "Today's Summary" bar chart — payment
+// mode breakdown (Cash/UPI/Card/…) with its own Today/Yesterday/Week toggle,
+// independent of the Revenue Overview chart's period.
+export interface PaymentModeBreakdownEntry {
+  // Raw lowercase payment_method key ('cash', 'upi', 'card', …) — the
+  // frontend formats it via utils/paymentMode.ts's formatPaymentMode() for
+  // display, same as every other screen that shows a payment method.
+  method: string;
+  amount: number;
+  percentage: number;
+}
+
+export interface PaymentModeBreakdown {
+  entries: PaymentModeBreakdownEntry[];
+  total: number;
+}
+
 export interface TopStaffMember {
   id: string;
   name: string;
