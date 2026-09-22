@@ -2,6 +2,7 @@ import { AppError } from "../../middleware/error.middleware";
 import { cashManagementRepository } from "./cash-management.repository";
 import { salonDashboardService } from "../salon-dashboard/salon-dashboard.service";
 import { salonsRepository } from "../salons/salons.repository";
+import { usersRepo } from "../users/users.repository";
 import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
 import logger from "../../config/logger";
 import type {
@@ -30,6 +31,21 @@ const formatTimeIST = (d: Date | string) =>
 
 const formatMoney = (n: number) => `₹${(Number.isFinite(n) ? n : 0).toFixed(2)}`;
 
+// The owner's own "WhatsApp Alerts Number" (users.phone, Settings > Profile
+// & Business > Contact Details) is the first choice — it's specifically
+// meant for internal alerts like this one, kept separate from Business Phone
+// (salons.phone) so a customer-facing print number never silently becomes
+// where these operational messages get sent. Falls back to Business Phone
+// for any salon that hasn't set a personal alerts number, so this doesn't
+// silently stop working for existing salons.
+async function resolveOwnerNotifyPhone(salon: any): Promise<string | null> {
+  if (salon?.owner_id) {
+    const owner = await usersRepo.findById(salon.owner_id);
+    if (owner?.phone) return owner.phone;
+  }
+  return salon?.phone || null;
+}
+
 // Fire-and-forget WhatsApp alert to the SALON OWNER (never a client) after a
 // counter open/close — deliberately not awaited by either caller below, and
 // whatsappAutomationService.trigger() itself never throws, so a WhatsApp
@@ -40,7 +56,7 @@ const formatMoney = (n: number) => `₹${(Number.isFinite(n) ? n : 0).toFixed(2)
 async function notifyOwnerCashCounterOpened(salonId: string, counter: any): Promise<void> {
   try {
     const salon = await salonsRepository.findById(salonId);
-    const ownerPhone = (salon as any)?.phone;
+    const ownerPhone = await resolveOwnerNotifyPhone(salon);
     if (!ownerPhone) {
       logger.info(`[WA-AUTO] cash_counter_opened skipped — salon ${salonId} has no owner WhatsApp number on file`);
       return;
@@ -70,7 +86,7 @@ async function notifyOwnerCashCounterOpened(salonId: string, counter: any): Prom
 async function notifyOwnerCashCounterClosed(salonId: string, counter: any): Promise<void> {
   try {
     const salon = await salonsRepository.findById(salonId);
-    const ownerPhone = (salon as any)?.phone;
+    const ownerPhone = await resolveOwnerNotifyPhone(salon);
     if (!ownerPhone) {
       logger.info(`[WA-AUTO] cash_counter_closed skipped — salon ${salonId} has no owner WhatsApp number on file`);
       return;
