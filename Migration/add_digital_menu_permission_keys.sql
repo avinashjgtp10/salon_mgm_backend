@@ -14,6 +14,7 @@ INSERT INTO permissions (key, name, description, module, group_name, action, ris
   ('view_digital_menu',           'View Digital Menu',           'View the digital/QR menu dashboard',                      'Catalog', 'Digital Menu', 'view',   'low',    NULL),
   ('create_digital_menu',         'Create Digital Menu',         'Create the salon''s digital menu',                        'Catalog', 'Digital Menu', 'create', 'medium', ARRAY['view_digital_menu']),
   ('edit_digital_menu',           'Edit Digital Menu',           'Change the digital menu name and selected services',      'Catalog', 'Digital Menu', 'edit',   'medium', ARRAY['view_digital_menu']),
+  ('delete_digital_menu',         'Delete Digital Menu',         'Permanently delete the salon''s digital menu',            'Catalog', 'Digital Menu', 'delete', 'high',   ARRAY['view_digital_menu']),
   ('manage_digital_menu_qr',      'Manage QR Code',              'View, download, print and share the menu QR code',        'Catalog', 'Digital Menu', 'manage', 'low',    ARRAY['view_digital_menu']),
   ('enable_disable_digital_menu', 'Enable/Disable Digital Menu', 'Turn the public digital menu on or off',                  'Catalog', 'Digital Menu', 'manage', 'medium', ARRAY['view_digital_menu'])
 ON CONFLICT (key) DO NOTHING;

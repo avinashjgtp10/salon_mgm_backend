@@ -32,7 +32,10 @@ import { computeBillTotals, rowsTotal, normalizeDiscountAppliesTo, ActiveTaxRow 
 import { getActiveTaxes } from "../settings/tax.util";
 import { paymentsRepository } from "../payments/payments.repository";
 import { clientPackagesService } from "../client-packages/client-packages.service";
+import { clientPackagesRepository } from "../client-packages/client-packages.repository";
 import { autoCreatePackagesForBill } from "../transactions/package-autocreate.helper";
+import { clientMembershipsService } from "../client-memberships/client-memberships.service";
+import { clientMembershipsRepository } from "../client-memberships/client-memberships.repository";
 import {
     Appointment,
     AppointmentServiceConsumableRecord,
@@ -844,6 +847,66 @@ export const appointmentsService = {
                         tip_added_to_salon: !!merged.tip_added_to_salon,
                         created_at: existing.scheduled_at,
                     });
+
+                    // The reverse case: a package REMOVED on this edit (or
+                    // the last one, emptying package_items entirely) leaves
+                    // its client_packages row behind untouched —
+                    // recordTransaction() above only rewrites sales/
+                    // sale_items, which has no idea client_packages exists,
+                    // and there was previously no teardown path for this at
+                    // all (only whole-appointment delete and the Package
+                    // Sale Report's own manual delete covered removal).
+                    // Diffed by name — the only identifying key package_items
+                    // entries and client_packages rows share (see
+                    // findIdByAppointmentAndName, the same lookup
+                    // autoCreateFromPayment's own idempotency check below
+                    // uses) — so a package dropped from the bill has its
+                    // assignment (and everything client-packages.service's
+                    // delete() cleans up: session history, future-booked
+                    // schedules, and its own slice of this sale/commission)
+                    // removed to match, instead of surviving as an orphan
+                    // still shown on the Package Sale Report.
+                    const oldNames = new Set((existing.package_items ?? []).map((p: any) => p.name).filter(Boolean));
+                    const newNames = new Set((merged.package_items ?? []).map((p: any) => p.name).filter(Boolean));
+                    const removedNames = [...oldNames].filter((n) => !newNames.has(n));
+                    for (const removedName of removedNames) {
+                        try {
+                            const removedId = await clientPackagesRepository.findIdByAppointmentAndName(
+                                existing.salon_id, appointmentId, removedName as string,
+                            );
+                            if (removedId) await clientPackagesService.delete(removedId, existing.salon_id);
+                        } catch (err) {
+                            logger.error(`[${logTag}] Failed to remove client_packages row for a package dropped from the bill`, {
+                                appointmentId, removedName, message: (err as any)?.message,
+                            });
+                        }
+                    }
+
+                    // Same removal-on-edit handling for memberships — a
+                    // membership dropped from the bill must have its
+                    // client_memberships row removed too, or it survives as
+                    // an orphan still shown on the Membership Sale Report.
+                    // Scoped to appointment_id (see
+                    // findIdByAppointmentAndName's own comment) so a renewal
+                    // of a pre-existing membership from a different, earlier
+                    // appointment is never touched by this — only a
+                    // membership this specific appointment's bill itself
+                    // created.
+                    const oldMembershipNames = new Set((existing.membership_items ?? []).map((m: any) => m.name).filter(Boolean));
+                    const newMembershipNames = new Set((merged.membership_items ?? []).map((m: any) => m.name).filter(Boolean));
+                    const removedMembershipNames = [...oldMembershipNames].filter((n) => !newMembershipNames.has(n));
+                    for (const removedName of removedMembershipNames) {
+                        try {
+                            const removedId = await clientMembershipsRepository.findIdByAppointmentAndName(
+                                existing.salon_id, appointmentId, removedName as string,
+                            );
+                            if (removedId) await clientMembershipsService.delete(removedId, existing.salon_id);
+                        } catch (err) {
+                            logger.error(`[${logTag}] Failed to remove client_memberships row for a membership dropped from the bill`, {
+                                appointmentId, removedName, message: (err as any)?.message,
+                            });
+                        }
+                    }
 
                     // A package added/changed on this edit needs its own
                     // client_packages row too — recordTransaction() above only

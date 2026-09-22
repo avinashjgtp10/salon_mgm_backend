@@ -55,8 +55,11 @@ export const branchOwnerService = {
     return branchOwnerRepository.getRevenueTrend(branchOwnerId, period);
   },
 
+  // No limit here (unlike the dashboard's 10-row preview above) — the
+  // Payments page's summary cards must total every matching payment, and a
+  // fixed cap silently truncated older ones out of that total.
   async getPayments(branchOwnerId: string, status?: string) {
-    return branchOwnerRepository.getRecentPayments(branchOwnerId, 200, status);
+    return branchOwnerRepository.getRecentPayments(branchOwnerId, undefined, status);
   },
 
   async listSalonProducts(branchOwnerId: string, salonId: string, search?: string) {
@@ -93,6 +96,18 @@ export const branchOwnerService = {
       if (source_salon_id === dest_salon_id) throw new AppError(400, "Source and destination salon must differ", "VALIDATION_ERROR");
       if (!(quantity > 0)) throw new AppError(400, "Quantity must be greater than zero", "VALIDATION_ERROR");
       await assertSalonsAssigned(branchOwnerId, [source_salon_id, dest_salon_id]);
+
+      // Mirrors the frontend's From/To pickers (only active branches are
+      // offered there) — enforced here too since this is the actual gate
+      // against a stale page or a direct API call still naming an inactive
+      // salon a client-side filter alone wouldn't catch.
+      const [sourceActive, destActive] = await Promise.all([
+        branchOwnerRepository.isSalonActive(source_salon_id),
+        branchOwnerRepository.isSalonActive(dest_salon_id),
+      ]);
+      if (!sourceActive || !destActive) {
+        throw new AppError(400, "Stock can only be transferred between active salons", "VALIDATION_ERROR");
+      }
 
       const source = await branchOwnerRepository.findProduct(source_product_id, source_salon_id);
       if (!source) throw new AppError(404, "Source product not found", "NOT_FOUND");

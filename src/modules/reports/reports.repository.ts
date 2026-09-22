@@ -2686,6 +2686,11 @@ async getSaleDetail(salonId: string, saleId: string): Promise<SaleDetailResponse
         ), 0) AS due_amount,
         COALESCE(SUM(p.ewallet_used), 0) AS ewallet_used,
         COALESCE(SUM(p.membership_wallet_used), 0) AS membership_wallet_used,
+        -- MAX, not SUM — membership_discount_used is CUMULATIVE per
+        -- appointment (every payment row re-reads/re-writes the full
+        -- total-so-far, not a per-call delta), same contract as every other
+        -- MAX(p.membership_discount_used) read elsewhere in this file.
+        COALESCE(MAX(p.membership_discount_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS membership_discount_used,
         COALESCE(SUM(p.reward_points_value), 0) AS reward_points_value,
         COALESCE(SUM(p.referral_credit_used), 0) AS referral_credit_used,
         (ARRAY_AGG(p.tax_breakdown ORDER BY p.created_at DESC))[1] AS tax_breakdown
@@ -2700,6 +2705,7 @@ async getSaleDetail(salonId: string, saleId: string): Promise<SaleDetailResponse
         due_amount: Number(payRow.due_amount ?? 0),
         ewallet_used: Number(payRow.ewallet_used ?? 0),
         membership_wallet_used: Number(payRow.membership_wallet_used ?? 0),
+        membership_discount_used: Number(payRow.membership_discount_used ?? 0),
         reward_points_value: Number(payRow.reward_points_value ?? 0),
         referral_credit_used: Number(payRow.referral_credit_used ?? 0),
         tax_breakdown: payRow.tax_breakdown ?? null,
@@ -10484,11 +10490,14 @@ async getStaffSalesReportStats(
     payment_mode?: string; payment_modes?: string[];
     item_type?: string; item_types?: string[];
     payment_status?: string; payment_statuses?: string[];
+    include_gst?: boolean;
   }
 ): Promise<StaffSalesReportStats> {
   const { where, values, nextIndex } = this._buildSalesSummaryWhere(salonId, filters);
   const unbilled = this._UNBILLED_APPOINTMENT_ROWS_CTE(filters, nextIndex);
   let idx = unbilled.nextIndex;
+  const includeGst = filters.include_gst !== false;
+  const itemPrice = includeGst ? "(sli.total_price + COALESCE(sli.tax_amount, 0))" : "sli.total_price";
 
   // Staff Sales report only (mirrors getStaffSalesReport): _buildSalesSummaryWhere's
   // EXISTS only gates which SALES qualify — it doesn't stop line items
@@ -10521,7 +10530,7 @@ async getStaffSalesReportStats(
     WITH sales_side AS (
       SELECT
         s.id,
-        (sli.total_price + COALESCE(sli.tax_amount, 0)) AS price,
+        ${itemPrice} AS price,
         CASE
           WHEN COALESCE(s.subtotal, 0) > 0
             THEN (CASE WHEN s.appointment_id IS NOT NULL THEN pay.paid_from_payments
@@ -10538,10 +10547,10 @@ async getStaffSalesReportStats(
         -- the matching comment in getStaffSalesReport for why this can
         -- repeat the same sale-level commission across that staff's rows.
         COALESCE(comm.commission_amount, 0) AS commission_amount,
-        CASE WHEN sli.item_type = 'service' THEN sli.total_price + COALESCE(sli.tax_amount, 0) ELSE 0 END AS service_revenue,
-        CASE WHEN sli.item_type = 'product' THEN sli.total_price + COALESCE(sli.tax_amount, 0) ELSE 0 END AS product_revenue,
-        CASE WHEN sli.item_type = 'package' THEN sli.total_price + COALESCE(sli.tax_amount, 0) ELSE 0 END AS package_revenue,
-        CASE WHEN sli.item_type = 'membership' THEN sli.total_price + COALESCE(sli.tax_amount, 0) ELSE 0 END AS membership_revenue
+        CASE WHEN sli.item_type = 'service' THEN ${itemPrice} ELSE 0 END AS service_revenue,
+        CASE WHEN sli.item_type = 'product' THEN ${itemPrice} ELSE 0 END AS product_revenue,
+        CASE WHEN sli.item_type = 'package' THEN ${itemPrice} ELSE 0 END AS package_revenue,
+        CASE WHEN sli.item_type = 'membership' THEN ${itemPrice} ELSE 0 END AS membership_revenue
       FROM sale_items sli
       JOIN sales s ON s.id = sli.sale_id
       LEFT JOIN clients c ON s.client_id = c.id
@@ -10558,7 +10567,8 @@ async getStaffSalesReportStats(
     appt_side AS (
       SELECT
         u.id,
-        u.price, u.paid_amount, u.due_amount, 0::numeric AS commission_amount,
+        ${includeGst ? "u.price" : "(u.price - u.tax_amount)"} AS price,
+        u.paid_amount, u.due_amount, 0::numeric AS commission_amount,
         0::numeric AS service_revenue, 0::numeric AS product_revenue,
         0::numeric AS package_revenue, 0::numeric AS membership_revenue
       FROM (${unbilled.sql}) u
@@ -10616,11 +10626,17 @@ async getStaffSalesReport(
     // 'sales_desc'/'sales_asc' = "Most/Least Staff Sales" (each row's own
     // Total Sales amount) — default is newest-first, matching prior behavior.
     sort?: "sales_desc" | "sales_asc";
+    // Whether price/revenue is gross (total_price + tax_amount) or net
+    // (total_price only). Defaults to true (gross) when omitted — same
+    // convention as Staff Performance's include_gst.
+    include_gst?: boolean;
   }
 ): Promise<{ items: StaffSalesReportRow[]; pagination: { total: number; page: number; limit: number; total_pages: number } }> {
   const { where, values, nextIndex } = this._buildSalesSummaryWhere(salonId, filters);
   const unbilled = this._UNBILLED_APPOINTMENT_ROWS_CTE(filters, nextIndex);
   let idx = unbilled.nextIndex;
+  const includeGst = filters.include_gst !== false;
+  const itemPrice = includeGst ? "(sli.total_price + COALESCE(sli.tax_amount, 0))" : "sli.total_price";
 
   // Staff Sales report only: _buildSalesSummaryWhere's EXISTS only gates
   // which SALES qualify (does this invoice have >=1 matching line item) —
@@ -10677,7 +10693,7 @@ async getStaffSalesReport(
         -- One row per line item, scoped to that item's own staff/amount —
         -- never the whole invoice's total_amount. See getProductRetailReport
         -- for the same one-row-per-line-item + proration pattern.
-        (sli.total_price + COALESCE(sli.tax_amount, 0)) AS price,
+        ${itemPrice} AS price,
         c.full_name AS client_name, c.phone_number AS client_phone,
         st.id AS staff_id,
         NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '') AS staff_name,
@@ -10718,7 +10734,12 @@ async getStaffSalesReport(
     ),
     appt_side AS (
       SELECT
-        u.id, u.created_at, u.status, u.payment_method, u.price,
+        u.id, u.created_at, u.status, u.payment_method,
+        -- _UNBILLED_APPOINTMENT_ROWS_CTE always returns u.price gross of GST
+        -- (plus u.tax_amount separately) since it's shared by several other
+        -- reports that don't take this toggle — subtract it back out here
+        -- instead of touching the shared CTE.
+        ${includeGst ? "u.price" : "(u.price - u.tax_amount)"} AS price,
         u.client_name, u.client_phone, u.staff_id, u.staff_name,
         u.item_description, u.item_types,
         u.paid_amount, u.due_amount,
@@ -10828,11 +10849,12 @@ async getStaffSalesChartTrend(
     : granularity === "week"
     ? `TO_CHAR(date_trunc('week', ${istInstant}), 'YYYY-MM-DD')`
     : `TO_CHAR(${istInstant}, 'YYYY-MM-DD')`;
+  const itemPrice = filters.include_gst !== false ? "(sli.total_price + COALESCE(sli.tax_amount, 0))" : "sli.total_price";
 
   const query = `
     SELECT
       ${dayExpr} AS day,
-      COALESCE(SUM(sli.total_price + COALESCE(sli.tax_amount, 0)), 0) AS revenue,
+      COALESCE(SUM(${itemPrice}), 0) AS revenue,
       COALESCE(SUM(comm.commission_amount), 0) AS commission
     FROM sale_items sli
     JOIN sales s ON s.id = sli.sale_id
@@ -10863,9 +10885,10 @@ async getStaffSalesChartByItemType(
 ): Promise<{ item_type: string; revenue: number }[]> {
   const { where, values, nextIndex } = this._buildSalesSummaryWhere(salonId, filters);
   const { sliWhere, sliValues } = this._buildStaffSalesSliWhere(filters, nextIndex);
+  const itemPrice = filters.include_gst !== false ? "(sli.total_price + COALESCE(sli.tax_amount, 0))" : "sli.total_price";
 
   const query = `
-    SELECT sli.item_type, COALESCE(SUM(sli.total_price + COALESCE(sli.tax_amount, 0)), 0) AS revenue
+    SELECT sli.item_type, COALESCE(SUM(${itemPrice}), 0) AS revenue
     FROM sale_items sli
     JOIN sales s ON s.id = sli.sale_id
     LEFT JOIN clients c ON s.client_id = c.id
@@ -10889,12 +10912,13 @@ async getStaffSalesChartTopStaff(
 ): Promise<{ staff_id: string | null; staff_name: string; revenue: number }[]> {
   const { where, values, nextIndex } = this._buildSalesSummaryWhere(salonId, filters);
   const { sliWhere, sliValues, nextIndex: idxAfterSli } = this._buildStaffSalesSliWhere(filters, nextIndex);
+  const itemPrice = filters.include_gst !== false ? "(sli.total_price + COALESCE(sli.tax_amount, 0))" : "sli.total_price";
 
   const query = `
     SELECT
       COALESCE(sli.staff_id, s.staff_id) AS staff_id,
       COALESCE(NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), ''), 'Unassigned') AS staff_name,
-      COALESCE(SUM(sli.total_price + COALESCE(sli.tax_amount, 0)), 0) AS revenue
+      COALESCE(SUM(${itemPrice}), 0) AS revenue
     FROM sale_items sli
     JOIN sales s ON s.id = sli.sale_id
     LEFT JOIN clients c ON s.client_id = c.id

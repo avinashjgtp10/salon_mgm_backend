@@ -211,7 +211,7 @@ export const DEFAULT_PURCHASE_TEMPLATES: Record<
         label: "Cash Counter Closed",
         category: "UTILITY",
         language: "en",
-        bodyText: "*Cash Counter Closed — {{salon_name}}*\n\nYour cash counter has been closed for the day. Here is the collection summary for this session.\n\nDate: {{closing_date}}\nTime: {{closing_time}}\n\n*Collection Summary*\n{{collection_breakdown}}\n━━━━━━━━━━━━━━\n*Total Collection: {{total_collection}}*\n\nVariance: {{variance}}\n\nThank you for reconciling today's cash counter.",
+        bodyText: "*Cash Counter Closed — {{salon_name}}*\n\nYour cash counter has been closed for the day. Here is the collection summary for this session.\n\nDate: {{closing_date}}\nTime: {{closing_time}}\n\n*Collection Summary*\n{{collection_breakdown}}\n━━━━━━━━━━━━━━\n*Total Collection: {{total_collection}}*\n\nThank you for reconciling today's cash counter.",
     },
 };
 
@@ -249,7 +249,7 @@ export const EVENT_VARIABLE_NAMES: Record<DefaultPurchaseEventType, string[]> = 
   birthday_wishes:      ["customer_name", "salon_name"],
   anniversary_wishes:   ["customer_name", "salon_name"],
   cash_counter_opened:  ["salon_name", "opening_date", "opening_time", "opening_amount"],
-  cash_counter_closed:  ["salon_name", "closing_date", "closing_time", "collection_breakdown", "total_collection", "variance"],
+  cash_counter_closed:  ["salon_name", "closing_date", "closing_time", "collection_breakdown", "total_collection"],
 };
 
 // Converts a salon's named-placeholder wording into Meta's required

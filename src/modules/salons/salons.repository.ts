@@ -317,17 +317,20 @@ export async function clearSalonData(client: PoolClient, salonId: string): Promi
   return true;
 }
 
-// Phone/address are no longer independently editable on the business record —
-// they always mirror the owner's Personal Profile (users.phone/users.address),
-// so every read joins to the owner and overrides those two columns.
+// Phone and address are independently business-owned fields again (Settings
+// > Profile & Business > Contact Details / Business Address) — neither
+// mirrors the owner's Personal Profile anymore. cash-management.service.ts's
+// cash counter WhatsApp alerts fall back to the owner's personal users.phone
+// on their own (resolveOwnerNotifyPhone) when salons.phone is empty, so
+// existing salons that never set a business phone don't silently lose that
+// alert.
 const SALON_SELECT_WITH_OWNER_CONTACT = `
     SELECT s.id, s.owner_id, s.business_name, s.business_type, s.slug, s.description,
-           s.logo_url, s.banner_url, s.email, u.phone AS phone, s.website_url, s.google_review_url,
+           s.logo_url, s.banner_url, s.email, s.phone, s.website_url, s.google_review_url,
            s.gst_number, s.pan_number, s.is_verified, s.is_active, s.onboarding_completed,
-           u.address AS address, s.city, s.state, s.country, s.pincode, s.timezone,
-           s.currency, s.business_category, s.created_at, s.updated_at
+           s.address, s.address_line2, s.city, s.state, s.country, s.pincode, s.timezone,
+           s.currency, s.business_category, s.gst_registration_type, s.created_at, s.updated_at
     FROM salons s
-    LEFT JOIN users u ON s.owner_id = u.id
 `;
 
 export const salonsRepository = {
@@ -336,9 +339,14 @@ export const salonsRepository = {
         return rows[0] || null;
     },
 
+    // Same split as resolveOwnerNotifyPhone (cash-management.service.ts): the
+    // owner's own login email (users.email) is where operational alerts like
+    // "New Appointment"/"New Payment" go — Business Email (salons.email) is
+    // customer-facing (receipts/booking page), and falls back to only if the
+    // owner's personal email is somehow empty.
     async findOwnerEmailById(id: string): Promise<string | null> {
         const { rows } = await pool.query(
-            `SELECT COALESCE(NULLIF(s.email, ''), u.email) AS email
+            `SELECT COALESCE(NULLIF(u.email, ''), s.email) AS email
              FROM salons s
              LEFT JOIN users u ON s.owner_id = u.id
              WHERE s.id = $1`,

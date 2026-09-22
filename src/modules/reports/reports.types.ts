@@ -777,6 +777,13 @@ export interface SaleDetailPayment {
     due_amount: number;
     ewallet_used: number;
     membership_wallet_used: number;
+    // Percentage/loyalty membership discount already baked into sale.total_amount
+    // (a pre-tax price cut, unlike the four redemptions above, which are
+    // subtracted AFTER total_amount) — needed so the Sale Detail panel's own
+    // computeBillBreakdown() waterfall recompute lands on the same reduced
+    // figure total_amount already reflects, instead of reconstructing the
+    // bill as if no membership discount had ever been applied.
+    membership_discount_used: number;
     reward_points_value: number;
     referral_credit_used: number;
     tax_breakdown: any[] | null;
@@ -2797,6 +2804,10 @@ export interface StaffSalesReportFilters {
     payment_status?: string;
     payment_statuses?: string[];
     sort?: "sales_desc" | "sales_asc";
+    // Whether each line item's price/revenue is gross (total_price + tax_amount)
+    // or net (total_price only). Defaults to true (gross) when omitted — same
+    // convention as StaffPerformanceReportFilters.include_gst.
+    include_gst?: boolean;
 }
 
 export interface StaffSalesReportRow {
@@ -2863,6 +2874,7 @@ export interface StaffSalesChartFilters {
     item_types?: string[];
     payment_status?: string;
     payment_statuses?: string[];
+    include_gst?: boolean;
 }
 
 export interface StaffSalesChartResponse {

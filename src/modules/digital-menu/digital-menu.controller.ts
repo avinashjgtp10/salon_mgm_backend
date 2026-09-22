@@ -47,6 +47,18 @@ export const digitalMenuController = {
     }
   },
 
+  async remove(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = getSalonId(req);
+      const id = String(req.params.id || "").trim();
+      if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
+      await digitalMenuService.remove(salonId, id);
+      return sendSuccess(res, 200, null, "Digital menu deleted successfully");
+    } catch (err) {
+      return next(err);
+    }
+  },
+
   async getPublic(req: Request, res: Response, next: NextFunction) {
     try {
       const token = String(req.params.token || "").trim();

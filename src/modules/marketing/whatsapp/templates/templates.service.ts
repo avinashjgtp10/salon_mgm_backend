@@ -179,9 +179,26 @@ export const templatesService = {
     const template = await templatesRepository.findById(id, salonId)
     if (!template) throw new AppError(404, 'Template not found', 'NOT_FOUND')
 
+    // A missing meta_template_id means this template was never actually
+    // accepted by Meta (its initial submitTemplate() call in create() failed
+    // and was silently swallowed) — there is nothing to "sync" and it must
+    // never resolve to APPROVED, or a campaign can launch against a template
+    // that doesn't exist on Meta's side, failing every send with 132001
+    // ("Template name does not exist in the translation"). This was the
+    // actual root cause of a real failed campaign (2026-09-22).
+    if (!template.meta_template_id) {
+      return templatesRepository.updateStatus(
+        id, 'REJECTED', null,
+        'Never successfully submitted to Meta — recreate this template to use it in a campaign.'
+      )
+    }
+
     const config = await configRepository.findBySalonId(salonId)
-    if (!config || !template.meta_template_id) {
-      return templatesRepository.updateStatus(id, 'APPROVED')
+    if (!config) {
+      // Can't verify against Meta right now (WhatsApp disconnected after
+      // this template was created) — leave the existing status untouched
+      // rather than guessing either way.
+      return template
     }
 
     try {

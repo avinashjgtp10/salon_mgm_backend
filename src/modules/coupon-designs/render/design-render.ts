@@ -14,6 +14,8 @@
  * If you change how an element looks, change it here and there in one go.
  */
 
+import { buildFontFaceCss } from "./fonts";
+
 export const SCHEMA_VERSION = 1;
 
 type Dict = Record<string, unknown>;
@@ -300,6 +302,8 @@ export interface DocumentOptions {
   sheet?: SheetOptions | null;
   widthPx?: number;
   heightPx?: number;
+  /** doc.fonts from the design — which decorative fonts to embed. */
+  fonts?: string[];
 }
 
 export function buildDocument(inner: string, opts: DocumentOptions = {}): string {
@@ -336,5 +340,7 @@ export function buildDocument(inner: string, opts: DocumentOptions = {}): string
   .cm::after{width:.2mm;height:3mm;left:0}
   .cm--tl{top:0;left:0}.cm--tr{top:0;right:0}.cm--bl{bottom:0;left:0}.cm--br{bottom:0;right:0}
   ${pageCss}
-</style></head><body>${inner}${AUTOFIT_SCRIPT}</body></html>`;
+</style>
+<style>${buildFontFaceCss(opts.fonts)}</style>
+</head><body>${inner}${AUTOFIT_SCRIPT}</body></html>`;
 }

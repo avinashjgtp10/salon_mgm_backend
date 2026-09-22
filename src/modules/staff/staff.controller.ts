@@ -18,6 +18,7 @@ import {
   CreateEmergencyContactBody, UpdateEmergencyContactBody, UpdateWageSettingsBody,
   UpdateCommissionBody, UpdatePayRunBody, UpsertStaffSchedulesBody,
   CreateStaffLeaveBody, UpdateStaffLeaveBody, AcceptInvitationBody, StaffListQuery,
+  UpdateSchedulerOrderBody,
 } from "./staff.types";
 
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string } };
@@ -177,6 +178,16 @@ export const staffController = {
         id, salonId, requesterUserId: req.user.userId, requesterRole: req.user.role,
       });
       return sendSuccess(res, 200, null, "Staff member deleted successfully");
+    } catch (err) { return next(err); }
+  },
+
+  async updateSchedulerOrder(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = getSalonId(req);
+      const body = req.body as UpdateSchedulerOrderBody;
+      logger.info("PUT /staff/scheduler-order", { salonId, count: body?.staffIds?.length });
+      await staffService.updateSchedulerOrder(salonId, body);
+      return sendSuccess(res, 200, null, "Staff sequence saved");
     } catch (err) { return next(err); }
   },
 

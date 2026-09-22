@@ -73,6 +73,11 @@ export const digitalMenuService = {
     return enrich(updated, salonId);
   },
 
+  async remove(salonId: string, id: string): Promise<void> {
+    const deleted = await digitalMenuRepository.deleteById(id, salonId);
+    if (!deleted) throw new AppError(404, "Digital menu not found", "NOT_FOUND");
+  },
+
   async getPublicByToken(token: string): Promise<PublicMenuResponse> {
     const menu = await digitalMenuRepository.findByPublicToken(token);
     if (!menu) throw new AppError(404, "Menu not found", "NOT_FOUND");

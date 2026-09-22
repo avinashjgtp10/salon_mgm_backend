@@ -223,10 +223,46 @@ export const salesRepository = {
         return { total: rows[0].total.toString(), count: rows[0].count.toString() };
     },
 
+    // Same cleanup as appointments.repository.ts's deleteById() for a sale
+    // reached via its appointment — commission/payments/any package sold on
+    // this sale must go too, or they'd survive as orphans (still counted in
+    // revenue/commission totals, still showing on the Package Sale Report
+    // with no invoice behind them).
     async deleteById(id: string): Promise<Sale | null> {
         const client = await pool.connect();
         try {
             await client.query('BEGIN');
+
+            const { rows: pkgRows } = await client.query(
+                `SELECT id FROM client_packages WHERE sale_id = $1`,
+                [id]
+            );
+            if (pkgRows.length > 0) {
+                const pkgIds = pkgRows.map((r: any) => r.id);
+                await client.query(
+                    `DELETE FROM client_package_service_schedules
+                     WHERE client_package_service_id IN (
+                       SELECT id FROM client_package_services WHERE client_package_id = ANY($1::uuid[])
+                     )`,
+                    [pkgIds]
+                );
+                await client.query(
+                    `DELETE FROM client_package_session_history
+                     WHERE client_package_service_id IN (
+                       SELECT id FROM client_package_services WHERE client_package_id = ANY($1::uuid[])
+                     )`,
+                    [pkgIds]
+                );
+                await client.query(`DELETE FROM client_package_services WHERE client_package_id = ANY($1::uuid[])`, [pkgIds]);
+                await client.query(`DELETE FROM client_packages WHERE id = ANY($1::uuid[])`, [pkgIds]);
+            }
+
+            // Same for a membership sold on this sale — membership_usage_log
+            // cascades on its own; client_memberships itself does not.
+            await client.query(`DELETE FROM client_memberships WHERE sale_id = $1`, [id]);
+
+            await client.query(`DELETE FROM commission_earned WHERE sale_id = $1`, [id]);
+            await client.query(`DELETE FROM payments WHERE appointment_id IN (SELECT appointment_id FROM sales WHERE id = $1 AND appointment_id IS NOT NULL)`, [id]);
             await client.query(`DELETE FROM sale_items WHERE sale_id = $1`, [id]);
             const { rows } = await client.query(`DELETE FROM sales WHERE id = $1 RETURNING *`, [id]);
             await client.query('COMMIT');

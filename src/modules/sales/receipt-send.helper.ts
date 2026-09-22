@@ -97,10 +97,25 @@ async function gatherReceiptContext(params: ReceiptContextParams) {
         params.clientId ? clientMembershipsService.list(params.salonId, { clientId: params.clientId, limit: 200 } as any).catch(() => null) : Promise.resolve(null),
     ]);
 
+    // Business Address (Settings > Profile & Business) is the primary
+    // source now — it's what the owner actually configured and expects to
+    // see on print. Falls back to the Main Branch's own address for any
+    // salon that never filled in a salon-level address (or hasn't run the
+    // address_line2/gst_registration_type migration yet), so this never
+    // regresses to a blank address on the bill.
     const branch = branches.find((b: any) => b.is_main) ?? branches[0] ?? null;
-    const salonAddress = branch
-        ? [branch.address_line1, branch.address_line2, branch.city, branch.state, branch.pincode].filter(Boolean).join(", ")
-        : null;
+    const salonAddressParts = [
+        (salonRecord as any)?.address,
+        (salonRecord as any)?.address_line2,
+        (salonRecord as any)?.city,
+        (salonRecord as any)?.state,
+        (salonRecord as any)?.pincode,
+    ].filter(Boolean);
+    const salonAddress = salonAddressParts.length > 0
+        ? salonAddressParts.join(", ")
+        : branch
+            ? [branch.address_line1, branch.address_line2, branch.city, branch.state, branch.pincode].filter(Boolean).join(", ")
+            : null;
 
     const staffNames: Record<string, string> = {};
     for (const s of (staffList as any).data as any[]) {
