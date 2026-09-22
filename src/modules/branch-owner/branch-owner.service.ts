@@ -97,6 +97,18 @@ export const branchOwnerService = {
       if (!(quantity > 0)) throw new AppError(400, "Quantity must be greater than zero", "VALIDATION_ERROR");
       await assertSalonsAssigned(branchOwnerId, [source_salon_id, dest_salon_id]);
 
+      // Mirrors the frontend's From/To pickers (only active branches are
+      // offered there) — enforced here too since this is the actual gate
+      // against a stale page or a direct API call still naming an inactive
+      // salon a client-side filter alone wouldn't catch.
+      const [sourceActive, destActive] = await Promise.all([
+        branchOwnerRepository.isSalonActive(source_salon_id),
+        branchOwnerRepository.isSalonActive(dest_salon_id),
+      ]);
+      if (!sourceActive || !destActive) {
+        throw new AppError(400, "Stock can only be transferred between active salons", "VALIDATION_ERROR");
+      }
+
       const source = await branchOwnerRepository.findProduct(source_product_id, source_salon_id);
       if (!source) throw new AppError(404, "Source product not found", "NOT_FOUND");
       if (quantity > source.amount) {

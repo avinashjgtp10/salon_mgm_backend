@@ -447,6 +447,11 @@ export const branchOwnerRepository = {
     return rows.length > 0;
   },
 
+  async isSalonActive(salonId: string): Promise<boolean> {
+    const { rows } = await pool.query(`SELECT is_active FROM salons WHERE id = $1`, [salonId]);
+    return rows[0]?.is_active === true;
+  },
+
   // Cash counter session totals per assigned salon — same source columns as
   // the single-salon Cash Management Report (reports.repository.ts), summed
   // per salon instead of filtered to one, so a branch owner sees every
@@ -621,6 +626,14 @@ export const branchOwnerRepository = {
     return { ...rows[0], pending_transfers_count: pendingRows[0]?.pending_count ?? 0 };
   },
 
+  // "Most relevant" = out-of-stock ranks above merely-low-on-stock (it's the
+  // more urgent condition regardless of when it happened); "latest" breaks
+  // ties within each severity by how recently the product's stock last
+  // changed (p.updated_at, bumped on every stock mutation — see
+  // product-inventory.repository.ts) — an item that just ran out belongs
+  // above one that's been sitting at the same low count for weeks. `message`
+  // mirrors inventory-alerts.service.ts's buildNotificationCopy() wording so
+  // this panel and the real low-stock notifications never disagree.
   async getLowStockAlerts(branchOwnerId: string, salonId?: string) {
     const values: unknown[] = [branchOwnerId];
     let salonFilter = "";
@@ -628,12 +641,18 @@ export const branchOwnerRepository = {
     const { rows } = await pool.query(
       `SELECT
          p.id AS product_id, p.name AS product_name, p.amount, p.qty_alert,
-         COALESCE(s.business_name, s.slug, 'Unnamed') AS salon_name
+         COALESCE(s.business_name, s.slug, 'Unnamed') AS salon_name,
+         p.updated_at,
+         CASE WHEN p.amount <= 0 THEN 'out_of_stock' ELSE 'low_stock' END AS severity,
+         CASE
+           WHEN p.amount <= 0 THEN p.name || ' is out of stock (0 remaining).'
+           ELSE p.name || ' is low on stock — ' || p.amount || ' left (threshold: ' || p.qty_alert || ').'
+         END AS message
        FROM branch_owner_salons bos
        JOIN salons s ON s.id = bos.salon_id
        JOIN products p ON p.salon_id = s.id AND p.is_active = true
        WHERE bos.branch_owner_id = $1 AND p.qty_alert IS NOT NULL AND p.amount <= p.qty_alert${salonFilter}
-       ORDER BY p.amount ASC
+       ORDER BY (p.amount <= 0) DESC, p.updated_at DESC, p.amount ASC
        LIMIT 50`,
       values
     );
