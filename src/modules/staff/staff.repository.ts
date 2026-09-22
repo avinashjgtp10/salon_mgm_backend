@@ -388,6 +388,24 @@ export const staffRepository = {
         return (rowCount ?? 0) > 0;
     },
 
+    // One UPDATE ... FROM (VALUES ...) rather than N round trips per staff
+    // member, same pattern as the coupons bulk-create's collision check.
+    // `salon_id = $N` in the WHERE is the actual tenant guard — an id for a
+    // different salon (or a stale/deleted one) is just silently skipped
+    // rather than erroring, since a caller reordering their own roster has no
+    // way to have a foreign id in the list in the first place.
+    async updateSchedulerOrder(salonId: string, staffIds: string[]): Promise<void> {
+        if (staffIds.length === 0) return;
+        const values = staffIds.map((_, i) => `($${i * 2 + 1}::uuid, $${i * 2 + 2}::int)`).join(", ");
+        const params = staffIds.flatMap((id, i) => [id, i]);
+        await pool.query(
+            `UPDATE staff AS s SET scheduler_order = v.ord, updated_at = NOW()
+             FROM (VALUES ${values}) AS v(id, ord)
+             WHERE s.id = v.id AND s.salon_id = $${staffIds.length * 2 + 1}`,
+            [...params, salonId]
+        );
+    },
+
     async exportForDownload(salonId: string, q: Omit<StaffListQuery, "page" | "limit">): Promise<Record<string, unknown>[]> {
         const {
             search, invitation_status, employment_type, is_active, branch_id,

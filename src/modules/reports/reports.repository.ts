@@ -2686,6 +2686,11 @@ async getSaleDetail(salonId: string, saleId: string): Promise<SaleDetailResponse
         ), 0) AS due_amount,
         COALESCE(SUM(p.ewallet_used), 0) AS ewallet_used,
         COALESCE(SUM(p.membership_wallet_used), 0) AS membership_wallet_used,
+        -- MAX, not SUM — membership_discount_used is CUMULATIVE per
+        -- appointment (every payment row re-reads/re-writes the full
+        -- total-so-far, not a per-call delta), same contract as every other
+        -- MAX(p.membership_discount_used) read elsewhere in this file.
+        COALESCE(MAX(p.membership_discount_used) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS membership_discount_used,
         COALESCE(SUM(p.reward_points_value), 0) AS reward_points_value,
         COALESCE(SUM(p.referral_credit_used), 0) AS referral_credit_used,
         (ARRAY_AGG(p.tax_breakdown ORDER BY p.created_at DESC))[1] AS tax_breakdown
@@ -2700,6 +2705,7 @@ async getSaleDetail(salonId: string, saleId: string): Promise<SaleDetailResponse
         due_amount: Number(payRow.due_amount ?? 0),
         ewallet_used: Number(payRow.ewallet_used ?? 0),
         membership_wallet_used: Number(payRow.membership_wallet_used ?? 0),
+        membership_discount_used: Number(payRow.membership_discount_used ?? 0),
         reward_points_value: Number(payRow.reward_points_value ?? 0),
         referral_credit_used: Number(payRow.referral_credit_used ?? 0),
         tax_breakdown: payRow.tax_breakdown ?? null,

@@ -233,17 +233,35 @@ export function buildReceiptHtml(params: {
         METHOD_LABELS[raw.trim().toLowerCase()]
         ?? raw.trim().replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
+    // Per-payment-method breakdown, real-money legs only — mirrors the
+    // frontend's paymentUtils.ts getPaymentMethodBreakdown() so the WhatsApp
+    // PDF and the dashboard side panel can never show different figures for
+    // the same booking. eWallet is deliberately excluded: paidAmount already
+    // excludes it too (it's a pre-payment credit tracked by its own separate
+    // "eWallet Used" deduction line above), so these legs always sum to
+    // exactly paidAmount.
     const splitLegs: Array<{ label: string; amount: number }> = (() => {
-        if ((sale.payment_method ?? "").trim().toLowerCase() !== "split") return [];
-        try {
-            const parsed = JSON.parse(sale.payment_reference ?? "") as Record<string, unknown>;
-            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
-            return Object.entries(parsed)
-                .map(([key, value]) => ({ label: prettyMethod(key), amount: Number(value) || 0 }))
-                .filter((leg) => leg.amount > 0);
-        } catch {
-            return [];
+        if ((sale.payment_method ?? "").trim().toLowerCase() === "split") {
+            try {
+                const parsed = JSON.parse(sale.payment_reference ?? "") as Record<string, unknown>;
+                if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+                    const legs = Object.entries(parsed)
+                        .map(([key, value]) => ({ label: prettyMethod(key), amount: Number(value) || 0 }))
+                        .filter((leg) => leg.amount > 0 && leg.label.toLowerCase() !== "e-wallet");
+                    if (legs.length > 0) return legs;
+                }
+            } catch {
+                // falls through to the single-method case below
+            }
         }
+        // Plain single-method payment (or a "split" record whose reference
+        // didn't parse) — the one real method is only known from
+        // payment_method, paired with the actual amount paid.
+        const method = (sale.payment_method ?? "").trim().toLowerCase();
+        if (method && !["package", "split", "ewallet", "wallet"].includes(method) && paidAmount > 0) {
+            return [{ label: prettyMethod(method), amount: paidAmount }];
+        }
+        return [];
     })();
 
     const summaryRows = [
@@ -280,7 +298,7 @@ export function buildReceiptHtml(params: {
         sumRow("Amount to Pay", fmt(grandTotal), true, "#111827"),
         tipAmt > 0 ? sumRow("Staff Tip (included above)", fmt(tipAmt), false, "#6b7280") : "",
         tipAmt > 0 ? tipBreakdown.map((t) => sumRow(`&nbsp;&nbsp;&nbsp;${t.staff_name}`, fmt(Number(t.amount) || 0), false, "#9ca3af")).join("") : "",
-        splitLegs.length > 1
+        splitLegs.length > 0
             ? splitLegs.map((leg) => sumRow(`Paid via ${leg.label}`, fmt(leg.amount), false, "#111827")).join("")
             : "",
         paidAmount > 0
