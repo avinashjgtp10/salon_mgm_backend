@@ -145,6 +145,7 @@ export const designExportService = {
       sheet: opts.sheet ?? null,
       widthPx: width,
       heightPx: height,
+      fonts: doc.fonts as string[] | undefined,
     });
 
     // A4 at 96dpi when in sheet mode; otherwise the artboard's own size.
