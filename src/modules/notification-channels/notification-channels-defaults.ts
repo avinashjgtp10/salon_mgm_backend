@@ -73,7 +73,7 @@ export const DEFAULT_SMS_TEMPLATES: Record<DefaultPurchaseEventType, string> = {
   cash_counter_opened:
     "Cash Counter Opened - {{salon_name}}. {{opening_date}} {{opening_time}}. Opening Cash: {{opening_amount}}.",
   cash_counter_closed:
-    "Cash Counter Closed - {{salon_name}}. {{closing_date}} {{closing_time}}. {{collection_breakdown}}. Total: {{total_collection}}.",
+    "Cash Counter Closed - {{salon_name}}. {{closing_date}} {{closing_time}}. {{collection_breakdown}}. Total: {{total_collection}}. Expenses: {{expenses}}. In-Store Cash: {{in_store_cash}}.",
 }
 
 export const DEFAULT_EMAIL_TEMPLATES: Record<DefaultPurchaseEventType, { subject: string; body: string }> = {
@@ -185,7 +185,7 @@ export const DEFAULT_EMAIL_TEMPLATES: Record<DefaultPurchaseEventType, { subject
   },
   cash_counter_closed: {
     subject: "Cash Counter Closed — {{salon_name}}",
-    body: "Cash Counter Closed — {{salon_name}}\n\nYour cash counter has been closed for the day. Here is the collection summary for this session.\n\nDate: {{closing_date}}\nTime: {{closing_time}}\n\nCollection Summary\n{{collection_breakdown}}\n\nTotal Collection: {{total_collection}}\n\nThank you for reconciling today's cash counter.",
+    body: "Cash Counter Closed — {{salon_name}}\n\nYour cash counter has been closed for the day. Here is the collection summary for this session.\n\nDate: {{closing_date}}\nTime: {{closing_time}}\n\nCollection Summary\n{{collection_breakdown}}\n\nTotal Collection: {{total_collection}}\nExpenses: {{expenses}}\nIn-Store Cash: {{in_store_cash}}\n\nThank you for reconciling today's cash counter.",
   },
 }
 
