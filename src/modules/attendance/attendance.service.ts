@@ -63,6 +63,7 @@ const UPDATABLE_SETTINGS_FIELDS: (keyof UpdateSettingsBody)[] = [
     "min_full_day_hours", "min_half_day_hours",
     "attendance_bonus", "commission_threshold_days",
     "active", "threshold_hours",
+    "half_day_deduction_amount", "staff_scope", "selected_staff_ids",
 ];
 
 function sanitizeSettingsUpdate(data: UpdateSettingsBody): UpdateSettingsBody {
@@ -84,6 +85,9 @@ function defaultSettings(): Omit<AttendanceSettings, "id" | "salon_id" | "create
         commission_threshold_days: 0,
         active: false,
         threshold_hours: 2,
+        half_day_deduction_amount: 0,
+        staff_scope: "all",
+        selected_staff_ids: [],
     };
 }
 
