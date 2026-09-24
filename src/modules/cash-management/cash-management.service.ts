@@ -106,12 +106,24 @@ async function notifyOwnerCashCounterClosed(salonId: string, counter: any): Prom
     const upiAmt  = Number(counter.upi_amount ?? 0);
     const collectionBreakdown = `Cash: ${formatMoney(cashAmt)} | Card: ${formatMoney(cardAmt)} | UPI: ${formatMoney(upiAmt)}`;
 
+    // Expenses/in-store-cash are the actual shift's physical drawer figures
+    // (cash_management.cash_expense / in_store_cash) — deliberately NOT
+    // re-derived from the service-date-bounded totals above, since those
+    // answer "what date does this revenue belong to" while these two answer
+    // "what actually happened to the physical cash this shift."
+    const expenses = Number(counter.cash_expense ?? 0);
+    const inStoreCash = counter.in_store_cash === null || counter.in_store_cash === undefined
+      ? 0
+      : Number(counter.in_store_cash);
+
     const variables = {
       "1": salon?.business_name ?? "your salon",
       "2": formatDateIST(counter.closed_at ?? new Date()),
       "3": formatTimeIST(counter.closed_at ?? new Date()),
       "4": collectionBreakdown,
       "5": formatMoney(cashAmt + cardAmt + upiAmt),
+      "6": formatMoney(expenses),
+      "7": formatMoney(inStoreCash),
     };
     await whatsappAutomationService.trigger({
       salonId,
