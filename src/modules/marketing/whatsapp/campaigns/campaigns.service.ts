@@ -156,6 +156,82 @@ export const campaignsService = {
     }
   },
 
+  // ── Resend to ONE failed/blocked contact — never touches any other contact
+  // on the campaign, and never re-sends to one that already succeeded. Reuses
+  // the exact same send worker as the original campaign (a single-contact
+  // job on the same queue), so it goes through the same template/media/inbox
+  // logic and updates that contact's own status, same as any other send.
+  async resendContact(campaignId: string, contactId: string, salonId: string, resentBy: string | null) {
+    const result = await this.resendContacts(campaignId, [contactId], salonId, resentBy)
+    if (result.skipped.length > 0) {
+      throw new AppError(400, result.skipped[0].reason, 'CONTACT_NOT_RESENDABLE')
+    }
+    return campaignsRepository.findContactById(contactId, campaignId)
+  },
+
+  // ── Bulk resend — "select all blocked/failed, resend" from the Contact
+  // Details table's BLOCKED/FAILED filter tab. Each contact is individually
+  // validated/logged/reset (same as the single-contact path), but all the
+  // ones that pass go out as ONE job on the queue instead of one job per
+  // contact — same batching the original campaign send already relies on,
+  // just sized to however many were selected. A contact that's already
+  // SENT/DELIVERED/READ (or simply not found) is skipped, not resent, and
+  // reported back by id so the caller can tell the user which ones didn't
+  // qualify instead of silently dropping them.
+  async resendContacts(
+    campaignId: string,
+    contactIds: string[],
+    salonId: string,
+    resentBy: string | null,
+  ): Promise<{ queued: string[]; skipped: Array<{ contactId: string; reason: string }> }> {
+    if (contactIds.length === 0) throw new AppError(400, 'No contacts selected to resend', 'NO_CONTACTS')
+
+    const campaign = await this.getById(campaignId, salonId)
+
+    const { rows: tmpl } = await pool.query(
+      `SELECT id FROM wa_templates WHERE id = $1 AND salon_id = $2 AND status = 'APPROVED'`,
+      [campaign.template_id, salonId]
+    )
+    if (!tmpl[0]) throw new AppError(400, 'Original template is no longer approved — cannot resend', 'TEMPLATE_NOT_APPROVED')
+
+    const queued: string[] = []
+    const skipped: Array<{ contactId: string; reason: string }> = []
+
+    for (const contactId of contactIds) {
+      const contact = await campaignsRepository.findContactById(contactId, campaignId)
+      if (!contact) { skipped.push({ contactId, reason: 'Contact not found on this campaign' }); continue }
+      if (!['FAILED', 'BLOCKED'].includes(contact.status)) {
+        skipped.push({ contactId, reason: `Already ${contact.status} — not resent` })
+        continue
+      }
+
+      await campaignsRepository.logContactResend({
+        contactId,
+        campaignId,
+        salonId,
+        previousStatus: contact.status,
+        previousErrorCode: contact.error_code ?? null,
+        previousErrorMessage: contact.error_message ?? null,
+        resentBy,
+      })
+      await campaignsRepository.resetContactForResend(contactId)
+      queued.push(contactId)
+    }
+
+    if (queued.length > 0) {
+      const batches = chunk(queued, campaign.batch_size)
+      for (let i = 0; i < batches.length; i++) {
+        await campaignQueue.add('send-batch', {
+          campaignId, salonId,
+          batchIndex: i,
+          contactIds: batches[i],
+        }, { delay: i * 500 })
+      }
+    }
+
+    return { queued, skipped }
+  },
+
   async pause(id: string, salonId: string) {
     await this.getById(id, salonId)
     return campaignsRepository.updateStatus(id, 'PAUSED')

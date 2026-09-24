@@ -1125,4 +1125,29 @@ export const cashManagementRepository = {
       client.release();
     }
   },
+
+  // Dashboard > Overall Collection's "Resend to WhatsApp" action (Yesterday
+  // only) — finds the counter whose OPEN date matches the requested date,
+  // same anchor closeCounter() itself uses for that day's message. Most
+  // recent close wins if more than one counter happened to open that day.
+  async findClosedCounterByOpenedDate(salonId: string, dateIso: string): Promise<CashManagementRecord | null> {
+    const { rows } = await pool.query<CashManagementRecord>(
+      `SELECT * FROM cash_management
+       WHERE salon_id = $1
+         AND status = 'closed'
+         AND DATE(opened_at AT TIME ZONE 'Asia/Kolkata') = $2::date
+       ORDER BY closed_at DESC
+       LIMIT 1`,
+      [salonId, dateIso],
+    );
+    return rows[0] ?? null;
+  },
+
+  // Cash/Card/UPI amounts were only ever computed transiently at close time
+  // (see closeCounter() above) — never persisted as their own columns — so a
+  // resend days later has to recompute them the same service-date-bounded
+  // way, keyed to the same date closeCounter() itself used.
+  async getCollectionTotalsForDate(salonId: string, dateIso: string) {
+    return getServiceDateBoundedPaymentTotals(pool, salonId, dateIso);
+  },
 };

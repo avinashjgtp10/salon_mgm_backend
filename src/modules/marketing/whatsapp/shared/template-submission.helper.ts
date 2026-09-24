@@ -71,10 +71,10 @@ export async function submitBodyOnlyTemplate(params: {
 export async function syncBodyOnlyTemplateStatus(params: {
     salonId: string;
     metaTemplateId: string;
-}): Promise<{ status: "PENDING" | "APPROVED" | "REJECTED"; rejectionReason: string | null }> {
+}): Promise<{ status: "PENDING" | "APPROVED" | "REJECTED"; rejectionReason: string | null; category: "UTILITY" | "MARKETING" | null }> {
     const config = await configRepository.findBySalonId(params.salonId);
-    if (!config) return { status: "PENDING", rejectionReason: null };
+    if (!config) return { status: "PENDING", rejectionReason: null, category: null };
 
     const meta = await whatsappMetaApi.getTemplateStatus(config.access_token, params.metaTemplateId);
-    return { status: meta.status, rejectionReason: meta.rejected_reason ?? null };
+    return { status: meta.status, rejectionReason: meta.rejected_reason ?? null, category: meta.category ?? null };
 }

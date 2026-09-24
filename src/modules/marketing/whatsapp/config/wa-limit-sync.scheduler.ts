@@ -14,8 +14,8 @@ let schedulerInterval: NodeJS.Timeout | null = null
 const SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000 // every 6 hours
 
 async function runLimitSync(): Promise<void> {
-  logger.info('[WA-LIMIT-SYNC] Running daily limit sync for all verified salons...')
-  const configs = await configRepository.findAllVerified()
+  logger.info('[WA-LIMIT-SYNC] Running daily limit sync for all configured salons...')
+  const configs = await configRepository.findAllConfigured()
 
   for (const config of configs) {
     try {

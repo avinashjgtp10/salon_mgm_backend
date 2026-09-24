@@ -4,6 +4,7 @@ import { salonDashboardService } from "../salon-dashboard/salon-dashboard.servic
 import { salonsRepository } from "../salons/salons.repository";
 import { usersRepo } from "../users/users.repository";
 import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
+import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
 import logger from "../../config/logger";
 import type {
   CloseCounterBody,
@@ -83,7 +84,11 @@ async function notifyOwnerCashCounterOpened(salonId: string, counter: any): Prom
   }
 }
 
-async function notifyOwnerCashCounterClosed(salonId: string, counter: any): Promise<void> {
+async function notifyOwnerCashCounterClosed(
+  salonId: string,
+  counter: any,
+  opts?: { dedupe?: boolean },
+): Promise<void> {
   try {
     const salon = await salonsRepository.findById(salonId);
     const ownerPhone = await resolveOwnerNotifyPhone(salon);
@@ -106,15 +111,19 @@ async function notifyOwnerCashCounterClosed(salonId: string, counter: any): Prom
     const upiAmt  = Number(counter.upi_amount ?? 0);
     const collectionBreakdown = `Cash: ${formatMoney(cashAmt)} | Card: ${formatMoney(cardAmt)} | UPI: ${formatMoney(upiAmt)}`;
 
-    // Expenses/in-store-cash are the actual shift's physical drawer figures
-    // (cash_management.cash_expense / in_store_cash) — deliberately NOT
-    // re-derived from the service-date-bounded totals above, since those
-    // answer "what date does this revenue belong to" while these two answer
-    // "what actually happened to the physical cash this shift."
-    const expenses = Number(counter.cash_expense ?? 0);
-    const inStoreCash = counter.in_store_cash === null || counter.in_store_cash === undefined
-      ? 0
-      : Number(counter.in_store_cash);
+    // Expenses/in-store-cash ({{6}}/{{7}}) are staged in pending_body_text
+    // (Trigger Templates > Cash Management > Cash Counter Closed) but NOT
+    // yet Meta-approved — the LIVE template Meta actually has on file still
+    // only expects 5 params. Sending 7 against it is an immediate Meta
+    // rejection (#132000 "number of localizable_params (7) does not match
+    // the expected number of params (5)"), not a soft/ignored extra — it
+    // fails every send until either the resubmission is approved (then
+    // re-add these two here) or the count matches again. Left commented,
+    // not deleted, so re-adding is a one-line uncomment once approved.
+    // const expenses = Number(counter.cash_expense ?? 0);
+    // const inStoreCash = counter.in_store_cash === null || counter.in_store_cash === undefined
+    //   ? 0
+    //   : Number(counter.in_store_cash);
 
     const variables = {
       "1": salon?.business_name ?? "your salon",
@@ -122,8 +131,8 @@ async function notifyOwnerCashCounterClosed(salonId: string, counter: any): Prom
       "3": formatTimeIST(counter.closed_at ?? new Date()),
       "4": collectionBreakdown,
       "5": formatMoney(cashAmt + cardAmt + upiAmt),
-      "6": formatMoney(expenses),
-      "7": formatMoney(inStoreCash),
+      // "6": formatMoney(expenses),
+      // "7": formatMoney(inStoreCash),
     };
     await whatsappAutomationService.trigger({
       salonId,
@@ -134,7 +143,11 @@ async function notifyOwnerCashCounterClosed(salonId: string, counter: any): Prom
       variables,
       referenceId: counter.id,
       referenceType: "cash_management",
-      dedupeByReference: true,
+      // Explicit resend (Dashboard > Overall Collection's "Resend to
+      // WhatsApp") must always actually send, even though the original
+      // automatic close already used this same counter.id as its dedupe key
+      // — opts.dedupe: false skips that guard on purpose.
+      dedupeByReference: opts?.dedupe !== false,
     });
   } catch (err: any) {
     logger.error("[WA-AUTO] cash_counter_closed trigger failed:", err?.message ?? err);
@@ -256,6 +269,64 @@ export const cashManagementService = {
     notifyOwnerCashCounterClosed(salonId, counter).catch(() => {});
 
     return counter;
+  },
+
+  // Dashboard > Overall Collection's "Resend to WhatsApp" action, shown only
+  // when the user has "Yesterday" selected — re-sends that day's already-
+  // closed counter's Cash Counter Closed message on demand. Awaited (not
+  // fire-and-forget, unlike the automatic close-time send above) since this
+  // is a deliberate user action that needs a real success/failure result to
+  // show a toast for, not a background side effect.
+  async resendClosedCounterMessage(salonId: string, dateIso: string) {
+    const counter = await cashManagementRepository.findClosedCounterByOpenedDate(salonId, dateIso);
+    if (!counter) {
+      throw new AppError(404, `No closed cash counter found for ${dateIso}`, "COUNTER_NOT_FOUND");
+    }
+
+    // Whatever log already exists for this counter BEFORE firing this resend
+    // (from the original automatic close, or an earlier resend) — captured
+    // so the poll below can tell "no new attempt has landed yet" apart from
+    // "the new attempt already reached a terminal state", instead of racing
+    // and reporting THIS stale row as if it were the fresh one.
+    const priorLog = await whatsappAutomationRepository.findLatestByReference(counter.id, "cash_management");
+    const priorLogId = priorLog?.id ?? null;
+
+    const methodCounts = await cashManagementRepository.getCollectionTotalsForDate(salonId, dateIso);
+
+    // Deliberately NOT awaited: whatsappAutomationService.trigger()'s own
+    // retry loop sleeps synchronously BETWEEN attempts (0 / 1min / 5min /
+    // 15min) inside this same call — awaiting it directly would hold this
+    // HTTP request open for up to ~21 minutes on a genuine Meta failure
+    // (this is exactly what happened testing today's #132000 param-count
+    // bug: the request hung rather than failing fast). Fire it, then poll
+    // the log it writes for a few seconds for the fast path (Meta almost
+    // always accepts/rejects attempt 1 in under a second) — anything slower
+    // reports back as still-in-progress rather than blocking the response.
+    notifyOwnerCashCounterClosed(
+      salonId,
+      { ...counter, ...methodCounts },
+      { dedupe: false },
+    ).catch(() => {});
+
+    const POLL_MS = 500;
+    const MAX_WAIT_MS = 6000;
+    let log = null as Awaited<ReturnType<typeof whatsappAutomationRepository.findLatestByReference>>;
+    for (let waited = 0; waited < MAX_WAIT_MS; waited += POLL_MS) {
+      await new Promise((r) => setTimeout(r, POLL_MS));
+      const candidate = await whatsappAutomationRepository.findLatestByReference(counter.id, "cash_management");
+      if (!candidate || candidate.id === priorLogId) continue; // still the OLD row — no new attempt yet
+      log = candidate;
+      if (log.status !== "QUEUED") break;
+    }
+
+    if (!log || log.status === "QUEUED") {
+      return { sent: false, status: "IN_PROGRESS", failure_reason: null };
+    }
+    return {
+      sent: log.status === "SENT",
+      status: log.status,
+      failure_reason: log.failure_reason ?? null,
+    };
   },
 
   // Fetches only the sections the caller asked for, in parallel, so a page
