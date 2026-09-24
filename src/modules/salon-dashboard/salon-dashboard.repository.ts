@@ -439,7 +439,12 @@ export const salonDashboardRepository = {
        )
        SELECT payment_method, COALESCE(SUM(paid_amount), 0) AS amount
        FROM unified
-       WHERE payment_method IS NOT NULL
+       -- 'split' isn't a real collection channel — it's cash/card/UPI in some
+       -- combination the report's own payment-mode filter can't decompose
+       -- (see the module comment above), so grouping it as its own bucket
+       -- here previously implied a 4th channel actually collected that money
+       -- verbatim, when none of it landed in an actual cash/card/UPI till.
+       WHERE payment_method IS NOT NULL AND payment_method <> 'split'
        GROUP BY payment_method`,
       [...values, ...unbilled.values]
     );
