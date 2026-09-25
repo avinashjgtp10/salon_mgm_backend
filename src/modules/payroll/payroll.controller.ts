@@ -2,7 +2,9 @@ import { Request, Response, NextFunction } from "express";
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { payrollService } from "./payroll.service";
-import { CreatePayrollEntryBody, CreateSalaryAdvanceBody, UpdatePayrollEntryBody, UpdateSalaryAdvanceBody } from "./payroll.types";
+import {
+    AdjustPayrollBody, PayPayrollBody, CreateSalaryAdvanceBody, UpdateSalaryAdvanceBody,
+} from "./payroll.types";
 
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string } };
 
@@ -13,35 +15,68 @@ const getSalonId = (req: AuthRequest): string => {
 };
 
 export const payrollController = {
-    async attendanceSummary(req: AuthRequest, res: Response, next: NextFunction) {
+    async staffSummary(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const salonId = getSalonId(req);
-            const summary = await payrollService.attendanceSummary(
+            const summary = await payrollService.getStaffSummary(
                 salonId,
-                String(req.query.staff_id ?? ""),
-                String(req.query.start_date ?? ""),
-                String(req.query.end_date ?? ""),
+                String(req.query.period_start),
+                String(req.query.period_end)
             );
-            return sendSuccess(res, 200, summary, "Payroll attendance summary fetched successfully");
+            return sendSuccess(res, 200, { items: summary }, "Payroll staff summary fetched successfully");
         } catch (err) { return next(err); }
     },
 
-    async list(req: AuthRequest, res: Response, next: NextFunction) {
+    async adjust(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const salonId = getSalonId(req);
-            const entries = await payrollService.list(salonId, {
-                period_start: String(req.query.period_start),
-                period_end: String(req.query.period_end),
-            });
-            return sendSuccess(res, 200, { items: entries }, "Payroll entries fetched successfully");
+            const staffId = String(req.params.staffId);
+            const summary = await payrollService.adjustPayroll(salonId, staffId, req.body as AdjustPayrollBody, req.user?.userId ?? null);
+            return sendSuccess(res, 200, summary, "Payroll adjustment recorded successfully");
         } catch (err) { return next(err); }
     },
 
-    async create(req: AuthRequest, res: Response, next: NextFunction) {
+    async pay(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const salonId = getSalonId(req);
-            const entry = await payrollService.create(salonId, req.body as CreatePayrollEntryBody);
-            return sendSuccess(res, 201, entry, "Payroll updated successfully");
+            const staffId = String(req.params.staffId);
+            const result = await payrollService.payStaff(salonId, staffId, req.body as PayPayrollBody, req.user?.userId ?? null);
+            return sendSuccess(res, 200, result, "Salary payment recorded successfully");
+        } catch (err) { return next(err); }
+    },
+
+    async salarySlip(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const salonId = getSalonId(req);
+            const staffId = String(req.params.staffId);
+            const { buffer, filename } = await payrollService.getSalarySlipPdf(
+                salonId, staffId, String(req.query.period_start), String(req.query.period_end)
+            );
+            res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+            res.setHeader("Content-Type", "application/pdf");
+            return res.send(buffer);
+        } catch (err) { return next(err); }
+    },
+
+    async paymentReceipt(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const salonId = getSalonId(req);
+            const staffId = String(req.params.staffId);
+            const { buffer, filename } = await payrollService.getPaymentReceiptPdf(
+                salonId, staffId, String(req.query.period_start), String(req.query.period_end)
+            );
+            res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+            res.setHeader("Content-Type", "application/pdf");
+            return res.send(buffer);
+        } catch (err) { return next(err); }
+    },
+
+    async history(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const salonId = getSalonId(req);
+            const staffId = String(req.params.staffId);
+            const items = await payrollService.getHistory(salonId, staffId);
+            return sendSuccess(res, 200, { items }, "Payroll history fetched successfully");
         } catch (err) { return next(err); }
     },
 
@@ -68,11 +103,7 @@ export const payrollController = {
     async updateSalaryAdvance(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const salonId = getSalonId(req);
-            const advance = await payrollService.updateSalaryAdvance(
-                String(req.params.advanceId),
-                salonId,
-                req.body as UpdateSalaryAdvanceBody
-            );
+            const advance = await payrollService.updateSalaryAdvance(String(req.params.advanceId), salonId, req.body as UpdateSalaryAdvanceBody);
             return sendSuccess(res, 200, advance, "Salary advance updated successfully");
         } catch (err) { return next(err); }
     },
@@ -83,34 +114,6 @@ export const payrollController = {
             const id = String(req.params.advanceId);
             await payrollService.deleteSalaryAdvance(id, salonId);
             return sendSuccess(res, 200, { id }, "Salary advance deleted successfully");
-        } catch (err) { return next(err); }
-    },
-
-    async update(req: AuthRequest, res: Response, next: NextFunction) {
-        try {
-            const salonId = getSalonId(req);
-            const id = String(req.params.id);
-            const entry = await payrollService.updateEntry(id, salonId, req.body as UpdatePayrollEntryBody);
-            return sendSuccess(res, 200, entry, "Payroll entry updated successfully");
-        } catch (err) { return next(err); }
-    },
-
-    async delete(req: AuthRequest, res: Response, next: NextFunction) {
-        try {
-            const salonId = getSalonId(req);
-            const id = String(req.params.id);
-            await payrollService.deleteEntry(id, salonId);
-            return sendSuccess(res, 200, { id }, "Payroll entry deleted successfully");
-        } catch (err) { return next(err); }
-    },
-
-    async pay(req: AuthRequest, res: Response, next: NextFunction) {
-        try {
-            const salonId = getSalonId(req);
-            const id = String(req.params.id);
-            const { amount, payment_method, payment_date } = req.body;
-            const entry = await payrollService.payEntry(id, salonId, Number(amount), payment_method, payment_date);
-            return sendSuccess(res, 200, entry, "Salary payment recorded successfully");
         } catch (err) { return next(err); }
     },
 };
