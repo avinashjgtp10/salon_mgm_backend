@@ -53,6 +53,11 @@ export interface Order {
     total_quantity: number;
     total_price: number;
     created_by: string | null;
+    // Set by ordersRepository.startVerification() when "Confirm Order" is
+    // clicked on a "sent" order — gates whether it shows on the Verify Order
+    // list before any items have actually been received (see list()'s
+    // status filter). Purely presentational; not a status of its own.
+    verification_started_at: string | null;
     created_at: string;
     updated_at: string;
     items?: OrderItem[];

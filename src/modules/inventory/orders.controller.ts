@@ -116,6 +116,22 @@ export const ordersController = {
         } catch (err) { next(err); }
     },
 
+    async place(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const salonId = getSalonId(req);
+            const order = await ordersRepository.place(String(req.params.id), salonId);
+            sendSuccess(res, 200, order, "Order placed");
+        } catch (err) { next(err); }
+    },
+
+    async startVerification(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const salonId = getSalonId(req);
+            const order = await ordersRepository.startVerification(String(req.params.id), salonId);
+            sendSuccess(res, 200, order, "Order moved to verification");
+        } catch (err) { next(err); }
+    },
+
     /**
      * POST /inventory/orders/upload-signature
      * Uploads a signature image (multer → S3, or local /uploads fallback,
