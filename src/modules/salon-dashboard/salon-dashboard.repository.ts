@@ -1,40 +1,18 @@
 import pool from "../../config/database";
 import logger from "../../config/logger";
-import { notificationsRepository } from "../notifications/notifications.repository";
 import { reportsRepository } from "../reports/reports.repository";
+import { appointmentsService } from "../appointments/appointments.service";
 import type {
   DashboardSummary,
-  TodayAppointment,
   RevenueDataPoint,
   PaymentModeBreakdown,
   TopStaffMember,
   StaffRevenueEntry,
   ServiceMixItem,
-  DashboardService,
-  DashboardAll,
-  TodayOverview,
-  TimelineSlot,
+  DashboardCombined,
   PendingPayments,
   TodaysBirthdays,
-  InactiveClients,
-  ActivityItem,
 } from "./salon-dashboard.types";
-
-// Map the unified appointments.status directly to the dashboard's display
-// status — payment state and lifecycle state are the same column now, so
-// there's no separate "is it actually paid" lookup needed anymore.
-function mapStatus(s: string): "completed" | "upcoming" | "cancelled" | "no-show" {
-  switch (s) {
-    case "cancelled":
-      return "cancelled";
-    case "no-show":
-      return "no-show";
-    case "paid":
-      return "completed";
-    default:
-      return "upcoming"; // booked, partial
-  }
-}
 
 // Round a number to 1 decimal place
 function round1(n: number): number {
@@ -44,17 +22,24 @@ function round1(n: number): number {
 export const salonDashboardRepository = {
   // ── KPI Summary ─────────────────────────────────────────────────────────────
   async getSummary(salonId: string): Promise<DashboardSummary> {
-    const [revenueRows, apptRows, clientRows, newClientRows, salesSummaryStats] = await Promise.all([
-      // Revenue: this month, last month, today, yesterday — plus completed-sale
-      // counts for avg bill value (this month vs last month, for a real % change).
+    // IST calendar-month bounds for last month, as start_date/end_date —
+    // same shape the Sales Summary report's own date picker sends, so this
+    // reads the identical range _buildSalesSummaryWhere applies there.
+    const istNow = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+    const lastMonthDate = new Date(Date.UTC(istNow.getUTCFullYear(), istNow.getUTCMonth() - 1, 1));
+    const lastMonthYear = lastMonthDate.getUTCFullYear();
+    const lastMonthMonth = lastMonthDate.getUTCMonth();
+    const lastMonthStart = `${lastMonthYear}-${String(lastMonthMonth + 1).padStart(2, "0")}-01`;
+    const lastMonthEndDay = new Date(Date.UTC(lastMonthYear, lastMonthMonth + 1, 0)).getUTCDate();
+    const lastMonthEnd = `${lastMonthYear}-${String(lastMonthMonth + 1).padStart(2, "0")}-${String(lastMonthEndDay).padStart(2, "0")}`;
+
+    const [revenueRows, apptRows, newClientRows, salesSummaryStats, lastMonthSalesSummaryStats] = await Promise.all([
+      // Revenue: this month, last month, today, yesterday.
       pool.query<{
         total_revenue: string;
-        last_month_revenue: string;
         today_revenue: string;
         last_month_today_revenue: string;
         yesterday_revenue: string;
-        sales_count: string;
-        last_month_sales_count: string;
       }>(
         `WITH sales_rows AS (
            -- Completed sales whose appointment (if any) hasn't since been
@@ -140,58 +125,31 @@ export const salonDashboardRepository = {
          SELECT
            COALESCE(SUM(CASE WHEN date_trunc('month', event_at AT TIME ZONE 'Asia/Kolkata') = date_trunc('month', bounds.ist_today)
              THEN amount ELSE 0 END), 0)::numeric AS total_revenue,
-           COALESCE(SUM(CASE WHEN date_trunc('month', event_at AT TIME ZONE 'Asia/Kolkata') = date_trunc('month', bounds.ist_today - INTERVAL '1 month')
-             THEN amount ELSE 0 END), 0)::numeric AS last_month_revenue,
            COALESCE(SUM(CASE WHEN (event_at AT TIME ZONE 'Asia/Kolkata')::date = bounds.ist_today
              THEN amount ELSE 0 END), 0)::numeric AS today_revenue,
            COALESCE(SUM(CASE WHEN (event_at AT TIME ZONE 'Asia/Kolkata')::date = (bounds.ist_today - INTERVAL '1 month')::date
              THEN amount ELSE 0 END), 0)::numeric AS last_month_today_revenue,
            COALESCE(SUM(CASE WHEN (event_at AT TIME ZONE 'Asia/Kolkata')::date = bounds.ist_today - INTERVAL '1 day'
-             THEN amount ELSE 0 END), 0)::numeric AS yesterday_revenue,
-           -- avg-bill-value stays scoped to actual completed sales — a still-
-           -- open deposit isn't a finished transaction, so it doesn't count as
-           -- one more "sale" in that denominator even though its money now
-           -- shows up in the revenue totals above.
-           -- Scalar subqueries can't reference bounds.ist_today from the
-           -- outer aggregate query without a GROUP BY, so these two recompute
-           -- "IST today" inline instead of joining against bounds.
-           (SELECT COUNT(*) FROM sales_rows WHERE date_trunc('month', event_at AT TIME ZONE 'Asia/Kolkata') = date_trunc('month', (NOW() AT TIME ZONE 'Asia/Kolkata')::date)) AS sales_count,
-           (SELECT COUNT(*) FROM sales_rows WHERE date_trunc('month', event_at AT TIME ZONE 'Asia/Kolkata') = date_trunc('month', (NOW() AT TIME ZONE 'Asia/Kolkata')::date - INTERVAL '1 month')) AS last_month_sales_count
+             THEN amount ELSE 0 END), 0)::numeric AS yesterday_revenue
          FROM revenue_events, bounds`,
         [salonId]
       ),
 
-      // Appointments: this month, last month, today
+      // Appointments: today, yesterday
       pool.query<{
-        total_appointments: string;
-        last_month_appointments: string;
         today_appointments: string;
+        yesterday_appointments: string;
       }>(
         `SELECT
-           COUNT(CASE WHEN date_trunc('month', scheduled_at) = date_trunc('month', NOW())
-             THEN 1 END) AS total_appointments,
-           COUNT(CASE WHEN date_trunc('month', scheduled_at) = date_trunc('month', NOW() - INTERVAL '1 month')
-             THEN 1 END) AS last_month_appointments,
            COUNT(CASE WHEN DATE(scheduled_at) = CURRENT_DATE
-             THEN 1 END) AS today_appointments
+             THEN 1 END) AS today_appointments,
+           COUNT(CASE WHEN DATE(scheduled_at) = CURRENT_DATE - INTERVAL '1 day'
+             THEN 1 END) AS yesterday_appointments
          FROM appointments
          WHERE salon_id = $1
            AND deleted_at IS NULL
            AND status NOT IN ('cancelled', 'no-show')
-           AND scheduled_at >= date_trunc('month', NOW() - INTERVAL '1 month')`,
-        [salonId]
-      ),
-
-      // Active clients who have ever visited this salon (clients table has no salon_id)
-      pool.query<{ total_clients: string }>(
-        `SELECT COUNT(DISTINCT c.id) AS total_clients
-         FROM clients c
-         INNER JOIN (
-           SELECT client_id FROM appointments WHERE salon_id = $1 AND client_id IS NOT NULL AND deleted_at IS NULL
-           UNION
-           SELECT client_id FROM sales       WHERE salon_id = $1 AND client_id IS NOT NULL
-         ) visited ON visited.client_id = c.id
-         WHERE c.is_active = true`,
+           AND scheduled_at >= CURRENT_DATE - INTERVAL '1 day'`,
         [salonId]
       ),
 
@@ -222,19 +180,24 @@ export const salonDashboardRepository = {
       ),
 
       // All-time total revenue — genuinely unbounded, unlike total_revenue
-      // above which is scoped to the current calendar month. Delegates to
-      // the exact same function the Sales Summary report calls for its own
-      // "Received Amount" stat, so the Dashboard's Total Revenue card is
-      // guaranteed to read the identical figure rather than a
-      // separately-maintained approximation that can drift out of sync (see
-      // the two prior bugs this replaced: summing sales.total_amount instead
-      // of what was actually paid, and per-row ROUND() drift). payment_statuses
-      // must match SalesSummaryReport.tsx's own default (paymentStatuses.length
-      // > 0 ? paymentStatuses : ["paid", "partial"]) — omitting it entirely
-      // is NOT equivalent, since it would also pull in booked/cancelled/
-      // refunded sales the report's own default view excludes, inflating
-      // this figure above what the report ever actually displays.
+      // above which is scoped to the current calendar month. Not read by the
+      // salon dashboard page itself, but branch-owner.service.ts's
+      // multi-branch Finance Overview reads it off this same getSummary()
+      // call. Delegates to the exact same function the Sales Summary report
+      // calls for its own "Received Amount" stat, so this figure is
+      // guaranteed to match rather than a separately-maintained approximation
+      // that can drift out of sync.
       reportsRepository.getSalesSummaryReportStats(salonId, { payment_statuses: ["paid", "partial"] }),
+
+      // Last month's revenue — same delegation as allTimeRevenue above, just
+      // scoped to last month's IST date range, so this matches exactly what
+      // the Sales Summary report shows when filtered to that same range
+      // instead of drifting from a separately hand-rolled query.
+      reportsRepository.getSalesSummaryReportStats(salonId, {
+        payment_statuses: ["paid", "partial"],
+        start_date: lastMonthStart,
+        end_date: lastMonthEnd,
+      }),
     ]);
 
     const r = revenueRows.rows[0];
@@ -243,23 +206,16 @@ export const salonDashboardRepository = {
 
     const totalRevenue = parseFloat(r.total_revenue);
     const allTimeRevenue = Number(salesSummaryStats.received_amount) || 0;
-    const lastMonthRevenue = parseFloat(r.last_month_revenue);
+    const lastMonthRevenue = Number(lastMonthSalesSummaryStats.received_amount) || 0;
     const todayRevenue = parseFloat(r.today_revenue);
     const lastMonthTodayRevenue = parseFloat(r.last_month_today_revenue);
     const yesterdayRevenue = parseFloat(r.yesterday_revenue);
 
-    const totalAppointments = parseInt(a.total_appointments, 10);
-    const lastMonthAppointments = parseInt(a.last_month_appointments, 10);
-    const totalClients = parseInt(clientRows.rows[0].total_clients, 10);
     const todayAppointmentsCount = parseInt(a.today_appointments, 10);
+    const yesterdayAppointmentsCount = parseInt(a.yesterday_appointments, 10);
 
     const newClientsToday = parseInt(nc?.new_today ?? "0", 10);
     const newClientsThisMonth = parseInt(nc?.new_this_month ?? "0", 10);
-
-    const salesCount = parseInt(r.sales_count, 10);
-    const lastMonthSalesCount = parseInt(r.last_month_sales_count, 10);
-    const avgBillValue = salesCount > 0 ? round1(totalRevenue / salesCount) : 0;
-    const lastMonthAvgBillValue = lastMonthSalesCount > 0 ? lastMonthRevenue / lastMonthSalesCount : 0;
 
     // Percentage changes (null when last-month baseline is 0)
     const pctChange = (curr: number, prev: number): number | null => {
@@ -274,70 +230,12 @@ export const salonDashboardRepository = {
       yesterdayRevenue,
       newClientsToday,
       newClientsThisMonth,
-      totalAppointments,
-      totalClients,
       todayRevenue,
       revenueChange: pctChange(totalRevenue, lastMonthRevenue),
-      appointmentsChange: pctChange(totalAppointments, lastMonthAppointments),
-      clientsChange: null, // no last-month baseline available here
       todayRevenueChange: pctChange(todayRevenue, lastMonthTodayRevenue),
       todayAppointmentsCount,
-      avgBillValue,
-      avgBillValueChange: pctChange(avgBillValue, lastMonthAvgBillValue),
+      yesterdayAppointmentsCount,
     };
-  },
-
-  // ── Today's Appointments ─────────────────────────────────────────────────────
-  async getTodayAppointments(salonId: string, date?: string | null): Promise<TodayAppointment[]> {
-    const { rows } = await pool.query<{
-      id: string;
-      client_name: string;
-      service: string;
-      staff_name: string;
-      time: string;
-      status: string;
-      amount: string;
-      is_deleted: boolean;
-    }>(
-      `SELECT
-         a.id,
-         COALESCE(
-           c.full_name,
-           TRIM(COALESCE(c.first_name, '') || ' ' || COALESCE(c.last_name, ''))
-         ) AS client_name,
-         COALESCE(a.title, 'Service') AS service,
-         TRIM(COALESCE(s.first_name, '') || ' ' || COALESCE(s.last_name, '')) AS staff_name,
-         TO_CHAR(a.scheduled_at AT TIME ZONE 'UTC', 'HH12:MI AM') AS time,
-         a.status,
-         COALESCE(
-           (SELECT ROUND(
-              SUM((item->>'price')::numeric * COALESCE((item->>'quantity')::numeric, 1)),
-              2
-            )
-            FROM jsonb_array_elements(
-              CASE WHEN jsonb_typeof(a.services) = 'array' THEN a.services ELSE '[]'::jsonb END
-            ) AS item),
-           0
-         )::numeric AS amount,
-         (a.deleted_at IS NOT NULL) AS is_deleted
-       FROM appointments a
-       LEFT JOIN clients c ON c.id = a.client_id
-       LEFT JOIN staff  s ON s.id = a.staff_id
-       WHERE a.salon_id = $1
-         AND DATE(a.scheduled_at AT TIME ZONE 'UTC') = COALESCE($2::date, CURRENT_DATE)
-       ORDER BY a.scheduled_at ASC`,
-      [salonId, date ?? null]
-    );
-
-    return rows.map((row) => ({
-      id: row.id,
-      clientName: row.client_name || "Walk-in",
-      service: row.service,
-      staffName: row.staff_name || "—",
-      time: row.time,
-      status: row.is_deleted ? "deleted" : mapStatus(row.status),
-      amount: parseFloat(row.amount),
-    }));
   },
 
   // ── Revenue Chart (today / weekly / monthly / yearly) ───────────────────────
@@ -472,7 +370,6 @@ export const salonDashboardRepository = {
       month: row.month,
       fullLabel: row.full_label,
       revenue: parseFloat(row.revenue),
-      expenses: 0,
     }));
   },
 
@@ -497,12 +394,20 @@ export const salonDashboardRepository = {
     const istDateString = (offsetDays: number) =>
       new Date(Date.now() + IST_OFFSET_MS + offsetDays * 86_400_000).toISOString().slice(0, 10);
 
+    // IST calendar month-to-date start, for the "month" period below.
+    const istMonthStartString = () => {
+      const ist = new Date(Date.now() + IST_OFFSET_MS);
+      return `${ist.getUTCFullYear()}-${String(ist.getUTCMonth() + 1).padStart(2, "0")}-01`;
+    };
+
     const dateFilters = period === "yesterday"
       ? { start_date: istDateString(-1), end_date: istDateString(-1) }
       : period === "week"
       // Last 7 days inclusive of today — same "week" convention as
       // getStaffRevenue's weekly bucket below.
       ? { start_date: istDateString(-6), end_date: istDateString(0) }
+      : period === "month"
+      ? { start_date: istMonthStartString(), end_date: istDateString(0) }
       : { start_date: istDateString(0), end_date: istDateString(0) };
 
     const { where, values, nextIndex } = reportsRepository._buildSalesSummaryWhere(salonId, dateFilters);
@@ -534,7 +439,12 @@ export const salonDashboardRepository = {
        )
        SELECT payment_method, COALESCE(SUM(paid_amount), 0) AS amount
        FROM unified
-       WHERE payment_method IS NOT NULL
+       -- 'split' isn't a real collection channel — it's cash/card/UPI in some
+       -- combination the report's own payment-mode filter can't decompose
+       -- (see the module comment above), so grouping it as its own bucket
+       -- here previously implied a 4th channel actually collected that money
+       -- verbatim, when none of it landed in an actual cash/card/UPI till.
+       WHERE payment_method IS NOT NULL AND payment_method <> 'split'
        GROUP BY payment_method`,
       [...values, ...unbilled.values]
     );
@@ -773,105 +683,6 @@ export const salonDashboardRepository = {
     }));
   },
 
-  // ── Active Services catalog ──────────────────────────────────────────────────
-  async getServices(salonId: string): Promise<DashboardService[]> {
-    const { rows } = await pool.query<{
-      id: string;
-      name: string;
-      price: string;
-      duration: string;
-      category_name: string | null;
-      price_type: string | null;
-      is_active: boolean;
-    }>(
-      `SELECT
-         s.id,
-         s.name,
-         COALESCE(s.price::text, '0')          AS price,
-         COALESCE(s.duration_minutes, 0)       AS duration,
-         c.name                                AS category_name,
-         s.price_type,
-         s.is_active
-       FROM services s
-       LEFT JOIN service_categories c ON c.id = s.category_id
-       WHERE s.salon_id = $1
-         AND s.is_active = true
-       ORDER BY s.name ASC`,
-      [salonId]
-    );
-
-    return rows.map((row) => ({
-      id: row.id,
-      name: row.name,
-      price: row.price,
-      duration: parseInt(String(row.duration), 10),
-      category_name: row.category_name ?? null,
-      price_type: (row.price_type as DashboardService["price_type"]) ?? null,
-      is_active: row.is_active,
-    }));
-  },
-
-  // ── Today's Overview (bookings/waiting/delayed/payment-due counts) ─────────
-  async getTodayOverview(salonId: string): Promise<TodayOverview> {
-    const { rows } = await pool.query<{
-      bookings: string;
-      waiting: string;
-      delayed: string;
-      payment_due: string;
-    }>(
-      // appointments.due_amount is never actually written anywhere in the
-      // backend — the real due amount lives on the most recent payments row
-      // per appointment (see getPendingPayments above for the same fix).
-      `SELECT
-         COUNT(*) FILTER (WHERE a.status NOT IN ('cancelled', 'no-show'))
-           AS bookings,
-         COUNT(*) FILTER (WHERE a.status IN ('booked', 'partial') AND a.scheduled_at > NOW())
-           AS waiting,
-         COUNT(*) FILTER (WHERE a.status IN ('booked', 'partial') AND a.scheduled_at <= NOW())
-           AS delayed,
-         COUNT(*) FILTER (WHERE COALESCE(latest.due_amount, 0) > 0)
-           AS payment_due
-       FROM appointments a
-       LEFT JOIN LATERAL (
-         SELECT p.due_amount FROM payments p
-         WHERE p.appointment_id = a.id
-         ORDER BY p.created_at DESC LIMIT 1
-       ) latest ON true
-       WHERE a.salon_id = $1
-         AND DATE(a.scheduled_at AT TIME ZONE 'UTC') = CURRENT_DATE
-         AND a.deleted_at IS NULL`,
-      [salonId]
-    );
-    const row = rows[0];
-    const delayed = parseInt(row?.delayed ?? "0", 10);
-    return {
-      bookings: parseInt(row?.bookings ?? "0", 10),
-      waiting: parseInt(row?.waiting ?? "0", 10),
-      delayed,
-      paymentDue: parseInt(row?.payment_due ?? "0", 10),
-      runningLate: delayed,
-    };
-  },
-
-  // ── Today's Timeline — appointment count per hour, business hours only ─────
-  async getTodayTimeline(salonId: string): Promise<TimelineSlot[]> {
-    const { rows } = await pool.query<{ hour: string; count: string }>(
-      `SELECT
-         TO_CHAR(date_trunc('hour', scheduled_at AT TIME ZONE 'UTC'), 'HH12 AM') AS hour,
-         date_trunc('hour', scheduled_at AT TIME ZONE 'UTC')                      AS sort_key,
-         COUNT(*)::int                                                            AS count
-       FROM appointments
-       WHERE salon_id = $1
-         AND DATE(scheduled_at AT TIME ZONE 'UTC') = CURRENT_DATE
-         AND status NOT IN ('cancelled', 'no-show')
-         AND deleted_at IS NULL
-       GROUP BY date_trunc('hour', scheduled_at AT TIME ZONE 'UTC')
-       ORDER BY sort_key ASC`,
-      [salonId]
-    );
-    return rows.map((row) => ({ hour: row.hour.replace(/^0/, ""), count: parseInt(row.count, 10) }));
-  },
-
   // ── Pending Payments — all outstanding balances, not just today's slate ─────
   // appointments.due_amount is never actually written anywhere in the backend
   // (checked every INSERT/UPDATE touching the appointments table — none set
@@ -937,7 +748,6 @@ export const salonDashboardRepository = {
       [salonId]
     );
     return {
-      count: rows.length,
       clients: rows.map((r) => ({
         id: r.id, name: r.name || "Unknown",
         phone: r.phone_number, phoneCountryCode: r.phone_country_code,
@@ -945,85 +755,50 @@ export const salonDashboardRepository = {
     };
   },
 
-  // ── Inactive Clients — visited before, nothing in the last 30 days ──────────
-  async getInactiveClients(salonId: string): Promise<InactiveClients> {
-    const { rows } = await pool.query<{ cnt: string }>(
-      `SELECT COUNT(*)::int AS cnt
-       FROM clients c
-       WHERE c.is_active = true
-         AND EXISTS (
-           SELECT 1 FROM appointments a
-           WHERE a.client_id = c.id AND a.salon_id = $1 AND a.deleted_at IS NULL
-             AND a.status NOT IN ('cancelled', 'no-show')
-         )
-         AND NOT EXISTS (
-           SELECT 1 FROM appointments a2
-           WHERE a2.client_id = c.id AND a2.salon_id = $1 AND a2.deleted_at IS NULL
-             AND a2.status NOT IN ('cancelled', 'no-show')
-             AND a2.scheduled_at >= NOW() - INTERVAL '30 days'
-         )`,
-      [salonId]
-    );
-    return { count: parseInt(rows[0]?.cnt ?? "0", 10) };
-  },
-
-  // ── Recent Activity — reuses the same feed backing the notification bell ───
-  async getRecentActivity(salonId: string): Promise<ActivityItem[]> {
-    const rows = await notificationsRepository.listBySalon(salonId, 6);
-    return rows.map((n) => ({
-      id: n.id, type: n.type, title: n.title, body: n.body, createdAt: n.created_at,
-    }));
-  },
-
-  // ── Combined: all dashboard data in one call ────────────────────────────────
-  // Each sub-query is isolated — a DB timeout or slow query on one section
-  // returns a safe empty/zero default instead of crashing the entire response.
-  async getAll(salonId: string, period: string = "monthly", date?: string): Promise<DashboardAll> {
-    // Each sub-query is isolated — a DB timeout or slow/broken query on one
-    // section falls back to a safe empty/zero default instead of crashing the
-    // entire response, but the failure itself is logged so a section
-    // silently going to its fallback (e.g. Pending Payments always showing
-    // {count:0, amount:0}) is visible in the logs instead of looking like a
-    // legitimate "nothing pending" result.
+  // ── Combined: everything the dashboard page needs in one call ──────────────
+  // Each sub-query is isolated — a DB timeout or slow/broken query on one
+  // section falls back to a safe empty/zero default instead of crashing the
+  // entire response, but the failure itself is logged so a section silently
+  // going to its fallback is visible in the logs instead of looking like a
+  // legitimate "nothing here" result.
+  async getCombined(
+    salonId: string,
+    period: string = "monthly",
+    date?: string,
+    collectionPeriod: string = "today",
+  ): Promise<DashboardCombined> {
     const safe = <T>(p: Promise<T>, fallback: T, label: string): Promise<T> =>
       p.catch((err) => {
-        logger.error(`[dashboard.getAll] ${label} failed, using fallback`, { salonId, error: err?.message ?? err });
+        logger.error(`[dashboard.getCombined] ${label} failed, using fallback`, { salonId, error: err?.message ?? err });
         return fallback;
       });
 
     const defaultSummary: DashboardSummary = {
-      totalRevenue: 0, allTimeRevenue: 0, totalAppointments: 0, totalClients: 0,
-      todayRevenue: 0, revenueChange: null, appointmentsChange: null,
-      clientsChange: null, todayRevenueChange: null, todayAppointmentsCount: 0,
-      avgBillValue: 0, avgBillValueChange: null,
+      totalRevenue: 0, allTimeRevenue: 0, todayRevenue: 0, revenueChange: null,
+      todayRevenueChange: null, todayAppointmentsCount: 0, yesterdayAppointmentsCount: 0,
       lastMonthRevenue: 0, yesterdayRevenue: 0, newClientsToday: 0, newClientsThisMonth: 0,
     };
-    const defaultOverview: TodayOverview = { bookings: 0, waiting: 0, delayed: 0, paymentDue: 0, runningLate: 0 };
     const defaultPending: PendingPayments = { count: 0, amount: 0 };
-    const defaultBirthdays: TodaysBirthdays = { count: 0, clients: [] };
-    const defaultInactive: InactiveClients = { count: 0 };
+    const defaultBirthdays: TodaysBirthdays = { clients: [] };
+    const defaultBreakdown: PaymentModeBreakdown = { entries: [], total: 0 };
 
-    const [
-      summary, todayAppointments, revenueChart, topStaff, serviceMix, services,
-      todayOverview, todayTimeline, pendingPayments, todaysBirthdays, inactiveClients, recentActivity,
-    ] = await Promise.all([
-      safe(this.getSummary(salonId),           defaultSummary,  "getSummary"),
-      safe(this.getTodayAppointments(salonId, date), [],          "getTodayAppointments"),
-      safe(this.getRevenueChart(salonId, period),    [],          "getRevenueChart"),
-      safe(this.getTopStaff(salonId),          [],                "getTopStaff"),
-      safe(this.getServiceMix(salonId),         [],               "getServiceMix"),
-      safe(this.getServices(salonId),           [],               "getServices"),
-      safe(this.getTodayOverview(salonId),      defaultOverview,  "getTodayOverview"),
-      safe(this.getTodayTimeline(salonId),      [],               "getTodayTimeline"),
-      safe(this.getPendingPayments(salonId),    defaultPending,   "getPendingPayments"),
-      safe(this.getTodaysBirthdays(salonId),    defaultBirthdays, "getTodaysBirthdays"),
-      safe(this.getInactiveClients(salonId),    defaultInactive,  "getInactiveClients"),
-      safe(this.getRecentActivity(salonId),     [],               "getRecentActivity"),
+    // Today's appointments come from the same enriched listing
+    // GET /api/v1/appointments uses (tax-aware grand total, live edits) —
+    // not a separately hand-rolled snapshot query — so this can never drift
+    // from what the Calendar/Appointments screen shows for the same day.
+    const todayAppointmentsPromise = appointmentsService
+      .list({ salonId, date: date ?? new Date().toISOString().slice(0, 10), limit: 200 })
+      .then((result) => (Array.isArray(result) ? result : result.data));
+
+    const [summary, todayAppointments, revenueChart, pendingPayments, todaysBirthdays, paymentModeBreakdown] = await Promise.all([
+      safe(this.getSummary(salonId),                        defaultSummary,   "getSummary"),
+      safe(todayAppointmentsPromise,                         [],               "getTodayAppointments"),
+      safe(this.getRevenueChart(salonId, period),            [],               "getRevenueChart"),
+      safe(this.getPendingPayments(salonId),                 defaultPending,   "getPendingPayments"),
+      safe(this.getTodaysBirthdays(salonId),                 defaultBirthdays, "getTodaysBirthdays"),
+      safe(this.getPaymentModeBreakdown(salonId, collectionPeriod), defaultBreakdown, "getPaymentModeBreakdown"),
     ]);
 
-    return {
-      summary, todayAppointments, revenueChart, topStaff, serviceMix, services,
-      todayOverview, todayTimeline, pendingPayments, todaysBirthdays, inactiveClients, recentActivity,
-    };
+    return { summary, todayAppointments, revenueChart, pendingPayments, todaysBirthdays, paymentModeBreakdown };
   },
 };

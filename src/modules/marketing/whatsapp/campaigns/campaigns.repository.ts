@@ -138,6 +138,60 @@ export const campaignsRepository = {
     return rows[0]
   },
 
+  // ── Per-contact manual Resend (FAILED/BLOCKED only) ───────────────────────
+  async findContactById(contactId: string, campaignId: string): Promise<WACampaignContact | null> {
+    const { rows } = await pool.query(
+      `SELECT * FROM wa_campaign_contacts WHERE id = $1 AND campaign_id = $2`,
+      [contactId, campaignId]
+    )
+    return rows[0] ?? null
+  },
+
+  // Preserves the failed attempt's own record before the contact row gets
+  // overwritten in place by the next send — otherwise the original error
+  // (code/message) is gone the moment the resend's own result lands.
+  async logContactResend(params: {
+    contactId: string
+    campaignId: string
+    salonId: string
+    previousStatus: string
+    previousErrorCode: string | null
+    previousErrorMessage: string | null
+    resentBy: string | null
+  }): Promise<void> {
+    await pool.query(
+      `INSERT INTO wa_campaign_contact_resends
+         (campaign_contact_id, campaign_id, salon_id, previous_status, previous_error_code, previous_error_message, resent_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [
+        params.contactId, params.campaignId, params.salonId,
+        params.previousStatus, params.previousErrorCode, params.previousErrorMessage,
+        params.resentBy,
+      ]
+    )
+  },
+
+  // Puts the contact back to PENDING so the existing worker (which only ever
+  // selects `status = 'PENDING'` contacts — see campaign.processor.ts) picks
+  // it up on the next job exactly like any other send, through the same
+  // flow. Clears the prior attempt's result fields — logContactResend above
+  // must be called first if that history needs to survive the overwrite.
+  async resetContactForResend(contactId: string): Promise<void> {
+    await pool.query(
+      `UPDATE wa_campaign_contacts
+       SET status = 'PENDING',
+           error_code = NULL,
+           error_message = NULL,
+           wamid = NULL,
+           sent_at = NULL,
+           delivered_at = NULL,
+           read_at = NULL,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [contactId]
+    )
+  },
+
   async getContacts(
   campaignId: string,
   status?:    string,

@@ -23,9 +23,10 @@ export interface OrderItem {
     // How much of `qty` has actually arrived so far, via the Receive action.
     // Never exceeds qty (receive() clamps it).
     received_qty: number;
-    // Cumulative confirmed-damaged total, set only by a confirmed
-    // order_receipts item (see order-receipts.repository.ts). received_qty +
-    // damaged_qty never exceeds qty.
+    // Cumulative confirmed-damaged total. Nothing currently writes this — the
+    // only writer was the removed order-receipts confirm flow (Verify Order
+    // is now view-only; receiving happens through Product Inventory →
+    // Record Purchase, which has no damaged-qty concept of its own).
     damaged_qty: number;
     created_at: string;
 }
@@ -53,6 +54,11 @@ export interface Order {
     total_quantity: number;
     total_price: number;
     created_by: string | null;
+    // Set by ordersRepository.startVerification() when "Confirm Order" is
+    // clicked on a "sent" order — gates whether it shows on the Verify Order
+    // list before any items have actually been received (see list()'s
+    // status filter). Purely presentational; not a status of its own.
+    verification_started_at: string | null;
     created_at: string;
     updated_at: string;
     items?: OrderItem[];
@@ -111,18 +117,15 @@ export interface ReceiveOrderDTO {
     purchase_date?: string;
 }
 
-// Corrects a mis-entered received_qty after the fact — this is the NEW
-// running total for the line, not a delta (unlike ReceiveOrderItemDTO).
-export interface CorrectReceivedQtyDTO {
-    received_qty: number;
-}
-
 export interface ListOrderFilters {
     search?: string;
     // Array form powers the Orders page's "Receiving" tab (a queue of
     // Sent/Partially Received orders) — a single OrderStatus still works for
     // the plain status-filter dropdown.
     status?: OrderStatus | OrderStatus[];
+    // Powers PurchaseModal.tsx's "does this supplier have orders awaiting
+    // receipt?" check — narrows to one supplier's orders.
+    supplier_id?: string;
     page?: number;
     limit?: number;
 }

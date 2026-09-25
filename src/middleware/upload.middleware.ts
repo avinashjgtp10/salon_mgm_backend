@@ -1,8 +1,15 @@
 import multer from "multer";
 import path from "path";
+import fs from "fs";
 import { AppError } from "./error.middleware";
 
-const uploadDir = path.join(__dirname, "../../uploads");
+// __dirname-relative traversal breaks once esbuild bundles this file into a
+// single dist/index.js: the extra directory level collapses and "../../uploads"
+// escapes past the app root entirely (e.g. /app/dist -> /uploads). process.cwd()
+// is stable across both the bundled prod build (WORKDIR /app) and local
+// ts-node-dev (run from the repo root).
+const uploadDir = path.join(process.cwd(), "uploads");
+fs.mkdirSync(uploadDir, { recursive: true });
 
 const storage = multer.diskStorage({
     destination: (_req, _file, cb) => {

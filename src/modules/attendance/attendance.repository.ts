@@ -8,6 +8,21 @@ import {
     AttendanceSource,
 } from "./attendance.types";
 
+// node-postgres already parses a jsonb column back into a JS array on its own —
+// this only guards the rare case a driver/pool config returns it as a raw
+// string instead, so a malformed/legacy row can't crash callers expecting
+// AttendanceSettings.selected_staff_ids to already be an array.
+function deserializeSettings(row: any): AttendanceSettings {
+    if (typeof row.selected_staff_ids === "string") {
+        try {
+            row.selected_staff_ids = JSON.parse(row.selected_staff_ids);
+        } catch {
+            row.selected_staff_ids = [];
+        }
+    }
+    return row;
+}
+
 export const attendanceRepository = {
 
     // ── Settings ──────────────────────────────────────────────────────────────
@@ -17,13 +32,18 @@ export const attendanceRepository = {
             `SELECT * FROM attendance_settings WHERE salon_id = $1`,
             [salonId]
         );
-        return rows[0] || null;
+        return rows[0] ? deserializeSettings(rows[0]) : null;
     },
 
     async upsertSettings(salonId: string, data: UpdateSettingsBody): Promise<AttendanceSettings> {
         const keys = Object.keys(data) as (keyof UpdateSettingsBody)[];
         const setParts = keys.map((k, i) => `${String(k)} = $${i + 2}`);
-        const values: any[] = [salonId, ...keys.map(k => (data as any)[k])];
+        // selected_staff_ids is a JSONB column — pg's default array binding
+        // builds a Postgres array literal ('{a,b}'), not JSON, and would fail
+        // against a jsonb column, so it needs an explicit JSON.stringify here.
+        const values: any[] = [salonId, ...keys.map(k =>
+            k === "selected_staff_ids" ? JSON.stringify((data as any)[k]) : (data as any)[k]
+        )];
 
         const { rows } = await pool.query(
             `INSERT INTO attendance_settings (salon_id, ${keys.join(", ")})
@@ -33,7 +53,7 @@ export const attendanceRepository = {
              RETURNING *`,
             values
         );
-        return rows[0];
+        return deserializeSettings(rows[0]);
     },
 
     // ── Single record lookup ──────────────────────────────────────────────────

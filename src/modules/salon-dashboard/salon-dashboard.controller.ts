@@ -8,7 +8,7 @@ type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?:
 
 const FINANCIAL_SUMMARY_FIELDS = [
   "totalRevenue", "allTimeRevenue", "lastMonthRevenue", "yesterdayRevenue",
-  "todayRevenue", "revenueChange", "todayRevenueChange", "avgBillValue", "avgBillValueChange",
+  "todayRevenue", "revenueChange", "todayRevenueChange",
 ] as const;
 
 // Owner/admin bypass (unconditional, matching every other permission check
@@ -37,24 +37,17 @@ export function redactFinancialSummaryFields(summary: Record<string, unknown>): 
 // Flattened, not emptied — the frontend chart is expected to still render
 // its container/labels/period toggle with a masked appearance (equal-height
 // points), not disappear into an empty state. Keeps month/fullLabel (time
-// labels, not financial) and zeroes only the value fields the shape is
-// drawn from.
+// labels, not financial) and zeroes only the value field the shape is drawn
+// from.
 function redactRevenueChart(chart: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
-  return chart.map((pt) => ({ ...pt, revenue: 1, expenses: 1 }));
+  return chart.map((pt) => ({ ...pt, revenue: 1 }));
+}
+
+function redactPaymentModeBreakdown(): Record<string, unknown> {
+  return { entries: [], total: 0 };
 }
 
 export const salonDashboardController = {
-  async getTodayAppointments(req: AuthRequest, res: Response, next: NextFunction) {
-    try {
-      const salonId = await getSalonId(req);
-      const date = typeof req.query.date === "string" ? req.query.date : undefined;
-      const data = await salonDashboardService.getTodayAppointments(salonId, date);
-      return sendSuccess(res, 200, data, "Today's appointments fetched successfully");
-    } catch (err) {
-      return next(err);
-    }
-  },
-
   async getRevenueChart(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = await getSalonId(req);
@@ -109,22 +102,31 @@ export const salonDashboardController = {
     }
   },
 
-  async getAll(req: AuthRequest, res: Response, next: NextFunction) {
+  // POST /api/v1/dashboard/combined — bundles the KPI summary, live today's
+  // appointments, revenue chart, pending payments, today's birthdays, and the
+  // Overall Collection payment-mode breakdown into one call, so the
+  // dashboard page's initial load (and every Overall Collection filter
+  // change) is a single request instead of three separate ones. Body params,
+  // not query, since this can carry the Overall Collection filter too.
+  async getCombined(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = await getSalonId(req);
-      const period = typeof req.query.period === "string" ? req.query.period : undefined;
-      const date   = typeof req.query.date   === "string" ? req.query.date   : undefined;
-      const data   = await salonDashboardService.getAll(salonId, period, date) as any;
+      const body = req.body ?? {};
+      const period = typeof body.period === "string" ? body.period : undefined;
+      const date = typeof body.date === "string" ? body.date : undefined;
+      const collectionPeriod = typeof body.collectionPeriod === "string" ? body.collectionPeriod : undefined;
+      const data = await salonDashboardService.getCombined(salonId, period, date, collectionPeriod) as any;
 
-      const [canFinancials, canStaffPerformance, canClientInfo] = await Promise.all([
+      const [canFinancials, canAppointments, canClientInfo] = await Promise.all([
         checkDashboardSubPermission(req, "view_dashboard_financials"),
-        checkDashboardSubPermission(req, "view_dashboard_staff_performance"),
+        checkDashboardSubPermission(req, "view_dashboard_appointments"),
         checkDashboardSubPermission(req, "view_dashboard_client_info"),
       ]);
 
       if (!canFinancials) {
         data.summary = redactFinancialSummaryFields(data.summary);
         data.revenueChart = redactRevenueChart(data.revenueChart ?? []);
+        data.paymentModeBreakdown = redactPaymentModeBreakdown();
         // count stays real — it's "how many clients", not a ₹ figure, and
         // zeroing it previously made a masked Due Amount card read as "0
         // clients" (looks like nothing is due, not "hidden"). amount is a
@@ -133,11 +135,11 @@ export const salonDashboardController = {
         // falling back to its own "no value" dash.
         data.pendingPayments = { count: data.pendingPayments?.count ?? 0, amount: 0 };
       }
-      if (!canStaffPerformance) {
-        data.topStaff = [];
+      if (!canAppointments) {
+        data.todayAppointments = [];
       }
       if (!canClientInfo) {
-        data.todaysBirthdays = { count: 0, clients: [] };
+        data.todaysBirthdays = { clients: [] };
       }
 
       return sendSuccess(res, 200, data, "Dashboard data fetched successfully");

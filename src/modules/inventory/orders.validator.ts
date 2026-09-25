@@ -130,23 +130,6 @@ export const validateReceiveOrder = (
     }
 };
 
-// ─── Correct Received Qty validator ────────────────────────────────────────────
-export const validateCorrectReceivedQty = (
-    req: Request,
-    _res: Response,
-    next: NextFunction
-): void => {
-    try {
-        const b = req.body;
-        if (typeof b.received_qty !== "number" || !Number.isFinite(b.received_qty) || b.received_qty < 0) {
-            throw new AppError(400, "received_qty must be a non-negative number", "VALIDATION_ERROR");
-        }
-        return next();
-    } catch (err) {
-        return next(err);
-    }
-};
-
 // ─── List Orders validator ─────────────────────────────────────────────────────
 export const validateListOrders = (
     req: Request,

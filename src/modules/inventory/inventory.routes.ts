@@ -17,7 +17,6 @@ import { productInventoryController } from "./product-inventory.controller";
 import { purchasesController } from "./purchases.controller";
 import { supplierPaymentsController } from "./supplier-payments.controller";
 import { ordersController } from "./orders.controller";
-import { orderReceiptsController } from "./order-receipts.controller";
 import { supplierProductsController } from "./supplier-products.controller";
 import { productSuppliersController } from "./product-suppliers.controller";
 import { productAuditController } from "./product-audit.controller";
@@ -30,8 +29,7 @@ import {
 } from "./inventory.validator";
 import { validateCreatePurchase, validateListPurchases } from "./purchases.validator";
 import { validateCreateSupplierPayment } from "./supplier-payments.validator";
-import { validateCreateOrder, validateReceiveOrder, validateCorrectReceivedQty } from "./orders.validator";
-import { validateSaveReceiptDraft, validateConfirmReceipt } from "./order-receipts.validator";
+import { validateCreateOrder, validateReceiveOrder } from "./orders.validator";
 import { validateResolveSupplierProduct } from "./supplier-products.validator";
 import { validateAddProductSupplier, validateUpdateProductSupplier } from "./product-suppliers.validator";
 import { supplierCatalogUpload } from "./supplier-products.upload";
@@ -295,16 +293,6 @@ router.get(
     productInventoryController.history
 );
 
-// Adding stock is a stock adjustment, so it sits behind that permission
-// rather than plain view access.
-router.post(
-    "/product-inventory/:id/stock-in",
-    authMiddleware,
-    roleMiddleware("salon_owner", "admin", "staff"),
-    adjustProductStock,
-    productInventoryController.stockIn
-);
-
 // Drawer aggregate: current stock, on-order, last purchase price, suppliers.
 router.get(
     "/product-inventory/:id/detail",
@@ -450,48 +438,6 @@ router.post(
     ordersController.receive
 );
 
-// Corrects a mis-entered received_qty after the fact — see
-// ordersRepository.correctReceivedQty for what this does/doesn't touch.
-router.post(
-    "/orders/:id/items/:itemId/correct-received",
-    authMiddleware,
-    roleMiddleware("salon_owner", "admin", "staff"),
-    receiveOrder,
-    validateCorrectReceivedQty,
-    ordersController.correctReceivedQty
-);
-
-// ─── Order Receiving (draft -> confirm) — replaces the single-shot Receive
-// above with a session the clerk can save as a draft (zero stock effect) and
-// only Confirm Receiving moves stock. See order-receipts.repository.ts.
-// Same receive_order permission — no new key, per this repo's rule against
-// drive-by permission additions.
-router.get(
-    "/orders/:id/receipts/draft",
-    authMiddleware,
-    roleMiddleware("salon_owner", "admin", "staff"),
-    receiveOrder,
-    orderReceiptsController.getOrCreateDraft
-);
-
-router.post(
-    "/orders/:id/receipts/:receiptId/items",
-    authMiddleware,
-    roleMiddleware("salon_owner", "admin", "staff"),
-    receiveOrder,
-    validateSaveReceiptDraft,
-    orderReceiptsController.saveDraft
-);
-
-router.post(
-    "/orders/:id/receipts/:receiptId/confirm",
-    authMiddleware,
-    roleMiddleware("salon_owner", "admin", "staff"),
-    receiveOrder,
-    validateConfirmReceipt,
-    orderReceiptsController.confirm
-);
-
 // Cancel and Delete share one "Delete/Cancel Order" permission per the
 // Warehouse -> Orders ticket (presented as a single action there, not two).
 // Delete previously had NO permission check at all (role-only, owner/admin)
@@ -503,6 +449,26 @@ router.post(
     roleMiddleware("salon_owner", "admin", "staff"),
     cancelOrder,
     ordersController.cancel
+);
+
+// Draft → Ordered. Gated by create_order — placing a draft is the same
+// commitment as creating an order outright, just via the review step.
+router.post(
+    "/orders/:id/place",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    createOrder,
+    ordersController.place
+);
+
+// "Confirm Order" on the Verify Order tab — gated by receive_order, same
+// permission as the actual Receive action this leads into.
+router.post(
+    "/orders/:id/start-verification",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    receiveOrder,
+    ordersController.startVerification
 );
 
 // POST, not DELETE — see ordersController.delete for why.
