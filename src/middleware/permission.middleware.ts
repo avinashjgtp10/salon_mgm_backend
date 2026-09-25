@@ -344,13 +344,6 @@ const DEFAULT_STAFF_PERMS: Record<string, boolean> = {
     download_commission_tip_pdf: false,
     view_attendance_list: true,
     view_attendance_rules: false,
-    view_payroll: false,
-    add_salary_advance: false,
-    pay_salary: false,
-    view_payroll_details: false,
-    edit_payroll: false,
-    delete_payroll: false,
-    export_payroll: false,
     view_reports: false,
     // Individual View/Download permissions for all 53 reports (Reports
     // ticket) — module='Reports', group_name=category in the catalog.
