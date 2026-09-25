@@ -85,6 +85,10 @@ async function applyMembershipDiscountForBooking(
   // charge lands on the same figure. null/undefined = charge the plan's own
   // rate, as it did before this was editable.
   requestedPercent?: number | null,
+  // Which of the client's several eligible percentage memberships staff
+  // actually ticked — undefined means "every eligible one" (pre-existing
+  // callers), an explicit [] means "none ticked", not "all of them".
+  selectedMembershipIds?: string[] | null,
 ): Promise<MembershipDiscountResult> {
   let total = 0;
   const perItem = new Map<string, number>();
@@ -93,8 +97,17 @@ async function applyMembershipDiscountForBooking(
   };
 
   if (applyPercentage) {
-    const percentageMembership = await clientMembershipsRepository.findActivePercentageForClient(clientId, salonId);
-    if (percentageMembership) {
+    // Only the memberships staff actually ticked are charged, each only
+    // against the rows its own applicable-services restriction covers —
+    // mirrors resolveMembershipDiscount's preview so the charge lands on the
+    // same figure the staff saw before paying. requestedPercent (the staff's
+    // edited rate) only unambiguously overrides ONE plan; with several
+    // stacking at once each is charged at its own plan rate instead.
+    const allPercentageMemberships = await clientMembershipsRepository.findAllActivePercentageForClient(clientId, salonId);
+    const percentageMemberships = selectedMembershipIds
+      ? allPercentageMemberships.filter((m) => selectedMembershipIds.includes(m.id))
+      : allPercentageMemberships;
+    for (const percentageMembership of percentageMemberships) {
       const appliesTo = percentageMembership.appliesTo;
       const eligible = [
         ...(appliesTo !== 'products' ? serviceItems.filter((i) => !i.isPackageService && i.amount > 0 && matchesCategoryRestriction(i, percentageMembership.serviceCategoryIds, percentageMembership.serviceIds)) : []),
@@ -109,9 +122,9 @@ async function applyMembershipDiscountForBooking(
             // May exceed the plan's own rate — see resolveMembershipDiscount's
             // requestedPercent for why that's allowed and what still bounds it
             // (the row's own value, and the discount balance left).
-            discountPercent: requestedPercent === null || requestedPercent === undefined
-              ? (percentageMembership.discountPercent ?? 0)
-              : Math.max(0, Math.min(100, requestedPercent)),
+            discountPercent: (percentageMemberships.length === 1 && requestedPercent !== null && requestedPercent !== undefined)
+              ? Math.max(0, Math.min(100, requestedPercent))
+              : (percentageMembership.discountPercent ?? 0),
             services: eligible.map((i) => ({ serviceId: i.itemId, serviceName: i.name, amount: i.amount })),
           },
         );
@@ -419,6 +432,7 @@ export const paymentsService = {
                 !!data.apply_membership_discount,
                 !!data.apply_loyalty_discount,
                 data.membership_discount_percent_requested,
+                data.membership_discount_ids,
               );
               membershipDiscountUsed = result.total;
               membershipDiscountByItem = result.perItem;
@@ -1522,6 +1536,10 @@ export const paymentsService = {
               data.appointment_id,
               item.staff_id || appt?.staff_id || undefined,
               checkoutSaleId,
+              // The appointment's own (possibly backdated) date — a walk-in
+              // entered after the fact should start the membership on the day
+              // it was actually sold, not on the real "right now" server time.
+              appt?.scheduled_at ?? undefined,
             );
           } catch (err: any) {
             logger.warn('[payments] membership auto-create failed:', err?.message ?? err);

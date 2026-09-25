@@ -579,6 +579,12 @@ export const clientMembershipsService = {
     // as a line item on a bill, not just via the standalone purchase() flow.
     staffId?: string,
     saleId?: string,
+    // The bill's own date (e.g. an appointment's start_time, which can be
+    // backdated for a walk-in entered after the fact) — falls through to
+    // clientMembershipsRepository.create()'s own NOW() default when absent,
+    // same as before this param existed. Lets a backdated sale's membership
+    // actually start on that date instead of always "right now".
+    purchasedAt?: string,
   ): Promise<void> {
     logger.info(`[client-memberships/auto-create] salon=${salonId} client=${clientId} membership=${membershipId} name="${membershipName}" sessions=${totalSessions} price=${pricePaid}`);
     try {
@@ -611,6 +617,7 @@ export const clientMembershipsService = {
         expiresAt,
         appointmentId,
         staffId,
+        purchasedAt,
       });
       if (saleId) {
         await clientMembershipsRepository.setSaleId(created.id, salonId, saleId);
