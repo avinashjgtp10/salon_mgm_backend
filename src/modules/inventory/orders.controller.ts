@@ -55,6 +55,7 @@ export const ordersController = {
                 {
                     search: (req.query.search as string) || undefined,
                     status: parseStatusFilter(req.query.status),
+                    supplier_id: (req.query.supplier_id as string) || undefined,
                     page: asPositiveInt(req.query.page, 1),
                     limit: asPositiveInt(req.query.limit, 20),
                 },
