@@ -23,9 +23,10 @@ export interface OrderItem {
     // How much of `qty` has actually arrived so far, via the Receive action.
     // Never exceeds qty (receive() clamps it).
     received_qty: number;
-    // Cumulative confirmed-damaged total, set only by a confirmed
-    // order_receipts item (see order-receipts.repository.ts). received_qty +
-    // damaged_qty never exceeds qty.
+    // Cumulative confirmed-damaged total. Nothing currently writes this — the
+    // only writer was the removed order-receipts confirm flow (Verify Order
+    // is now view-only; receiving happens through Product Inventory →
+    // Record Purchase, which has no damaged-qty concept of its own).
     damaged_qty: number;
     created_at: string;
 }
@@ -114,12 +115,6 @@ export interface ReceiveOrderItemDTO {
 export interface ReceiveOrderDTO {
     items: ReceiveOrderItemDTO[];
     purchase_date?: string;
-}
-
-// Corrects a mis-entered received_qty after the fact — this is the NEW
-// running total for the line, not a delta (unlike ReceiveOrderItemDTO).
-export interface CorrectReceivedQtyDTO {
-    received_qty: number;
 }
 
 export interface ListOrderFilters {

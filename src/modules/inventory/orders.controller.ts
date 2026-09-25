@@ -4,7 +4,7 @@ import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { uploadAvatarToS3 } from "../utils/avatar.upload";
 import { ordersRepository } from "./orders.repository";
-import { CreateOrderDTO, CorrectReceivedQtyDTO, ReceiveOrderDTO } from "./orders.types";
+import { CreateOrderDTO, ReceiveOrderDTO } from "./orders.types";
 
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string } };
 
@@ -88,24 +88,6 @@ export const ordersController = {
 
             const order = await ordersRepository.receive(String(req.params.id), body, salonId, userId);
             sendSuccess(res, 200, order, "Order received successfully");
-        } catch (err) { next(err); }
-    },
-
-    async correctReceivedQty(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
-        try {
-            const salonId = getSalonId(req);
-            const userId = req.user?.userId;
-            if (!userId) throw new AppError(401, "Authentication required", "NO_USER");
-
-            const body = req.body as CorrectReceivedQtyDTO;
-            logger.info("POST /inventory/orders/:id/items/:itemId/correct-received called", {
-                salonId, userId, orderId: req.params.id, itemId: req.params.itemId,
-            });
-
-            const order = await ordersRepository.correctReceivedQty(
-                String(req.params.id), String(req.params.itemId), body.received_qty, salonId, userId,
-            );
-            sendSuccess(res, 200, order, "Received quantity updated");
         } catch (err) { next(err); }
     },
 
