@@ -22,6 +22,47 @@ const VALID_MOVEMENT_TYPES: MovementType[] = ["in", "out", "adjustment", "transf
 
 // ─── Supplier validators ──────────────────────────────────────────────────────
 
+const SUPPLIER_OPTIONAL_STRINGS = [
+    "description", "first_name", "last_name",
+    "mobile_country_code", "mobile_number",
+    "telephone_country_code", "telephone_number",
+    "email", "website",
+    "street", "suburb", "city", "state", "zip_code", "country",
+    "postal_street", "postal_suburb", "postal_city",
+    "postal_state", "postal_zip_code", "postal_country",
+    "contact_person", "address", "gstin", "pan",
+    "business_registration_number",
+    "bank_account_holder_name", "bank_name", "bank_account_number", "bank_ifsc_code",
+    "notes",
+];
+
+const VALID_SUPPLIER_TYPES = ["product", "consumable", "both"];
+const VALID_PAYMENT_TERMS_DAYS = [0, 7, 15, 30];
+
+const validateSupplierBody = (b: Record<string, unknown>): void => {
+    for (const f of SUPPLIER_OPTIONAL_STRINGS) {
+        if (!isOptionalString(b[f])) {
+            throw new AppError(400, `${f} must be a string`, "VALIDATION_ERROR");
+        }
+    }
+
+    if (!isOptionalBoolean(b.same_as_physical)) {
+        throw new AppError(400, "same_as_physical must be a boolean", "VALIDATION_ERROR");
+    }
+    if (!isOptionalBoolean(b.is_active)) {
+        throw new AppError(400, "is_active must be a boolean", "VALIDATION_ERROR");
+    }
+    if (b.supplier_type !== undefined && !VALID_SUPPLIER_TYPES.includes(b.supplier_type as string)) {
+        throw new AppError(400, "supplier_type must be one of product, consumable, both", "VALIDATION_ERROR");
+    }
+    if (b.payment_terms_days !== undefined && !VALID_PAYMENT_TERMS_DAYS.includes(b.payment_terms_days as number)) {
+        throw new AppError(400, "payment_terms_days must be one of 0, 7, 15, 30", "VALIDATION_ERROR");
+    }
+    if (!isOptionalPositiveNumber(b.credit_limit)) {
+        throw new AppError(400, "credit_limit must be a non-negative number", "VALIDATION_ERROR");
+    }
+};
+
 export const validateCreateSupplier = (
     req: Request,
     _res: Response,
@@ -34,28 +75,7 @@ export const validateCreateSupplier = (
             throw new AppError(400, "name is required and must be a non-empty string", "VALIDATION_ERROR");
         }
 
-        const optionalStrings = [
-            "description", "first_name", "last_name",
-            "mobile_country_code", "mobile_number",
-            "telephone_country_code", "telephone_number",
-            "email", "website",
-            "street", "suburb", "city", "state", "zip_code", "country",
-            "postal_street", "postal_suburb", "postal_city",
-            "postal_state", "postal_zip_code", "postal_country",
-        ];
-
-        for (const f of optionalStrings) {
-            if (!isOptionalString(b[f])) {
-                throw new AppError(400, `${f} must be a string`, "VALIDATION_ERROR");
-            }
-        }
-
-        if (!isOptionalBoolean(b.same_as_physical)) {
-            throw new AppError(400, "same_as_physical must be a boolean", "VALIDATION_ERROR");
-        }
-        if (!isOptionalBoolean(b.is_active)) {
-            throw new AppError(400, "is_active must be a boolean", "VALIDATION_ERROR");
-        }
+        validateSupplierBody(b);
 
         return next();
     } catch (err) {
@@ -75,28 +95,7 @@ export const validateUpdateSupplier = (
             throw new AppError(400, "name must be a non-empty string", "VALIDATION_ERROR");
         }
 
-        const optionalStrings = [
-            "description", "first_name", "last_name",
-            "mobile_country_code", "mobile_number",
-            "telephone_country_code", "telephone_number",
-            "email", "website",
-            "street", "suburb", "city", "state", "zip_code", "country",
-            "postal_street", "postal_suburb", "postal_city",
-            "postal_state", "postal_zip_code", "postal_country",
-        ];
-
-        for (const f of optionalStrings) {
-            if (!isOptionalString(b[f])) {
-                throw new AppError(400, `${f} must be a string`, "VALIDATION_ERROR");
-            }
-        }
-
-        if (!isOptionalBoolean(b.same_as_physical)) {
-            throw new AppError(400, "same_as_physical must be a boolean", "VALIDATION_ERROR");
-        }
-        if (!isOptionalBoolean(b.is_active)) {
-            throw new AppError(400, "is_active must be a boolean", "VALIDATION_ERROR");
-        }
+        validateSupplierBody(b);
 
         return next();
     } catch (err) {

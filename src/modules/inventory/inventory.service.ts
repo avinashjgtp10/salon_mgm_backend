@@ -79,7 +79,10 @@ export const suppliersService = {
         logger.info("suppliersService.update called", { supplierId, requesterUserId, requesterRole });
         const existing = await suppliersRepository.findById(supplierId, salonId);
         if (!existing) throw new AppError(404, "Supplier not found", "NOT_FOUND");
-        const updated = await suppliersRepository.update(supplierId, patch, salonId);
+        // supplier_code is server-generated and immutable — drop it even if
+        // a client sends it back, rather than letting it silently overwrite.
+        const { supplier_code: _ignored, ...safePatch } = patch as UpdateSupplierBody & { supplier_code?: string };
+        const updated = await suppliersRepository.update(supplierId, safePatch, salonId);
         logger.info("suppliersService.update success", { supplierId: updated.id });
         return updated;
     },

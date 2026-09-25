@@ -1,5 +1,7 @@
 // ─── Supplier ────────────────────────────────────────────────────────────────
 
+export type SupplierType = "product" | "consumable" | "both";
+
 export type Supplier = {
     id: string;
     name: string;
@@ -26,6 +28,21 @@ export type Supplier = {
     postal_zip_code: string | null;
     postal_country: string | null;
     is_active: boolean;
+    // Supplier Master fields — see Migration/add_supplier_master_details.sql
+    supplier_code: string | null;
+    supplier_type: SupplierType;
+    contact_person: string | null;
+    address: string | null;
+    gstin: string | null;
+    pan: string | null;
+    business_registration_number: string | null;
+    payment_terms_days: number;
+    credit_limit: number;
+    bank_account_holder_name: string | null;
+    bank_name: string | null;
+    bank_account_number: string | null;
+    bank_ifsc_code: string | null;
+    notes: string | null;
     created_at: string;
     updated_at: string;
 };
@@ -55,8 +72,23 @@ export type CreateSupplierBody = {
     postal_zip_code?: string | null;
     postal_country?: string | null;
     is_active?: boolean;
+    supplier_type?: SupplierType;
+    contact_person?: string;
+    address?: string;
+    gstin?: string;
+    pan?: string;
+    business_registration_number?: string;
+    payment_terms_days?: number;
+    credit_limit?: number;
+    bank_account_holder_name?: string;
+    bank_name?: string;
+    bank_account_number?: string;
+    bank_ifsc_code?: string;
+    notes?: string;
 };
 
+// supplier_code is server-generated (see suppliersRepository.create) and
+// immutable thereafter — never part of the writable body.
 export type UpdateSupplierBody = Partial<CreateSupplierBody>;
 
 // ─── Supplier balance (derived from purchases − supplier_payments) ───────────

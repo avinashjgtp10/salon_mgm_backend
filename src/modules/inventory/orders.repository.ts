@@ -228,6 +228,16 @@ export const ordersRepository = {
             if (Array.isArray(filters.status)) {
                 conditions.push(`o.status = ANY($${idx++}::varchar[])`);
                 values.push(filters.status);
+            } else if (filters.status === "partially_received") {
+                // Verify Order also picks up a "sent" order the moment
+                // "Confirm Order" has been clicked on it (see
+                // startVerification below) — not just orders that already
+                // have partial receipts.
+                conditions.push(
+                    `(o.status = $${idx} OR (o.status = 'sent' AND o.verification_started_at IS NOT NULL))`
+                );
+                values.push(filters.status);
+                idx++;
             } else {
                 conditions.push(`o.status = $${idx++}`);
                 values.push(filters.status);
@@ -475,6 +485,36 @@ export const ordersRepository = {
             throw new AppError(400, "Cannot cancel an order that has already been received against", "ORDER_ALREADY_RECEIVED");
         }
         await pool.query(`UPDATE orders SET status = 'cancelled', updated_at = NOW() WHERE id = $1 AND salon_id = $2`, [orderId, salonId]);
+        return (await this.getById(orderId, salonId))!;
+    },
+
+    // Draft → Ordered ("sent"). Nothing else about the order changes — a
+    // draft never touched stock/the ledger (see receive() for the only
+    // thing that does), so this is a plain status flip, not a re-create.
+    async place(orderId: string, salonId: string): Promise<Order> {
+        const order = await this.getById(orderId, salonId);
+        if (!order) throw new AppError(404, "Order not found", "ORDER_NOT_FOUND");
+        if (order.status !== "draft") {
+            throw new AppError(400, "Only a draft order can be placed", "ORDER_NOT_DRAFT");
+        }
+        await pool.query(`UPDATE orders SET status = 'sent', updated_at = NOW() WHERE id = $1 AND salon_id = $2`, [orderId, salonId]);
+        return (await this.getById(orderId, salonId))!;
+    },
+
+    // "Confirm Order" on a Verify-eligible ("sent") order — doesn't touch
+    // status or stock, just timestamps that verification has begun so the
+    // order shows on the Verify Order list (see list()'s status filter)
+    // before any items have actually been received yet.
+    async startVerification(orderId: string, salonId: string): Promise<Order> {
+        const order = await this.getById(orderId, salonId);
+        if (!order) throw new AppError(404, "Order not found", "ORDER_NOT_FOUND");
+        if (order.status !== "sent") {
+            throw new AppError(400, "Only an Ordered order can be moved to verification", "ORDER_NOT_SENT");
+        }
+        await pool.query(
+            `UPDATE orders SET verification_started_at = NOW(), updated_at = NOW() WHERE id = $1 AND salon_id = $2`,
+            [orderId, salonId],
+        );
         return (await this.getById(orderId, salonId))!;
     },
 

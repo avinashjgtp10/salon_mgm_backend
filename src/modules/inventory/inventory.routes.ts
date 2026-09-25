@@ -505,6 +505,26 @@ router.post(
     ordersController.cancel
 );
 
+// Draft → Ordered. Gated by create_order — placing a draft is the same
+// commitment as creating an order outright, just via the review step.
+router.post(
+    "/orders/:id/place",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    createOrder,
+    ordersController.place
+);
+
+// "Confirm Order" on the Verify Order tab — gated by receive_order, same
+// permission as the actual Receive action this leads into.
+router.post(
+    "/orders/:id/start-verification",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    receiveOrder,
+    ordersController.startVerification
+);
+
 // POST, not DELETE — see ordersController.delete for why.
 router.post(
     "/orders/:id/delete",
