@@ -243,6 +243,10 @@ export const ordersRepository = {
                 values.push(filters.status);
             }
         }
+        if (filters.supplier_id) {
+            conditions.push(`o.supplier_id = $${idx++}`);
+            values.push(filters.supplier_id);
+        }
 
         const where = `WHERE ${conditions.join(" AND ")}`;
         const page = Math.max(1, filters.page ?? 1);
@@ -320,7 +324,7 @@ export const ordersRepository = {
      * the quantities that arrived THIS delivery; order_items.received_qty
      * accumulates across calls, and the order's status is derived from it.
      */
-    async receive(orderId: string, data: ReceiveOrderDTO, salonId: string, createdBy: string): Promise<Order> {
+    async receive(orderId: string, data: ReceiveOrderDTO, salonId: string, createdBy: string): Promise<Order & { updatedProducts: Awaited<ReturnType<typeof purchasesRepository.create>>["updatedProducts"] }> {
         const order = await this.getById(orderId, salonId);
         if (!order) throw new AppError(404, "Order not found", "ORDER_NOT_FOUND");
         if (order.status === "cancelled") throw new AppError(400, "Cannot receive a cancelled order", "ORDER_CANCELLED");
@@ -345,8 +349,11 @@ export const ordersRepository = {
 
         // The actual stock-in — same code path a standalone Purchase uses,
         // so products.amount/stock_movements/supplier balance all update
-        // exactly the way they already do today.
-        await purchasesRepository.create(
+        // exactly the way they already do today. Its updatedProducts is
+        // returned back out (see below) so PurchaseModal.tsx's "receive
+        // against this PO" flow can patch Product Inventory in place, same
+        // as it already does for an ad-hoc purchase.
+        const { updatedProducts } = await purchasesRepository.create(
             { supplier_id: order.supplier_id, purchase_date: data.purchase_date, order_id: orderId, items: purchaseItems },
             salonId,
             createdBy,
@@ -378,7 +385,7 @@ export const ordersRepository = {
             client.release();
         }
 
-        return (await this.getById(orderId, salonId))!;
+        return { ...(await this.getById(orderId, salonId))!, updatedProducts };
     },
 
     /**

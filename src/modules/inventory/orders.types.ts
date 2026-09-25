@@ -128,6 +128,9 @@ export interface ListOrderFilters {
     // Sent/Partially Received orders) — a single OrderStatus still works for
     // the plain status-filter dropdown.
     status?: OrderStatus | OrderStatus[];
+    // Powers PurchaseModal.tsx's "does this supplier have orders awaiting
+    // receipt?" check — narrows to one supplier's orders.
+    supplier_id?: string;
     page?: number;
     limit?: number;
 }

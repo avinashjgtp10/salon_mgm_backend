@@ -295,16 +295,6 @@ router.get(
     productInventoryController.history
 );
 
-// Adding stock is a stock adjustment, so it sits behind that permission
-// rather than plain view access.
-router.post(
-    "/product-inventory/:id/stock-in",
-    authMiddleware,
-    roleMiddleware("salon_owner", "admin", "staff"),
-    adjustProductStock,
-    productInventoryController.stockIn
-);
-
 // Drawer aggregate: current stock, on-order, last purchase price, suppliers.
 router.get(
     "/product-inventory/:id/detail",
