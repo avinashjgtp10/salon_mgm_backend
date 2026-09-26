@@ -110,6 +110,15 @@ const viewTeamOrBooking = requireAnyPermission(["view_team", "create_sales", "ma
 router.get("/", auth, ownerAdminStaff, viewTeamOrBooking, staffController.list);
 router.post("/", auth, ownerAdminStaff, createStaff, validateCreateStaff, staffController.create);
 
+// ─── Live email-availability check for the Staff Login email field (must be
+// BEFORE /:id) — gated on either permission that can reach this field
+// (Add Staff or Edit Staff). ──────────────────────────────────────────────
+router.get(
+  "/check-email",
+  auth, ownerAdminStaff, requireAnyPermission(["add_team_member", "edit_team_member"]),
+  staffController.checkEmail
+);
+
 // ─── Scheduler staff sequence (must be BEFORE /:id — see the Commissions
 // comment above for why a literal path segment loses to an earlier /:id
 // route otherwise) — gated by manage_calendar, the same permission that

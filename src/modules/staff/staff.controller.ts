@@ -63,6 +63,23 @@ export const staffController = {
     } catch (err) { return next(err); }
   },
 
+  // GET /staff/check-email?email=...&exclude_staff_id=... — live duplicate
+  // check for the Staff Login email field (Add/Edit Staff page), so the
+  // admin sees "email already exists" as they type instead of only finding
+  // out after clicking Save. exclude_staff_id (Edit Staff only) keeps the
+  // staff member's own current email from flagging itself.
+  async checkEmail(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = getSalonId(req);
+      const email = String(req.query.email || "").trim();
+      if (!email) throw new AppError(400, "email is required", "VALIDATION_ERROR");
+      const excludeStaffId = req.query.exclude_staff_id ? String(req.query.exclude_staff_id) : undefined;
+
+      const result = await staffService.checkEmailAvailable(salonId, email, excludeStaffId);
+      return sendSuccess(res, 200, result, "Email availability checked");
+    } catch (err) { return next(err); }
+  },
+
   async create(req: AuthRequest, res: Response, _next: NextFunction) {
     try {
       const salonId = getSalonId(req);
