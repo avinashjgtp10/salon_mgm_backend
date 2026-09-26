@@ -393,6 +393,7 @@ const DEFAULT_STAFF_PERMS: Record<string, boolean> = {
     view_report_brand_performance: false, download_report_brand_performance: false,
     view_report_purchase_vs_sales: false, download_report_purchase_vs_sales: false,
     view_report_consumable_usage: false, download_report_consumable_usage: false,
+    view_report_consumable_analytics: false, download_report_consumable_analytics: false,
     view_report_supplier_report: false, download_report_supplier_report: false,
     view_report_purchase_history: false, download_report_purchase_history: false,
     // Staff

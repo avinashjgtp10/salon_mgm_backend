@@ -4146,3 +4146,68 @@ export interface ClientRatingReportResponse {
     pagination: ClientRatingReportPagination;
     stats: ClientRatingReportStats;
 }
+
+// ===============================
+// CONSUMABLE ANALYTICS REPORT (independent report API —
+// POST /api/report/consumable-analytics)
+// Per-client consumable product usage. Reads consumable_usage directly
+// (the ledger written when a service is completed / stock is deducted for a
+// booking — see inventory-transactions.repository.ts), joined through
+// appointments to get the client, since consumable_usage itself only has a
+// booking_id, not a client_id. Only rows tied to a real booking are
+// included (booking_id IS NOT NULL) — manual stock adjustments and reverts
+// aren't attributable to any client and are excluded, not a data gap.
+// ===============================
+
+export interface ConsumableAnalyticsReportFilters {
+    from?: string;
+    to?: string;
+    client_ids?: string[];
+    product_ids?: string[];
+    service_ids?: string[];
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface ConsumableAnalyticsReportRow {
+    id: string;
+    client_id: string;
+    client_name: string | null;
+    product_id: string;
+    product_name: string;
+    qty: number;
+    unit: string | null;
+    service_id: string | null;
+    service_name: string | null;
+    usage_date: string;
+}
+
+export interface ConsumableAnalyticsClientTotal {
+    client_id: string;
+    client_name: string | null;
+    total_qty: number;
+}
+
+export interface ConsumableAnalyticsReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface ConsumableAnalyticsFilterOption {
+    id: string;
+    label: string;
+}
+
+export interface ConsumableAnalyticsReportResponse {
+    rows: ConsumableAnalyticsReportRow[];
+    pagination: ConsumableAnalyticsReportPagination;
+    client_totals: ConsumableAnalyticsClientTotal[];
+    filters_available: {
+        clients: ConsumableAnalyticsFilterOption[];
+        products: ConsumableAnalyticsFilterOption[];
+        services: ConsumableAnalyticsFilterOption[];
+    };
+}

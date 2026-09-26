@@ -3803,4 +3803,47 @@ async getPayrollHistoryReport(
     }
 },
 
+// ======================================================
+// CONSUMABLE ANALYTICS REPORT (independent report API)
+// POST /api/report/consumable-analytics
+// ======================================================
+async getConsumableAnalyticsReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            from: asString(body.from),
+            to: asString(body.to),
+            client_ids: Array.isArray(body.client_ids)
+                ? body.client_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+            product_ids: Array.isArray(body.product_ids)
+                ? body.product_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+            service_ids: Array.isArray(body.service_ids)
+                ? body.service_ids.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+            page: body.page !== undefined ? Number(body.page) : undefined,
+            limit: body.limit !== undefined ? Number(body.limit) : undefined,
+            is_export: body.is_export === true,
+        };
+
+        const data = await reportsService.getConsumableAnalyticsReport(salonId, filters);
+
+        sendSuccess(
+            res,
+            200,
+            data,
+            "Consumable analytics report fetched successfully"
+        );
+    } catch (error) {
+        next(error);
+    }
+},
+
 };
