@@ -14,7 +14,7 @@ router.post(
 );
 
 router.get(
-    "/me",
+    "/current",
     authMiddleware,
     salonsController.mySalon
 );

@@ -10,10 +10,10 @@ import { updateUserSchema, changePasswordSchema } from "./users.validator";
 
 const router = Router();
 
-// ── Self endpoints (must come before /:id to avoid "me" being parsed as id) ──
+// ── Self endpoints (must come before /:id to avoid "me"/"profile" being parsed as id) ──
 
-// GET  /api/v1/users/me  — get own profile
-router.get("/me", authMiddleware, usersController.me);
+// GET  /api/v1/users/profile  — get own profile
+router.get("/profile", authMiddleware, usersController.me);
 
 // PATCH /api/v1/users/me — update own profile (validated)
 router.patch(
