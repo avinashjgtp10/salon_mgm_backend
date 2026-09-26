@@ -336,6 +336,8 @@ import {
     AppointmentDetailReportResponse,
     OnlineAppointmentReportFilters,
     OnlineAppointmentReportResponse,
+    ConsumableAnalyticsReportFilters,
+    ConsumableAnalyticsReportResponse,
     UpcomingAppointmentsReportFilters,
     UpcomingAppointmentsReportResponse,
     WaCampaignReportFilters,
@@ -2630,6 +2632,26 @@ async getPayrollHistoryReport(
         rows: rowsResult.items,
         pagination: rowsResult.pagination,
         stats,
+        filters_available: filtersAvailable,
+    };
+},
+
+// ======================================================
+// CONSUMABLE ANALYTICS REPORT (independent report API)
+// ======================================================
+
+async getConsumableAnalyticsReport(
+    salonId: string,
+    filters: ConsumableAnalyticsReportFilters
+): Promise<ConsumableAnalyticsReportResponse> {
+    const [result, filtersAvailable] = await Promise.all([
+        reportsRepository.getConsumableAnalyticsReport(salonId, filters),
+        reportsRepository.getConsumableAnalyticsFiltersAvailable(salonId),
+    ]);
+    return {
+        rows: result.items,
+        pagination: result.pagination,
+        client_totals: result.client_totals,
         filters_available: filtersAvailable,
     };
 },

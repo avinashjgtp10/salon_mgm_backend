@@ -121,6 +121,9 @@ import {
     MemberSaleChartFilters,
     AppointmentDetailReportRow,
     OnlineAppointmentReportRow,
+    ConsumableAnalyticsReportFilters,
+    ConsumableAnalyticsReportRow,
+    ConsumableAnalyticsClientTotal,
     UpcomingAppointmentsReportRow,
     UpcomingAppointmentsFiltersAvailable,
     CategoryTotalsRow,
@@ -22934,6 +22937,177 @@ async getPayrollHistoryFiltersAvailable(salonId: string): Promise<{
 
   return {
     staff: staffRows.map((r: any) => ({ id: r.id, label: r.label })),
+  };
+},
+
+// ======================================================
+// CONSUMABLE ANALYTICS REPORT (independent report API)
+// POST /api/report/consumable-analytics — per-client consumable product
+// usage. consumable_usage only carries booking_id, not client_id, so the
+// client comes from a join through appointments. Only rows tied to a real
+// booking are included; manual stock adjustments/reverts (booking_id NULL)
+// aren't attributable to a client and are excluded on purpose, not a gap.
+// Only 'deduct' rows count as usage — a 'revert' row undoes an earlier
+// deduction rather than representing separate consumption.
+// ======================================================
+async getConsumableAnalyticsReport(
+  salonId: string,
+  filters: ConsumableAnalyticsReportFilters
+): Promise<{
+  items: ConsumableAnalyticsReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+  client_totals: ConsumableAnalyticsClientTotal[];
+}> {
+  const values: any[] = [salonId];
+  const where = [
+    "cu.salon_id = $1",
+    "cu.booking_id IS NOT NULL",
+    "cu.direction = 'deduct'",
+  ];
+  let idx = 2;
+
+  if (filters.from) {
+    where.push(`cu.created_at >= $${idx++}::timestamptz`);
+    values.push(`${filters.from}T00:00:00+05:30`);
+  }
+  if (filters.to) {
+    where.push(`cu.created_at < ($${idx++}::timestamptz + interval '1 day')`);
+    values.push(`${filters.to}T00:00:00+05:30`);
+  }
+  if (filters.client_ids && filters.client_ids.length > 0) {
+    where.push(`a.client_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.client_ids);
+  }
+  if (filters.product_ids && filters.product_ids.length > 0) {
+    where.push(`cu.product_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.product_ids);
+  }
+  if (filters.service_ids && filters.service_ids.length > 0) {
+    where.push(`cu.service_id = ANY($${idx++}::uuid[])`);
+    values.push(filters.service_ids);
+  }
+  const whereClause = where.join(" AND ");
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 20));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    SELECT
+      cu.id,
+      a.client_id,
+      c.full_name AS client_name,
+      cu.product_id,
+      p.name AS product_name,
+      cu.qty,
+      cu.unit,
+      cu.service_id,
+      s.name AS service_name,
+      cu.created_at AS usage_date,
+      COUNT(*) OVER() AS total_count
+    FROM consumable_usage cu
+    JOIN appointments a ON a.id = cu.booking_id
+    JOIN clients c ON c.id = a.client_id
+    JOIN products p ON p.id = cu.product_id
+    LEFT JOIN services s ON s.id = cu.service_id
+    WHERE ${whereClause}
+    ORDER BY cu.created_at DESC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: ConsumableAnalyticsReportRow[] = rows.map((row: any) => ({
+    id: row.id,
+    client_id: row.client_id,
+    client_name: row.client_name,
+    product_id: row.product_id,
+    product_name: row.product_name,
+    qty: Number(row.qty ?? 0),
+    unit: row.unit,
+    service_id: row.service_id,
+    service_name: row.service_name,
+    usage_date: row.usage_date,
+  }));
+
+  // Total consumable quantity used per client — same filters, no pagination,
+  // so it always reflects every matching row, not just the current page.
+  const totalsQuery = `
+    SELECT a.client_id, c.full_name AS client_name, SUM(cu.qty) AS total_qty
+    FROM consumable_usage cu
+    JOIN appointments a ON a.id = cu.booking_id
+    JOIN clients c ON c.id = a.client_id
+    JOIN products p ON p.id = cu.product_id
+    LEFT JOIN services s ON s.id = cu.service_id
+    WHERE ${whereClause}
+    GROUP BY a.client_id, c.full_name
+    ORDER BY total_qty DESC
+  `;
+  const { rows: totalRows } = await safeQuery(() => pool.query(totalsQuery, values));
+  const client_totals: ConsumableAnalyticsClientTotal[] = totalRows.map((row: any) => ({
+    client_id: row.client_id,
+    client_name: row.client_name,
+    total_qty: Number(row.total_qty ?? 0),
+  }));
+
+  const effectiveLimit = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+    client_totals,
+  };
+},
+
+// Distinct clients/products/services with at least one qualifying
+// consumable_usage row in this salon — populates the report's filter
+// dropdowns. Scoped only to salon_id + booking_id/direction (not the
+// current date/other filters), same "always show every option" reasoning
+// as getPayrollHistoryFiltersAvailable above.
+async getConsumableAnalyticsFiltersAvailable(salonId: string): Promise<{
+  clients: { id: string; label: string }[];
+  products: { id: string; label: string }[];
+  services: { id: string; label: string }[];
+}> {
+  const baseWhere = `cu.salon_id = $1 AND cu.booking_id IS NOT NULL AND cu.direction = 'deduct'`;
+
+  const { rows: clientRows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT c.id, c.full_name AS label
+     FROM consumable_usage cu
+     JOIN appointments a ON a.id = cu.booking_id
+     JOIN clients c ON c.id = a.client_id
+     WHERE ${baseWhere}
+     ORDER BY label ASC`,
+    [salonId]
+  ));
+  const { rows: productRows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT p.id, p.name AS label
+     FROM consumable_usage cu
+     JOIN products p ON p.id = cu.product_id
+     WHERE ${baseWhere}
+     ORDER BY label ASC`,
+    [salonId]
+  ));
+  const { rows: serviceRows } = await safeQuery(() => pool.query(
+    `SELECT DISTINCT s.id, s.name AS label
+     FROM consumable_usage cu
+     JOIN services s ON s.id = cu.service_id
+     WHERE ${baseWhere}
+     ORDER BY label ASC`,
+    [salonId]
+  ));
+
+  return {
+    clients: clientRows.map((r: any) => ({ id: r.id, label: r.label })),
+    products: productRows.map((r: any) => ({ id: r.id, label: r.label })),
+    services: serviceRows.map((r: any) => ({ id: r.id, label: r.label })),
   };
 },
 
