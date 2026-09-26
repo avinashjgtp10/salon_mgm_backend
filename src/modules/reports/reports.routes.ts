@@ -181,6 +181,18 @@ router.post(
 );
 
 // ======================================================
+// CONSUMABLE ANALYTICS REPORT (independent report API)
+// Reads consumable_usage directly, joined through appointments for the
+// client — never calls the Appointment API/service.
+// ======================================================
+
+router.post(
+    "/consumable-analytics",
+    ...baseGuard, viewReport("view_report_consumable_analytics"),
+    reportsController.getConsumableAnalyticsReport
+);
+
+// ======================================================
 // PRODUCT MARGIN REPORT (independent report API)
 // Reads sale_items/products directly — never calls the Appointment
 // API/service. Shows under BOTH Sales and Inventory categories (REPORTS ids
@@ -615,6 +627,19 @@ router.post(
     "/appointment-detail",
     ...baseGuard, viewReport("view_report_appointment_detail"),
     reportsController.getAppointmentDetailReport
+);
+
+// ======================================================
+// ONLINE APPOINTMENT REPORT (independent report API)
+// Same query as Appointment Detail, filtered to appointments classified as
+// booked online (no dedicated source column — see APPOINTMENT_SOURCE_SQL in
+// reports.repository.ts).
+// ======================================================
+
+router.post(
+    "/online-appointment",
+    ...baseGuard, viewReport("view_report_online_appointment"),
+    reportsController.getOnlineAppointmentReport
 );
 
 // ======================================================

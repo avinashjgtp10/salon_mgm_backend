@@ -27,34 +27,17 @@ const auth = authMiddleware;
 const ownerAdmin = roleMiddleware("salon_owner", "admin");
 const ownerAdminStaff = roleMiddleware("salon_owner", "admin", "staff");
 // Wages/Commissions/Tips were previously owner/admin-only with no permission
-// key at all (view_payroll being the sole exception — it existed but was
-// dead for the same role-gate reason). All four opened to staff this phase.
+// key at all. All four opened to staff this phase.
 const manageWages = requirePermission("manage_wages");
-// The Payroll Dashboard's Base Salary column reads each staff member's wage
-// settings for display — same cross-module read dependency as the
-// commissions/tips OR-fallbacks below. view_wages itself has no catalog row
-// (removed per feedback_no_proactive_permission_backfill) and so can never
-// be granted through any UI, which made this route permanently unreachable
-// for staff and broke Payroll's own ticketed Base Salary column.
-const viewWagesOrPayroll = requireAnyPermission(["view_wages", "view_payroll"]);
+const viewWages = requirePermission("view_wages");
 const viewCommissions = requirePermission("view_commissions");
 const manageCommissions = requirePermission("manage_commissions");
 const viewTips = requirePermission("view_tips");
-// The Payroll Dashboard (view_payroll) reads commission totals/history as
-// display-only enrichment for its Commission Paid/Pending columns — without
-// this OR, a staff member granted only the Payroll ticket's keys (not Tip &
-// Commission's) gets a hard 403 on page load just from this background
-// fetch. Scoped to only the two read routes Payroll actually calls; every
-// other commissions route (including the write ones) still requires
-// view_commissions/manage_commissions on its own, unrelated to Payroll.
-const viewCommissionsOrPayroll = requireAnyPermission(["view_commissions", "view_payroll"]);
 // Reports ticket: Commission Report has no dedicated backend endpoint — it
 // reuses these two commissions routes. New report-specific key OR'd
 // alongside the existing feature permissions, same treatment as the other
 // no-route reports (see inventory.routes.ts/attendance.routes.ts).
 const viewCommissionsOrReport = requireAnyPermission(["view_commissions", "view_report_commission_report"]);
-const viewCommissionsOrPayrollOrReport = requireAnyPermission(["view_commissions", "view_payroll", "view_report_commission_report"]);
-const viewTipsOrPayroll = requireAnyPermission(["view_tips", "view_payroll"]);
 // Staff addresses/emergency contacts/schedules/leaves — role gate unchanged
 // (owner/admin for writes, as before), just adding the permission check
 // that was missing entirely.
@@ -127,6 +110,15 @@ const viewTeamOrBooking = requireAnyPermission(["view_team", "create_sales", "ma
 router.get("/", auth, ownerAdminStaff, viewTeamOrBooking, staffController.list);
 router.post("/", auth, ownerAdminStaff, createStaff, validateCreateStaff, staffController.create);
 
+// ─── Live email-availability check for the Staff Login email field (must be
+// BEFORE /:id) — gated on either permission that can reach this field
+// (Add Staff or Edit Staff). ──────────────────────────────────────────────
+router.get(
+  "/check-email",
+  auth, ownerAdminStaff, requireAnyPermission(["add_team_member", "edit_team_member"]),
+  staffController.checkEmail
+);
+
 // ─── Scheduler staff sequence (must be BEFORE /:id — see the Commissions
 // comment above for why a literal path segment loses to an earlier /:id
 // route otherwise) — gated by manage_calendar, the same permission that
@@ -147,7 +139,7 @@ router.get("/export/csv",    auth, ownerAdminStaff, ...exportStaffCsv,   staffCo
 // view_commissions/manage_commissions per the same decision that opened
 // Payroll/Wages/Tips/Marketing this phase.
 router.get("/commissions/summary",              auth, ownerAdminStaff, viewCommissionsOrReport, staffCommissionsController.getCommissionSummary);
-router.get("/commissions/earned",               auth, ownerAdminStaff, viewCommissionsOrPayrollOrReport, staffCommissionsController.getEarnedBySalon);
+router.get("/commissions/earned",               auth, ownerAdminStaff, viewCommissionsOrReport, staffCommissionsController.getEarnedBySalon);
 router.get("/commissions/export",               auth, ownerAdminStaff, viewCommissions, exportCommissionsFormat, staffCommissionsController.exportCommissions);
 router.post("/commissions/:staffId/mark-paid",  auth, ownerAdminStaff, manageCommissions, staffCommissionsController.markStaffCommissionPaid);
 router.get("/commissions/:staffId/settlements", auth, ownerAdminStaff, viewCommissions, staffCommissionsController.getSettlementHistory);
@@ -158,7 +150,7 @@ router.post("/commissions/bulk-configure",      auth, ownerAdminStaff, manageCom
 // Commissions above — a literal segment like "tips" registered after a
 // "/:staffId" route would otherwise be swallowed by it) ──────────────────────
 router.get("/tips/summary",              auth, ownerAdminStaff, viewTips, staffTipsController.getTipSummary);
-router.get("/tips/earned",               auth, ownerAdminStaff, viewTipsOrPayroll, staffTipsController.getEarnedBySalon);
+router.get("/tips/earned",               auth, ownerAdminStaff, viewTips, staffTipsController.getEarnedBySalon);
 // Settle Tip is gated by the new dedicated edit_tip (Tip & Commission
 // ticket) OR the existing manageTips — no distinct add_tip/delete_tip
 // backend action exists (tips are auto-earned at checkout, never manually
@@ -170,7 +162,7 @@ router.get("/tips/:staffId/settlements", auth, ownerAdminStaff, viewTips, staffT
 // ─── Commission Slabs + History — per staff ──────────────────────────────────
 router.get("/:staffId/commissions/slabs",   auth, ownerAdminStaff, viewCommissions, staffCommissionsController.getSlabs);
 router.put("/:staffId/commissions/slabs",   auth, ownerAdminStaff, manageCommissions, staffCommissionsController.upsertSlabs);
-router.get("/:staffId/commissions/history", auth, ownerAdminStaff, viewCommissionsOrPayroll, staffCommissionsController.getStaffHistory);
+router.get("/:staffId/commissions/history", auth, ownerAdminStaff, viewCommissions, staffCommissionsController.getStaffHistory);
 
 // ─── Roles & Permissions — bulk (must be BEFORE /:id routes, same reason as
 // Commissions/Tips above) ──────────────────────────────────────────────────
@@ -209,7 +201,7 @@ router.patch("/:staffId/emergency-contacts/:id",  auth, ownerAdmin, manageStaffP
 router.delete("/:staffId/emergency-contacts/:id", auth, ownerAdmin, manageStaffPersonalData, staffEmergencyContactController.delete);
 
 // ─── Wages ────────────────────────────────────────────────────────────────────
-router.get("/:staffId/wages", auth, ownerAdminStaff, viewWagesOrPayroll, staffWagesController.get);
+router.get("/:staffId/wages", auth, ownerAdminStaff, viewWages, staffWagesController.get);
 router.put("/:staffId/wages", auth, ownerAdminStaff, manageWages, validateUpdateWageSettings, staffWagesController.upsert);
 
 // ─── Commissions — per staff ──────────────────────────────────────────────────

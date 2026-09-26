@@ -48,6 +48,44 @@ export const staffService = {
         return staff;
     },
 
+    // Live "is this email already taken" check for the Staff Login email
+    // field — same duplicate rules create()/update() enforce at save time
+    // (salon-scoped staff duplicate, plus an existing salon_owner/admin/
+    // super_admin account on that email), returned as a plain result instead
+    // of throwing, since this is a query the frontend polls as the admin
+    // types, not a save attempt. `excludeStaffId` lets Edit Staff check
+    // without the staff member's own current email flagging itself.
+    async checkEmailAvailable(
+        salonId: string,
+        email: string,
+        excludeStaffId?: string
+    ): Promise<{ available: boolean; reason?: string }> {
+        const existingStaff = await staffRepository.findByEmail(salonId, email);
+        if (existingStaff && existingStaff.id !== excludeStaffId) {
+            return { available: false, reason: "A staff member with this email already exists" };
+        }
+
+        const existingUser = await authRepository.findUserByEmail(email);
+        if (existingUser) {
+            const excludedStaff = excludeStaffId ? await staffRepository.findById(excludeStaffId, salonId) : null;
+            const isSameLinkedUser = excludedStaff && existingUser.id === excludedStaff.user_id;
+            if (!isSameLinkedUser) {
+                if (existingUser.role === "super_admin") {
+                    return { available: false, reason: "A staff member with this email already exists" };
+                }
+                if (existingUser.role === "salon_owner" || existingUser.role === "admin") {
+                    return {
+                        available: false,
+                        reason: `This email already exists as the ${existingUser.role === "salon_owner" ? "salon owner" : "admin"} and cannot be added as a staff member.`,
+                    };
+                }
+                return { available: false, reason: "A staff member with this email already exists" };
+            }
+        }
+
+        return { available: true };
+    },
+
     async create(params: {
         salonId: string; requesterUserId: string; requesterRole?: string; body: CreateStaffBody;
     }): Promise<{ staffId: string }> {

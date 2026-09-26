@@ -9,40 +9,37 @@ import { waScheduledMessagesService } from "../whatsapp-automation/wa-scheduled-
 import { appointmentsService } from "../appointments/appointments.service";
 import { appointmentsRepository } from "../appointments/appointments.repository";
 import { blockedTimesRepository } from "../blocked_times/blocked_times.repository";
-import { groupWorkingHours } from "../marketplace/marketplace.service";
-import { reviewsService } from "../reviews/reviews.service";
 import { hasFeature } from "../../middleware/planFeature.middleware";
 import { PublicBookingRequest } from "./bookings.types";
+import { bookingEmailOtpService } from "./booking-email-otp.service";
 import logger from "../../config/logger";
 
-// Attaches the salon's real marketplace working hours/amenities and real
-// review data so the public booking page shows actual data instead of always
-// falling back to its hardcoded placeholder defaults (4.8 rating, sample
-// reviews, generic amenities).
+// Attaches booking policy, brand kit, and the marketplace gallery — the
+// hero band's background photo. A first pass at this (heavy cream wash over
+// the whole image) looked washed-out/blurry rather than polished; this now
+// only fetches what the page actually shows, and the page itself applies a
+// left-side-only scrim instead of a full-image wash. Was also fetching
+// marketplace working_hours/amenities and a full review summary (rating/
+// review_count/rating_breakdown/reviews) on every public page load; an audit
+// confirmed none of those are read in the frontend (the page's visible
+// rating/review count come from a separate per-staff query), so those extra
+// DB round trips on an unauthenticated, publicly-reachable endpoint stay
+// removed.
 async function attachPublicExtras(salon: any) {
-    const [marketplaceExtras, reviewSummary, bookingPolicy, brandKit] = await Promise.all([
-        salon?.marketplace_profile_id
-            ? Promise.all([
-                bookingsRepository.findWorkingHours(salon.marketplace_profile_id),
-                bookingsRepository.findAmenities(salon.marketplace_profile_id),
-                bookingsRepository.findGalleryImages(salon.marketplace_profile_id),
-            ]).then(([hourRows, amenities, gallery]) => ({ working_hours: groupWorkingHours(hourRows), amenities, gallery }))
-            : Promise.resolve({ gallery: [] as string[] }),
-        reviewsService.getPublicSummary(salon.id),
+    const [bookingPolicy, brandKit, gallery] = await Promise.all([
         bookingsRepository.findBookingPolicy(salon.id),
         bookingsRepository.findBrandKit(salon.id),
+        salon?.marketplace_profile_id
+            ? bookingsRepository.findGalleryImages(salon.marketplace_profile_id)
+            : Promise.resolve([] as string[]),
     ]);
     return {
         ...salon,
-        ...marketplaceExtras,
         ...bookingPolicy,
         // null for every salon today (the brand-kit editor was removed), in
         // which case the booking page uses its own neutral palette.
         brand_kit: brandKit,
-        rating: reviewSummary.averageRating,
-        review_count: reviewSummary.totalReviews,
-        rating_breakdown: reviewSummary.breakdown,
-        reviews: reviewSummary.reviews,
+        gallery,
     };
 }
 
@@ -233,24 +230,30 @@ async function getStaffWindowsForDate(
             : marketplaceDayHours;
     const stepMin = salonOpen?.slot_interval_minutes ?? DEFAULT_SLOT_INTERVAL_MINUTES;
 
+    // The salon's day-wise Open/End Time from Settings is a hard ceiling: a
+    // staff member's personal schedule can only narrow it, never exceed it.
+    // If the salon is closed this day, nobody is bookable regardless of any
+    // individual staff schedule row.
+    const salonOpenMin = salonOpen ? toMinutes(salonOpen.open_time) : null;
+    const salonCloseMin = salonOpen ? toMinutes(salonOpen.close_time) : null;
+
     // Each staff member's own [open, close) window in minutes-from-midnight
     // for this exact date, or absent if they're not working at all that day.
     const windowByStaff = new Map<string, { open: number; close: number; breaks: BreakRange[] }>();
+    if (!salonOpen) return { windowByStaff, stepMin }; // salon closed this day — no one is bookable
     for (const id of staffIds) {
         const row = scheduleByStaff.get(id);
         if (row) {
             if (!row.is_available || !row.start_time || !row.end_time) continue; // explicit day off
-            windowByStaff.set(id, {
-                open: toMinutes(String(row.start_time).slice(0, 5)),
-                close: toMinutes(String(row.end_time).slice(0, 5)),
-                breaks: parseBreaks(row.breaks),
-            });
-        } else if (salonOpen) {
+            const open = Math.max(toMinutes(String(row.start_time).slice(0, 5)), salonOpenMin!);
+            const close = Math.min(toMinutes(String(row.end_time).slice(0, 5)), salonCloseMin!);
+            if (close <= open) continue; // staff's own hours don't overlap salon hours at all
+            windowByStaff.set(id, { open, close, breaks: parseBreaks(row.breaks) });
+        } else {
             // No exact-date row and no weekly baseline for this day — fall back
             // to the salon's general hours, which carry no per-staff breaks.
-            windowByStaff.set(id, { open: toMinutes(salonOpen.open_time), close: toMinutes(salonOpen.close_time), breaks: [] });
+            windowByStaff.set(id, { open: salonOpenMin!, close: salonCloseMin!, breaks: [] });
         }
-        // else: the salon itself is closed this day — nobody is bookable.
     }
     return { windowByStaff, stepMin };
 }
@@ -440,6 +443,15 @@ export const bookingsService = {
     },
 
     async createBooking(body: PublicBookingRequest) {
+        // Cheapest check first: reject before touching the DB at all if the
+        // client's email hasn't been through POST /bookings/email-otp/verify.
+        // validateCreateBooking already rejected a missing/malformed address;
+        // this is the actual proof of ownership.
+        const emailVerified = await bookingEmailOtpService.isVerified(body.client_email);
+        if (!emailVerified) {
+            throw new AppError(403, "Please verify your email before booking.", "EMAIL_NOT_VERIFIED");
+        }
+
         // findSalonById already excludes inactive/unpublished salons — reject
         // up front instead of letting an unpublished salon still take bookings
         // via a direct link (the marketplace Unpublish toggle must actually work).
@@ -570,12 +582,23 @@ export const bookingsService = {
         // Every booking created here now carries a real stylist — "Any Stylist"
         // no longer leaves an unassigned row for someone to notice later.
         const assignedStaffId: string = assignment.staffId;
+        // Preserved separately from assignedStaffId so the Calendar can still
+        // show this in its own "Any" column — the customer's actual
+        // preference (or lack of one) would otherwise be lost the moment a
+        // real stylist gets picked for them.
+        const isAnyStaff = !body.staff_id;
 
-        // Find or create the client for this salon
-        let client = await clientsRepository.findExistingByEmailOrPhone(
-            { email: body.client_email, phone_number: body.client_phone },
-            body.salon_id
-        );
+        // Find or create the client for this salon. Phone is the unique
+        // identifier here, not email: findExistingByEmailOrPhone (used
+        // elsewhere) checks email FIRST, which would silently attach this
+        // booking to an unrelated client that merely shares an email (a
+        // family/shared address) while never even looking at the phone number
+        // typed on this exact form. A phone number is entered fresh on every
+        // booking and, unlike email, may contain spaces/dashes the user typed
+        // — normalise to digits before matching or storing so "9876543210"
+        // and "987-654-3210" are recognised as the same client.
+        const phoneDigits = String(body.client_phone || "").replace(/\D/g, "");
+        let client = await clientsRepository.findActiveByPhone(phoneDigits, body.salon_id);
 
         if (!client) {
             const nameParts = body.client_name.trim().split(/\s+/);
@@ -585,7 +608,7 @@ export const bookingsService = {
                     first_name: nameParts[0],
                     last_name: nameParts.slice(1).join(" ") || null,
                     email: body.client_email || null,
-                    phone_number: body.client_phone || null,
+                    phone_number: phoneDigits,
                 },
                 body.salon_id,
                 { code: referralCode, rewardStatus: null }
@@ -604,6 +627,7 @@ export const bookingsService = {
             salonId: body.salon_id,
             clientId: client.id,
             staffId: assignedStaffId,
+            isAnyStaff,
             serviceId: body.service_ids[0],
             title,
             scheduledAt: body.scheduled_at,
@@ -675,6 +699,18 @@ export const bookingsService = {
                 const manageUrl = (salon as any).slug
                     ? `${publicBaseUrl()}/book/${(salon as any).slug}/manage/${appointment.id}?token=${generateManageToken(appointment.id)}`
                     : "";
+                // An "Any Available" booking's real staff_name is only the
+                // auto-assignment's pick, not a confirmed stylist — naming
+                // them here would tell the customer someone specific before
+                // the salon has actually reviewed/assigned it (see the
+                // Calendar's "Any" column, which requires exactly that review
+                // before is_any_staff clears). Every downstream message
+                // (WhatsApp confirmation, its 24h reminder, and the email
+                // template's {{staff_name}} token, which is fed from this
+                // same "6" positional variable) uses this instead.
+                const staffNameForMessages = isAnyStaff
+                    ? "our team"
+                    : (full.staff_name ?? "our team");
 
                 const extraVariables: Record<string, string> = {
                     booking_id:        appointment.id,
@@ -707,7 +743,7 @@ export const bookingsService = {
                         "3": formatDate(full.scheduled_at),
                         "4": formatTime(full.scheduled_at),
                         "5": full.services?.[0]?.name ?? full.title ?? "your service",
-                        "6": full.staff_name                  ?? "our team",
+                        "6": staffNameForMessages,
                     },
                     // Keyed on the appointment, so a retried submit or a double
                     // click can never produce a second confirmation.
@@ -732,7 +768,7 @@ export const bookingsService = {
                         clientName:    full.client_name         ?? "Valued Customer",
                         salonName:     (full as any).salon_name ?? "our salon",
                         serviceName:   full.services?.[0]?.name ?? full.title ?? "your service",
-                        staffName:     full.staff_name          ?? "our team",
+                        staffName:     staffNameForMessages,
                     }).catch((err: any) =>
                         logger.error("[wa-scheduled] public booking reminder schedule failed:", err?.message ?? err)
                     );

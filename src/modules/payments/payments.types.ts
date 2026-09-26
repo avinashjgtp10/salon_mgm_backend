@@ -88,6 +88,10 @@ export type CreatePaymentBody = {
   /** Staff's edit of the membership discount RATE for this bill (Available
    *  Benefits panel), as a percentage. Omitted = charge the plan's own rate. */
   membership_discount_percent_requested?: number;
+  /** Which of the client's several eligible percentage memberships staff
+   *  actually ticked in Available Benefits — undefined means "every eligible
+   *  one" (pre-existing callers), an explicit [] means "none ticked yet". */
+  membership_discount_ids?: string[];
   // Intent flag for a percentage/loyalty membership discount. There is no
   // matching "requested" field — the amount follows entirely from the plan's
   // percentage, the eligible line total, and the remaining discount balance.

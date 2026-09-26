@@ -1,14 +1,11 @@
-export type PayrollPeriodType = "weekly" | "biweekly" | "monthly" | "custom";
+export type PayrollEntryStatus = "draft" | "pending" | "paid";
+export type PayrollAdjustmentField = "commission" | "bonus" | "tips" | "deduction" | "other_earning" | "salary";
 
 export type PayrollEntry = {
     id: string;
     salon_id: string;
     staff_id: string;
-    staff_first_name: string;
-    staff_last_name: string | null;
-    staff_designation: string | null;
-    staff_calendar_color: string | null;
-    period_type: PayrollPeriodType;
+    period_type: "custom";
     period_start: string;
     period_end: string;
     base_salary: number;
@@ -17,41 +14,92 @@ export type PayrollEntry = {
     bonus: number;
     salary_advance: number;
     deductions: number;
+    other_earning: number;
     paid_amount: number;
     payment_method: string | null;
     payment_date: string | null;
+    status: PayrollEntryStatus;
+    locked_at: string | null;
     created_at: string;
     updated_at: string;
 };
 
-export type CreatePayrollEntryBody = {
-    staff_id: string;
-    period_type: PayrollPeriodType;
-    period_start: string;
-    period_end: string;
-    base_salary: number;
-    commission?: number;
-    tips?: number;
-    bonus?: number;
-    salary_advance?: number;
-    deductions?: number;
+export type CommissionByCategory = {
+    services: number;
+    products: number;
+    memberships: number;
+    packages: number;
+    other: number;
 };
 
-export type UpdatePayrollEntryBody = Partial<Pick<
-    CreatePayrollEntryBody,
-    "base_salary" | "commission" | "tips" | "bonus" | "salary_advance" | "deductions"
->>;
+export type StaffPayrollSummary = {
+    staff_id: string;
+    staff_first_name: string;
+    staff_last_name: string | null;
+    staff_email: string;
+    staff_calendar_color: string | null;
+    staff_designation: string | null;
+    base_salary: number;
+    compensation_type: string;
+    commission_by_category: CommissionByCategory;
+    commission_total: number;
+    tips_total: number;
+    tips_pending: number;
+    tips_paid: number;
+    bonus: number;
+    deductions: number;
+    other_earning: number;
+    salary_advance: number;
+    net_salary: number;
+    status: PayrollEntryStatus;
+    payment_method: string | null;
+    payment_date: string | null;
+    payroll_entry_id: string | null;
+    adjustments: PayrollAdjustment[];
+};
 
-export type PayPayrollEntryBody = {
+export type PayrollAdjustment = {
+    id: string;
+    salon_id: string;
+    staff_id: string;
+    payroll_entry_id: string;
+    field: PayrollAdjustmentField;
+    original_value: number;
+    adjusted_value: number;
+    reason: string;
+    adjusted_by: string | null;
+    created_at: string;
+};
+
+export type AdjustPayrollBody = {
+    period_start: string;
+    period_end: string;
+    field: PayrollAdjustmentField;
+    adjusted_value: number;
+    reason: string;
+};
+
+export type PayPayrollBody = {
+    period_start: string;
+    period_end: string;
+    payment_method: string;
+    payment_reference?: string;
+};
+
+export type PayrollPayment = {
+    id: string;
+    salon_id: string;
+    staff_id: string;
+    payroll_entry_id: string;
     amount: number;
     payment_method: string;
-    payment_date: string;
+    payment_reference: string | null;
+    paid_by: string | null;
+    paid_at: string;
+    receipt_sent_at: string | null;
 };
 
-export type PayrollEntryListQuery = {
-    period_start: string;
-    period_end: string;
-};
+// ─── Salary advances (unchanged from the pre-existing module) ─────────────
 
 export type SalaryAdvanceTransaction = {
     id: string;

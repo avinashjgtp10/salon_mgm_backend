@@ -980,6 +980,30 @@ export const clientMembershipsRepository = {
     return rows.length ? toClientMembership(rows[0]) : null;
   },
 
+  // Same eligibility gate as findActivePercentageForClient, but returns every
+  // usable percentage membership instead of just the richest one — a client
+  // can now hold several at once (e.g. one restricted to Hair Cut, another to
+  // Facial) and have BOTH apply, each only to the rows it actually covers.
+  // Order doesn't matter for correctness here (resolveMembershipDiscount/
+  // applyMembershipDiscountForBooking sum every membership's own allocation
+  // independently), only for a stable, predictable display order.
+  async findAllActivePercentageForClient(clientId: string, salonId: string): Promise<ClientMembership[]> {
+    const { rows } = await pool.query(
+      `SELECT * FROM client_memberships
+       WHERE client_id = $1 AND salon_id = $2 AND status = 'active'
+         AND pricing_type = 'percentage'
+         AND COALESCE(discount_percent, 0) > 0
+         AND (COALESCE(benefit_type, 'discount_balance') = 'validity'
+              OR discount_balance_remaining > 0)
+         AND (COALESCE(end_date, expires_at) IS NULL
+              OR COALESCE(end_date, expires_at) >= CURRENT_DATE)
+       ORDER BY (COALESCE(benefit_type, 'discount_balance') = 'validity') DESC,
+                discount_balance_remaining DESC`,
+      [clientId, salonId],
+    );
+    return rows.map((r) => toClientMembership(r));
+  },
+
   async getDiscountGivenForAppointment(appointmentId: string): Promise<number> {
     const { rows } = await pool.query(
       `SELECT COALESCE(SUM(amount_deducted),0) AS total FROM membership_usage_log

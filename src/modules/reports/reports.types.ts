@@ -3530,6 +3530,37 @@ export interface AppointmentDetailReportResponse {
 }
 
 // ===============================
+// ONLINE APPOINTMENT REPORT
+// Same shape as Appointment Detail — filtered server-side to only
+// appointments classified as booked online (see APPOINTMENT_SOURCE_SQL in
+// reports.repository.ts). Also carries client_phone, which Appointment
+// Detail's row doesn't need — this report's rows feed the "Send Campaign"
+// (WhatsApp) action, which requires a phone number per selected row.
+// ===============================
+
+export interface OnlineAppointmentReportFilters {
+    from?: string;
+    to?: string;
+    statuses?: string[];
+    search?: string;
+    payment_methods?: string[];
+    staff_ids?: string[];
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface OnlineAppointmentReportRow extends AppointmentDetailReportRow {
+    client_phone: string | null;
+}
+export type OnlineAppointmentReportPagination = AppointmentDetailReportPagination;
+
+export interface OnlineAppointmentReportResponse {
+    rows: OnlineAppointmentReportRow[];
+    pagination: OnlineAppointmentReportPagination;
+}
+
+// ===============================
 // Upcoming Appointments Report (independent report API —
 // POST /api/report/upcoming-appointments)
 // Same appointments-table shape as Appointment Detail above, but scoped to
@@ -4114,4 +4145,69 @@ export interface ClientRatingReportResponse {
     rows: ClientRatingReportRow[];
     pagination: ClientRatingReportPagination;
     stats: ClientRatingReportStats;
+}
+
+// ===============================
+// CONSUMABLE ANALYTICS REPORT (independent report API —
+// POST /api/report/consumable-analytics)
+// Per-client consumable product usage. Reads consumable_usage directly
+// (the ledger written when a service is completed / stock is deducted for a
+// booking — see inventory-transactions.repository.ts), joined through
+// appointments to get the client, since consumable_usage itself only has a
+// booking_id, not a client_id. Only rows tied to a real booking are
+// included (booking_id IS NOT NULL) — manual stock adjustments and reverts
+// aren't attributable to any client and are excluded, not a data gap.
+// ===============================
+
+export interface ConsumableAnalyticsReportFilters {
+    from?: string;
+    to?: string;
+    client_ids?: string[];
+    product_ids?: string[];
+    service_ids?: string[];
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface ConsumableAnalyticsReportRow {
+    id: string;
+    client_id: string;
+    client_name: string | null;
+    product_id: string;
+    product_name: string;
+    qty: number;
+    unit: string | null;
+    service_id: string | null;
+    service_name: string | null;
+    usage_date: string;
+}
+
+export interface ConsumableAnalyticsClientTotal {
+    client_id: string;
+    client_name: string | null;
+    total_qty: number;
+}
+
+export interface ConsumableAnalyticsReportPagination {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+}
+
+export interface ConsumableAnalyticsFilterOption {
+    id: string;
+    label: string;
+}
+
+export interface ConsumableAnalyticsReportResponse {
+    rows: ConsumableAnalyticsReportRow[];
+    pagination: ConsumableAnalyticsReportPagination;
+    client_totals: ConsumableAnalyticsClientTotal[];
+    filters_available: {
+        clients: ConsumableAnalyticsFilterOption[];
+        products: ConsumableAnalyticsFilterOption[];
+        services: ConsumableAnalyticsFilterOption[];
+    };
 }

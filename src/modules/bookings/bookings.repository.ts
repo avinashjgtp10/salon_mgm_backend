@@ -1,4 +1,5 @@
 import pool from "../../config/database";
+import { digitalMenuRepository } from "../digital-menu/digital-menu.repository";
 
 // Postgres "undefined_column" — thrown if Migration/add_marketplace_booking_
 // settings_and_saved_links.sql hasn't been run yet. Booking-policy reads are
@@ -131,31 +132,10 @@ export const bookingsRepository = {
         return rows[0] || null;
     },
 
-    // Working hours + amenities live in the marketplace tables, keyed by
-    // marketplace_profile_id (null when the salon has no marketplace profile).
-    async findWorkingHours(marketplaceProfileId: string) {
-        const { rows } = await pool.query(
-            `SELECT day_of_week, is_open, open_time, close_time, slot_index
-             FROM marketplace_working_hours
-             WHERE profile_id = $1 ORDER BY day_of_week, slot_index`,
-            [marketplaceProfileId]
-        );
-        return rows;
-    },
-
-    async findAmenities(marketplaceProfileId: string) {
-        const { rows } = await pool.query(
-            `SELECT feature_key FROM marketplace_features
-             WHERE profile_id = $1 AND feature_type = 'amenity'`,
-            [marketplaceProfileId]
-        );
-        return rows.map((r) => r.feature_key as string);
-    },
-
-    // Gallery photos for the public hero carousel. Cover first, then the salon's
-    // own ordering — the same order the Marketplace Profile editor shows.
-    // Tolerant of a missing table so an un-migrated environment renders the page
-    // without a carousel rather than 500ing the whole booking flow.
+    // Gallery photos for the public hero band's background. Cover first, then
+    // the salon's own ordering — the same order the Marketplace Profile
+    // editor shows. Tolerant of a missing table so an un-migrated environment
+    // renders the page without a hero photo rather than 500ing the booking flow.
     async findGalleryImages(marketplaceProfileId: string) {
         try {
             const { rows } = await pool.query(
@@ -182,6 +162,16 @@ export const bookingsRepository = {
     // on, used for the "Most booked" shortcut. Real usage, not a guess: a
     // catalogue this size is unusable without a way in.
     async findActiveServices(salonId: string) {
+        // BUG-OB-DM-01: Online Booking used to show every active, bookable
+        // catalog service regardless of the salon's Digital Menu curation — a
+        // salon that configured a specific 7-service selection there still
+        // saw its whole catalog on the public booking page. Digital Menu's
+        // own selection (digital_menu_services, mode = 'specific') is now the
+        // same source of truth here; mode = 'all_active' or no menu row at
+        // all (never configured) keeps today's unfiltered behavior.
+        const menu = await digitalMenuRepository.findBySalonId(salonId);
+        const specific = menu?.service_selection_mode === "specific";
+
         const { rows } = await pool.query(
             `SELECT s.id, s.name, s.description, s.price, s.price_type,
                     s.duration_minutes AS duration,
@@ -199,9 +189,10 @@ export const bookingsRepository = {
                    AND status NOT IN ('cancelled', 'deleted')
                  GROUP BY service_id
              ) b ON b.service_id = s.id
+             ${specific ? "JOIN digital_menu_services dms ON dms.service_id = s.id AND dms.menu_id = $2" : ""}
              WHERE s.salon_id = $1 AND s.is_active = true AND s.online_booking = true
              ORDER BY COALESCE(c.display_order, 2147483647), c.name NULLS LAST, s.name ASC`,
-            [salonId]
+            specific ? [salonId, menu!.id] : [salonId]
         );
         return rows;
     },
@@ -307,12 +298,21 @@ export const bookingsRepository = {
         return rows.length > 0;
     },
 
+    // Same Digital Menu gate as findActiveServices, applied at the point a
+    // service_id is actually submitted for booking — otherwise a service
+    // hidden from a "specific" Digital Menu selection could still be booked
+    // by anyone who already had (or guessed) its id, bypassing what the
+    // customer was ever shown.
     async findServiceById(id: string, salonId: string) {
+        const menu = await digitalMenuRepository.findBySalonId(salonId);
+        const specific = menu?.service_selection_mode === "specific";
+
         const { rows } = await pool.query(
-            `SELECT id, name, description, price, price_type, duration_minutes AS duration
-             FROM services
-             WHERE id = $1 AND salon_id = $2 AND is_active = true`,
-            [id, salonId]
+            `SELECT s.id, s.name, s.description, s.price, s.price_type, s.duration_minutes AS duration
+             FROM services s
+             ${specific ? "JOIN digital_menu_services dms ON dms.service_id = s.id AND dms.menu_id = $3" : ""}
+             WHERE s.id = $1 AND s.salon_id = $2 AND s.is_active = true`,
+            specific ? [id, salonId, menu!.id] : [id, salonId]
         );
         return rows[0] || null;
     },
@@ -498,6 +498,7 @@ export const bookingsRepository = {
         salonId: string;
         clientId: string;
         staffId?: string | null;
+        isAnyStaff?: boolean;
         serviceId: string;
         title: string;
         scheduledAt: string;
@@ -512,14 +513,14 @@ export const bookingsRepository = {
                 scheduled_at, duration_minutes,
                 ends_at,
                 colour, created_by,
-                services
+                services, source, is_any_staff
             ) VALUES (
                 $1, $2, $3, $4,
                 $5, $6, $7,
                 $8, $9,
                 ($8::timestamptz + ($9::integer * INTERVAL '1 minute')),
                 $10, $11,
-                $12::jsonb
+                $12::jsonb, $13, $14
             )
             RETURNING *`,
             [
@@ -535,6 +536,8 @@ export const bookingsRepository = {
                 "blue",
                 null,
                 JSON.stringify(params.services),
+                "online_booking",
+                params.isAnyStaff ?? false,
             ]
         );
         return rows[0];

@@ -22,21 +22,21 @@ const getParamString = (value: unknown): string | null => {
 
 export const usersController = {
   /**
-   * GET /api/v1/users/me
+   * GET /api/v1/users/profile
    * Protected
    */
   async me(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const userId = req.user?.userId;
 
-      logger.info("GET /users/me called", {
+      logger.info("GET /users/profile called", {
         userId,
         method: req.method,
         path: req.originalUrl,
       });
 
       if (!userId) {
-        logger.warn("GET /users/me unauthorized (missing req.user.userId)", {
+        logger.warn("GET /users/profile unauthorized (missing req.user.userId)", {
           method: req.method,
           path: req.originalUrl,
         });
@@ -45,7 +45,7 @@ export const usersController = {
 
       const user = await usersService.me(userId, req.user?.salonId);
 
-      logger.info("GET /users/me success", {
+      logger.info("GET /users/profile success", {
         userId,
         method: req.method,
         path: req.originalUrl,
@@ -53,7 +53,7 @@ export const usersController = {
 
       return sendSuccess(res, 200, user, "User profile fetched successfully");
     } catch (error) {
-      logger.error("GET /users/me error", {
+      logger.error("GET /users/profile error", {
         method: req.method,
         path: req.originalUrl,
         error,
