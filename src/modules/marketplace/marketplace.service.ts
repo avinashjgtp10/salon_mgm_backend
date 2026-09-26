@@ -45,21 +45,15 @@ export const marketplaceService = {
 
   async getProfile(salonId: string): Promise<MarketplaceProfileFull> {
     const profile = await _ensureProfile(salonId);
-    const [location, hourRows, images, featureRows] = await Promise.all([
-      marketplaceLocationRepo.findByProfileId(profile.id),
-      marketplaceWorkingHoursRepo.findByProfileId(profile.id),
-      marketplaceImagesRepo.findByProfileId(profile.id),
-      marketplaceFeaturesRepo.findByProfileId(profile.id),
-    ]);
+    // Was also fetching location/images/amenities/highlights/values here —
+    // an audit confirmed MarketplaceProfilePage.tsx never reads any of them
+    // (the gallery UI uses a separate getImages call), so those 3 joins ran
+    // on every profile page load for output nobody consumed.
+    const hourRows = await marketplaceWorkingHoursRepo.findByProfileId(profile.id);
 
     return {
       ...profile,
-      location,
       working_hours: groupWorkingHours(hourRows),
-      images,
-      amenities:  featureRows.filter((f) => f.feature_type === "amenity")  .map((f) => f.feature_key as Amenity),
-      highlights: featureRows.filter((f) => f.feature_type === "highlight").map((f) => f.feature_key as Highlight),
-      values:     featureRows.filter((f) => f.feature_type === "value")    .map((f) => f.feature_key as Value),
     };
   },
 

@@ -70,29 +70,43 @@ export const campaignsService = {
     const contacts = dedupeContacts(body.contacts)
 
     const client = await pool.connect()
+    let campaignId: string | undefined
     try {
       await client.query('BEGIN')
-      const campaignId = await campaignsRepository.create(
+      // Both calls now run ON this same client — previously they queried the
+      // shared pool directly, so BEGIN/COMMIT/ROLLBACK here were a complete
+      // no-op: a failed bulkInsertContacts left the campaign row it had
+      // already (auto-)committed sitting orphaned forever (total_contacts
+      // set, but zero actual rows in wa_campaign_contacts) — and 10 minutes
+      // later reconcileStalledCampaigns' "no pending contacts left = must be
+      // done" check would wrongly flip that empty, broken campaign to
+      // COMPLETED, hiding the failure entirely. Now a failed insert rolls
+      // back cleanly and nothing is left behind.
+      campaignId = await campaignsRepository.create(
         salonId, body.template_id, body.name, batchSize,
-        contacts.length, scheduledAt
+        contacts.length, scheduledAt, client
       )
-      await campaignsRepository.bulkInsertContacts(campaignId, contacts)
+      await campaignsRepository.bulkInsertContacts(campaignId, contacts, client)
       await client.query('COMMIT')
-
-      if (!isScheduled) {
-        // Send immediately
-        await queueCampaignBatches(campaignId, salonId, batchSize)
-      } else {
-        logger.info(`📅 Campaign "${body.name}" scheduled for ${scheduledAt}`)
-      }
-
-      return campaignsRepository.findById(campaignId, salonId)
-    } catch (err) {
-      await client.query('ROLLBACK')
-      throw err
+    } catch (err: any) {
+      try { await client.query('ROLLBACK') } catch { /* connection may already be dead */ }
+      logger.error(`❌ Campaign creation failed for salon ${salonId} (${contacts.length} contacts): ${err.message}`, { stack: err.stack })
+      // Surface the real cause instead of letting it fall through to the
+      // generic "Something went wrong" — this failure has no safe default
+      // and needs to be actionable from the toast alone.
+      throw err instanceof AppError ? err : new AppError(500, `Campaign creation failed: ${err.message}`, 'CAMPAIGN_CREATE_FAILED')
     } finally {
       client.release()
     }
+
+    if (!isScheduled) {
+      // Send immediately
+      await queueCampaignBatches(campaignId, salonId, batchSize)
+    } else {
+      logger.info(`📅 Campaign "${body.name}" scheduled for ${scheduledAt}`)
+    }
+
+    return campaignsRepository.findById(campaignId, salonId)
   },
 
   // ── Resend — relaunches the same campaign to its full original contact list,
@@ -115,6 +129,7 @@ export const campaignsService = {
     if (contacts.length === 0) throw new AppError(400, 'This campaign has no contacts to resend', 'NO_CONTACTS')
 
     const client = await pool.connect()
+    let newCampaignId: string | undefined
     try {
       await client.query('BEGIN')
 
@@ -138,22 +153,27 @@ export const campaignsService = {
         ? contacts.map(c => ({ ...c, variables: { ...c.variables, ...variables } }))
         : contacts
 
-      const newCampaignId = await campaignsRepository.create(
+      // Both calls run ON this same client, same reasoning as create() above
+      // — otherwise a failed bulkInsertContacts leaves an orphaned, contact-
+      // less campaign row that reconcileStalledCampaigns later mislabels
+      // COMPLETED instead of rolling back cleanly.
+      newCampaignId = await campaignsRepository.create(
         salonId, campaign.template_id, `${campaign.name} (Resend)`, campaign.batch_size,
-        contactsToInsert.length, null
+        contactsToInsert.length, null, client
       )
-      await campaignsRepository.bulkInsertContacts(newCampaignId, contactsToInsert)
+      await campaignsRepository.bulkInsertContacts(newCampaignId, contactsToInsert, client)
       await client.query('COMMIT')
-
-      await queueCampaignBatches(newCampaignId, salonId, campaign.batch_size)
-
-      return campaignsRepository.findById(newCampaignId, salonId)
-    } catch (err) {
-      await client.query('ROLLBACK')
-      throw err
+    } catch (err: any) {
+      try { await client.query('ROLLBACK') } catch { /* connection may already be dead */ }
+      logger.error(`❌ Campaign resend failed for campaign ${id}: ${err.message}`, { stack: err.stack })
+      throw err instanceof AppError ? err : new AppError(500, `Campaign resend failed: ${err.message}`, 'CAMPAIGN_RESEND_FAILED')
     } finally {
       client.release()
     }
+
+    await queueCampaignBatches(newCampaignId, salonId, campaign.batch_size)
+
+    return campaignsRepository.findById(newCampaignId, salonId)
   },
 
   // ── Resend to ONE failed/blocked contact — never touches any other contact
@@ -269,6 +289,17 @@ export const campaignsService = {
       try {
         const pending = await campaignsRepository.getPendingContactIds(campaign.id)
         if (pending.length === 0) {
+          // "No pending contacts" is only "everything was processed" if
+          // there were ever any contact rows to process. A campaign whose
+          // own contacts insert failed (see create()'s now-real transaction)
+          // has total_contacts > 0 but zero actual rows — that's a creation
+          // failure, not a finished send, and must not be reported as one.
+          const actualContacts = await campaignsRepository.countContacts(campaign.id)
+          if (actualContacts === 0) {
+            await campaignsRepository.updateStatus(campaign.id, 'FAILED')
+            logger.error(`❌ Campaign "${campaign.name}" (${campaign.id}) stalled with zero contact rows — marked FAILED instead of COMPLETED`)
+            continue
+          }
           // Everything was actually processed — just the final completion
           // update itself never landed. Finish it, nothing left to send.
           await campaignsRepository.updateStatus(campaign.id, 'COMPLETED')

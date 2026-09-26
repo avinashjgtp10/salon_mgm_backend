@@ -337,12 +337,20 @@ const SALES_SUMMARY_ITEM_CTES = `
   )
 `;
 
+// Was a title-text/null-client_id guess (predates the appointments.source
+// column actually being populated) — every real calendar appointment with a
+// client and no "walk" in its title fell through to 'Online' by default, so
+// staff-booked appointments were miscounted as online bookings. Now reads the
+// real tag: bookingsRepository.createAppointment() sets 'online_booking' for
+// every public Online Booking submission, quick-sale checkout sets
+// 'quick_sale' (a walk-in, per Quick Sale's own naming), and everything else
+// is a staff-created calendar appointment — neither Walk-in nor Online, so it
+// doesn't land in either of getAppointmentCards' two filtered counts.
 const APPOINTMENT_SOURCE_SQL = `
-  CASE
-    WHEN LOWER(COALESCE(a.title, '')) LIKE '%walk%'
-      OR a.client_id IS NULL
-    THEN 'Walk-in'
-    ELSE 'Online'
+  CASE a.source
+    WHEN 'quick_sale' THEN 'Walk-in'
+    WHEN 'online_booking' THEN 'Online'
+    ELSE 'Calendar'
   END
 `;
 

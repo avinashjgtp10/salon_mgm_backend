@@ -175,11 +175,11 @@ export type UpsertFeaturesBody = {
 
 // ─── Full Profile (aggregated) ────────────────────────────────────────────────
 
+// location/images/amenities/highlights/values used to be fetched here too —
+// an audit found MarketplaceProfilePage.tsx (the only consumer of this type)
+// never reads any of them; the gallery UI hydrates from a separate getImages
+// call, not profile.images. Removed rather than left unread on every profile
+// page load.
 export type MarketplaceProfileFull = MarketplaceProfile & {
-  location: MarketplaceLocation | null;
   working_hours: WorkingHoursDay[];
-  images: MarketplaceImage[];
-  amenities: Amenity[];
-  highlights: Highlight[];
-  values: Value[];
 };

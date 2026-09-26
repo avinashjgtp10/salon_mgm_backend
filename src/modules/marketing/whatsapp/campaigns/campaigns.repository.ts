@@ -1,6 +1,13 @@
 import pool from '../../../../config/database'
 import { v4 as uuid } from 'uuid'
+import { PoolClient } from 'pg'
 import { WACampaign, WACampaignContact } from './campaigns.types'
+
+// Both create() and bulkInsertContacts() below take an optional `db` (a
+// checked-out PoolClient) so a caller running an explicit BEGIN/COMMIT can
+// have these participate in that same transaction — pass the pool instead
+// and they run as before, each auto-committing independently.
+type Queryable = Pick<PoolClient, 'query'>
 
 export const campaignsRepository = {
 
@@ -53,13 +60,14 @@ export const campaignsRepository = {
     name:          string,
     batchSize:     number,
     totalContacts: number,
-    scheduledAt?:  string | null
+    scheduledAt?:  string | null,
+    db:            Queryable = pool
   ): Promise<string> {
     const campaignId  = uuid()
     const isScheduled = scheduledAt && new Date(scheduledAt) > new Date()
     const status      = isScheduled ? 'SCHEDULED' : 'SENDING'
 
-    await pool.query(`
+    await db.query(`
       INSERT INTO wa_campaigns
         (id, salon_id, template_id, name, status, batch_size, total_contacts, scheduled_at, started_at)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,${isScheduled ? 'NULL' : 'NOW()'})
@@ -69,7 +77,8 @@ export const campaignsRepository = {
 
   async bulkInsertContacts(
     campaignId: string,
-    contacts:   Array<{ phone: string; name?: string | null; variables?: Record<string, any> }>
+    contacts:   Array<{ phone: string; name?: string | null; variables?: Record<string, any> }>,
+    db:         Queryable = pool
   ): Promise<void> {
     const CHUNK = 500
     for (let i = 0; i < contacts.length; i += CHUNK) {
@@ -83,7 +92,7 @@ export const campaignsRepository = {
         c.name      ?? null,
         JSON.stringify(c.variables ?? {}),
       ])
-      await pool.query(
+      await db.query(
         `INSERT INTO wa_campaign_contacts (id, campaign_id, phone, name, variables) VALUES ${vals}`,
         params
       )
@@ -127,6 +136,14 @@ export const campaignsRepository = {
       [campaignId]
     )
     return rows.map(r => r.id)
+  },
+
+  async countContacts(campaignId: string): Promise<number> {
+    const { rows } = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM wa_campaign_contacts WHERE campaign_id = $1`,
+      [campaignId]
+    )
+    return rows[0]?.n ?? 0
   },
 
   async updateStatus(id: string, status: string, extra?: { started_at?: boolean }): Promise<WACampaign> {
