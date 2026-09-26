@@ -381,6 +381,7 @@ const DEFAULT_STAFF_PERMS: Record<string, boolean> = {
     view_report_enquiry_report: false, download_report_enquiry_report: false,
     // Appointments
     view_report_appointment_detail: false, download_report_appointment_detail: false,
+    view_report_online_appointment: false, download_report_online_appointment: false,
     view_report_upcoming_appointments: false, download_report_upcoming_appointments: false,
     view_report_no_show_recovery: false, download_report_no_show_recovery: false,
     // Inventory

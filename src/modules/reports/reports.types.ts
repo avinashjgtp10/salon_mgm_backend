@@ -3530,6 +3530,37 @@ export interface AppointmentDetailReportResponse {
 }
 
 // ===============================
+// ONLINE APPOINTMENT REPORT
+// Same shape as Appointment Detail — filtered server-side to only
+// appointments classified as booked online (see APPOINTMENT_SOURCE_SQL in
+// reports.repository.ts). Also carries client_phone, which Appointment
+// Detail's row doesn't need — this report's rows feed the "Send Campaign"
+// (WhatsApp) action, which requires a phone number per selected row.
+// ===============================
+
+export interface OnlineAppointmentReportFilters {
+    from?: string;
+    to?: string;
+    statuses?: string[];
+    search?: string;
+    payment_methods?: string[];
+    staff_ids?: string[];
+    page?: number;
+    limit?: number;
+    is_export?: boolean;
+}
+
+export interface OnlineAppointmentReportRow extends AppointmentDetailReportRow {
+    client_phone: string | null;
+}
+export type OnlineAppointmentReportPagination = AppointmentDetailReportPagination;
+
+export interface OnlineAppointmentReportResponse {
+    rows: OnlineAppointmentReportRow[];
+    pagination: OnlineAppointmentReportPagination;
+}
+
+// ===============================
 // Upcoming Appointments Report (independent report API —
 // POST /api/report/upcoming-appointments)
 // Same appointments-table shape as Appointment Detail above, but scoped to
