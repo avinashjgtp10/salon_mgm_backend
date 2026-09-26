@@ -582,6 +582,11 @@ export const bookingsService = {
         // Every booking created here now carries a real stylist — "Any Stylist"
         // no longer leaves an unassigned row for someone to notice later.
         const assignedStaffId: string = assignment.staffId;
+        // Preserved separately from assignedStaffId so the Calendar can still
+        // show this in its own "Any" column — the customer's actual
+        // preference (or lack of one) would otherwise be lost the moment a
+        // real stylist gets picked for them.
+        const isAnyStaff = !body.staff_id;
 
         // Find or create the client for this salon. Phone is the unique
         // identifier here, not email: findExistingByEmailOrPhone (used
@@ -622,6 +627,7 @@ export const bookingsService = {
             salonId: body.salon_id,
             clientId: client.id,
             staffId: assignedStaffId,
+            isAnyStaff,
             serviceId: body.service_ids[0],
             title,
             scheduledAt: body.scheduled_at,
@@ -693,6 +699,18 @@ export const bookingsService = {
                 const manageUrl = (salon as any).slug
                     ? `${publicBaseUrl()}/book/${(salon as any).slug}/manage/${appointment.id}?token=${generateManageToken(appointment.id)}`
                     : "";
+                // An "Any Available" booking's real staff_name is only the
+                // auto-assignment's pick, not a confirmed stylist — naming
+                // them here would tell the customer someone specific before
+                // the salon has actually reviewed/assigned it (see the
+                // Calendar's "Any" column, which requires exactly that review
+                // before is_any_staff clears). Every downstream message
+                // (WhatsApp confirmation, its 24h reminder, and the email
+                // template's {{staff_name}} token, which is fed from this
+                // same "6" positional variable) uses this instead.
+                const staffNameForMessages = isAnyStaff
+                    ? "our team"
+                    : (full.staff_name ?? "our team");
 
                 const extraVariables: Record<string, string> = {
                     booking_id:        appointment.id,
@@ -725,7 +743,7 @@ export const bookingsService = {
                         "3": formatDate(full.scheduled_at),
                         "4": formatTime(full.scheduled_at),
                         "5": full.services?.[0]?.name ?? full.title ?? "your service",
-                        "6": full.staff_name                  ?? "our team",
+                        "6": staffNameForMessages,
                     },
                     // Keyed on the appointment, so a retried submit or a double
                     // click can never produce a second confirmation.
@@ -750,7 +768,7 @@ export const bookingsService = {
                         clientName:    full.client_name         ?? "Valued Customer",
                         salonName:     (full as any).salon_name ?? "our salon",
                         serviceName:   full.services?.[0]?.name ?? full.title ?? "your service",
-                        staffName:     full.staff_name          ?? "our team",
+                        staffName:     staffNameForMessages,
                     }).catch((err: any) =>
                         logger.error("[wa-scheduled] public booking reminder schedule failed:", err?.message ?? err)
                     );

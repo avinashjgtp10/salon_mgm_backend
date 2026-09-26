@@ -269,6 +269,10 @@ export type CreateAppointmentBody = {
     include_gst?: boolean;
     apply_membership_wallet?: boolean;
     reopened_from_paid?: boolean;
+    // Cleared to false when an "Any Available" online booking is edited
+    // through the internal Calendar — see bookings.repository.ts's
+    // createAppointment for where it's originally set true.
+    is_any_staff?: boolean;
 };
 
 export type UpdateAppointmentBody = Partial<Omit<CreateAppointmentBody, "salon_id">>;
