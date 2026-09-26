@@ -120,6 +120,7 @@ import {
     MemberSaleFiltersAvailable,
     MemberSaleChartFilters,
     AppointmentDetailReportRow,
+    OnlineAppointmentReportRow,
     UpcomingAppointmentsReportRow,
     UpcomingAppointmentsFiltersAvailable,
     CategoryTotalsRow,
@@ -13412,6 +13413,243 @@ async getAppointmentDetailReport(
       page: limit ? page : 1,
       limit: effectiveLimit,
       total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
+    },
+  };
+},
+
+// ======================================================
+// ONLINE APPOINTMENT REPORT (independent report API)
+// POST /api/report/online-appointment — identical query to Appointment
+// Detail above, with one added condition: only appointments classified as
+// booked online (APPOINTMENT_SOURCE_SQL = 'Online'). There's no dedicated
+// booking-source column on the appointments table — this reuses the same
+// heuristic (title doesn't look like a walk-in AND client_id is present)
+// that the rest of the app already uses to distinguish Online vs Walk-in.
+// ======================================================
+async getOnlineAppointmentReport(
+  salonId: string,
+  filters: {
+    from?: string; to?: string; statuses?: string[];
+    search?: string; payment_methods?: string[]; staff_ids?: string[];
+    page?: number; limit?: number; is_export?: boolean;
+  }
+): Promise<{
+  items: OnlineAppointmentReportRow[];
+  pagination: { total: number; page: number; limit: number; total_pages: number };
+}> {
+  const values: any[] = [salonId];
+  // APPOINTMENT_SOURCE_SQL only needs a.title/a.client_id, both present on
+  // the raw appointments row, so the online-only filter can be folded
+  // directly into this initial WHERE (scoping the `matched` CTE) rather than
+  // needing the later joined/outer stage.
+  const where = ["a.salon_id = $1", `(${APPOINTMENT_SOURCE_SQL}) = 'Online'`];
+  let idx = 2;
+
+  if (filters.from) {
+    where.push(`a.scheduled_at >= $${idx++}::timestamptz`);
+    values.push(`${filters.from}T00:00:00+05:30`);
+  }
+  if (filters.to) {
+    where.push(`a.scheduled_at < ($${idx++}::timestamptz + interval '1 day')`);
+    values.push(`${filters.to}T00:00:00+05:30`);
+  }
+  if (filters.statuses && filters.statuses.length > 0) {
+    where.push(`a.status::text = ANY($${idx++}::text[])`);
+    values.push(filters.statuses);
+  }
+
+  const page = Math.max(1, Number(filters.page ?? 1));
+  const requestedLimit = Math.max(1, Number(filters.limit ?? 10));
+  const limit = filters.is_export ? undefined : Math.min(requestedLimit, 200);
+  const offset = limit ? (page - 1) * limit : 0;
+
+  const outerWhere: string[] = [];
+  if (filters.search?.trim()) {
+    outerWhere.push(`(
+      COALESCE(e.client_name, '') ILIKE $${idx}
+      OR COALESCE(e.phone_number, '') ILIKE $${idx}
+      OR COALESCE(e.invoice_number, '') ILIKE $${idx}
+      OR COALESCE(e.item_name, '') ILIKE $${idx}
+      OR COALESCE(e.staff_name, '') ILIKE $${idx}
+    )`);
+    values.push(`%${filters.search.trim()}%`);
+    idx++;
+  }
+  if (filters.payment_methods && filters.payment_methods.length > 0) {
+    outerWhere.push(`(${filters.payment_methods.map(() => `e.payment_method ILIKE $${idx++}`).join(" OR ")})`);
+    filters.payment_methods.forEach(m => values.push(`%${m}%`));
+  }
+  if (filters.staff_ids && filters.staff_ids.length > 0) {
+    outerWhere.push(`COALESCE(
+      CASE WHEN e.item_staff_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+           THEN e.item_staff_id::uuid END,
+      e.staff_id
+    ) = ANY($${idx++}::uuid[])`);
+    values.push(filters.staff_ids);
+  }
+  const outerWhereClause = outerWhere.length ? `WHERE ${outerWhere.join(" AND ")}` : "";
+
+  const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
+  const limitValues = limit ? [limit, offset] : [];
+
+  const query = `
+    WITH matched AS (
+      SELECT a.*
+      FROM appointments a
+      WHERE ${where.join(" AND ")}
+    ),
+    exploded AS (
+      SELECT
+        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.status,
+        'service' AS item_type,
+        svc.value->>'name' AS item_name,
+        NULLIF(svc.value->>'staff_id', '') AS item_staff_id,
+        NULLIF(svc.value->>'staff_name', '') AS item_staff_name,
+        COALESCE(NULLIF(svc.value->>'price', '')::numeric, 0) AS item_price
+      FROM matched m
+      LEFT JOIN LATERAL jsonb_array_elements(COALESCE(m.services, '[]'::jsonb)) AS svc(value) ON TRUE
+      WHERE svc.value IS NOT NULL
+
+      UNION ALL
+
+      SELECT
+        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.status,
+        'product' AS item_type,
+        prod.value->>'name' AS item_name,
+        NULLIF(prod.value->>'staff_id', '') AS item_staff_id,
+        NULLIF(prod.value->>'staff_name', '') AS item_staff_name,
+        COALESCE(NULLIF(prod.value->>'price', '')::numeric, 0) AS item_price
+      FROM matched m
+      LEFT JOIN LATERAL jsonb_array_elements(COALESCE(m.product_items, '[]'::jsonb)) AS prod(value) ON TRUE
+      WHERE prod.value IS NOT NULL
+
+      UNION ALL
+
+      SELECT
+        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.status,
+        'package' AS item_type,
+        pkg.value->>'name' AS item_name,
+        NULLIF(pkg.value->>'staff_id', '') AS item_staff_id,
+        NULLIF(pkg.value->>'staff_name', '') AS item_staff_name,
+        COALESCE(NULLIF(pkg.value->>'price', '')::numeric, 0) AS item_price
+      FROM matched m
+      LEFT JOIN LATERAL jsonb_array_elements(COALESCE(m.package_items, '[]'::jsonb)) AS pkg(value) ON TRUE
+      WHERE pkg.value IS NOT NULL
+
+      UNION ALL
+
+      SELECT
+        m.id, m.scheduled_at, m.duration_minutes, m.created_at, m.client_id, m.staff_id, m.status,
+        'membership' AS item_type,
+        mem.value->>'name' AS item_name,
+        NULLIF(mem.value->>'staff_id', '') AS item_staff_id,
+        NULLIF(mem.value->>'staff_name', '') AS item_staff_name,
+        COALESCE(NULLIF(mem.value->>'price', '')::numeric, 0) AS item_price
+      FROM matched m
+      LEFT JOIN LATERAL jsonb_array_elements(COALESCE(m.membership_items, '[]'::jsonb)) AS mem(value) ON TRUE
+      WHERE mem.value IS NOT NULL
+    ),
+    base AS (
+      SELECT
+        e.*,
+        TO_CHAR(e.scheduled_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS appointment_date,
+        TO_CHAR(e.scheduled_at AT TIME ZONE 'Asia/Kolkata', 'HH12:MI AM') AS time,
+        TO_CHAR(e.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS booked_date,
+        c.full_name AS client_name,
+        c.phone_number,
+        COALESCE(
+          e.item_staff_name,
+          NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '')
+        ) AS staff_name,
+        pay.payment_method,
+        pay.paid_amount,
+        s.invoice_number
+      FROM exploded e
+      LEFT JOIN clients c ON e.client_id = c.id
+      LEFT JOIN staff st ON st.id = COALESCE(
+        CASE WHEN e.item_staff_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+             THEN e.item_staff_id::uuid END,
+        e.staff_id
+      )
+      LEFT JOIN LATERAL (
+        SELECT p.payment_method, p.paid_amount
+        FROM payments p
+        WHERE p.appointment_id = e.id
+        ORDER BY p.created_at DESC
+        LIMIT 1
+      ) pay ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT s.invoice_number
+        FROM sales s
+        WHERE s.appointment_id = e.id
+        ORDER BY s.created_at DESC
+        LIMIT 1
+      ) s ON TRUE
+    ),
+    filtered AS (
+      SELECT e.*
+      FROM base e
+      ${outerWhereClause}
+    ),
+    grouped AS (
+      SELECT
+        e.id,
+        MIN(e.appointment_date) AS appointment_date,
+        MIN(e.time) AS time,
+        MIN(e.booked_date) AS booked_date,
+        MIN(e.client_name) AS client_name,
+        -- Needed so the frontend can offer "Send Campaign" (WhatsApp) on
+        -- selected rows without a second round-trip to look up each client's
+        -- phone number — every exploded item row for one appointment shares
+        -- the same client, so MIN is a no-op collapse here, same as the
+        -- other per-appointment (not per-item) fields above.
+        MIN(e.phone_number) AS client_phone,
+        STRING_AGG(DISTINCT COALESCE(e.item_name, '—'), ', ' ORDER BY COALESCE(e.item_name, '—')) AS item_name,
+        STRING_AGG(DISTINCT e.item_type, ', ' ORDER BY e.item_type) AS item_type,
+        STRING_AGG(DISTINCT e.staff_name, ', ' ORDER BY e.staff_name) FILTER (WHERE e.staff_name IS NOT NULL) AS staff_name,
+        MAX(e.duration_minutes) AS duration,
+        SUM(COALESCE(e.item_price, e.paid_amount, 0)) AS amount,
+        MIN(e.payment_method) AS payment_method,
+        MIN(e.status) AS payment_status,
+        MIN(e.scheduled_at) AS scheduled_at
+      FROM filtered e
+      GROUP BY e.id
+    )
+    SELECT
+      id, appointment_date, time, booked_date, client_name, client_phone,
+      item_name, item_type, staff_name, duration, amount,
+      payment_method, payment_status,
+      COUNT(*) OVER() AS total_count
+    FROM grouped
+    ORDER BY scheduled_at DESC
+    ${limitClause}
+  `;
+
+  const { rows } = await safeQuery(() => pool.query(query, [...values, ...limitValues]));
+  const total = rows.length ? Number(rows[0].total_count) : 0;
+  const items: OnlineAppointmentReportRow[] = rows.map((row: any) => ({
+    id: row.id,
+    appointment_date: row.appointment_date,
+    time: row.time,
+    booked_date: row.booked_date,
+    client_name: row.client_name,
+    client_phone: row.client_phone ?? null,
+    item_name: row.item_name,
+    item_type: row.item_type,
+    staff_name: row.staff_name,
+    duration: Number(row.duration ?? 0),
+    amount: Number(row.amount ?? 0),
+    payment_method: row.payment_method,
+    payment_status: row.payment_status,
+  }));
+  const effectiveLimit2 = limit ?? Math.max(total, 1);
+  return {
+    items,
+    pagination: {
+      total,
+      page: limit ? page : 1,
+      limit: effectiveLimit2,
+      total_pages: Math.max(1, Math.ceil(total / effectiveLimit2)),
     },
   };
 },

@@ -618,6 +618,19 @@ router.post(
 );
 
 // ======================================================
+// ONLINE APPOINTMENT REPORT (independent report API)
+// Same query as Appointment Detail, filtered to appointments classified as
+// booked online (no dedicated source column — see APPOINTMENT_SOURCE_SQL in
+// reports.repository.ts).
+// ======================================================
+
+router.post(
+    "/online-appointment",
+    ...baseGuard, viewReport("view_report_online_appointment"),
+    reportsController.getOnlineAppointmentReport
+);
+
+// ======================================================
 // UPCOMING APPOINTMENTS REPORT (independent report API)
 // Reads the appointments table directly via SQL — never calls the
 // Appointment HTTP API/service. Scoped to future, still-booked appointments.

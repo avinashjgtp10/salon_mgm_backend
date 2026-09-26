@@ -334,6 +334,8 @@ import {
     MemberSaleChartResponse,
     AppointmentDetailReportFilters,
     AppointmentDetailReportResponse,
+    OnlineAppointmentReportFilters,
+    OnlineAppointmentReportResponse,
     UpcomingAppointmentsReportFilters,
     UpcomingAppointmentsReportResponse,
     WaCampaignReportFilters,
@@ -2425,6 +2427,21 @@ async getAppointmentDetailReport(
     filters: AppointmentDetailReportFilters
 ): Promise<AppointmentDetailReportResponse> {
     const result = await reportsRepository.getAppointmentDetailReport(salonId, filters);
+    return {
+        rows: result.items,
+        pagination: result.pagination,
+    };
+},
+
+// ======================================================
+// ONLINE APPOINTMENT REPORT (independent report API)
+// ======================================================
+
+async getOnlineAppointmentReport(
+    salonId: string,
+    filters: OnlineAppointmentReportFilters
+): Promise<OnlineAppointmentReportResponse> {
+    const result = await reportsRepository.getOnlineAppointmentReport(salonId, filters);
     return {
         rows: result.items,
         pagination: result.pagination,
