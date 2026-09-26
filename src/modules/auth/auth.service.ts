@@ -294,6 +294,20 @@ export const authService = {
     }
 
     const salonId = await authRepository.findSalonIdByUserId(user.id);
+
+    // Mirrors the same check in login() above — a salon deactivated after
+    // the user's last login must not let a still-valid refresh token keep
+    // minting fresh access tokens for it. Without this, revoking a salon's
+    // access only blocked new logins; anyone already holding a refresh token
+    // could silently keep working indefinitely.
+    if (salonId) {
+      const salon = await salonsRepository.findById(salonId);
+      if (salon && salon.is_active === false) {
+        logger.warn("[authService.refresh] Salon is inactive", { userId, salonId });
+        throw new AppError(403, "Your account is deactivated. Kindly contact the Salonox team.", "SALON_INACTIVE");
+      }
+    }
+
     const newAccessToken = signAccessToken({ userId: user.id, role: user.role, salonId });
     logger.info("[authService.refresh] New access token issued", { userId, salonId });
     return { accessToken: newAccessToken };
