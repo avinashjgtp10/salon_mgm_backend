@@ -800,8 +800,17 @@ export const staffSchedulesController = {
       const salonId = getSalonId(req);
       const date = req.query.date ? String(req.query.date) : undefined;
       if (!date) throw new AppError(400, "Date is required", "MISSING_DATE");
-      await staffSchedulesService.deleteByDate(staffId, salonId, date);
-      return sendSuccess(res, 200, null, "Schedule deleted successfully");
+      const result = await staffSchedulesService.deleteByDate(staffId, salonId, date);
+      // "noop" means nothing existed to clear for this date (no dated row,
+      // and no active weekly baseline to override) — surfacing that as a
+      // 200 "deleted successfully" made the UI show the block as removed
+      // (optimistic update) even though nothing changed server-side, so it
+      // reappeared on the next refetch. Report it as a failure instead so
+      // the frontend can roll back its optimistic state.
+      if (result === "noop") {
+        throw new AppError(404, "No schedule entry found for this date", "SCHEDULE_NOT_FOUND");
+      }
+      return sendSuccess(res, 200, { result }, "Schedule deleted successfully");
     } catch (err) { return next(err); }
   },
 };
