@@ -498,6 +498,7 @@ export const bookingsRepository = {
         salonId: string;
         clientId: string;
         staffId?: string | null;
+        isAnyStaff?: boolean;
         serviceId: string;
         title: string;
         scheduledAt: string;
@@ -512,14 +513,14 @@ export const bookingsRepository = {
                 scheduled_at, duration_minutes,
                 ends_at,
                 colour, created_by,
-                services, source
+                services, source, is_any_staff
             ) VALUES (
                 $1, $2, $3, $4,
                 $5, $6, $7,
                 $8, $9,
                 ($8::timestamptz + ($9::integer * INTERVAL '1 minute')),
                 $10, $11,
-                $12::jsonb, $13
+                $12::jsonb, $13, $14
             )
             RETURNING *`,
             [
@@ -536,6 +537,7 @@ export const bookingsRepository = {
                 null,
                 JSON.stringify(params.services),
                 "online_booking",
+                params.isAnyStaff ?? false,
             ]
         );
         return rows[0];
