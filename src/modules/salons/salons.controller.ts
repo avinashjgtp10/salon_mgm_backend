@@ -6,7 +6,7 @@ import { salonsService } from "./salons.service";
 import { CreateSalonBody, UpdateSalonBody } from "./salons.types";
 
 type AuthRequest = Request & {
-    user?: { userId: string; role?: string };
+    user?: { userId: string; role?: string; salonId?: string };
 };
 
 export const salonsController = {
@@ -41,12 +41,12 @@ export const salonsController = {
         }
     },
 
-    // GET /api/v1/salons/me
+    // GET /api/v1/salons/current
     async mySalon(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const userId = req.user?.userId;
 
-            logger.info("GET /salons/me called", {
+            logger.info("GET /salons/current called", {
                 userId,
                 path: req.originalUrl,
                 method: req.method,
@@ -54,11 +54,17 @@ export const salonsController = {
 
             if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
 
-            // For staff users the JWT carries salonId; fall back to query param
-            const salonId = req.user?.salonId ?? (req.query.salon_id as string | undefined) ?? null;
+            // salonId comes exclusively from the authenticated JWT (req.user.salonId)
+            // — for staff users, that's how their salon is resolved below, since
+            // they don't own a salon themselves. NEVER fall back to a client-
+            // supplied query param here: that would let any staff member fetch
+            // an arbitrary salon's full profile by simply passing ?salon_id=<id>
+            // for a different salon, a cross-tenant data leak. See the identical
+            // reasoning already documented in interceptors.ts.
+            const salonId = req.user?.salonId ?? null;
             const salon = await salonsService.mySalon(userId, salonId);
 
-            logger.info("GET /salons/me success", {
+            logger.info("GET /salons/current success", {
                 userId,
                 salonId: salon.id,
             });
