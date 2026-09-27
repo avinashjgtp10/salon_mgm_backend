@@ -111,19 +111,18 @@ async function notifyOwnerCashCounterClosed(
     const upiAmt  = Number(counter.upi_amount ?? 0);
     const collectionBreakdown = `Cash: ${formatMoney(cashAmt)} | Card: ${formatMoney(cardAmt)} | UPI: ${formatMoney(upiAmt)}`;
 
-    // Expenses/in-store-cash ({{6}}/{{7}}) are staged in pending_body_text
-    // (Trigger Templates > Cash Management > Cash Counter Closed) but NOT
-    // yet Meta-approved — the LIVE template Meta actually has on file still
-    // only expects 5 params. Sending 7 against it is an immediate Meta
-    // rejection (#132000 "number of localizable_params (7) does not match
-    // the expected number of params (5)"), not a soft/ignored extra — it
-    // fails every send until either the resubmission is approved (then
-    // re-add these two here) or the count matches again. Left commented,
-    // not deleted, so re-adding is a one-line uncomment once approved.
-    // const expenses = Number(counter.cash_expense ?? 0);
-    // const inStoreCash = counter.in_store_cash === null || counter.in_store_cash === undefined
-    //   ? 0
-    //   : Number(counter.in_store_cash);
+    // Expenses/in-store-cash are the actual shift's physical drawer figures
+    // (cash_management.cash_expense / in_store_cash) — deliberately NOT
+    // re-derived from the service-date-bounded totals above, since those
+    // answer "what date does this revenue belong to" while these two answer
+    // "what actually happened to the physical cash this shift."
+    // Meta approved the 7-param resubmission on 2026-09-26 (confirmed live
+    // via the Graph API — template now expects {{6}}/{{7}}), so these are
+    // back in after being commented out while the approval was pending.
+    const expenses = Number(counter.cash_expense ?? 0);
+    const inStoreCash = counter.in_store_cash === null || counter.in_store_cash === undefined
+      ? 0
+      : Number(counter.in_store_cash);
 
     const variables = {
       "1": salon?.business_name ?? "your salon",
@@ -131,8 +130,8 @@ async function notifyOwnerCashCounterClosed(
       "3": formatTimeIST(counter.closed_at ?? new Date()),
       "4": collectionBreakdown,
       "5": formatMoney(cashAmt + cardAmt + upiAmt),
-      // "6": formatMoney(expenses),
-      // "7": formatMoney(inStoreCash),
+      "6": formatMoney(expenses),
+      "7": formatMoney(inStoreCash),
     };
     await whatsappAutomationService.trigger({
       salonId,

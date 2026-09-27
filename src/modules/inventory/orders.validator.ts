@@ -122,6 +122,9 @@ export const validateReceiveOrder = (
             if (typeof item.received_qty !== "number" || !Number.isFinite(item.received_qty) || item.received_qty < 0) {
                 throw new AppError(400, `items[${i}].received_qty must be a non-negative number`, "VALIDATION_ERROR");
             }
+            if (item.damaged_qty !== undefined && (typeof item.damaged_qty !== "number" || !Number.isFinite(item.damaged_qty) || item.damaged_qty < 0)) {
+                throw new AppError(400, `items[${i}].damaged_qty must be a non-negative number`, "VALIDATION_ERROR");
+            }
         }
 
         return next();

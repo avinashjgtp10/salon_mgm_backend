@@ -17,6 +17,12 @@ export const validateResolveSupplierProduct = (
         if (b.action === "link" && !isUUID(b.product_id)) {
             throw new AppError(400, "product_id is required and must be a UUID when action is 'link'", "VALIDATION_ERROR");
         }
+        if (b.action === "create_product") {
+            const price = Number(b.retail_price);
+            if (!Number.isFinite(price) || price <= 0) {
+                throw new AppError(400, "retail_price is required and must be a positive number when action is 'create_product'", "VALIDATION_ERROR");
+            }
+        }
         return next();
     } catch (err) { return next(err); }
 };

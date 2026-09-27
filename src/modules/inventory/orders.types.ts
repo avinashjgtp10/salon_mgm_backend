@@ -110,6 +110,10 @@ export interface CreateOrderDTO {
 export interface ReceiveOrderItemDTO {
     order_item_id: string;
     received_qty: number;
+    // Arrived but unsellable this delivery — never added to products.amount,
+    // just accumulated on order_items.damaged_qty. Optional so a plain
+    // "receive N good units" call still works without sending 0 explicitly.
+    damaged_qty?: number;
 }
 
 export interface ReceiveOrderDTO {
