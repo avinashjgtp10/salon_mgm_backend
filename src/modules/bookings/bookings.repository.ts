@@ -132,6 +132,27 @@ export const bookingsRepository = {
         return rows[0] || null;
     },
 
+    // Facilities/Amenities + Salon Specialities (Highlights/Values) for the
+    // public About Us section — same marketplace_features rows the admin
+    // Marketplace Profile page's Facilities & Amenities / Salon Specialities
+    // checkboxes save. Tolerant of a missing table, same reasoning as gallery.
+    async findFeatures(marketplaceProfileId: string): Promise<{ amenities: string[]; highlights: string[]; values: string[] }> {
+        try {
+            const { rows } = await pool.query(
+                `SELECT feature_type, feature_key FROM marketplace_features WHERE profile_id = $1`,
+                [marketplaceProfileId]
+            );
+            return {
+                amenities:  rows.filter((r) => r.feature_type === "amenity").map((r) => r.feature_key),
+                highlights: rows.filter((r) => r.feature_type === "highlight").map((r) => r.feature_key),
+                values:     rows.filter((r) => r.feature_type === "value").map((r) => r.feature_key),
+            };
+        } catch (err: any) {
+            if (err?.code === "42P01" || err?.code === "42703") return { amenities: [], highlights: [], values: [] };
+            throw err;
+        }
+    },
+
     // Gallery photos for the public hero band's background. Cover first, then
     // the salon's own ordering — the same order the Marketplace Profile
     // editor shows. Tolerant of a missing table so an un-migrated environment
@@ -250,7 +271,11 @@ export const bookingsRepository = {
              ) r ON r.staff_id = s.id
              WHERE s.salon_id = $1
                AND s.is_active = true
-               AND COALESCE(s.allow_calendar_bookings, true) = true
+               -- Independent of allow_calendar_bookings (that one gates the
+               -- internal Calendar column, a different concern per the Staff
+               -- Visibility ticket) — this is Marketplace Profile's own
+               -- per-staff "Show in Online Booking" toggle.
+               AND COALESCE(s.show_in_online_booking, true) = true
                AND (
                  $2::uuid[] IS NULL
                  OR NOT EXISTS (

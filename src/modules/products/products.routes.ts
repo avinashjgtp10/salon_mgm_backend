@@ -22,7 +22,6 @@ const ownerAdminStaff = roleMiddleware("salon_owner", "admin", "staff");
 // view permissions — so this passes if they can view products OR sell OR
 // manage the calendar.
 const viewProducts = requireAnyPermission(["view_products", "create_sales", "manage_calendar"]);
-const createProducts = requirePermission("create_products");
 const editProducts = requirePermission("edit_products");
 // Consumables ARE products (product_type consumable/both), and Warehouse's
 // Product Inventory page's Edit/Delete row actions also call these same
@@ -44,12 +43,17 @@ const exportProductsCsv = [requirePermission("download_products_csv"), requirePe
 const exportProductsExcel = [requirePermission("download_products_excel"), requirePermission("export_excel")];
 const exportProductsPdf = [requirePermission("download_products_pdf"), requirePermission("export_pdf")];
 
-// Brands
-router.get("/brands", authMiddleware, ownerAdminStaff, viewProducts, brandsController.list);
-router.get("/brands/:id", authMiddleware, ownerAdminStaff, viewProducts, brandsController.getById);
-router.post("/brands", authMiddleware, ownerAdminStaff, createProducts, validateCreateBrand, brandsController.create);
-router.patch("/brands/:id", authMiddleware, ownerAdminStaff, createProducts, validateUpdateBrand, brandsController.update);
-router.delete("/brands/:id", authMiddleware, roleMiddleware("salon_owner", "admin"), brandsController.delete);
+// Brands — "Manage My Brands" (Products permissions ticket) is its own
+// independent permission, not coupled to View/Create Product. OR'd in
+// alongside the pre-existing view_products/create_products checks so a role
+// that already relied on those keeps working unchanged.
+const viewBrands = requireAnyPermission(["manage_my_brands", "view_products", "create_sales", "manage_calendar"]);
+const manageBrands = requireAnyPermission(["manage_my_brands", "create_products"]);
+router.get("/brands", authMiddleware, ownerAdminStaff, viewBrands, brandsController.list);
+router.get("/brands/:id", authMiddleware, ownerAdminStaff, viewBrands, brandsController.getById);
+router.post("/brands", authMiddleware, ownerAdminStaff, manageBrands, validateCreateBrand, brandsController.create);
+router.patch("/brands/:id", authMiddleware, ownerAdminStaff, manageBrands, validateUpdateBrand, brandsController.update);
+router.delete("/brands/:id", authMiddleware, ownerAdminStaff, manageBrands, brandsController.delete);
 
 // Products
 router.get("/export/csv", authMiddleware, ownerAdminStaff, viewProducts, ...exportProductsCsv, productsController.exportCSV);

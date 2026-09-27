@@ -28,8 +28,11 @@ const ownerAdminStaff = roleMiddleware("salon_owner", "admin", "staff");
 // view access — same reasoning already applied to Services/Products/
 // Packages/Memberships. This was the gap: everywhere else got this
 // treatment, Clients didn't, which broke booking/checkout for anyone
-// granted only view_calendar or create_sales.
-const viewClients = requireAnyPermission(["view_clients", "create_sales", "manage_calendar"]);
+// granted only create_sales. create_appointment is also OR'd in — a role
+// scoped to just "Create Booking Appointment" (Calendar permissions rename
+// ticket) hit a real 403 searching for a client while building a brand-new
+// booking, since it has neither view_clients nor create_sales.
+const viewClients = requireAnyPermission(["view_clients", "create_sales", "create_appointment", "manage_calendar"]);
 
 // featureKey "clients" — Basic tier and up by default, but a super admin can
 // still revoke it per salon via feature_overrides. See inventory.routes.ts
