@@ -14,24 +14,28 @@ import { PublicBookingRequest } from "./bookings.types";
 import { bookingEmailOtpService } from "./booking-email-otp.service";
 import logger from "../../config/logger";
 
-// Attaches booking policy, brand kit, and the marketplace gallery — the
-// hero band's background photo. A first pass at this (heavy cream wash over
-// the whole image) looked washed-out/blurry rather than polished; this now
-// only fetches what the page actually shows, and the page itself applies a
-// left-side-only scrim instead of a full-image wash. Was also fetching
-// marketplace working_hours/amenities and a full review summary (rating/
-// review_count/rating_breakdown/reviews) on every public page load; an audit
-// confirmed none of those are read in the frontend (the page's visible
-// rating/review count come from a separate per-staff query), so those extra
-// DB round trips on an unauthenticated, publicly-reachable endpoint stay
-// removed.
+// Attaches booking policy, brand kit, the marketplace gallery, and (only when
+// About Us is enabled) its Facilities/Specialities — everything the public
+// page's hero photo and About Us section actually render. A first pass at
+// the hero (heavy cream wash over the whole image) looked washed-out/blurry
+// rather than polished; this now only fetches what the page shows, and the
+// page itself applies a left-side-only scrim instead of a full-image wash.
+// Was also fetching marketplace working_hours and a full review summary
+// (rating/review_count/rating_breakdown/reviews) on every public page load;
+// an audit confirmed neither is read in the frontend (the page's visible
+// rating/review count come from a separate per-staff query), so those two
+// stay removed.
 async function attachPublicExtras(salon: any) {
-    const [bookingPolicy, brandKit, gallery] = await Promise.all([
+    const aboutEnabled = salon?.about_enabled !== false;
+    const [bookingPolicy, brandKit, gallery, features] = await Promise.all([
         bookingsRepository.findBookingPolicy(salon.id),
         bookingsRepository.findBrandKit(salon.id),
         salon?.marketplace_profile_id
             ? bookingsRepository.findGalleryImages(salon.marketplace_profile_id)
             : Promise.resolve([] as string[]),
+        salon?.marketplace_profile_id && aboutEnabled
+            ? bookingsRepository.findFeatures(salon.marketplace_profile_id)
+            : Promise.resolve({ amenities: [] as string[], highlights: [] as string[], values: [] as string[] }),
     ]);
     return {
         ...salon,
@@ -40,6 +44,9 @@ async function attachPublicExtras(salon: any) {
         // which case the booking page uses its own neutral palette.
         brand_kit: brandKit,
         gallery,
+        amenities: features.amenities,
+        highlights: features.highlights,
+        values: features.values,
     };
 }
 

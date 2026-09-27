@@ -243,3 +243,20 @@ export const validateUpsertFeatures = (req: Request, _res: Response, next: NextF
     return next();
   } catch (err) { return next(err); }
 };
+
+// ─── Staff Visibility ─────────────────────────────────────────────────────────
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export const validateSetStaffVisibility = (req: Request, _res: Response, next: NextFunction) => {
+  try {
+    const { staff_id, visible } = req.body ?? {};
+    if (!isNonEmpty(staff_id) || !UUID_RE.test(staff_id.trim())) {
+      throw new AppError(400, "staff_id must be a valid UUID", "VALIDATION_ERROR");
+    }
+    if (typeof visible !== "boolean") {
+      throw new AppError(400, "visible must be a boolean", "VALIDATION_ERROR");
+    }
+    return next();
+  } catch (err) { return next(err); }
+};
