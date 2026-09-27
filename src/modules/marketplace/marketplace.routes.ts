@@ -9,7 +9,7 @@ import {
   validateUpsertEssentials, validateUpsertAbout,
   validateUpsertLocation, validateUpsertWorkingHours,
   validateAddImage, validateReorderImages, validateUpsertFeatures,
-  validateUpsertBookingPolicy,
+  validateUpsertBookingPolicy, validateSetStaffVisibility,
 } from "./marketplace.validator";
 
 const router  = Router();
@@ -58,6 +58,10 @@ router.post("/cover", auth, ownerAdminStaff, manageMarketplace, uploadMiddleware
 // ── Amenities & Highlights ────────────────────────────────────────────────────
 router.get("/features",         auth, ownerAdminStaff, viewMarketplace, marketplaceController.getFeatures);
 router.put("/features",         auth, ownerAdminStaff, manageMarketplace, validateUpsertFeatures,    marketplaceController.upsertFeatures);
+
+// ── Staff Visibility ─────────────────────────────────────────────────────────
+router.get("/staff-visibility", auth, ownerAdminStaff, viewMarketplace, marketplaceController.getStaffVisibility);
+router.put("/staff-visibility", auth, ownerAdminStaff, manageMarketplace, validateSetStaffVisibility, marketplaceController.setStaffVisibility);
 
 // ── Publish / Unpublish ───────────────────────────────────────────────────────
 router.post("/publish",         auth, ownerAdminStaff, manageMarketplace, marketplaceController.publish);

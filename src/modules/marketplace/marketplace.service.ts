@@ -3,6 +3,7 @@ import { AppError } from "../../middleware/error.middleware";
 import {
   marketplaceProfileRepo, marketplaceLocationRepo,
   marketplaceWorkingHoursRepo, marketplaceImagesRepo, marketplaceFeaturesRepo,
+  marketplaceStaffVisibilityRepo,
 } from "./marketplace.repository";
 import { salonsRepository } from "../salons/salons.repository";
 import {
@@ -175,6 +176,22 @@ export const marketplaceService = {
     const profile = await _ensureProfile(salonId);
     await marketplaceFeaturesRepo.upsert(profile.id, data);
     return this.getFeatures(salonId);
+  },
+
+  // ── Staff Visibility ────────────────────────────────────────────────────────
+  // Independent of allow_calendar_bookings — this only decides whether a
+  // staff member is offered on the public Online Booking page, and must
+  // never affect the internal Calendar or anything else about the staff
+  // member (see bookings.repository.ts's findActiveStaff, the only reader).
+
+  async getStaffVisibility(salonId: string) {
+    return marketplaceStaffVisibilityRepo.listActive(salonId);
+  },
+
+  async setStaffVisibility(salonId: string, staffId: string, visible: boolean) {
+    logger.info("marketplace.setStaffVisibility", { salonId, staffId, visible });
+    await marketplaceStaffVisibilityRepo.setVisibility(salonId, staffId, visible);
+    return this.getStaffVisibility(salonId);
   },
 
   // ── Logo & Cover ────────────────────────────────────────────────────────────

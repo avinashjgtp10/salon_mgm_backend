@@ -139,6 +139,22 @@ export const marketplaceController = {
         } catch (err) { return next(err); }
     },
 
+    // ── Staff Visibility ─────────────────────────────────────────────────────────
+    async getStaffVisibility(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const data = await marketplaceService.getStaffVisibility(await getSalonId(req));
+            return sendSuccess(res, 200, data, "Staff visibility fetched");
+        } catch (err) { return next(err); }
+    },
+
+    async setStaffVisibility(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const { staff_id, visible } = req.body as { staff_id: string; visible: boolean };
+            const data = await marketplaceService.setStaffVisibility(await getSalonId(req), staff_id, visible);
+            return sendSuccess(res, 200, data, "Staff visibility updated");
+        } catch (err) { return next(err); }
+    },
+
     // ── Logo & Cover ─────────────────────────────────────────────────────────────
     async uploadLogo(req: AuthRequest, res: Response, next: NextFunction) {
         try {
