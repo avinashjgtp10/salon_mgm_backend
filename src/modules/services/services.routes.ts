@@ -16,7 +16,9 @@ const router = Router();
 const authBase = [authMiddleware, roleMiddleware("salon_owner", "admin", "staff")];
 // Quick Sale and Calendar both need to read services to build a sale/
 // appointment, even for staff who weren't separately granted Catalog view.
-const viewServices = requireAnyPermission(["view_services", "create_sales", "manage_calendar"]);
+// create_appointment covers a role scoped to just "Create Booking
+// Appointment" — same gap/fix as clients.routes.ts's viewClients.
+const viewServices = requireAnyPermission(["view_services", "create_sales", "create_appointment", "manage_calendar"]);
 const createServices = requirePermission("create_services");
 const editServices = requirePermission("edit_services");
 // Delete Service is its own dedicated permission now (see the Service Menu
