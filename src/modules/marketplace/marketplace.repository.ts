@@ -448,3 +448,29 @@ export const marketplaceFeaturesRepo = {
     }
   },
 };
+
+// ─── Staff Visibility ─────────────────────────────────────────────────────────
+// A per-staff "Show in Online Booking" toggle, edited from Marketplace
+// Profile — lives on the `staff` table itself (not a marketplace_* table)
+// since it's fundamentally a staff attribute, same as allow_calendar_bookings
+// (a separate, independent flag for the internal Calendar).
+
+export const marketplaceStaffVisibilityRepo = {
+  async listActive(salonId: string): Promise<{ id: string; first_name: string; last_name: string | null; show_in_online_booking: boolean }[]> {
+    const { rows } = await pool.query(
+      `SELECT id, first_name, last_name, show_in_online_booking
+       FROM staff
+       WHERE salon_id = $1 AND is_active = true
+       ORDER BY first_name ASC, last_name ASC`,
+      [salonId]
+    );
+    return rows;
+  },
+
+  async setVisibility(salonId: string, staffId: string, visible: boolean): Promise<void> {
+    await pool.query(
+      `UPDATE staff SET show_in_online_booking = $1 WHERE id = $2 AND salon_id = $3`,
+      [visible, staffId, salonId]
+    );
+  },
+};

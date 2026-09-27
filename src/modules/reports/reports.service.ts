@@ -334,6 +334,10 @@ import {
     MemberSaleChartResponse,
     AppointmentDetailReportFilters,
     AppointmentDetailReportResponse,
+    OnlineAppointmentReportFilters,
+    OnlineAppointmentReportResponse,
+    ConsumableAnalyticsReportFilters,
+    ConsumableAnalyticsReportResponse,
     UpcomingAppointmentsReportFilters,
     UpcomingAppointmentsReportResponse,
     WaCampaignReportFilters,
@@ -2432,6 +2436,21 @@ async getAppointmentDetailReport(
 },
 
 // ======================================================
+// ONLINE APPOINTMENT REPORT (independent report API)
+// ======================================================
+
+async getOnlineAppointmentReport(
+    salonId: string,
+    filters: OnlineAppointmentReportFilters
+): Promise<OnlineAppointmentReportResponse> {
+    const result = await reportsRepository.getOnlineAppointmentReport(salonId, filters);
+    return {
+        rows: result.items,
+        pagination: result.pagination,
+    };
+},
+
+// ======================================================
 // UPCOMING APPOINTMENTS REPORT (independent report API)
 // ======================================================
 
@@ -2613,6 +2632,26 @@ async getPayrollHistoryReport(
         rows: rowsResult.items,
         pagination: rowsResult.pagination,
         stats,
+        filters_available: filtersAvailable,
+    };
+},
+
+// ======================================================
+// CONSUMABLE ANALYTICS REPORT (independent report API)
+// ======================================================
+
+async getConsumableAnalyticsReport(
+    salonId: string,
+    filters: ConsumableAnalyticsReportFilters
+): Promise<ConsumableAnalyticsReportResponse> {
+    const [result, filtersAvailable] = await Promise.all([
+        reportsRepository.getConsumableAnalyticsReport(salonId, filters),
+        reportsRepository.getConsumableAnalyticsFiltersAvailable(salonId),
+    ]);
+    return {
+        rows: result.items,
+        pagination: result.pagination,
+        client_totals: result.client_totals,
         filters_available: filtersAvailable,
     };
 },

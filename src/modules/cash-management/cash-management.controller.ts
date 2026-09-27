@@ -219,6 +219,30 @@ export const cashManagementController = {
     }
   },
 
+  // Dashboard > Overall Collection's "Resend to WhatsApp" action — date is
+  // the IST calendar date (YYYY-MM-DD) the counter OPENED on, matching how
+  // that day's Cash Counter Closed message was originally computed.
+  async resendClosedCounterMessage(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = getSalonId(req);
+      const date = String(req.body?.date || req.query?.date || "").trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        throw new AppError(400, "date must be in YYYY-MM-DD format", "VALIDATION_ERROR");
+      }
+
+      const result = await cashManagementService.resendClosedCounterMessage(salonId, date);
+
+      return sendSuccess(
+        res,
+        200,
+        result,
+        result.sent ? "Cash counter message resent" : "Could not resend — see failure_reason",
+      );
+    } catch (error) {
+      return next(error);
+    }
+  },
+
   async getSummaryBundle(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = getSalonId(req);

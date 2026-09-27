@@ -40,6 +40,10 @@ export type ResolveSupplierProductBody = {
     action: ResolveAction;
     // Required when action === "link" — the existing product to attach.
     product_id?: string;
+    // Required when action === "create_product" — the catalog row's price is
+    // the supplier's cost price, never a selling price, so retail price must
+    // come from the staff member creating the product.
+    retail_price?: number;
 };
 
 export type SupplierProductImportIssue = {

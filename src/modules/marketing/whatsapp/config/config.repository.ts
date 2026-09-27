@@ -10,10 +10,17 @@ export const configRepository = {
     return rows[0] || null
   },
 
-  // ── All verified configs — used by the background limit-sync job ─────────
-  async findAllVerified(): Promise<WhatsAppConfig[]> {
+  // ── All configured connections — used by the background limit-sync job ────
+  // Deliberately NOT gated on is_verified: that flag only ever gets set by a
+  // one-time "Test Connection" click in Settings > Integrations, unrelated to
+  // whether the connection is actually live — a salon can be sending real
+  // messages for months without anyone ever clicking it again. Gating the
+  // sync on it meant daily_limit silently froze at whatever it was initially
+  // set to (the generic default) for any salon that never happened to
+  // (re)click Test Connection, even though the connection itself works fine.
+  async findAllConfigured(): Promise<WhatsAppConfig[]> {
     const { rows } = await pool.query(
-      `SELECT * FROM whatsapp_configs WHERE is_verified = true AND access_token IS NOT NULL`
+      `SELECT * FROM whatsapp_configs WHERE access_token IS NOT NULL`
     )
     return rows
   },

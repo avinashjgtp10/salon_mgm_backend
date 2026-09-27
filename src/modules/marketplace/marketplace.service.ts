@@ -3,6 +3,7 @@ import { AppError } from "../../middleware/error.middleware";
 import {
   marketplaceProfileRepo, marketplaceLocationRepo,
   marketplaceWorkingHoursRepo, marketplaceImagesRepo, marketplaceFeaturesRepo,
+  marketplaceStaffVisibilityRepo,
 } from "./marketplace.repository";
 import { salonsRepository } from "../salons/salons.repository";
 import {
@@ -45,21 +46,15 @@ export const marketplaceService = {
 
   async getProfile(salonId: string): Promise<MarketplaceProfileFull> {
     const profile = await _ensureProfile(salonId);
-    const [location, hourRows, images, featureRows] = await Promise.all([
-      marketplaceLocationRepo.findByProfileId(profile.id),
-      marketplaceWorkingHoursRepo.findByProfileId(profile.id),
-      marketplaceImagesRepo.findByProfileId(profile.id),
-      marketplaceFeaturesRepo.findByProfileId(profile.id),
-    ]);
+    // Was also fetching location/images/amenities/highlights/values here —
+    // an audit confirmed MarketplaceProfilePage.tsx never reads any of them
+    // (the gallery UI uses a separate getImages call), so those 3 joins ran
+    // on every profile page load for output nobody consumed.
+    const hourRows = await marketplaceWorkingHoursRepo.findByProfileId(profile.id);
 
     return {
       ...profile,
-      location,
       working_hours: groupWorkingHours(hourRows),
-      images,
-      amenities:  featureRows.filter((f) => f.feature_type === "amenity")  .map((f) => f.feature_key as Amenity),
-      highlights: featureRows.filter((f) => f.feature_type === "highlight").map((f) => f.feature_key as Highlight),
-      values:     featureRows.filter((f) => f.feature_type === "value")    .map((f) => f.feature_key as Value),
     };
   },
 
@@ -181,6 +176,22 @@ export const marketplaceService = {
     const profile = await _ensureProfile(salonId);
     await marketplaceFeaturesRepo.upsert(profile.id, data);
     return this.getFeatures(salonId);
+  },
+
+  // ── Staff Visibility ────────────────────────────────────────────────────────
+  // Independent of allow_calendar_bookings — this only decides whether a
+  // staff member is offered on the public Online Booking page, and must
+  // never affect the internal Calendar or anything else about the staff
+  // member (see bookings.repository.ts's findActiveStaff, the only reader).
+
+  async getStaffVisibility(salonId: string) {
+    return marketplaceStaffVisibilityRepo.listActive(salonId);
+  },
+
+  async setStaffVisibility(salonId: string, staffId: string, visible: boolean) {
+    logger.info("marketplace.setStaffVisibility", { salonId, staffId, visible });
+    await marketplaceStaffVisibilityRepo.setVisibility(salonId, staffId, visible);
+    return this.getStaffVisibility(salonId);
   },
 
   // ── Logo & Cover ────────────────────────────────────────────────────────────

@@ -10,6 +10,7 @@ const EXEMPT_PREFIXES = [
     "/api/v1/webhooks",
     "/api/v1/profile",
     "/api/v1/users/me",
+    "/api/v1/users/profile",
     "/api-docs",
 ];
 

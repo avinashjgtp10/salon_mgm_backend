@@ -1,20 +1,17 @@
+import type { Appointment } from "../appointments/appointments.types";
+
 export interface DashboardSummary {
   totalRevenue: number;
   // True all-time total, unlike totalRevenue above which is scoped to the
-  // current calendar month.
+  // current calendar month. Not read by the salon dashboard page itself, but
+  // branch-owner.service.ts's multi-branch Finance Overview (BranchOwnerFinancePage's
+  // "All-Time Revenue" stat) reads this off the same getSummary() call.
   allTimeRevenue: number;
-  totalAppointments: number;
-  totalClients: number;
   todayRevenue: number;
   revenueChange: number | null;
-  appointmentsChange: number | null;
-  clientsChange: number | null;
   todayRevenueChange: number | null;
   todayAppointmentsCount: number;
-  // Total revenue this month / count of completed sales this month — 0 when
-  // there are no completed sales yet, so the UI can show "—" instead of ₹0.
-  avgBillValue: number;
-  avgBillValueChange: number | null;
+  yesterdayAppointmentsCount: number;
   // Raw comparison figures for the KPI flip cards (back face) — the front
   // face already has the "this period" value + % change; the back face shows
   // the actual prior-period number being compared against.
@@ -31,19 +28,6 @@ export interface StaffRevenueEntry {
   revenue: number;
 }
 
-export interface TodayOverview {
-  bookings: number;
-  waiting: number;
-  delayed: number;
-  paymentDue: number;
-  runningLate: number;
-}
-
-export interface TimelineSlot {
-  hour: string;
-  count: number;
-}
-
 export interface PendingPayments {
   count: number;
   amount: number;
@@ -57,30 +41,7 @@ export interface BirthdayClient {
 }
 
 export interface TodaysBirthdays {
-  count: number;
   clients: BirthdayClient[];
-}
-
-export interface InactiveClients {
-  count: number;
-}
-
-export interface ActivityItem {
-  id: string;
-  type: string;
-  title: string;
-  body: string | null;
-  createdAt: string;
-}
-
-export interface TodayAppointment {
-  id: string;
-  clientName: string;
-  service: string;
-  staffName: string;
-  time: string;
-  status: "completed" | "upcoming" | "partial" | "cancelled" | "no-show" | "deleted";
-  amount: number;
 }
 
 export interface RevenueDataPoint {
@@ -93,7 +54,6 @@ export interface RevenueDataPoint {
   // monthly; "Jul 2026" for yearly.
   fullLabel: string;
   revenue: number;
-  expenses: number;
 }
 
 // Replaces the old appointment-status "Today's Summary" bar chart — payment
@@ -128,27 +88,15 @@ export interface ServiceMixItem {
   value: number;
 }
 
-export interface DashboardService {
-  id: string;
-  name: string;
-  price: string;
-  duration: number;
-  category_name: string | null;
-  price_type: "fixed" | "from" | "free" | null;
-  is_active: boolean;
-}
-
-export interface DashboardAll {
+export interface DashboardCombined {
   summary: DashboardSummary;
-  todayAppointments: TodayAppointment[];
+  // Raw enriched appointment rows for the requested day (same shape as
+  // GET /api/v1/appointments, straight from appointmentsService.list) — the
+  // frontend's existing mapApiBooking() normalizes these, so this endpoint
+  // doesn't duplicate that tax/grand-total logic server-side a second time.
+  todayAppointments: Appointment[];
   revenueChart: RevenueDataPoint[];
-  topStaff: TopStaffMember[];
-  serviceMix: ServiceMixItem[];
-  services: DashboardService[];
-  todayOverview: TodayOverview;
-  todayTimeline: TimelineSlot[];
   pendingPayments: PendingPayments;
   todaysBirthdays: TodaysBirthdays;
-  inactiveClients: InactiveClients;
-  recentActivity: ActivityItem[];
+  paymentModeBreakdown: PaymentModeBreakdown;
 }

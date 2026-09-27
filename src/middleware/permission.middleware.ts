@@ -344,13 +344,6 @@ const DEFAULT_STAFF_PERMS: Record<string, boolean> = {
     download_commission_tip_pdf: false,
     view_attendance_list: true,
     view_attendance_rules: false,
-    view_payroll: false,
-    add_salary_advance: false,
-    pay_salary: false,
-    view_payroll_details: false,
-    edit_payroll: false,
-    delete_payroll: false,
-    export_payroll: false,
     view_reports: false,
     // Individual View/Download permissions for all 53 reports (Reports
     // ticket) — module='Reports', group_name=category in the catalog.
@@ -388,6 +381,7 @@ const DEFAULT_STAFF_PERMS: Record<string, boolean> = {
     view_report_enquiry_report: false, download_report_enquiry_report: false,
     // Appointments
     view_report_appointment_detail: false, download_report_appointment_detail: false,
+    view_report_online_appointment: false, download_report_online_appointment: false,
     view_report_upcoming_appointments: false, download_report_upcoming_appointments: false,
     view_report_no_show_recovery: false, download_report_no_show_recovery: false,
     // Inventory
@@ -399,6 +393,7 @@ const DEFAULT_STAFF_PERMS: Record<string, boolean> = {
     view_report_brand_performance: false, download_report_brand_performance: false,
     view_report_purchase_vs_sales: false, download_report_purchase_vs_sales: false,
     view_report_consumable_usage: false, download_report_consumable_usage: false,
+    view_report_consumable_analytics: false, download_report_consumable_analytics: false,
     view_report_supplier_report: false, download_report_supplier_report: false,
     view_report_purchase_history: false, download_report_purchase_history: false,
     // Staff

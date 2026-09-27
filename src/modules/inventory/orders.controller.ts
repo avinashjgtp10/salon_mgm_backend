@@ -4,7 +4,7 @@ import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { uploadAvatarToS3 } from "../utils/avatar.upload";
 import { ordersRepository } from "./orders.repository";
-import { CreateOrderDTO, CorrectReceivedQtyDTO, ReceiveOrderDTO } from "./orders.types";
+import { CreateOrderDTO, ReceiveOrderDTO } from "./orders.types";
 
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string } };
 
@@ -55,6 +55,7 @@ export const ordersController = {
                 {
                     search: (req.query.search as string) || undefined,
                     status: parseStatusFilter(req.query.status),
+                    supplier_id: (req.query.supplier_id as string) || undefined,
                     page: asPositiveInt(req.query.page, 1),
                     limit: asPositiveInt(req.query.limit, 20),
                 },
@@ -90,29 +91,27 @@ export const ordersController = {
         } catch (err) { next(err); }
     },
 
-    async correctReceivedQty(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
-        try {
-            const salonId = getSalonId(req);
-            const userId = req.user?.userId;
-            if (!userId) throw new AppError(401, "Authentication required", "NO_USER");
-
-            const body = req.body as CorrectReceivedQtyDTO;
-            logger.info("POST /inventory/orders/:id/items/:itemId/correct-received called", {
-                salonId, userId, orderId: req.params.id, itemId: req.params.itemId,
-            });
-
-            const order = await ordersRepository.correctReceivedQty(
-                String(req.params.id), String(req.params.itemId), body.received_qty, salonId, userId,
-            );
-            sendSuccess(res, 200, order, "Received quantity updated");
-        } catch (err) { next(err); }
-    },
-
     async cancel(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             const salonId = getSalonId(req);
             const order = await ordersRepository.cancel(String(req.params.id), salonId);
             sendSuccess(res, 200, order, "Order cancelled");
+        } catch (err) { next(err); }
+    },
+
+    async place(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const salonId = getSalonId(req);
+            const order = await ordersRepository.place(String(req.params.id), salonId);
+            sendSuccess(res, 200, order, "Order placed");
+        } catch (err) { next(err); }
+    },
+
+    async startVerification(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const salonId = getSalonId(req);
+            const order = await ordersRepository.startVerification(String(req.params.id), salonId);
+            sendSuccess(res, 200, order, "Order moved to verification");
         } catch (err) { next(err); }
     },
 

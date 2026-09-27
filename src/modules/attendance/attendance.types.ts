@@ -44,6 +44,9 @@ export type AttendanceSettings = {
     commission_threshold_days: number;
     active: boolean;             // Half Day Rule enabled
     threshold_hours: number;     // late-by-more-than-this = half_day
+    half_day_deduction_amount: number;   // fixed amount; 0 falls back to half of per-day salary
+    staff_scope: "all" | "selected";     // who the Half Day Rule applies to
+    selected_staff_ids: string[];        // only meaningful when staff_scope = "selected"
     created_at: string;
     updated_at: string;
 };
@@ -96,6 +99,9 @@ export type UpdateSettingsBody = {
     commission_threshold_days?: number;
     active?: boolean;
     threshold_hours?: number;
+    half_day_deduction_amount?: number;
+    staff_scope?: "all" | "selected";
+    selected_staff_ids?: string[];
 };
 
 export type DailySummary = {

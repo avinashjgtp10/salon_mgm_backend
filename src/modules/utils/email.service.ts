@@ -1364,4 +1364,67 @@ export const emailService = {
       `,
     });
   },
+
+  // First template in this file to attach a file — nodemailer attachments
+  // already work in this codebase (receipt-send.helper.ts proves it via the
+  // heavier multi-channel notificationChannelsService dispatcher), but
+  // payroll receipts go straight through this service/transporter since
+  // only email is needed here, no SMS/WhatsApp fan-out.
+  async sendSalaryReceiptEmail(params: {
+    to: string;
+    staffFirstName: string;
+    salonName: string;
+    periodLabel: string;
+    netPay: number;
+    pdfBuffer: Buffer;
+    pdfFilename: string;
+  }) {
+    const { to, staffFirstName, salonName, periodLabel, netPay, pdfBuffer, pdfFilename } = params;
+    const formattedNetPay = `₹${(Number(netPay) || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to,
+      subject: `Your Salary Receipt — ${escapeHtml(salonName)}`,
+      html: `
+        <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
+        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
+            <tr><td align="center">
+              <table width="560" cellpadding="0" cellspacing="0"
+                style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.07);max-width:560px;width:100%;">
+                <tr>
+                  <td style="background:#16a34a;padding:28px 36px;">
+                    <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.8;">${escapeHtml(salonName)}</p>
+                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">Salary Payment Processed</h1>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:32px 36px;">
+                    <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
+                      Hi <strong>${escapeHtml(staffFirstName)}</strong>, your salary for the period below has been processed. The itemized receipt is attached as a PDF.
+                    </p>
+                    <table width="100%" cellpadding="0" cellspacing="0"
+                      style="background:#f0fdf4;border-radius:10px;border:1px solid #bbf7d0;">
+                      <tr>
+                        <td style="padding:20px 24px;">
+                          <p style="margin:0 0 8px;color:#15803d;font-size:14px;"><strong>Period:</strong> ${escapeHtml(periodLabel)}</p>
+                          <p style="margin:0;color:#15803d;font-size:20px;font-weight:800;"><strong>Net Pay:</strong> ${formattedNetPay}</p>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="background:#f9fafb;padding:16px 36px;border-top:1px solid #e5e7eb;">
+                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">© ${new Date().getFullYear()} SalonOx. Automated notification.</p>
+                  </td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
+        </body></html>`,
+      attachments: [{ filename: pdfFilename, content: pdfBuffer }],
+    });
+  },
 };

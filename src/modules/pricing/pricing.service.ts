@@ -138,6 +138,13 @@ export async function resolveMembershipDiscount(
   // It does NOT touch the Loyalty discount, which is a separate plan behind
   // its own card with its own rate.
   requestedPercent?: number | null,
+  // Which of the client's several eligible percentage memberships staff
+  // actually ticked in Available Benefits — undefined/null means "every
+  // eligible one" (the old all-or-nothing behavior, kept for callers that
+  // predate per-membership selection). An explicit empty array means "none
+  // ticked yet", which must return the same as applyPercentage=false, not
+  // silently fall back to "all".
+  selectedMembershipIds?: string[] | null,
 ): Promise<MembershipDiscountPreview> {
   const empty = (): MembershipDiscountPreview => ({
     total: 0,
@@ -181,19 +188,34 @@ export async function resolveMembershipDiscount(
   // Independent lookups (different tables, neither reads the other's result)
   // — resolved in parallel when both are toggled on, instead of one after
   // the other.
-  const [percentageMembership, loyalty] = await Promise.all([
-    applyPercentage ? clientMembershipsRepository.findActivePercentageForClient(clientId, salonId) : Promise.resolve(null),
+  const [allPercentageMemberships, loyalty] = await Promise.all([
+    applyPercentage ? clientMembershipsRepository.findAllActivePercentageForClient(clientId, salonId) : Promise.resolve([]),
     applyLoyalty ? membershipsRepository.findLoyaltyEligibility(clientId, salonId) : Promise.resolve(null),
   ]);
+  // Narrow to just what staff ticked, when the caller tells us — an explicit
+  // [] here (nothing ticked yet) must yield no memberships, not "all of them".
+  const percentageMemberships = selectedMembershipIds
+    ? allPercentageMemberships.filter((m) => selectedMembershipIds.includes(m.id))
+    : allPercentageMemberships;
 
   const previews: MembershipDiscountPreview[] = [];
 
-  if (percentageMembership) {
+  // Every SELECTED percentage membership applies at once, each only to the
+  // rows its own applicable-services restriction actually covers — a client
+  // with "Hair Cut only" AND "Facial only" memberships gets both discounts
+  // when both are ticked, not whichever one used to win a single-membership
+  // pick. Overlapping restrictions stack additively on a shared row, same as
+  // percentage + loyalty already do below; that's an accepted tradeoff of
+  // this model, not new here. The staff-edited rate (requestedPercent) only
+  // ever overrides ONE plan's rate unambiguously when there's exactly one
+  // selected membership — with several stacking at once, each keeps its own
+  // plan rate instead.
+  for (const percentageMembership of percentageMemberships) {
     const planPercent = percentageMembership.discountPercent ?? 0;
     // Validity model: nothing is consumed, so there is no pool to bound the
     // allocation — same uncapped treatment loyalty already gets below. The
     // membership's expiry is what ends it, and that's enforced upstream in
-    // findActivePercentageForClient (an expired one isn't returned at all).
+    // findAllActivePercentageForClient (an expired one isn't returned at all).
     const planBalance = percentageMembership.benefitType === 'validity'
       ? Infinity
       : percentageMembership.discountBalanceRemaining;
@@ -202,9 +224,9 @@ export async function resolveMembershipDiscount(
       // one. 100% is the ceiling because that's a full write-off of the line;
       // allocateMembershipDiscount clamps there too, so anything higher would
       // silently mean the same thing.
-      requestedPercent === null || requestedPercent === undefined
-        ? planPercent
-        : Math.max(0, Math.min(100, requestedPercent)),
+      (percentageMemberships.length === 1 && requestedPercent !== null && requestedPercent !== undefined)
+        ? Math.max(0, Math.min(100, requestedPercent))
+        : planPercent,
       planBalance,
       percentageMembership.appliesTo,
       percentageMembership.serviceCategoryIds,
@@ -324,6 +346,7 @@ export const pricingService = {
             salonId, body.client_id, serviceRows, productRows,
             !!body.applyMembershipDiscount, !!body.applyLoyaltyDiscount,
             body.membershipDiscountPercentRequested,
+            body.membershipDiscountIds,
           );
         } catch {
           return zeroDiscountPreview; // non-fatal — preview simply shows no discount

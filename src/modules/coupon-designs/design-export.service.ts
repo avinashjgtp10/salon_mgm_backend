@@ -62,7 +62,9 @@ export interface ExportResult {
   missingTokens: string[];
 }
 
-const OUT_DIR = path.join(__dirname, "../../../uploads/designs");
+// __dirname-relative traversal breaks once esbuild bundles this file into a
+// single dist/index.js — see the matching comment in upload.middleware.ts.
+const OUT_DIR = path.join(process.cwd(), "uploads/designs");
 const RETENTION_MS = 24 * 60 * 60 * 1000;
 // Chrome is 150–300MB resident per browser. Two pages in flight is what a
 // small instance tolerates; the rest queue.

@@ -46,6 +46,10 @@ export interface CalculateTotalsBody {
   // Omit to use the plan's own rate, which is what it was before this became
   // editable. Clamped server-side to the plan's rate, so it can only reduce.
   membershipDiscountPercentRequested?: number;
+  // Which of the client's several eligible percentage memberships staff
+  // actually ticked in Available Benefits — undefined means "every eligible
+  // one" (pre-existing callers), an explicit [] means "none ticked yet".
+  membershipDiscountIds?: string[];
   // Independent sibling flag for the salon-wide Loyalty discount — stacks
   // additively with applyMembershipDiscount above when both are set.
   applyLoyaltyDiscount?: boolean;

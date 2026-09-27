@@ -45,6 +45,7 @@ export const supplierProductsService = {
                 category_id: row.category_id || undefined,
                 supplier_id: row.supplier_id,
                 supply_price: row.price ?? undefined,
+                retail_price: body.retail_price,
                 hsn_sac: row.hsn_sac || undefined,
             }, salonId);
             const updated = await supplierProductsRepository.resolve(catalogId, salonId, "create_product", created.id);

@@ -2,14 +2,14 @@
 // caller (see inventory-transactions.repository.ts / inventory.service.ts's
 // appointmentConsumablesService), but the shape is deliberately reason-
 // agnostic so Retail/Waste/Adjustment call sites can move onto it later
-// without a redesign. Retail's existing productsRepository.deductStock/
-// restoreStock is NOT migrated onto this yet (deliberately out of scope).
+// without a redesign.
 
 // retail_sale and waste were defined but never wired to any code path —
-// retail product sales deduct products.amount directly in
-// appointments.service.ts without going through this ledger at all (see
-// products.repository.ts deductStock/restoreStock), and nothing ever wrote a
-// "waste" reason. Only these two are ever actually used.
+// retail product sales go through stockLedgerService.deductForSale at
+// checkout instead (see appointments.service.ts's create() for why —
+// productsRepository.deductStock/restoreStock, the earlier retail path,
+// double-deducted stock and was removed), and nothing ever wrote a "waste"
+// reason. Only these two are ever actually used.
 export type InventoryTransactionReason = "consumable_usage" | "adjustment";
 
 // "revert" is a correction of a past consumable deduction that never actually

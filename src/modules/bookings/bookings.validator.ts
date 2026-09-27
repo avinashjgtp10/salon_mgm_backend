@@ -85,12 +85,12 @@ export const validateCreateBooking = (req: Request, _res: Response, next: NextFu
       fail("client_phone must contain between 7 and 15 digits");
     }
 
-    // Email is optional, but a value that's present must be usable — otherwise
-    // the confirmation silently fails later instead of being caught here.
-    if (b.client_email !== undefined && b.client_email !== null && String(b.client_email).trim() !== "") {
-      if (!EMAIL_RE.test(String(b.client_email).trim())) {
-        fail("client_email must be a valid email address");
-      }
+    // Email is required and must have already passed OTP verification (see
+    // bookingsService.createBooking, which checks the Redis-backed verified
+    // marker set by POST /bookings/email-otp/verify) — this validator only
+    // rejects an obviously-malformed address before that check runs.
+    if (!isNonEmptyString(b.client_email) || !EMAIL_RE.test(String(b.client_email).trim())) {
+      fail("A verified client_email is required");
     }
 
     if (b.notes !== undefined && b.notes !== null) {
@@ -163,6 +163,35 @@ export const validateReschedule = (req: Request, _res: Response, next: NextFunct
     if (!isNonEmptyString(req.body?.scheduled_at)) fail("scheduled_at is required");
     if (Number.isNaN(new Date(req.body.scheduled_at).getTime())) {
       fail("scheduled_at must be a valid ISO 8601 date-time");
+    }
+    return next();
+  } catch (err) {
+    return next(err);
+  }
+};
+
+// ── Email OTP ──────────────────────────────────────────────────────────────────
+
+export const validateSendEmailOtp = (req: Request, _res: Response, next: NextFunction) => {
+  try {
+    const email = req.body?.email;
+    if (!isNonEmptyString(email) || !EMAIL_RE.test(email.trim())) {
+      fail("A valid email is required");
+    }
+    return next();
+  } catch (err) {
+    return next(err);
+  }
+};
+
+export const validateVerifyEmailOtp = (req: Request, _res: Response, next: NextFunction) => {
+  try {
+    const { email, otp } = req.body ?? {};
+    if (!isNonEmptyString(email) || !EMAIL_RE.test(email.trim())) {
+      fail("A valid email is required");
+    }
+    if (!isNonEmptyString(otp) || !/^\d{6}$/.test(String(otp).trim())) {
+      fail("A valid 6-digit OTP is required");
     }
     return next();
   } catch (err) {

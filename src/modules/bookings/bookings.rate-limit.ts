@@ -58,6 +58,34 @@ const byIpRead = new RateLimiterRedis({
   blockDuration: 60,
 });
 
+// Email OTP send/verify — unauthenticated and email-sending, so both an IP
+// flood and a single email being hammered with resend requests need a cap.
+// Roomier than a login OTP: a real customer may legitimately hit "Resend"
+// a couple of times waiting for an email to land.
+const otpSendByIp = new RateLimiterRedis({
+  storeClient: redis,
+  keyPrefix: "booking_otp_send_ip",
+  points: 10,
+  duration: 60 * 10,
+  blockDuration: 60 * 10,
+});
+
+const otpSendByEmail = new RateLimiterRedis({
+  storeClient: redis,
+  keyPrefix: "booking_otp_send_email",
+  points: 5,
+  duration: 60 * 10,
+  blockDuration: 60 * 15,
+});
+
+const otpVerifyByEmail = new RateLimiterRedis({
+  storeClient: redis,
+  keyPrefix: "booking_otp_verify_email",
+  points: 8,
+  duration: 60 * 10,
+  blockDuration: 60 * 15,
+});
+
 const clientIp = (req: Request): string =>
   (req.ip || req.socket?.remoteAddress || "unknown").toString();
 
@@ -110,6 +138,41 @@ export async function bookingWriteRateLimit(req: Request, res: Response, next: N
 export async function bookingReadRateLimit(req: Request, res: Response, next: NextFunction) {
   try {
     await byIpRead.consume(clientIp(req));
+    return next();
+  } catch (rejection: any) {
+    if (rejection instanceof Error) return next(); // fail open
+    return tooMany(res, rejection?.msBeforeNext ?? 60_000);
+  }
+}
+
+/** Guards the "send email OTP" endpoint. */
+export async function bookingOtpSendRateLimit(req: Request, res: Response, next: NextFunction) {
+  const ip = clientIp(req);
+  const email = String(req.body?.email || "").trim().toLowerCase();
+  try {
+    const checks: Promise<unknown>[] = [otpSendByIp.consume(ip)];
+    if (email) checks.push(otpSendByEmail.consume(email));
+    await Promise.all(checks);
+    return next();
+  } catch (rejection: any) {
+    if (rejection instanceof Error) {
+      logger.error("[booking-rate-limit] otp-send limiter unavailable, allowing request", {
+        message: rejection.message,
+      });
+      return next(); // fail open
+    }
+    return tooMany(res, rejection?.msBeforeNext ?? 60_000);
+  }
+}
+
+/** Guards the "verify email OTP" endpoint — keyed by email, not IP, since a
+ *  wrong-code guess should cost the email being guessed against, regardless
+ *  of which address the guesser is coming from. */
+export async function bookingOtpVerifyRateLimit(req: Request, res: Response, next: NextFunction) {
+  const email = String(req.body?.email || "").trim().toLowerCase();
+  if (!email) return next(); // validator below will reject the missing email
+  try {
+    await otpVerifyByEmail.consume(email);
     return next();
   } catch (rejection: any) {
     if (rejection instanceof Error) return next(); // fail open

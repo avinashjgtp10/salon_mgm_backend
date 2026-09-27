@@ -282,6 +282,71 @@ async function getPaymentMethodCounts(
   };
 }
 
+// For the WhatsApp close message specifically — unlike getPaymentMethodCounts
+// above (bounded by WHEN a payment was actually recorded, correct for the
+// live "what's in the till right now" shift view), this bounds by the same
+// SERVICE date Daily Sheet and the Dashboard use: appointment.scheduled_at,
+// falling back to the linked sale's created_at for a walk-in with no
+// appointment. So a bill for yesterday's appointment that only gets paid/
+// entered today is correctly left OUT of today's message (Daily Sheet
+// already counted it under yesterday) even though the cash physically
+// changed hands today — deliberately different from the live shift view,
+// which still needs to show that cash as being in today's drawer.
+async function getServiceDateBoundedPaymentTotals(
+  client: DbClient,
+  salonId: string,
+  targetDateIso: string,
+) {
+  const legAmount = (leg: string) => `COALESCE((
+    SELECT SUM(value::numeric)
+    FROM jsonb_each_text(COALESCE(py.split_details, '{}'::jsonb)) AS leg(key, value)
+    WHERE LOWER(key) = '${leg}'
+  ), 0::numeric)`;
+
+  const legOrFull = (leg: string) => `(
+    CASE
+      WHEN LOWER(COALESCE(py.payment_method, '')) = '${leg}'
+        THEN COALESCE(py.paid_amount, py.net_amount, py.amount, 0)::numeric
+      ELSE ${legAmount(leg)}
+    END
+  )`;
+
+  const { rows } = await client.query<{
+    upi_count: string; card_count: string; cash_count: string;
+    upi_amount: string; card_amount: string; cash_amount: string;
+  }>(
+    `SELECT
+       COUNT(*) FILTER (
+         WHERE LOWER(COALESCE(py.payment_method, '')) = 'upi' OR ${legAmount("upi")} > 0
+       ) AS upi_count,
+       COUNT(*) FILTER (
+         WHERE LOWER(COALESCE(py.payment_method, '')) = 'card' OR ${legAmount("card")} > 0
+       ) AS card_count,
+       COUNT(*) FILTER (
+         WHERE LOWER(COALESCE(py.payment_method, '')) = 'cash' OR ${legAmount("cash")} > 0
+       ) AS cash_count,
+       COALESCE(SUM(${legOrFull("upi")}), 0) AS upi_amount,
+       COALESCE(SUM(${legOrFull("card")}), 0) AS card_amount,
+       COALESCE(SUM(${legOrFull("cash")}), 0) AS cash_amount
+     FROM payments py
+     LEFT JOIN appointments a ON a.id = py.appointment_id
+     LEFT JOIN sales s ON s.appointment_id = py.appointment_id AND s.status = 'completed'
+     WHERE py.salon_id = $1
+       AND py.status IN ('partial', 'completed')
+       AND DATE(COALESCE(a.scheduled_at, s.created_at, py.updated_at) AT TIME ZONE 'Asia/Kolkata') = $2::date`,
+    [salonId, targetDateIso],
+  );
+
+  return {
+    upi_count: Number(rows[0]?.upi_count ?? 0),
+    card_count: Number(rows[0]?.card_count ?? 0),
+    cash_count: Number(rows[0]?.cash_count ?? 0),
+    upi_amount: Number(rows[0]?.upi_amount ?? 0),
+    card_amount: Number(rows[0]?.card_amount ?? 0),
+    cash_amount: Number(rows[0]?.cash_amount ?? 0),
+  };
+}
+
 export async function ensureCashManagementTables(): Promise<void> {
   await safeQuery(() =>
     pool.query(`
@@ -1025,11 +1090,22 @@ export const cashManagementRepository = {
         ],
       );
 
-      const methodCounts = await getPaymentMethodCounts(
+      // The WhatsApp close message reports THIS CALENDAR DATE's collection
+      // (Asia/Kolkata), by SERVICE date (same as Daily Sheet/Dashboard) —
+      // not the raw shift window, and not by when the payment happened to be
+      // recorded. So a bill for yesterday's appointment that gets paid/
+      // entered today is correctly excluded (Daily Sheet already counted it
+      // under yesterday), even though the cash changed hands today. Dated to
+      // the IST day the counter was OPENED on.
+      const openedDate = await client.query<{ ist_date: string }>(
+        `SELECT (date_trunc('day', $1::timestamptz AT TIME ZONE 'Asia/Kolkata'))::date AS ist_date`,
+        [rows[0].opened_at],
+      );
+
+      const methodCounts = await getServiceDateBoundedPaymentTotals(
         client,
         params.salonId,
-        rows[0].opened_at,
-        rows[0].closed_at,
+        openedDate.rows[0].ist_date,
       );
 
       await client.query("COMMIT");
@@ -1048,5 +1124,30 @@ export const cashManagementRepository = {
     } finally {
       client.release();
     }
+  },
+
+  // Dashboard > Overall Collection's "Resend to WhatsApp" action (Yesterday
+  // only) — finds the counter whose OPEN date matches the requested date,
+  // same anchor closeCounter() itself uses for that day's message. Most
+  // recent close wins if more than one counter happened to open that day.
+  async findClosedCounterByOpenedDate(salonId: string, dateIso: string): Promise<CashManagementRecord | null> {
+    const { rows } = await pool.query<CashManagementRecord>(
+      `SELECT * FROM cash_management
+       WHERE salon_id = $1
+         AND status = 'closed'
+         AND DATE(opened_at AT TIME ZONE 'Asia/Kolkata') = $2::date
+       ORDER BY closed_at DESC
+       LIMIT 1`,
+      [salonId, dateIso],
+    );
+    return rows[0] ?? null;
+  },
+
+  // Cash/Card/UPI amounts were only ever computed transiently at close time
+  // (see closeCounter() above) — never persisted as their own columns — so a
+  // resend days later has to recompute them the same service-date-bounded
+  // way, keyed to the same date closeCounter() itself used.
+  async getCollectionTotalsForDate(salonId: string, dateIso: string) {
+    return getServiceDateBoundedPaymentTotals(pool, salonId, dateIso);
   },
 };

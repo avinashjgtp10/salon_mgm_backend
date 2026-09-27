@@ -6,8 +6,15 @@ import {
   validateManageToken,
   validateReschedule,
   validateCancel,
+  validateSendEmailOtp,
+  validateVerifyEmailOtp,
 } from "./bookings.validator";
-import { bookingWriteRateLimit, bookingReadRateLimit } from "./bookings.rate-limit";
+import {
+  bookingWriteRateLimit,
+  bookingReadRateLimit,
+  bookingOtpSendRateLimit,
+  bookingOtpVerifyRateLimit,
+} from "./bookings.rate-limit";
 
 const router = Router();
 
@@ -23,6 +30,21 @@ router.get(
   bookingReadRateLimit,
   validateAvailabilityQuery,
   bookingsController.getAvailability
+);
+
+// Client email verification, required before the booking write below will
+// accept that email (see bookingsService.createBooking).
+router.post(
+  "/email-otp/send",
+  bookingOtpSendRateLimit,
+  validateSendEmailOtp,
+  bookingsController.sendEmailOtp
+);
+router.post(
+  "/email-otp/verify",
+  bookingOtpVerifyRateLimit,
+  validateVerifyEmailOtp,
+  bookingsController.verifyEmailOtp
 );
 
 // Rate limit first: a rejected flood shouldn't get as far as parsing, and

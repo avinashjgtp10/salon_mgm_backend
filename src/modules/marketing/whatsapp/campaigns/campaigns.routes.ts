@@ -52,6 +52,21 @@ router.post('/:id/resend',
   campaignsController.resend
 )
 
+// Per-contact manual Resend for one FAILED/BLOCKED recipient — distinct from
+// /:id/resend above, which relaunches the whole campaign to every original
+// contact regardless of status.
+router.post('/:id/contacts/:contactId/resend',
+  authMiddleware, ownerAdminStaff, sendCampaign,
+  campaignsController.resendContact
+)
+
+// Bulk variant — "select all blocked/failed, resend" from the Contact
+// Details table. body: { contactIds: string[] }.
+router.post('/:id/contacts/resend',
+  authMiddleware, ownerAdminStaff, sendCampaign,
+  campaignsController.resendContacts
+)
+
 router.post('/:id/pause',
   authMiddleware, ownerAdminStaff, sendCampaign,
   campaignsController.pause

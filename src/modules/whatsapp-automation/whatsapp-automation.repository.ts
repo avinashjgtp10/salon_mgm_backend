@@ -175,17 +175,25 @@ export const whatsappAutomationRepository = {
     salonId: string,
     eventType: AutomationEventType,
     status: 'PENDING' | 'APPROVED' | 'REJECTED',
-    rejectionReason: string | null
+    rejectionReason: string | null,
+    // Meta can silently recategorize a template after submission (e.g.
+    // approve a UTILITY submission as MARKETING) — synced on every status
+    // check so what we display never permanently diverges from Meta's own
+    // live category. Optional/null-safe: COALESCE keeps the existing value
+    // when the caller has nothing new to report (e.g. Meta's config lookup
+    // failed) instead of blanking out a category we already know.
+    category?: 'UTILITY' | 'MARKETING' | null
   ): Promise<AutomationTemplate> {
     const { rows } = await pool.query(
       `UPDATE wa_automation_templates
        SET status = $1::varchar,
            rejection_reason = $2,
+           category = COALESCE($5::varchar, category),
            approved_at = CASE WHEN $1::varchar = 'APPROVED' THEN NOW() ELSE approved_at END,
            updated_at = NOW()
        WHERE salon_id = $3 AND event_type = $4
        RETURNING *`,
-      [status, rejectionReason, salonId, eventType]
+      [status, rejectionReason, salonId, eventType, category ?? null]
     )
     if (!rows[0]) throw new Error(`Salon template not found for eventType=${eventType}`)
     return rows[0]
@@ -249,12 +257,17 @@ export const whatsappAutomationRepository = {
     // pending_meta_template_id and copies from there instead.
     templateName?: string,
     metaTemplateId?: string,
+    // Meta's actual approved category — passed on the sync path (Meta may
+    // have recategorized the resubmission); COALESCE keeps the existing
+    // value on the instant-approve path, which has nothing new to report.
+    category?: 'UTILITY' | 'MARKETING' | null,
   ): Promise<AutomationTemplate> {
     const { rows } = await pool.query(
       `UPDATE wa_automation_templates
        SET body_text = pending_body_text,
            template_name = COALESCE($1, pending_template_name),
            meta_template_id = COALESCE($2, pending_meta_template_id),
+           category = COALESCE($5::varchar, category),
            status = 'APPROVED',
            rejection_reason = NULL,
            approved_at = NOW(),
@@ -266,7 +279,7 @@ export const whatsappAutomationRepository = {
            updated_at = NOW()
        WHERE salon_id = $3 AND event_type = $4
        RETURNING *`,
-      [templateName ?? null, metaTemplateId ?? null, salonId, eventType]
+      [templateName ?? null, metaTemplateId ?? null, salonId, eventType, category ?? null]
     )
     if (!rows[0]) throw new Error(`Salon template not found for eventType=${eventType}`)
     return rows[0]

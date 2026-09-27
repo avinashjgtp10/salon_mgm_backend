@@ -176,38 +176,70 @@ export const suppliersRepository = {
         return rows[0] || null;
     },
 
+    // Supplier codes (SPL-00001, ...) are per-salon sequential, generated
+    // atomically off salons.next_supplier_seq — same pattern as
+    // purchases.repository.ts's purchase numbers.
     async create(data: CreateSupplierBody, salonId: string): Promise<Supplier> {
-        const { rows } = await pool.query(
-            `INSERT INTO suppliers (
-        salon_id, name, description,
-        first_name, last_name,
-        mobile_country_code, mobile_number,
-        telephone_country_code, telephone_number,
-        email, website,
-        street, suburb, city, state, zip_code, country,
-        same_as_physical,
-        postal_street, postal_suburb, postal_city,
-        postal_state, postal_zip_code, postal_country,
-        is_active
-      ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
-        $19,$20,$21,$22,$23,$24,$25
-      ) RETURNING *`,
-            [
-                salonId, data.name, data.description ?? null,
-                data.first_name ?? null, data.last_name ?? null,
-                data.mobile_country_code ?? null, data.mobile_number ?? null,
-                data.telephone_country_code ?? null, data.telephone_number ?? null,
-                data.email ?? null, data.website ?? null,
-                data.street ?? null, data.suburb ?? null, data.city ?? null,
-                data.state ?? null, data.zip_code ?? null, data.country ?? null,
-                data.same_as_physical ?? true,
-                data.postal_street ?? null, data.postal_suburb ?? null, data.postal_city ?? null,
-                data.postal_state ?? null, data.postal_zip_code ?? null, data.postal_country ?? null,
-                data.is_active ?? true,
-            ]
-        );
-        return rows[0];
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            const { rows: seqRows } = await client.query(
+                `UPDATE salons SET next_supplier_seq = next_supplier_seq + 1
+                 WHERE id = $1 RETURNING next_supplier_seq - 1 AS seq`,
+                [salonId],
+            );
+            const supplierCode = `SPL-${String(seqRows[0].seq).padStart(5, "0")}`;
+
+            const { rows } = await client.query(
+                `INSERT INTO suppliers (
+            salon_id, name, description,
+            first_name, last_name,
+            mobile_country_code, mobile_number,
+            telephone_country_code, telephone_number,
+            email, website,
+            street, suburb, city, state, zip_code, country,
+            same_as_physical,
+            postal_street, postal_suburb, postal_city,
+            postal_state, postal_zip_code, postal_country,
+            is_active,
+            supplier_code, supplier_type, contact_person, address,
+            gstin, pan, business_registration_number,
+            payment_terms_days, credit_limit,
+            bank_account_holder_name, bank_name, bank_account_number, bank_ifsc_code,
+            notes
+          ) VALUES (
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
+            $19,$20,$21,$22,$23,$24,$25,
+            $26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39
+          ) RETURNING *`,
+                [
+                    salonId, data.name, data.description ?? null,
+                    data.first_name ?? null, data.last_name ?? null,
+                    data.mobile_country_code ?? null, data.mobile_number ?? null,
+                    data.telephone_country_code ?? null, data.telephone_number ?? null,
+                    data.email ?? null, data.website ?? null,
+                    data.street ?? null, data.suburb ?? null, data.city ?? null,
+                    data.state ?? null, data.zip_code ?? null, data.country ?? null,
+                    data.same_as_physical ?? true,
+                    data.postal_street ?? null, data.postal_suburb ?? null, data.postal_city ?? null,
+                    data.postal_state ?? null, data.postal_zip_code ?? null, data.postal_country ?? null,
+                    data.is_active ?? true,
+                    supplierCode, data.supplier_type ?? "product", data.contact_person ?? null, data.address ?? null,
+                    data.gstin ?? null, data.pan ?? null, data.business_registration_number ?? null,
+                    data.payment_terms_days ?? 0, data.credit_limit ?? 0,
+                    data.bank_account_holder_name ?? null, data.bank_name ?? null,
+                    data.bank_account_number ?? null, data.bank_ifsc_code ?? null,
+                    data.notes ?? null,
+                ]
+            );
+            await client.query("COMMIT");
+            return rows[0];
+        } catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        } finally {
+            client.release();
+        }
     },
 
     async update(id: string, patch: UpdateSupplierBody, salonId: string): Promise<Supplier> {

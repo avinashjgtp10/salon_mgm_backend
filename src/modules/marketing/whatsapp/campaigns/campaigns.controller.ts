@@ -43,6 +43,37 @@ export const campaignsController = {
     } catch (e) { return next(e) }
   },
 
+  async resendContact(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId
+      if (!salonId) return res.status(400).json({ error: 'salonId missing from token' })
+      const data = await campaignsService.resendContact(
+        req.params.id as string,
+        req.params.contactId as string,
+        salonId,
+        req.user?.userId ?? null,
+      )
+      return sendSuccess(res, 200, data, 'Message resent to contact')
+    } catch (e) { return next(e) }
+  },
+
+  async resendContacts(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId
+      if (!salonId) return res.status(400).json({ error: 'salonId missing from token' })
+      const contactIds = Array.isArray(req.body?.contactIds)
+        ? req.body.contactIds.filter((v: unknown) => typeof v === 'string')
+        : []
+      const data = await campaignsService.resendContacts(
+        req.params.id as string,
+        contactIds,
+        salonId,
+        req.user?.userId ?? null,
+      )
+      return sendSuccess(res, 200, data, `Resent to ${data.queued.length} contact(s)`)
+    } catch (e) { return next(e) }
+  },
+
   async pause(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = req.user?.salonId

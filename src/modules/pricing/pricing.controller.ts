@@ -45,6 +45,10 @@ export const pricingController = {
         membershipDiscountPercentRequested: body.membershipDiscountPercentRequested !== undefined
           ? Number(body.membershipDiscountPercentRequested) || 0
           : undefined,
+        // Which specific percentage memberships staff ticked — omitted here
+        // meant resolveMembershipDiscount always fell back to "every eligible
+        // one", silently re-summing memberships staff never selected.
+        membershipDiscountIds: Array.isArray(body.membershipDiscountIds) ? body.membershipDiscountIds : undefined,
         applyLoyaltyDiscount: !!body.applyLoyaltyDiscount,
         applyRewardPoints: !!body.applyRewardPoints,
         rewardPointsToRedeem: Number(body.rewardPointsToRedeem) || 0,

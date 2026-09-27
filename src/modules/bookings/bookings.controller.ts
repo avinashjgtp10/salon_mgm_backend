@@ -2,9 +2,28 @@ import { Request, Response, NextFunction } from "express";
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { bookingsService } from "./bookings.service";
+import { bookingEmailOtpService } from "./booking-email-otp.service";
 import { PublicBookingRequest } from "./bookings.types";
 
 export const bookingsController = {
+    async sendEmailOtp(req: Request, res: Response, next: NextFunction) {
+        try {
+            const result = await bookingEmailOtpService.sendOtp(req.body?.email);
+            return sendSuccess(res, 200, result, result.message);
+        } catch (err) {
+            return next(err);
+        }
+    },
+
+    async verifyEmailOtp(req: Request, res: Response, next: NextFunction) {
+        try {
+            const result = await bookingEmailOtpService.verifyOtp(req.body?.email, req.body?.otp);
+            return sendSuccess(res, 200, result, result.message);
+        } catch (err) {
+            return next(err);
+        }
+    },
+
     async getSalonDetails(req: Request, res: Response, next: NextFunction) {
         try {
             const { salon_id } = req.params;

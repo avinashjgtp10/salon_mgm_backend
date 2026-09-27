@@ -41,6 +41,7 @@ router.post("/expenses", ...guard, addExpense, cashManagementController.createEx
 router.put("/expenses/:id", ...guard, editExpense, cashManagementController.updateExpense);
 router.delete("/expenses/:id", ...guard, deleteExpense, cashManagementController.deleteExpense);
 router.post("/close", ...guard, closeCounter, cashManagementController.closeCounter);
+router.post("/resend-closed-message", ...guard, viewCash, cashManagementController.resendClosedCounterMessage);
 router.post("/send-summary-email", ...guard, viewCash, upload.single("file"), cashManagementController.sendSummaryEmail);
 router.post("/email-summary", ...guard, viewCash, upload.single("file"), cashManagementController.sendSummaryEmail);
 

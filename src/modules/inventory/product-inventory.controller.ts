@@ -1,5 +1,4 @@
 import { Request, Response, NextFunction } from "express";
-import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { productInventoryRepository } from "./product-inventory.repository";
@@ -45,48 +44,6 @@ export const productInventoryController = {
             const salonId = getSalonId(req);
             sendSuccess(res, 200, await productInventoryRepository.filterOptions(salonId));
         } catch (err) {
-            next(err);
-        }
-    },
-
-    async stockIn(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
-        try {
-            const salonId = getSalonId(req);
-            const userId = req.user?.userId;
-            if (!userId) throw new AppError(401, "Authentication required", "NO_USER");
-
-            const quantity = Number(req.body?.quantity);
-            // Validated here as well as on the form: the endpoint is reachable
-            // directly, and a zero/negative "addition" would write a movement
-            // row that silently reduced stock while reading as a stock-in.
-            if (!Number.isFinite(quantity) || quantity <= 0) {
-                throw new AppError(400, "Quantity must be greater than zero", "INVALID_QUANTITY");
-            }
-
-            const result = await productInventoryRepository.stockIn({
-                productId: String(req.params.id),
-                salonId,
-                quantity,
-                notes: req.body?.notes ?? null,
-                supplierId: req.body?.supplier_id ?? null,
-                unitPrice: req.body?.unit_price != null ? Number(req.body.unit_price) : null,
-                createdBy: userId,
-            });
-
-            logger.info("Product stock-in recorded", {
-                salonId, userId, productId: req.params.id,
-                quantity, before: result.before, after: result.after,
-            });
-            sendSuccess(res, 201, result, "Stock added");
-        } catch (err: any) {
-            if (err?.message === "Product not found in this salon") {
-                next(new AppError(404, err.message, "PRODUCT_NOT_FOUND"));
-                return;
-            }
-            if (err?.message === "Quantity must be greater than zero") {
-                next(new AppError(400, err.message, "INVALID_QUANTITY"));
-                return;
-            }
             next(err);
         }
     },

@@ -22,7 +22,7 @@ const isOptionalUUID = (v: unknown) => v === undefined || isUUID(v);
 const isNonEmptyString = (v: unknown) =>
     typeof v === "string" && v.trim().length > 0;
 const isOptionalString = (v: unknown) =>
-    v === undefined || typeof v === "string";
+    v === undefined || v === null || typeof v === "string";
 const isOptionalInt = (v: unknown) =>
     v === undefined ||
     (typeof v === "number" && Number.isInteger(v) && v >= 0);

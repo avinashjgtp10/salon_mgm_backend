@@ -63,6 +63,23 @@ export const staffController = {
     } catch (err) { return next(err); }
   },
 
+  // GET /staff/check-email?email=...&exclude_staff_id=... — live duplicate
+  // check for the Staff Login email field (Add/Edit Staff page), so the
+  // admin sees "email already exists" as they type instead of only finding
+  // out after clicking Save. exclude_staff_id (Edit Staff only) keeps the
+  // staff member's own current email from flagging itself.
+  async checkEmail(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = getSalonId(req);
+      const email = String(req.query.email || "").trim();
+      if (!email) throw new AppError(400, "email is required", "VALIDATION_ERROR");
+      const excludeStaffId = req.query.exclude_staff_id ? String(req.query.exclude_staff_id) : undefined;
+
+      const result = await staffService.checkEmailAvailable(salonId, email, excludeStaffId);
+      return sendSuccess(res, 200, result, "Email availability checked");
+    } catch (err) { return next(err); }
+  },
+
   async create(req: AuthRequest, res: Response, _next: NextFunction) {
     try {
       const salonId = getSalonId(req);
@@ -800,8 +817,17 @@ export const staffSchedulesController = {
       const salonId = getSalonId(req);
       const date = req.query.date ? String(req.query.date) : undefined;
       if (!date) throw new AppError(400, "Date is required", "MISSING_DATE");
-      await staffSchedulesService.deleteByDate(staffId, salonId, date);
-      return sendSuccess(res, 200, null, "Schedule deleted successfully");
+      const result = await staffSchedulesService.deleteByDate(staffId, salonId, date);
+      // "noop" means nothing existed to clear for this date (no dated row,
+      // and no active weekly baseline to override) — surfacing that as a
+      // 200 "deleted successfully" made the UI show the block as removed
+      // (optimistic update) even though nothing changed server-side, so it
+      // reappeared on the next refetch. Report it as a failure instead so
+      // the frontend can roll back its optimistic state.
+      if (result === "noop") {
+        throw new AppError(404, "No schedule entry found for this date", "SCHEDULE_NOT_FOUND");
+      }
+      return sendSuccess(res, 200, { result }, "Schedule deleted successfully");
     } catch (err) { return next(err); }
   },
 };

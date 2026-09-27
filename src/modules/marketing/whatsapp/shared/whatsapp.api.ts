@@ -274,7 +274,11 @@ async verifyAccessToken(params: {
   async getTemplateStatus(accessToken: string, metaTemplateId: string) {
     const res = await http.get(
       `${WA_BASE_URL}/${WA_API_VERSION}/${metaTemplateId}`,
-      { headers: { Authorization: `Bearer ${accessToken}` }, params: { fields: 'id,name,status,quality_score,rejected_reason' } }
+      // category included so a sync can pick up Meta silently reclassifying
+      // a template post-submission (e.g. a UTILITY submission Meta approves
+      // but recategorizes as MARKETING) — without it here, our own stored
+      // category never has a way to learn it's gone stale.
+      { headers: { Authorization: `Bearer ${accessToken}` }, params: { fields: 'id,name,status,category,quality_score,rejected_reason' } }
     )
     return res.data
   },

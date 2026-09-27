@@ -168,7 +168,7 @@ export const waPurchaseTemplatesService = {
             try {
                 const synced = await syncBodyOnlyTemplateStatus({ salonId, metaTemplateId: existing.pending_meta_template_id });
                 if (synced.status === "APPROVED") {
-                    return whatsappAutomationRepository.promotePendingTemplate(salonId, eventType);
+                    return whatsappAutomationRepository.promotePendingTemplate(salonId, eventType, undefined, undefined, synced.category);
                 }
                 return whatsappAutomationRepository.updatePendingSyncedStatus(salonId, eventType, synced.status, synced.rejectionReason);
             } catch (err: any) {
@@ -185,7 +185,7 @@ export const waPurchaseTemplatesService = {
 
         try {
             const synced = await syncBodyOnlyTemplateStatus({ salonId, metaTemplateId: existing.meta_template_id });
-            return whatsappAutomationRepository.updateSyncedStatus(salonId, eventType, synced.status, synced.rejectionReason);
+            return whatsappAutomationRepository.updateSyncedStatus(salonId, eventType, synced.status, synced.rejectionReason, synced.category);
         } catch (err: any) {
             // Template was deleted on Meta's side — surface it as resubmittable
             // rather than leaving a stale APPROVED row that keeps failing sends.
