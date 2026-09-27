@@ -335,45 +335,54 @@ export const ordersRepository = {
         for (const line of data.items) {
             const orderItem = itemsById.get(line.order_item_id);
             if (!orderItem) throw new AppError(400, `order_item_id ${line.order_item_id} does not belong to this order`, "VALIDATION_ERROR");
-            const remaining = Number(orderItem.qty) - Number(orderItem.received_qty);
-            if (line.received_qty > remaining + 0.001) {
-                throw new AppError(400, `Cannot receive ${line.received_qty} of "${orderItem.product_name ?? orderItem.product_id}" — only ${remaining} remaining on this order`, "VALIDATION_ERROR");
+            const damagedQty = line.damaged_qty ?? 0;
+            const remaining = Number(orderItem.qty) - Number(orderItem.received_qty) - Number(orderItem.damaged_qty);
+            if (line.received_qty + damagedQty > remaining + 0.001) {
+                throw new AppError(400, `Cannot account for ${line.received_qty + damagedQty} of "${orderItem.product_name ?? orderItem.product_id}" — only ${remaining} remaining on this order`, "VALIDATION_ERROR");
             }
+            // Only the good units are ever stocked in — damaged ones are
+            // recorded on order_items below but never touch products.amount.
             if (line.received_qty > 0) {
                 purchaseItems.push({ product_id: orderItem.product_id, quantity: line.received_qty, purchase_price: Number(orderItem.cost_price) });
             }
         }
 
-        if (!purchaseItems.length) throw new AppError(400, "At least one item must have a received quantity > 0", "VALIDATION_ERROR");
+        if (!purchaseItems.length && !data.items.some((l) => (l.damaged_qty ?? 0) > 0)) {
+            throw new AppError(400, "At least one item must have a received or damaged quantity > 0", "VALIDATION_ERROR");
+        }
 
         // The actual stock-in — same code path a standalone Purchase uses,
         // so products.amount/stock_movements/supplier balance all update
         // exactly the way they already do today. Its updatedProducts is
         // returned back out (see below) so PurchaseModal.tsx's "receive
         // against this PO" flow can patch Product Inventory in place, same
-        // as it already does for an ad-hoc purchase.
-        const { updatedProducts } = await purchasesRepository.create(
-            { supplier_id: order.supplier_id, purchase_date: data.purchase_date, order_id: orderId, items: purchaseItems },
-            salonId,
-            createdBy,
-        );
+        // as it already does for an ad-hoc purchase. Skipped entirely when
+        // this call is damaged-only (no good units to stock in).
+        const updatedProducts = purchaseItems.length
+            ? (await purchasesRepository.create(
+                { supplier_id: order.supplier_id, purchase_date: data.purchase_date, order_id: orderId, items: purchaseItems },
+                salonId,
+                createdBy,
+            )).updatedProducts
+            : [];
 
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
             for (const line of data.items) {
-                if (line.received_qty <= 0) continue;
+                const damagedQty = line.damaged_qty ?? 0;
+                if (line.received_qty <= 0 && damagedQty <= 0) continue;
                 await client.query(
-                    `UPDATE order_items SET received_qty = received_qty + $1 WHERE id = $2`,
-                    [line.received_qty, line.order_item_id],
+                    `UPDATE order_items SET received_qty = received_qty + $1, damaged_qty = damaged_qty + $2 WHERE id = $3`,
+                    [line.received_qty, damagedQty, line.order_item_id],
                 );
             }
             const { rows: refreshedItems } = await client.query(
-                `SELECT qty, received_qty FROM order_items WHERE order_id = $1`,
+                `SELECT qty, received_qty, damaged_qty FROM order_items WHERE order_id = $1`,
                 [orderId],
             );
-            const fullyReceived = refreshedItems.every((r) => Number(r.received_qty) >= Number(r.qty) - 0.001);
-            const anyReceived = refreshedItems.some((r) => Number(r.received_qty) > 0);
+            const fullyReceived = refreshedItems.every((r) => Number(r.received_qty) + Number(r.damaged_qty) >= Number(r.qty) - 0.001);
+            const anyReceived = refreshedItems.some((r) => Number(r.received_qty) + Number(r.damaged_qty) > 0);
             const newStatus = fullyReceived ? "received" : anyReceived ? "partially_received" : order.status;
             await client.query(`UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2`, [newStatus, orderId]);
             await client.query("COMMIT");
