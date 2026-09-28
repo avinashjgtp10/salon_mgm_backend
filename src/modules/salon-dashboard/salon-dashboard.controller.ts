@@ -6,10 +6,19 @@ import { staffHasPermission } from "../../middleware/permission.middleware";
 
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string | null } };
 
+// Used by cash-management.controller.ts's own summary-bundle endpoint
+// (a different dashboard surface, gated on the original view_dashboard_
+// financials key — unrelated to getCombined()'s per-card redaction below).
 const FINANCIAL_SUMMARY_FIELDS = [
   "totalRevenue", "allTimeRevenue", "lastMonthRevenue", "yesterdayRevenue",
   "todayRevenue", "revenueChange", "todayRevenueChange",
 ] as const;
+
+// Total Revenue card's fields (This Month / Last Month faces).
+const TOTAL_REVENUE_SUMMARY_FIELDS = ["totalRevenue", "allTimeRevenue", "lastMonthRevenue", "revenueChange"] as const;
+// Today's Revenue card's fields (Today / Yesterday faces).
+const TODAY_REVENUE_SUMMARY_FIELDS = ["todayRevenue", "yesterdayRevenue", "todayRevenueChange"] as const;
+const NEW_CLIENTS_SUMMARY_FIELDS = ["newClientsToday", "newClientsThisMonth"] as const;
 
 // Owner/admin bypass (unconditional, matching every other permission check
 // in the app); staff resolved against the real permission tables/blob via
@@ -26,12 +35,16 @@ export async function checkDashboardSubPermission(req: AuthRequest, permKey: str
   return staffHasPermission({ userId, role, salonId }, permKey);
 }
 
-export function redactFinancialSummaryFields(summary: Record<string, unknown>): Record<string, unknown> {
+function redactSummaryFields(summary: Record<string, unknown>, fields: readonly string[]): Record<string, unknown> {
   const redacted = { ...summary };
-  for (const field of FINANCIAL_SUMMARY_FIELDS) {
+  for (const field of fields) {
     if (field in redacted) redacted[field] = null;
   }
   return redacted;
+}
+
+export function redactFinancialSummaryFields(summary: Record<string, unknown>): Record<string, unknown> {
+  return redactSummaryFields(summary, FINANCIAL_SUMMARY_FIELDS);
 }
 
 // Flattened, not emptied — the frontend chart is expected to still render
@@ -45,6 +58,15 @@ function redactRevenueChart(chart: Array<Record<string, unknown>>): Array<Record
 
 function redactPaymentModeBreakdown(): Record<string, unknown> {
   return { entries: [], total: 0 };
+}
+
+// count stays real — it's "how many clients", not a currency figure, and
+// zeroing it previously made a masked Due Amount card read as "0 clients"
+// (looks like nothing is due, not "hidden"). amount is a non-null dummy (not
+// null) so the frontend's fmt() still calls formatAmount() and renders the
+// masked placeholder text instead of falling back to its own "no value" dash.
+function redactPendingPayments(pendingPayments: { count?: number; amount?: number } | undefined) {
+  return { count: pendingPayments?.count ?? 0, amount: 0 };
 }
 
 export const salonDashboardController = {
@@ -117,29 +139,43 @@ export const salonDashboardController = {
       const collectionPeriod = typeof body.collectionPeriod === "string" ? body.collectionPeriod : undefined;
       const data = await salonDashboardService.getCombined(salonId, period, date, collectionPeriod) as any;
 
-      const [canFinancials, canAppointments, canClientInfo] = await Promise.all([
-        checkDashboardSubPermission(req, "view_dashboard_financials"),
-        checkDashboardSubPermission(req, "view_dashboard_appointments"),
-        checkDashboardSubPermission(req, "view_dashboard_client_info"),
+      const [
+        canTotalRevenue, canTodayRevenue, canDueAmount, canAppointments,
+        canBirthdays, canNewClients, canRevenueOverview, canOverallCollection,
+      ] = await Promise.all([
+        checkDashboardSubPermission(req, "view_dashboard_card_total_revenue"),
+        checkDashboardSubPermission(req, "view_dashboard_card_today_revenue"),
+        checkDashboardSubPermission(req, "view_dashboard_card_due_amount"),
+        checkDashboardSubPermission(req, "view_dashboard_card_appointments"),
+        checkDashboardSubPermission(req, "view_dashboard_card_birthdays"),
+        checkDashboardSubPermission(req, "view_dashboard_card_new_clients"),
+        checkDashboardSubPermission(req, "view_dashboard_card_revenue_overview"),
+        checkDashboardSubPermission(req, "view_dashboard_card_overall_collection"),
       ]);
 
-      if (!canFinancials) {
-        data.summary = redactFinancialSummaryFields(data.summary);
-        data.revenueChart = redactRevenueChart(data.revenueChart ?? []);
-        data.paymentModeBreakdown = redactPaymentModeBreakdown();
-        // count stays real — it's "how many clients", not a ₹ figure, and
-        // zeroing it previously made a masked Due Amount card read as "0
-        // clients" (looks like nothing is due, not "hidden"). amount is a
-        // non-null dummy (not null) so the frontend's fmt() still calls
-        // formatAmount() and renders the masked placeholder text instead of
-        // falling back to its own "no value" dash.
-        data.pendingPayments = { count: data.pendingPayments?.count ?? 0, amount: 0 };
+      if (!canTotalRevenue) {
+        data.summary = redactSummaryFields(data.summary, TOTAL_REVENUE_SUMMARY_FIELDS);
+      }
+      if (!canTodayRevenue) {
+        data.summary = redactSummaryFields(data.summary, TODAY_REVENUE_SUMMARY_FIELDS);
+      }
+      if (!canDueAmount) {
+        data.pendingPayments = redactPendingPayments(data.pendingPayments);
       }
       if (!canAppointments) {
         data.todayAppointments = [];
       }
-      if (!canClientInfo) {
+      if (!canBirthdays) {
         data.todaysBirthdays = { clients: [] };
+      }
+      if (!canNewClients) {
+        data.summary = redactSummaryFields(data.summary, NEW_CLIENTS_SUMMARY_FIELDS);
+      }
+      if (!canRevenueOverview) {
+        data.revenueChart = redactRevenueChart(data.revenueChart ?? []);
+      }
+      if (!canOverallCollection) {
+        data.paymentModeBreakdown = redactPaymentModeBreakdown();
       }
 
       return sendSuccess(res, 200, data, "Dashboard data fetched successfully");
