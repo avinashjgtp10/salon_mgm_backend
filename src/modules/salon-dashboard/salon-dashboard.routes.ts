@@ -8,11 +8,11 @@ const router = Router();
 
 const guard = [authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), requirePermission("view_dashboard")];
 
-// GET /api/v1/dashboard/revenue
-router.get("/revenue", ...guard, requirePermission("view_dashboard_financials"), salonDashboardController.getRevenueChart);
+// GET /api/v1/dashboard/revenue — "Revenue Overview" chart card
+router.get("/revenue", ...guard, requirePermission("view_dashboard_card_revenue_overview"), salonDashboardController.getRevenueChart);
 
 // GET /api/v1/dashboard/payment-mode-breakdown — "Overall Collection" card
-router.get("/payment-mode-breakdown", ...guard, requirePermission("view_dashboard_financials"), salonDashboardController.getPaymentModeBreakdown);
+router.get("/payment-mode-breakdown", ...guard, requirePermission("view_dashboard_card_overall_collection"), salonDashboardController.getPaymentModeBreakdown);
 
 // GET /api/v1/dashboard/staff/top
 router.get("/staff/top", ...guard, requirePermission("view_dashboard_staff_performance"), salonDashboardController.getTopStaff);
