@@ -14,7 +14,7 @@ export const validateBody =
           error: {
             code: "VALIDATION_ERROR",
             message: "Validation failed",
-            details: (err as any).errors.map((e: any) => ({
+            details: err.issues.map((e) => ({
               field: e.path.join("."),
               message: e.message,
             })),
