@@ -11,14 +11,28 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return chunks
 }
 
+// wa_campaign_contacts.phone is varchar(20) — a real E.164 number
+// ("+919876543210") is at most 16 characters, so anything longer than this
+// is never a real phone number. Left ungated, a single bad row (an Excel
+// column-detection miss landing on a long text cell instead of the actual
+// phone column — confirmed root cause of a real prod failure, "value too
+// long for type character varying(20)") would throw an unhandled Postgres
+// error and abort the ENTIRE campaign's insert, not just that one contact.
+const MAX_PHONE_LENGTH = 20
+
 // Collapse duplicate phone numbers within one upload (comparing on digits only,
 // so "+91 98..." and "9198..." count as the same person) — otherwise the same
 // customer is messaged twice and total_contacts over-counts unique recipients.
+// Also drops any contact whose phone is too long to ever be real (see
+// MAX_PHONE_LENGTH above) — silently skipped rather than failing the whole
+// batch, same as an empty/duplicate phone already was.
 function dedupeContacts<T extends { phone: string }>(contacts: T[]): T[] {
   const seen = new Set<string>()
   const out: T[] = []
   for (const c of contacts) {
-    const key = String(c.phone ?? '').replace(/\D/g, '')
+    const phone = String(c.phone ?? '')
+    if (phone.length > MAX_PHONE_LENGTH) continue
+    const key = phone.replace(/\D/g, '')
     if (!key || seen.has(key)) continue
     seen.add(key)
     out.push(c)
