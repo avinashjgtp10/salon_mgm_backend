@@ -110,15 +110,24 @@ export const superAdminRepository = {
            WHERE status IN ('completed','partial')
              AND created_at >= date_trunc('month', NOW()))                               AS mrr,
         (SELECT COUNT(*)::int FROM appointments)                                         AS total_bookings,
-        (SELECT COUNT(*)::int FROM appointments WHERE DATE(created_at) = CURRENT_DATE)   AS bookings_today,
+        -- IST-aware "today" — bare DATE(created_at) = CURRENT_DATE compared
+        -- in the DB session's UTC, rolling over at 5:30am IST instead of
+        -- midnight IST. For the first ~5.5 hours of every IST day this
+        -- silently reported ₹0/zero counts for genuinely-today activity —
+        -- same fix already applied to salon-dashboard.repository.ts and
+        -- branch-owner.repository.ts's equivalent "today" queries.
+        (SELECT COUNT(*)::int FROM appointments
+           WHERE (created_at AT TIME ZONE 'Asia/Kolkata')::date = (NOW() AT TIME ZONE 'Asia/Kolkata')::date) AS bookings_today,
         (SELECT COUNT(*)::int FROM users
-           WHERE role != 'super_admin' AND DATE(created_at) = CURRENT_DATE)             AS signups_today,
+           WHERE role != 'super_admin'
+             AND (created_at AT TIME ZONE 'Asia/Kolkata')::date = (NOW() AT TIME ZONE 'Asia/Kolkata')::date) AS signups_today,
         (SELECT COUNT(*)::int FROM users
-           WHERE role = 'client' AND DATE(created_at) = CURRENT_DATE)                   AS new_clients_today,
+           WHERE role = 'client'
+             AND (created_at AT TIME ZONE 'Asia/Kolkata')::date = (NOW() AT TIME ZONE 'Asia/Kolkata')::date) AS new_clients_today,
         (SELECT COALESCE(SUM(net_amount), 0)::numeric
            FROM payments
            WHERE status IN ('completed','partial')
-             AND DATE(created_at) = CURRENT_DATE)                                       AS revenue_today,
+             AND (created_at AT TIME ZONE 'Asia/Kolkata')::date = (NOW() AT TIME ZONE 'Asia/Kolkata')::date) AS revenue_today,
         (SELECT COUNT(*)::int FROM users
            WHERE role != 'super_admin' AND created_at >= NOW() - INTERVAL '7 days')     AS signups_this_week,
         (SELECT COUNT(*)::int FROM users
