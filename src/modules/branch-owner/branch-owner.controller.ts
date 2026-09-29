@@ -289,7 +289,9 @@ export const branchOwnerController = {
 
   async getCashManagementOverview(req: AuthedRequest, res: Response, next: NextFunction) {
     try {
-      const data = await branchOwnerService.getCashManagementOverview(req.user!.userId);
+      const from = typeof req.query.from === "string" ? req.query.from : undefined;
+      const to = typeof req.query.to === "string" ? req.query.to : undefined;
+      const data = await branchOwnerService.getCashManagementOverview(req.user!.userId, from, to);
       return res.json({ success: true, data });
     } catch (err) { return next(err); }
   },

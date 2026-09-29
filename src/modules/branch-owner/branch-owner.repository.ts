@@ -64,7 +64,7 @@ export const branchOwnerRepository = {
         SELECT salon_id, COUNT(*)::int AS appointments_today
         FROM appointments
         WHERE deleted_at IS NULL AND status NOT IN ('cancelled', 'no-show')
-          AND DATE(scheduled_at) = CURRENT_DATE
+          AND (scheduled_at AT TIME ZONE 'Asia/Kolkata')::date = (NOW() AT TIME ZONE 'Asia/Kolkata')::date
         GROUP BY salon_id
       ) appt_counts ON appt_counts.salon_id = s.id
       LEFT JOIN (
@@ -86,7 +86,13 @@ export const branchOwnerRepository = {
               SELECT 1 FROM sales s2 WHERE s2.appointment_id = p.appointment_id AND s2.status = 'completed'
             )
         ) revenue_events
-        WHERE DATE(event_at) = CURRENT_DATE
+        -- Salon's business day is Asia/Kolkata (IST), not the DB session's
+        -- UTC — bare DATE(event_at) = CURRENT_DATE rolled over at UTC
+        -- midnight (5:30am IST), so for the first ~5.5 hours of every IST
+        -- day this silently read as "yesterday" and reported ₹0/zero counts
+        -- for genuinely-today activity. Same fix already applied to
+        -- salon-dashboard.repository.ts's own revenue query.
+        WHERE (event_at AT TIME ZONE 'Asia/Kolkata')::date = (NOW() AT TIME ZONE 'Asia/Kolkata')::date
         GROUP BY salon_id
       ) revenue ON revenue.salon_id = s.id
       WHERE bos.branch_owner_id = $1
@@ -150,14 +156,20 @@ export const branchOwnerRepository = {
         )
         SELECT
           COALESCE((SELECT SUM(amount) FROM revenue_events), 0)::numeric AS total_revenue,
-          COALESCE((SELECT SUM(amount) FROM revenue_events WHERE DATE(event_at) = CURRENT_DATE), 0)::numeric AS revenue_today,
+          -- IST-aware "today" (see getMySalons' own revenue subquery above
+          -- for the full explanation) — bare DATE(event_at) = CURRENT_DATE
+          -- rolled over at UTC midnight (5:30am IST), silently zeroing this
+          -- KPI for the first ~5.5 hours of every IST day.
+          COALESCE((SELECT SUM(amount) FROM revenue_events
+            WHERE (event_at AT TIME ZONE 'Asia/Kolkata')::date = (NOW() AT TIME ZONE 'Asia/Kolkata')::date
+          ), 0)::numeric AS revenue_today,
           (SELECT COUNT(*) FROM appointments
             WHERE salon_id IN (SELECT salon_id FROM my_salons)
               AND deleted_at IS NULL AND status NOT IN ('cancelled', 'no-show'))::int AS total_bookings,
           (SELECT COUNT(*) FROM appointments
             WHERE salon_id IN (SELECT salon_id FROM my_salons)
               AND deleted_at IS NULL AND status NOT IN ('cancelled', 'no-show')
-              AND DATE(scheduled_at) = CURRENT_DATE)::int AS bookings_today
+              AND (scheduled_at AT TIME ZONE 'Asia/Kolkata')::date = (NOW() AT TIME ZONE 'Asia/Kolkata')::date)::int AS bookings_today
       `, [branchOwnerId]),
 
       pool.query<{ total_staff: string }>(`
@@ -188,7 +200,7 @@ export const branchOwnerRepository = {
         SELECT COUNT(*)::int AS new_clients_today
         FROM clients c
         WHERE c.is_active = true
-          AND DATE(c.created_at) = CURRENT_DATE
+          AND (c.created_at AT TIME ZONE 'Asia/Kolkata')::date = (NOW() AT TIME ZONE 'Asia/Kolkata')::date
           AND EXISTS (
             SELECT 1 FROM appointments a
             WHERE a.client_id = c.id
@@ -456,7 +468,16 @@ export const branchOwnerRepository = {
   // the single-salon Cash Management Report (reports.repository.ts), summed
   // per salon instead of filtered to one, so a branch owner sees every
   // branch's cash position on one screen.
-  async getCashManagementBySalon(branchOwnerId: string) {
+  // from/to are 'YYYY-MM-DD' strings (inclusive), compared against opened_at
+  // in the salon's business timezone (Asia/Kolkata) — same convention
+  // cash-management.repository.ts uses for its own same-day counter check,
+  // so a session opened late at night IST is bucketed under the correct IST
+  // calendar day rather than rolling over at UTC midnight. The date check
+  // lives in the JOIN condition, not a WHERE clause, so a salon with zero
+  // sessions in the selected range still shows an all-zero row instead of
+  // disappearing — filtering cm's columns in WHERE would turn this back
+  // into an inner join.
+  async getCashManagementBySalon(branchOwnerId: string, from: string, to: string) {
     const { rows } = await pool.query(`
       SELECT
         s.id                                            AS salon_id,
@@ -471,11 +492,13 @@ export const branchOwnerRepository = {
         COUNT(cm.id) FILTER (WHERE cm.status = 'closed')::int AS closed_sessions
       FROM branch_owner_salons bos
       JOIN salons s ON s.id = bos.salon_id
-      LEFT JOIN cash_management cm ON cm.salon_id = s.id
+      LEFT JOIN cash_management cm
+        ON cm.salon_id = s.id
+        AND (cm.opened_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN $2::date AND $3::date
       WHERE bos.branch_owner_id = $1
       GROUP BY s.id, s.business_name, s.slug
       ORDER BY s.created_at DESC
-    `, [branchOwnerId]);
+    `, [branchOwnerId, from, to]);
     return rows;
   },
 
