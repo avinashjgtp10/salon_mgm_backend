@@ -4,6 +4,7 @@ import { whatsappMetaApi } from '../shared/whatsapp.api'
 import { SaveConfigBody, TestConnectionResult } from './config.types'
 import logger from '../../../../config/logger'
 import { waPurchaseTemplatesService } from '../../../whatsapp-automation/wa-purchase-templates.service'
+import { dashboardRepository } from '../dashboard/dashboard.repository'
 
 // APP_URL = your backend domain e.g. https://api.salonox.com
 // Each salon gets their own webhook URL with their salonId in it
@@ -17,12 +18,17 @@ export const configService = {
   async getConfig(salonId: string) {
     const config = await configRepository.findBySalonId(salonId)
     if (!config) return null
+    // sent_today powers the Send Campaign modal's "messages remaining today"
+    // usage bar — cheap enough to compute on every config fetch, and this is
+    // the endpoint every report/campaign page already loads waConfig from.
+    const sentToday = await dashboardRepository.getSentToday(salonId)
     return {
       ...config,
       access_token: config.access_token
         ? config.access_token.slice(0, 8) + '••••••••'
         : null,
       app_secret: config.app_secret ? '••••••••' : null,
+      sent_today: sentToday,
     }
   },
 
