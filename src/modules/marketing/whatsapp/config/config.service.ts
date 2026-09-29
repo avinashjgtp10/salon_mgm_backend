@@ -3,6 +3,7 @@ import { configRepository } from './config.repository'
 import { whatsappMetaApi } from '../shared/whatsapp.api'
 import { SaveConfigBody, TestConnectionResult } from './config.types'
 import logger from '../../../../config/logger'
+import { waPurchaseTemplatesService } from '../../../whatsapp-automation/wa-purchase-templates.service'
 
 // APP_URL = your backend domain e.g. https://api.salonox.com
 // Each salon gets their own webhook URL with their salonId in it
@@ -68,6 +69,13 @@ export const configService = {
       }
     }
 
+    // Read BEFORE the upsert — "was this salon already configured" has to
+    // reflect the state prior to this exact save, so editing an existing
+    // config (e.g. rotating the access token) never re-triggers the
+    // first-time bulk template submission below.
+    const existingBefore = await configRepository.findBySalonId(salonId)
+    const wasConfiguredBefore = !!existingBefore?.phone_number_id
+
     let saved: Awaited<ReturnType<typeof configRepository.upsert>>
     try {
       saved = await configRepository.upsert(salonId, cleanBody as any)
@@ -117,6 +125,17 @@ export const configService = {
           { response: err?.response?.data }
         )
       }
+    }
+
+    // ── First-time setup complete — submit every default trigger template ────
+    // Fire-and-forget: 24 individual Meta submissions can take a while and
+    // saveConfig's own response shouldn't wait on it, same reasoning as the
+    // webhook auto-registration above. Only fires once, the moment
+    // phone_number_id first appears on this salon's config row.
+    if (!wasConfiguredBefore && saved.phone_number_id) {
+      waPurchaseTemplatesService.submitAllDefaults(salonId).catch((err) =>
+        logger.error(`⚠️  submitAllDefaults failed for salon ${salonId}: ${err?.message}`)
+      )
     }
 
     return {

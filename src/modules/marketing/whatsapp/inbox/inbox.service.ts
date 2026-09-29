@@ -26,6 +26,12 @@ export const inboxService = {
     return inboxRepository.getMessages(salonId, normalizedPhone)
   },
 
+  // ── Customer Info panel — null when the number doesn't match a saved
+  // client (e.g. a lead who messaged in but was never added as a client).
+  async getCustomerInfo(salonId: string, phone: string) {
+    return inboxRepository.findCustomerInfoByPhone(salonId, phone)
+  },
+
   async sendReply(salonId: string, phone: string, message: string) {
     const normalizedPhone = normalizePhone(phone)
 
