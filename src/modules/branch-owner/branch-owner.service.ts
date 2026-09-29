@@ -50,9 +50,10 @@ export const branchOwnerService = {
   },
 
   // Separate from getDashboard so switching the Daily/Weekly/Monthly toggle
-  // on the Revenue Overview card only refetches this, not the whole page.
-  async getRevenueTrend(branchOwnerId: string, period: "daily" | "weekly" | "monthly") {
-    return branchOwnerRepository.getRevenueTrend(branchOwnerId, period);
+  // (or the branch filter) on the Revenue Overview card only refetches
+  // this, not the whole page.
+  async getRevenueTrend(branchOwnerId: string, period: "daily" | "weekly" | "monthly", salonId?: string) {
+    return branchOwnerRepository.getRevenueTrend(branchOwnerId, period, salonId);
   },
 
   // No limit here (unlike the dashboard's 10-row preview above) — the

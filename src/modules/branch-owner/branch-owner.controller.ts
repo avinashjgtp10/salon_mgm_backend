@@ -40,7 +40,8 @@ export const branchOwnerController = {
       if (period !== "daily" && period !== "weekly" && period !== "monthly") {
         throw new AppError(400, "period must be daily, weekly, or monthly", "VALIDATION_ERROR");
       }
-      const data = await branchOwnerService.getRevenueTrend(branchOwnerId, period);
+      const salonId = typeof req.query.salonId === "string" && req.query.salonId ? req.query.salonId : undefined;
+      const data = await branchOwnerService.getRevenueTrend(branchOwnerId, period, salonId);
       return res.json({ success: true, data });
     } catch (err) { return next(err); }
   },
