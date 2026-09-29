@@ -172,6 +172,14 @@ export const notificationsService = {
     return notificationsRepository.listBySalon(salonId, 30);
   },
 
+  // "All Branches" aggregate — same 30-row cap as the single-salon list,
+  // merged and re-sorted across every salon rather than 30 per salon, so it
+  // reads the same way ("most recent 30 across everything I manage") rather
+  // than ballooning with the number of branches.
+  async listForSalons(salonIds: string[]) {
+    return notificationsRepository.listBySalons(salonIds, 30);
+  },
+
   async markRead(id: string, salonId: string) {
     return notificationsRepository.markRead(id, salonId);
   },
@@ -180,7 +188,15 @@ export const notificationsService = {
     await notificationsRepository.markAllRead(salonId);
   },
 
+  async markAllReadForSalons(salonIds: string[]) {
+    await notificationsRepository.markAllReadForSalons(salonIds);
+  },
+
   async getUnreadCount(salonId: string) {
     return notificationsRepository.getUnreadCount(salonId);
+  },
+
+  async getUnreadCountForSalons(salonIds: string[]) {
+    return notificationsRepository.getUnreadCountForSalons(salonIds);
   },
 };
