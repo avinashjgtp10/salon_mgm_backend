@@ -86,6 +86,24 @@ export const notificationsRepository = {
     return rows;
   },
 
+  // "All Branches" view for a branch owner — same shape as listBySalon plus
+  // salon_name, so an aggregated feed can label which salon each row
+  // belongs to (the single-salon view already has that context from its own
+  // active-branch switcher, so it doesn't need the name on each row).
+  async listBySalons(salonIds: string[], limit = 30): Promise<(Notification & { salon_name: string })[]> {
+    if (salonIds.length === 0) return [];
+    const { rows } = await pool.query<Notification & { salon_name: string }>(
+      `SELECT n.*, COALESCE(s.business_name, s.slug, 'Unnamed') AS salon_name
+       FROM notifications n
+       JOIN salons s ON s.id = n.salon_id
+       WHERE n.salon_id = ANY($1::uuid[])
+       ORDER BY n.created_at DESC
+       LIMIT $2`,
+      [salonIds, limit]
+    );
+    return rows;
+  },
+
   async markRead(id: string, salonId: string) {
     const { rows } = await pool.query<Notification>(
       `UPDATE notifications SET is_read = true
@@ -103,10 +121,27 @@ export const notificationsRepository = {
     );
   },
 
+  async markAllReadForSalons(salonIds: string[]) {
+    if (salonIds.length === 0) return;
+    await pool.query(
+      `UPDATE notifications SET is_read = true WHERE salon_id = ANY($1::uuid[]) AND is_read = false`,
+      [salonIds]
+    );
+  },
+
   async getUnreadCount(salonId: string): Promise<number> {
     const { rows } = await pool.query<{ count: string }>(
       `SELECT COUNT(*)::int AS count FROM notifications WHERE salon_id = $1 AND is_read = false`,
       [salonId]
+    );
+    return parseInt(rows[0]?.count ?? "0", 10);
+  },
+
+  async getUnreadCountForSalons(salonIds: string[]): Promise<number> {
+    if (salonIds.length === 0) return 0;
+    const { rows } = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::int AS count FROM notifications WHERE salon_id = ANY($1::uuid[]) AND is_read = false`,
+      [salonIds]
     );
     return parseInt(rows[0]?.count ?? "0", 10);
   },

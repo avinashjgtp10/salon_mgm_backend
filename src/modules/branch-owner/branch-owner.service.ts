@@ -462,22 +462,45 @@ export const branchOwnerService = {
   // salon the branch owner currently has selected in the topbar switcher,
   // validated through assertSalonsAssigned like every other salon-scoped
   // branch-owner action, rather than trusting req.user.salonId.
+  // salonId === "all" aggregates across every salon assigned to this branch
+  // owner (the topbar's "All Branches Overview" / notification panel's own
+  // Branch selector) — every other value is the existing single-salon path,
+  // still validated through assertSalonsAssigned so a branch owner can never
+  // read/mutate another salon's notifications by guessing its id.
   async listNotifications(branchOwnerId: string, salonId: string) {
+    if (salonId === "all") {
+      const salonIds = await branchOwnerRepository.getAssignedSalonIds(branchOwnerId);
+      return notificationsService.listForSalons(salonIds);
+    }
     await assertSalonsAssigned(branchOwnerId, [salonId]);
     return notificationsService.list(salonId);
   },
 
   async getUnreadNotificationCount(branchOwnerId: string, salonId: string) {
+    if (salonId === "all") {
+      const salonIds = await branchOwnerRepository.getAssignedSalonIds(branchOwnerId);
+      return notificationsService.getUnreadCountForSalons(salonIds);
+    }
     await assertSalonsAssigned(branchOwnerId, [salonId]);
     return notificationsService.getUnreadCount(salonId);
   },
 
   async markNotificationRead(branchOwnerId: string, salonId: string, notificationId: string) {
+    // Marking a single notification read is always by its own real salon_id
+    // (the panel's item click handler sends the notification's actual
+    // salon), even when the panel itself is in the "All Branches" view — so
+    // this path never receives "all" and keeps its existing single-salon
+    // validation unchanged.
     await assertSalonsAssigned(branchOwnerId, [salonId]);
     return notificationsService.markRead(notificationId, salonId);
   },
 
   async markAllNotificationsRead(branchOwnerId: string, salonId: string) {
+    if (salonId === "all") {
+      const salonIds = await branchOwnerRepository.getAssignedSalonIds(branchOwnerId);
+      await notificationsService.markAllReadForSalons(salonIds);
+      return { success: true };
+    }
     await assertSalonsAssigned(branchOwnerId, [salonId]);
     await notificationsService.markAllRead(salonId);
     return { success: true };

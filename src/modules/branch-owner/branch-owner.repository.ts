@@ -459,6 +459,17 @@ export const branchOwnerRepository = {
     return rows.length > 0;
   },
 
+  // Lightweight id-only list — for call sites (the "All Branches"
+  // notifications aggregate) that only need the salon_id set, not
+  // getMySalons()'s full per-salon counts/revenue join.
+  async getAssignedSalonIds(branchOwnerId: string): Promise<string[]> {
+    const { rows } = await pool.query<{ salon_id: string }>(
+      `SELECT salon_id FROM branch_owner_salons WHERE branch_owner_id = $1`,
+      [branchOwnerId]
+    );
+    return rows.map((r) => r.salon_id);
+  },
+
   async isSalonActive(salonId: string): Promise<boolean> {
     const { rows } = await pool.query(`SELECT is_active FROM salons WHERE id = $1`, [salonId]);
     return rows[0]?.is_active === true;
