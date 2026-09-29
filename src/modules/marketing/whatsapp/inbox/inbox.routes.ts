@@ -23,6 +23,9 @@ router.get('/conversations', auth, viewInbox, inboxController.getConversations)
 // GET  /api/v1/inbox/conversations/:phone/messages
 router.get('/conversations/:phone/messages', auth, viewInbox, inboxController.getMessages)
 
+// GET  /api/v1/inbox/conversations/:phone/customer — Customer Info sidebar
+router.get('/conversations/:phone/customer', auth, viewInbox, inboxController.getCustomerInfo)
+
 // POST /api/v1/inbox/conversations/:phone/reply
 router.post('/conversations/:phone/reply', auth, replyToConversation, validateBody(sendReplySchema), inboxController.sendReply)
 

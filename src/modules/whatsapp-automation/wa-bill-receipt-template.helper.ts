@@ -28,7 +28,7 @@ function extractExamples(text: string): string[] {
 // sample invoice with fixture data purely for that review. Never sent to a
 // real client; a real per-checkout PDF's URL is supplied fresh on every
 // actual send (see sendBillReceiptTemplateMessage below).
-async function buildSampleReceiptPdf(salonName: string): Promise<Buffer> {
+export async function buildSampleReceiptPdf(salonName: string): Promise<Buffer> {
     const now = new Date().toISOString();
     const sale: Sale = {
         id: "sample", salon_id: "sample", client_id: null, appointment_id: null, staff_id: null,

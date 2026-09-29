@@ -27,6 +27,17 @@ export const inboxController = {
     } catch (e) { return next(e) }
   },
 
+  async getCustomerInfo(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId
+      if (!salonId) return res.status(400).json({ error: 'salonId missing from token' })
+
+      const phone = decodeURIComponent(req.params.phone as string)
+      const data  = await inboxService.getCustomerInfo(salonId, phone)
+      return sendSuccess(res, 200, data, 'Customer info fetched successfully')
+    } catch (e) { return next(e) }
+  },
+
   async sendReply(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = req.user?.salonId

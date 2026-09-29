@@ -18,5 +18,7 @@ router.post("/:salonId/:eventType/submit", waPurchaseTemplatesController.submitF
 router.post("/:salonId/:eventType/reset", waPurchaseTemplatesController.reset);
 // POST /api/v1/wa-automation/purchase-templates/:salonId/:eventType/sync
 router.post("/:salonId/:eventType/sync", waPurchaseTemplatesController.syncStatus);
+// POST /api/v1/wa-automation/purchase-templates/:salonId/:eventType/test-send  body: { phone }
+router.post("/:salonId/:eventType/test-send", waPurchaseTemplatesController.sendTest);
 
 export default router;
