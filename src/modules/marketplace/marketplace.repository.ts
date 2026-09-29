@@ -428,11 +428,20 @@ export const marketplaceFeaturesRepo = {
         ...(data.values     ?? []).map((k) => ({ type: "value",     key: k })),
       ];
 
+      // ON CONFLICT DO NOTHING — two overlapping upsertFeatures calls for the
+      // same profile (e.g. a double-clicked Save button with no frontend
+      // guard) can each pass the DELETE above before either INSERTs, then
+      // race on the (profile_id, feature_type, feature_key) unique
+      // constraint. A plain INSERT surfaced that race as a 409 instead of
+      // both calls converging on the same end state, which is what a caller
+      // asking to upsert the same feature list twice actually wants.
       const results: MarketplaceFeature[] = [];
       for (const item of toInsert) {
         const { rows } = await client.query(
           `INSERT INTO marketplace_features (profile_id, feature_type, feature_key)
-           VALUES ($1,$2,$3) RETURNING *`,
+           VALUES ($1,$2,$3)
+           ON CONFLICT (profile_id, feature_type, feature_key) DO UPDATE SET feature_key = EXCLUDED.feature_key
+           RETURNING *`,
           [profileId, item.type, item.key]
         );
         results.push(rows[0]);
