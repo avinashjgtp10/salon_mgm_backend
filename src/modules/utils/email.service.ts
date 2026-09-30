@@ -30,6 +30,88 @@ const formatDateTime = (value: string | undefined) => {
   });
 };
 
+// Shared branded shell for the Client Requirements email family
+// (sendRequirementCreatedEmail / sendRequirementAssignedEmail /
+// sendRequirementStatusChangedEmail / sendRequirementUpdateEmail /
+// sendRequirementCompletedEmail) — a consistent logo mark + header band +
+// footer around each one's own body content, instead of each template
+// hand-rolling its own header/footer markup with slightly different
+// spacing/colors.
+const PRIORITY_COLORS: Record<string, { bg: string; text: string }> = {
+  high: { bg: "#fef2f2", text: "#dc2626" },
+  medium: { bg: "#fffbeb", text: "#d97706" },
+  low: { bg: "#f0fdf4", text: "#16a34a" },
+};
+
+function priorityBadgeHtml(priority: string): string {
+  const c = PRIORITY_COLORS[priority.toLowerCase()] ?? { bg: "#f1f5f9", text: "#475569" };
+  return `<span style="display:inline-block;padding:3px 10px;border-radius:999px;background:${c.bg};color:${c.text};font-size:11px;font-weight:700;text-transform:capitalize;letter-spacing:0.02em;">${escapeHtml(priority)}</span>`;
+}
+
+function requirementEmailShell(params: {
+  eyebrow: string;
+  heading: string;
+  accentColor: string;
+  bodyHtml: string;
+}): string {
+  const { eyebrow, heading, accentColor, bodyHtml } = params;
+  return `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/></head>
+<body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9;padding:40px 16px;">
+    <tr><td align="center">
+      <table width="580" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 1px 3px rgba(15,23,42,0.06),0 8px 24px rgba(15,23,42,0.06);max-width:580px;width:100%;">
+
+        <!-- Brand strip -->
+        <tr><td style="padding:24px 36px 0;">
+          <table cellpadding="0" cellspacing="0"><tr>
+            <td style="width:32px;height:32px;border-radius:9px;background:linear-gradient(135deg,#6366f1,#8b5cf6);text-align:center;vertical-align:middle;font-size:15px;">
+              <span style="color:#fff;font-weight:800;font-family:Arial,sans-serif;">S</span>
+            </td>
+            <td style="padding-left:10px;color:#0f172a;font-size:15px;font-weight:800;letter-spacing:-0.01em;">SalonoX</td>
+          </tr></table>
+        </td></tr>
+
+        <!-- Header band -->
+        <tr><td style="padding:20px 36px 26px;">
+          <p style="margin:0 0 6px;color:${accentColor};font-size:11.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">${escapeHtml(eyebrow)}</p>
+          <h1 style="margin:0;color:#0f172a;font-size:21px;font-weight:800;line-height:1.3;">${heading}</h1>
+        </td></tr>
+
+        <!-- Body -->
+        <tr><td style="padding:0 36px 32px;">
+          ${bodyHtml}
+        </td></tr>
+
+        <!-- Footer -->
+        <tr><td style="background:#f8fafc;padding:18px 36px;border-top:1px solid #eef2f6;">
+          <p style="margin:0;color:#94a3b8;font-size:11.5px;text-align:center;">This is an automated notification from SalonoX — please do not reply directly to this email.</p>
+          <p style="margin:6px 0 0;color:#cbd5e1;font-size:11px;text-align:center;">© ${new Date().getFullYear()} SalonoX. All rights reserved.</p>
+        </td></tr>
+
+      </table>
+    </td></tr>
+  </table>
+</body></html>`;
+}
+
+// A bordered key/value info card — the requirement summary block reused
+// across every template in this family.
+function infoCardHtml(rows: [string, string][], accentBg = "#f8fafc", accentBorder = "#eef2f6"): string {
+  const rowsHtml = rows.map(([label, value]) => `
+    <tr>
+      <td style="padding:7px 0;color:#64748b;font-size:12.5px;font-weight:600;vertical-align:top;width:130px;">${escapeHtml(label)}</td>
+      <td style="padding:7px 0;color:#0f172a;font-size:13px;font-weight:600;vertical-align:top;">${value}</td>
+    </tr>`).join("");
+  return `
+    <table width="100%" cellpadding="0" cellspacing="0" style="background:${accentBg};border:1px solid ${accentBorder};border-radius:12px;">
+      <tr><td style="padding:18px 20px;">
+        <table width="100%" cellpadding="0" cellspacing="0">${rowsHtml}</table>
+      </td></tr>
+    </table>`;
+}
+
 export const emailService = {
   async verifyConnection() {
     await transporter.verify();
@@ -1491,6 +1573,214 @@ export const emailService = {
           </table>
         </body></html>`,
       attachments: [{ filename: pdfFilename, content: pdfBuffer }],
+    });
+  },
+
+  // ── Client Requirements (REQ-XXX tickets) ────────────────────────────────
+  // Sent to EACH developer assigned at requirement-creation time (multiple
+  // developers can be assigned in the same Create Requirement form) —
+  // separate from sendRequirementCreatedEmail's client-confirmation +
+  // single internal-team-notification pair below.
+  async sendRequirementAssignedEmail(params: {
+    to: string;
+    developerName: string;
+    reqNumber: string;
+    title: string;
+    salonName: string;
+    priority: string;
+    targetDate: string | null;
+  }) {
+    const { to, developerName, reqNumber, title, salonName, priority, targetDate } = params;
+    const targetDateLabel = targetDate
+      ? new Date(targetDate).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })
+      : null;
+
+    const infoRows: [string, string][] = [
+      ["Requirement", `${escapeHtml(reqNumber)} — ${escapeHtml(title)}`],
+      ["Client", escapeHtml(salonName)],
+      ["Priority", priorityBadgeHtml(priority)],
+    ];
+    if (targetDateLabel) infoRows.push(["Target Date", escapeHtml(targetDateLabel)]);
+
+    const bodyHtml = `
+      <p style="margin:0 0 22px;color:#374151;font-size:14.5px;line-height:1.65;">
+        Hi <strong style="color:#0f172a;">${escapeHtml(developerName)}</strong>, you've been assigned to a client requirement. Here are the details:
+      </p>
+      ${infoCardHtml(infoRows, "#eef2ff", "#c7d2fe")}
+      <p style="margin:22px 0 0;color:#64748b;font-size:13px;line-height:1.6;">
+        Sign in to Super Admin → Client Requirements to view the full description and post updates.
+      </p>`;
+
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to,
+      subject: `New Requirement Assigned — ${escapeHtml(reqNumber)}: ${escapeHtml(title)}`,
+      html: requirementEmailShell({
+        eyebrow: reqNumber,
+        heading: "You've Been Assigned a Requirement",
+        accentColor: "#6366f1",
+        bodyHtml,
+      }),
+    });
+  },
+
+  // Team notification recipient follows the same fallback chain
+  // sendSupportTicketCreatedEmail already uses — SUPPORT_NOTIFICATION_EMAIL
+  // env var, else the SMTP account itself.
+  async sendRequirementCreatedEmail(params: {
+    reqNumber: string;
+    title: string;
+    description: string;
+    priority: string;
+    salonName: string;
+    submitterName: string | null;
+    submitterEmail: string;
+  }) {
+    const { reqNumber, title, description, priority, salonName, submitterName, submitterEmail } = params;
+    const teamEmail = process.env.SUPPORT_NOTIFICATION_EMAIL || config.smtp.user || config.smtp.from;
+
+    // Client confirmation
+    const clientBody = `
+      <p style="margin:0 0 22px;color:#374151;font-size:14.5px;line-height:1.65;">
+        Hi <strong style="color:#0f172a;">${escapeHtml(submitterName || "there")}</strong>, your requirement has been raised successfully. Our team will review it shortly and keep you updated by email at every step.
+      </p>
+      ${infoCardHtml([
+        ["Requirement ID", escapeHtml(reqNumber)],
+        ["Title", escapeHtml(title)],
+        ["Status", `<span style="display:inline-block;padding:3px 10px;border-radius:999px;background:#eff6ff;color:#2563eb;font-size:11px;font-weight:700;">Open</span>`],
+      ], "#eef2ff", "#c7d2fe")}`;
+
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to: submitterEmail,
+      subject: `Requirement Raised — ${escapeHtml(reqNumber)}: ${escapeHtml(title)}`,
+      html: requirementEmailShell({
+        eyebrow: salonName,
+        heading: "Your Requirement Has Been Raised",
+        accentColor: "#6366f1",
+        bodyHtml: clientBody,
+      }),
+    });
+
+    // Team notification
+    const teamBody = `
+      <p style="margin:0 0 22px;color:#374151;font-size:14.5px;line-height:1.65;">
+        A new requirement was raised by <strong style="color:#0f172a;">${escapeHtml(salonName)}</strong>.
+      </p>
+      ${infoCardHtml([
+        ["Requirement ID", escapeHtml(reqNumber)],
+        ["Title", escapeHtml(title)],
+        ["Priority", priorityBadgeHtml(priority)],
+      ])}
+      <div style="margin-top:20px;padding:16px 18px;background:#fff;border:1px solid #eef2f6;border-radius:10px;">
+        <p style="margin:0 0 6px;color:#94a3b8;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;">Description</p>
+        <p style="margin:0;color:#374151;font-size:13.5px;line-height:1.6;white-space:pre-wrap;">${escapeHtml(description)}</p>
+      </div>`;
+
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to: teamEmail,
+      subject: `New Requirement — ${escapeHtml(reqNumber)}: ${escapeHtml(title)}`,
+      html: requirementEmailShell({
+        eyebrow: "Client Requirements",
+        heading: "New Requirement Raised",
+        accentColor: "#0f172a",
+        bodyHtml: teamBody,
+      }),
+    });
+  },
+
+  async sendRequirementStatusChangedEmail(params: {
+    reqNumber: string;
+    title: string;
+    salonName: string;
+    submitterEmail: string;
+    newStatus: string;
+    newStatusLabel: string;
+  }) {
+    const { reqNumber, title, salonName, submitterEmail, newStatusLabel } = params;
+    const teamEmail = process.env.SUPPORT_NOTIFICATION_EMAIL || config.smtp.user || config.smtp.from;
+    const statusBadge = `<span style="display:inline-block;padding:3px 10px;border-radius:999px;background:#eff6ff;color:#2563eb;font-size:11px;font-weight:700;">${escapeHtml(newStatusLabel)}</span>`;
+
+    const clientBody = `
+      <p style="margin:0 0 22px;color:#374151;font-size:14.5px;line-height:1.65;">
+        Your requirement's status has been updated.
+      </p>
+      ${infoCardHtml([
+        ["Requirement", `${escapeHtml(reqNumber)} — ${escapeHtml(title)}`],
+        ["New Status", statusBadge],
+      ])}`;
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to: submitterEmail,
+      subject: `Status Update — ${escapeHtml(reqNumber)} is now ${escapeHtml(newStatusLabel)}`,
+      html: requirementEmailShell({ eyebrow: reqNumber, heading: "Requirement Status Updated", accentColor: "#0f172a", bodyHtml: clientBody }),
+    });
+
+    const teamBody = `
+      <p style="margin:0 0 22px;color:#374151;font-size:14.5px;line-height:1.65;">
+        Status changed for <strong style="color:#0f172a;">${escapeHtml(salonName)}</strong>'s requirement.
+      </p>
+      ${infoCardHtml([
+        ["Requirement", `${escapeHtml(reqNumber)} — ${escapeHtml(title)}`],
+        ["New Status", statusBadge],
+      ])}`;
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to: teamEmail,
+      subject: `Status Updated — ${escapeHtml(reqNumber)}`,
+      html: requirementEmailShell({ eyebrow: "Client Requirements", heading: "Requirement Status Updated", accentColor: "#0f172a", bodyHtml: teamBody }),
+    });
+  },
+
+  async sendRequirementUpdateEmail(params: {
+    reqNumber: string;
+    title: string;
+    salonName: string;
+    submitterEmail: string;
+    authorName: string | null;
+    message: string;
+  }) {
+    const { reqNumber, title, salonName, submitterEmail, authorName, message } = params;
+    const teamEmail = process.env.SUPPORT_NOTIFICATION_EMAIL || config.smtp.user || config.smtp.from;
+
+    const bodyHtml = `
+      <p style="margin:0 0 20px;color:#374151;font-size:14.5px;line-height:1.65;">
+        There's a new update on requirement <strong style="color:#0f172a;">${escapeHtml(reqNumber)}</strong> — ${escapeHtml(title)}, raised by <strong style="color:#0f172a;">${escapeHtml(salonName)}</strong>.
+      </p>
+      <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:12px;padding:18px 20px;">
+        <p style="margin:0 0 8px;color:#1e40af;font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;">${escapeHtml(authorName || "SalonoX Team")}</p>
+        <p style="margin:0;color:#1e3a8a;font-size:14px;line-height:1.65;white-space:pre-wrap;">${escapeHtml(message)}</p>
+      </div>`;
+    const html = requirementEmailShell({ eyebrow: reqNumber, heading: "New Update on Your Requirement", accentColor: "#3b82f6", bodyHtml });
+
+    await transporter.sendMail({ from: config.smtp.from, to: submitterEmail, subject: `Update — ${escapeHtml(reqNumber)}: ${escapeHtml(title)}`, html });
+    await transporter.sendMail({ from: config.smtp.from, to: teamEmail, subject: `Update Sent — ${escapeHtml(reqNumber)}`, html });
+  },
+
+  async sendRequirementCompletedEmail(params: {
+    reqNumber: string;
+    title: string;
+    submitterEmail: string;
+  }) {
+    const { reqNumber, title, submitterEmail } = params;
+    const bodyHtml = `
+      <p style="margin:0 0 22px;color:#374151;font-size:14.5px;line-height:1.65;">
+        Great news — your requirement has been completed and the requested functionality is now available.
+      </p>
+      ${infoCardHtml([
+        ["Requirement", escapeHtml(title)],
+        ["Ticket", escapeHtml(reqNumber)],
+        ["Status", `<span style="display:inline-block;padding:3px 10px;border-radius:999px;background:#f0fdf4;color:#16a34a;font-size:11px;font-weight:700;">Completed</span>`],
+      ], "#f0fdf4", "#bbf7d0")}
+      <p style="margin:22px 0 0;color:#64748b;font-size:13px;line-height:1.6;">
+        If you have any questions or run into anything unexpected, just reply to your original requirement thread and our team will follow up.
+      </p>`;
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to: submitterEmail,
+      subject: `Completed — ${escapeHtml(reqNumber)}: ${escapeHtml(title)}`,
+      html: requirementEmailShell({ eyebrow: reqNumber, heading: "Your Requirement Has Been Completed 🎉", accentColor: "#16a34a", bodyHtml }),
     });
   },
 };
