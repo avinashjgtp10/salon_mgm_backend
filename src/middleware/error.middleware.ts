@@ -101,6 +101,19 @@ export const errorHandler = (
     const FRIENDLY_TABLE_NAMES: Record<string, string> = {
       bundle_services: 'one or more bundles',
       client_package_services: 'one or more client packages',
+      orders: 'one or more purchase orders',
+      purchases: 'one or more purchases',
+      stock_ledger: 'the stock ledger',
+      stock_movements: 'stock movement history',
+      supplier_payments: 'recorded payments',
+      supplier_products: 'an imported supplier product catalog',
+      product_suppliers: 'one or more products',
+      // products.supplier_id is FK-enforced in the live DB even though no
+      // migration file shows it that way (schema drift) — verified directly
+      // against salonoxdb_dev's information_schema, not assumed from the
+      // Migration/ folder. This is the one that actually fires for most
+      // suppliers, since almost every supplier has products linked to it.
+      products: 'one or more products',
     };
     const referencingTable = (err as any).table as string | undefined;
     const friendly = referencingTable ? FRIENDLY_TABLE_NAMES[referencingTable] : undefined;

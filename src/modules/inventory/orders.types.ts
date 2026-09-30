@@ -20,14 +20,23 @@ export interface OrderItem {
     cost_wo_tax: number;
     total_cost_wo_tax: number;
     total_tax: number;
-    // How much of `qty` has actually arrived so far, via the Receive action.
-    // Never exceeds qty (receive() clamps it).
+    // How much of `qty` has actually arrived so far AS STOCK — written ONLY
+    // by receive() (Product Inventory → Record Purchase → pick this
+    // supplier's open order). Never exceeds qty (receive() clamps it).
+    // Deliberately separate from verified_qty below.
     received_qty: number;
-    // Cumulative confirmed-damaged total. Nothing currently writes this — the
-    // only writer was the removed order-receipts confirm flow (Verify Order
-    // is now view-only; receiving happens through Product Inventory →
-    // Record Purchase, which has no damaged-qty concept of its own).
+    // Cumulative damaged total FROM STOCK RECEIVING — same "only receive()
+    // writes this" rule as received_qty.
     damaged_qty: number;
+    // What the Verify Order tab recorded as arrived — informational only,
+    // never touches products.amount and is NOT what receive()'s "remaining
+    // to stock in" math reads (that's still qty - received_qty -
+    // damaged_qty). Lets a warehouse staffer log what physically showed up
+    // without that count blocking or double-counting against the actual
+    // stock-in step done later through Product Inventory.
+    verified_qty: number;
+    // Same relationship to damaged_qty that verified_qty has to received_qty.
+    verified_damaged_qty: number;
     created_at: string;
 }
 
