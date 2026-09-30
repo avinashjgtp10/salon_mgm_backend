@@ -368,16 +368,64 @@ export const branchOwnerService = {
 
   // Single-call version of the Staff & Permissions page — the frontend used
   // to GET /salons/:salonId/staff once per assigned salon (N browser round
-  // trips). This does the same per-salon fan-out server-side in one request,
-  // tagging each staff row with its salonId/salonName so the page can still
-  // render the combined table and the salon column.
-  async getAllStaff(branchOwnerId: string) {
+  // trips), PLUS a separate /salons/list call just to populate the page's
+  // salon filter dropdown. This does the per-salon staff fan-out server-side
+  // in one request, tagging each staff row with its salonId/salonName so the
+  // page can still render the combined table and the salon column — and
+  // returns the already-fetched `salons` list alongside it, since this
+  // method calls getMySalons() internally anyway. Returning `salons` here
+  // (rather than deriving it from the staff rows) matters because a salon
+  // with zero staff still needs to appear in the filter dropdown, and it
+  // would otherwise contribute no rows to `staff` at all.
+  //
+  // Pagination is applied AFTER combining every assigned salon's staff into
+  // one list, not passed down to each per-salon staffService.list call —
+  // page/limit per salon would paginate each salon independently (e.g.
+  // page=2 asking every salon for ITS OWN rows 21-40), which isn't the same
+  // as "rows 21-40 of the combined, salon-tagged list" the frontend actually
+  // wants. search/role/status/permissions filters are applied the same way,
+  // in-memory over the combined set, since role_name/has_overrides are
+  // joined-in display fields staffService.list can't filter by itself.
+  //
+  // staffService.list's own default limit (50) would otherwise silently drop
+  // staff beyond the 50th in any single salon — MAX_PER_SALON below is a
+  // generous ceiling so a salon's full roster is always pulled in before
+  // this method does its own combined pagination.
+  async getAllStaff(branchOwnerId: string, opts: {
+    page?: number; limit?: number; search?: string;
+    salonIds?: string[]; roleNames?: string[]; isActive?: boolean; hasOverrides?: boolean;
+  } = {}) {
+    const MAX_PER_SALON = 2000;
     const salons = await branchOwnerRepository.getMySalons(branchOwnerId);
     const perSalon = await Promise.all(salons.map(async (salon: any) => {
-      const { data } = await staffService.list(salon.id, {});
+      const { data } = await staffService.list(salon.id, { limit: MAX_PER_SALON });
       return data.map((member: any) => ({ ...member, salonId: salon.id, salonName: salon.name }));
     }));
-    return perSalon.flat();
+    let combined = perSalon.flat();
+
+    if (opts.salonIds?.length) combined = combined.filter((m: any) => opts.salonIds!.includes(m.salonId));
+    if (opts.roleNames?.length) combined = combined.filter((m: any) => opts.roleNames!.includes(m.role_name));
+    if (opts.isActive !== undefined) combined = combined.filter((m: any) => (m.is_active !== false) === opts.isActive);
+    if (opts.hasOverrides !== undefined) combined = combined.filter((m: any) => !!m.has_overrides === opts.hasOverrides);
+    if (opts.search?.trim()) {
+      const q = opts.search.trim().toLowerCase();
+      combined = combined.filter((m: any) => {
+        const name = m.fullName || `${m.first_name ?? ""} ${m.last_name ?? ""}`.trim() || m.email || "";
+        return `${name} ${m.email ?? ""} ${m.salonName ?? ""}`.toLowerCase().includes(q);
+      });
+    }
+
+    const total = combined.length;
+    const page = Math.max(1, opts.page ?? 1);
+    const limit = Math.max(1, opts.limit ?? (total || 1));
+    const start = (page - 1) * limit;
+    const staff = opts.page || opts.limit ? combined.slice(start, start + limit) : combined;
+
+    return {
+      salons,
+      staff,
+      pagination: { total, page, limit, total_pages: Math.max(1, Math.ceil(total / limit)) },
+    };
   },
 
   // ── Roles & Permissions (real system) ──────────────────────────────────────
