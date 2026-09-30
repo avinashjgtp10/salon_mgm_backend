@@ -104,11 +104,25 @@ export const branchOwnerController = {
   },
 
   // Single-call version of the Staff & Permissions page — combined staff
-  // list across every assigned salon, computed server-side in one request.
+  // list across every assigned salon plus the salon list itself (for the
+  // page's own filter dropdown), computed server-side in one request instead
+  // of the frontend firing this and /salons/list separately. data shape:
+  // { salons: BranchOwnerSalon[], staff: StaffRow[], pagination }.
+  // POST body carries page/limit/search/filters (not query params) — same
+  // convention as /salons/list on this router, which is also a POST.
   async listAllStaff(req: AuthedRequest, res: Response, next: NextFunction) {
     try {
       const branchOwnerId = req.user!.userId;
-      const data = await branchOwnerService.getAllStaff(branchOwnerId);
+      const body = req.body ?? {};
+      const data = await branchOwnerService.getAllStaff(branchOwnerId, {
+        page: body.page ? Number(body.page) : undefined,
+        limit: body.limit ? Number(body.limit) : undefined,
+        search: body.search,
+        salonIds: Array.isArray(body.salonIds) ? body.salonIds : undefined,
+        roleNames: Array.isArray(body.roleNames) ? body.roleNames : undefined,
+        isActive: typeof body.isActive === "boolean" ? body.isActive : undefined,
+        hasOverrides: typeof body.hasOverrides === "boolean" ? body.hasOverrides : undefined,
+      });
       return res.json({ success: true, data });
     } catch (err) { return next(err); }
   },
