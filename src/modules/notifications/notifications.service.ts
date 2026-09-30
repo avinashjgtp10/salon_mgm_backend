@@ -18,6 +18,7 @@ type CreateNotificationData = {
   branch_id?: string;
   alert_status?: string;
   spotlight_feature_id?: string;
+  contact_phone?: string;
 };
 
 type CreateNotificationOptions = {
@@ -55,6 +56,7 @@ export const notificationsService = {
       branch_id: data.branch_id,
       alert_status: data.alert_status,
       spotlight_feature_id: data.spotlight_feature_id,
+      contact_phone: data.contact_phone,
     });
     logger.info("Notification DB row created", {
       notificationId: notification.id,

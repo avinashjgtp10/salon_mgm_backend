@@ -157,6 +157,7 @@ export const webhooksService = {
       title:    `WhatsApp: ${senderName}`,
       body:     messageBody.length > 80 ? messageBody.slice(0, 77) + '…' : messageBody,
       event_key: 'newMessage',
+      contact_phone: msg.from,
     }).catch((err: any) => {
       logger.error('WhatsApp inbound notification failed', {
         salonId,
