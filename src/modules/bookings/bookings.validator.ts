@@ -64,6 +64,30 @@ export const validateCreateBooking = (req: Request, _res: Response, next: NextFu
       }
     }
 
+    // ── Per-service staff (optional — lets each service carry its own
+    // stylist, or "any available" for that one service) ───────────────────────
+    if (b.service_staff !== undefined && b.service_staff !== null) {
+      if (!Array.isArray(b.service_staff)) fail("service_staff must be an array");
+      const seen = new Set<string>();
+      for (const row of b.service_staff) {
+        if (!row || typeof row !== "object") fail("Each service_staff entry must be an object");
+        if (!isNonEmptyString(row.service_id) || !UUID_RE.test(row.service_id.trim())) {
+          fail("Each service_staff entry needs a valid service_id");
+        }
+        const key = row.service_id.trim().toLowerCase();
+        if (seen.has(key)) fail("service_staff must not repeat a service_id");
+        seen.add(key);
+        if (!b.service_ids.some((id: string) => id.trim().toLowerCase() === key)) {
+          fail("service_staff references a service_id not present in service_ids");
+        }
+        if (row.staff_id !== undefined && row.staff_id !== null && row.staff_id !== "") {
+          if (!isNonEmptyString(row.staff_id) || !UUID_RE.test(row.staff_id.trim())) {
+            fail("service_staff.staff_id must be a valid UUID when provided");
+          }
+        }
+      }
+    }
+
     // ── When ─────────────────────────────────────────────────────────────────
     if (!isNonEmptyString(b.scheduled_at)) fail("scheduled_at is required");
     const when = new Date(b.scheduled_at);
@@ -118,7 +142,7 @@ export const validateCreateBooking = (req: Request, _res: Response, next: NextFu
 export const validateAvailabilityQuery = (req: Request, _res: Response, next: NextFunction) => {
   try {
     const { salon_id } = req.params;
-    const { date, staffId, durationMinutes } = req.query;
+    const { date, staffId, durationMinutes, serviceStaff } = req.query;
 
     if (!salon_id || !UUID_RE.test(String(salon_id))) fail("salon_id must be a valid UUID");
     if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(String(date))) fail("date must be in YYYY-MM-DD format");
@@ -131,6 +155,35 @@ export const validateAvailabilityQuery = (req: Request, _res: Response, next: Ne
       const n = Number(durationMinutes);
       if (!Number.isFinite(n) || n <= 0 || n > 24 * 60) {
         fail("durationMinutes must be between 1 and 1440");
+      }
+    }
+
+    if (serviceStaff !== undefined) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(String(serviceStaff));
+      } catch {
+        fail("serviceStaff must be valid JSON");
+      }
+      if (!Array.isArray(parsed) || parsed.length === 0) {
+        fail("serviceStaff must be a non-empty array");
+      }
+      if ((parsed as any[]).length > MAX_SERVICES_PER_BOOKING) {
+        fail(`serviceStaff cannot contain more than ${MAX_SERVICES_PER_BOOKING} services`);
+      }
+      const seen = new Set<string>();
+      for (const row of parsed as any[]) {
+        if (!row || typeof row !== "object" || !isNonEmptyString(row.service_id) || !UUID_RE.test(row.service_id.trim())) {
+          fail("Each serviceStaff entry needs a valid service_id");
+        }
+        const key = row.service_id.trim().toLowerCase();
+        if (seen.has(key)) fail("serviceStaff must not repeat a service_id");
+        seen.add(key);
+        if (row.staff_id !== undefined && row.staff_id !== null && row.staff_id !== "") {
+          if (!isNonEmptyString(row.staff_id) || !UUID_RE.test(row.staff_id.trim())) {
+            fail("serviceStaff.staff_id must be a valid UUID when provided");
+          }
+        }
       }
     }
 
