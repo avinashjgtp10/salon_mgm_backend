@@ -1,4 +1,5 @@
 import pool from "../../config/database";
+import crypto from "crypto";
 import {
     PlanTier,
     SalonPlanDefinition,
@@ -176,31 +177,53 @@ export const salonCustomizationsRepository = {
 
 // ─── Invoices ────────────────────────────────────────────────────────────────
 
-function nextInvoiceNumber(): string {
-    // INV-<year>-<random 6-digit> — collisions are astronomically unlikely
-    // and the UNIQUE constraint on invoice_number is the actual guarantee;
-    // this is just a human-readable format, not a strict sequence.
+function nextLegacyInvoiceNumber(): string {
+    // INV-<year>-<random 12-hex-char slice of a UUID> — kept only to satisfy
+    // the legacy invoice_number NOT NULL/UNIQUE VARCHAR(30) column pre-dating
+    // invoice_no; the billing page reads/displays invoice_no
+    // (FY2026-27/041 format) instead. 12 hex chars (~48 bits of randomness,
+    // versus the old 6-digit ~20 bits) makes a collision on THIS column
+    // astronomically unlikely, so any 23505 the retry loop below catches is
+    // reliably the real, expected race instead: two concurrent inserts for
+    // the same salon+financial-year both grabbing the same invoice_no
+    // sequence number before either commits.
     const year = new Date().getFullYear();
-    const rand = Math.floor(100000 + Math.random() * 900000);
+    const rand = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
     return `INV-${year}-${rand}`;
+}
+
+// Indian financial year runs Apr 1 – Mar 31, formatted "2026-27".
+function financialYearFor(date: Date): string {
+    const year = date.getUTCFullYear();
+    const month = date.getUTCMonth();
+    const startYear = month >= 3 ? year : year - 1;
+    const endYearShort = String((startYear + 1) % 100).padStart(2, "0");
+    return `${startYear}-${endYearShort}`;
+}
+
+function buildInvoiceWhere(filters: ListInvoicesFilters): { where: string; values: unknown[] } {
+    const conditions: string[] = [];
+    const values: unknown[] = [];
+    let idx = 1;
+
+    if (filters.salon_id) { conditions.push(`spi.salon_id = $${idx++}`); values.push(filters.salon_id); }
+    if (filters.status) { conditions.push(`spi.status = $${idx++}`); values.push(filters.status); }
+    if (filters.branch) { conditions.push(`spi.branch = $${idx++}`); values.push(filters.branch); }
+    if (filters.date_from) { conditions.push(`spi.issued_date >= $${idx++}`); values.push(filters.date_from); }
+    if (filters.date_to) { conditions.push(`spi.issued_date <= $${idx++}`); values.push(filters.date_to); }
+    if (filters.search) {
+        conditions.push(`(spi.invoice_no ILIKE $${idx} OR spi.invoice_number ILIKE $${idx} OR COALESCE(s.business_name, s.slug, '') ILIKE $${idx})`);
+        values.push(`%${filters.search}%`);
+        idx++;
+    }
+    return { where: conditions.length ? `WHERE ${conditions.join(" AND ")}` : "", values };
 }
 
 export const salonPlanInvoicesRepository = {
     async list(filters: ListInvoicesFilters): Promise<{ data: (SalonPlanInvoice & { salon_name: string })[]; total: number }> {
-        const conditions: string[] = [];
-        const values: unknown[] = [];
-        let idx = 1;
-
-        if (filters.salon_id) { conditions.push(`spi.salon_id = $${idx++}`); values.push(filters.salon_id); }
-        if (filters.status) { conditions.push(`spi.status = $${idx++}`); values.push(filters.status); }
-        if (filters.search) {
-            conditions.push(`(spi.invoice_number ILIKE $${idx} OR COALESCE(s.business_name, s.slug, '') ILIKE $${idx})`);
-            values.push(`%${filters.search}%`);
-            idx++;
-        }
-        const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+        const { where, values } = buildInvoiceWhere(filters);
         const page = filters.page ?? 1;
-        const limit = filters.limit ?? 20;
+        const limit = filters.limit ?? 10;
         const offset = (page - 1) * limit;
 
         const { rows: countRows } = await pool.query(
@@ -217,40 +240,83 @@ export const salonPlanInvoicesRepository = {
        JOIN salons s ON s.id = spi.salon_id
        ${where}
        ORDER BY spi.issued_date DESC, spi.created_at DESC
-       LIMIT $${idx++} OFFSET $${idx++}`,
+       LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
             [...values, limit, offset]
         );
         return { data: rows, total: countRows[0]?.total ?? 0 };
     },
 
-    async summary(): Promise<{ total: number; collected: number; outstanding: number }> {
+    async summary(filters: ListInvoicesFilters): Promise<{ total_invoices: number; paid_count: number; pending_count: number; revenue: number; gst_collected: number }> {
+        const { where, values } = buildInvoiceWhere(filters);
         const { rows } = await pool.query(
             `SELECT
-        COALESCE(SUM(amount), 0)::float AS total,
-        COALESCE(SUM(amount) FILTER (WHERE status = 'paid'), 0)::float AS collected,
-        COALESCE(SUM(amount) FILTER (WHERE status IN ('open', 'overdue')), 0)::float AS outstanding
-      FROM salon_plan_invoices`
+        COUNT(*)::int AS total_invoices,
+        COUNT(*) FILTER (WHERE spi.status = 'paid')::int AS paid_count,
+        COUNT(*) FILTER (WHERE spi.status IN ('open', 'pending'))::int AS pending_count,
+        COALESCE(SUM(spi.amount), 0)::float AS revenue,
+        COALESCE(SUM(spi.gst_amount), 0)::float AS gst_collected
+       FROM salon_plan_invoices spi
+       JOIN salons s ON s.id = spi.salon_id
+       ${where}`,
+            values
         );
         return rows[0];
     },
 
-    async create(body: CreateInvoiceBody, createdBy: string): Promise<SalonPlanInvoice> {
+    async listDistinctBranches(): Promise<string[]> {
         const { rows } = await pool.query(
-            `INSERT INTO salon_plan_invoices (invoice_number, salon_id, plan_tier, amount, status, issued_date, due_date, created_by)
-       VALUES ($1, $2, $3, $4, $5, COALESCE($6, CURRENT_DATE), $7, $8)
+            `SELECT DISTINCT branch FROM salon_plan_invoices WHERE branch IS NOT NULL ORDER BY branch`
+        );
+        return rows.map((r) => r.branch);
+    },
+
+    async findByIdWithSalon(id: string): Promise<(SalonPlanInvoice & { salon_name: string }) | null> {
+        const { rows } = await pool.query(
+            `SELECT spi.*, COALESCE(s.business_name, s.slug, 'Unnamed') AS salon_name
+       FROM salon_plan_invoices spi
+       JOIN salons s ON s.id = spi.salon_id
+       WHERE spi.id = $1`,
+            [id]
+        );
+        return rows[0] || null;
+    },
+
+    // invoice_no comes from a single global Postgres SEQUENCE
+    // (salon_plan_invoice_no_seq) — nextval() is atomic and strictly
+    // increasing by definition, so every call gets a brand new number with
+    // zero chance of repeating, no matter how many requests fire
+    // concurrently. This replaces the earlier per-salon/per-financial-year
+    // counter TABLE, which could get stuck re-returning the same seq forever
+    // once a mismatch occurred (its UPDATE...RETURNING was rolled back
+    // together with the rest of a failed attempt via SAVEPOINT, so a retry
+    // just read the same stale value again) — a real bug that surfaced as
+    // repeated 409 DUPLICATE_ENTRY errors on invoice creation.
+    async create(body: CreateInvoiceBody, createdBy: string): Promise<SalonPlanInvoice> {
+        const issuedDate = new Date(body.issued_date ?? new Date().toISOString());
+        const financialYear = financialYearFor(issuedDate);
+        const subtotal = body.amount;
+        const applyGst = body.apply_gst ?? true;
+        const gstAmount = applyGst ? Math.round(subtotal * 0.18 * 100) / 100 : 0;
+        const totalAmount = subtotal + gstAmount;
+
+        const { rows: seqRows } = await pool.query(`SELECT nextval('salon_plan_invoice_no_seq') AS seq`);
+        const seq = Number(seqRows[0].seq);
+        const invoiceNo = `FY${financialYear}/${String(seq).padStart(2, "0")}`;
+
+        const { rows: invRows } = await pool.query(
+            `INSERT INTO salon_plan_invoices (
+         invoice_number, invoice_no, financial_year, salon_id, plan_tier,
+         branch, billing_cycle, period_start, period_end, payment_mode,
+         amount, subtotal, gst_amount, status, issued_date, due_date, created_by
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,COALESCE($15, CURRENT_DATE),$16,$17)
        RETURNING *`,
             [
-                nextInvoiceNumber(),
-                body.salon_id,
-                body.plan_tier,
-                body.amount,
-                body.status ?? "open",
-                body.issued_date ?? null,
-                body.due_date ?? null,
-                createdBy,
+                nextLegacyInvoiceNumber(), invoiceNo, financialYear, body.salon_id, body.plan_tier,
+                body.branch ?? null, body.billing_cycle, body.period_start, body.period_end, body.payment_mode ?? null,
+                totalAmount, subtotal, gstAmount, body.status ?? "paid", body.issued_date ?? null, body.due_date ?? null, createdBy,
             ]
         );
-        return rows[0];
+        return invRows[0];
     },
 
     async updateStatus(id: string, status: string): Promise<SalonPlanInvoice | null> {
@@ -259,5 +325,10 @@ export const salonPlanInvoicesRepository = {
             [status, id]
         );
         return rows[0] || null;
+    },
+
+    async remove(id: string): Promise<boolean> {
+        const { rowCount } = await pool.query(`DELETE FROM salon_plan_invoices WHERE id = $1`, [id]);
+        return (rowCount ?? 0) > 0;
     },
 };

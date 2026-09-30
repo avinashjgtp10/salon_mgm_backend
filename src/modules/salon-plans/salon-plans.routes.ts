@@ -42,9 +42,15 @@ router.get("/customizations/:salonId",        salonPlansController.getCustomizat
 router.put("/customizations/:salonId",        salonPlansController.upsertCustomization);
 router.delete("/customizations/:salonId",     salonPlansController.removeCustomization);
 
-// Invoices
-router.get("/invoices",              salonPlansController.listInvoices);
-router.post("/invoices",             salonPlansController.createInvoice);
-router.patch("/invoices/:id/status", salonPlansController.updateInvoiceStatus);
+// Invoices — legacy list (BillingInvoicesTab.tsx) plus the redesigned
+// Billing & Invoices page's own filtered list/summary/branches/print.
+router.get("/invoices",                    salonPlansController.listInvoices);
+router.get("/invoices/filtered",           salonPlansController.listInvoicesFiltered);
+router.get("/invoices/summary",            salonPlansController.invoicesSummary);
+router.get("/invoices/branches",           salonPlansController.invoiceBranches);
+router.get("/invoices/:id/print",          salonPlansController.getInvoiceForPrint);
+router.post("/invoices",                   salonPlansController.createInvoice);
+router.patch("/invoices/:id/status",       salonPlansController.updateInvoiceStatus);
+router.delete("/invoices/:id",             salonPlansController.deleteInvoice);
 
 export default router;

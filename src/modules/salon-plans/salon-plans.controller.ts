@@ -111,4 +111,55 @@ export const salonPlansController = {
             return res.json({ success: true, data });
         } catch (err) { return next(err); }
     },
+
+    async deleteInvoice(req: Request, res: Response, next: NextFunction) {
+        try {
+            const data = await salonPlansService.deleteInvoice(String(req.params.id));
+            return res.json({ success: true, data });
+        } catch (err) { return next(err); }
+    },
+
+    // ── Billing & Invoices page (filtered list/summary/branches/print) ─────────
+
+    _parseListFilters(query: Request["query"]) {
+        const { salon_id, status, branch, search, date_from, date_to, page, limit } = query;
+        return {
+            salon_id: typeof salon_id === "string" ? salon_id : undefined,
+            status: typeof status === "string" ? (status as any) : undefined,
+            branch: typeof branch === "string" ? branch : undefined,
+            search: typeof search === "string" ? search : undefined,
+            date_from: typeof date_from === "string" ? date_from : undefined,
+            date_to: typeof date_to === "string" ? date_to : undefined,
+            page: page ? parseInt(page as string, 10) : undefined,
+            limit: limit ? parseInt(limit as string, 10) : undefined,
+        };
+    },
+
+    async listInvoicesFiltered(req: Request, res: Response, next: NextFunction) {
+        try {
+            const data = await salonPlansService.listInvoicesFiltered(salonPlansController._parseListFilters(req.query));
+            return res.json({ success: true, data });
+        } catch (err) { return next(err); }
+    },
+
+    async invoicesSummary(req: Request, res: Response, next: NextFunction) {
+        try {
+            const data = await salonPlansService.invoicesSummary(salonPlansController._parseListFilters(req.query));
+            return res.json({ success: true, data });
+        } catch (err) { return next(err); }
+    },
+
+    async invoiceBranches(_req: Request, res: Response, next: NextFunction) {
+        try {
+            const data = await salonPlansService.invoiceBranches();
+            return res.json({ success: true, data });
+        } catch (err) { return next(err); }
+    },
+
+    async getInvoiceForPrint(req: Request, res: Response, next: NextFunction) {
+        try {
+            const data = await salonPlansService.getInvoiceForPrint(String(req.params.id));
+            return res.json({ success: true, data });
+        } catch (err) { return next(err); }
+    },
 };
