@@ -2,6 +2,7 @@ import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { superAdminMiddleware } from "../../middleware/role.middleware";
 import { superAdminController } from "./super-admin.controller";
+import { salonClientInvoicesController } from "../salon-client-invoices/salon-client-invoices.controller";
 
 const router = Router();
 
@@ -67,5 +68,14 @@ router.delete("/users/:id/branch-salons/:salonId",  superAdminController.unassig
 
 // Payments
 router.get("/payments",                     superAdminController.getAllPayments);
+
+// Salon client invoices (GST tax invoices — a salon's own billing to its
+// clients, distinct from the salon's own SaaS subscription billing)
+router.get("/salons/:id/invoices",                    salonClientInvoicesController.list);
+router.get("/salons/:id/invoices/summary",             salonClientInvoicesController.summary);
+router.get("/salons/:id/invoices/branches",            salonClientInvoicesController.branches);
+router.get("/salons/:id/clients/search",               salonClientInvoicesController.searchClients);
+router.get("/salons/:id/invoices/:invoiceId/print",    salonClientInvoicesController.getForPrint);
+router.post("/salons/:id/invoices",                    salonClientInvoicesController.create);
 
 export default router;

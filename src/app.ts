@@ -86,6 +86,7 @@ import { ensureBranchOwnerTables } from "./modules/branch-owner/branch-owner.rep
 import salonPlansRoutes from "./modules/salon-plans/salon-plans.routes";
 import demoRequestsRoutes from "./modules/demo-requests/demo-requests.routes";
 import supportRoutes from "./modules/support/support.routes";
+import clientRequirementsRoutes from "./modules/client-requirements/client-requirements.routes";
 import notificationsRoutes from "./modules/notifications/notifications.routes";
 import deploymentAnnouncementsRoutes from "./modules/deployment-announcements/deployment-announcements.routes";
 import appVersionRoutes from "./modules/app-version/app-version.routes";
@@ -339,6 +340,7 @@ app.use("/api/v1/branch-owner", branchOwnerRoutes);
 app.use("/api/v1/salon-plans", salonPlansRoutes);
 app.use("/api/v1/demo-requests", demoRequestsRoutes);
 app.use("/api/v1/support", supportRoutes);
+app.use("/api/v1/requirements", clientRequirementsRoutes);
 app.use("/api/v1/notifications", notificationsRoutes);
 app.use("/api/v1/deployment-announcements", deploymentAnnouncementsRoutes);
 // Global mobile app version configuration. GET /api/v1/app/version is public.

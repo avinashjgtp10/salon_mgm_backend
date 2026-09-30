@@ -1,6 +1,7 @@
 import pool from '../../../../config/database'
 import { v4 as uuid } from 'uuid'
 import { WAConversation, WAMessage } from './inbox.types'
+import { clientPhoneKey } from '../../../clients/clients.phone'
 
 // ── Normalize phone to E.164 format — second layer of defense ─────────────────
 function normalizePhone(phone: string): string {
@@ -135,5 +136,48 @@ export const inboxRepository = {
         ${timestampCol} = COALESCE(${timestampCol}, $2)
       WHERE wamid = $3
     `, [status, timestamp, wamid])
+  },
+
+  // ── Customer Info panel (Inbox sidebar) ───────────────────────────────────
+  // Matched on clientPhoneKey (last 10 digits) — the same normalizer the
+  // Clients module itself uses for "is this the same person" — so a
+  // conversation phone stored as "+919876543210" still matches a client row
+  // saved as "9876543210" or "09876543210".
+  async findCustomerInfoByPhone(salonId: string, phone: string) {
+    const key = clientPhoneKey(phone)
+    if (!key) return null
+    // total_visits/last_visit_date are computed live from appointments here,
+    // NOT read off clients.total_visits/last_visit_date — the former drifts
+    // (an incrementing counter, same known issue as wa_campaigns' own stale
+    // sent_count) and the latter is dead: no code anywhere in this codebase
+    // ever writes to clients.last_visit_date, so it's always NULL. This
+    // matches the same live-appointments pattern clients.service.ts already
+    // uses for its own History tab.
+    const { rows } = await pool.query(`
+      SELECT
+        c.id, c.full_name, c.phone_number,
+        COALESCE(appt.total_visits, 0) AS total_visits,
+        appt.last_visit_date,
+        COALESCE(pay.lifetime_spend, 0) AS lifetime_spend,
+        cm.membership_name
+      FROM clients c
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(*) FILTER (WHERE a.status IN ('paid', 'partial'))::int AS total_visits,
+          MAX(a.scheduled_at) FILTER (WHERE a.status IN ('paid', 'partial')) AS last_visit_date
+        FROM appointments a
+        WHERE a.client_id = c.id AND a.deleted_at IS NULL
+      ) appt ON true
+      LEFT JOIN LATERAL (
+        SELECT SUM(py.paid_amount) AS lifetime_spend
+        FROM payments py
+        WHERE py.client_id = c.id AND py.status IN ('completed', 'partial')
+      ) pay ON true
+      LEFT JOIN client_memberships cm ON cm.client_id = c.id AND cm.status = 'active'
+      WHERE c.salon_id = $1
+        AND RIGHT(REGEXP_REPLACE(COALESCE(c.phone_number, ''), '[^0-9]', '', 'g'), 10) = $2
+      LIMIT 1
+    `, [salonId, key])
+    return rows[0] ?? null
   },
 }

@@ -9,7 +9,7 @@ import { AutomationTriggerPayload } from "../whatsapp-automation/whatsapp-automa
 import { notificationChannelsRepository } from "./notification-channels.repository"
 import { positionalToNamed, renderTemplate, renderChannelEmailHtml } from "./notification-channels.render"
 import { validateSmsBody, validateEmailContent, requirePurchaseEvent } from "./notification-channels.validators"
-import { isPurchaseEventType, DefaultPurchaseEventType } from "./notification-channels-defaults"
+import { isPurchaseEventType, DefaultPurchaseEventType, EVENT_VARIABLE_NAMES } from "./notification-channels-defaults"
 import { NotificationChannelTemplate, Channel } from "./notification-channels.types"
 import { msg91SendSms, isMsg91Configured } from "./msg91.provider"
 
@@ -46,6 +46,37 @@ function formatPhoneForSms(phone: string, countryCode?: string | null): string {
 // is chosen — that's what sank the last attempt, and why the send below is
 // addressed by template id + variables rather than by the rendered body.
 const NO_SMS_PROVIDER = "No SMS provider configured"
+
+// Same sample values wa-purchase-templates.service.ts's WhatsApp test-send
+// uses (TEST_SAMPLE_VALUES there) — kept in sync manually since a test send
+// just needs *something* realistic in each slot, not pixel parity with any
+// particular preview. Named here (not positional), since Email/SMS templates
+// use named {{customer_name}} tokens directly, unlike Meta's {{1}}/{{2}}.
+const TEST_SAMPLE_VALUES: Record<string, string> = {
+  customer_name: "Priya Sharma", salon_name: "Bloom Salon",
+  appointment_date: "12 Sep 2026", appointment_time: "3:30 PM",
+  old_date: "10 Sep 2026", old_time: "2:00 PM", new_date: "12 Sep 2026", new_time: "3:30 PM",
+  service_name: "Hair Cut", staff_name: "Anita", amount: "1,250",
+  package_name: "Glow Package", membership_name: "Gold Membership", expiry_date: "30 Sep 2026",
+  remaining_sessions: "3", remaining_balance: "1,500", remaining_services_breakdown: "Hair Cut-2, Facial-1",
+  services: "Hair Cut, Facial", total_sessions: "5", package_value: "4,999", invoice_number: "INV-1024",
+  benefit: "10% off every visit", start_date: "1 Sep 2026", membership_price: "6,999",
+  items: "Hair Cut — 500, Facial — 750, Total Paid: 1,250",
+  feedback_line: "We'd love your feedback: https://feedback.salonox.com/f/abc123",
+  amount_used: "500", points_earned: "50", total_points: "320",
+  referred_customer_name: "Rahul Verma", reward: "100", points_used: "50", remaining_points: "270",
+  referral_code: "SAMPLE10", opening_date: "25 Sep 2026", opening_time: "9:00 AM", opening_amount: "500",
+  closing_date: "25 Sep 2026", closing_time: "9:00 PM",
+  collection_breakdown: "Cash: ₹500.00 | Card: ₹300.00 | UPI: ₹200.00",
+  total_collection: "1,000", expenses: "100", in_store_cash: "400",
+}
+
+function buildSampleNamedVars(eventType: DefaultPurchaseEventType): Record<string, string> {
+  const names = EVENT_VARIABLE_NAMES[eventType] ?? []
+  const vars: Record<string, string> = {}
+  for (const name of names) vars[name] = TEST_SAMPLE_VALUES[name] ?? `[${name}]`
+  return vars
+}
 
 async function sendSmsViaProvider(params: {
   to: string
@@ -162,14 +193,29 @@ export const notificationChannelsService = {
   // show the real error immediately, and it isn't written to
   // notification_channel_logs — that table is for real automation events,
   // not manual pokes.
-  async sendTest(channel: Channel, to: string): Promise<{ providerId: string | null }> {
+  //
+  // SMS stays a fixed generic message regardless of eventType/draft — a test
+  // SMS is still a real transactional SMS, so DLT applies to it too, and
+  // there is no "just send this text" path: it needs its own registered
+  // template, keyed "test" in MSG91_DLT_TEMPLATE_IDS. A real per-event SMS
+  // preview would need its own DLT-registered template per event, which is
+  // outside what this button can do. Deliberately no retry: the owner is
+  // waiting on this request and wants the real error, not a response held
+  // for two and a half minutes.
+  //
+  // Email has no such constraint, so when eventType/subject/body are given
+  // (the Message Settings "Send Test" button), it renders the ACTUAL current
+  // draft with real sample variables — not a hardcoded placeholder — so what
+  // arrives matches what's on screen. Previously this always sent the exact
+  // same fixed message for every event, ignoring subject/body/variables
+  // entirely.
+  async sendTest(
+    channel: Channel,
+    to: string,
+    draft?: { eventType: string; subject?: string; body: string }
+  ): Promise<{ providerId: string | null }> {
     const testMessage = "This is a test message from your SalonOx notification settings."
     if (channel === "SMS") {
-      // A test SMS is still a real transactional SMS, so DLT applies to it too
-      // — there is no "just send this text" path. It needs its own registered
-      // template, keyed "test" in MSG91_DLT_TEMPLATE_IDS. Deliberately no
-      // retry: the owner is waiting on this request and wants the real error,
-      // not a response held for two and a half minutes.
       const result = await sendSmsViaProvider({
         to: formatPhoneForSms(to),
         body: testMessage,
@@ -178,6 +224,17 @@ export const notificationChannelsService = {
       })
       return { providerId: result.sid || null }
     }
+
+    if (draft) {
+      const eventType = requirePurchaseEvent(draft.eventType)
+      const namedVars = buildSampleNamedVars(eventType)
+      const subject = renderTemplate(draft.subject ?? "", namedVars, true) || "Test email from SalonOx"
+      const bodyHtml = renderTemplate(draft.body, namedVars, true)
+      const html = renderChannelEmailHtml({ subject, bodyText: bodyHtml, salonName: namedVars.salon_name ?? "" })
+      const result = await transporter.sendMail({ from: config.smtp.from, to, subject, html })
+      return { providerId: result.messageId ?? null }
+    }
+
     const result = await transporter.sendMail({
       from: config.smtp.from,
       to,

@@ -438,6 +438,18 @@ router.post(
     ordersController.receive
 );
 
+// Verify Order tab — record-only (verified_qty/verified_damaged_qty), never
+// moves stock or changes order.status. Same body shape/permission as
+// receive() above, just a different write target.
+router.post(
+    "/orders/:id/verify",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    receiveOrder,
+    validateReceiveOrder,
+    ordersController.verify
+);
+
 // Cancel and Delete share one "Delete/Cancel Order" permission per the
 // Warehouse -> Orders ticket (presented as a single action there, not two).
 // Delete previously had NO permission check at all (role-only, owner/admin)

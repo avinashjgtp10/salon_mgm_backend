@@ -688,16 +688,19 @@ export const clientsRepository = {
         const pcc = params.phone_country_code ? String(params.phone_country_code).trim() : null;
         const pn = params.phone_number ? String(params.phone_number).trim() : null;
 
+        // Archived (is_active = false) clients are excluded, matching findActiveByPhone —
+        // otherwise a previously deleted client's email/phone permanently blocks
+        // re-adding that person via bulk import.
         if (email) {
             const r = await pool.query(
-                `SELECT * FROM clients WHERE email = $1 AND salon_id = $2 LIMIT 1`,
+                `SELECT * FROM clients WHERE email = $1 AND salon_id = $2 AND is_active = true LIMIT 1`,
                 [email, salonId]
             );
             if (r.rows[0]) return r.rows[0] as Client;
         }
         if (pcc && pn) {
             const r = await pool.query(
-                `SELECT * FROM clients WHERE phone_country_code = $1 AND phone_number = $2 AND salon_id = $3 LIMIT 1`,
+                `SELECT * FROM clients WHERE phone_country_code = $1 AND phone_number = $2 AND salon_id = $3 AND is_active = true LIMIT 1`,
                 [pcc, pn, salonId]
             );
             if (r.rows[0]) return r.rows[0] as Client;
@@ -708,7 +711,7 @@ export const clientsRepository = {
         // skip (not a merge), so the worst outcome is a false duplicate detection.
         if (pn && !pcc) {
             const r = await pool.query(
-                `SELECT * FROM clients WHERE TRIM(phone_number) = $1 AND salon_id = $2 LIMIT 1`,
+                `SELECT * FROM clients WHERE TRIM(phone_number) = $1 AND salon_id = $2 AND is_active = true LIMIT 1`,
                 [pn, salonId]
             );
             if (r.rows[0]) {

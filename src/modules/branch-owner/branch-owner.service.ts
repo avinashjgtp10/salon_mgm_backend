@@ -50,9 +50,10 @@ export const branchOwnerService = {
   },
 
   // Separate from getDashboard so switching the Daily/Weekly/Monthly toggle
-  // on the Revenue Overview card only refetches this, not the whole page.
-  async getRevenueTrend(branchOwnerId: string, period: "daily" | "weekly" | "monthly") {
-    return branchOwnerRepository.getRevenueTrend(branchOwnerId, period);
+  // (or the branch filter) on the Revenue Overview card only refetches
+  // this, not the whole page.
+  async getRevenueTrend(branchOwnerId: string, period: "daily" | "weekly" | "monthly", salonId?: string) {
+    return branchOwnerRepository.getRevenueTrend(branchOwnerId, period, salonId);
   },
 
   // No limit here (unlike the dashboard's 10-row preview above) — the
@@ -243,8 +244,19 @@ export const branchOwnerService = {
       return { salons: rows, totals };
   },
 
-  async getCashManagementOverview(branchOwnerId: string) {
-      const rows = await branchOwnerRepository.getCashManagementBySalon(branchOwnerId);
+  async getCashManagementOverview(branchOwnerId: string, from?: string, to?: string) {
+      // Default to "today" in the salon's business timezone (Asia/Kolkata —
+      // same convention cash-management.repository.ts already uses for its
+      // own same-day counter checks) whenever the caller doesn't specify a
+      // range, rather than the previous behavior of summing every cash
+      // session ever opened for each salon. A bare `new Date()` ISO slice
+      // would use the server's own UTC day instead, which is wrong for the
+      // first ~5.5 hours of every IST day (see that file's own comment on
+      // this exact pitfall).
+      const todayIst = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+      const effectiveFrom = from || todayIst;
+      const effectiveTo = to || todayIst;
+      const rows = await branchOwnerRepository.getCashManagementBySalon(branchOwnerId, effectiveFrom, effectiveTo);
       const salons = rows.map((r: any) => ({
           salonId: r.salon_id,
           salonName: r.salon_name,
@@ -451,22 +463,45 @@ export const branchOwnerService = {
   // salon the branch owner currently has selected in the topbar switcher,
   // validated through assertSalonsAssigned like every other salon-scoped
   // branch-owner action, rather than trusting req.user.salonId.
+  // salonId === "all" aggregates across every salon assigned to this branch
+  // owner (the topbar's "All Branches Overview" / notification panel's own
+  // Branch selector) — every other value is the existing single-salon path,
+  // still validated through assertSalonsAssigned so a branch owner can never
+  // read/mutate another salon's notifications by guessing its id.
   async listNotifications(branchOwnerId: string, salonId: string) {
+    if (salonId === "all") {
+      const salonIds = await branchOwnerRepository.getAssignedSalonIds(branchOwnerId);
+      return notificationsService.listForSalons(salonIds);
+    }
     await assertSalonsAssigned(branchOwnerId, [salonId]);
     return notificationsService.list(salonId);
   },
 
   async getUnreadNotificationCount(branchOwnerId: string, salonId: string) {
+    if (salonId === "all") {
+      const salonIds = await branchOwnerRepository.getAssignedSalonIds(branchOwnerId);
+      return notificationsService.getUnreadCountForSalons(salonIds);
+    }
     await assertSalonsAssigned(branchOwnerId, [salonId]);
     return notificationsService.getUnreadCount(salonId);
   },
 
   async markNotificationRead(branchOwnerId: string, salonId: string, notificationId: string) {
+    // Marking a single notification read is always by its own real salon_id
+    // (the panel's item click handler sends the notification's actual
+    // salon), even when the panel itself is in the "All Branches" view — so
+    // this path never receives "all" and keeps its existing single-salon
+    // validation unchanged.
     await assertSalonsAssigned(branchOwnerId, [salonId]);
     return notificationsService.markRead(notificationId, salonId);
   },
 
   async markAllNotificationsRead(branchOwnerId: string, salonId: string) {
+    if (salonId === "all") {
+      const salonIds = await branchOwnerRepository.getAssignedSalonIds(branchOwnerId);
+      await notificationsService.markAllReadForSalons(salonIds);
+      return { success: true };
+    }
     await assertSalonsAssigned(branchOwnerId, [salonId]);
     await notificationsService.markAllRead(salonId);
     return { success: true };
