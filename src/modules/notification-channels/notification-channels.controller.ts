@@ -74,7 +74,14 @@ export const notificationChannelsController = {
       if (channel !== "SMS" && channel !== "EMAIL") return next(new AppError(400, `Invalid channel: ${channel}`, "VALIDATION_ERROR"))
       const to = String(req.body?.to || "").trim()
       if (!to) return next(new AppError(400, "to is required", "VALIDATION_ERROR"))
-      const data = await notificationChannelsService.sendTest(channel as Channel, to)
+      // Email-only: sends the ACTUAL current draft (subject/body from the
+      // editor, not yet necessarily saved) rendered with sample variables —
+      // see sendTest's doc comment for why SMS can't do the same.
+      const eventType = req.body?.eventType ? String(req.body.eventType) : undefined
+      const draft = channel === "EMAIL" && eventType
+        ? { eventType, subject: req.body?.subject ? String(req.body.subject) : undefined, body: String(req.body?.body ?? "") }
+        : undefined
+      const data = await notificationChannelsService.sendTest(channel as Channel, to, draft)
       sendSuccess(res, 200, data, `Test ${channel === "SMS" ? "SMS" : "email"} sent`)
     } catch (err) { next(err) }
   },
