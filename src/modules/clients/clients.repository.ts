@@ -70,6 +70,14 @@ export const clientsRepository = {
             where.push(`c.is_active = $${params.length}`);
         }
 
+        // Blocked/unblocked status — is_blocked is a plain boolean column, so
+        // a literal is safe here (no user-supplied value reaches the SQL).
+        if (q.blocked_status === "blocked") {
+            where.push(`c.is_blocked = true`);
+        } else if (q.blocked_status === "unblocked") {
+            where.push(`c.is_blocked = false`);
+        }
+
         if (q.source) {
             params.push(q.source);
             where.push(`c.client_source = $${params.length}`);
