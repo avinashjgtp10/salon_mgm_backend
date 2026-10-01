@@ -4,6 +4,7 @@ import { stockLedgerRepository } from "./stock-ledger.repository";
 import { appointmentConsumablesService } from "./inventory.service";
 import {
     CreateStockLedgerEntryBody,
+    CreateStockTransferBody,
     UpdateStockLedgerEntryBody,
     ListStockLedgerFilters,
 } from "./stock-ledger.types";
@@ -43,6 +44,48 @@ export const stockLedgerService = {
             entryId: created.id, transactionType: created.transaction_type, balanceAfter: created.balance_after,
         });
         return created;
+    },
+
+    // Branch-to-branch transfer — one call creates both the transfer_out and
+    // transfer_in rows atomically (see stock-ledger.repository.ts#createTransfer),
+    // replacing the old workaround of submitting two independent manual
+    // entries through create() above with no link between them.
+    async createTransfer(params: { requesterUserId: string; requesterRole?: string; salonId: string; body: CreateStockTransferBody }) {
+        const { requesterUserId, requesterRole, salonId, body } = params;
+
+        if (!body.product_id) throw new AppError(400, "product_id is required", "VALIDATION_ERROR");
+        if (!body.source_branch_id) throw new AppError(400, "source_branch_id is required", "VALIDATION_ERROR");
+        if (!body.destination_branch_id) throw new AppError(400, "destination_branch_id is required", "VALIDATION_ERROR");
+        if (body.source_branch_id === body.destination_branch_id) {
+            throw new AppError(400, "Source and destination branch must be different", "VALIDATION_ERROR");
+        }
+        if (!body.quantity || body.quantity <= 0) throw new AppError(400, "quantity must be greater than 0", "VALIDATION_ERROR");
+
+        logger.info("stockLedgerService.createTransfer called", {
+            requesterUserId, requesterRole, productId: body.product_id,
+            sourceBranchId: body.source_branch_id, destinationBranchId: body.destination_branch_id, quantity: body.quantity,
+        });
+
+        let result;
+        try {
+            result = await stockLedgerRepository.createTransfer(body, requesterUserId, salonId);
+        } catch (err) {
+            if (err instanceof Error && err.message === "Product not found in this salon") {
+                throw new AppError(404, "Product not found", "PRODUCT_NOT_FOUND");
+            }
+            if (err instanceof Error && err.message === "Quantity exceeds current stock") {
+                throw new AppError(400, "Quantity exceeds current stock", "QUANTITY_EXCEEDS_STOCK");
+            }
+            if (err instanceof Error && err.message === "Source and destination branch must be different") {
+                throw new AppError(400, err.message, "VALIDATION_ERROR");
+            }
+            throw err;
+        }
+
+        logger.info("stockLedgerService.createTransfer success", {
+            transferGroupId: result.out.transfer_group_id, outId: result.out.id, inId: result.in.id,
+        });
+        return result;
     },
 
     async list(filters: ListStockLedgerFilters, salonId: string) {

@@ -2,6 +2,7 @@ import pool from "../../config/database";
 import {
     StockLedgerEntry,
     CreateStockLedgerEntryBody,
+    CreateStockTransferBody,
     UpdateStockLedgerEntryBody,
     ListStockLedgerFilters,
     StockLedgerSummary,
@@ -11,7 +12,9 @@ import { inventoryAlertsService } from "./inventory-alerts.service";
 
 // Shared SELECT list + joins so list/findById/getTimeline all project the
 // same shape — product name/category for display, created_by resolved to a
-// human name the same way product-audit resolves auditor_name.
+// human name the same way product-audit resolves auditor_name. source_br/
+// dest_br are only non-null for the two rows of a linked transfer (see
+// createTransfer below).
 const SELECT_WITH_JOINS = `
     SELECT sl.*,
            p.name AS product_name,
@@ -19,11 +22,17 @@ const SELECT_WITH_JOINS = `
            p.bottle_size AS bottle_size,
            sc.name AS category,
            sup.name AS supplier_name,
+           br.name AS branch_name,
+           source_br.name AS source_branch_name,
+           dest_br.name AS destination_branch_name,
            NULLIF(TRIM(CONCAT(u.first_name, ' ', COALESCE(u.last_name, ''))), '') AS created_by_name
     FROM stock_ledger sl
     JOIN products p ON p.id = sl.product_id
     LEFT JOIN service_categories sc ON sc.id = p.category_id
     LEFT JOIN suppliers sup ON sup.id = sl.supplier_id
+    LEFT JOIN branches br ON br.id = sl.branch_id
+    LEFT JOIN branches source_br ON source_br.id = sl.source_branch_id
+    LEFT JOIN branches dest_br ON dest_br.id = sl.destination_branch_id
     LEFT JOIN users u ON u.id = sl.created_by`;
 
 export const stockLedgerRepository = {
@@ -186,6 +195,110 @@ export const stockLedgerRepository = {
 
             const created = await this.findById(rows[0].id, salonId);
             return created as StockLedgerEntry;
+        } catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        } finally {
+            client.release();
+        }
+    },
+
+    // Branch-to-branch transfer — writes BOTH the transfer_out row (at
+    // source_branch_id) and the paired transfer_in row (at
+    // destination_branch_id) in one DB transaction, linked by a shared
+    // transfer_group_id, instead of relying on two independent manual
+    // entries that could be created separately (or only one of them,
+    // silently leaving a one-sided movement — see the ticket this fixes).
+    //
+    // Stock itself is tracked per-salon, not per-branch (products.amount is
+    // one pooled total — see create() above, which also only locks/updates
+    // by product_id with no branch_id involved in the balance). So a
+    // transfer's -qty (out) and +qty (in) are applied to that SAME pooled
+    // row in sequence: the net effect on products.amount is zero, exactly as
+    // it should be since the product didn't leave the salon, only moved
+    // location — while each ledger row still gets its own correct
+    // balance_after snapshot (the pool dipping by qty, then recovering back
+    // to its starting value), so the audit trail reads correctly even though
+    // the two balances momentarily differ mid-transaction.
+    async createTransfer(data: CreateStockTransferBody, createdBy: string, salonId: string): Promise<{ out: StockLedgerEntry; in: StockLedgerEntry }> {
+        if (data.source_branch_id === data.destination_branch_id) {
+            throw new Error("Source and destination branch must be different");
+        }
+
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+
+            const { rows: prodRows } = await client.query(
+                `SELECT id, COALESCE(amount, 0) AS amount FROM products
+                 WHERE id = $1 AND salon_id = $2
+                 FOR UPDATE`,
+                [data.product_id, salonId]
+            );
+            if (!prodRows.length) throw new Error("Product not found in this salon");
+
+            const qty = Math.abs(data.quantity);
+            const startingAmount = parseFloat(prodRows[0].amount);
+            const afterOut = startingAmount - qty;
+
+            if (afterOut < 0) {
+                throw new Error("Quantity exceeds current stock");
+            }
+
+            const transferGroupId = (await client.query("SELECT gen_random_uuid() AS id")).rows[0].id;
+            const reference = data.reference?.trim() || null;
+
+            const { rows: outRows } = await client.query(
+                `INSERT INTO stock_ledger (
+                    salon_id, branch_id, product_id, transaction_type,
+                    reference, quantity, balance_after, reason, notes, created_by,
+                    transfer_group_id, source_branch_id, destination_branch_id
+                 ) VALUES ($1,$2,$3,'transfer_out',$4,$5,$6,$7,$8,$9,$10,$11,$12)
+                 RETURNING *`,
+                [
+                    salonId, data.source_branch_id, data.product_id,
+                    reference, -qty, afterOut, data.reason ?? null, data.notes ?? null, createdBy,
+                    transferGroupId, data.source_branch_id, data.destination_branch_id,
+                ]
+            );
+
+            const afterIn = afterOut + qty;
+
+            const { rows: inRows } = await client.query(
+                `INSERT INTO stock_ledger (
+                    salon_id, branch_id, product_id, transaction_type,
+                    reference, quantity, balance_after, reason, notes, created_by,
+                    transfer_group_id, source_branch_id, destination_branch_id
+                 ) VALUES ($1,$2,$3,'transfer_in',$4,$5,$6,$7,$8,$9,$10,$11,$12)
+                 RETURNING *`,
+                [
+                    salonId, data.destination_branch_id, data.product_id,
+                    reference, qty, afterIn, data.reason ?? null, data.notes ?? null, createdBy,
+                    transferGroupId, data.source_branch_id, data.destination_branch_id,
+                ]
+            );
+
+            // Net zero on the pooled per-salon balance — see the method's own
+            // comment above for why. Still reassert the ending value
+            // explicitly rather than skipping this UPDATE, so updated_at
+            // reflects the transfer happening even though amount is
+            // unchanged.
+            await client.query(
+                `UPDATE products SET amount = $1, updated_at = NOW() WHERE id = $2`,
+                [afterIn, data.product_id]
+            );
+
+            await client.query("COMMIT");
+
+            inventoryAlertsService
+                .checkAndNotify([data.product_id], salonId)
+                .catch(() => { /* logged internally, never blocks the caller */ });
+
+            const [out, inEntry] = await Promise.all([
+                this.findById(outRows[0].id, salonId),
+                this.findById(inRows[0].id, salonId),
+            ]);
+            return { out: out as StockLedgerEntry, in: inEntry as StockLedgerEntry };
         } catch (err) {
             await client.query("ROLLBACK");
             throw err;

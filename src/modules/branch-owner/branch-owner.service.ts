@@ -12,10 +12,31 @@ import { notificationsService } from "../notifications/notifications.service";
 
 const ACCESS_SECRET: Secret = process.env.JWT_ACCESS_SECRET || "";
 
+// Checks run in parallel, not sequentially — every call site either passes
+// one salonId (where this makes no difference) or two (transferStock,
+// cash-transfer-style methods), where awaiting them one at a time doubles
+// the round-trip latency to the DB for no reason, since each check is
+// independent of the others.
 async function assertSalonsAssigned(branchOwnerId: string, salonIds: string[]) {
-    for (const salonId of salonIds) {
-        const ok = await branchOwnerRepository.isSalonAssignedToBranchOwner(branchOwnerId, salonId);
-        if (!ok) throw new AppError(403, "Salon not assigned to you", "FORBIDDEN");
+    const results = await Promise.all(
+        salonIds.map((salonId) => branchOwnerRepository.isSalonAssignedToBranchOwner(branchOwnerId, salonId))
+    );
+    if (results.some((ok) => !ok)) throw new AppError(403, "Salon not assigned to you", "FORBIDDEN");
+}
+
+// Staff & Permissions (list + the three methods below) only ever manages
+// staff who can actually log in — login is keyed by email (see
+// AddStaffPage.tsx's staffLoginEnabled / StaffListPage.tsx's "Login access"
+// badge, same convention here). getAllStaff/getSalonStaff already filter the
+// LIST to login-access-only staff, but that alone doesn't stop a direct API
+// call naming a staffId the caller already knows about — this is the same
+// check enforced at the point of actually reading/changing a permission, so
+// a staff member without login access can never be targeted even by a
+// crafted request.
+async function assertStaffHasLoginAccess(staffId: string, salonId: string) {
+    const staff = await staffService.getById(staffId, salonId);
+    if (!staff.email) {
+        throw new AppError(403, "This staff member does not have login access", "FORBIDDEN");
     }
 }
 
@@ -98,24 +119,36 @@ export const branchOwnerService = {
       if (!(quantity > 0)) throw new AppError(400, "Quantity must be greater than zero", "VALIDATION_ERROR");
       await assertSalonsAssigned(branchOwnerId, [source_salon_id, dest_salon_id]);
 
+      // Everything below is independent of everything else here — active
+      // checks, the source product lookup, and both salon names (needed
+      // later for the Stock Ledger reference text) — so they're fetched in
+      // one round trip each instead of five sequential ones. This used to
+      // be the single biggest chunk of this endpoint's latency: on a remote
+      // DB, five awaited-one-at-a-time queries cost 5x one query's round
+      // trip even though none of them actually depended on each other.
+      const [sourceActive, destActive, source, sourceSalonName, destSalonName] = await Promise.all([
+        branchOwnerRepository.isSalonActive(source_salon_id),
+        branchOwnerRepository.isSalonActive(dest_salon_id),
+        branchOwnerRepository.findProduct(source_product_id, source_salon_id),
+        branchOwnerRepository.getSalonName(source_salon_id),
+        branchOwnerRepository.getSalonName(dest_salon_id),
+      ]);
       // Mirrors the frontend's From/To pickers (only active branches are
       // offered there) — enforced here too since this is the actual gate
       // against a stale page or a direct API call still naming an inactive
       // salon a client-side filter alone wouldn't catch.
-      const [sourceActive, destActive] = await Promise.all([
-        branchOwnerRepository.isSalonActive(source_salon_id),
-        branchOwnerRepository.isSalonActive(dest_salon_id),
-      ]);
       if (!sourceActive || !destActive) {
         throw new AppError(400, "Stock can only be transferred between active salons", "VALIDATION_ERROR");
       }
-
-      const source = await branchOwnerRepository.findProduct(source_product_id, source_salon_id);
       if (!source) throw new AppError(404, "Source product not found", "NOT_FOUND");
       if (quantity > source.amount) {
           throw new AppError(400, `Insufficient stock (available ${source.amount}, requested ${quantity})`, "INSUFFICIENT_STOCK");
       }
 
+      // Destination product resolution still has to happen after the above
+      // (it needs source.name/barcode/etc for matching or cloning), so this
+      // part stays sequential — but it's now the only remaining dependent
+      // step before the transfer itself.
       let destProductId = body.dest_product_id;
       if (destProductId) {
           const dest = await branchOwnerRepository.findProduct(destProductId, dest_salon_id);
@@ -135,10 +168,17 @@ export const branchOwnerService = {
           destProductId = created.id;
       }
 
+      const reason = body.reason?.trim() || null;
+
       const client = await pool.connect();
       try {
           await client.query("BEGIN");
-          await branchOwnerRepository.executeTransfer(client, source_product_id, destProductId, quantity);
+          await branchOwnerRepository.executeTransfer(client, {
+              sourceProductId: source_product_id, destProductId, quantity,
+              sourceSalonId: source_salon_id, destSalonId: dest_salon_id,
+              sourceSalonName, destSalonName,
+              productName: source.name, reason, createdBy: branchOwnerId,
+          });
           await client.query("COMMIT");
       } catch (err) {
           await client.query("ROLLBACK");
@@ -149,7 +189,7 @@ export const branchOwnerService = {
 
       return branchOwnerRepository.recordTransfer(branchOwnerId, {
           source_salon_id, dest_salon_id, source_product_id, dest_product_id: destProductId,
-          product_name: source.name, quantity, reason: body.reason?.trim() || null,
+          product_name: source.name, quantity, reason,
           status: "completed",
       });
   },
@@ -162,7 +202,14 @@ export const branchOwnerService = {
       if (!transfer) throw new AppError(404, "Transfer not found", "NOT_FOUND");
       if (transfer.status !== "pending") throw new AppError(409, `Cannot complete a transfer in status "${transfer.status}"`, "INVALID_TRANSITION");
 
-      const source = await branchOwnerRepository.findProduct(transfer.source_product_id, transfer.source_salon_id);
+      // Neither salon name depends on the source product lookup (both only
+      // need `transfer`, already in hand) — fetched alongside it instead of
+      // after, same round-trip-reduction as transferStock above.
+      const [source, sourceSalonName, destSalonName] = await Promise.all([
+          branchOwnerRepository.findProduct(transfer.source_product_id, transfer.source_salon_id),
+          branchOwnerRepository.getSalonName(transfer.source_salon_id),
+          branchOwnerRepository.getSalonName(transfer.dest_salon_id),
+      ]);
       if (!source || Number(transfer.quantity) > source.amount) {
           throw new AppError(400, `Insufficient stock at source (available ${source?.amount ?? 0}, requested ${transfer.quantity})`, "INSUFFICIENT_STOCK");
       }
@@ -170,7 +217,12 @@ export const branchOwnerService = {
       const client = await pool.connect();
       try {
           await client.query("BEGIN");
-          await branchOwnerRepository.executeTransfer(client, transfer.source_product_id, transfer.dest_product_id, Number(transfer.quantity));
+          await branchOwnerRepository.executeTransfer(client, {
+              sourceProductId: transfer.source_product_id, destProductId: transfer.dest_product_id, quantity: Number(transfer.quantity),
+              sourceSalonId: transfer.source_salon_id, destSalonId: transfer.dest_salon_id,
+              sourceSalonName, destSalonName,
+              productName: transfer.product_name, reason: transfer.reason ?? null, createdBy: branchOwnerId,
+          });
           await client.query("COMMIT");
       } catch (err) {
           await client.query("ROLLBACK");
@@ -363,7 +415,10 @@ export const branchOwnerService = {
   async getSalonStaff(branchOwnerId: string, salonId: string) {
     await assertSalonsAssigned(branchOwnerId, [salonId]);
     const { data } = await staffService.list(salonId, {});
-    return data;
+    // Same login-access-only filter as getAllStaff below — this single-salon
+    // variant backs the same Staff & Permissions functionality, so it must
+    // never surface staff with no login access (no email) either.
+    return data.filter((m: any) => !!m.email);
   },
 
   // Single-call version of the Staff & Permissions page — the frontend used
@@ -403,6 +458,16 @@ export const branchOwnerService = {
     }));
     let combined = perSalon.flat();
 
+    // Staff & Permissions only ever manages staff who can actually log in —
+    // login is keyed by email (see AddStaffPage.tsx's staffLoginEnabled /
+    // StaffListPage.tsx's "Login access" badge, same convention here), so a
+    // staff member with no email has no account to assign a role/permission
+    // to in the first place. Filtered unconditionally, not behind an opt-in
+    // flag, since this list should never surface staff without login access
+    // — enabling/disabling a staff member's email (Staff Login toggle) is
+    // exactly what moves them in or out of this list on the next load.
+    combined = combined.filter((m: any) => !!m.email);
+
     if (opts.salonIds?.length) combined = combined.filter((m: any) => opts.salonIds!.includes(m.salonId));
     if (opts.roleNames?.length) combined = combined.filter((m: any) => opts.roleNames!.includes(m.role_name));
     if (opts.isActive !== undefined) combined = combined.filter((m: any) => (m.is_active !== false) === opts.isActive);
@@ -441,6 +506,7 @@ export const branchOwnerService = {
 
   async getStaffPermissions(branchOwnerId: string, salonId: string, staffId: string) {
     await assertSalonsAssigned(branchOwnerId, [salonId]);
+    await assertStaffHasLoginAccess(staffId, salonId);
     return rolesService.getStaffEffectivePermissions(staffId, salonId);
   },
 
@@ -449,6 +515,7 @@ export const branchOwnerService = {
     overrides: Record<string, boolean | null>, ipAddress: string | null, userAgent: string | null,
   ) {
     await assertSalonsAssigned(branchOwnerId, [salonId]);
+    await assertStaffHasLoginAccess(staffId, salonId);
     const actor = { userId: branchOwnerId, role: "branch_owner", salonId, ipAddress, userAgent };
     return rolesService.setStaffOverrides(staffId, salonId, actor, overrides);
   },
@@ -458,6 +525,7 @@ export const branchOwnerService = {
     roleId: string, ipAddress: string | null, userAgent: string | null,
   ) {
     await assertSalonsAssigned(branchOwnerId, [salonId]);
+    await assertStaffHasLoginAccess(staffId, salonId);
     const actor = { userId: branchOwnerId, role: "branch_owner", salonId, ipAddress, userAgent };
     return rolesService.assignStaffRole(staffId, salonId, actor, roleId);
   },

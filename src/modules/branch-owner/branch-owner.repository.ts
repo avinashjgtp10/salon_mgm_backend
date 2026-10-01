@@ -1,5 +1,19 @@
 import pool, { safeQuery } from "../../config/database";
 
+// Same "main branch, else first" resolution as
+// inventory.service.ts#resolveBranchId — duplicated locally (rather than
+// importing that module) since this only ever needs the plain salonId ->
+// branchId lookup, not that function's appointment-specific
+// apptBranchId override param. Used to give a transfer's Stock Ledger rows a
+// real branch_id (NOT NULL on stock_ledger) for whichever salon they land in.
+async function resolveSalonMainBranchId(salonId: string): Promise<string | null> {
+  const { rows } = await pool.query(
+    `SELECT id FROM branches WHERE salon_id = $1 ORDER BY is_main DESC, created_at ASC LIMIT 1`,
+    [salonId]
+  );
+  return rows[0]?.id ?? null;
+}
+
 export const branchOwnerRepository = {
 
   // Per-salon breakdown for the "My Salons" table — same revenue convention
@@ -500,6 +514,17 @@ export const branchOwnerRepository = {
     return rows[0]?.is_active === true;
   },
 
+  // Same display-name fallback as listTransfers' own ss./ds. COALESCE below —
+  // used to build the "Branch Transfer – <other salon>" Stock Ledger
+  // reference text (see executeTransfer) before a transfer row exists yet.
+  async getSalonName(salonId: string): Promise<string> {
+    const { rows } = await pool.query(
+      `SELECT COALESCE(business_name, slug, 'Unnamed') AS name FROM salons WHERE id = $1`,
+      [salonId]
+    );
+    return rows[0]?.name ?? "Unnamed";
+  },
+
   // Cash counter session totals per assigned salon — same source columns as
   // the single-salon Cash Management Report (reports.repository.ts), summed
   // per salon instead of filtered to one, so a branch owner sees every
@@ -543,15 +568,26 @@ export const branchOwnerRepository = {
   // moving a quantity from one salon's product row to (an equivalent
   // product row in) another salon, not moving a single shared row.
 
-  async listProductsForSalon(salonId: string, search?: string): Promise<{ id: string; name: string; barcode: string | null; amount: number; measure_unit: string }[]> {
+  async listProductsForSalon(salonId: string, search?: string): Promise<{
+    id: string; name: string; barcode: string | null; amount: number; measure_unit: string;
+    retail_price: number | null; category_name: string | null; qty_alert: number | null;
+  }[]> {
     const values: unknown[] = [salonId];
-    let where = "salon_id = $1 AND is_active = true";
+    let where = "p.salon_id = $1 AND p.is_active = true";
     if (search && search.trim()) {
       values.push(`%${search.trim()}%`);
-      where += ` AND name ILIKE $${values.length}`;
+      where += ` AND (p.name ILIKE $${values.length} OR p.barcode ILIKE $${values.length})`;
     }
+    // retail_price/category_name/qty_alert added for the Create Stock
+    // Transfer table's Unit Price/Total columns and low-stock badge (see
+    // BranchOwnerInventoryPage.tsx) — listProductsForSalon previously only
+    // returned the bare fields findProduct's own transfer-matching logic
+    // needs, nothing display-only.
     const { rows } = await pool.query(
-      `SELECT id, name, barcode, amount, measure_unit FROM products WHERE ${where} ORDER BY name ASC LIMIT 50`,
+      `SELECT p.id, p.name, p.barcode, p.amount, p.measure_unit, p.retail_price, p.qty_alert, c.name AS category_name
+       FROM products p
+       LEFT JOIN service_categories c ON c.id = p.category_id
+       WHERE ${where} ORDER BY p.name ASC LIMIT 50`,
       values
     );
     return rows;
@@ -583,9 +619,73 @@ export const branchOwnerRepository = {
     return rows[0];
   },
 
-  async executeTransfer(client: any, sourceProductId: string, destProductId: string, quantity: number): Promise<void> {
-    await client.query(`UPDATE products SET amount = amount - $1, updated_at = NOW() WHERE id = $2`, [quantity, sourceProductId]);
-    await client.query(`UPDATE products SET amount = amount + $1, updated_at = NOW() WHERE id = $2`, [quantity, destProductId]);
+  // Moves the stock (source product decremented, dest product incremented —
+  // two genuinely separate products.amount rows in two separate salons,
+  // since a Branch Owner's "branch" is a whole salon here, not a sub-salon
+  // `branches` row), AND writes the matching Stock Ledger entry on each
+  // side in the same transaction — a transfer_out row in the source salon's
+  // ledger, a transfer_in row in the destination salon's ledger, sharing a
+  // transfer_group_id so either one can be traced to its pair. Previously
+  // this only moved the stock and recorded a branch_stock_transfers row
+  // (see recordTransfer) — nothing ever touched stock_ledger, so a transfer
+  // never showed up in either salon's Stock Ledger page at all.
+  async executeTransfer(
+    client: any,
+    params: {
+      sourceProductId: string; destProductId: string; quantity: number;
+      sourceSalonId: string; destSalonId: string;
+      sourceSalonName: string; destSalonName: string;
+      productName: string; reason: string | null; createdBy: string | null;
+    },
+  ): Promise<void> {
+    // productName isn't used in the ledger insert itself — stock_ledger's own
+    // joins (see stock-ledger.repository.ts's SELECT_WITH_JOINS) already
+    // resolve product_name for display, and it's kept on `params` only so
+    // callers don't need a separate no-op argument just to document what's
+    // being transferred.
+    const { sourceProductId, destProductId, quantity, sourceSalonId, destSalonId, sourceSalonName, destSalonName, reason, createdBy } = params;
+
+    const { rows: outRows } = await client.query(
+      `UPDATE products SET amount = amount - $1, updated_at = NOW() WHERE id = $2 RETURNING amount`,
+      [quantity, sourceProductId]
+    );
+    const { rows: inRows } = await client.query(
+      `UPDATE products SET amount = amount + $1, updated_at = NOW() WHERE id = $2 RETURNING amount`,
+      [quantity, destProductId]
+    );
+    const sourceBalanceAfter = parseFloat(outRows[0]?.amount ?? 0);
+    const destBalanceAfter = parseFloat(inRows[0]?.amount ?? 0);
+
+    const [sourceBranchId, destBranchId] = await Promise.all([
+      resolveSalonMainBranchId(sourceSalonId),
+      resolveSalonMainBranchId(destSalonId),
+    ]);
+    // A salon with no branches row at all (none found anywhere in this repo
+    // as a real case, but resolveSalonMainBranchId can still return null) —
+    // skip the ledger write rather than violate stock_ledger's NOT NULL
+    // branch_id; the stock movement above still happens either way.
+    if (!sourceBranchId || !destBranchId) return;
+
+    const transferGroupId = (await client.query("SELECT gen_random_uuid() AS id")).rows[0].id;
+    const sourceReference = `Branch Transfer – ${destSalonName}`;
+    const destReference = `Branch Transfer – ${sourceSalonName}`;
+
+    await client.query(
+      `INSERT INTO stock_ledger (
+          salon_id, branch_id, product_id, transaction_type,
+          reference, quantity, balance_after, reason, created_by,
+          transfer_group_id, source_branch_id, destination_branch_id
+       ) VALUES ($1,$2,$3,'transfer_out',$4,$5,$6,$7,$8,$9,$10,$11)`,
+      [sourceSalonId, sourceBranchId, sourceProductId, sourceReference, -Math.abs(quantity), sourceBalanceAfter, reason, createdBy, transferGroupId, sourceBranchId, destBranchId]
+    );
+    await client.query(
+      `INSERT INTO stock_ledger (
+          salon_id, branch_id, product_id, transaction_type,
+          reference, quantity, balance_after, reason, created_by,
+          transfer_group_id, source_branch_id, destination_branch_id
+       ) VALUES ($1,$2,$3,'transfer_in',$4,$5,$6,$7,$8,$9,$10,$11)`,
+      [destSalonId, destBranchId, destProductId, destReference, Math.abs(quantity), destBalanceAfter, reason, createdBy, transferGroupId, sourceBranchId, destBranchId]
+    );
   },
 
   async recordTransfer(branchOwnerId: string, params: {
@@ -726,7 +826,7 @@ export const branchOwnerRepository = {
       `SELECT c.name AS category_name, COUNT(p.id)::int AS product_count
        FROM branch_owner_salons bos
        JOIN products p ON p.salon_id = bos.salon_id AND p.is_active = true
-       JOIN categories c ON c.id = p.category_id
+       JOIN service_categories c ON c.id = p.category_id
        WHERE bos.branch_owner_id = $1
        GROUP BY c.name
        ORDER BY product_count DESC`,
@@ -743,7 +843,7 @@ export const branchOwnerRepository = {
        FROM branch_owner_salons bos
        JOIN salons s ON s.id = bos.salon_id
        JOIN products p ON p.salon_id = s.id AND p.is_active = true
-       JOIN categories c ON c.id = p.category_id
+       JOIN service_categories c ON c.id = p.category_id
        WHERE bos.branch_owner_id = $1 AND c.name = $2
        ORDER BY s.business_name ASC, p.name ASC`,
       [branchOwnerId, categoryName]

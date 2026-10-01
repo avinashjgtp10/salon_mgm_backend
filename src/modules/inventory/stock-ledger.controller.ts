@@ -4,6 +4,7 @@ import { sendSuccess } from "../utils/response.util";
 import { stockLedgerService } from "./stock-ledger.service";
 import {
     CreateStockLedgerEntryBody,
+    CreateStockTransferBody,
     UpdateStockLedgerEntryBody,
     ListStockLedgerFilters,
     StockLedgerTransactionType,
@@ -34,6 +35,23 @@ export const stockLedgerController = {
                 body: req.body as CreateStockLedgerEntryBody,
             });
             sendSuccess(res, 201, entry, "Stock ledger entry created successfully");
+        } catch (err) { next(err); }
+    },
+
+    async createTransfer(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const userId = req.user?.userId;
+            const role = req.user?.role;
+            const salonId = getSalonId(req);
+            if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+
+            const result = await stockLedgerService.createTransfer({
+                requesterUserId: userId,
+                requesterRole: role,
+                salonId,
+                body: req.body as CreateStockTransferBody,
+            });
+            sendSuccess(res, 201, result, "Stock transfer recorded successfully");
         } catch (err) { next(err); }
     },
 

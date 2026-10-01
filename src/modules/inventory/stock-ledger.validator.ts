@@ -34,6 +34,23 @@ export const validateCreateStockLedgerEntry = (req: Request, _res: Response, nex
     } catch (err) { next(err); }
 };
 
+export const validateCreateStockTransfer = (req: Request, _res: Response, next: NextFunction): void => {
+    try {
+        const b = req.body;
+        if (!isUUID(b.product_id)) throw new AppError(400, "product_id is required and must be a UUID", "VALIDATION_ERROR");
+        if (!isUUID(b.source_branch_id)) throw new AppError(400, "source_branch_id is required and must be a UUID", "VALIDATION_ERROR");
+        if (!isUUID(b.destination_branch_id)) throw new AppError(400, "destination_branch_id is required and must be a UUID", "VALIDATION_ERROR");
+        if (b.source_branch_id === b.destination_branch_id) {
+            throw new AppError(400, "Source and destination branch must be different", "VALIDATION_ERROR");
+        }
+        if (!isPositiveNumber(b.quantity)) throw new AppError(400, "quantity is required and must be greater than 0", "VALIDATION_ERROR");
+        if (!isOptionalString(b.reference)) throw new AppError(400, "reference must be a string", "VALIDATION_ERROR");
+        if (!isOptionalString(b.reason)) throw new AppError(400, "reason must be a string", "VALIDATION_ERROR");
+        if (!isOptionalString(b.notes)) throw new AppError(400, "notes must be a string", "VALIDATION_ERROR");
+        next();
+    } catch (err) { next(err); }
+};
+
 export const validateUpdateStockLedgerEntry = (req: Request, _res: Response, next: NextFunction): void => {
     try {
         const b = req.body;

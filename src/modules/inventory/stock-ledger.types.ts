@@ -49,6 +49,7 @@ export type StockLedgerEntry = {
     id: string;
     salon_id: string;
     branch_id: string;
+    branch_name: string | null;
     product_id: string;
     product_name: string;
     measure_unit: string | null;
@@ -71,6 +72,17 @@ export type StockLedgerEntry = {
      *  Migration/add_stock_ledger_supplier.sql). */
     supplier_id: string | null;
     supplier_name: string | null;
+    /** Set on both rows of a linked branch transfer (the transfer_out row at
+     *  the source branch and its paired transfer_in row at the destination) —
+     *  see stock-ledger.repository.ts#createTransfer. NULL for every other
+     *  transaction_type, and for transfer_in/transfer_out rows created
+     *  individually through the generic create() endpoint before this
+     *  existed. */
+    transfer_group_id: string | null;
+    source_branch_id: string | null;
+    source_branch_name: string | null;
+    destination_branch_id: string | null;
+    destination_branch_name: string | null;
     created_by: string | null;
     created_by_name: string | null;
     created_at: string;
@@ -88,6 +100,21 @@ export type CreateStockLedgerEntryBody = {
     reason?: string;
     notes?: string;
     supplier_id?: string;
+};
+
+// A single branch-to-branch transfer — one request creates BOTH the
+// transfer_out row (at source_branch_id) and the paired transfer_in row (at
+// destination_branch_id) in one DB transaction, linked by a shared
+// transfer_group_id. See stock-ledger.repository.ts#createTransfer.
+export type CreateStockTransferBody = {
+    product_id: string;
+    source_branch_id: string;
+    destination_branch_id: string;
+    /** Unsigned. */
+    quantity: number;
+    reference?: string;
+    reason?: string;
+    notes?: string;
 };
 
 export type UpdateStockLedgerEntryBody = {

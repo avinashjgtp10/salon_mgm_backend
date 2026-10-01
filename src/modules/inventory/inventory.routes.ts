@@ -43,6 +43,7 @@ import {
 } from "./product-audit.validator";
 import {
     validateCreateStockLedgerEntry,
+    validateCreateStockTransfer,
     validateUpdateStockLedgerEntry,
 } from "./stock-ledger.validator";
 
@@ -814,6 +815,20 @@ router.post(
     stockLedgerAdjustment,
     validateCreateStockLedgerEntry,
     stockLedgerController.create
+);
+
+// Branch-to-branch transfer — one call atomically writes both the
+// transfer_out row (source branch) and its paired transfer_in row
+// (destination branch), instead of the frontend submitting two independent
+// POST /stock-ledger calls with no link between them. Same permission as a
+// manual stock adjustment, since a transfer is a kind of stock adjustment.
+router.post(
+    "/stock-ledger/transfer",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    stockLedgerAdjustment,
+    validateCreateStockTransfer,
+    stockLedgerController.createTransfer
 );
 
 router.get(
