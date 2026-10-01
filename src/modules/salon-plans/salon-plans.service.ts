@@ -96,7 +96,19 @@ export const salonPlansService = {
         // (e.g. editing just the tagline or feature list shouldn't spawn a
         // new Razorpay plan object).
         if (patch.price !== undefined || patch.name !== undefined) {
-            updated = await this.syncToRazorpay(tier, updatedBy);
+            try {
+                updated = await this.syncToRazorpay(tier, updatedBy);
+            } catch (err: any) {
+                // The price is already saved above but the linked Razorpay plan
+                // still holds the old amount — surface that instead of a bare
+                // 500 so it isn't mistaken for "nothing saved" and left stale.
+                logger.error(`Razorpay re-sync failed for tier ${tier} after price/name update`, { err });
+                throw new AppError(
+                    502,
+                    `Plan saved, but syncing it to Razorpay failed — checkout will keep using the old amount until a sync succeeds. Retry via sync-razorpay. (${err?.message ?? "unknown error"})`,
+                    "RAZORPAY_SYNC_FAILED"
+                );
+            }
         }
         return updated;
     },
@@ -106,21 +118,29 @@ export const salonPlansService = {
     // which calls razorpay.plans.create() and stores the result in
     // subscription_plans) for this tier, and links it so the salon-facing
     // "Pay & Continue" button can create a live subscription against it.
-    // Idempotent by re-running: each call creates a NEW Razorpay plan object
-    // and re-links (Razorpay plans are immutable — there's no "update price"
-    // on an existing one). Called automatically from updatePlanDefinition
-    // whenever price/name change (see above); the standalone sync-razorpay
-    // endpoint exists for the first-time sync and for manually re-running it
-    // without any other field change.
+    // First sync creates the subscription_plans row. Every later sync UPDATES
+    // that same row in place (same id, new price/razorpay_plan_id) instead of
+    // inserting another — Razorpay itself can't edit a plan's amount, so only
+    // the Razorpay-side plan object is new. Called automatically from
+    // updatePlanDefinition whenever price/name change (see above); the
+    // standalone sync-razorpay endpoint re-runs it without any other change.
     async syncToRazorpay(tier: string, updatedBy: string) {
         assertValidTier(tier);
         const plan = await planDefinitionsRepository.findByTier(tier);
         if (!plan) throw new AppError(404, "Plan tier not found", "NOT_FOUND");
 
-        // slug must be globally unique on subscription_plans, and re-syncing
-        // (e.g. after a price change) always needs a fresh row since
-        // Razorpay plans are immutable — a fixed slug would collide with
-        // the previous sync's row on the very next call.
+        if (plan.linked_subscription_plan_id) {
+            await subscriptionsService.updatePlanPricing(plan.linked_subscription_plan_id, {
+                name: `SalonOx ${plan.name}`,
+                description: plan.tagline ?? undefined,
+                price: parseFloat(plan.price),
+            });
+            const relinked = await planDefinitionsRepository.findByTier(tier);
+            if (!relinked) throw new AppError(404, "Plan tier not found", "NOT_FOUND");
+            return relinked;
+        }
+
+        // First-time sync — slug must be globally unique on subscription_plans.
         const created = await subscriptionsService.createPlan({
             name: `SalonOx ${plan.name}`,
             slug: `salonox-${plan.tier}-yearly-${Date.now()}`,

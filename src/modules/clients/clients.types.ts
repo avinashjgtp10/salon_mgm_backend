@@ -224,6 +224,9 @@ export type GenderFilter = "all" | "female" | "male" | "other" | "non_binary" | 
 // and ClientHistoryDetail.tsx's displayPkgStatus().
 export type PackageMembershipFilter = "has_package" | "has_membership" | "has_both" | "has_none";
 
+// Filters on clients.is_blocked (NOT is_active — that's the soft-delete flag).
+export type BlockedStatusFilter = "blocked" | "unblocked";
+
 export type ClientsListQuery = {
     offset?: number;
     limit?: number;
@@ -241,6 +244,7 @@ export type ClientsListQuery = {
     min_sales?: number;    // revenue range (lifetime paid, wallet-settled excluded)
     max_sales?: number;
     package_membership?: PackageMembershipFilter;
+    blocked_status?: BlockedStatusFilter;
 
     // "list" trims the SELECT to only what the Client List table renders
     // (skips address/notes/tags/ltv/ewallet/reward-balance columns and the

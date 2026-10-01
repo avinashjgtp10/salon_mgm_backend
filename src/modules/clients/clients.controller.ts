@@ -10,8 +10,9 @@ import { sendSuccess } from "../utils/response.util";
 import { uploadAvatarToS3 } from "../utils/avatar.upload";
 import { clientsService } from "./clients.service";
 import { clientsRepository } from "./clients.repository";
-import { ClientsListQuery, CreateClientBody, UpdateClientBody, CampaignFilterParams, PackageMembershipFilter } from "./clients.types";
+import { ClientsListQuery, CreateClientBody, UpdateClientBody, CampaignFilterParams, PackageMembershipFilter, BlockedStatusFilter } from "./clients.types";
 import pool from "../../config/database";
+import { resolveClientExportColumns, buildClientExportRows } from "./clients.export-columns";
 
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string } };
 
@@ -59,6 +60,11 @@ const parsePackageMembershipFilter = (v: unknown): PackageMembershipFilter | und
     return PACKAGE_MEMBERSHIP_VALUES.has(s) ? (s as PackageMembershipFilter) : undefined;
 };
 
+const parseBlockedStatusFilter = (v: unknown): BlockedStatusFilter | undefined => {
+    const s = String(v ?? "").trim();
+    return s === "blocked" || s === "unblocked" ? s : undefined;
+};
+
 export const clientsController = {
     // GET /api/v1/clients
     async list(req: AuthRequest, res: Response, next: NextFunction) {
@@ -95,6 +101,7 @@ export const clientsController = {
                 min_sales: parseMoney(req.query.min_sales),
                 max_sales: parseMoney(req.query.max_sales),
                 package_membership: parsePackageMembershipFilter(req.query.package_membership),
+                blocked_status: parseBlockedStatusFilter(req.query.blocked_status),
                 fields: req.query.fields === "list" ? "list" : undefined,
             };
             const raw = await clientsService.list(q, salonId);
@@ -308,6 +315,7 @@ export const clientsController = {
                 min_sales: parseMoney(req.query.min_sales),
                 max_sales: parseMoney(req.query.max_sales),
                 package_membership: parsePackageMembershipFilter(req.query.package_membership),
+                blocked_status: parseBlockedStatusFilter(req.query.blocked_status),
             };
             const data = await clientsService.list(q, salonId);
             const rows = data.items.map((c: any) => ({
@@ -325,9 +333,15 @@ export const clientsController = {
                 sms_marketing: c.sms_marketing, whatsapp_marketing: c.whatsapp_marketing,
                 created_at: c.created_at, updated_at: c.updated_at,
             }));
+            // Optional ?columns=a,b,c (Export clients modal): only those columns,
+            // in that order. Absent => legacy all-fields output. PDF keeps its
+            // fixed readable layout either way.
+            const pickedCols = format === "pdf" ? null : resolveClientExportColumns(req.query.columns);
+            if (pickedCols && pickedCols.length === 0) throw new AppError(400, "Select at least one valid column to export", "VALIDATION_ERROR");
+            const outRows = pickedCols ? buildClientExportRows(data.items as any[], pickedCols) : rows;
             if (format === "csv") {
-                const parser = new Json2CsvParser({ withBOM: true });
-                const csv = parser.parse(rows);
+                const parser = new Json2CsvParser({ withBOM: true, ...(pickedCols ? { fields: pickedCols.map((d) => d.label) } : {}) });
+                const csv = parser.parse(outRows);
                 res.setHeader("Content-Type", "text/csv");
                 res.setHeader("Content-Disposition", `attachment; filename="clients_export.csv"`);
                 return res.status(200).send(csv);
@@ -376,7 +390,7 @@ export const clientsController = {
                 doc.end();
                 return;
             }
-            const ws = XLSX.utils.json_to_sheet(rows);
+            const ws = XLSX.utils.json_to_sheet(outRows, pickedCols ? { header: pickedCols.map((d) => d.label) } : undefined);
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, "clients");
             const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
