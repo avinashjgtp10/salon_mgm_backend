@@ -40,6 +40,25 @@ export const subscriptionsRepository = {
         return rows[0]
     },
 
+    // Re-points an existing plan row at a fresh Razorpay plan (Razorpay plans
+    // are immutable, so a price change needs a new Razorpay plan object) while
+    // keeping the same subscription_plans.id — no extra rows per price edit.
+    async updatePlanPricing(id: string, data: {
+        name: string
+        description?: string | null
+        price: number
+        razorpay_plan_id: string
+    }): Promise<SubscriptionPlan | null> {
+        const { rows } = await pool.query(
+            `UPDATE subscription_plans
+       SET name = $2, description = $3, price = $4, razorpay_plan_id = $5, is_active = true
+       WHERE id = $1
+       RETURNING *`,
+            [id, data.name, data.description ?? null, data.price, data.razorpay_plan_id]
+        )
+        return rows[0] || null
+    },
+
     async listPlans(): Promise<SubscriptionPlan[]> {
         const { rows } = await pool.query(
             `SELECT * FROM subscription_plans
