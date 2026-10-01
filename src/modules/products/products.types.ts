@@ -113,7 +113,7 @@ export type ProductListFilters = {
     retail_sales_enabled?: boolean;
     min_price?: number;
     max_price?: number;
-    stock?: "all" | "low" | "out_of_stock";
+    stock?: "all" | "low" | "in_stock" | "out_of_stock";
     // Defaults to active-only (see _buildFilterConditions) — pass false
     // explicitly to see deactivated products, e.g. a future "Show inactive" toggle.
     is_active?: boolean;

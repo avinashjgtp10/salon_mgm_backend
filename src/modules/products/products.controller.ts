@@ -32,7 +32,7 @@ const parseListFilters = (req: AuthRequest) => {
             retail_sales_enabled !== undefined ? retail_sales_enabled === "true" : undefined,
         min_price: min_price ? parseFloat(min_price as string) : undefined,
         max_price: max_price ? parseFloat(max_price as string) : undefined,
-        stock: stock as "all" | "low" | "out_of_stock" | undefined,
+        stock: stock as "all" | "low" | "in_stock" | "out_of_stock" | undefined,
         sort_by: sort_by as string | undefined,
         sort_order: sort_order as "ASC" | "DESC" | undefined,
     };
@@ -50,7 +50,7 @@ const parseSearchFilters = (req: AuthRequest) => {
         retail_sales_enabled: typeof retail_sales_enabled === "boolean" ? retail_sales_enabled : undefined,
         min_price: min_price !== undefined ? Number(min_price) : undefined,
         max_price: max_price !== undefined ? Number(max_price) : undefined,
-        stock: stock as "all" | "low" | "out_of_stock" | undefined,
+        stock: stock as "all" | "low" | "in_stock" | "out_of_stock" | undefined,
         sort_by: sort_by as string | undefined,
         sort_order: sort_order as "ASC" | "DESC" | undefined,
     };

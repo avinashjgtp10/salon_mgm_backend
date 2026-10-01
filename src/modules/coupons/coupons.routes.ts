@@ -14,10 +14,12 @@ const manageCoupons = requirePermission('manage_coupons');
 // Validate stays open to any authenticated user — it's a read-only "is this
 // code valid" check used at checkout, not a management action.
 router.post('/validate', authMiddleware, couponsController.validate);
-router.get('/', authMiddleware, ownerAdminStaff, viewCoupons, couponsController.list);
 
 // ---------------- MANAGEMENT (Settings → Coupons) ----------------
-router.get('/mine', authMiddleware, ownerAdminStaff, viewCoupons, couponsController.listOwn);
+// This salon's own coupons (never the global salon_id IS NULL ones). Used to
+// be GET /mine; it took over GET / when that was renamed, replacing the old
+// unused "active + global" list handler that lived here.
+router.get('/', authMiddleware, ownerAdminStaff, viewCoupons, couponsController.listOwn);
 router.post('/', authMiddleware, ownerAdminStaff, manageCoupons, couponsController.create);
 router.post('/bulk', authMiddleware, ownerAdminStaff, manageCoupons, couponsController.createBulk);
 router.patch('/:id', authMiddleware, ownerAdminStaff, manageCoupons, couponsController.update);
