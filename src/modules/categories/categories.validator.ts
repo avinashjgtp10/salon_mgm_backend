@@ -6,6 +6,9 @@ const isOptionalString = (v: unknown) => v === undefined || typeof v === "string
 const isOptionalNumber = (v: unknown) => v === undefined || typeof v === "number";
 const VALID_CATEGORY_TYPES = ["service", "product", "both"];
 const isOptionalCategoryType = (v: unknown) => v === undefined || VALID_CATEGORY_TYPES.includes(v as string);
+// An icon is a short lowercase key (e.g. "hair", "men-grooming"); null clears it.
+const isOptionalIconKey = (v: unknown) =>
+    v === undefined || v === null || (typeof v === "string" && /^[a-z0-9_-]{1,40}$/.test(v));
 
 export const validateCreateCategory = (req: Request, _res: Response, next: NextFunction) => {
     try {
@@ -32,6 +35,10 @@ export const validateCreateCategory = (req: Request, _res: Response, next: NextF
 
         if (!isOptionalCategoryType(b.type)) {
             throw new AppError(400, "type must be one of: service, product, both", "VALIDATION_ERROR");
+        }
+
+        if (!isOptionalIconKey(b.icon)) {
+            throw new AppError(400, "icon must be a short lowercase key (letters, numbers, - or _)", "VALIDATION_ERROR");
         }
 
         return next();
@@ -65,6 +72,10 @@ export const validateUpdateCategory = (req: Request, _res: Response, next: NextF
 
         if (!isOptionalCategoryType(b.type)) {
             throw new AppError(400, "type must be one of: service, product, both", "VALIDATION_ERROR");
+        }
+
+        if (!isOptionalIconKey(b.icon)) {
+            throw new AppError(400, "icon must be a short lowercase key (letters, numbers, - or _)", "VALIDATION_ERROR");
         }
 
         return next();
