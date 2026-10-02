@@ -200,6 +200,7 @@ const DEFAULT_STAFF_PERMS: Record<string, boolean> = {
     view_appointment: true,
     create_appointment: false,
     edit_appointment: false,
+    edit_paid_bill: false,
     cancel_appointment: false,
     delete_appointment: false,
     view_payment_details: false,

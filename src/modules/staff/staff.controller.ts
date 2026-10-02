@@ -80,6 +80,16 @@ export const staffController = {
     } catch (err) { return next(err); }
   },
 
+  // GET /staff/manager-status — { manager_ids }: who currently holds the Manager
+  // tier, so the Add/Edit Staff form can disable "Manager" when it's taken.
+  async managerStatus(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = getSalonId(req);
+      const result = await staffService.getManagerIds(salonId);
+      return sendSuccess(res, 200, result, "Manager status fetched");
+    } catch (err) { return next(err); }
+  },
+
   async create(req: AuthRequest, res: Response, _next: NextFunction) {
     try {
       const salonId = getSalonId(req);

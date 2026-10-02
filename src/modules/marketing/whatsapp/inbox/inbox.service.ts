@@ -19,6 +19,10 @@ export const inboxService = {
     return inboxRepository.getConversations(salonId)
   },
 
+  async getUnreadTotal(salonId: string) {
+    return inboxRepository.getUnreadTotal(salonId)
+  },
+
   async getMessages(salonId: string, phone: string) {
     const normalizedPhone = normalizePhone(phone)
     // Fire-and-forget — don't block message fetch on unread reset

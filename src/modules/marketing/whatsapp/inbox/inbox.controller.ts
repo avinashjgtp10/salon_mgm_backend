@@ -16,6 +16,16 @@ export const inboxController = {
     } catch (e) { return next(e) }
   },
 
+  async getUnreadCount(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId
+      if (!salonId) return res.status(400).json({ error: 'salonId missing from token' })
+
+      const unread = await inboxService.getUnreadTotal(salonId)
+      return sendSuccess(res, 200, { unread }, 'Unread count fetched successfully')
+    } catch (e) { return next(e) }
+  },
+
   async getMessages(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = req.user?.salonId

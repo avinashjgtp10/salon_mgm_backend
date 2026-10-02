@@ -57,6 +57,17 @@ export const inboxRepository = {
     return rows
   },
 
+  // Just the total — powers the sidebar's unread badge without shipping the
+  // whole conversation list on every page.
+  async getUnreadTotal(salonId: string): Promise<number> {
+    const { rows } = await pool.query(`
+      SELECT COALESCE(SUM(unread_count), 0)::int AS total
+      FROM wa_conversations
+      WHERE salon_id = $1
+    `, [salonId])
+    return rows[0]?.total ?? 0
+  },
+
   async findConversation(salonId: string, phone: string): Promise<WAConversation | null> {
     const normalizedPhone = normalizePhone(phone)   // ← normalize
     const { rows } = await pool.query(`
