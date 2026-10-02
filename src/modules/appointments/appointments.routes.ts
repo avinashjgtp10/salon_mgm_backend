@@ -3,6 +3,7 @@ import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { requirePermission, requireAnyPermission, requireExportFormatPermission } from "../../middleware/permission.middleware";
 import { appointmentsController } from "./appointments.controller";
+import { requirePaidBillEditPermission } from "./appointments.guards";
 import {
     validateCreateAppointment, validateUpdateAppointment, validateCheckoutAppointment,
 } from "./appointments.validator";
@@ -27,7 +28,9 @@ router.get("/:id", authMiddleware, ownerAdminStaff, requirePermission("view_appo
 // create_sales is OR'd in for the same reason as :id/checkout below — editing
 // an in-progress Quick Sale walk-in appointment (e.g. adding another item
 // before checkout) goes through this same route.
-router.patch("/:id", authMiddleware, ownerAdminStaff, requireAnyPermission(["edit_appointment", "create_sales"]), validateUpdateAppointment, appointmentsController.update);
+// requirePaidBillEditPermission adds the separate edit_paid_bill check when the
+// appointment is already paid (staff only) — see appointments.guards.ts.
+router.patch("/:id", authMiddleware, ownerAdminStaff, requireAnyPermission(["edit_appointment", "create_sales"]), requirePaidBillEditPermission, validateUpdateAppointment, appointmentsController.update);
 router.post("/:id/cancel", authMiddleware, roleMiddleware("salon_owner", "admin", "staff", "client"), requirePermission("cancel_appointment"), appointmentsController.cancel);
 router.delete("/:id", authMiddleware, ownerAdminStaff, requirePermission("delete_appointment"), appointmentsController.delete);
 // Gated by edit_appointment ("Edit & Payment Appointment"), not

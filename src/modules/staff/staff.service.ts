@@ -47,6 +47,12 @@ export async function assertNoOtherManager(salonId: string, staffId?: string | n
 }
 
 export const staffService = {
+    // Ids of the salon's current Manager(s) — lets the Add/Edit Staff form grey
+    // out the "Manager" role up front instead of only rejecting it on Save.
+    async getManagerIds(salonId: string): Promise<{ manager_ids: string[] }> {
+        return { manager_ids: await staffRepository.listManagerIds(salonId) };
+    },
+
     async list(salonId: string, query: StaffListQuery) {
         logger.info("staffService.list", { salonId });
         return staffRepository.list(salonId, query);
