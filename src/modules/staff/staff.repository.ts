@@ -18,6 +18,24 @@ import {
 // ─── Staff ────────────────────────────────────────────────────────────────────
 
 export const staffRepository = {
+    /**
+     * Ids of every staff member in the salon who holds the Manager tier — via
+     * the Roles & Permissions role (the real permission source) or the
+     * permission_level column Add/Edit Staff and Import still write.
+     */
+    async listManagerIds(salonId: string, excludeStaffId?: string | null): Promise<string[]> {
+        const { rows } = await pool.query(
+            `SELECT s.id::text AS id
+               FROM staff s
+               LEFT JOIN roles r ON r.id = s.role_id
+              WHERE s.salon_id = $1
+                AND (LOWER(r.name) = 'manager' OR LOWER(s.permission_level) = 'manager')
+                AND ($2::text IS NULL OR s.id::text <> $2)`,
+            [salonId, excludeStaffId ?? null],
+        );
+        return rows.map((r: { id: string }) => r.id);
+    },
+
     async findById(id: string, salonId: string): Promise<Staff | null> {
         const { rows } = await pool.query(
             `SELECT * FROM staff WHERE id = $1 AND salon_id = $2`,
