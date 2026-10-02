@@ -162,11 +162,14 @@ const SALON_CLEAR_DATA_TABLES = [
 
   // Product audits & stock ledger — product_audit_items.product_id and
   // stock_ledger.product_id/.supplier_id are all plain (NO ACTION) FKs, and
-  // supplier_payments.supplier_id likewise, so all four must be cleared
-  // before products (catalog section below) and suppliers (Inventory
-  // section further down) or the delete aborts with a foreign-key
-  // violation. product_audit_items also cascades from product_audits.
+  // supplier_payments.supplier_id, product_suppliers.product_id/
+  // .supplier_id, and supplier_products.product_id/.supplier_id likewise,
+  // so all six must be cleared before products (catalog section below) and
+  // suppliers (Inventory section further down) or the delete aborts with a
+  // foreign-key violation. product_audit_items also cascades from
+  // product_audits.
   "product_audit_items", "product_audits", "stock_ledger", "supplier_payments",
+  "product_suppliers", "supplier_products",
 
   // client_package_services.catalog_service_id -> services is a plain
   // (NO ACTION) FK, so it (and its CASCADE children) must be cleared before

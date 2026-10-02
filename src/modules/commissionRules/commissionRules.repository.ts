@@ -1,4 +1,5 @@
 import pool from "../../config/database";
+import { AppError } from "../../middleware/error.middleware";
 import {
     CommissionRule,
     CommissionRuleListQuery,
@@ -36,25 +37,53 @@ export const commissionRulesRepository = {
     /** Creates a single rule row for one scope_id (or null for salon-wide). Fan-out across
      *  multiple staff (scope_ids) is handled by the service layer looping this per staff. */
     async create(salonId: string, data: CreateCommissionRuleBody, scopeId: string | null): Promise<CommissionRule> {
-        const { rows } = await pool.query(
-            `INSERT INTO commission_rules (
-                salon_id, name, source, type, rate, rate_after_target, condition_target, condition_metric,
-                frequency, scope_type, scope_id, status, tiers
-             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)
-             RETURNING *`,
-            [
-                salonId, data.name, data.source, data.type, data.rate,
-                data.rate_after_target ?? null,
-                data.condition_target ?? null,
-                data.condition_metric ?? null,
-                data.frequency ?? "monthly",
-                data.scope_type ?? "salon",
-                scopeId,
-                data.status ?? "draft",
-                data.tiers ? JSON.stringify(data.tiers) : null,
-            ]
-        );
-        return rows[0];
+        const columns = [
+            "salon_id", "name", "source", "type", "rate", "rate_after_target", "condition_target", "condition_metric",
+            "frequency", "scope_type", "scope_id", "status",
+        ];
+        const values: unknown[] = [
+            salonId, data.name, data.source, data.type, data.rate,
+            data.rate_after_target ?? null,
+            data.condition_target ?? null,
+            data.condition_metric ?? null,
+            data.frequency ?? "monthly",
+            data.scope_type ?? "salon",
+            scopeId,
+            data.status ?? "draft",
+        ];
+        const placeholders = values.map((_, i) => `$${i + 1}`);
+
+        // `tiers` is only written for ladder rules. Writing it for every rule meant
+        // an environment that hasn't run add_commission_rule_milestone_ladder.sql
+        // yet failed EVERY save (percentage, fixed, monthly target too) with a
+        // missing-column error, not just the new ladder type.
+        if (data.tiers) {
+            columns.push("tiers");
+            values.push(JSON.stringify(data.tiers));
+            placeholders.push(`$${values.length}::jsonb`);
+        }
+
+        try {
+            const { rows } = await pool.query(
+                `INSERT INTO commission_rules (${columns.join(", ")})
+                 VALUES (${placeholders.join(", ")})
+                 RETURNING *`,
+                values
+            );
+            return rows[0];
+        } catch (err: any) {
+            // 42703 = undefined_column (no `tiers`), 23514 = check_violation (type list
+            // doesn't include milestone_ladder yet) — both mean this environment's
+            // database is missing the Milestone Ladder migration.
+            if (data.type === "milestone_ladder" && (err?.code === "42703" || err?.code === "23514")) {
+                throw new AppError(
+                    503,
+                    "Milestone Ladder isn't available in this environment yet — its database update hasn't been applied.",
+                    "FEATURE_NOT_READY"
+                );
+            }
+            throw err;
+        }
     },
 
     async update(id: string, salonId: string, patch: UpdateCommissionRuleBody): Promise<CommissionRule | null> {
