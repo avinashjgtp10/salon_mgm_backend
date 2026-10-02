@@ -27,6 +27,13 @@ export interface RegisterDeviceTokenParams {
 }
 
 export const deviceTokensRepository = {
+  async findNotificationRecipients(salonId: string, staffUserIds: string[]): Promise<DeviceToken[]> {
+    const { rows } = await pool.query<DeviceToken>(
+      `SELECT d.* FROM device_tokens d JOIN users u ON u.id = d.user_id
+       WHERE d.salon_id = $1 AND (u.role IN ('salon_owner', 'branch_owner', 'admin', 'super_admin')
+         OR d.user_id = ANY($2::uuid[]))`, [salonId, staffUserIds]);
+    return rows;
+  },
   async registerToken(data: RegisterDeviceTokenParams): Promise<DeviceToken> {
     const client = await pool.connect();
 
