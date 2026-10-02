@@ -4,6 +4,8 @@ import { notificationsService } from "./notifications.service";
 import { deviceTokensService } from "./deviceTokens.service";
 import { getSalonId } from "../utils/tenant.util";
 
+import { isMobileStaffRequest } from "./staffNotificationScope";
+
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string | null } };
 
 export const notificationsController = {
@@ -65,7 +67,7 @@ export const notificationsController = {
   async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = await getSalonId(req);
-      const data = await notificationsService.list(salonId);
+      const data = await notificationsService.list(salonId, isMobileStaffRequest(req) ? req.user!.userId : undefined);
       return res.json({ success: true, data });
     } catch (err) { return next(err); }
   },
@@ -74,7 +76,7 @@ export const notificationsController = {
     try {
       const salonId = await getSalonId(req);
       const id = String(req.params.id ?? "");
-      const data = await notificationsService.markRead(id, salonId);
+      const data = await notificationsService.markRead(id, salonId, isMobileStaffRequest(req) ? req.user!.userId : undefined);
       return res.json({ success: true, data });
     } catch (err) { return next(err); }
   },
@@ -82,7 +84,7 @@ export const notificationsController = {
   async markAllRead(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = await getSalonId(req);
-      await notificationsService.markAllRead(salonId);
+      await notificationsService.markAllRead(salonId, isMobileStaffRequest(req) ? req.user!.userId : undefined);
       return res.json({ success: true });
     } catch (err) { return next(err); }
   },
@@ -90,7 +92,7 @@ export const notificationsController = {
   async unreadCount(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = await getSalonId(req);
-      const count = await notificationsService.getUnreadCount(salonId);
+      const count = await notificationsService.getUnreadCount(salonId, isMobileStaffRequest(req) ? req.user!.userId : undefined);
       return res.json({ success: true, data: { count } });
     } catch (err) { return next(err); }
   },

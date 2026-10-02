@@ -1,4 +1,5 @@
-import { Router } from "express";
+import { isMobileStaffRequest } from "../notifications/staffNotificationScope";
+import { Router, type Request, type Response, type NextFunction } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { requirePermission, requireAnyPermission, requireExportFormatPermission } from "../../middleware/permission.middleware";
@@ -9,6 +10,9 @@ import {
 
 const router = Router();
 const ownerAdminStaff = roleMiddleware("salon_owner", "admin", "staff");
+const ownAppointmentRead = (permission: ReturnType<typeof requirePermission>) =>
+  (req: Request & { user?: { userId: string; role?: string } }, res: Response, next: NextFunction) =>
+    isMobileStaffRequest(req) ? next() : permission(req, res, next);
 
 // create_sales is OR'd in for the same reason as :id/checkout below — Quick
 // Sale creates its walk-in appointment through this same route, so a staff
@@ -20,10 +24,10 @@ router.post("/", authMiddleware, ownerAdminStaff, requireAnyPermission(["create_
 // useTodayAppointments.ts) rather than the dashboard's own stale bundled
 // snapshot, so a staff member with only the Dashboard-scoped permission can
 // still see that preview without needing full Calendar module access.
-router.get("/", authMiddleware, ownerAdminStaff, requireAnyPermission(["view_calendar", "view_dashboard_appointments"]), appointmentsController.list);
+router.get("/", authMiddleware, ownerAdminStaff, ownAppointmentRead(requireAnyPermission(["view_calendar", "view_dashboard_appointments"])), appointmentsController.list);
 router.get("/export", authMiddleware, ownerAdminStaff, requirePermission("view_calendar"), requireExportFormatPermission(["csv", "excel"], "csv"), appointmentsController.exportAppointments);
 router.post("/bulk-delete", authMiddleware, ownerAdminStaff, requirePermission("delete_appointment"), appointmentsController.bulkDelete);
-router.get("/:id", authMiddleware, ownerAdminStaff, requirePermission("view_appointment"), appointmentsController.getById);
+router.get("/:id", authMiddleware, ownerAdminStaff, ownAppointmentRead(requirePermission("view_appointment")), appointmentsController.getById);
 // create_sales is OR'd in for the same reason as :id/checkout below — editing
 // an in-progress Quick Sale walk-in appointment (e.g. adding another item
 // before checkout) goes through this same route.

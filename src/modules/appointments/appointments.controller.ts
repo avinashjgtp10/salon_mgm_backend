@@ -3,6 +3,7 @@ import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { appointmentsService } from "./appointments.service";
 import { CreateAppointmentBody, UpdateAppointmentBody, CancelAppointmentBody } from "./appointments.types";
+import { appointmentRecipients, isMobileStaffRequest, ownStaffId } from "../notifications/staffNotificationScope";
 
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string | null } };
 
@@ -28,6 +29,10 @@ export const appointmentsController = {
             const id = String(req.params.id || "").trim();
             if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
             const appointment = await appointmentsService.getById(id);
+            if (isMobileStaffRequest(req) && (appointment.salon_id !== req.user?.salonId ||
+                !(await appointmentRecipients(req.user!.salonId!, id)).includes(req.user!.userId))) {
+                throw new AppError(403, "Appointment unavailable", "FORBIDDEN");
+            }
             return sendSuccess(res, 200, appointment, "Appointment fetched successfully");
         } catch (err) { return next(err); }
     },
@@ -43,12 +48,19 @@ export const appointmentsController = {
                 clientId: String(req.query.client_id || "").trim() || undefined,
                 date: String(req.query.date || "").trim() || undefined,
                 staffId: String(req.query.staff_id || "").trim() || undefined,
+                includeServiceAssignments: isMobileStaffRequest(req),
                 status: String(req.query.status || "").trim() || undefined,
                 startDate: String(req.query.start_date || "").trim() || undefined,
                 endDate: String(req.query.end_date || "").trim() || undefined,
                 page,
                 limit,
             };
+            if (isMobileStaffRequest(req)) {
+                const staffId = await ownStaffId(req.user!.userId, salonId);
+                if (!staffId) throw new AppError(403, "Staff profile unavailable", "FORBIDDEN");
+                filters.staffId = staffId;
+                filters.clientId = undefined; // Never use the unscoped client-history path on mobile.
+            }
             const result = await appointmentsService.list(filters);
             return sendSuccess(res, 200, result, "Appointments fetched successfully");
         } catch (err) { return next(err); }

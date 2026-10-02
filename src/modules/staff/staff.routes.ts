@@ -1,3 +1,4 @@
+import { isMobileStaffRequest, ownStaffId } from "../notifications/staffNotificationScope";
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
@@ -24,6 +25,17 @@ import { validateCreateStaffBlockedTime, validateUpdateBlockedTime } from "../bl
 
 const router = Router();
 const auth = authMiddleware;
+const ownProfileRead = (permission: ReturnType<typeof requirePermission>) =>
+  async (req: Request & { user?: { userId: string; role?: string; salonId?: string | null } }, res: Response, next: NextFunction) => {
+    if (!isMobileStaffRequest(req)) return permission(req, res, next);
+    try {
+      const requestedId = req.params.id ?? req.params.staffId;
+      if (requestedId && requestedId !== await ownStaffId(req.user!.userId, req.user!.salonId!)) {
+        return res.status(403).json({ success: false, message: "Only your own staff details are available" });
+      }
+      return next();
+    } catch (error) { return next(error); }
+  };
 const ownerAdmin = roleMiddleware("salon_owner", "admin");
 const ownerAdminStaff = roleMiddleware("salon_owner", "admin", "staff");
 // Wages/Commissions/Tips were previously owner/admin-only with no permission
@@ -107,7 +119,7 @@ router.post("/invite/accept", validateAcceptInvitation, staffInvitationControlle
 // alone, not just manage_calendar, has to be enough — you don't need edit
 // rights on the calendar to see who it's organized by).
 const viewTeamOrBooking = requireAnyPermission(["view_team", "create_sales", "manage_calendar", "view_calendar"]);
-router.get("/", auth, ownerAdminStaff, viewTeamOrBooking, staffController.list);
+router.get("/", auth, ownerAdminStaff, ownProfileRead(viewTeamOrBooking), staffController.list);
 router.post("/", auth, ownerAdminStaff, createStaff, validateCreateStaff, staffController.create);
 
 // ─── Live email-availability check for the Staff Login email field (must be
@@ -170,7 +182,7 @@ router.post("/bulk/role",             auth, ownerAdmin, requirePermission("manag
 router.post("/bulk/reset-overrides",  auth, ownerAdmin, requirePermission("manage_roles"), staffPermissionsController.bulkResetOverrides);
 
 // ─── Staff by ID ──────────────────────────────────────────────────────────────
-router.get("/:id",    auth, ownerAdminStaff, requirePermission("view_team"), staffController.getById);
+router.get("/:id",    auth, ownerAdminStaff, ownProfileRead(requirePermission("view_team")), staffController.getById);
 
 // ─── Roles & Permissions — per staff ─────────────────────────────────────────
 router.get("/:id/permissions",   auth, ownerAdminStaff, requirePermission("view_team"), requireAnyPermission(["view_roles", "manage_roles"]), staffPermissionsController.getEffective);
@@ -189,13 +201,13 @@ router.delete("/:id/cancel-invite",  auth, ownerAdmin, staffInvitationController
 // ─── Addresses ────────────────────────────────────────────────────────────────
 // Role gate unchanged (still owner/admin for writes) — this ticket only
 // closes the missing-permission-check gap, it doesn't change who's eligible.
-router.get("/:staffId/addresses",         auth, ownerAdminStaff, manageStaffPersonalData, staffAddressController.list);
+router.get("/:staffId/addresses",         auth, ownerAdminStaff, ownProfileRead(manageStaffPersonalData), staffAddressController.list);
 router.post("/:staffId/addresses",        auth, ownerAdmin, manageStaffPersonalData, validateCreateStaffAddress, staffAddressController.create);
 router.patch("/:staffId/addresses/:id",   auth, ownerAdmin, manageStaffPersonalData, validateUpdateStaffAddress, staffAddressController.update);
 router.delete("/:staffId/addresses/:id",  auth, ownerAdmin, manageStaffPersonalData, staffAddressController.delete);
 
 // ─── Emergency Contacts ───────────────────────────────────────────────────────
-router.get("/:staffId/emergency-contacts",        auth, ownerAdminStaff, manageStaffPersonalData, staffEmergencyContactController.list);
+router.get("/:staffId/emergency-contacts",        auth, ownerAdminStaff, ownProfileRead(manageStaffPersonalData), staffEmergencyContactController.list);
 router.post("/:staffId/emergency-contacts",       auth, ownerAdmin, manageStaffPersonalData, validateCreateEmergencyContact, staffEmergencyContactController.create);
 router.patch("/:staffId/emergency-contacts/:id",  auth, ownerAdmin, manageStaffPersonalData, validateUpdateEmergencyContact, staffEmergencyContactController.update);
 router.delete("/:staffId/emergency-contacts/:id", auth, ownerAdmin, manageStaffPersonalData, staffEmergencyContactController.delete);
@@ -235,7 +247,7 @@ router.post(
 );
 router.get(
   "/:staffId/blocked-times",
-  auth, ownerAdminStaff, viewScheduledShifts,
+  auth, ownerAdminStaff, ownProfileRead(viewScheduledShifts),
   (req: Request, _res: Response, next: NextFunction) => { req.query.staff_id = req.params.staffId; next(); },
   blockedTimesController.list
 );

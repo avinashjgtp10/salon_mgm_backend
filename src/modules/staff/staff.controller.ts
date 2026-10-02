@@ -4,6 +4,7 @@ import * as Papa from "papaparse";
 import { Parser as CsvParser } from "json2csv";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
+import { isMobileStaffRequest, ownStaffId } from "../notifications/staffNotificationScope";
 import { invalidateStaffPermCache } from "../../middleware/permission.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { uploadAvatarToS3 } from "../utils/avatar.upload";
@@ -37,6 +38,11 @@ export const staffController = {
       const salonId = req.user?.salonId ?? req.body?.salon_id;
       if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR");
       logger.info("GET /staff", { salonId });
+      if (isMobileStaffRequest(req)) {
+        const staffId = await ownStaffId(req.user!.userId, salonId);
+        const items = staffId ? [await staffService.getById(staffId, salonId)] : [];
+        return sendSuccess(res, 200, { items, pagination: { total: items.length, page: 1, limit: 1, total_pages: items.length } }, "Your staff profile");
+      }
 
       const query: StaffListQuery = {
         page: req.query.page ? Number(req.query.page) : undefined,

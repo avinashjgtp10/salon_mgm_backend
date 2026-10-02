@@ -142,6 +142,7 @@ export const appointmentsRepository = {
         filters: {
             date?: string;
             staff_id?: string;
+            includeServiceAssignments?: boolean;
             status?: string;
             start_date?: string;
             end_date?: string;
@@ -177,7 +178,9 @@ export const appointmentsRepository = {
             values.push(filters.end_date + "T00:00:00+05:30"); idx++;
         }
         if (filters.staff_id) {
-            conditions.push(`a.staff_id = $${idx}`);
+            conditions.push(filters.includeServiceAssignments ? `(a.staff_id = $${idx} OR EXISTS (
+                SELECT 1 FROM jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) service
+                WHERE service->>'staff_id' = $${idx}::text))` : `a.staff_id = $${idx}`);
             values.push(filters.staff_id); idx++;
         }
         if (filters.status) {
