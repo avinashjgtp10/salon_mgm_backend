@@ -3,24 +3,7 @@ import { AppError } from "../../middleware/error.middleware";
 import { salonsRepository } from "./salons.repository";
 import { CreateSalonBody, UpdateSalonBody, Salon } from "./salons.types";
 import { authRepository } from "../auth/auth.repository";
-import jwt, { Secret, SignOptions } from "jsonwebtoken";
-
-// ── token helpers (mirrors auth.service.ts) ───────────────────────────────────
-const ACCESS_SECRET: Secret  = process.env.JWT_ACCESS_SECRET  || "";
-const REFRESH_SECRET: Secret = process.env.JWT_REFRESH_SECRET || "";
-
-const accessOptions:  SignOptions = { expiresIn: (process.env.JWT_ACCESS_EXPIRES_IN  || "15m") as any };
-const refreshOptions: SignOptions = { expiresIn: (process.env.JWT_REFRESH_EXPIRES_IN || "30d") as any };
-
-const signAccessToken  = (p: { userId: string; role: string; salonId: string }) =>
-  jwt.sign(p, ACCESS_SECRET, accessOptions);
-
-const signRefreshToken = (p: { userId: string }) =>
-  jwt.sign(p, REFRESH_SECRET, refreshOptions);
-
-const refreshExpiryDate = () =>
-  new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-// ─────────────────────────────────────────────────────────────────────────────
+import { issueSessionTokens } from "../auth/session.util";
 
 const slugify = (text: string) =>
     text
@@ -69,13 +52,10 @@ export const salonsService = {
             }
 
             // Re-issue tokens now that salonId exists and role is correct
-            const accessToken  = signAccessToken({ userId: ownerId, role: user.role, salonId: salon.id });
-            const refreshToken = signRefreshToken({ userId: ownerId });
-
-            await authRepository.saveRefreshToken({
-                user_id:    ownerId,
-                token:      refreshToken,
-                expires_at: refreshExpiryDate(),
+            // kickOthers: false — this is the same person finishing onboarding
+            // in their already-signed-in session, not a fresh login.
+            const { accessToken, refreshToken } = await issueSessionTokens({
+                userId: ownerId, role: user.role, salonId: salon.id, kickOthers: false,
             });
 
             // Mark onboarding complete

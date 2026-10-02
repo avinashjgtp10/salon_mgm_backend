@@ -3,6 +3,7 @@ import axios from 'axios';
 import jwt from 'jsonwebtoken';
 import pool from '../../config/database';
 import { botQuestionsService } from './bot-questions.service';
+import { isSessionActive } from '../auth/session.util';
 
 const router = Router();
 
@@ -11,7 +12,7 @@ type AuthRequest = Request & { user?: { userId: string; salonId?: string | null 
 // Bearer token is decoded when present so /ask can attribute questions to the
 // asking salon, but a missing/invalid token never blocks the chatbot — unlike
 // authMiddleware, this route stays usable without hard-failing the request.
-function attachUserIfPresent(req: AuthRequest, _res: Response, next: NextFunction) {
+async function attachUserIfPresent(req: AuthRequest, _res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
   const [type, token] = authHeader?.split(' ') ?? [];
   const secret = process.env.JWT_ACCESS_SECRET;
@@ -20,7 +21,14 @@ function attachUserIfPresent(req: AuthRequest, _res: Response, next: NextFunctio
 
   if (type === 'Bearer' && token && secret) {
     try {
-      req.user = jwt.verify(token, secret) as AuthRequest['user'];
+      const decoded = jwt.verify(token, secret) as AuthRequest['user'] & { sid?: string };
+      // A signed-out session (account logged in elsewhere) isn't attributed
+      // to anyone — same "no token" path as above, so the chatbot still works.
+      let active = true;
+      if (decoded?.sid) {
+        try { active = await isSessionActive(String(decoded.sid)); } catch { active = true; }
+      }
+      if (active) req.user = decoded;
       console.log('[BOT AUTH DEBUG] decoded user:', JSON.stringify(req.user));
     } catch (e: any) {
       console.log('[BOT AUTH DEBUG] jwt.verify failed:', e?.message);
