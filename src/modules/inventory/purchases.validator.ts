@@ -29,6 +29,9 @@ export const validateCreatePurchase = (
         if (!isOptionalDate(b.purchase_date)) {
             throw new AppError(400, "purchase_date must be in YYYY-MM-DD format", "VALIDATION_ERROR");
         }
+        if (b.received_by_staff_id !== undefined && b.received_by_staff_id !== null && !isUUID(b.received_by_staff_id)) {
+            throw new AppError(400, "received_by_staff_id must be a UUID", "VALIDATION_ERROR");
+        }
         if (!Array.isArray(b.items) || b.items.length === 0) {
             throw new AppError(400, "items must be a non-empty array", "VALIDATION_ERROR");
         }

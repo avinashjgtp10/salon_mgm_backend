@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
+import pool from "../../config/database";
 import { purchasesRepository } from "./purchases.repository";
 
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string } };
@@ -18,6 +19,24 @@ const asPositiveInt = (value: unknown, fallback: number): number => {
 };
 
 export const purchasesController = {
+    // Active staff to choose from in the "Received By" picker. Deliberately its
+    // own tiny endpoint rather than the Staff list: that one needs view_team /
+    // calendar permissions, which someone who only handles stock may not have.
+    async listReceivers(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const salonId = getSalonId(req);
+            const { rows } = await pool.query(
+                `SELECT id,
+                        NULLIF(TRIM(CONCAT(first_name, ' ', COALESCE(last_name, ''))), '') AS name
+                   FROM staff
+                  WHERE salon_id = $1 AND COALESCE(is_active, TRUE) = TRUE
+                  ORDER BY first_name ASC, last_name ASC NULLS LAST`,
+                [salonId],
+            );
+            sendSuccess(res, 200, rows, "Receivers fetched");
+        } catch (err) { next(err); }
+    },
+
     async create(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             const salonId = getSalonId(req);
@@ -28,6 +47,7 @@ export const purchasesController = {
                 {
                     supplier_id: req.body.supplier_id,
                     purchase_date: req.body.purchase_date ?? undefined,
+                    received_by_staff_id: req.body.received_by_staff_id ?? null,
                     items: req.body.items.map((i: any) => ({
                         product_id: i.product_id,
                         quantity: Number(i.quantity),
