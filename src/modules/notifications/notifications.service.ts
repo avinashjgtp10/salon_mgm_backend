@@ -5,10 +5,13 @@ import logger from "../../config/logger";
 import { deviceTokensRepository } from "./deviceTokens.repository";
 import { pushNotificationService } from "./pushNotification.service";
 
+import { appointmentRecipients } from "./staffNotificationScope";
+
 const ANDROID_NOTIFICATION_CHANNEL_ID = "salonox";
 
 type CreateNotificationData = {
   salon_id: string;
+  reference_id?: string;
   type: string;
   title: string;
   body?: string;
@@ -18,6 +21,7 @@ type CreateNotificationData = {
   branch_id?: string;
   alert_status?: string;
   spotlight_feature_id?: string;
+  contact_phone?: string;
 };
 
 type CreateNotificationOptions = {
@@ -46,7 +50,10 @@ export const notificationsService = {
       logger.info("Notification skipped by push preference", { salonId: data.salon_id, eventKey: preferenceEvent });
       return null;
     }
+    const recipientUserIds = data.type === "appointment" ? await appointmentRecipients(data.salon_id, data.reference_id) : [];
     const notification = await notificationsRepository.create({
+      reference_id: data.reference_id,
+      recipient_user_ids: recipientUserIds,
       salon_id: data.salon_id,
       type: data.type,
       title: data.title,
@@ -55,6 +62,7 @@ export const notificationsService = {
       branch_id: data.branch_id,
       alert_status: data.alert_status,
       spotlight_feature_id: data.spotlight_feature_id,
+      contact_phone: data.contact_phone,
     });
     logger.info("Notification DB row created", {
       notificationId: notification.id,
@@ -86,7 +94,7 @@ export const notificationsService = {
         salonId: notification.salon_id,
       });
 
-      const devices = await deviceTokensRepository.findBySalon(data.salon_id);
+      const devices = await deviceTokensRepository.findNotificationRecipients(data.salon_id, recipientUserIds);
       const tokens = Array.from(
         new Set(devices.map((device) => device.expo_push_token).filter(Boolean))
       );
@@ -116,6 +124,8 @@ export const notificationsService = {
             notification_id: notification.id,
             salon_id: notification.salon_id,
             type: notification.type,
+            reference_id: data.reference_id,
+            recipient_user_ids: recipientUserIds,
             event_key: preferenceEvent,
           },
           sound: "default",
@@ -168,19 +178,35 @@ export const notificationsService = {
     return notification;
   },
 
-  async list(salonId: string) {
-    return notificationsRepository.listBySalon(salonId, 30);
+  async list(salonId: string, staffUserId?: string) {
+    return notificationsRepository.listBySalon(salonId, 30, staffUserId);
   },
 
-  async markRead(id: string, salonId: string) {
-    return notificationsRepository.markRead(id, salonId);
+  // "All Branches" aggregate — same 30-row cap as the single-salon list,
+  // merged and re-sorted across every salon rather than 30 per salon, so it
+  // reads the same way ("most recent 30 across everything I manage") rather
+  // than ballooning with the number of branches.
+  async listForSalons(salonIds: string[]) {
+    return notificationsRepository.listBySalons(salonIds, 30);
   },
 
-  async markAllRead(salonId: string) {
-    await notificationsRepository.markAllRead(salonId);
+  async markRead(id: string, salonId: string, staffUserId?: string) {
+    return notificationsRepository.markRead(id, salonId, staffUserId);
   },
 
-  async getUnreadCount(salonId: string) {
-    return notificationsRepository.getUnreadCount(salonId);
+  async markAllRead(salonId: string, staffUserId?: string) {
+    await notificationsRepository.markAllRead(salonId, staffUserId);
+  },
+
+  async markAllReadForSalons(salonIds: string[]) {
+    await notificationsRepository.markAllReadForSalons(salonIds);
+  },
+
+  async getUnreadCount(salonId: string, staffUserId?: string) {
+    return notificationsRepository.getUnreadCount(salonId, staffUserId);
+  },
+
+  async getUnreadCountForSalons(salonIds: string[]) {
+    return notificationsRepository.getUnreadCountForSalons(salonIds);
   },
 };

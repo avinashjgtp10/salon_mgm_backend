@@ -81,4 +81,19 @@ export const waPurchaseTemplatesController = {
             next(err);
         }
     },
+
+    // POST /api/v1/wa-automation/purchase-templates/:salonId/:eventType/test-send
+    // Body: { phone }
+    async sendTest(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const salonId = await resolveOwnedSalonId(req);
+            const eventType = req.params.eventType as string;
+            const phone = String(req.body?.phone ?? "").trim();
+            if (!phone) throw new AppError(400, "phone is required", "VALIDATION_ERROR");
+            const result = await waPurchaseTemplatesService.sendTest(salonId, eventType, phone);
+            sendSuccess(res, 200, result, result.sent ? "Test message sent" : "Test message queued");
+        } catch (err) {
+            next(err);
+        }
+    },
 };

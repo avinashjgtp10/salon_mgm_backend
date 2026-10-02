@@ -3,6 +3,7 @@ import bcrypt from "bcrypt";
 import jwt, { Secret, SignOptions } from "jsonwebtoken";
 import { AppError } from "../../middleware/error.middleware";
 import { authRepository } from "./auth.repository";
+import { issueSessionTokens } from "./session.util";
 import type { RegisterBody, LoginBody } from "./auth.types";
 import { generateOtp, hashOtp, compareOtp, otpExpiry } from "../utils/otp.util";
 import { emailService } from "../utils/email.service";
@@ -23,27 +24,14 @@ const accessOptions: SignOptions = {
   expiresIn: (process.env.JWT_ACCESS_EXPIRES_IN || "15m") as any,
 };
 
-const refreshOptions: SignOptions = {
-  expiresIn: (process.env.JWT_REFRESH_EXPIRES_IN || "30d") as any,
-};
-
 function assertEnv() {
   if (!process.env.JWT_ACCESS_SECRET || !process.env.JWT_REFRESH_SECRET) {
     throw new Error("JWT secrets missing in env");
   }
 }
 
-function signAccessToken(payload: { userId: string; role: string; salonId?: string | null }) {
+function signAccessToken(payload: { userId: string; role: string; salonId?: string | null; sid?: string }) {
   return jwt.sign(payload, ACCESS_SECRET, accessOptions);
-}
-
-function signRefreshToken(payload: { userId: string }) {
-  return jwt.sign(payload, REFRESH_SECRET, refreshOptions);
-}
-
-function refreshExpiryDate(): Date {
-  const days = 30;
-  return new Date(Date.now() + days * 24 * 60 * 60 * 1000);
 }
 
 function splitFullName(fullName: string) {
@@ -118,13 +106,8 @@ export const authService = {
     } as any);
 
     const salonId = await authRepository.findSalonIdByUserId(user.id);
-    const accessToken = signAccessToken({ userId: user.id, role: user.role, salonId });
-    const refreshToken = signRefreshToken({ userId: user.id });
-
-    await authRepository.saveRefreshToken({
-      user_id: user.id,
-      token: refreshToken,
-      expires_at: refreshExpiryDate(),
+    const { accessToken, refreshToken } = await issueSessionTokens({
+      userId: user.id, role: user.role, salonId, kickOthers: true,
     });
 
     logger.info("[authService.register] User created successfully", { email, userId: user?.id, role, salonId });
@@ -195,13 +178,11 @@ export const authService = {
     // Informational only — see findStaffRoleNameByUserId's own comment for
     // why this must never replace user.role in the token or response below.
     const staffRoleName = await authRepository.findStaffRoleNameByUserId(user.id);
-    const accessToken = signAccessToken({ userId: user.id, role: user.role, salonId });
-    const refreshToken = signRefreshToken({ userId: user.id });
-
-    await authRepository.saveRefreshToken({
-      user_id: user.id,
-      token: refreshToken,
-      expires_at: refreshExpiryDate(),
+    // Single login per account: this ends the user's other sessions (so the
+    // previous device is signed out on its next request). Impersonation
+    // sessions are not affected by this call starting, and are ended by it.
+    const { accessToken, refreshToken } = await issueSessionTokens({
+      userId: user.id, role: user.role, salonId, kickOthers: true,
     });
 
     logger.info("[authService.login] Login successful", { email, userId: user.id, role: user.role, salonId });
@@ -308,7 +289,11 @@ export const authService = {
       }
     }
 
-    const newAccessToken = signAccessToken({ userId: user.id, role: user.role, salonId });
+    // Carry the session forward: `saved.id` is this login's session row, so
+    // the refreshed token stays tied to it (and dies with it if a newer login
+    // ends this session) — including impersonation sessions, which have their
+    // own row.
+    const newAccessToken = signAccessToken({ userId: user.id, role: user.role, salonId, sid: String(saved.id) });
     logger.info("[authService.refresh] New access token issued", { userId, salonId });
     return { accessToken: newAccessToken };
   },
@@ -782,13 +767,8 @@ export const authService = {
     }
 
     const salonId = await authRepository.findSalonIdByUserId(user.id);
-    const accessToken = signAccessToken({ userId: user.id, role: user.role, salonId });
-    const refreshToken = signRefreshToken({ userId: user.id });
-
-    await authRepository.saveRefreshToken({
-      user_id: user.id,
-      token: refreshToken,
-      expires_at: refreshExpiryDate(),
+    const { accessToken, refreshToken } = await issueSessionTokens({
+      userId: user.id, role: user.role, salonId, kickOthers: true,
     });
 
     return { user, accessToken, refreshToken, salonId, isOnboardingComplete: user.is_onboarding_complete ?? false };

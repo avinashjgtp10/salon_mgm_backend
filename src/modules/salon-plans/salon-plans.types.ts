@@ -80,14 +80,30 @@ export type UpsertSalonCustomizationBody = {
     expiry_date?: string | null;
 };
 
-export type SalonPlanInvoiceStatus = "paid" | "open" | "overdue" | "void";
+export type SalonPlanInvoiceStatus = "paid" | "open" | "pending" | "overdue" | "failed" | "void";
+
+export type BillingCycle = "monthly" | "quarterly" | "annual";
+export const BILLING_CYCLE_LABEL: Record<BillingCycle, string> = {
+    monthly: "Monthly Plan",
+    quarterly: "Quarterly Plan",
+    annual: "Annual Plan",
+};
 
 export type SalonPlanInvoice = {
     id: string;
     invoice_number: string;
+    invoice_no: string | null;
+    financial_year: string | null;
     salon_id: string;
     plan_tier: PlanTier;
+    branch: string | null;
+    billing_cycle: BillingCycle;
+    period_start: string | null;
+    period_end: string | null;
+    payment_mode: string | null;
     amount: string;
+    subtotal: string | null;
+    gst_amount: string | null;
     status: SalonPlanInvoiceStatus;
     issued_date: string;
     due_date: string | null;
@@ -99,7 +115,13 @@ export type SalonPlanInvoice = {
 export type CreateInvoiceBody = {
     salon_id: string;
     plan_tier: PlanTier;
+    branch?: string;
+    billing_cycle: BillingCycle;
+    period_start: string;
+    period_end: string;
+    payment_mode?: string;
     amount: number;
+    apply_gst?: boolean;
     status?: SalonPlanInvoiceStatus;
     issued_date?: string;
     due_date?: string | null;
@@ -108,7 +130,10 @@ export type CreateInvoiceBody = {
 export type ListInvoicesFilters = {
     salon_id?: string;
     status?: SalonPlanInvoiceStatus;
+    branch?: string;
     search?: string; // matches invoice_number or salon name
+    date_from?: string;
+    date_to?: string;
     page?: number;
     limit?: number;
 };

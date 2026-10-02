@@ -194,6 +194,12 @@ function parseBreaks(raw: unknown): BreakRange[] {
 const overlapsBreak = (breaks: BreakRange[], start: number, end: number): boolean =>
     breaks.some((b) => start < b.end && end > b.start);
 
+// One line of a multi-service, per-service-staff booking: the service's own
+// duration and, when the customer picked a specific stylist for it, exactly
+// that id — absent means "any stylist eligible for this service" for that
+// line only, resolved independently of every other line's pick.
+type ServiceStaffLine = { serviceId: string; durationMinutes: number; staffId?: string | null };
+
 // Shared by computeAvailableSlots (what the UI is offered) and createBooking's
 // server-side re-check (what a submitted time is validated against) — both
 // must agree on what "working that day" means, per staff, per date.
@@ -265,34 +271,22 @@ async function getStaffWindowsForDate(
     return { windowByStaff, stepMin };
 }
 
-async function computeAvailableSlots(params: {
-    salonId: string;
-    dateStr: string;
-    staffId?: string;
-    durationMinutes: number;
-    // When no specific stylist is chosen, only staff who can perform these
-    // services count towards "is anyone free" (BUG-OB-014).
-    serviceIds?: string[] | null;
-}): Promise<string[]> {
-    const { salonId, dateStr, staffId, durationMinutes } = params;
-
-    const [staffList, appointments, blockedTimes, policy] = await Promise.all([
-        staffId ? Promise.resolve([{ id: staffId }]) : bookingsRepository.findActiveStaff(salonId, params.serviceIds),
+// Everything computeAvailableSlots and computeAvailableSlotsMultiStaff both
+// need before they can start walking the day's start times: which staff are
+// in play, the salon's booking-policy window for the date, each staff
+// member's own open/close/breaks, and every staff member's already-busy
+// ranges. Pulled out so a multi-service, multi-staff booking checks against
+// the exact same window/overlap rules a single-staff booking always has,
+// rather than a second, easily-drifting copy of the same logic.
+async function loadDayAvailabilityContext(salonId: string, dateStr: string, staffIds: string[]) {
+    const [appointments, blockedTimes, policy] = await Promise.all([
         bookingsRepository.findAppointmentsForDate(salonId, dateStr),
         blockedTimesRepository.list({ salon_id: salonId, date: dateStr }),
         bookingsRepository.findBookingPolicy(salonId),
     ]);
-    if (staffList.length === 0) return [];
 
-    // Outside the salon's booking window (past, same-day off, or beyond the
-    // maximum advance) — offer nothing rather than a list nobody can submit.
     const window = resolveDateWindow(dateStr, policy);
-    if (!window.bookable) return [];
-    const earliestMinute = window.earliestMinute;
-
-    const staffIds = staffList.map((s) => s.id);
     const { windowByStaff, stepMin } = await getStaffWindowsForDate(salonId, staffIds, dateStr);
-    if (windowByStaff.size === 0) return [];
 
     // Per-staff busy [start, end) ranges in minutes from salon-local midnight —
     // the same frame the schedule windows and blocked times below are in.
@@ -321,6 +315,34 @@ async function computeAvailableSlots(params: {
         return !(busyByStaff.get(id) ?? []).some((r) => start < r.end && end > r.start);
     };
 
+    return { window, windowByStaff, stepMin, isStaffFreeAt };
+}
+
+async function computeAvailableSlots(params: {
+    salonId: string;
+    dateStr: string;
+    staffId?: string;
+    durationMinutes: number;
+    // When no specific stylist is chosen, only staff who can perform these
+    // services count towards "is anyone free" (BUG-OB-014).
+    serviceIds?: string[] | null;
+}): Promise<string[]> {
+    const { salonId, dateStr, staffId, durationMinutes } = params;
+
+    const staffList = staffId
+        ? [{ id: staffId }]
+        : await bookingsRepository.findActiveStaff(salonId, params.serviceIds);
+    if (staffList.length === 0) return [];
+    const staffIds = staffList.map((s) => s.id);
+
+    const { window, windowByStaff, stepMin, isStaffFreeAt } =
+        await loadDayAvailabilityContext(salonId, dateStr, staffIds);
+    // Outside the salon's booking window (past, same-day off, or beyond the
+    // maximum advance) — offer nothing rather than a list nobody can submit.
+    if (!window.bookable) return [];
+    if (windowByStaff.size === 0) return [];
+    const earliestMinute = window.earliestMinute;
+
     const overallOpen  = Math.min(...Array.from(windowByStaff.values()).map((w) => w.open));
     const overallClose = Math.max(...Array.from(windowByStaff.values()).map((w) => w.close));
 
@@ -330,6 +352,83 @@ async function computeAvailableSlots(params: {
         const end = start + durationMinutes;
         const anyStaffFree = staffIds.some((id) => isStaffFreeAt(id, start, end));
         if (anyStaffFree) slots.push(fmt12h(start));
+    }
+    return slots;
+}
+
+// Multi-service, per-service-staff booking: every line's service runs at the
+// SAME start time (parallel — e.g. one stylist does a haircut while another
+// does a manicure), each for its own duration. A start time is offered only
+// when every line can be satisfied simultaneously: a line with a specific
+// staff_id needs exactly that person free for its duration; a line with no
+// staff_id needs at least one of the service's eligible staff free for it —
+// and, since two "any" lines must not silently double-book the same person
+// for overlapping time, each candidate start time picks a distinct eligible
+// staff member per "any" line (first-fit is enough here; salons run at most a
+// handful of services per booking, never a scheduling puzzle at scale).
+async function computeAvailableSlotsMultiStaff(params: {
+    salonId: string;
+    dateStr: string;
+    lines: ServiceStaffLine[];
+}): Promise<string[]> {
+    const { salonId, dateStr, lines } = params;
+    if (lines.length === 0) return [];
+
+    // Eligible staff per "any" line — who can perform that specific service —
+    // resolved once per line rather than once for the whole cart, so a line
+    // asking for a service only two stylists offer isn't matched against
+    // someone who can't actually perform it.
+    const eligibleByLine = await Promise.all(
+        lines.map((line) =>
+            line.staffId
+                ? Promise.resolve([line.staffId])
+                : bookingsRepository.findActiveStaff(salonId, [line.serviceId]).then((rows) => rows.map((s: any) => String(s.id)))
+        )
+    );
+
+    const allStaffIds = Array.from(new Set(([] as string[]).concat(...eligibleByLine, lines.map((l) => l.staffId).filter(Boolean) as string[])));
+    if (allStaffIds.length === 0) return [];
+
+    const { window, windowByStaff, stepMin, isStaffFreeAt } =
+        await loadDayAvailabilityContext(salonId, dateStr, allStaffIds);
+    if (!window.bookable) return [];
+    if (windowByStaff.size === 0) return [];
+    const earliestMinute = window.earliestMinute;
+
+    const overallOpen  = Math.min(...Array.from(windowByStaff.values()).map((w) => w.open));
+    const overallClose = Math.max(...Array.from(windowByStaff.values()).map((w) => w.close));
+    const maxLineDuration = Math.max(...lines.map((l) => l.durationMinutes));
+
+    // Can every line be assigned a distinct staff member, simultaneously free
+    // for its own duration, starting at `start`? Fixed lines (an explicit
+    // staff_id) are checked first — they have exactly one candidate and no
+    // room to try another — then "any" lines greedily claim the first free
+    // eligible staff member not already claimed by an earlier line at this
+    // same start time.
+    function canSatisfyAllAt(start: number): boolean {
+        const claimed = new Set<string>();
+        const fixed = lines.map((l, i) => ({ l, i })).filter((x) => x.l.staffId);
+        const flexible = lines.map((l, i) => ({ l, i })).filter((x) => !x.l.staffId);
+
+        for (const { l } of fixed) {
+            const end = start + l.durationMinutes;
+            if (!isStaffFreeAt(l.staffId!, start, end)) return false;
+            if (claimed.has(l.staffId!)) return false; // two lines pinned to the same person, same slot
+            claimed.add(l.staffId!);
+        }
+        for (const { l, i } of flexible) {
+            const end = start + l.durationMinutes;
+            const candidate = eligibleByLine[i].find((id) => !claimed.has(id) && isStaffFreeAt(id, start, end));
+            if (!candidate) return false;
+            claimed.add(candidate);
+        }
+        return true;
+    }
+
+    const slots: string[] = [];
+    for (let start = overallOpen; start + maxLineDuration <= overallClose; start += stepMin) {
+        if (start < earliestMinute) continue;
+        if (canSatisfyAllAt(start)) slots.push(fmt12h(start));
     }
     return slots;
 }
@@ -435,10 +534,36 @@ export const bookingsService = {
     async getAvailability(params: {
         salon_id: string; date: string; staffId?: string;
         durationMinutes?: number; serviceIds?: string[] | null;
+        // Present only for a multi-service booking with per-service staff
+        // assignment — each service_id's own staff_id (or none, for "any").
+        // Durations aren't trusted from the client: looked up fresh here, the
+        // same way createBooking looks them up before ever using a duration.
+        serviceStaff?: { service_id: string; staff_id?: string }[] | null;
     }) {
         const salon = await bookingsRepository.findSalonById(params.salon_id);
         if (!salon) throw new AppError(404, "Salon not found", "NOT_FOUND");
         await assertSalonEntitled(params.salon_id);
+
+        if (params.serviceStaff && params.serviceStaff.length > 0) {
+            const services = await Promise.all(
+                params.serviceStaff.map((row) => bookingsRepository.findServiceById(row.service_id, params.salon_id))
+            );
+            if (services.some((s) => !s)) {
+                throw new AppError(404, "Service not found for this salon", "NOT_FOUND");
+            }
+            const lines: ServiceStaffLine[] = params.serviceStaff.map((row, i) => ({
+                serviceId: row.service_id,
+                durationMinutes: Math.max(15, Number(services[i]!.duration) || 30),
+                staffId: row.staff_id || null,
+            }));
+            const slots = await computeAvailableSlotsMultiStaff({
+                salonId: params.salon_id,
+                dateStr: params.date,
+                lines,
+            });
+            return { slots };
+        }
+
         const slots = await computeAvailableSlots({
             salonId: params.salon_id,
             dateStr: params.date,
@@ -500,6 +625,7 @@ export const bookingsService = {
         if (services.some((s) => !s)) {
             throw new AppError(404, "Service not found for this salon", "NOT_FOUND");
         }
+        const serviceById = new Map(body.service_ids.map((id, i) => [id, services[i]!]));
 
         const durationMinutes = services.reduce((sum, s) => sum + (Number(s!.duration) || 30), 0);
 
@@ -507,78 +633,112 @@ export const bookingsService = {
         // staff schedules are stored as local TIME values, so the requested
         // instant has to be expressed in the same frame to be comparable.
         const { dateStr, minutes: startMin } = requested;
-        const endMin = startMin + durationMinutes;
+
+        // Per-service staff assignment: each service_id may carry its own
+        // staff_id (or none, for "any available" on that line only). Falls
+        // back to a single uniform line per service using the legacy
+        // whole-booking staff_id, so an older client that only ever sent
+        // staff_id keeps behaving exactly as before.
+        const serviceStaffMap = new Map(
+            (body.service_staff ?? []).map((row) => [row.service_id, row.staff_id || null])
+        );
+        const hasPerServiceStaff = (body.service_staff?.length ?? 0) > 0;
+        const lines: ServiceStaffLine[] = body.service_ids.map((id) => ({
+            serviceId: id,
+            durationMinutes: Math.max(15, Number(serviceById.get(id)!.duration) || 30),
+            staffId: hasPerServiceStaff ? serviceStaffMap.get(id) ?? null : body.staff_id || null,
+        }));
 
         // Which stylists could take this booking at all: active, allowed to take
         // calendar bookings, and able to perform every selected service
-        // (BUG-OB-013 / BUG-OB-014).
-        const eligible = await bookingsRepository.findActiveStaff(body.salon_id, body.service_ids);
-        if (eligible.length === 0) {
-            throw new AppError(409, "No stylist at this salon can perform the selected services online.", "NO_ELIGIBLE_STAFF");
-        }
-
-        if (body.staff_id && !eligible.some((s: any) => s.id === body.staff_id)) {
-            // Either the stylist isn't at this salon, isn't bookable online, or
-            // doesn't perform one of these services. All the same to the
-            // customer, and none of them worth leaking individually.
-            throw new AppError(409, "That stylist isn't available for the selected services.", "STAFF_NOT_ELIGIBLE");
+        // (BUG-OB-013 / BUG-OB-014). Checked per line so a stylist pinned to
+        // one service only needs to be eligible for THAT service, not every
+        // service in the cart.
+        const eligibleByLine = await Promise.all(
+            lines.map((line) => bookingsRepository.findActiveStaff(body.salon_id, [line.serviceId]))
+        );
+        for (let i = 0; i < lines.length; i++) {
+            if (eligibleByLine[i].length === 0) {
+                throw new AppError(409, "No stylist at this salon can perform the selected services online.", "NO_ELIGIBLE_STAFF");
+            }
+            const pinned = lines[i].staffId;
+            if (pinned && !eligibleByLine[i].some((s: any) => s.id === pinned)) {
+                // Either the stylist isn't at this salon, isn't bookable online, or
+                // doesn't perform this service. All the same to the customer, and
+                // none of them worth leaking individually.
+                throw new AppError(409, "That stylist isn't available for the selected services.", "STAFF_NOT_ELIGIBLE");
+            }
         }
 
         // BUG-OB-002 + BUG-OB-003: serialise concurrent attempts for this salon
-        // and date, then choose/verify the stylist inside that lock. Two requests
-        // could otherwise both pass the overlap check before either inserts — a
-        // read-then-write can't close that window and there's no exclusion
-        // constraint underneath.
+        // and date, then choose/verify every line's stylist inside that lock.
+        // Two requests could otherwise both pass the overlap check before
+        // either inserts — a read-then-write can't close that window and
+        // there's no exclusion constraint underneath. All lines run at the
+        // same start time (parallel scheduling), so every assigned staff
+        // member must be distinct and simultaneously free.
         const assignment = await bookingsRepository.withBookingLock(
             body.salon_id,
             dateStr,
             async (dbClient) => {
-                const candidates: string[] = body.staff_id
-                    ? [body.staff_id]
-                    : eligible.map((s: any) => String(s.id));
+                const allCandidateIds = Array.from(new Set(
+                    ([] as string[]).concat(...eligibleByLine.map((rows) => rows.map((s: any) => String(s.id))))
+                ));
+                const { windowByStaff } = await getStaffWindowsForDate(body.salon_id, allCandidateIds, dateStr);
 
-                const { windowByStaff } = await getStaffWindowsForDate(body.salon_id, candidates, dateStr);
-                let lastReason: { message: string; code: string } | null = null;
-
-                for (const staffId of candidates) {
+                const checkStaffFree = async (staffId: string, lineEnd: number): Promise<{ message: string; code: string } | null> => {
                     const win = windowByStaff.get(staffId);
-                    if (!win || startMin < win.open || endMin > win.close) {
-                        lastReason = { message: "This stylist isn't working at the selected time.", code: "OUTSIDE_WORKING_HOURS" };
-                        continue;
+                    if (!win || startMin < win.open || lineEnd > win.close) {
+                        return { message: "This stylist isn't working at the selected time.", code: "OUTSIDE_WORKING_HOURS" };
                     }
-                    if (overlapsBreak(win.breaks, startMin, endMin)) {
-                        lastReason = { message: "This stylist is on a break at the selected time.", code: "STAFF_ON_BREAK" };
-                        continue;
+                    if (overlapsBreak(win.breaks, startMin, lineEnd)) {
+                        return { message: "This stylist is on a break at the selected time.", code: "STAFF_ON_BREAK" };
                     }
-
                     const blocked = await blockedTimesRepository.hasOverlap({
-                        staffId,
-                        date: dateStr,
-                        startTime: fmtHHMM(startMin),
-                        endTime: fmtHHMM(endMin),
+                        staffId, date: dateStr, startTime: fmtHHMM(startMin), endTime: fmtHHMM(lineEnd),
                     });
-                    if (blocked) {
-                        lastReason = { message: "This time is no longer available for the selected stylist.", code: "BLOCKED_TIME" };
-                        continue;
-                    }
-
+                    if (blocked) return { message: "This time is no longer available for the selected stylist.", code: "BLOCKED_TIME" };
                     const taken = await bookingsRepository.hasAppointmentOverlap(
-                        { salonId: body.salon_id, staffId, dateStr, startMinute: startMin, endMinute: endMin },
+                        { salonId: body.salon_id, staffId, dateStr, startMinute: startMin, endMinute: lineEnd },
                         dbClient
                     );
-                    if (taken) {
-                        lastReason = { message: "This time has just been booked. Please pick another slot.", code: "SLOT_TAKEN" };
-                        continue;
-                    }
+                    if (taken) return { message: "This time has just been booked. Please pick another slot.", code: "SLOT_TAKEN" };
+                    return null;
+                };
 
-                    return { staffId, lastReason: null as { message: string; code: string } | null };
+                const claimed = new Set<string>();
+                const assignedByLine: (string | null)[] = new Array(lines.length).fill(null);
+                let lastReason: { message: string; code: string } | null = null;
+
+                // Fixed (customer-pinned) lines first — they have exactly one
+                // candidate and no fallback — then "any" lines, each claiming
+                // the first free eligible staff member not already claimed by
+                // an earlier line at this same start time.
+                const order = lines.map((_, i) => i).sort((a, b) => (lines[a].staffId ? -1 : 1) - (lines[b].staffId ? -1 : 1));
+
+                for (const i of order) {
+                    const line = lines[i];
+                    const lineEnd = startMin + line.durationMinutes;
+                    const candidates = line.staffId ? [line.staffId] : eligibleByLine[i].map((s: any) => String(s.id));
+
+                    let assigned: string | null = null;
+                    for (const staffId of candidates) {
+                        if (claimed.has(staffId)) continue;
+                        const reason = await checkStaffFree(staffId, lineEnd);
+                        if (reason) { lastReason = reason; continue; }
+                        assigned = staffId;
+                        break;
+                    }
+                    if (!assigned) return { assignedByLine: null, lastReason };
+                    claimed.add(assigned);
+                    assignedByLine[i] = assigned;
                 }
 
-                return { staffId: null as string | null, lastReason };
+                return { assignedByLine, lastReason: null as { message: string; code: string } | null };
             }
         );
 
-        if (!assignment.staffId) {
+        if (!assignment.assignedByLine) {
             const reason = assignment.lastReason ?? {
                 message: "This time is no longer available. Please pick another slot.",
                 code: "SLOT_TAKEN",
@@ -586,14 +746,20 @@ export const bookingsService = {
             throw new AppError(409, reason.message, reason.code);
         }
 
-        // Every booking created here now carries a real stylist — "Any Stylist"
-        // no longer leaves an unassigned row for someone to notice later.
-        const assignedStaffId: string = assignment.staffId;
-        // Preserved separately from assignedStaffId so the Calendar can still
-        // show this in its own "Any" column — the customer's actual
-        // preference (or lack of one) would otherwise be lost the moment a
-        // real stylist gets picked for them.
-        const isAnyStaff = !body.staff_id;
+        // Every booking created here now carries a real stylist per service —
+        // "Any Stylist" no longer leaves an unassigned row for someone to
+        // notice later.
+        const assignedStaffByService = new Map(body.service_ids.map((id, i) => [id, assignment.assignedByLine![i]!]));
+        // The appointment-level staff_id/is_any_staff stay meaningful for a
+        // single-staff booking (still the common case) and become a
+        // best-effort summary for a mixed one: the first assigned line, with
+        // is_any_staff true unless every line was a specific pick — the
+        // per-service `services` JSONB array below is the real source of
+        // truth either way (see bookingMapper.ts's anyServiceHasOwnStaff).
+        const assignedStaffId: string = assignment.assignedByLine![0]!;
+        const isAnyStaff = hasPerServiceStaff
+            ? lines.some((l) => !l.staffId)
+            : !body.staff_id;
 
         // Find or create the client for this salon. Phone is the unique
         // identifier here, not email: findExistingByEmailOrPhone (used
@@ -645,7 +811,7 @@ export const bookingsService = {
                 name: s!.name,
                 price: Number(s!.price) || 0,
                 quantity: 1,
-                staff_id: assignedStaffId,
+                staff_id: assignedStaffByService.get(body.service_ids[i]),
             })),
         });
 
@@ -657,6 +823,7 @@ export const bookingsService = {
         notificationsService.create({
             salon_id: body.salon_id,
             type: "appointment",
+            reference_id: appointment.id,
             title: "New Appointment Booked",
             body: `${body.client_name} — ${formatDate(body.scheduled_at)} at ${formatTime(body.scheduled_at)}`,
             event_key: "newAppointment",

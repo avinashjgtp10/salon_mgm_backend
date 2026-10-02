@@ -360,7 +360,7 @@ export const ordersRepository = {
         // this call is damaged-only (no good units to stock in).
         const updatedProducts = purchaseItems.length
             ? (await purchasesRepository.create(
-                { supplier_id: order.supplier_id, purchase_date: data.purchase_date, order_id: orderId, items: purchaseItems },
+                { supplier_id: order.supplier_id, purchase_date: data.purchase_date, order_id: orderId, received_by_staff_id: data.received_by_staff_id ?? null, items: purchaseItems },
                 salonId,
                 createdBy,
             )).updatedProducts
@@ -394,6 +394,50 @@ export const ordersRepository = {
         }
 
         return { ...(await this.getById(orderId, salonId))!, updatedProducts };
+    },
+
+    /**
+     * Records what actually arrived on the Verify Order tab
+     * (verified_qty/verified_damaged_qty per line) — WITHOUT moving stock
+     * and WITHOUT touching order.status. Deliberately the record-only
+     * counterpart to receive() above; actually adding stock (and advancing
+     * status to partially_received/received) happens in exactly one place:
+     * Product Inventory → Record Purchase → pick this supplier's open order
+     * (still calls receive(), which reads received_qty/damaged_qty — NOT
+     * these columns — so verifying here can never block or double-count
+     * against that separate step).
+     */
+    async verify(orderId: string, data: ReceiveOrderDTO, salonId: string): Promise<Order> {
+        const order = await this.getById(orderId, salonId);
+        if (!order) throw new AppError(404, "Order not found", "ORDER_NOT_FOUND");
+        if (order.status === "cancelled") throw new AppError(400, "Cannot verify a cancelled order", "ORDER_CANCELLED");
+
+        const itemsById = new Map((order.items ?? []).map((i) => [i.id, i]));
+        let hasAny = false;
+
+        for (const line of data.items) {
+            const orderItem = itemsById.get(line.order_item_id);
+            if (!orderItem) throw new AppError(400, `order_item_id ${line.order_item_id} does not belong to this order`, "VALIDATION_ERROR");
+            const damagedQty = line.damaged_qty ?? 0;
+            const remaining = Number(orderItem.qty) - Number(orderItem.verified_qty) - Number(orderItem.verified_damaged_qty);
+            if (line.received_qty + damagedQty > remaining + 0.001) {
+                throw new AppError(400, `Cannot account for ${line.received_qty + damagedQty} of "${orderItem.product_name ?? orderItem.product_id}" — only ${remaining} still unverified on this order`, "VALIDATION_ERROR");
+            }
+            if (line.received_qty > 0 || damagedQty > 0) hasAny = true;
+        }
+
+        if (!hasAny) throw new AppError(400, "At least one item must have a received or damaged quantity > 0", "VALIDATION_ERROR");
+
+        for (const line of data.items) {
+            const damagedQty = line.damaged_qty ?? 0;
+            if (line.received_qty <= 0 && damagedQty <= 0) continue;
+            await pool.query(
+                `UPDATE order_items SET verified_qty = verified_qty + $1, verified_damaged_qty = verified_damaged_qty + $2 WHERE id = $3`,
+                [line.received_qty, damagedQty, line.order_item_id],
+            );
+        }
+
+        return (await this.getById(orderId, salonId))!;
     },
 
     async cancel(orderId: string, salonId: string): Promise<Order> {

@@ -131,6 +131,8 @@ export const productsRepository = {
                          THEN CEIL(COALESCE(${prefix}amount, 0) / ${prefix}bottle_size)
                          ELSE COALESCE(${prefix}amount, 0)
                     END) <= ${prefix}qty_alert)`);
+            } else if (filters.stock === "in_stock") {
+                conditions.push(`${prefix}amount > 0`);
             } else if (filters.stock === "out_of_stock") {
                 conditions.push(`${prefix}amount = 0`);
             }

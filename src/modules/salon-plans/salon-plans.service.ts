@@ -1,6 +1,11 @@
+import pool from "../../config/database";
 import { AppError } from "../../middleware/error.middleware";
 import { invalidatePlanFeatureCache, invalidateAllPlanFeatureCaches, loadSalonFeatureKeys } from "../../middleware/planFeature.middleware";
 import { subscriptionsService } from "../subscriptions/subscriptions.service";
+import { superAdminRepository } from "../super-admin/super-admin.repository";
+import { emailService } from "../utils/email.service";
+import { renderSalonPlanInvoicePdf } from "./salon-plan-invoice-pdf.service";
+import logger from "../../config/logger";
 import {
     planDefinitionsRepository,
     salonCustomizationsRepository,
@@ -13,7 +18,28 @@ import {
     UpsertSalonCustomizationBody,
     CreateInvoiceBody,
     ListInvoicesFilters,
+    BILLING_CYCLE_LABEL,
+    BillingCycle,
 } from "./salon-plans.types";
+
+const ONES = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
+const TENS = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+function twoDigitsWords(n: number): string { return n < 20 ? ONES[n] : `${TENS[Math.floor(n / 10)]}${n % 10 ? " " + ONES[n % 10] : ""}`; }
+function threeDigitsWords(n: number): string { return n < 100 ? twoDigitsWords(n) : `${ONES[Math.floor(n / 100)]} Hundred${n % 100 ? " " + twoDigitsWords(n % 100) : ""}`; }
+function amountInWords(n: number): string {
+    const rupees = Math.floor(n);
+    if (rupees === 0) return "Rupees Zero Only";
+    const crore = Math.floor(rupees / 10000000);
+    const lakh = Math.floor((rupees % 10000000) / 100000);
+    const thousand = Math.floor((rupees % 100000) / 1000);
+    const hundred = rupees % 1000;
+    const parts: string[] = [];
+    if (crore) parts.push(`${threeDigitsWords(crore)} Crore`);
+    if (lakh) parts.push(`${threeDigitsWords(lakh)} Lakh`);
+    if (thousand) parts.push(`${threeDigitsWords(thousand)} Thousand`);
+    if (hundred) parts.push(threeDigitsWords(hundred));
+    return `Rupees ${parts.join(" ")} Only`;
+}
 
 function assertValidTier(tier: string): asserts tier is PlanTier {
     if (!PLAN_TIER_ORDER.includes(tier as PlanTier)) {
@@ -70,7 +96,19 @@ export const salonPlansService = {
         // (e.g. editing just the tagline or feature list shouldn't spawn a
         // new Razorpay plan object).
         if (patch.price !== undefined || patch.name !== undefined) {
-            updated = await this.syncToRazorpay(tier, updatedBy);
+            try {
+                updated = await this.syncToRazorpay(tier, updatedBy);
+            } catch (err: any) {
+                // The price is already saved above but the linked Razorpay plan
+                // still holds the old amount — surface that instead of a bare
+                // 500 so it isn't mistaken for "nothing saved" and left stale.
+                logger.error(`Razorpay re-sync failed for tier ${tier} after price/name update`, { err });
+                throw new AppError(
+                    502,
+                    `Plan saved, but syncing it to Razorpay failed — checkout will keep using the old amount until a sync succeeds. Retry via sync-razorpay. (${err?.message ?? "unknown error"})`,
+                    "RAZORPAY_SYNC_FAILED"
+                );
+            }
         }
         return updated;
     },
@@ -80,21 +118,29 @@ export const salonPlansService = {
     // which calls razorpay.plans.create() and stores the result in
     // subscription_plans) for this tier, and links it so the salon-facing
     // "Pay & Continue" button can create a live subscription against it.
-    // Idempotent by re-running: each call creates a NEW Razorpay plan object
-    // and re-links (Razorpay plans are immutable — there's no "update price"
-    // on an existing one). Called automatically from updatePlanDefinition
-    // whenever price/name change (see above); the standalone sync-razorpay
-    // endpoint exists for the first-time sync and for manually re-running it
-    // without any other field change.
+    // First sync creates the subscription_plans row. Every later sync UPDATES
+    // that same row in place (same id, new price/razorpay_plan_id) instead of
+    // inserting another — Razorpay itself can't edit a plan's amount, so only
+    // the Razorpay-side plan object is new. Called automatically from
+    // updatePlanDefinition whenever price/name change (see above); the
+    // standalone sync-razorpay endpoint re-runs it without any other change.
     async syncToRazorpay(tier: string, updatedBy: string) {
         assertValidTier(tier);
         const plan = await planDefinitionsRepository.findByTier(tier);
         if (!plan) throw new AppError(404, "Plan tier not found", "NOT_FOUND");
 
-        // slug must be globally unique on subscription_plans, and re-syncing
-        // (e.g. after a price change) always needs a fresh row since
-        // Razorpay plans are immutable — a fixed slug would collide with
-        // the previous sync's row on the very next call.
+        if (plan.linked_subscription_plan_id) {
+            await subscriptionsService.updatePlanPricing(plan.linked_subscription_plan_id, {
+                name: `SalonOx ${plan.name}`,
+                description: plan.tagline ?? undefined,
+                price: parseFloat(plan.price),
+            });
+            const relinked = await planDefinitionsRepository.findByTier(tier);
+            if (!relinked) throw new AppError(404, "Plan tier not found", "NOT_FOUND");
+            return relinked;
+        }
+
+        // First-time sync — slug must be globally unique on subscription_plans.
         const created = await subscriptionsService.createPlan({
             name: `SalonOx ${plan.name}`,
             slug: `salonox-${plan.tier}-yearly-${Date.now()}`,
@@ -211,27 +257,138 @@ export const salonPlansService = {
 
     // ── Invoices ──────────────────────────────────────────────────────────────
 
+    // Kept for BillingInvoicesTab.tsx (Plans & Subscriptions' own simpler
+    // tab) — unchanged shape (list + a global, unfiltered summary).
     async listInvoices(filters: ListInvoicesFilters) {
         const [list, summary] = await Promise.all([
             salonPlanInvoicesRepository.list(filters),
-            salonPlanInvoicesRepository.summary(),
+            salonPlanInvoicesRepository.summary({}),
         ]);
         return { ...list, summary };
+    },
+
+    // Powers the redesigned Billing & Invoices page — filtered summary (the
+    // 5 KPI cards react to the same date/branch/status/search filters as
+    // the table), distinct from listInvoices' global summary above.
+    async listInvoicesFiltered(filters: ListInvoicesFilters) {
+        return salonPlanInvoicesRepository.list(filters);
+    },
+
+    async invoicesSummary(filters: ListInvoicesFilters) {
+        return salonPlanInvoicesRepository.summary(filters);
+    },
+
+    async invoiceBranches() {
+        return salonPlanInvoicesRepository.listDistinctBranches();
     },
 
     async createInvoice(body: CreateInvoiceBody, createdBy: string) {
         assertValidTier(body.plan_tier);
         if (body.amount <= 0) throw new AppError(400, "Amount must be greater than zero", "VALIDATION_ERROR");
-        return salonPlanInvoicesRepository.create(body, createdBy);
+        if (!body.period_start || !body.period_end) {
+            throw new AppError(400, "period_start and period_end are required", "VALIDATION_ERROR");
+        }
+        if (!["monthly", "quarterly", "annual"].includes(body.billing_cycle)) {
+            throw new AppError(400, "Invalid billing_cycle", "VALIDATION_ERROR");
+        }
+        const invoice = await salonPlanInvoicesRepository.create(body, createdBy);
+
+        // Fire-and-forget: the salon owner's invoice PDF email must never
+        // block or fail the invoice creation response itself.
+        this._emailInvoiceToSalonOwner(invoice.id).catch((err) => {
+            logger.error(`Failed to email invoice ${invoice.id} to salon owner`, { err });
+        });
+
+        return invoice;
     },
 
     async updateInvoiceStatus(id: string, status: string) {
-        const valid = ["paid", "open", "overdue", "void"];
+        const valid = ["paid", "open", "pending", "overdue", "failed", "void"];
         if (!valid.includes(status)) {
             throw new AppError(400, `Invalid status "${status}" — must be one of ${valid.join(", ")}`, "VALIDATION_ERROR");
         }
         const updated = await salonPlanInvoicesRepository.updateStatus(id, status);
         if (!updated) throw new AppError(404, "Invoice not found", "NOT_FOUND");
         return updated;
+    },
+
+    async deleteInvoice(id: string) {
+        const removed = await salonPlanInvoicesRepository.remove(id);
+        if (!removed) throw new AppError(404, "Invoice not found", "NOT_FOUND");
+        return { deleted: true };
+    },
+
+    // Assembles the print-ready payload for the invoice preview panel AND
+    // the emailed PDF (see _emailInvoiceToSalonOwner below) — the invoice
+    // itself, the seller's (SalonoX's own) details + bank account —
+    // hardcoded here since this invoice is SalonoX billing the salon, not
+    // the salon billing its own clients (contrast with
+    // salon-client-invoices.service.ts's getForPrint, which pulls the
+    // SALON's own gst_number/bank columns as the seller).
+    async _buildPrintPayload(id: string) {
+        const invoice = await salonPlanInvoicesRepository.findByIdWithSalon(id);
+        if (!invoice) throw new AppError(404, "Invoice not found", "NOT_FOUND");
+
+        const { rows } = await pool.query(
+            `SELECT business_name, address, address_line2, phone, email
+             FROM salons WHERE id = $1`,
+            [invoice.salon_id]
+        );
+        const salon = rows[0] ?? {};
+
+        const totalAmount = Number(invoice.amount);
+        return {
+            invoice: {
+                ...invoice,
+                plan_label: BILLING_CYCLE_LABEL[invoice.billing_cycle as BillingCycle] ?? invoice.billing_cycle,
+            },
+            customer: {
+                salon_name: invoice.salon_name,
+                address: [salon.address, salon.address_line2].filter(Boolean).join(", ") || null,
+                contact: salon.phone ?? null,
+            },
+            seller: {
+                name: "Salonox Tech",
+                address: "F01, A/P Nimboti Tal. Baramati Dist. Pune",
+                contact: "7875914818",
+                email: "avinashjgpt10@gmail.com",
+                gst_number: "27ASPPJ5781N1ZT",
+                pan: "ASPPJ5781N",
+                bank_name: "Punjab National Bank",
+                bank_branch: "Baramati",
+                bank_account_number: "0705102100002626",
+                bank_ifsc: "PUNB0070510",
+                bank_account_type: "Current",
+            },
+            amount_in_words: amountInWords(totalAmount),
+        };
+    },
+
+    async getInvoiceForPrint(id: string) {
+        return this._buildPrintPayload(id);
+    },
+
+    // Best-effort — a mail-server hiccup or missing owner email must never
+    // fail invoice creation itself, so the caller (createInvoice) fires
+    // this without awaiting it and catches any error into a log line only.
+    async _emailInvoiceToSalonOwner(invoiceId: string) {
+        const payload = await this._buildPrintPayload(invoiceId);
+        const owner = await superAdminRepository.getSalonOwnerContact(payload.invoice.salon_id);
+        if (!owner?.owner_email) {
+            logger.warn(`Skipped invoice email — no owner email on file for salon ${payload.invoice.salon_id}`);
+            return;
+        }
+
+        const pdfBuffer = await renderSalonPlanInvoicePdf(payload);
+        await emailService.sendSalonPlanInvoiceEmail({
+            to: owner.owner_email,
+            salonName: payload.customer.salon_name,
+            invoiceNo: payload.invoice.invoice_no || payload.invoice.invoice_number,
+            planLabel: payload.invoice.plan_label,
+            amount: Number(payload.invoice.amount),
+            dueDate: payload.invoice.due_date,
+            pdfBuffer,
+            pdfFilename: `${(payload.invoice.invoice_no || payload.invoice.invoice_number).replace(/\//g, "-")}.pdf`,
+        });
     },
 };

@@ -2,7 +2,6 @@ import { Request, Response, NextFunction } from 'express';
 import { AppError } from '../../middleware/error.middleware';
 import { sendSuccess } from '../utils/response.util';
 import { couponsService } from './coupons.service';
-import { couponsRepository } from './coupons.repository';
 
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string | null } };
 
@@ -23,15 +22,6 @@ export const couponsController = {
         salonId,
       });
       return sendSuccess(res, 200, result, result.message);
-    } catch (err) { return next(err); }
-  },
-
-  async list(req: AuthRequest, res: Response, next: NextFunction) {
-    try {
-      const salonId = req.user?.salonId;
-      if (!salonId) throw new AppError(403, 'Salon context required', 'NO_SALON_CONTEXT');
-      const coupons = await couponsRepository.list(salonId);
-      return sendSuccess(res, 200, coupons, 'Coupons fetched successfully');
     } catch (err) { return next(err); }
   },
 

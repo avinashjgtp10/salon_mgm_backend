@@ -64,7 +64,7 @@ export const branchOwnerRepository = {
         SELECT salon_id, COUNT(*)::int AS appointments_today
         FROM appointments
         WHERE deleted_at IS NULL AND status NOT IN ('cancelled', 'no-show')
-          AND DATE(scheduled_at) = CURRENT_DATE
+          AND (scheduled_at AT TIME ZONE 'Asia/Kolkata')::date = (NOW() AT TIME ZONE 'Asia/Kolkata')::date
         GROUP BY salon_id
       ) appt_counts ON appt_counts.salon_id = s.id
       LEFT JOIN (
@@ -86,7 +86,13 @@ export const branchOwnerRepository = {
               SELECT 1 FROM sales s2 WHERE s2.appointment_id = p.appointment_id AND s2.status = 'completed'
             )
         ) revenue_events
-        WHERE DATE(event_at) = CURRENT_DATE
+        -- Salon's business day is Asia/Kolkata (IST), not the DB session's
+        -- UTC — bare DATE(event_at) = CURRENT_DATE rolled over at UTC
+        -- midnight (5:30am IST), so for the first ~5.5 hours of every IST
+        -- day this silently read as "yesterday" and reported ₹0/zero counts
+        -- for genuinely-today activity. Same fix already applied to
+        -- salon-dashboard.repository.ts's own revenue query.
+        WHERE (event_at AT TIME ZONE 'Asia/Kolkata')::date = (NOW() AT TIME ZONE 'Asia/Kolkata')::date
         GROUP BY salon_id
       ) revenue ON revenue.salon_id = s.id
       WHERE bos.branch_owner_id = $1
@@ -150,14 +156,20 @@ export const branchOwnerRepository = {
         )
         SELECT
           COALESCE((SELECT SUM(amount) FROM revenue_events), 0)::numeric AS total_revenue,
-          COALESCE((SELECT SUM(amount) FROM revenue_events WHERE DATE(event_at) = CURRENT_DATE), 0)::numeric AS revenue_today,
+          -- IST-aware "today" (see getMySalons' own revenue subquery above
+          -- for the full explanation) — bare DATE(event_at) = CURRENT_DATE
+          -- rolled over at UTC midnight (5:30am IST), silently zeroing this
+          -- KPI for the first ~5.5 hours of every IST day.
+          COALESCE((SELECT SUM(amount) FROM revenue_events
+            WHERE (event_at AT TIME ZONE 'Asia/Kolkata')::date = (NOW() AT TIME ZONE 'Asia/Kolkata')::date
+          ), 0)::numeric AS revenue_today,
           (SELECT COUNT(*) FROM appointments
             WHERE salon_id IN (SELECT salon_id FROM my_salons)
               AND deleted_at IS NULL AND status NOT IN ('cancelled', 'no-show'))::int AS total_bookings,
           (SELECT COUNT(*) FROM appointments
             WHERE salon_id IN (SELECT salon_id FROM my_salons)
               AND deleted_at IS NULL AND status NOT IN ('cancelled', 'no-show')
-              AND DATE(scheduled_at) = CURRENT_DATE)::int AS bookings_today
+              AND (scheduled_at AT TIME ZONE 'Asia/Kolkata')::date = (NOW() AT TIME ZONE 'Asia/Kolkata')::date)::int AS bookings_today
       `, [branchOwnerId]),
 
       pool.query<{ total_staff: string }>(`
@@ -188,7 +200,7 @@ export const branchOwnerRepository = {
         SELECT COUNT(*)::int AS new_clients_today
         FROM clients c
         WHERE c.is_active = true
-          AND DATE(c.created_at) = CURRENT_DATE
+          AND (c.created_at AT TIME ZONE 'Asia/Kolkata')::date = (NOW() AT TIME ZONE 'Asia/Kolkata')::date
           AND EXISTS (
             SELECT 1 FROM appointments a
             WHERE a.client_id = c.id
@@ -238,13 +250,20 @@ export const branchOwnerRepository = {
   // in empty buckets so the chart doesn't skip gaps. Also returns the sum of
   // the immediately preceding window of the same length, so the frontend can
   // show a genuine period-over-period comparison rather than a fabricated one.
-  async getRevenueTrend(branchOwnerId: string, period: "daily" | "weekly" | "monthly" = "daily") {
+  // salonId narrows the trend to one specific salon (still validated as
+  // actually belonging to this branch owner via the same
+  // branch_owner_salons join, not trusted from the caller directly) —
+  // omitted/undefined keeps the existing "across every assigned salon"
+  // behavior. $3 is bound in both queries below even when unused so the
+  // parameterized query always has a stable shape.
+  async getRevenueTrend(branchOwnerId: string, period: "daily" | "weekly" | "monthly" = "daily", salonId?: string) {
     const bucketUnit = period === "daily" ? "day" : period === "weekly" ? "week" : "month";
     const bucketCount = period === "daily" ? 14 : period === "weekly" ? 12 : 12;
 
     const { rows } = await pool.query<{ bucket: string; revenue: string }>(`
       WITH my_salons AS (
-        SELECT salon_id FROM branch_owner_salons WHERE branch_owner_id = $1
+        SELECT salon_id FROM branch_owner_salons
+        WHERE branch_owner_id = $1 AND ($3::uuid IS NULL OR salon_id = $3::uuid)
       ),
       sales_rows AS (
         SELECT s.created_at AS event_at, ROUND(s.total_amount) AS amount
@@ -285,7 +304,7 @@ export const branchOwnerRepository = {
       LEFT JOIN revenue_events re ON date_trunc('${bucketUnit}', re.event_at) = bs.bucket
       GROUP BY bs.bucket
       ORDER BY bs.bucket
-    `, [branchOwnerId, bucketCount]);
+    `, [branchOwnerId, bucketCount, salonId ?? null]);
 
     const points = rows.map((r) => ({ day: r.bucket, revenue: Number(r.revenue) }));
 
@@ -293,7 +312,8 @@ export const branchOwnerRepository = {
     // before the window above, computed with the same revenue_events logic.
     const { rows: priorRows } = await pool.query<{ prior_revenue: string }>(`
       WITH my_salons AS (
-        SELECT salon_id FROM branch_owner_salons WHERE branch_owner_id = $1
+        SELECT salon_id FROM branch_owner_salons
+        WHERE branch_owner_id = $1 AND ($3::uuid IS NULL OR salon_id = $3::uuid)
       ),
       sales_rows AS (
         SELECT s.created_at AS event_at, ROUND(s.total_amount) AS amount
@@ -328,7 +348,7 @@ export const branchOwnerRepository = {
       SELECT COALESCE(SUM(re.amount), 0)::numeric AS prior_revenue
       FROM revenue_events re, window_bounds wb
       WHERE re.event_at >= wb.prior_start AND re.event_at < wb.prior_end
-    `, [branchOwnerId, bucketCount]);
+    `, [branchOwnerId, bucketCount, salonId ?? null]);
 
     return { points, priorPeriodRevenue: Number(priorRows[0]?.prior_revenue ?? 0) };
   },
@@ -418,7 +438,16 @@ export const branchOwnerRepository = {
         COALESCE(s.business_name, s.slug, 'Unnamed') AS salon_name,
         sa.invoice_number                            AS invoice_number,
         COALESCE(c.full_name, 'Walk-in Client')      AS client_name,
-        c.phone_number                               AS client_phone
+        c.phone_number                               AS client_phone,
+        -- Same priority order reports.repository.ts's appointment_staff_rollup
+        -- uses: per-service staff names from the appointment's own services
+        -- JSONB (a booking can have several services, each with its own
+        -- assigned staff member) first, falling back to the appointment's
+        -- single staff_id when services carries none.
+        COALESCE(
+          NULLIF(staff_rollup.service_staff_names, ''),
+          NULLIF(TRIM(CONCAT(COALESCE(st.first_name, ''), ' ', COALESCE(st.last_name, ''))), '')
+        ) AS staff_name
       FROM payments p
       JOIN salons s ON s.id = p.salon_id
       LEFT JOIN LATERAL (
@@ -429,6 +458,14 @@ export const branchOwnerRepository = {
       ) sa ON TRUE
       LEFT JOIN appointments a ON a.id = p.appointment_id
       LEFT JOIN clients c ON c.id = a.client_id
+      LEFT JOIN staff st ON st.id = a.staff_id
+      LEFT JOIN LATERAL (
+        SELECT STRING_AGG(
+          DISTINCT NULLIF(TRIM(COALESCE(svc.value->>'staff_name', '')), ''),
+          ', ' ORDER BY NULLIF(TRIM(COALESCE(svc.value->>'staff_name', '')), '')
+        ) AS service_staff_names
+        FROM jsonb_array_elements(COALESCE(a.services, '[]'::jsonb)) AS svc(value)
+      ) staff_rollup ON TRUE
       WHERE EXISTS (
         SELECT 1 FROM branch_owner_salons bos
         WHERE bos.branch_owner_id = $1 AND bos.salon_id = p.salon_id
@@ -447,6 +484,17 @@ export const branchOwnerRepository = {
     return rows.length > 0;
   },
 
+  // Lightweight id-only list — for call sites (the "All Branches"
+  // notifications aggregate) that only need the salon_id set, not
+  // getMySalons()'s full per-salon counts/revenue join.
+  async getAssignedSalonIds(branchOwnerId: string): Promise<string[]> {
+    const { rows } = await pool.query<{ salon_id: string }>(
+      `SELECT salon_id FROM branch_owner_salons WHERE branch_owner_id = $1`,
+      [branchOwnerId]
+    );
+    return rows.map((r) => r.salon_id);
+  },
+
   async isSalonActive(salonId: string): Promise<boolean> {
     const { rows } = await pool.query(`SELECT is_active FROM salons WHERE id = $1`, [salonId]);
     return rows[0]?.is_active === true;
@@ -456,7 +504,16 @@ export const branchOwnerRepository = {
   // the single-salon Cash Management Report (reports.repository.ts), summed
   // per salon instead of filtered to one, so a branch owner sees every
   // branch's cash position on one screen.
-  async getCashManagementBySalon(branchOwnerId: string) {
+  // from/to are 'YYYY-MM-DD' strings (inclusive), compared against opened_at
+  // in the salon's business timezone (Asia/Kolkata) — same convention
+  // cash-management.repository.ts uses for its own same-day counter check,
+  // so a session opened late at night IST is bucketed under the correct IST
+  // calendar day rather than rolling over at UTC midnight. The date check
+  // lives in the JOIN condition, not a WHERE clause, so a salon with zero
+  // sessions in the selected range still shows an all-zero row instead of
+  // disappearing — filtering cm's columns in WHERE would turn this back
+  // into an inner join.
+  async getCashManagementBySalon(branchOwnerId: string, from: string, to: string) {
     const { rows } = await pool.query(`
       SELECT
         s.id                                            AS salon_id,
@@ -471,11 +528,13 @@ export const branchOwnerRepository = {
         COUNT(cm.id) FILTER (WHERE cm.status = 'closed')::int AS closed_sessions
       FROM branch_owner_salons bos
       JOIN salons s ON s.id = bos.salon_id
-      LEFT JOIN cash_management cm ON cm.salon_id = s.id
+      LEFT JOIN cash_management cm
+        ON cm.salon_id = s.id
+        AND (cm.opened_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN $2::date AND $3::date
       WHERE bos.branch_owner_id = $1
       GROUP BY s.id, s.business_name, s.slug
       ORDER BY s.created_at DESC
-    `, [branchOwnerId]);
+    `, [branchOwnerId, from, to]);
     return rows;
   },
 

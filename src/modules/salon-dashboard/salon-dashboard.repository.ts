@@ -141,15 +141,19 @@ export const salonDashboardRepository = {
         yesterday_appointments: string;
       }>(
         `SELECT
-           COUNT(CASE WHEN DATE(scheduled_at) = CURRENT_DATE
+           COUNT(CASE WHEN (scheduled_at AT TIME ZONE 'Asia/Kolkata')::date = (NOW() AT TIME ZONE 'Asia/Kolkata')::date
              THEN 1 END) AS today_appointments,
-           COUNT(CASE WHEN DATE(scheduled_at) = CURRENT_DATE - INTERVAL '1 day'
+           COUNT(CASE WHEN (scheduled_at AT TIME ZONE 'Asia/Kolkata')::date = (NOW() AT TIME ZONE 'Asia/Kolkata')::date - INTERVAL '1 day'
              THEN 1 END) AS yesterday_appointments
          FROM appointments
          WHERE salon_id = $1
            AND deleted_at IS NULL
            AND status NOT IN ('cancelled', 'no-show')
-           AND scheduled_at >= CURRENT_DATE - INTERVAL '1 day'`,
+           -- IST-aware pre-filter, same reasoning as the CASE checks above —
+           -- a bare UTC CURRENT_DATE bound here would exclude a row that's
+           -- genuinely "yesterday IST" but still today in UTC (or vice
+           -- versa) before it ever reaches the COUNT(CASE...) below.
+           AND (scheduled_at AT TIME ZONE 'Asia/Kolkata')::date >= (NOW() AT TIME ZONE 'Asia/Kolkata')::date - INTERVAL '1 day'`,
         [salonId]
       ),
 

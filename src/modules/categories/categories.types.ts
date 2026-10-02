@@ -13,6 +13,8 @@ export type ServiceCategory = {
   display_order: number;
   is_active: boolean;
   type: CategoryType;
+  // Short key the frontend maps to an icon (e.g. 'hair'). NULL = none chosen yet.
+  icon: string | null;
   created_at: string;
 };
 
@@ -22,6 +24,7 @@ export type CreateCategoryBody = {
   display_order?: number;
   is_active?: boolean;
   type?: CategoryType;
+  icon?: string | null;
 };
 
 export type UpdateCategoryBody = Partial<CreateCategoryBody>;

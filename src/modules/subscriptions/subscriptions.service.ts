@@ -35,6 +35,31 @@ export const subscriptionsService = {
         })
     },
 
+    // Updates an existing plan's price/name in place. Razorpay can't edit a
+    // plan's amount, so a new Razorpay plan is created and the same DB row is
+    // re-pointed at it (see subscriptionsRepository.updatePlanPricing).
+    async updatePlanPricing(id: string, body: { name: string; description?: string; price: number }) {
+        const existing = await subscriptionsRepository.findPlanById(id)
+        if (!existing) throw new AppError(404, "Plan not found", "NOT_FOUND")
+
+        const rzpPlan = await razorpay.plans.create({
+            period: existing.billing_cycle,
+            interval: 1,
+            item: {
+                name: body.name,
+                amount: Math.round(body.price * 100),
+                currency: "INR",
+                description: body.description || "",
+            },
+        })
+        const updated = await subscriptionsRepository.updatePlanPricing(id, {
+            ...body,
+            razorpay_plan_id: rzpPlan.id,
+        })
+        if (!updated) throw new AppError(404, "Plan not found", "NOT_FOUND")
+        return updated
+    },
+
     async listPlans() {
         return subscriptionsRepository.listPlans()
     },
@@ -94,6 +119,19 @@ export const subscriptionsService = {
         if (!plan) throw new AppError(404, "Plan not found", "NOT_FOUND")
         if (!plan.razorpay_plan_id)
             throw new AppError(400, "Plan not synced with Razorpay", "INVALID_PLAN")
+
+        // Tier plans (salonox-*) are only valid while a salon_plan_definitions
+        // tier is linked to them. An older row from before a price change
+        // still points at a Razorpay plan with the OLD amount — a stale page
+        // can still send its id, so refuse it instead of charging the old price.
+        if (plan.slug?.startsWith("salonox-")) {
+            const { rows } = await pool.query(
+                `SELECT 1 FROM salon_plan_definitions WHERE linked_subscription_plan_id = $1`,
+                [plan.id]
+            )
+            if (rows.length === 0)
+                throw new AppError(409, "This plan's price was updated. Please refresh the page and try again.", "PLAN_OUTDATED")
+        }
 
         const rzpSub = await razorpay.subscriptions.create({
             plan_id: plan.razorpay_plan_id,

@@ -35,8 +35,8 @@ export const categoriesRepository = {
 
   async create(salonId: string, data: CreateCategoryBody): Promise<ServiceCategory> {
     const { rows } = await pool.query(
-      `INSERT INTO service_categories (salon_id, name, description, display_order, is_active, type)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO service_categories (salon_id, name, description, display_order, is_active, type, icon)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
       [
         salonId,
@@ -45,13 +45,14 @@ export const categoriesRepository = {
         data.display_order ?? 0,
         data.is_active ?? true,
         data.type ?? "both",
+        data.icon ?? null,
       ]
     );
     return rows[0];
   },
 
   async update(id: string, salonId: string, patch: UpdateCategoryBody): Promise<ServiceCategory | null> {
-    const allowed: (keyof UpdateCategoryBody)[] = ["name", "description", "display_order", "is_active", "type"];
+    const allowed: (keyof UpdateCategoryBody)[] = ["name", "description", "display_order", "is_active", "type", "icon"];
 
     const entries = allowed
       .filter((k) => patch[k] !== undefined)

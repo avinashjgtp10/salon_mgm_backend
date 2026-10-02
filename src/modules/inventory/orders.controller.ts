@@ -91,6 +91,19 @@ export const ordersController = {
         } catch (err) { next(err); }
     },
 
+    // Verify Order tab — records verified_qty/verified_damaged_qty only, no
+    // stock movement, no status change. See ordersRepository.verify.
+    async verify(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const salonId = getSalonId(req);
+            const body = req.body as ReceiveOrderDTO;
+            logger.info("POST /inventory/orders/:id/verify called", { salonId, orderId: req.params.id });
+
+            const order = await ordersRepository.verify(String(req.params.id), body, salonId);
+            sendSuccess(res, 200, order, "Order verified successfully");
+        } catch (err) { next(err); }
+    },
+
     async cancel(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             const salonId = getSalonId(req);

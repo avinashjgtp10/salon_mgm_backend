@@ -2,6 +2,7 @@ import pool from "../../config/database";
 import { productInventoryRepository, ProductInventoryRow } from "./product-inventory.repository";
 import { CreatePurchaseDTO, ListPurchaseFilters, Purchase, PurchaseItem, PurchaseChartFilters } from "./purchases.types";
 import { inventoryAlertsService } from "./inventory-alerts.service";
+import { AppError } from "../../middleware/error.middleware";
 
 // Schema (purchases, purchase_items, salons.next_purchase_seq) is NOT
 // self-migrated from here — per project policy, schema changes are never
@@ -92,6 +93,18 @@ export const purchasesRepository = {
             // one), else fall back to resolving the salon's main branch (or
             // any branch), the same way the ledger's own manual "Add Stock"
             // flow requires a branch to be picked.
+            // The receiver must be one of THIS salon's staff — never trust an id
+            // from the request body to point at another salon's staff row.
+            if (data.received_by_staff_id) {
+                const { rows: receiverRows } = await client.query(
+                    `SELECT 1 FROM staff WHERE id = $1 AND salon_id = $2`,
+                    [data.received_by_staff_id, salonId],
+                );
+                if (!receiverRows.length) {
+                    throw new AppError(400, "received_by_staff_id is not a staff member of this salon", "VALIDATION_ERROR");
+                }
+            }
+
             let branchId: string | null = data.branch_id ?? null;
             if (!branchId) {
                 const { rows: branchRows } = await client.query(
@@ -116,10 +129,10 @@ export const purchasesRepository = {
                 await client.query("SAVEPOINT purchase_insert_attempt");
                 try {
                     const purchaseResult = await client.query(
-                        `INSERT INTO purchases (salon_id, supplier_id, purchase_number, purchase_date, created_by, order_id)
-                         VALUES ($1, $2, $3, COALESCE($4, CURRENT_DATE), $5, $6)
+                        `INSERT INTO purchases (salon_id, supplier_id, purchase_number, purchase_date, created_by, order_id, received_by_staff_id)
+                         VALUES ($1, $2, $3, COALESCE($4, CURRENT_DATE), $5, $6, $7)
                          RETURNING *`,
-                        [salonId, data.supplier_id, purchaseNumber, data.purchase_date ?? null, createdBy, data.order_id ?? null],
+                        [salonId, data.supplier_id, purchaseNumber, data.purchase_date ?? null, createdBy, data.order_id ?? null, data.received_by_staff_id ?? null],
                     );
                     await client.query("RELEASE SAVEPOINT purchase_insert_attempt");
                     purchase = purchaseResult.rows[0];
@@ -287,9 +300,11 @@ export const purchasesRepository = {
 
         const { rows } = await pool.query(
             `SELECT pu.*, sup.name AS supplier_name,
+                    NULLIF(TRIM(CONCAT(rb.first_name, ' ', COALESCE(rb.last_name, ''))), '') AS received_by_name,
                     (SELECT COUNT(*) FROM purchase_items pi WHERE pi.purchase_id = pu.id)::int AS item_count
                FROM purchases pu
                LEFT JOIN suppliers sup ON sup.id = pu.supplier_id
+               LEFT JOIN staff rb ON rb.id = pu.received_by_staff_id
                ${where}
               ORDER BY pu.created_at DESC
               LIMIT $${idx++} OFFSET $${idx++}`,
@@ -465,9 +480,11 @@ export const purchasesRepository = {
 
     async getById(id: string, salonId: string): Promise<Purchase | null> {
         const { rows: purchaseRows } = await pool.query(
-            `SELECT pu.*, sup.name AS supplier_name
+            `SELECT pu.*, sup.name AS supplier_name,
+                    NULLIF(TRIM(CONCAT(rb.first_name, ' ', COALESCE(rb.last_name, ''))), '') AS received_by_name
                FROM purchases pu
                LEFT JOIN suppliers sup ON sup.id = pu.supplier_id
+               LEFT JOIN staff rb ON rb.id = pu.received_by_staff_id
               WHERE pu.id = $1 AND pu.salon_id = $2`,
             [id, salonId],
         );

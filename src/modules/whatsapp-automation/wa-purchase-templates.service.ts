@@ -1,10 +1,35 @@
 import { AppError } from "../../middleware/error.middleware";
+import { v4 as uuid } from "uuid";
 import logger from "../../config/logger";
 import { whatsappAutomationRepository } from "./whatsapp-automation.repository";
+import { whatsappAutomationService } from "./whatsapp-automation.service";
 import { AutomationEventType, PURCHASE_EVENTS, CAPTION_ONLY_EVENTS } from "./whatsapp-automation.types";
-import { isPurchaseEventType, validateNamedPlaceholders, toMetaNumberedBody, DefaultPurchaseEventType } from "./wa-automation-defaults";
+import { isPurchaseEventType, validateNamedPlaceholders, toMetaNumberedBody, DefaultPurchaseEventType, EVENT_VARIABLE_NAMES } from "./wa-automation-defaults";
 import { submitBodyOnlyTemplate, syncBodyOnlyTemplateStatus } from "../marketing/whatsapp/shared/template-submission.helper";
-import { submitBillReceiptTemplate } from "./wa-bill-receipt-template.helper";
+import { submitBillReceiptTemplate, sendBillReceiptTemplateMessage, buildSampleReceiptPdf } from "./wa-bill-receipt-template.helper";
+import { salonsRepository } from "../salons/salons.repository";
+
+// Same sample values the frontend preview uses (sampleValues.ts) — kept in
+// sync manually since a test send just needs *something* realistic in each
+// slot, not pixel parity with the preview panel's own rendering.
+const TEST_SAMPLE_VALUES: Record<string, string> = {
+    customer_name: "Priya Sharma", salon_name: "Bloom Salon",
+    appointment_date: "12 Sep 2026", appointment_time: "3:30 PM",
+    old_date: "10 Sep 2026", old_time: "2:00 PM", new_date: "12 Sep 2026", new_time: "3:30 PM",
+    service_name: "Hair Cut", staff_name: "Anita", amount: "1,250",
+    package_name: "Glow Package", membership_name: "Gold Membership", expiry_date: "30 Sep 2026",
+    remaining_sessions: "3", remaining_balance: "1,500", remaining_services_breakdown: "Hair Cut-2, Facial-1",
+    services: "Hair Cut, Facial", total_sessions: "5", package_value: "4,999", invoice_number: "INV-1024",
+    benefit: "10% off every visit", start_date: "1 Sep 2026", membership_price: "6,999",
+    items: "Hair Cut — 500, Facial — 750, Total Paid: 1,250",
+    feedback_line: "We'd love your feedback: https://feedback.salonox.com/f/abc123",
+    amount_used: "500", points_earned: "50", total_points: "320",
+    referred_customer_name: "Rahul Verma", reward: "100", points_used: "50", remaining_points: "270",
+    referral_code: "SAMPLE10", opening_date: "25 Sep 2026", opening_time: "9:00 AM", opening_amount: "500",
+    closing_date: "25 Sep 2026", closing_time: "9:00 PM",
+    collection_breakdown: "Cash: ₹500.00 | Card: ₹300.00 | UPI: ₹200.00",
+    total_collection: "1,000", expenses: "100", in_store_cash: "400",
+};
 
 function requirePurchaseEvent(eventType: string): AutomationEventType {
     if (!PURCHASE_EVENTS.includes(eventType as AutomationEventType)) {
@@ -25,6 +50,100 @@ function isMetaDeletedError(err: any): boolean {
 export const waPurchaseTemplatesService = {
     async list(salonId: string) {
         return whatsappAutomationRepository.findAllSalonPurchaseTemplates(salonId);
+    },
+
+    // Called once, fire-and-forget, right after a salon finishes WhatsApp
+    // setup for the first time — submits every PURCHASE_EVENTS template that's
+    // still sitting untouched in DRAFT (its seeded default wording, never
+    // edited or submitted) so a new salon's automation starts working without
+    // requiring them to click "Submit to Meta" 24 separate times. Anything
+    // already PENDING/APPROVED/REJECTED (they got to it first, or this ran
+    // before and partially succeeded) is left completely alone. Each event is
+    // submitted independently — one Meta rejection (e.g. a placeholder-count
+    // mismatch in a default body) must never block the other 23.
+    async submitAllDefaults(salonId: string): Promise<{ submitted: string[]; skipped: string[]; failed: Array<{ eventType: string; reason: string }> }> {
+        const submitted: string[] = [];
+        const skipped: string[] = [];
+        const failed: Array<{ eventType: string; reason: string }> = [];
+
+        for (const eventType of PURCHASE_EVENTS) {
+            if (CAPTION_ONLY_EVENTS.includes(eventType)) { skipped.push(eventType); continue; }
+            try {
+                const existing = await whatsappAutomationRepository.findOrSeedSalonPurchaseTemplate(salonId, eventType);
+                if (existing.status !== "DRAFT" || !existing.body_text?.trim()) { skipped.push(eventType); continue; }
+                await this.submitForApproval(salonId, eventType);
+                submitted.push(eventType);
+            } catch (err: any) {
+                failed.push({ eventType, reason: err?.message ?? "Unknown error" });
+                logger.warn(`[WA-TRACE] submitAllDefaults: ${eventType} failed for salon ${salonId} — ${err?.message}`);
+            }
+        }
+
+        logger.info(`[WA-TRACE] submitAllDefaults for salon ${salonId}: ${submitted.length} submitted, ${skipped.length} skipped, ${failed.length} failed`);
+        return { submitted, skipped, failed };
+    },
+
+    // "Send Test" — fires the salon's own LIVE approved template at an
+    // arbitrary phone number with realistic sample values in every slot.
+    // Meta only ever sends an APPROVED template, never draft/pending
+    // wording, so this is a genuine constraint, not an arbitrary one: there
+    // is no way to preview unapproved wording as a real WhatsApp message.
+    //
+    // trigger()'s own retry loop can sleep up to ~21 minutes across its 4
+    // attempts on a failing send (sendWithRetry) — same reasoning as
+    // cash-management.service.ts's resendClosedCounterMessage: fire it
+    // without awaiting, then poll the fresh log row for a few seconds so a
+    // normal (fast) success/failure still comes back in the response,
+    // without blocking the request for a slow one.
+    async sendTest(salonId: string, eventTypeRaw: string, phone: string): Promise<{ sent: boolean; status: string; failure_reason: string | null }> {
+        const eventType = requirePurchaseEvent(eventTypeRaw);
+        if (CAPTION_ONLY_EVENTS.includes(eventType)) {
+            throw new AppError(400, "This message type doesn't go through Meta — nothing to test-send", "NOT_TESTABLE");
+        }
+        const tpl = await whatsappAutomationRepository.findOrSeedSalonPurchaseTemplate(salonId, eventType);
+        if (tpl.status !== "APPROVED") {
+            throw new AppError(400, "This template must be approved by Meta before you can send a test message", "TEMPLATE_NOT_APPROVED");
+        }
+
+        const names = isPurchaseEventType(eventType) ? EVENT_VARIABLE_NAMES[eventType] : undefined;
+        const variables: Record<string, string> = {};
+        (names ?? []).forEach((name, i) => { variables[String(i + 1)] = TEST_SAMPLE_VALUES[name] ?? `[${name}]`; });
+
+        // bill_receipt's live template has a DOCUMENT header (the bill PDF) —
+        // trigger()'s normal send path only ever supplies BODY parameters, so
+        // sending it that way gets rejected by Meta (#132012, "parameter
+        // format does not match... in the created template": the template
+        // expects a header parameter that was never sent). Route this one
+        // event through the same helper checkout uses, with the same fixture
+        // PDF the submission-review flow already generates.
+        if (eventType === "bill_receipt") {
+            const salon = await salonsRepository.findById(salonId);
+            const pdfBuffer = await buildSampleReceiptPdf(salon?.business_name ?? "our salon");
+            const result = await sendBillReceiptTemplateMessage({
+                salonId, phone, countryCode: null,
+                templateName: tpl.template_name, language: tpl.language,
+                pdfBuffer, pdfFilename: "sample-receipt.pdf",
+                variables,
+            });
+            return { sent: result.sent, status: result.sent ? "SENT" : "FAILED", failure_reason: result.reason ?? null };
+        }
+
+        const referenceId = uuid();
+        whatsappAutomationService.trigger({
+            salonId, eventType, clientId: null, phone, countryCode: null, variables,
+            referenceId, referenceType: "test_send", dedupeByReference: false,
+        }).catch(() => {});
+
+        const POLL_MS = 500;
+        const MAX_WAIT_MS = 6000;
+        for (let waited = 0; waited < MAX_WAIT_MS; waited += POLL_MS) {
+            await new Promise((r) => setTimeout(r, POLL_MS));
+            const log = await whatsappAutomationRepository.findLatestByReference(referenceId, "test_send");
+            if (log && log.status !== "QUEUED") {
+                return { sent: log.status === "SENT", status: log.status, failure_reason: log.failure_reason ?? null };
+            }
+        }
+        return { sent: false, status: "IN_PROGRESS", failure_reason: null };
     },
 
     // Editable anytime, regardless of current status. When a live APPROVED

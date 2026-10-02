@@ -50,9 +50,10 @@ export const branchOwnerService = {
   },
 
   // Separate from getDashboard so switching the Daily/Weekly/Monthly toggle
-  // on the Revenue Overview card only refetches this, not the whole page.
-  async getRevenueTrend(branchOwnerId: string, period: "daily" | "weekly" | "monthly") {
-    return branchOwnerRepository.getRevenueTrend(branchOwnerId, period);
+  // (or the branch filter) on the Revenue Overview card only refetches
+  // this, not the whole page.
+  async getRevenueTrend(branchOwnerId: string, period: "daily" | "weekly" | "monthly", salonId?: string) {
+    return branchOwnerRepository.getRevenueTrend(branchOwnerId, period, salonId);
   },
 
   // No limit here (unlike the dashboard's 10-row preview above) — the
@@ -243,8 +244,19 @@ export const branchOwnerService = {
       return { salons: rows, totals };
   },
 
-  async getCashManagementOverview(branchOwnerId: string) {
-      const rows = await branchOwnerRepository.getCashManagementBySalon(branchOwnerId);
+  async getCashManagementOverview(branchOwnerId: string, from?: string, to?: string) {
+      // Default to "today" in the salon's business timezone (Asia/Kolkata —
+      // same convention cash-management.repository.ts already uses for its
+      // own same-day counter checks) whenever the caller doesn't specify a
+      // range, rather than the previous behavior of summing every cash
+      // session ever opened for each salon. A bare `new Date()` ISO slice
+      // would use the server's own UTC day instead, which is wrong for the
+      // first ~5.5 hours of every IST day (see that file's own comment on
+      // this exact pitfall).
+      const todayIst = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+      const effectiveFrom = from || todayIst;
+      const effectiveTo = to || todayIst;
+      const rows = await branchOwnerRepository.getCashManagementBySalon(branchOwnerId, effectiveFrom, effectiveTo);
       const salons = rows.map((r: any) => ({
           salonId: r.salon_id,
           salonName: r.salon_name,
@@ -356,16 +368,64 @@ export const branchOwnerService = {
 
   // Single-call version of the Staff & Permissions page — the frontend used
   // to GET /salons/:salonId/staff once per assigned salon (N browser round
-  // trips). This does the same per-salon fan-out server-side in one request,
-  // tagging each staff row with its salonId/salonName so the page can still
-  // render the combined table and the salon column.
-  async getAllStaff(branchOwnerId: string) {
+  // trips), PLUS a separate /salons/list call just to populate the page's
+  // salon filter dropdown. This does the per-salon staff fan-out server-side
+  // in one request, tagging each staff row with its salonId/salonName so the
+  // page can still render the combined table and the salon column — and
+  // returns the already-fetched `salons` list alongside it, since this
+  // method calls getMySalons() internally anyway. Returning `salons` here
+  // (rather than deriving it from the staff rows) matters because a salon
+  // with zero staff still needs to appear in the filter dropdown, and it
+  // would otherwise contribute no rows to `staff` at all.
+  //
+  // Pagination is applied AFTER combining every assigned salon's staff into
+  // one list, not passed down to each per-salon staffService.list call —
+  // page/limit per salon would paginate each salon independently (e.g.
+  // page=2 asking every salon for ITS OWN rows 21-40), which isn't the same
+  // as "rows 21-40 of the combined, salon-tagged list" the frontend actually
+  // wants. search/role/status/permissions filters are applied the same way,
+  // in-memory over the combined set, since role_name/has_overrides are
+  // joined-in display fields staffService.list can't filter by itself.
+  //
+  // staffService.list's own default limit (50) would otherwise silently drop
+  // staff beyond the 50th in any single salon — MAX_PER_SALON below is a
+  // generous ceiling so a salon's full roster is always pulled in before
+  // this method does its own combined pagination.
+  async getAllStaff(branchOwnerId: string, opts: {
+    page?: number; limit?: number; search?: string;
+    salonIds?: string[]; roleNames?: string[]; isActive?: boolean; hasOverrides?: boolean;
+  } = {}) {
+    const MAX_PER_SALON = 2000;
     const salons = await branchOwnerRepository.getMySalons(branchOwnerId);
     const perSalon = await Promise.all(salons.map(async (salon: any) => {
-      const { data } = await staffService.list(salon.id, {});
+      const { data } = await staffService.list(salon.id, { limit: MAX_PER_SALON });
       return data.map((member: any) => ({ ...member, salonId: salon.id, salonName: salon.name }));
     }));
-    return perSalon.flat();
+    let combined = perSalon.flat();
+
+    if (opts.salonIds?.length) combined = combined.filter((m: any) => opts.salonIds!.includes(m.salonId));
+    if (opts.roleNames?.length) combined = combined.filter((m: any) => opts.roleNames!.includes(m.role_name));
+    if (opts.isActive !== undefined) combined = combined.filter((m: any) => (m.is_active !== false) === opts.isActive);
+    if (opts.hasOverrides !== undefined) combined = combined.filter((m: any) => !!m.has_overrides === opts.hasOverrides);
+    if (opts.search?.trim()) {
+      const q = opts.search.trim().toLowerCase();
+      combined = combined.filter((m: any) => {
+        const name = m.fullName || `${m.first_name ?? ""} ${m.last_name ?? ""}`.trim() || m.email || "";
+        return `${name} ${m.email ?? ""} ${m.salonName ?? ""}`.toLowerCase().includes(q);
+      });
+    }
+
+    const total = combined.length;
+    const page = Math.max(1, opts.page ?? 1);
+    const limit = Math.max(1, opts.limit ?? (total || 1));
+    const start = (page - 1) * limit;
+    const staff = opts.page || opts.limit ? combined.slice(start, start + limit) : combined;
+
+    return {
+      salons,
+      staff,
+      pagination: { total, page, limit, total_pages: Math.max(1, Math.ceil(total / limit)) },
+    };
   },
 
   // ── Roles & Permissions (real system) ──────────────────────────────────────
@@ -451,22 +511,45 @@ export const branchOwnerService = {
   // salon the branch owner currently has selected in the topbar switcher,
   // validated through assertSalonsAssigned like every other salon-scoped
   // branch-owner action, rather than trusting req.user.salonId.
+  // salonId === "all" aggregates across every salon assigned to this branch
+  // owner (the topbar's "All Branches Overview" / notification panel's own
+  // Branch selector) — every other value is the existing single-salon path,
+  // still validated through assertSalonsAssigned so a branch owner can never
+  // read/mutate another salon's notifications by guessing its id.
   async listNotifications(branchOwnerId: string, salonId: string) {
+    if (salonId === "all") {
+      const salonIds = await branchOwnerRepository.getAssignedSalonIds(branchOwnerId);
+      return notificationsService.listForSalons(salonIds);
+    }
     await assertSalonsAssigned(branchOwnerId, [salonId]);
     return notificationsService.list(salonId);
   },
 
   async getUnreadNotificationCount(branchOwnerId: string, salonId: string) {
+    if (salonId === "all") {
+      const salonIds = await branchOwnerRepository.getAssignedSalonIds(branchOwnerId);
+      return notificationsService.getUnreadCountForSalons(salonIds);
+    }
     await assertSalonsAssigned(branchOwnerId, [salonId]);
     return notificationsService.getUnreadCount(salonId);
   },
 
   async markNotificationRead(branchOwnerId: string, salonId: string, notificationId: string) {
+    // Marking a single notification read is always by its own real salon_id
+    // (the panel's item click handler sends the notification's actual
+    // salon), even when the panel itself is in the "All Branches" view — so
+    // this path never receives "all" and keeps its existing single-salon
+    // validation unchanged.
     await assertSalonsAssigned(branchOwnerId, [salonId]);
     return notificationsService.markRead(notificationId, salonId);
   },
 
   async markAllNotificationsRead(branchOwnerId: string, salonId: string) {
+    if (salonId === "all") {
+      const salonIds = await branchOwnerRepository.getAssignedSalonIds(branchOwnerId);
+      await notificationsService.markAllReadForSalons(salonIds);
+      return { success: true };
+    }
     await assertSalonsAssigned(branchOwnerId, [salonId]);
     await notificationsService.markAllRead(salonId);
     return { success: true };

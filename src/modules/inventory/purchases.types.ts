@@ -24,6 +24,11 @@ export interface Purchase {
     purchase_date: string;
     total_amount: number;
     created_by: string | null;
+    // The staff member who physically received the stock (chosen on Record
+    // Purchase / Receive Against Order) — distinct from created_by, the user
+    // who entered it. Null for purchases recorded before this existed.
+    received_by_staff_id?: string | null;
+    received_by_name?: string | null;
     created_at: string;
     updated_at: string;
     items?: PurchaseItem[];
@@ -53,6 +58,8 @@ export interface CreatePurchaseDTO {
     // writer was the removed order-receipts confirmReceipt()). Omitted
     // falls back to the salon's main-branch auto-resolution.
     branch_id?: string | null;
+    // Staff member who received the stock — must belong to this salon.
+    received_by_staff_id?: string | null;
     items: CreatePurchaseItemDTO[];
 }
 

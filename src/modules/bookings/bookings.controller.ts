@@ -49,12 +49,18 @@ export const bookingsController = {
     async getAvailability(req: Request, res: Response, next: NextFunction) {
         try {
             const { salon_id } = req.params;
-            const { date, staffId, durationMinutes, serviceIds } = req.query;
+            const { date, staffId, durationMinutes, serviceIds, serviceStaff } = req.query;
             if (!salon_id || !date) throw new AppError(400, "salon_id and date are required", "VALIDATION_ERROR");
             // Comma-separated, so "any stylist" availability only counts staff
             // who can actually perform what's in the basket.
             const parsedServiceIds = typeof serviceIds === "string" && serviceIds.trim()
                 ? serviceIds.split(",").map((s) => s.trim()).filter(Boolean)
+                : null;
+            // A GET query string can't carry a real array of objects, so a
+            // multi-service, per-service-staff request sends it JSON-encoded —
+            // already shape-checked in validateAvailabilityQuery.
+            const parsedServiceStaff = typeof serviceStaff === "string" && serviceStaff.trim()
+                ? (JSON.parse(serviceStaff) as { service_id: string; staff_id?: string }[])
                 : null;
             const result = await bookingsService.getAvailability({
                 salon_id: salon_id as string,
@@ -62,6 +68,7 @@ export const bookingsController = {
                 staffId: staffId ? (staffId as string) : undefined,
                 durationMinutes: durationMinutes ? Number(durationMinutes) : undefined,
                 serviceIds: parsedServiceIds,
+                serviceStaff: parsedServiceStaff,
             });
             return sendSuccess(res, 200, result, "Availability fetched successfully");
         } catch (err) {

@@ -5,6 +5,7 @@ import { emailService } from "../utils/email.service";
 import { AppError } from "../../middleware/error.middleware";
 import { invalidateSubscriptionPermCache } from "../../middleware/subscriptionPermission.middleware";
 import { subscriptionsRepository } from "../subscriptions/subscriptions.repository";
+import { salonPlanInvoicesRepository, planDefinitionsRepository, salonCustomizationsRepository } from "../salon-plans/salon-plans.repository";
 import logger from "../../config/logger";
 import bcrypt from "bcrypt";
 import jwt, { Secret, SignOptions } from "jsonwebtoken";
@@ -133,8 +134,11 @@ export const superAdminService = {
     const ownerId = await superAdminRepository.getSalonOwnerId(salonId);
     if (!ownerId) throw new AppError(404, "Salon or owner not found", "NOT_FOUND");
     if (!ACCESS_SECRET || !REFRESH_SECRET) throw new AppError(500, "JWT config missing", "SERVER_ERROR");
-    const token = jwt.sign({ userId: ownerId, role: "salon_owner", salonId, impersonatedBy: "super_admin" }, ACCESS_SECRET, { expiresIn: "1h" } as any);
-    const refreshToken = await this._issueImpersonationRefreshToken(ownerId);
+    // Own session row first (never deletes the owner's real sessions), so the
+    // access token can carry its id: a real login by the owner later ends
+    // this impersonation instantly, instead of lingering for the token's 1h.
+    const { refreshToken, sid } = await this._issueImpersonationRefreshToken(ownerId);
+    const token = jwt.sign({ userId: ownerId, role: "salon_owner", salonId, impersonatedBy: "super_admin", sid }, ACCESS_SECRET, { expiresIn: "1h" } as any);
     return { token, refreshToken, isOnboardingComplete: true };
   },
 
@@ -142,12 +146,12 @@ export const superAdminService = {
     const user = await superAdminRepository.getUserForImpersonate(userId);
     if (!user) throw new AppError(404, "User not found", "NOT_FOUND");
     if (!ACCESS_SECRET || !REFRESH_SECRET) throw new AppError(500, "JWT config missing", "SERVER_ERROR");
+    const { refreshToken, sid } = await this._issueImpersonationRefreshToken(user.id);
     const token = jwt.sign(
-      { userId: user.id, role: user.role, salonId: user.salon_id ?? null, impersonatedBy: "super_admin" },
+      { userId: user.id, role: user.role, salonId: user.salon_id ?? null, impersonatedBy: "super_admin", sid },
       ACCESS_SECRET,
       { expiresIn: "1h" } as any
     );
-    const refreshToken = await this._issueImpersonationRefreshToken(user.id);
     return { token, refreshToken, isOnboardingComplete: user.is_onboarding_complete };
   },
 
@@ -157,11 +161,14 @@ export const superAdminService = {
   // difference is a much shorter DB-side expires_at (8h instead of 30d),
   // which is the authoritative check refresh() makes before ever looking at
   // the JWT's own exp claim.
-  async _issueImpersonationRefreshToken(userId: string): Promise<string> {
+  // Returns the new row's id as `sid` too — the impersonation access token
+  // carries it so the session can be ended like any other (see
+  // auth/session.util.ts). Adding this row never deletes the real user's own.
+  async _issueImpersonationRefreshToken(userId: string): Promise<{ refreshToken: string; sid: string }> {
     const refreshToken = jwt.sign({ userId }, REFRESH_SECRET, { expiresIn: "8h" } as any);
     const expiresAt = new Date(Date.now() + 8 * 60 * 60 * 1000);
-    await authRepository.saveRefreshToken({ user_id: userId, token: refreshToken, expires_at: expiresAt });
-    return refreshToken;
+    const row = await authRepository.saveRefreshToken({ user_id: userId, token: refreshToken, expires_at: expiresAt });
+    return { refreshToken, sid: String(row.id) };
   },
 
   // ── SALON PERMISSIONS ────────────────────────────────────────────────────────
@@ -242,6 +249,41 @@ export const superAdminService = {
   // field useSubscriptionPoller.ts reads to decide whether to show
   // SubscriptionWall — so access is restored/extended immediately, no
   // logout needed.
+  // Auto-creates a salon_plan_invoices row (the same table Plans &
+  // Subscriptions > Billing & Invoices tab reads) whenever a super admin
+  // grants/applies a subscription — previously grantSubscriptionDays/
+  // applySubscription only ever touched the `subscriptions` table, leaving
+  // no billing record behind at all. Amount follows the same "effective
+  // price" precedence getMyPlan() uses on the salon's own side: a per-salon
+  // custom_price override if one exists, else the tier's base list price.
+  // Marked 'paid' immediately — there's no separate payment step in this
+  // manual super-admin flow, unlike the Razorpay self-serve checkout.
+  async _createSubscriptionInvoice(salonId: string, changedByUserId: string, issuedDate: string, dueDate: string | null) {
+    try {
+      const customization = await salonCustomizationsRepository.findBySalonId(salonId);
+      const tier = customization?.base_tier ?? "basic";
+      const planDef = await planDefinitionsRepository.findByTier(tier);
+      const amount = Number(customization?.custom_price ?? planDef?.price ?? 0);
+      if (amount <= 0) return null;
+
+      const periodEnd = dueDate ?? issuedDate;
+      return await salonPlanInvoicesRepository.create(
+        {
+          salon_id: salonId, plan_tier: tier, billing_cycle: "monthly",
+          period_start: issuedDate, period_end: periodEnd,
+          amount, status: "paid", issued_date: issuedDate, due_date: dueDate ?? undefined,
+        },
+        changedByUserId
+      );
+    } catch (err) {
+      // Never let invoice bookkeeping block the actual subscription grant —
+      // the admin's primary action (restoring/extending access) must still
+      // succeed even if, say, no plan definitions are configured yet.
+      logger.error(`Failed to auto-create subscription invoice for salon ${salonId}`, { err });
+      return null;
+    }
+  },
+
   async grantSubscriptionDays(salonId: string, days: number, changedByUserId: string) {
     if (!salonId) throw new AppError(400, "Salon ID required", "VALIDATION_ERROR");
     if (!Number.isFinite(days) || days <= 0) throw new AppError(400, "days must be a positive number", "VALIDATION_ERROR");
@@ -274,7 +316,11 @@ export const superAdminService = {
     // action type inside new_value instead of a permission map.
     await superAdminRepository.logSubscriptionGrantDays(salonId, changedByUserId, days, updated.current_period_end as string);
 
-    return { subscription: updated, days_granted: days };
+    const today = new Date().toISOString().slice(0, 10);
+    const dueDate = updated.current_period_end ? String(updated.current_period_end).slice(0, 10) : null;
+    const invoice = await this._createSubscriptionInvoice(salonId, changedByUserId, today, dueDate);
+
+    return { subscription: updated, days_granted: days, invoice };
   },
 
   // ── APPLY SUBSCRIPTION (explicit start/end dates) ─────────────────────────────
@@ -310,7 +356,9 @@ export const superAdminService = {
 
     await superAdminRepository.logSubscriptionApply(salonId, changedByUserId, startDate, endDate);
 
-    return { subscription: updated };
+    const invoice = await this._createSubscriptionInvoice(salonId, changedByUserId, startDate, endDate);
+
+    return { subscription: updated, invoice };
   },
 
   // ── REMOVE SUBSCRIPTION (immediate deactivation) ──────────────────────────────

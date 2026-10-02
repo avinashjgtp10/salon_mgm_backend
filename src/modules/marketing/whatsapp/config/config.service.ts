@@ -3,6 +3,8 @@ import { configRepository } from './config.repository'
 import { whatsappMetaApi } from '../shared/whatsapp.api'
 import { SaveConfigBody, TestConnectionResult } from './config.types'
 import logger from '../../../../config/logger'
+import { waPurchaseTemplatesService } from '../../../whatsapp-automation/wa-purchase-templates.service'
+import { dashboardRepository } from '../dashboard/dashboard.repository'
 
 // APP_URL = your backend domain e.g. https://api.salonox.com
 // Each salon gets their own webhook URL with their salonId in it
@@ -16,12 +18,17 @@ export const configService = {
   async getConfig(salonId: string) {
     const config = await configRepository.findBySalonId(salonId)
     if (!config) return null
+    // sent_today powers the Send Campaign modal's "messages remaining today"
+    // usage bar — cheap enough to compute on every config fetch, and this is
+    // the endpoint every report/campaign page already loads waConfig from.
+    const sentToday = await dashboardRepository.getSentToday(salonId)
     return {
       ...config,
       access_token: config.access_token
         ? config.access_token.slice(0, 8) + '••••••••'
         : null,
       app_secret: config.app_secret ? '••••••••' : null,
+      sent_today: sentToday,
     }
   },
 
@@ -67,6 +74,13 @@ export const configService = {
         )
       }
     }
+
+    // Read BEFORE the upsert — "was this salon already configured" has to
+    // reflect the state prior to this exact save, so editing an existing
+    // config (e.g. rotating the access token) never re-triggers the
+    // first-time bulk template submission below.
+    const existingBefore = await configRepository.findBySalonId(salonId)
+    const wasConfiguredBefore = !!existingBefore?.phone_number_id
 
     let saved: Awaited<ReturnType<typeof configRepository.upsert>>
     try {
@@ -117,6 +131,17 @@ export const configService = {
           { response: err?.response?.data }
         )
       }
+    }
+
+    // ── First-time setup complete — submit every default trigger template ────
+    // Fire-and-forget: 24 individual Meta submissions can take a while and
+    // saveConfig's own response shouldn't wait on it, same reasoning as the
+    // webhook auto-registration above. Only fires once, the moment
+    // phone_number_id first appears on this salon's config row.
+    if (!wasConfiguredBefore && saved.phone_number_id) {
+      waPurchaseTemplatesService.submitAllDefaults(salonId).catch((err) =>
+        logger.error(`⚠️  submitAllDefaults failed for salon ${salonId}: ${err?.message}`)
+      )
     }
 
     return {

@@ -345,6 +345,16 @@ router.delete(
 // does, so it sits behind the same stock_adjustment permission, not
 // manage_inventory — a staff member who can Add Stock must also be able to
 // record a Purchase.
+// Staff to pick from in Record Purchase / Receive Against Order's "Received By"
+// field — open to anyone who can do either of those two actions.
+router.get(
+    "/product-inventory/purchase-receivers",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    requireAnyPermission(["adjust_product_stock", "receive_order"]),
+    purchasesController.listReceivers
+);
+
 router.post(
     "/product-inventory/purchases",
     authMiddleware,
@@ -436,6 +446,18 @@ router.post(
     receiveOrder,
     validateReceiveOrder,
     ordersController.receive
+);
+
+// Verify Order tab — record-only (verified_qty/verified_damaged_qty), never
+// moves stock or changes order.status. Same body shape/permission as
+// receive() above, just a different write target.
+router.post(
+    "/orders/:id/verify",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    receiveOrder,
+    validateReceiveOrder,
+    ordersController.verify
 );
 
 // Cancel and Delete share one "Delete/Cancel Order" permission per the

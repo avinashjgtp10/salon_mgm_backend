@@ -282,6 +282,18 @@ export const authRepository = {
   },
 
   /**
+   * Is this login session (a refresh_tokens row, referenced by the access
+   * token's `sid` claim) still alive? False once it was deleted by a newer
+   * login, a logout, a password reset, etc., or has expired.
+   */
+  async isRefreshSessionActive(id: string): Promise<boolean> {
+    const { rows } = await safeQuery(() =>
+      pool.query(`SELECT 1 FROM refresh_tokens WHERE id = $1 AND expires_at > NOW() LIMIT 1`, [id]),
+    );
+    return rows.length > 0;
+  },
+
+  /**
    * Delete refresh token
    */
   async deleteRefreshToken(token: string) {

@@ -108,21 +108,52 @@ export const templatesService = {
         components.push(headerComponent)
 
       } else if (file && ['image', 'video', 'document'].includes(body.header_type)) {
-        try {
-          const appId = (config as any).app_id
-          if (!appId) throw new Error('app_id not configured in WhatsApp settings')
-          const handle = await uploadMediaHandle(file, appId, config.access_token)
-          headerMediaId = await uploadMediaId(file, config.phone_number_id, config.access_token)
-          const formatMap: Record<string, string> = { image: 'IMAGE', video: 'VIDEO', document: 'DOCUMENT' }
-          components.push({
-            type:    'HEADER',
-            format:  formatMap[body.header_type],
-            example: { header_handle: [handle] },
-          })
-        } catch (mediaErr: any) {
-          console.error('❌ Media upload failed:', mediaErr?.response?.data ?? mediaErr?.message)
-          components.push({ type: 'HEADER', format: body.header_type.toUpperCase() })
+        // Validate BEFORE attempting any upload — same cap/message as
+        // fixMedia() below. Previously unchecked here: an oversized file (or
+        // any other upload failure) fell into the catch below, which swallowed
+        // the error and silently created a template with NO media handle at
+        // all. That template would only fail much later, at actual campaign
+        // send time (campaign.processor.ts's MISSING_MEDIA_ID guard), with no
+        // indication to the user that their image was ever the problem.
+        const maxSize = MAX_HEADER_FILE_SIZE[body.header_type]
+        if (maxSize && file.size > maxSize) {
+          const maxMB = maxSize / (1024 * 1024)
+          const fileMB = (file.size / (1024 * 1024)).toFixed(1)
+          throw new AppError(
+            400,
+            `File is too large — max ${maxMB}MB for a ${body.header_type} header (received ${fileMB}MB)`,
+            'VALIDATION_ERROR'
+          )
         }
+
+        const appId = (config as any).app_id
+        if (!appId) throw new AppError(400, 'app_id not configured in WhatsApp settings', 'WA_NOT_CONFIGURED')
+
+        let handle: string
+        try {
+          handle = await uploadMediaHandle(file, appId, config.access_token)
+          headerMediaId = await uploadMediaId(file, config.phone_number_id, config.access_token)
+        } catch (mediaErr: any) {
+          const metaMsg = mediaErr?.response?.data?.error?.message
+          console.error('❌ Media upload failed:', mediaErr?.response?.data ?? mediaErr?.message)
+          // Surface the real failure instead of silently creating a broken,
+          // header-less template — the user needs to know their file didn't
+          // make it to Meta, and why, right here at creation time.
+          throw new AppError(
+            400,
+            metaMsg
+              ? `Failed to upload ${body.header_type} to WhatsApp: ${metaMsg}`
+              : `Failed to upload ${body.header_type} to WhatsApp. Please try a smaller or different file.`,
+            'MEDIA_UPLOAD_FAILED'
+          )
+        }
+
+        const formatMap: Record<string, string> = { image: 'IMAGE', video: 'VIDEO', document: 'DOCUMENT' }
+        components.push({
+          type:    'HEADER',
+          format:  formatMap[body.header_type],
+          example: { header_handle: [handle] },
+        })
       } else {
         components.push({ type: 'HEADER', format: body.header_type.toUpperCase() })
       }
