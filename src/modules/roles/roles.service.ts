@@ -7,6 +7,7 @@ import {
     invalidateStaffOverridesCache,
 } from "../../middleware/permission.middleware";
 import { rolesRepository } from "./roles.repository";
+import { assertNoOtherManager } from "../staff/staff.service";
 import {
     Permission,
     Role,
@@ -317,6 +318,13 @@ export const rolesService = {
 
         const targetRole = await rolesRepository.findRoleById(roleId, salonId);
         if (!targetRole) throw new AppError(404, "Role not found", "NOT_FOUND");
+
+        // One salon, one Manager — a different staff member already holding the
+        // Manager role blocks this assignment (re-assigning the current Manager
+        // to Manager is a no-op and still allowed).
+        if (String(targetRole.name ?? "").trim().toLowerCase() === "manager") {
+            await assertNoOtherManager(salonId, staffId);
+        }
 
         const targetRolePerms = await rolesRepository.getRolePermissions(roleId);
         const grantedTrueKeys = Object.entries(targetRolePerms).filter(([, v]) => v === true).map(([k]) => k);
