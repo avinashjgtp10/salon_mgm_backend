@@ -823,6 +823,7 @@ export const bookingsService = {
         notificationsService.create({
             salon_id: body.salon_id,
             type: "appointment",
+            reference_id: appointment.id,
             title: "New Appointment Booked",
             body: `${body.client_name} — ${formatDate(body.scheduled_at)} at ${formatTime(body.scheduled_at)}`,
             event_key: "newAppointment",
