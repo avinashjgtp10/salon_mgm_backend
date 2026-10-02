@@ -10,7 +10,7 @@ import {
 } from "./commissionRules.types";
 
 const VALID_SOURCES: CommissionRuleSource[] = ["services", "products", "memberships", "packages"];
-const VALID_TYPES: CommissionRuleType[] = ["percentage", "fixed", "milestone", "tiered_target"];
+const VALID_TYPES: CommissionRuleType[] = ["percentage", "fixed", "milestone", "tiered_target", "milestone_ladder"];
 const VALID_METRICS: ConditionMetric[] = ["revenue", "count"];
 const VALID_FREQUENCIES: CommissionFrequency[] = ["daily", "weekly", "biweekly", "monthly", "custom"];
 const VALID_SCOPE_TYPES: CommissionScopeType[] = ["salon", "staff", "role"];
@@ -40,7 +40,25 @@ const validateShared = (b: any, isCreate: boolean) => {
         throw new AppError(400, "type is required", "VALIDATION_ERROR");
 
     const type = b.type;
-    if (isCreate || b.rate !== undefined) {
+
+    // milestone_ladder has no single rate/condition — its payout is the steps list.
+    if (type === "milestone_ladder") {
+        if (isCreate || b.tiers !== undefined) {
+            const tiers = b.tiers;
+            if (!Array.isArray(tiers) || tiers.length === 0)
+                throw new AppError(400, "tiers is required and must be a non-empty list for milestone_ladder rules", "VALIDATION_ERROR");
+            const targets = new Set<number>();
+            for (const t of tiers) {
+                if (!t || !isPositiveNumber(t.target) || !isPositiveNumber(t.reward))
+                    throw new AppError(400, "every tier needs a target and a reward greater than 0", "VALIDATION_ERROR");
+                if (targets.has(t.target))
+                    throw new AppError(400, "tier targets must be unique", "VALIDATION_ERROR");
+                targets.add(t.target);
+            }
+        }
+        if (b.condition_target !== undefined && b.condition_target !== null)
+            throw new AppError(400, "condition_target is not used by milestone_ladder rules", "VALIDATION_ERROR");
+    } else if (isCreate || b.rate !== undefined) {
         if (!isPositiveNumber(b.rate))
             throw new AppError(400, "rate is required and must be a positive number", "VALIDATION_ERROR");
         if ((type === "percentage" || type === "tiered_target") && b.rate > 100)

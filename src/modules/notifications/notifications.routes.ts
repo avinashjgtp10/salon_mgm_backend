@@ -1,4 +1,5 @@
-import { Router } from "express";
+import { isMobileStaffRequest } from "./staffNotificationScope";
+import { Router, type Request, type Response, type NextFunction } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { requirePermission } from "../../middleware/permission.middleware";
 import { notificationsController } from "./notifications.controller";
@@ -13,7 +14,9 @@ router.use(authMiddleware);
 router.post("/register-device",   notificationsController.registerDevice);
 router.delete("/register-device", notificationsController.unregisterDevice);
 
-const viewNotifications = requirePermission("view_notifications");
+const notificationPermission = requirePermission("view_notifications");
+const viewNotifications = (req: Request & { user?: { userId: string; role?: string } }, res: Response, next: NextFunction) =>
+  isMobileStaffRequest(req) ? next() : notificationPermission(req, res, next);
 router.get("/",                  viewNotifications, notificationsController.list);
 router.get("/unread-count",      viewNotifications, notificationsController.unreadCount);
 router.patch("/read-all",        viewNotifications, notificationsController.markAllRead);

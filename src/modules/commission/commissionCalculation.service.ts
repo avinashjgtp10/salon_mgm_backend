@@ -437,6 +437,51 @@ async function tryNewEngineRule(params: {
         return true;
     }
 
+    // ── Milestone ladder ─────────────────────────────────────────────────────────
+    // Cumulative monthly revenue (IST month) unlocks one-time flat bonuses that STACK:
+    // crossing ₹500 pays ₹50, then ₹1,000 adds ₹100, and so on. Owed = sum of rewards
+    // for every step now reached; what to pay now = owed − already earned on this rule
+    // this month. Using the SUM of commission_amount (not a row count) keeps this
+    // correct even after a partial settlement splits a row in two.
+    if (rule.type === "milestone_ladder") {
+        const tiers = (rule.tiers ?? []) as { target: number; reward: number }[];
+        const IST = "Asia/Kolkata";
+        const { rows } = await pool.query(
+            `SELECT COALESCE(SUM(revenue_amount),0)::float    AS revenue,
+                    COALESCE(SUM(commission_amount),0)::float AS earned
+             FROM commission_earned
+             WHERE staff_id=$1 AND rule_id=$2
+               AND date_trunc('month', earned_at AT TIME ZONE '${IST}') = date_trunc('month', NOW() AT TIME ZONE '${IST}')`,
+            [staff_id, rule.id]
+        );
+        const periodRevenue = parseFloat(rows[0]?.revenue ?? "0") + revenue;
+        const alreadyEarned = parseFloat(rows[0]?.earned ?? "0");
+        const owed = tiers
+            .filter((t) => periodRevenue >= Number(t.target))
+            .reduce((sum, t) => sum + Number(t.reward), 0);
+        const payNow = Math.max(0, parseFloat((owed - alreadyEarned).toFixed(2)));
+
+        // Always write a row — even at ₹0 — so this sale's revenue counts toward
+        // next time's cumulative total (the revenue lives on these rows).
+        if (revenue > 0 || payNow > 0) {
+            inserts.push(
+                commissionEarnedRepository.insert({
+                    salon_id: salonId, staff_id, sale_id: saleId,
+                    appointment_id: appointmentId ?? null, category,
+                    revenue_amount: parseFloat(revenue.toFixed(2)),
+                    commission_kind: "fixed_rate",
+                    commission_rate: payNow,
+                    commission_amount: payNow,
+                    rule_id: rule.id,
+                })
+            );
+        }
+        logger.info("commissionCalculationService: milestone_ladder evaluated", {
+            staff_id, saleId, category, ruleId: rule.id, periodRevenue, owed, alreadyEarned, payNow,
+        });
+        return true;
+    }
+
     // ── Threshold gate (applies to all 3 types) ──────────────────────────────────
     // "They receive [rate] when they generate [condition_target] based on [condition_metric]"
     let periodMetric: number | null = null;

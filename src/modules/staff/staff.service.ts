@@ -31,7 +31,28 @@ import {
 
 // ─── Staff ────────────────────────────────────────────────────────────────────
 
+export const MANAGER_LIMIT_MESSAGE =
+    "This salon already has a Manager. Only one Manager is allowed per salon — change or remove the existing Manager first.";
+
+// One salon, one Manager — for making someone a Manager. A member who is
+// ALREADY a Manager is always allowed through (re-saving them, or assigning
+// them the Manager role they already hold, must keep working — including in
+// salons that predate this rule and have more than one). Anyone else is
+// rejected as soon as the salon has any Manager. 400 rather than 409 so the
+// Add/Edit Staff form shows it as a normal error, not its duplicate-email text.
+export async function assertNoOtherManager(salonId: string, staffId?: string | null): Promise<void> {
+    const managerIds = await staffRepository.listManagerIds(salonId);
+    if (staffId && managerIds.includes(String(staffId))) return;
+    if (managerIds.length > 0) throw new AppError(400, MANAGER_LIMIT_MESSAGE, "MANAGER_LIMIT_REACHED");
+}
+
 export const staffService = {
+    // Ids of the salon's current Manager(s) — lets the Add/Edit Staff form grey
+    // out the "Manager" role up front instead of only rejecting it on Save.
+    async getManagerIds(salonId: string): Promise<{ manager_ids: string[] }> {
+        return { manager_ids: await staffRepository.listManagerIds(salonId) };
+    },
+
     async list(salonId: string, query: StaffListQuery) {
         logger.info("staffService.list", { salonId });
         return staffRepository.list(salonId, query);
@@ -93,6 +114,10 @@ export const staffService = {
         console.log("[DEBUG] staffService.create - params:", { salonId, requesterUserId, requesterRole, email: body.email });
 
         try {
+            if (String(body.permission_level ?? "").toLowerCase() === "manager") {
+                await assertNoOtherManager(salonId);
+            }
+
             // Staff Login off (no email at all) — none of the duplicate-email/
             // owner-admin-collision checks below mean anything without an
             // email to check, so they're skipped entirely rather than run
@@ -243,6 +268,10 @@ export const staffService = {
 
         const existing = await staffRepository.findById(id, salonId);
         if (!existing) throw new AppError(404, "Staff not found", "NOT_FOUND");
+
+        if (String((patch as any).permission_level ?? "").toLowerCase() === "manager") {
+            await assertNoOtherManager(salonId, id);
+        }
 
         // Split out blocked_times — handled separately, not a staff table column
         const { blocked_times: blockedTimesToCreate, ...staffPatch } = patch as any;
@@ -502,6 +531,26 @@ export const staffService = {
         // two separate creates.
         const seenEmails = new Map<string, number>();
 
+        // One Manager per salon: walk the file in order and let only the first
+        // Manager row through (or none, if the salon already has one other than
+        // that row's own staff member). Later Manager rows are rejected below.
+        const managerRowRejected = new Set<number>();
+        {
+            const managerHolders = new Set(await staffRepository.listManagerIds(salonId));
+            rows.forEach((row, idx) => {
+                const roleRaw = String(row["Role"] ?? row["role"] ?? "").trim().toLowerCase();
+                if (roleRaw !== "manager") return;
+                const email = String(row["Email"] ?? row["email"] ?? "").trim().toLowerCase();
+                const existingStaff = email ? existingMap.get(email) : undefined;
+                const holderKey = existingStaff ? String(existingStaff.id) : `new:${idx}`;
+                if (managerHolders.size > 0 && !managerHolders.has(holderKey)) {
+                    managerRowRejected.add(idx + 1);
+                } else {
+                    managerHolders.add(holderKey);
+                }
+            });
+        }
+
         const BATCH_SIZE = 5;
         for (let i = 0; i < rows.length; i += BATCH_SIZE) {
             const batch = rows.slice(i, i + BATCH_SIZE);
@@ -549,6 +598,9 @@ export const staffService = {
                         if (roleRaw) {
                             permission_level = ROLE_TO_PERMISSION_LEVEL[roleRaw.toLowerCase()] ?? null;
                             if (!permission_level) fieldErrors.push({ field: "Role", message: "Role does not exist" });
+                        }
+                        if (managerRowRejected.has(rowNum)) {
+                            fieldErrors.push({ field: "Role", message: "Only one Manager is allowed per salon" });
                         }
 
                         const hourly_rate = toNum(row["Hourly Rate"] ?? row["hourly_rate"]);

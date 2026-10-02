@@ -593,6 +593,7 @@ export const appointmentsService = {
         notificationsService.create({
             salon_id: appointment.salon_id,
             type:     "appointment",
+            reference_id: appointment.id,
             title:    "New Appointment Booked",
             body:     `${full?.client_name ?? "Walk-in"} — ${formatDate(appointment.scheduled_at)} at ${formatTime(appointment.scheduled_at)}`,
             event_key: "newAppointment",
@@ -1123,6 +1124,7 @@ export const appointmentsService = {
             notificationsService.create({
                 salon_id: existing.salon_id,
                 type:     "appointment",
+            reference_id: updated.id,
                 title:    "Appointment Updated",
                 body:     `${existing.client_name ?? "Walk-in"} — ${formatDate(updated.scheduled_at)} at ${formatTime(updated.scheduled_at)}`,
                 scheduled_at: updated.scheduled_at,
@@ -1246,6 +1248,7 @@ export const appointmentsService = {
         notificationsService.create({
             salon_id: existing.salon_id,
             type:     "appointment",
+            reference_id: existing.id,
             title:    "Appointment Cancelled",
             body:     `${existing.client_name ?? "Walk-in"} — ${formatDate(existing.scheduled_at)} at ${formatTime(existing.scheduled_at)}`,
             event_key: "appointmentCancelled",

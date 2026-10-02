@@ -119,6 +119,14 @@ router.get(
   staffController.checkEmail
 );
 
+// ─── Current Manager(s) of the salon (must be BEFORE /:id) — read by the
+// Add/Edit Staff Role dropdown, so same gate as check-email. ───────────────
+router.get(
+  "/manager-status",
+  auth, ownerAdminStaff, requireAnyPermission(["add_team_member", "edit_team_member"]),
+  staffController.managerStatus
+);
+
 // ─── Scheduler staff sequence (must be BEFORE /:id — see the Commissions
 // comment above for why a literal path segment loses to an earlier /:id
 // route otherwise) — gated by manage_calendar, the same permission that

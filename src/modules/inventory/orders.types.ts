@@ -128,6 +128,8 @@ export interface ReceiveOrderItemDTO {
 export interface ReceiveOrderDTO {
     items: ReceiveOrderItemDTO[];
     purchase_date?: string;
+    // Staff member who received this delivery — carried onto the Purchase row.
+    received_by_staff_id?: string | null;
 }
 
 export interface ListOrderFilters {

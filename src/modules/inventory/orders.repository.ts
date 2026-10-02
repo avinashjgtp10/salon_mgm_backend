@@ -360,7 +360,7 @@ export const ordersRepository = {
         // this call is damaged-only (no good units to stock in).
         const updatedProducts = purchaseItems.length
             ? (await purchasesRepository.create(
-                { supplier_id: order.supplier_id, purchase_date: data.purchase_date, order_id: orderId, items: purchaseItems },
+                { supplier_id: order.supplier_id, purchase_date: data.purchase_date, order_id: orderId, received_by_staff_id: data.received_by_staff_id ?? null, items: purchaseItems },
                 salonId,
                 createdBy,
             )).updatedProducts

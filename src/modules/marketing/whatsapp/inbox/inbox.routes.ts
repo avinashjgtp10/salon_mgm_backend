@@ -17,6 +17,9 @@ const viewInbox = requirePermission('view_inbox')
 // survivor since it matches this route's actual name.
 const replyToConversation = requirePermission('reply_to_conversation')
 
+// GET  /api/v1/inbox/unread-count — { unread } total across all conversations (sidebar badge)
+router.get('/unread-count', auth, viewInbox, inboxController.getUnreadCount)
+
 // GET  /api/v1/inbox/conversations
 router.get('/conversations', auth, viewInbox, inboxController.getConversations)
 
