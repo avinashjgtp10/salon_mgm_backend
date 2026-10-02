@@ -1,8 +1,9 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import { AppError } from "./error.middleware";
+import { isSessionActive } from "../modules/auth/session.util";
 
-export const authMiddleware = (
+export const authMiddleware = async (
   req: Request & { user?: any },
   _res: Response,
   next: NextFunction
@@ -25,7 +26,30 @@ export const authMiddleware = (
       throw new AppError(500, "JWT access secret missing", "JWT_SECRET_MISSING");
     }
 
-    const decoded = jwt.verify(token, secret);
+    const decoded: any = jwt.verify(token, secret);
+
+    // Single-login-per-account: a token minted for a login session carries
+    // that session's id. If the session was ended (the account logged in
+    // elsewhere, logout, password reset) the token stops working at once
+    // instead of lingering until it expires. Tokens with no `sid` (issued
+    // before this existed, the super-admin's own login, and the branch-owner
+    // "enter salon" token) are not checked.
+    if (decoded?.sid) {
+      let active = true;
+      try {
+        active = await isSessionActive(String(decoded.sid));
+      } catch {
+        // A DB hiccup must never sign everyone out — fail open.
+        active = true;
+      }
+      if (!active) {
+        return next(new AppError(
+          401,
+          "You were signed out because this account was logged in on another device.",
+          "SESSION_REPLACED",
+        ));
+      }
+    }
 
     req.user = decoded;
     return next();
