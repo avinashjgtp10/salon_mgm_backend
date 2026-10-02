@@ -345,6 +345,16 @@ router.delete(
 // does, so it sits behind the same stock_adjustment permission, not
 // manage_inventory — a staff member who can Add Stock must also be able to
 // record a Purchase.
+// Staff to pick from in Record Purchase / Receive Against Order's "Received By"
+// field — open to anyone who can do either of those two actions.
+router.get(
+    "/product-inventory/purchase-receivers",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    requireAnyPermission(["adjust_product_stock", "receive_order"]),
+    purchasesController.listReceivers
+);
+
 router.post(
     "/product-inventory/purchases",
     authMiddleware,
