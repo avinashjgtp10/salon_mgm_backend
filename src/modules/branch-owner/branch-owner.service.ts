@@ -25,6 +25,25 @@ export const branchOwnerService = {
     return branchOwnerRepository.getMySalons(branchOwnerId);
   },
 
+  // Payload for POST /salons/list: the salon rows plus the My Salons summary
+  // tiles, so the page needs only this one call. revenue_today comes out of
+  // Postgres as a numeric (string), so it's coerced to a number here — summing
+  // the raw strings concatenates them instead of adding.
+  async getMySalonsList(branchOwnerId: string) {
+    const rows: any[] = await branchOwnerRepository.getMySalons(branchOwnerId);
+    const salons = rows.map((s) => ({ ...s, revenue_today: Number(s.revenue_today) || 0 }));
+    const active = salons.filter((s) => s.status === "active").length;
+    const summary = {
+      total_salons: salons.length,
+      active_salons: active,
+      inactive_salons: salons.length - active,
+      total_staff: salons.reduce((n, s) => n + (Number(s.staff_count) || 0), 0),
+      revenue_today: salons.reduce((n, s) => n + s.revenue_today, 0),
+      without_active_plan: salons.filter((s) => !s.has_active_plan).length,
+    };
+    return { salons, summary };
+  },
+
   // Single combined payload for the Branch Owner dashboard — replaces what
   // used to be 3 separate calls (salons, stats, payments), 2 of which
   // (/stats, /payments) hit routes that never existed on the backend and
@@ -47,6 +66,52 @@ export const branchOwnerService = {
     // knows which period it belongs to, which the dedicated revenue-trend
     // endpoint provides when the Daily/Weekly/Monthly toggle is used.
     return { salons, stats, payments, revenueTrend: dailyTrend.points, inventorySummary, attention };
+  },
+
+  // Everything the dashboard KPI cards show, in one payload, scoped to either
+  // every assigned salon or the single salon picked in the dropdown. Revenue
+  // and appointment figures sum salonDashboardRepository.getSummary() per
+  // salon, so they match each salon's own dashboard cards exactly.
+  async getDashboardCards(branchOwnerId: string, salonId?: string) {
+    if (salonId) await assertSalonsAssigned(branchOwnerId, [salonId]);
+    const allSalons: any[] = await branchOwnerRepository.getMySalons(branchOwnerId);
+    const salons = salonId ? allSalons.filter((s) => s.id === salonId) : allSalons;
+
+    const [summaries, scopeTotals] = await Promise.all([
+      Promise.all(salons.map((s) => salonDashboardRepository.getSummary(s.id))),
+      branchOwnerRepository.getScopeTotals(salons.map((s) => s.id)),
+    ]);
+
+    const sum = (pick: (x: (typeof summaries)[number]) => number | undefined) =>
+      summaries.reduce((n, x) => n + (Number(pick(x)) || 0), 0);
+    const active = salons.filter((s) => s.status === "active").length;
+
+    return {
+      salons: {
+        total: salons.length,
+        active,
+        inactive: salons.length - active,
+        without_plan: salons.filter((s) => !s.has_active_plan).length,
+      },
+      staff: salons.reduce((n, s) => n + (Number(s.staff_count) || 0), 0),
+      clients: scopeTotals.total_clients,
+      bookings: {
+        total: scopeTotals.total_bookings,
+        today: sum((x) => x.todayAppointmentsCount),
+        yesterday: sum((x) => x.yesterdayAppointmentsCount),
+      },
+      new_clients: {
+        today: sum((x) => x.newClientsToday),
+        this_month: sum((x) => x.newClientsThisMonth),
+      },
+      revenue: {
+        this_month: sum((x) => x.totalRevenue),
+        last_month: sum((x) => x.lastMonthRevenue),
+        today: sum((x) => x.todayRevenue),
+        yesterday: sum((x) => x.yesterdayRevenue),
+        all_time: sum((x) => x.allTimeRevenue),
+      },
+    };
   },
 
   // Separate from getDashboard so switching the Daily/Weekly/Monthly toggle
@@ -138,7 +203,11 @@ export const branchOwnerService = {
       const client = await pool.connect();
       try {
           await client.query("BEGIN");
-          await branchOwnerRepository.executeTransfer(client, source_product_id, destProductId, quantity);
+          await branchOwnerRepository.executeTransfer(client, {
+              sourceSalonId: source_salon_id, destSalonId: dest_salon_id,
+              sourceProductId: source_product_id, destProductId: destProductId!,
+              quantity, reason: body.reason?.trim() || null, createdBy: branchOwnerId,
+          });
           await client.query("COMMIT");
       } catch (err) {
           await client.query("ROLLBACK");
@@ -170,7 +239,11 @@ export const branchOwnerService = {
       const client = await pool.connect();
       try {
           await client.query("BEGIN");
-          await branchOwnerRepository.executeTransfer(client, transfer.source_product_id, transfer.dest_product_id, Number(transfer.quantity));
+          await branchOwnerRepository.executeTransfer(client, {
+              sourceSalonId: transfer.source_salon_id, destSalonId: transfer.dest_salon_id,
+              sourceProductId: transfer.source_product_id, destProductId: transfer.dest_product_id,
+              quantity: Number(transfer.quantity), reason: transfer.reason ?? null, createdBy: branchOwnerId,
+          });
           await client.query("COMMIT");
       } catch (err) {
           await client.query("ROLLBACK");
