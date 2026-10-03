@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import pool, { safeQuery } from "../../config/database";
 
 export const branchOwnerRepository = {
@@ -99,6 +100,31 @@ export const branchOwnerRepository = {
       ORDER BY s.created_at DESC
     `, [branchOwnerId]);
     return rows;
+  },
+
+  // All-time booking count and distinct client count for an explicit set of
+  // salons — the dashboard cards' scope is either every assigned salon or the
+  // one picked in the salon dropdown, so this takes the ids rather than the
+  // branch owner. Same booking/client conventions as getDashboardStats().
+  async getScopeTotals(salonIds: string[]) {
+    if (salonIds.length === 0) return { total_bookings: 0, total_clients: 0 };
+    const { rows } = await pool.query<{ total_bookings: number; total_clients: number }>(`
+      SELECT
+        (SELECT COUNT(*) FROM appointments
+          WHERE salon_id = ANY($1::uuid[]) AND deleted_at IS NULL
+            AND status NOT IN ('cancelled', 'no-show'))::int AS total_bookings,
+        (SELECT COUNT(DISTINCT c.id)
+          FROM clients c
+          INNER JOIN (
+            SELECT client_id FROM appointments
+              WHERE salon_id = ANY($1::uuid[]) AND client_id IS NOT NULL AND deleted_at IS NULL
+            UNION
+            SELECT client_id FROM sales
+              WHERE salon_id = ANY($1::uuid[]) AND client_id IS NOT NULL
+          ) visited ON visited.client_id = c.id
+          WHERE c.is_active = true)::int AS total_clients
+    `, [salonIds]);
+    return rows[0] ?? { total_bookings: 0, total_clients: 0 };
   },
 
   // Cross-salon dashboard stats — one query per metric, each scoped to every
@@ -583,9 +609,69 @@ export const branchOwnerRepository = {
     return rows[0];
   },
 
-  async executeTransfer(client: any, sourceProductId: string, destProductId: string, quantity: number): Promise<void> {
-    await client.query(`UPDATE products SET amount = amount - $1, updated_at = NOW() WHERE id = $2`, [quantity, sourceProductId]);
-    await client.query(`UPDATE products SET amount = amount + $1, updated_at = NOW() WHERE id = $2`, [quantity, destProductId]);
+  // Moves the stock AND writes the two Stock Ledger rows in the caller's
+  // transaction: a transfer_out (negative quantity) in the source salon's
+  // ledger and a transfer_in (positive) in the destination's, each snapshotting
+  // that product's balance right after the movement. Product rows are locked
+  // FOR UPDATE so the balances can't be read stale. The ledger rows land on
+  // each salon's main branch (same lookup purchases.repository.ts uses).
+  async executeTransfer(client: any, params: {
+    sourceSalonId: string; destSalonId: string; sourceProductId: string; destProductId: string;
+    quantity: number; reason: string | null; createdBy: string;
+  }): Promise<void> {
+    const { sourceSalonId, destSalonId, sourceProductId, destProductId, quantity, reason, createdBy } = params;
+
+    const { rows: srcRows } = await client.query(
+      `SELECT COALESCE(amount, 0) AS amount FROM products WHERE id = $1 AND salon_id = $2 FOR UPDATE`,
+      [sourceProductId, sourceSalonId]
+    );
+    const { rows: dstRows } = await client.query(
+      `SELECT COALESCE(amount, 0) AS amount FROM products WHERE id = $1 AND salon_id = $2 FOR UPDATE`,
+      [destProductId, destSalonId]
+    );
+    if (!srcRows.length || !dstRows.length) throw new Error("Transfer product not found");
+
+    const sourceBalance = parseFloat(srcRows[0].amount) - quantity;
+    const destBalance = parseFloat(dstRows[0].amount) + quantity;
+    if (sourceBalance < 0) throw new Error("Insufficient stock at source");
+
+    await client.query(`UPDATE products SET amount = $1, updated_at = NOW() WHERE id = $2`, [sourceBalance, sourceProductId]);
+    await client.query(`UPDATE products SET amount = $1, updated_at = NOW() WHERE id = $2`, [destBalance, destProductId]);
+
+    const { rows: nameRows } = await client.query(
+      `SELECT id, COALESCE(business_name, slug, 'Unnamed') AS name FROM salons WHERE id = ANY($1::uuid[])`,
+      [[sourceSalonId, destSalonId]]
+    );
+    const nameOf = (id: string) => nameRows.find((r: any) => r.id === id)?.name ?? "Unknown";
+
+    const mainBranchOf = async (salonId: string): Promise<string> => {
+      const { rows } = await client.query(
+        `SELECT id FROM branches WHERE salon_id = $1 ORDER BY is_main DESC, created_at ASC LIMIT 1`,
+        [salonId]
+      );
+      if (!rows.length) throw new Error("No branch found for salon");
+      return rows[0].id;
+    };
+    // Sequential: both queries share this one transaction client.
+    const sourceBranchId = await mainBranchOf(sourceSalonId);
+    const destBranchId = await mainBranchOf(destSalonId);
+
+    // Both rows share one transfer_group_id and carry the source/destination
+    // branch ids, so the Stock Ledger page can pair them and show
+    // "Source → Destination" (same columns the in-salon branch transfer uses).
+    const transferGroupId = randomUUID();
+    const insertLedger = (salonId: string, branchId: string, productId: string, type: "transfer_in" | "transfer_out",
+                          signedQty: number, balanceAfter: number, reference: string) =>
+      client.query(
+        `INSERT INTO stock_ledger (salon_id, branch_id, product_id, transaction_type, reference, quantity, balance_after, reason, created_by,
+                                   transfer_group_id, source_branch_id, destination_branch_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [salonId, branchId, productId, type, reference, signedQty, balanceAfter, reason, createdBy,
+         transferGroupId, sourceBranchId, destBranchId]
+      );
+
+    await insertLedger(sourceSalonId, sourceBranchId, sourceProductId, "transfer_out", -quantity, sourceBalance, `Transfer Out → ${nameOf(destSalonId)}`);
+    await insertLedger(destSalonId, destBranchId, destProductId, "transfer_in", quantity, destBalance, `Transfer In ← ${nameOf(sourceSalonId)}`);
   },
 
   async recordTransfer(branchOwnerId: string, params: {
