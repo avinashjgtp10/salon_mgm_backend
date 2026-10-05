@@ -169,8 +169,12 @@ export const superAdminRepository = {
           WHERE salon_id = s.id AND status IN ('completed','partial')
         ), 0)::numeric                                                                    AS revenue,
         sub.status                                                                        AS subscription_status,
-        sp.name                                                                           AS plan_name,
-        COALESCE(sub.trial_end, sub.current_period_end)                                   AS plan_expires_at
+        -- The plan Super Admin assigned (Plans & Subscriptions → Salon Customization)
+        -- is what the salon's own Billing page and feature gating use, so it wins;
+        -- the subscription row's plan is the fallback for salons never customized.
+        COALESCE(spd.name, sp.name)                                                       AS plan_name,
+        spc.base_tier                                                                     AS plan_tier,
+        COALESCE(sub.trial_end, sub.current_period_end, spc.expiry_date)                  AS plan_expires_at
       FROM salons s
       LEFT JOIN users u ON u.id = s.owner_id
       LEFT JOIN LATERAL (
@@ -180,6 +184,8 @@ export const superAdminRepository = {
         LIMIT 1
       ) sub ON true
       LEFT JOIN subscription_plans sp ON sp.id = sub.plan_id
+      LEFT JOIN salon_plan_customizations spc ON spc.salon_id = s.id
+      LEFT JOIN salon_plan_definitions spd ON spd.tier = spc.base_tier
       WHERE ($1::text IS NULL
          OR s.business_name ILIKE $1
          OR s.slug          ILIKE $1
