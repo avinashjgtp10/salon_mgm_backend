@@ -1,6 +1,7 @@
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { attendanceRepository } from "./attendance.repository";
+import { notificationsService } from "../notifications/notifications.service";
 import {
     Attendance,
     AttendanceSettings,
@@ -53,6 +54,33 @@ function calcStatus(
 }
 
 const VALID_STATUSES: AttendanceStatus[] = ["present", "absent", "half_day", "late", "on_leave"];
+
+async function notifyAttendancePunch(record: Attendance, action: "in" | "out"): Promise<void> {
+    try {
+        const timestamp = action === "in" ? record.check_in : record.check_out;
+        if (!timestamp) return;
+        const details = await attendanceRepository.findById(record.id);
+        if (!details || details.salon_id !== record.salon_id || details.staff_id !== record.staff_id) return;
+        const name = details.staff_name?.trim() || "A staff member";
+        const ist = new Date(new Date(timestamp).getTime() + 330 * 60_000);
+        const hour = ist.getUTCHours();
+        const clock = `${String(hour % 12 || 12).padStart(2, "0")}:${String(ist.getUTCMinutes()).padStart(2, "0")} ${hour >= 12 ? "PM" : "AM"}`;
+        const day = `${String(ist.getUTCDate()).padStart(2, "0")}-${String(ist.getUTCMonth() + 1).padStart(2, "0")}-${ist.getUTCFullYear()}`;
+        await notificationsService.create({
+            salon_id: record.salon_id,
+            reference_id: record.id,
+            type: "attendance",
+            title: action === "in" ? "Staff Checked In" : "Staff Checked Out",
+            body: `${name} checked ${action} at ${clock} (IST) on ${day}.`,
+            event_key: "otherUpdates",
+        }, { deduplicate: true, persistWhenPushDisabled: true });
+    } catch (error: any) {
+        // Attendance is already saved; notification outages must not undo punches.
+        logger.error("Attendance notification failed", {
+            attendanceId: record.id, salonId: record.salon_id, action, message: error?.message,
+        });
+    }
+}
 
 // upsertSettings() builds its SQL column list directly from this object's keys,
 // so only real attendance_settings columns may pass through — otherwise any
@@ -145,6 +173,7 @@ export const attendanceService = {
             location: location?.trim() || undefined,
         });
         logger.info("attendance.checkIn", { salonId, staffId: staff_id, date, status });
+        void notifyAttendancePunch(record, "in");
         return record;
     },
 
@@ -176,6 +205,7 @@ export const attendanceService = {
             location: location?.trim() || undefined,
         });
         logger.info("attendance.checkOut", { salonId, staffId: staff_id, date, status, hours });
+        void notifyAttendancePunch(record, "out");
         return record;
     },
 
@@ -189,30 +219,38 @@ export const attendanceService = {
         if (check_type === "in") {
             const onLeave = await attendanceRepository.hasApprovedLeave(staff_id, date);
             if (onLeave) {
-                return attendanceRepository.upsert({
+                const record = await attendanceRepository.upsert({
                     salonId, staffId: staff_id, date, status: "on_leave", source, checkIn: ts,
                 });
+                void notifyAttendancePunch(record, "in");
+                return record;
             }
             const settings = await attendanceService.getSettings(salonId);
             const status = calcStatus(ts, null, settings);
-            return attendanceRepository.upsertCheckIn({ salonId, staffId: staff_id, date, checkIn: ts, status, source });
+            const record = await attendanceRepository.upsertCheckIn({ salonId, staffId: staff_id, date, checkIn: ts, status, source });
+            void notifyAttendancePunch(record, "in");
+            return record;
         }
 
         // check_type === "out"
         const existing = await attendanceRepository.findByStaffAndDate(staff_id, date);
         if (!existing || !existing.check_in) {
             // No check-in: upsert with check-out only, treat as present
-            return attendanceRepository.upsert({
+            const record = await attendanceRepository.upsert({
                 salonId, staffId: staff_id, date, status: "present", source, checkOut: ts,
             });
+            void notifyAttendancePunch(record, "out");
+            return record;
         }
 
         const settings = await attendanceService.getSettings(salonId);
         const hours = hoursFromTimestamps(existing.check_in, ts);
         const status = calcStatus(existing.check_in, ts, settings);
-        return attendanceRepository.upsertCheckOut({
+        const record = await attendanceRepository.upsertCheckOut({
             salonId, staffId: staff_id, date, checkOut: ts, status, hoursWorked: hours,
         });
+        void notifyAttendancePunch(record, "out");
+        return record;
     },
 
     // ── Manual Mark ───────────────────────────────────────────────────────────

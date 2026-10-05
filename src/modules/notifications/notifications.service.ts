@@ -26,6 +26,8 @@ type CreateNotificationData = {
 
 type CreateNotificationOptions = {
   rejectOnPushFailure?: boolean;
+  deduplicate?: boolean;
+  persistWhenPushDisabled?: boolean;
 };
 
 export const notificationsService = {
@@ -46,12 +48,12 @@ export const notificationsService = {
     };
     const preferenceEvent = data.event_key ?? fallbackEvents[data.type] ?? "otherUpdates";
     const allowed = await canSendPush(data.salon_id, preferenceEvent);
-    if (!allowed) {
+    if (!allowed && !options.persistWhenPushDisabled) {
       logger.info("Notification skipped by push preference", { salonId: data.salon_id, eventKey: preferenceEvent });
       return null;
     }
     const recipientUserIds = data.type === "appointment" ? await appointmentRecipients(data.salon_id, data.reference_id) : [];
-    const notification = await notificationsRepository.create({
+    const createData = {
       reference_id: data.reference_id,
       recipient_user_ids: recipientUserIds,
       salon_id: data.salon_id,
@@ -63,7 +65,11 @@ export const notificationsService = {
       alert_status: data.alert_status,
       spotlight_feature_id: data.spotlight_feature_id,
       contact_phone: data.contact_phone,
-    });
+    };
+    const notification = options.deduplicate
+      ? await notificationsRepository.createOnce(createData)
+      : await notificationsRepository.create(createData);
+    if (!notification) return null;
     logger.info("Notification DB row created", {
       notificationId: notification.id,
       salonId: notification.salon_id,
@@ -86,6 +92,8 @@ export const notificationsService = {
         message: err?.message,
       });
     }
+
+    if (!allowed) return notification;
 
     let pushStage = "device_token_lookup";
     try {
