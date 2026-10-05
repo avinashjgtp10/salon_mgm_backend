@@ -1,4 +1,5 @@
 import pool from "../../config/database";
+import type { PoolClient } from "pg";
 
 export interface Notification {
   id: string;
@@ -18,8 +19,7 @@ export interface Notification {
   contact_phone?: string | null;
 }
 
-export const notificationsRepository = {
-  async create(data: {
+type CreateNotificationData = {
     salon_id: string;
     type: string;
     title: string;
@@ -31,8 +31,11 @@ export const notificationsRepository = {
     reference_id?: string;
     recipient_user_ids?: string[];
     contact_phone?: string;
-  }) {
-    const { rows } = await pool.query<Notification>(
+};
+
+export const notificationsRepository = {
+  async create(data: CreateNotificationData, client?: PoolClient): Promise<Notification> {
+    const { rows } = await (client ?? pool).query<Notification>(
       `INSERT INTO notifications (salon_id, type, title, body, product_id, branch_id, alert_status, spotlight_feature_id, reference_id, recipient_user_ids, contact_phone)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
@@ -43,6 +46,35 @@ export const notificationsRepository = {
       ]
     );
     return rows[0];
+  },
+
+  // Serialize retries of the same attendance event across server instances.
+  // No new column/index is required; check-in/out have distinct stable titles.
+  async createOnce(data: CreateNotificationData): Promise<Notification | null> {
+    if (!data.reference_id) throw new Error("A reference is required for a deduplicated notification");
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const key = JSON.stringify([data.salon_id, data.type, data.reference_id, data.title]);
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [key]);
+      const { rows } = await client.query(
+        `SELECT id FROM notifications WHERE salon_id = $1 AND type = $2
+         AND reference_id = $3 AND title = $4 LIMIT 1`,
+        [data.salon_id, data.type, data.reference_id, data.title]
+      );
+      if (rows.length) {
+        await client.query("COMMIT");
+        return null;
+      }
+      const notification = await notificationsRepository.create(data, client);
+      await client.query("COMMIT");
+      return notification;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   },
 
   // Finds the still-active (unresolved) alert notification for this
