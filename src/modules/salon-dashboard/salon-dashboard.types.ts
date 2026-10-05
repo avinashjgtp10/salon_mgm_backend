@@ -44,6 +44,11 @@ export interface TodaysBirthdays {
   clients: BirthdayClient[];
 }
 
+// Same row shape as a birthday — just clients whose anniversary falls today.
+export interface TodaysAnniversaries {
+  clients: BirthdayClient[];
+}
+
 // "Monthly Projection & Growth" card. Everything is the current IST calendar
 // month; "sales" is money received (same definition as the other dashboard
 // revenue cards) and a "walk-in" is one completed bill.
@@ -123,5 +128,6 @@ export interface DashboardCombined {
   revenueChart: RevenueDataPoint[];
   pendingPayments: PendingPayments;
   todaysBirthdays: TodaysBirthdays;
+  todaysAnniversaries: TodaysAnniversaries;
   paymentModeBreakdown: PaymentModeBreakdown;
 }
