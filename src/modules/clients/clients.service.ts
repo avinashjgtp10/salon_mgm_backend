@@ -91,7 +91,11 @@ async function attachExtendedProfile(
             ? pool.query(
                 `SELECT
                     COUNT(*) FILTER (WHERE a.status IN ('paid','partial'))::int AS total_visits,
-                    COUNT(*) FILTER (WHERE a.status = 'cancelled')::int         AS cancelled_count
+                    COUNT(*) FILTER (WHERE a.status = 'cancelled')::int         AS cancelled_count,
+                    -- Same paid/partial definition as total_visits above, so "Last
+                    -- Visit" and "Visits" on the booking card always agree. Not
+                    -- clients.last_visit_date: nothing ever writes that column.
+                    MAX(a.scheduled_at) FILTER (WHERE a.status IN ('paid','partial')) AS last_visit_date
                  FROM appointments a
                  WHERE a.client_id = $1 AND a.salon_id = $2 AND a.deleted_at IS NULL`,
                 [clientId, salonId],
@@ -144,6 +148,7 @@ async function attachExtendedProfile(
             total_visits: Number(statsRow.total_visits ?? 0),
             cancelled_count: Number(statsRow.cancelled_count ?? 0),
             total_revenue: Number(revenueRow.total_revenue ?? 0),
+            last_visit_date: statsRow.last_visit_date ? new Date(statsRow.last_visit_date).toISOString() : null,
         };
     }
     if (includeSet.has("loyalty")) result.loyalty_eligibility = loyaltyRes ?? null;
@@ -332,7 +337,7 @@ export const clientsService = {
             const includeSet = new Set(String(include).split(",").map((s) => s.trim()).filter(Boolean));
             if (includeSet.has("packages")) withRel.packages = [];
             if (includeSet.has("memberships")) withRel.memberships = [];
-            if (includeSet.has("history")) withRel.history = { total_visits: 0, cancelled_count: 0, total_revenue: 0 };
+            if (includeSet.has("history")) withRel.history = { total_visits: 0, cancelled_count: 0, total_revenue: 0, last_visit_date: null };
             if (includeSet.has("loyalty")) withRel.loyalty_eligibility = null;
         }
 
@@ -830,9 +835,10 @@ export const clientsService = {
         return result;
     },
 
-    async search(q: string, salonId: string, limit?: number): Promise<Client[]> {
+    async search(q: string, salonId: string, limit?: number, offset?: number): Promise<Client[]> {
+        // Empty is allowed here on purpose: validateSearchClients only lets an
+        // empty q through for `browse=true` (full A→Z list), and rejects it otherwise.
         const term = String(q || "").trim();
-        if (term.length < 2) throw new AppError(400, "q must be at least 2 characters", "VALIDATION_ERROR");
-        return clientsRepository.search(term, limit ?? 20, salonId);
+        return clientsRepository.search(term, limit ?? 20, salonId, offset ?? 0);
     },
 };

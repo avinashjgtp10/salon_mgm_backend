@@ -5,6 +5,7 @@ import { appointmentsService } from "../appointments/appointments.service";
 import type {
   DashboardSummary,
   RevenueDataPoint,
+  MonthlyProjection,
   PaymentModeBreakdown,
   TopStaffMember,
   StaffRevenueEntry,
@@ -377,19 +378,166 @@ export const salonDashboardRepository = {
     }));
   },
 
+  // ── Monthly Projection & Growth card ─────────────────────────────────────
+  // Same revenue events and IST business-day bucketing as getSummary (money
+  // actually received, dated by the appointment's visit, falling back to the
+  // sale's created_at) so this card's MTD agrees with the Total Revenue card.
+  async getMonthlyProjection(salonId: string, gender?: string): Promise<MonthlyProjection> {
+    const istNow = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+    const y = istNow.getUTCFullYear();
+    const m = istNow.getUTCMonth(); // 0-based
+    const daysPassed = istNow.getUTCDate();
+    const daysInMonth = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const asOf = `${y}-${pad(m + 1)}-${pad(daysPassed)}`;
+    const lastMonthDate = new Date(Date.UTC(y, m - 1, 1));
+    const lastMonthStart = `${lastMonthDate.getUTCFullYear()}-${pad(lastMonthDate.getUTCMonth() + 1)}-01`;
+    const monthStartKey = `${y}-${pad(m + 1)}-`;
+    const lastMonthKey = `${lastMonthDate.getUTCFullYear()}-${pad(lastMonthDate.getUTCMonth() + 1)}-`;
+
+    const useGender = !!gender && gender !== "all";
+    const genderClause = useGender ? `AND LOWER(cl.gender) = $4` : "";
+    const values: unknown[] = [salonId, lastMonthStart, asOf];
+    if (useGender) values.push(gender!.toLowerCase());
+
+    const { rows } = await pool.query<{ day: string; sales: string; bills: string }>(
+      `WITH sales_rows AS (
+         SELECT COALESCE(a.scheduled_at, s.created_at) AS event_at,
+           CASE
+             WHEN s.appointment_id IS NOT NULL THEN COALESCE(pay.paid_from_payments, 0)
+             ELSE ROUND(s.total_amount)
+           END AS amount,
+           1 AS bills
+         FROM sales s
+         LEFT JOIN appointments a ON a.id = s.appointment_id
+         LEFT JOIN clients cl ON cl.id = COALESCE(s.client_id, a.client_id)
+         LEFT JOIN LATERAL (
+           SELECT COALESCE(SUM(p.paid_amount) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS paid_from_payments
+           FROM payments p
+           WHERE p.appointment_id = s.appointment_id
+         ) pay ON s.appointment_id IS NOT NULL
+         WHERE s.salon_id = $1
+           AND s.status = 'completed'
+           -- one day looser than the IST month start so the tz shift can't drop a bill
+           AND COALESCE(a.scheduled_at, s.created_at) >= ($2::date - INTERVAL '1 day')
+           AND (a.id IS NULL OR (a.status IN ('paid', 'partial') AND a.deleted_at IS NULL))
+           ${genderClause}
+       ),
+       -- Deposits on a bill still short of its total: real money in, no sale
+       -- row yet, and not a completed bill, so they add sales but no walk-in.
+       open_partial_rows AS (
+         SELECT COALESCE(a.scheduled_at, p.created_at) AS event_at, p.paid_amount AS amount, 0 AS bills
+         FROM payments p
+         JOIN appointments a ON a.id = p.appointment_id
+         LEFT JOIN clients cl ON cl.id = a.client_id
+         WHERE p.salon_id = $1
+           AND p.status = 'partial'
+           AND COALESCE(a.scheduled_at, p.created_at) >= ($2::date - INTERVAL '1 day')
+           AND a.deleted_at IS NULL
+           AND a.status NOT IN ('cancelled', 'no-show')
+           AND NOT EXISTS (
+             SELECT 1 FROM sales s2
+             WHERE s2.appointment_id = p.appointment_id AND s2.status = 'completed'
+           )
+           ${genderClause}
+       ),
+       events AS (
+         SELECT event_at, amount, bills FROM sales_rows
+         UNION ALL
+         SELECT event_at, amount, bills FROM open_partial_rows
+       )
+       SELECT d::text AS day, COALESCE(SUM(amount), 0)::numeric AS sales, COALESCE(SUM(bills), 0)::int AS bills
+       FROM (SELECT (event_at AT TIME ZONE 'Asia/Kolkata')::date AS d, amount, bills FROM events) x
+       WHERE d >= $2::date AND d <= $3::date
+       GROUP BY d
+       ORDER BY d`,
+      values,
+    );
+
+    let mtdSales = 0, mtdWalkins = 0, lmmtdSales = 0, todaySales = 0, todayWalkins = 0;
+    const dailyMap = new Map<number, number>();
+    for (const r of rows) {
+      const sales = parseFloat(r.sales) || 0;
+      const bills = parseInt(r.bills, 10) || 0;
+      const dayOfMonth = parseInt(r.day.slice(8, 10), 10);
+      if (r.day.startsWith(monthStartKey)) {
+        mtdSales += sales;
+        mtdWalkins += bills;
+        dailyMap.set(dayOfMonth, sales);
+        if (dayOfMonth === daysPassed) { todaySales = sales; todayWalkins = bills; }
+      } else if (r.day.startsWith(lastMonthKey) && dayOfMonth <= daysPassed) {
+        // Last month's matching window (a shorter month simply ends early).
+        lmmtdSales += sales;
+      }
+    }
+
+    // Target lives on its own column (migration add_salon_monthly_sales_target.sql);
+    // a missing column (migration not run yet) must not take the whole card
+    // down — it just reads as "no target set".
+    let target: number | null = null;
+    try {
+      const t = await pool.query<{ monthly_sales_target: string | null }>(
+        `SELECT monthly_sales_target FROM salons WHERE id = $1`,
+        [salonId],
+      );
+      const raw = t.rows[0]?.monthly_sales_target;
+      const n = raw == null ? null : parseFloat(raw);
+      target = n != null && Number.isFinite(n) && n > 0 ? n : null;
+    } catch (err: any) {
+      if (err?.code !== "42703") throw err; // undefined_column
+    }
+
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const remainingDays = daysInMonth - daysPassed;
+    const remainingTarget = target != null ? Math.max(0, target - mtdSales) : null;
+
+    return {
+      asOf,
+      monthLabel: new Date(Date.UTC(y, m, 1)).toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "UTC" }),
+      daysPassed,
+      daysInMonth,
+      remainingDays,
+      mtdSales: r2(mtdSales),
+      lmmtdSales: r2(lmmtdSales),
+      projectedSales: r2((mtdSales / daysPassed) * daysInMonth),
+      growthPct: lmmtdSales > 0 ? round1(((mtdSales - lmmtdSales) / lmmtdSales) * 100) : null,
+      target,
+      achievedPct: target != null ? round1((mtdSales / target) * 100) : null,
+      remainingTarget: remainingTarget != null ? r2(remainingTarget) : null,
+      requiredDailySales: remainingTarget != null && remainingDays > 0 ? r2(remainingTarget / remainingDays) : null,
+      todaySales: r2(todaySales),
+      todayWalkins,
+      dayAbv: todayWalkins > 0 ? r2(todaySales / todayWalkins) : null,
+      mtdWalkins,
+      monthAbv: mtdWalkins > 0 ? r2(mtdSales / mtdWalkins) : null,
+      daily: Array.from({ length: daysPassed }, (_, i) => ({ day: i + 1, sales: r2(dailyMap.get(i + 1) ?? 0) })),
+    };
+  },
+
+  async setMonthlyTarget(salonId: string, target: number | null): Promise<void> {
+    await pool.query(`UPDATE salons SET monthly_sales_target = $2 WHERE id = $1`, [salonId, target]);
+  },
+
   // ── Payment Mode Breakdown ("Overall Collection" card) ──────────────────
   // Powers the card that replaced the old appointment-status "Today's
   // Summary" bar chart. Deliberately reuses the Sales Summary report's own
   // filter/CTE building blocks (_buildSalesSummaryWhere,
   // _UNBILLED_APPOINTMENT_ROWS_CTE, _PAYMENT_LATERAL,
-  // _APPOINTMENT_STATUS_JOIN) instead of a hand-rolled parallel definition —
-  // an earlier version summed its own "amount received" and even split a
-  // 'split' sale's JSON payment_reference across Cash/Card/UPI, so its
-  // numbers could never match Sales Summary filtered to the same payment
-  // mode: that report's own payment-mode filter is a plain
-  // `s.payment_method = 'cash'` equality (never split-aware). Grouping by
-  // the literal payment_method here, off the exact same query shape, is the
-  // only way to guarantee the two screens always agree.
+  // _APPOINTMENT_STATUS_JOIN) instead of a hand-rolled parallel definition,
+  // so the set of bills and the "amount received" per bill are exactly
+  // Sales Summary's. Single-method bills group by their literal payment_method.
+  //
+  // Split bills ('split', or an unbilled appointment's "Cash+UPI"-style label)
+  // used to be dropped entirely, so their money was missing from every row
+  // AND from the total. They are now spread across Cash/Card/UPI: each
+  // payment's RECEIVED amount (not the raw leg amounts — those can exceed
+  // what was actually received, e.g. legs entered before a discount) is
+  // divided in proportion to that payment's Cash/Card/UPI legs, so the card's
+  // total still equals the money received. Package/Membership/eWallet legs
+  // are not counter collection and take no share. Note Sales Summary's
+  // payment-mode filter is a plain `s.payment_method = 'cash'` equality (not
+  // split-aware), so that report filtered to one mode will be lower than
+  // this card by that mode's share of split bills.
   async getPaymentModeBreakdown(salonId: string, period: string = "today"): Promise<PaymentModeBreakdown> {
     // IST calendar date, computed from the UTC epoch directly (not the
     // server process's local clock) — same "today" the date range picker and
@@ -425,7 +573,9 @@ export const salonDashboardRepository = {
              WHEN s.appointment_id IS NOT NULL THEN pay.paid_from_payments
              WHEN s.status = 'completed' THEN s.total_amount::numeric
              ELSE 0
-           END AS paid_amount
+           END AS paid_amount,
+           s.appointment_id,
+           s.payment_reference
          FROM sales s
          LEFT JOIN clients c ON s.client_id = c.id
          ${reportsRepository._PAYMENT_LATERAL}
@@ -433,22 +583,92 @@ export const salonDashboardRepository = {
          WHERE ${where}
        ),
        appt_side AS (
-         SELECT LOWER(u.payment_method) AS payment_method, u.paid_amount
+         SELECT LOWER(u.payment_method) AS payment_method, u.paid_amount,
+                u.appointment_id, NULL::text AS payment_reference
          FROM (${unbilled.sql}) u
        ),
        unified AS (
-         SELECT payment_method, paid_amount FROM sales_side
+         SELECT payment_method, paid_amount, appointment_id, payment_reference FROM sales_side
          UNION ALL
-         SELECT payment_method, paid_amount FROM appt_side
+         SELECT payment_method, paid_amount, appointment_id, payment_reference FROM appt_side
+       ),
+       -- Single-method bills: grouped by their own method, unchanged.
+       plain_rows AS (
+         SELECT payment_method, paid_amount
+         FROM unified
+         WHERE payment_method IS NOT NULL
+           AND payment_method <> 'split' AND payment_method NOT LIKE '%+%'
+       ),
+       -- Split bills, spread across Cash/Card/UPI below.
+       split_rows AS (
+         SELECT ROW_NUMBER() OVER () AS rid, appointment_id, payment_reference, paid_amount
+         FROM unified
+         WHERE payment_method = 'split' OR payment_method LIKE '%+%'
+       ),
+       -- Appointment-linked splits: every payment on the appointment, with the
+       -- Cash/Card/UPI legs it recorded (payments.split_details only ever
+       -- holds real legs; the sale's payment_reference also lists Membership
+       -- and can describe just the last payment of a multi-payment bill).
+       split_pay AS (
+         SELECT p.id, p.paid_amount, p.payment_method, p.split_details
+         FROM payments p
+         WHERE p.status IN ('completed', 'partial')
+           AND p.appointment_id IN (SELECT appointment_id FROM split_rows WHERE appointment_id IS NOT NULL)
+       ),
+       pay_legs_raw AS (
+         SELECT sp.id AS pay_id, LOWER(l.key) AS method,
+                CASE WHEN l.value ~ '^[0-9]+(\\.[0-9]+)?$' THEN l.value::numeric END AS val
+         FROM split_pay sp
+         CROSS JOIN LATERAL jsonb_each_text(COALESCE(sp.split_details, '{}'::jsonb)) AS l(key, value)
+         WHERE LOWER(l.key) IN ('cash', 'card', 'upi')
+       ),
+       pay_legs AS (
+         SELECT pay_id, method, val FROM pay_legs_raw WHERE val > 0
+       ),
+       appt_leg_rows AS (
+         SELECT v.method AS payment_method,
+                sp.paid_amount * v.val / SUM(v.val) OVER (PARTITION BY sp.id) AS paid_amount
+         FROM split_pay sp
+         JOIN pay_legs v ON v.pay_id = sp.id
+         UNION ALL
+         -- A payment in a split appointment with no usable legs but a plain
+         -- Cash/Card/UPI method: take it whole rather than lose it.
+         SELECT LOWER(sp.payment_method), sp.paid_amount
+         FROM split_pay sp
+         WHERE LOWER(sp.payment_method) IN ('cash', 'card', 'upi')
+           AND NOT EXISTS (SELECT 1 FROM pay_legs v WHERE v.pay_id = sp.id)
+       ),
+       -- Walk-in splits (no appointment/payments rows): legs come from the
+       -- sale's own payment_reference JSON, e.g. {"Cash":600,"UPI":660}.
+       walkin_legs_raw AS (
+         SELECT sr.rid, sr.paid_amount AS received, LOWER(l.key) AS method,
+                CASE WHEN l.value ~ '^[0-9]+(\\.[0-9]+)?$' THEN l.value::numeric END AS val
+         FROM split_rows sr
+         CROSS JOIN LATERAL jsonb_each_text(
+           CASE WHEN sr.payment_reference ~ '^\\s*\\{.*\\}\\s*$'
+                THEN sr.payment_reference::jsonb ELSE '{}'::jsonb END
+         ) AS l(key, value)
+         WHERE sr.appointment_id IS NULL
+           AND LOWER(l.key) IN ('cash', 'card', 'upi')
+       ),
+       walkin_legs AS (
+         SELECT rid, received, method, val FROM walkin_legs_raw WHERE val > 0
+       ),
+       walkin_leg_rows AS (
+         SELECT method AS payment_method,
+                received * val / SUM(val) OVER (PARTITION BY rid) AS paid_amount
+         FROM walkin_legs
+       ),
+       collected AS (
+         SELECT payment_method, paid_amount FROM plain_rows
+         UNION ALL
+         SELECT payment_method, paid_amount FROM appt_leg_rows
+         UNION ALL
+         SELECT payment_method, paid_amount FROM walkin_leg_rows
        )
        SELECT payment_method, COALESCE(SUM(paid_amount), 0) AS amount
-       FROM unified
-       -- 'split' isn't a real collection channel — it's cash/card/UPI in some
-       -- combination the report's own payment-mode filter can't decompose
-       -- (see the module comment above), so grouping it as its own bucket
-       -- here previously implied a 4th channel actually collected that money
-       -- verbatim, when none of it landed in an actual cash/card/UPI till.
-       WHERE payment_method IS NOT NULL AND payment_method <> 'split'
+       FROM collected
+       WHERE payment_method IS NOT NULL
        GROUP BY payment_method`,
       [...values, ...unbilled.values]
     );

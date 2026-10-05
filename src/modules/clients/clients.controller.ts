@@ -405,8 +405,12 @@ export const clientsController = {
         try {
             const salonId = getSalonId(req);
             const q = String(req.query.q || "").trim();
-            const limit = req.query.limit !== undefined ? Number(String(req.query.limit)) : 20;
-            const clients = await clientsService.search(q, salonId, limit);
+            const rawLimit = req.query.limit !== undefined ? Number(String(req.query.limit)) : 20;
+            const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(Math.trunc(rawLimit), 1), 100) : 20;
+            // Optional 1-based page for the load-more dropdowns; omitted = first page.
+            const rawPage = req.query.page !== undefined ? Number(String(req.query.page)) : 1;
+            const page = Number.isFinite(rawPage) ? Math.max(Math.trunc(rawPage), 1) : 1;
+            const clients = await clientsService.search(q, salonId, limit, (page - 1) * limit);
             const results = clients.map((c: any) => ({
                 id: c.id,
                 first_name: c.first_name,

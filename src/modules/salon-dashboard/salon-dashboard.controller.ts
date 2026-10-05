@@ -82,6 +82,44 @@ export const salonDashboardController = {
     }
   },
 
+  // GET /api/v1/dashboard/monthly-projection — "Monthly Projection & Growth"
+  // card (replaced Revenue Overview; same card permission). Figures are
+  // zeroed for a user without view_dashboard_financials, mirroring what the
+  // other dashboard cards redact, so the response never carries the real
+  // numbers just because the frontend masks them.
+  async getMonthlyProjection(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = await getSalonId(req);
+      const gender = typeof req.query.gender === "string" ? req.query.gender : undefined;
+      const data = await salonDashboardService.getMonthlyProjection(salonId, gender);
+      const canFinancials = await checkDashboardSubPermission(req, "view_dashboard_financials");
+      if (!canFinancials) {
+        return sendSuccess(res, 200, {
+          ...data,
+          mtdSales: 0, lmmtdSales: 0, projectedSales: 0, growthPct: null,
+          target: data.target != null ? 0 : null, achievedPct: null,
+          remainingTarget: null, requiredDailySales: null,
+          todaySales: 0, dayAbv: null, monthAbv: null,
+          daily: data.daily.map((d) => ({ day: d.day, sales: 0 })),
+        }, "Monthly projection fetched successfully");
+      }
+      return sendSuccess(res, 200, data, "Monthly projection fetched successfully");
+    } catch (err) {
+      return next(err);
+    }
+  },
+
+  // PUT /api/v1/dashboard/monthly-target — owner/admin only (see routes).
+  async setMonthlyTarget(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = await getSalonId(req);
+      await salonDashboardService.setMonthlyTarget(salonId, req.body?.target);
+      return sendSuccess(res, 200, null, "Monthly target saved successfully");
+    } catch (err) {
+      return next(err);
+    }
+  },
+
   async getPaymentModeBreakdown(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = await getSalonId(req);
