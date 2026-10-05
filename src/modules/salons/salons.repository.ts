@@ -2,6 +2,15 @@ import type { PoolClient } from "pg";
 import pool from "../../config/database";
 import { CreateSalonBody, UpdateSalonBody, Salon } from "./salons.types";
 
+// The batched delete scripts below inline the salon id (a multi-statement
+// query can't take bind parameters), so it must be a real UUID first.
+function assertUuid(value: string): string {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) {
+    throw new Error(`Invalid salon id: ${value}`);
+  }
+  return value;
+}
+
 // Tables that carry a salon_id column but have NO foreign key constraint to
 // salons(id) — ON DELETE CASCADE never fires for these, so their rows would
 // be silently orphaned (left behind, pointing at a salon that no longer
@@ -28,6 +37,16 @@ const SALON_ORPHAN_RISK_TABLES = [
   // deleting them explicitly too is harmless and guards against that FK ever
   // being dropped/changed later.
   "invoices", "billing_subscriptions",
+  // Found by diffing every table with a salon_id column against this list and
+  // SALON_CLEAR_DATA_TABLES (dev DB, 2026-10-05): salon_id present, no FK to
+  // salons, and no parent row that would cascade them away — so a deleted
+  // salon left them behind. (digital_menu_services cascades from digital_menus.)
+  // Deliberately NOT added: order_receipts / payroll_adjustments /
+  // payroll_payments (already removed via their orders/staff/payroll_entries
+  // parents), client_past_salon_records (cascades from clients, and a row may
+  // describe another salon's client — not this salon's data to delete), and
+  // salon_cleanup_log (audit trail of cleanups, kept on purpose).
+  "digital_menus", "notification_channel_logs", "notification_channel_templates",
 ];
 
 /**
@@ -47,11 +66,18 @@ const SALON_ORPHAN_RISK_TABLES = [
  * to delete anyway.
  */
 export async function purgeSalon(client: PoolClient, salonId: string): Promise<{ id: string } | null> {
-  for (const table of SALON_ORPHAN_RISK_TABLES) {
-    const { rows: exists } = await client.query(`SELECT to_regclass($1) AS reg`, [table]);
-    if (!exists[0]?.reg) continue;
-    await client.query(`DELETE FROM ${table} WHERE salon_id = $1`, [salonId]);
-  }
+  // Wipe the salon's data in the dependency-safe order first (children before
+  // parents: stock_ledger/product_audit_items/supplier_payments before
+  // products & suppliers, sales before sales_import_batches, pos_payment_*
+  // before appointments/payments, ...). The final `DELETE FROM salons` below
+  // cascades products/suppliers/etc. all at once, and any plain (NO ACTION)
+  // FK pointing at them from a table that is NOT itself cascaded — e.g.
+  // stock_ledger -> products/suppliers — aborts the whole delete with
+  // "This can't be deleted — it's still in use by the stock ledger."
+  // clearSalonData already encodes that ordering (and is what Super Admin's
+  // "Clear Data" uses), so reuse it instead of keeping a second, shorter list.
+  // It keeps the salons row, which is removed at the bottom of this function.
+  await clearSalonData(client, salonId);
 
   // roles.salon_id / permission_audit_log.salon_id both reference salons(id)
   // with NO ON DELETE CASCADE (confirmed in create_permissions_system_tables.sql
@@ -64,14 +90,27 @@ export async function purgeSalon(client: PoolClient, salonId: string): Promise<{
   // exist here; they're only removed by the salons cascade further down).
   // role_permissions/staff_permission_overrides both cascade automatically
   // once their parent role/staff row goes, so nothing extra needed for those.
-  for (const table of ["roles", "permission_audit_log"]) {
-    const { rows: exists } = await client.query(`SELECT to_regclass($1) AS reg`, [table]);
-    if (!exists[0]?.reg) continue;
-    if (table === "roles") {
-      await client.query(`UPDATE staff SET role_id = NULL WHERE salon_id = $1`, [salonId]);
-    }
-    await client.query(`DELETE FROM ${table} WHERE salon_id = $1`, [salonId]);
+  //
+  // One lookup for which of these tables exist (a table not yet migrated in
+  // some environment is skipped, not a hard failure), then one batched script
+  // — see clearSalonData for why per-table round trips are avoided.
+  const wanted = [...SALON_ORPHAN_RISK_TABLES, "roles", "permission_audit_log"];
+  const { rows: present } = await client.query(
+    `SELECT table_name FROM information_schema.tables
+     WHERE table_schema = 'public' AND table_name = ANY($1::text[])`,
+    [wanted]
+  );
+  const existing = new Set((present as { table_name: string }[]).map((r) => r.table_name));
+  const id = assertUuid(salonId);
+  const stmts: string[] = [];
+  for (const table of SALON_ORPHAN_RISK_TABLES) {
+    if (existing.has(table)) stmts.push(`DELETE FROM ${table} WHERE salon_id = '${id}'`);
   }
+  if (existing.has("roles")) stmts.push(`UPDATE staff SET role_id = NULL WHERE salon_id = '${id}'`);
+  for (const table of ["roles", "permission_audit_log"]) {
+    if (existing.has(table)) stmts.push(`DELETE FROM ${table} WHERE salon_id = '${id}'`);
+  }
+  if (stmts.length > 0) await client.query(stmts.join(";\n"));
 
   // Cascades everything else with a direct salon_id FK: staff, clients,
   // services, categories, salon_settings, bookings, packages, products,
@@ -296,13 +335,22 @@ export async function clearSalonData(client: PoolClient, salonId: string): Promi
     colsByTable.get(table_name)!.push(column_name);
   }
 
+  // All the DELETEs go to Postgres in ONE round trip (simple-query protocol runs
+  // a ;-separated script in order, inside the caller's transaction), not one
+  // await per table: ~150 sequential round trips to a remote RDS made salon
+  // delete/clear take 30s-2min and blow past the dev proxy / axios timeouts.
+  // Statement order is exactly SALON_CLEAR_DATA_TABLES' (it encodes the FK
+  // dependency order) and the first failing statement still aborts the
+  // transaction with its FK error, same as before. Table/column names come from
+  // that constant and information_schema; salonId is validated as a UUID before
+  // being inlined (a multi-statement script can't take bind parameters).
+  const stmts: string[] = [];
   for (const table of SALON_CLEAR_DATA_TABLES) {
     const colNames = colsByTable.get(table);
     if (!colNames || colNames.length === 0) continue;
-
-    const whereClause = colNames.map((c: string) => `${c} = $1`).join(" OR ");
-    await client.query(`DELETE FROM ${table} WHERE ${whereClause}`, [salonId]);
+    stmts.push(`DELETE FROM ${table} WHERE ${colNames.map((c: string) => `${c} = '${assertUuid(salonId)}'`).join(" OR ")}`);
   }
+  if (stmts.length > 0) await client.query(stmts.join(";\n"));
 
   // The invoice/enquiry/purchase numbers above (sales.repository.ts,
   // enquiries.repository.ts, purchases.repository.ts) aren't derived from

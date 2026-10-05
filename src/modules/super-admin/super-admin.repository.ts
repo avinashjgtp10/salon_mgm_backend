@@ -874,11 +874,55 @@ export const superAdminRepository = {
         ownerEmail = ownerRows[0]?.email ?? null;
       }
 
+      // The salon's staff LOGINS, found BEFORE the purge: users has no usable
+      // salon link (users.salon_id is empty for everyone), the only link is
+      // staff.user_id, and purgeSalon deletes the staff rows. Without this
+      // the staff users rows (and their emails) outlived the salon. Only
+      // plain staff/admin logins qualify, and only if they have no staff row
+      // at any OTHER salon and don't own another salon — a shared login must
+      // survive. The owner is handled separately below.
+      const { rows: staffLogins } = await client.query(
+        `SELECT DISTINCT u.id, u.email, u.role,
+                TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,''))) AS name
+         FROM users u
+         JOIN staff s ON s.user_id = u.id
+         WHERE s.salon_id = $1
+           AND u.role IN ('staff', 'admin')
+           AND u.id IS DISTINCT FROM $2
+           AND NOT EXISTS (SELECT 1 FROM staff s2 WHERE s2.user_id = u.id AND s2.salon_id <> $1)
+           AND NOT EXISTS (SELECT 1 FROM salons o WHERE o.owner_id = u.id AND o.id <> $1)`,
+        [id, ownerId]
+      );
+
       // Deletes every row scoped to this salon, including tables with no FK
       // to salons (appointments, sales, bundles, etc.) that ON DELETE CASCADE
       // never reaches on its own — see purgeSalon's own comment for the full
       // list and why each one needs an explicit delete.
       const deleted = await purgeSalon(client, id);
+
+      // Staff logins — same cleanup deleteUser does for one account, applied
+      // to each (staff rows are already gone via purgeSalon, so no staff.user_id
+      // to detach). Each gets its own deleted_account_log line.
+      if (staffLogins.length > 0) {
+        const staffIds = staffLogins.map((u: { id: string }) => u.id);
+        await client.query(`DELETE FROM refresh_tokens WHERE user_id = ANY($1::uuid[])`, [staffIds]);
+        await client.query(`DELETE FROM otp_verifications WHERE user_id = ANY($1::uuid[])`, [staffIds]);
+        await client.query(`DELETE FROM user_identities WHERE user_id = ANY($1::uuid[])`, [staffIds]);
+        await client.query(`UPDATE support_tickets SET user_id = NULL, updated_at = NOW() WHERE user_id = ANY($1::uuid[])`, [staffIds]);
+        const { rows: removed } = await client.query(
+          `DELETE FROM users WHERE id = ANY($1::uuid[]) AND role IN ('staff', 'admin') RETURNING id`,
+          [staffIds]
+        );
+        const removedIds = new Set(removed.map((r: { id: string }) => r.id));
+        for (const u of staffLogins) {
+          if (!removedIds.has(u.id)) continue;
+          await client.query(
+            `INSERT INTO deleted_account_log (account_type, account_id, account_email, account_name, account_role, deleted_by, reason)
+             VALUES ('user', $1, $2, $3, $4, $5, $6)`,
+            [u.id, u.email, u.name, u.role, deletedByUserId, `Deleted with salon "${salons[0].name}"${reason ? ` — ${reason}` : ""}`]
+          );
+        }
+      }
 
       // "Delete the salon" means every account related to it, not just the
       // business data — an ownerless (salon_id-less) user row left behind
