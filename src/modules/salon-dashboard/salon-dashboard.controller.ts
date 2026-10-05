@@ -179,13 +179,14 @@ export const salonDashboardController = {
 
       const [
         canTotalRevenue, canTodayRevenue, canDueAmount, canAppointments,
-        canBirthdays, canNewClients, canRevenueOverview, canOverallCollection,
+        canBirthdays, canAnniversaries, canNewClients, canRevenueOverview, canOverallCollection,
       ] = await Promise.all([
         checkDashboardSubPermission(req, "view_dashboard_card_total_revenue"),
         checkDashboardSubPermission(req, "view_dashboard_card_today_revenue"),
         checkDashboardSubPermission(req, "view_dashboard_card_due_amount"),
         checkDashboardSubPermission(req, "view_dashboard_card_appointments"),
         checkDashboardSubPermission(req, "view_dashboard_card_birthdays"),
+        checkDashboardSubPermission(req, "view_dashboard_card_anniversaries"),
         checkDashboardSubPermission(req, "view_dashboard_card_new_clients"),
         checkDashboardSubPermission(req, "view_dashboard_card_revenue_overview"),
         checkDashboardSubPermission(req, "view_dashboard_card_overall_collection"),
@@ -205,6 +206,9 @@ export const salonDashboardController = {
       }
       if (!canBirthdays) {
         data.todaysBirthdays = { clients: [] };
+      }
+      if (!canAnniversaries) {
+        data.todaysAnniversaries = { clients: [] };
       }
       if (!canNewClients) {
         data.summary = redactSummaryFields(data.summary, NEW_CLIENTS_SUMMARY_FIELDS);

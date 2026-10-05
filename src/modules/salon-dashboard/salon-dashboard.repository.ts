@@ -13,6 +13,7 @@ import type {
   DashboardCombined,
   PendingPayments,
   TodaysBirthdays,
+  TodaysAnniversaries,
 } from "./salon-dashboard.types";
 
 // Round a number to 1 decimal place
@@ -979,6 +980,29 @@ export const salonDashboardRepository = {
     };
   },
 
+  // ── Today's Anniversaries ────────────────────────────────────────────────────
+  // clients.anniversary is a real DATE column (unlike birthday_day_month), so
+  // match today's month + day directly, ignoring the year.
+  async getTodaysAnniversaries(salonId: string): Promise<TodaysAnniversaries> {
+    const { rows } = await pool.query<{ id: string; name: string; phone_number: string | null; phone_country_code: string | null }>(
+      `SELECT c.id, COALESCE(c.full_name, TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,''))) AS name,
+              c.phone_number, c.phone_country_code
+       FROM clients c
+       WHERE c.salon_id = $1
+         AND c.is_active = true
+         AND c.anniversary IS NOT NULL
+         AND EXTRACT(MONTH FROM c.anniversary) = EXTRACT(MONTH FROM NOW())
+         AND EXTRACT(DAY   FROM c.anniversary) = EXTRACT(DAY   FROM NOW())`,
+      [salonId]
+    );
+    return {
+      clients: rows.map((r) => ({
+        id: r.id, name: r.name || "Unknown",
+        phone: r.phone_number, phoneCountryCode: r.phone_country_code,
+      })),
+    };
+  },
+
   // ── Combined: everything the dashboard page needs in one call ──────────────
   // Each sub-query is isolated — a DB timeout or slow/broken query on one
   // section falls back to a safe empty/zero default instead of crashing the
@@ -1004,6 +1028,7 @@ export const salonDashboardRepository = {
     };
     const defaultPending: PendingPayments = { count: 0, amount: 0 };
     const defaultBirthdays: TodaysBirthdays = { clients: [] };
+    const defaultAnniversaries: TodaysAnniversaries = { clients: [] };
     const defaultBreakdown: PaymentModeBreakdown = { entries: [], total: 0 };
 
     // Today's appointments come from the same enriched listing
@@ -1014,15 +1039,16 @@ export const salonDashboardRepository = {
       .list({ salonId, date: date ?? new Date().toISOString().slice(0, 10), limit: 200 })
       .then((result) => (Array.isArray(result) ? result : result.data));
 
-    const [summary, todayAppointments, revenueChart, pendingPayments, todaysBirthdays, paymentModeBreakdown] = await Promise.all([
+    const [summary, todayAppointments, revenueChart, pendingPayments, todaysBirthdays, todaysAnniversaries, paymentModeBreakdown] = await Promise.all([
       safe(this.getSummary(salonId),                        defaultSummary,   "getSummary"),
       safe(todayAppointmentsPromise,                         [],               "getTodayAppointments"),
       safe(this.getRevenueChart(salonId, period),            [],               "getRevenueChart"),
       safe(this.getPendingPayments(salonId),                 defaultPending,   "getPendingPayments"),
       safe(this.getTodaysBirthdays(salonId),                 defaultBirthdays, "getTodaysBirthdays"),
+      safe(this.getTodaysAnniversaries(salonId),             defaultAnniversaries, "getTodaysAnniversaries"),
       safe(this.getPaymentModeBreakdown(salonId, collectionPeriod), defaultBreakdown, "getPaymentModeBreakdown"),
     ]);
 
-    return { summary, todayAppointments, revenueChart, pendingPayments, todaysBirthdays, paymentModeBreakdown };
+    return { summary, todayAppointments, revenueChart, pendingPayments, todaysBirthdays, todaysAnniversaries, paymentModeBreakdown };
   },
 };
