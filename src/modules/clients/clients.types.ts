@@ -131,6 +131,8 @@ export type ClientWithRelations = Client & {
         total_visits: number;
         cancelled_count: number;
         total_revenue: number;
+        /** Most recent paid/partial visit (same definition as total_visits); null if none. */
+        last_visit_date: string | null;
     };
     loyalty_eligibility?: unknown | null;
     // ?include=staffAlert — the most recent appointment (by scheduled_at) that
