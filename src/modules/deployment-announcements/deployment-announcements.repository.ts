@@ -35,6 +35,14 @@ export const deploymentAnnouncementsRepository = {
     return rows[0] || null;
   },
 
+  async remove(id: string): Promise<DeploymentAnnouncement | null> {
+    const { rows } = await pool.query(
+      `DELETE FROM deployment_announcements WHERE id = $1 RETURNING *`,
+      [id],
+    );
+    return rows[0] || null;
+  },
+
   async listRecent(limit = 20): Promise<DeploymentAnnouncement[]> {
     const { rows } = await pool.query(
       `SELECT * FROM deployment_announcements ORDER BY created_at DESC LIMIT $1`,

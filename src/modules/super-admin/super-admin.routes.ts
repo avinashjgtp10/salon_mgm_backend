@@ -34,6 +34,9 @@ router.get("/users-no-plan",         superAdminController.getUsersWithoutSubscri
 // Stats
 router.get("/stats",    superAdminController.getStats);
 
+// Dashboard (Overview page) — one POST returns stats, salons, payments, logins, support stats
+router.post("/dashboard", superAdminController.getDashboard);
+
 // Salons
 router.get("/salons",                       superAdminController.getAllSalons);
 router.get("/salons/:id/staff",             superAdminController.getSalonStaff);

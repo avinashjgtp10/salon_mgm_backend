@@ -24,6 +24,16 @@ export const deploymentAnnouncementsService = {
     return data;
   },
 
+  // Deleting a live announcement must also take its banner down on every
+  // connected dashboard, so it reuses the "stopped" event.
+  async remove(id: string) {
+    const data = await deploymentAnnouncementsRepository.remove(id);
+    if (data) {
+      try { getIO().emit("deployment_announcement:stopped", data); } catch { /* socket not initialized (e.g. tests) */ }
+    }
+    return data;
+  },
+
   async listRecent() {
     return deploymentAnnouncementsRepository.listRecent();
   },
