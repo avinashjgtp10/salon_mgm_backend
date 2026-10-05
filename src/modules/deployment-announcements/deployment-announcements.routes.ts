@@ -12,6 +12,7 @@ router.get("/active", authMiddleware, deploymentAnnouncementsController.getActiv
 // Super Admin only — creating/stopping/reviewing announcements.
 router.post("/", authMiddleware, superAdminMiddleware, deploymentAnnouncementsController.create);
 router.post("/:id/stop", authMiddleware, superAdminMiddleware, deploymentAnnouncementsController.stop);
+router.delete("/:id", authMiddleware, superAdminMiddleware, deploymentAnnouncementsController.remove);
 router.get("/recent", authMiddleware, superAdminMiddleware, deploymentAnnouncementsController.listRecent);
 
 export default router;

@@ -32,6 +32,14 @@ export const deploymentAnnouncementsController = {
     } catch (err) { next(err); }
   },
 
+  async remove(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const data = await deploymentAnnouncementsService.remove(String(req.params.id));
+      if (!data) throw new AppError(404, "Announcement not found", "NOT_FOUND");
+      sendSuccess(res, 200, data, "Deployment announcement deleted");
+    } catch (err) { next(err); }
+  },
+
   async listRecent(_req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
       const data = await deploymentAnnouncementsService.listRecent();

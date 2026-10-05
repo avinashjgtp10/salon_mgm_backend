@@ -155,6 +155,7 @@ export const superAdminRepository = {
       SELECT
         s.id,
         COALESCE(s.business_name, s.slug, 'Unnamed')                                    AS name,
+        u.id                                                                              AS owner_id,
         u.email                                                                           AS owner_email,
         TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,'')))                         AS owner_name,
         CASE WHEN s.is_active THEN 'active' ELSE 'inactive' END                         AS status,
