@@ -27,9 +27,11 @@ import logger from "../../config/logger";
 // stay removed.
 async function attachPublicExtras(salon: any) {
     const aboutEnabled = salon?.about_enabled !== false;
-    const [bookingPolicy, brandKit, gallery, features] = await Promise.all([
+    const [bookingPolicy, brandKit, themeColor, headline, gallery, features] = await Promise.all([
         bookingsRepository.findBookingPolicy(salon.id),
         bookingsRepository.findBrandKit(salon.id),
+        bookingsRepository.findThemeColor(salon.id),
+        bookingsRepository.findBookingHeadline(salon.id),
         salon?.marketplace_profile_id
             ? bookingsRepository.findGalleryImages(salon.marketplace_profile_id)
             : Promise.resolve([] as string[]),
@@ -43,6 +45,12 @@ async function attachPublicExtras(salon: any) {
         // null for every salon today (the brand-kit editor was removed), in
         // which case the booking page uses its own neutral palette.
         brand_kit: brandKit,
+        // The salon's own pick from Online Booking > Theme Colour; the public
+        // page prefers this over brand_kit and falls back to its default when null.
+        theme_color: themeColor,
+        // Custom first-step title/subtitle (null = the page's built-in wording).
+        booking_headline: headline.booking_headline,
+        booking_subheadline: headline.booking_subheadline,
         gallery,
         amenities: features.amenities,
         highlights: features.highlights,
@@ -967,7 +975,10 @@ export const bookingsService = {
         assertManageToken(appointmentId, token);
         const appointment = await appointmentsRepository.findById(appointmentId);
         if (!appointment) throw new AppError(404, "Booking not found", "NOT_FOUND");
-        return appointment;
+        // The customer's manage/cancel page is part of the salon's public booking
+        // experience, so it carries the same Theme Colour (null = default).
+        const theme_color = await bookingsRepository.findThemeColor(appointment.salon_id);
+        return { ...appointment, theme_color };
     },
 
     async cancelManagedAppointment(appointmentId: string, token: string | undefined | null, reason?: string | null) {
