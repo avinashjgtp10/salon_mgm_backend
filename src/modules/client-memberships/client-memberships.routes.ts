@@ -12,11 +12,13 @@ const router = Router();
 // tried and then removed — these writes are role-only now (owner/admin/
 // staff), same as most other Warehouse-adjacent actions in this app.
 const auth = [authMiddleware, requireSalon, roleMiddleware('salon_owner', 'admin', 'staff')];
-// Reads accept view_clients or view_appointment — useClientMembershipWallet
+// Reads accept view_clients, view_appointment, or Quick Sale access
+// (create_sales / quick_sale_view_client — Quick Sale's client keys are
+// independent of view_clients, so checkout must not require it) — useClientMembershipWallet
 // fetches this list for ANY selected client (eWallet/membership-balance
 // display during Quick Sale/Calendar checkout, or inside View Appointment),
 // which is routine client-viewing.
-const readPurchaseHistory = requireAnyPermission(['view_clients', 'view_appointment']);
+const readPurchaseHistory = requireAnyPermission(['view_clients', 'view_appointment', 'create_sales', 'quick_sale_view_client']);
 
 router.get('/',              ...auth, readPurchaseHistory, clientMembershipsController.list);
 router.post('/',             ...auth, clientMembershipsController.purchase);

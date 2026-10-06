@@ -19,11 +19,12 @@ const router = Router();
 // its own view_client_packages/create_package/edit_package/delete_package
 // keys instead, closing the zero-gating gap for good this time.
 const auth = [authMiddleware, requireSalon, roleMiddleware("salon_owner", "admin", "staff")];
-// Reads accept view_clients or view_appointment (Quick Sale/Calendar need to
+// Reads accept view_clients, view_appointment or Quick Sale access
+// (create_sales / quick_sale_view_client, independent of view_clients) (Quick Sale/Calendar need to
 // read a selected client's package coverage just to build a booking/sale,
 // or show it inside View Appointment) OR the new dedicated
 // view_client_packages, for the Client Packages page itself.
-const readPurchaseHistory = requireAnyPermission(["view_clients", "view_appointment", "view_client_packages"]);
+const readPurchaseHistory = requireAnyPermission(["view_clients", "view_appointment", "view_client_packages", "create_sales", "quick_sale_view_client"]);
 const createPackage = requirePermission("create_package");
 const editPackage = requirePermission("edit_package");
 const deletePackage = requirePermission("delete_package");
