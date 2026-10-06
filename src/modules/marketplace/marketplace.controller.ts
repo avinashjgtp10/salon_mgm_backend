@@ -6,7 +6,7 @@ import { uploadAvatarToS3 } from "../utils/avatar.upload";
 import {
     UpsertEssentialsBody, UpsertAboutBody, UpsertLocationBody,
     UpsertWorkingHoursBody, AddImageBody, ReorderImagesBody, UpsertFeaturesBody,
-    UpsertBookingPolicyBody,
+    UpsertBookingPolicyBody, UpsertThemeBody, UpsertHeadlineBody,
 } from "./marketplace.types";
 
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string } };
@@ -48,6 +48,22 @@ export const marketplaceController = {
         try {
             const data = await marketplaceService.upsertBookingPolicy(await getSalonId(req), req.body as UpsertBookingPolicyBody);
             return sendSuccess(res, 200, data, "Booking policy saved");
+        } catch (err) { return next(err); }
+    },
+
+    // ── Booking page heading ─────────────────────────────────────────────────────
+    async upsertHeadline(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const data = await marketplaceService.upsertHeadline(getSalonId(req), req.body as UpsertHeadlineBody);
+            return sendSuccess(res, 200, data, "Booking page heading saved");
+        } catch (err) { return next(err); }
+    },
+
+    // ── Theme colour ─────────────────────────────────────────────────────────────
+    async upsertTheme(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const data = await marketplaceService.upsertTheme(getSalonId(req), req.body as UpsertThemeBody);
+            return sendSuccess(res, 200, data, "Theme colour saved");
         } catch (err) { return next(err); }
     },
 

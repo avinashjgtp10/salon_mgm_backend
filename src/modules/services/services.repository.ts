@@ -83,7 +83,14 @@ const buildServiceWhere = (q: ListServicesQuery, salonId: string) => {
     where.push(sql.replace("?", `$${values.length}`));
   };
 
-  if (q.category_id) add(`s.category_id = ?`, q.category_id);
+  if (q.category_id) {
+    // One id, or several comma-separated (the Services filter is a multi-select
+    // checklist). Compared as text so a malformed id just matches nothing
+    // instead of raising a uuid cast error.
+    const ids = String(q.category_id).split(",").map((x) => x.trim()).filter(Boolean);
+    if (ids.length === 1) add(`s.category_id = ?`, ids[0]);
+    else if (ids.length > 1) add(`s.category_id::text = ANY(?::text[])`, ids);
+  }
   if (q.search) add(`LOWER(s.name) LIKE LOWER(?)`, `%${q.search}%`);
   if (q.status === "active") where.push(`s.is_active = true`);
   if (q.status === "inactive") where.push(`s.is_active = false`);
