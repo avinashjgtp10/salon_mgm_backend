@@ -4,6 +4,7 @@ import { roleMiddleware } from "../../middleware/role.middleware";
 import { requirePermission, requireAnyPermission } from "../../middleware/permission.middleware";
 import { attendanceController } from "./attendance.controller";
 
+import { isMobileStaffRequest } from "../notifications/staffNotificationScope";
 const router = Router();
 const ownerAdmin = roleMiddleware("salon_owner", "admin");
 const ownerAdminStaff = roleMiddleware("salon_owner", "admin", "staff");
@@ -25,7 +26,7 @@ router.get("/settings",    authMiddleware, ownerAdminStaff, viewAttendanceRules,
 router.put("/settings",    authMiddleware, ownerAdminStaff, viewAttendanceRules, attendanceController.updateSettings);
 
 // Dashboard + grid
-router.get("/today",       authMiddleware, ownerAdminStaff, viewAttendanceList, attendanceController.getToday);
+router.get("/today",       authMiddleware, ownerAdminStaff, (req, res, next) => isMobileStaffRequest(req) ? next() : viewAttendanceList(req, res, next), attendanceController.getToday);
 router.get("/monthly",     authMiddleware, ownerAdminStaff, viewAttendanceList, attendanceController.getMonthly);
 router.get("/range",       authMiddleware, ownerAdminStaff, viewAttendanceListOrReport, attendanceController.getRange);
 router.get("/summary",     authMiddleware, ownerAdminStaff, viewAttendanceList, attendanceController.getDailySummary);
