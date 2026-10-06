@@ -1,3 +1,4 @@
+import { isMobileStaffRequest, ownStaffId } from "../notifications/staffNotificationScope";
 import { Request, Response, NextFunction } from "express";
 import * as XLSX from "xlsx";
 import * as Papa from "papaparse";
@@ -37,6 +38,17 @@ export const staffController = {
       const salonId = req.user?.salonId ?? req.body?.salon_id;
       if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR");
       logger.info("GET /staff", { salonId });
+
+      // Mobile staff can resolve only their own active profile, without team permissions.
+      // Never use a caller-supplied staff/user/branch filter to expand this scope.
+      if (isMobileStaffRequest(req)) {
+        const staffId = await ownStaffId(req.user!.userId, getSalonId(req));
+        const items = staffId ? [await staffService.getById(staffId, getSalonId(req))] : [];
+        return sendSuccess(res, 200, {
+          items,
+          pagination: { total: items.length, page: 1, limit: 1, total_pages: items.length },
+        }, "Staff profile fetched successfully");
+      }
 
       const query: StaffListQuery = {
         page: req.query.page ? Number(req.query.page) : undefined,
