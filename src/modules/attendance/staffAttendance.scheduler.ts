@@ -37,17 +37,17 @@ export async function runAttendanceReminderSweep() {
       try {
         const state = await staffAttendanceState(candidate.user_id, candidate.salon_id);
         if (state.checked_in || !state.can_check_in || !state.reminder_at || Date.now() < new Date(state.reminder_at).getTime()) continue;
-        const key = `attendance-reminder:${state.date}`;
+        // alert_status is constrained to inventory alerts; use a dated title for daily deduplication.
+        const title = `You haven't checked in (${state.date})`;
         const existing = await client.query<{ id: string; resolved_at: string | null }>(
-          "SELECT id, resolved_at FROM notifications WHERE salon_id = $1 AND type = 'attendance' AND reference_id::text = $2 AND alert_status = $3 LIMIT 1",
-          [candidate.salon_id, state.staff_id, key]);
+          "SELECT id, resolved_at FROM notifications WHERE salon_id = $1 AND type = 'attendance' AND reference_id::text = $2 AND title = $3 LIMIT 1",
+          [candidate.salon_id, state.staff_id, title]);
         if (existing.rows[0]?.resolved_at) continue;
-        const title = "You haven't checked in";
         const startLabel = new Date(state.shift_start!).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" });
         const body = `Your shift started at ${startLabel}. Open SalonOX and check in.`;
         const notification = existing.rows[0] ?? await notificationsRepository.create({
           salon_id: candidate.salon_id, reference_id: state.staff_id, type: "attendance", title, body,
-          alert_status: key, recipient_user_ids: [candidate.user_id],
+          recipient_user_ids: [candidate.user_id],
         });
         const devices = await deviceTokensRepository.getUserTokens(candidate.user_id);
         const tokens = [...new Set(devices.filter(device => device.salon_id === candidate.salon_id).map(device => device.expo_push_token))];

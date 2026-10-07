@@ -2,6 +2,7 @@ import pool from "../../config/database";
 import { AppError } from "../../middleware/error.middleware";
 import { ownStaffId } from "../notifications/staffNotificationScope";
 import { attendanceRepository } from "./attendance.repository";
+import { notifyAttendancePunch } from "./attendance.service";
 import { istDate, shiftWindow, type Shift } from "./staffAttendance.rules";
 
 export async function staffAttendanceState(userId: string, salonId: string, now = new Date()) {
@@ -34,27 +35,37 @@ export async function staffAttendanceState(userId: string, salonId: string, now 
   };
 }
 
-export async function staffSelfCheckIn(userId: string, salonId: string, now = new Date()) {
+// `location` (optional) is the device location captured at the punch; callers
+// that don't pass it keep the previous behavior (stored location untouched).
+export async function staffSelfCheckIn(userId: string, salonId: string, now = new Date(), location: string | null = null) {
   const state = await staffAttendanceState(userId, salonId, now);
   if (state.checked_in) return state; // Retrying never rewrites the original punch.
   await pool.query(
-    `INSERT INTO attendance (salon_id, staff_id, date, check_in, status, source)
-     VALUES ($1, $2, $3::date, $4::timestamptz, $5, 'manual')
+    `INSERT INTO attendance (salon_id, staff_id, date, check_in, status, source, check_in_location)
+     VALUES ($1, $2, $3::date, $4::timestamptz, $5, 'manual', $6)
      ON CONFLICT (salon_id, staff_id, date) DO UPDATE
      SET check_in = COALESCE(attendance.check_in, EXCLUDED.check_in),
          status = attendance.status,
-         updated_at = NOW()`, [salonId, state.staff_id, state.date, now.toISOString(), "present"]);
-  return staffAttendanceState(userId, salonId, now);
+         check_in_location = COALESCE(attendance.check_in_location, EXCLUDED.check_in_location),
+         updated_at = NOW()`, [salonId, state.staff_id, state.date, now.toISOString(), "present", location]);
+  const next = await staffAttendanceState(userId, salonId, now);
+  // Same owner/admin "Staff Checked In" notification as manual/device punches.
+  if (next.record?.check_in) void notifyAttendancePunch(next.record, "in");
+  return next;
 }
 
-export async function staffSelfCheckOut(userId: string, salonId: string, now = new Date()) {
+export async function staffSelfCheckOut(userId: string, salonId: string, now = new Date(), location: string | null = null) {
   const state = await staffAttendanceState(userId, salonId, now);
   const record = state.record;
   if (!record?.check_in) throw new AppError(400, "You have not checked in.", "NOT_CHECKED_IN");
   if (record.check_out) return state;
   const hours = Math.max(0, (now.getTime() - new Date(record.check_in).getTime()) / 3600000);
-  await pool.query(`UPDATE attendance SET check_out = $4::timestamptz, hours_worked = $5, updated_at = NOW()
+  const { rowCount } = await pool.query(`UPDATE attendance SET check_out = $4::timestamptz, hours_worked = $5,
+      check_out_location = COALESCE($6, check_out_location), updated_at = NOW()
     WHERE salon_id = $1 AND staff_id = $2 AND date = $3::date AND check_out IS NULL`,
-    [salonId, state.staff_id, state.date, now.toISOString(), Number(hours.toFixed(2))]);
-  return staffAttendanceState(userId, salonId, now);
+    [salonId, state.staff_id, state.date, now.toISOString(), Number(hours.toFixed(2)), location]);
+  const next = await staffAttendanceState(userId, salonId, now);
+  // Only notify when this request actually recorded the check-out.
+  if (rowCount && next.record?.check_out) void notifyAttendancePunch(next.record, "out");
+  return next;
 }

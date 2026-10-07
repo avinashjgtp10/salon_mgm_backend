@@ -55,7 +55,7 @@ function calcStatus(
 
 const VALID_STATUSES: AttendanceStatus[] = ["present", "absent", "half_day", "late", "on_leave"];
 
-async function notifyAttendancePunch(record: Attendance, action: "in" | "out"): Promise<void> {
+export async function notifyAttendancePunch(record: Attendance, action: "in" | "out"): Promise<void> {
     try {
         const timestamp = action === "in" ? record.check_in : record.check_out;
         if (!timestamp) return;
@@ -71,7 +71,7 @@ async function notifyAttendancePunch(record: Attendance, action: "in" | "out"): 
             reference_id: record.id,
             type: "attendance",
             title: action === "in" ? "Staff Checked In" : "Staff Checked Out",
-            body: `${name} checked ${action} at ${clock} (IST) on ${day}.`,
+            body: `${name} checked ${action} at ${clock} on ${day}.`,
             event_key: "otherUpdates",
         }, { deduplicate: true, persistWhenPushDisabled: true });
     } catch (error: any) {
