@@ -114,6 +114,54 @@ export const staffRepository = {
         const where = conditions.join(" AND ");
         const offset = (page - 1) * limit;
 
+        // Pickers/filters only need who to offer — id + display name. Same
+        // filters, ordering and paging as the full query, none of its joins.
+        if (q.fields === "select") {
+            const [{ rows: data }, { rows: countRows }] = await Promise.all([
+                pool.query(
+                    `SELECT id, TRIM(CONCAT(first_name, ' ', COALESCE(last_name, ''))) AS name
+                       FROM staff
+                      WHERE ${where}
+                      ORDER BY ${orderBy}
+                      LIMIT $${idx} OFFSET $${idx + 1}`,
+                    [...values, limit, offset]
+                ),
+                pool.query(`SELECT COUNT(*)::int AS total FROM staff WHERE ${where}`, values),
+            ]);
+            return { data: data as unknown as Staff[], total: countRows[0].total };
+        }
+
+        // The Staff list grid: the columns it renders plus the role/override
+        // joins. No schedule / blocked_times aggregates (the heaviest part of
+        // the full query), and no notes, address, custom_permissions, wage or
+        // other detail columns — Edit Staff and the drawer load a member by id.
+        if (q.fields === "list") {
+            const [{ rows: data }, { rows: countRows }] = await Promise.all([
+                pool.query(
+                    `SELECT s.id, s.user_id, s.staff_code, s.first_name, s.last_name, s.email,
+                            s.phone, s.phone_country_code, s.avatar_url, s.calendar_color,
+                            s.designation, s.is_active, s.allow_calendar_bookings,
+                            s.invitation_status, s.employment_type, s.joined_date, s.created_at,
+                            s.branch_id, s.role_id, s.permission_level,
+                            r.name AS role_name, ov_agg.has_overrides
+                       FROM (
+                         SELECT * FROM staff
+                          WHERE ${where}
+                          ORDER BY ${orderBy}
+                          LIMIT $${idx} OFFSET $${idx + 1}
+                       ) s
+                       LEFT JOIN roles r ON r.id = s.role_id
+                       LEFT JOIN LATERAL (
+                         SELECT EXISTS(SELECT 1 FROM staff_permission_overrides spo WHERE spo.staff_id = s.id) AS has_overrides
+                       ) ov_agg ON true
+                      ORDER BY ${outerOrderBy}`,
+                    [...values, limit, offset]
+                ),
+                pool.query(`SELECT COUNT(*)::int AS total FROM staff WHERE ${where}`, values),
+            ]);
+            return { data: data as unknown as Staff[], total: countRows[0].total };
+        }
+
         const [{ rows: data }, { rows: countRows }] = await Promise.all([
             pool.query(
                 `SELECT s.*, bt_agg.blocked_times, sch_agg.schedule, r.name AS role_name, ov_agg.has_overrides
