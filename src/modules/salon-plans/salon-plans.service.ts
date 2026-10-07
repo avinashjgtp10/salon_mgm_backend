@@ -278,6 +278,16 @@ export const salonPlansService = {
         return salonPlanInvoicesRepository.summary(filters);
     },
 
+    // Billing & Invoices page: list + summary + branch dropdown in one round trip.
+    async invoicesOverview(filters: ListInvoicesFilters) {
+        const [list, summary, branches] = await Promise.all([
+            salonPlanInvoicesRepository.list(filters),
+            salonPlanInvoicesRepository.summary(filters),
+            salonPlanInvoicesRepository.listDistinctBranches(),
+        ]);
+        return { list, summary, branches };
+    },
+
     async invoiceBranches() {
         return salonPlanInvoicesRepository.listDistinctBranches();
     },

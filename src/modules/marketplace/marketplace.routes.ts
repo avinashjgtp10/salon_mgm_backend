@@ -9,7 +9,7 @@ import {
   validateUpsertEssentials, validateUpsertAbout,
   validateUpsertLocation, validateUpsertWorkingHours,
   validateAddImage, validateReorderImages, validateUpsertFeatures,
-  validateUpsertBookingPolicy, validateSetStaffVisibility,
+  validateUpsertBookingPolicy, validateSetStaffVisibility, validateUpsertTheme, validateUpsertHeadline,
 } from "./marketplace.validator";
 
 const router  = Router();
@@ -35,6 +35,8 @@ router.get("/profile",          auth, ownerAdminStaff, viewMarketplace, marketpl
 router.put("/essentials",       auth, ownerAdminStaff, manageMarketplace, validateUpsertEssentials, marketplaceController.upsertEssentials);
 router.put("/about",            auth, ownerAdminStaff, manageMarketplace, validateUpsertAbout,      marketplaceController.upsertAbout);
 router.put("/booking-policy",   auth, ownerAdminStaff, manageMarketplace, validateUpsertBookingPolicy, marketplaceController.upsertBookingPolicy);
+router.put("/theme",            auth, ownerAdminStaff, manageMarketplace, validateUpsertTheme,         marketplaceController.upsertTheme);
+router.put("/headline",         auth, ownerAdminStaff, manageMarketplace, validateUpsertHeadline,      marketplaceController.upsertHeadline);
 
 // ── Location ──────────────────────────────────────────────────────────────────
 router.get("/location",         auth, ownerAdminStaff, viewMarketplace, marketplaceController.getLocation);

@@ -991,7 +991,7 @@ export const clientsRepository = {
     },
 
     // ---------------- SEARCH ----------------
-    async search(q: string, limit: number, salonId: string): Promise<Client[]> {
+    async search(q: string, limit: number, salonId: string, offset = 0): Promise<Client[]> {
         const needle = q.trim().toLowerCase();
         const term = `%${needle}%`;
         const prefixTerm = `${needle}%`;
@@ -1024,9 +1024,9 @@ export const clientsRepository = {
                  WHEN LOWER(COALESCE(phone_number, '')) LIKE $5 THEN 2
                  ELSE 3
                END,
-               full_name ASC
-             LIMIT $3`,
-            [salonId, term, limit, needle, prefixTerm]
+               full_name ASC, id ASC
+             LIMIT $3 OFFSET $6`,
+            [salonId, term, limit, needle, prefixTerm, offset]
         );
 
         return rows as Client[];

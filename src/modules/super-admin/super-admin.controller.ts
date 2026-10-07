@@ -53,6 +53,23 @@ export const superAdminController = {
     } catch (err) { return next(err); }
   },
 
+  // ── DASHBOARD ─────────────────────────────────────────────────────────────────
+
+  // POST /api/v1/super-admin/dashboard — single call for the whole Overview page.
+  async getDashboard(req: Request, res: Response, next: NextFunction) {
+    try {
+      const limitOf = (v: unknown) => {
+        const n = typeof v === "number" ? v : parseInt(String(v), 10);
+        return Number.isFinite(n) && n > 0 ? Math.min(n, 100) : undefined;
+      };
+      const data = await superAdminService.getDashboard({
+        frequentLoginsLimit: limitOf(req.body?.frequent_logins_limit),
+        usersNoPlanLimit: limitOf(req.body?.users_no_plan_limit),
+      });
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
   // ── SALONS ────────────────────────────────────────────────────────────────────
 
   async getAllSalons(req: Request, res: Response, next: NextFunction) {

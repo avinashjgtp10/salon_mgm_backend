@@ -50,10 +50,29 @@ export type MarketplaceProfile = {
   min_notice_hours: number;
   cancellation_notice_hours: number;
   slot_interval_minutes: number;
+  // Theme — "#rrggbb" accent for the public booking page; null = built-in default.
+  // Optional: absent until Migration/add_marketplace_theme_color.sql has run.
+  theme_color?: string | null;
+  // Public booking page title/subtitle — optional until
+  // Migration/add_marketplace_booking_headline.sql has run; null = defaults.
+  booking_headline?: string | null;
+  booking_subheadline?: string | null;
   // Status
   is_published: boolean;
   created_at: string;
   updated_at: string;
+};
+
+export type UpsertHeadlineBody = {
+  /** Title on the public booking page's first step; null/empty = built-in default. */
+  booking_headline: string | null;
+  /** Line under the title; null/empty = built-in default. */
+  booking_subheadline: string | null;
+};
+
+export type UpsertThemeBody = {
+  /** "#rrggbb", or null to go back to the default colour. */
+  theme_color: string | null;
 };
 
 export type UpsertEssentialsBody = {

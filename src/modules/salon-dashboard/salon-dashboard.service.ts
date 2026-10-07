@@ -3,6 +3,7 @@ import { salonDashboardRepository } from "./salon-dashboard.repository";
 import type {
   DashboardSummary,
   RevenueDataPoint,
+  MonthlyProjection,
   PaymentModeBreakdown,
   TopStaffMember,
   StaffRevenueEntry,
@@ -19,6 +20,24 @@ export const salonDashboardService = {
   async getRevenueChart(salonId: string, period?: string, gender?: string): Promise<RevenueDataPoint[]> {
     if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR");
     return salonDashboardRepository.getRevenueChart(salonId, period, gender);
+  },
+
+  async getMonthlyProjection(salonId: string, gender?: string): Promise<MonthlyProjection> {
+    if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR");
+    return salonDashboardRepository.getMonthlyProjection(salonId, gender);
+  },
+
+  async setMonthlyTarget(salonId: string, target: unknown): Promise<void> {
+    if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR");
+    // null / "" clears the target; otherwise a positive, sane number.
+    if (target === null || target === "" || target === undefined) {
+      return salonDashboardRepository.setMonthlyTarget(salonId, null);
+    }
+    const n = Number(target);
+    if (!Number.isFinite(n) || n <= 0 || n > 99_999_999_999) {
+      throw new AppError(400, "target must be a positive number", "VALIDATION_ERROR");
+    }
+    return salonDashboardRepository.setMonthlyTarget(salonId, Math.round(n * 100) / 100);
   },
 
   async getPaymentModeBreakdown(salonId: string, period?: string): Promise<PaymentModeBreakdown> {

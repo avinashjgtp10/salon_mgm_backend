@@ -125,6 +125,74 @@ export const validateUpsertBookingPolicy = (req: Request, _res: Response, next: 
   } catch (err) { return next(err); }
 };
 
+// ─── Theme colour ───────────────────────────────────────────────────────────────
+
+const HEX6_RE = /^#[0-9a-fA-F]{6}$/;
+
+// WCAG relative luminance / contrast ratio. The accent is used both as a
+// background (white text on it) and as TEXT/link colour on the page's white
+// surface, so it has to stay readable against white.
+const channel = (c: number) => {
+  const s = c / 255;
+  return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+};
+const luminance = (hex: string) => {
+  const n = parseInt(hex.slice(1), 16);
+  return 0.2126 * channel((n >> 16) & 255) + 0.7152 * channel((n >> 8) & 255) + 0.0722 * channel(n & 255);
+};
+/** Minimum contrast vs white (WCAG "3:1" for large text / UI components). */
+export const MIN_THEME_CONTRAST_ON_WHITE = 3;
+export const contrastOnWhite = (hex: string) => 1.05 / (luminance(hex) + 0.05);
+
+export const validateUpsertTheme = (req: Request, _res: Response, next: NextFunction) => {
+  try {
+    const c = req.body?.theme_color;
+    // null = back to the default colour.
+    if (c === null) return next();
+    if (typeof c !== "string" || !HEX6_RE.test(c))
+      throw new AppError(400, "theme_color must be a colour like #1e4634 (or null for the default)", "VALIDATION_ERROR");
+    if (contrastOnWhite(c) < MIN_THEME_CONTRAST_ON_WHITE)
+      throw new AppError(400, "That colour is too light to read on the booking page. Please choose a darker shade.", "VALIDATION_ERROR");
+    // Normalise so the stored value is always lower-case #rrggbb.
+    req.body.theme_color = c.toLowerCase();
+    return next();
+  } catch (err) { return next(err); }
+};
+
+// ─── Booking page heading ─────────────────────────────────────────────────────────
+
+export const HEADLINE_MAX = 60;
+export const SUBHEADLINE_MAX = 140;
+
+// Control characters (incl. newlines/tabs) never belong in a one-line heading.
+// eslint-disable-next-line no-control-regex
+const CONTROL_RE = /[\u0000-\u001f\u007f]/;
+
+/** undefined/null/blank -> null (= use the built-in default); else the trimmed string. */
+const cleanText = (v: unknown, label: string, max: number): string | null => {
+  if (v === undefined || v === null) return null;
+  if (typeof v !== "string") throw new AppError(400, `${label} must be text`, "VALIDATION_ERROR");
+  const t = v.replace(/\s+/g, " ").trim();
+  if (t === "") return null;
+  if (CONTROL_RE.test(t)) throw new AppError(400, `${label} contains invalid characters`, "VALIDATION_ERROR");
+  if (t.length > max) throw new AppError(400, `${label} must be ${max} characters or fewer`, "VALIDATION_ERROR");
+  return t;
+};
+
+export const validateUpsertHeadline = (req: Request, _res: Response, next: NextFunction) => {
+  try {
+    const b = req.body ?? {};
+    // Rendered by React (escaped), but keep angle-bracket markup out of stored
+    // copy anyway so it can never be mis-rendered by another consumer later.
+    const headline = cleanText(b.booking_headline, "Heading", HEADLINE_MAX);
+    const sub = cleanText(b.booking_subheadline, "Subtitle", SUBHEADLINE_MAX);
+    if ((headline && /[<>]/.test(headline)) || (sub && /[<>]/.test(sub)))
+      throw new AppError(400, "Heading and subtitle can't contain < or >", "VALIDATION_ERROR");
+    req.body = { booking_headline: headline, booking_subheadline: sub };
+    return next();
+  } catch (err) { return next(err); }
+};
+
 // ─── Location ─────────────────────────────────────────────────────────────────
 
 export const validateUpsertLocation = (req: Request, _res: Response, next: NextFunction) => {

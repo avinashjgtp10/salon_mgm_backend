@@ -1,4 +1,5 @@
 import pool from "../../config/database";
+import type { PoolClient } from "pg";
 
 export interface Notification {
   id: string;
@@ -18,8 +19,7 @@ export interface Notification {
   contact_phone?: string | null;
 }
 
-export const notificationsRepository = {
-  async create(data: {
+type CreateNotificationData = {
     salon_id: string;
     type: string;
     title: string;
@@ -31,8 +31,11 @@ export const notificationsRepository = {
     reference_id?: string;
     recipient_user_ids?: string[];
     contact_phone?: string;
-  }) {
-    const { rows } = await pool.query<Notification>(
+};
+
+export const notificationsRepository = {
+  async create(data: CreateNotificationData, client?: PoolClient): Promise<Notification> {
+    const { rows } = await (client ?? pool).query<Notification>(
       `INSERT INTO notifications (salon_id, type, title, body, product_id, branch_id, alert_status, spotlight_feature_id, reference_id, recipient_user_ids, contact_phone)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
@@ -43,6 +46,35 @@ export const notificationsRepository = {
       ]
     );
     return rows[0];
+  },
+
+  // Serialize retries of the same attendance event across server instances.
+  // No new column/index is required; check-in/out have distinct stable titles.
+  async createOnce(data: CreateNotificationData): Promise<Notification | null> {
+    if (!data.reference_id) throw new Error("A reference is required for a deduplicated notification");
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const key = JSON.stringify([data.salon_id, data.type, data.reference_id, data.title]);
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [key]);
+      const { rows } = await client.query(
+        `SELECT id FROM notifications WHERE salon_id = $1 AND type = $2
+         AND reference_id = $3 AND title = $4 LIMIT 1`,
+        [data.salon_id, data.type, data.reference_id, data.title]
+      );
+      if (rows.length) {
+        await client.query("COMMIT");
+        return null;
+      }
+      const notification = await notificationsRepository.create(data, client);
+      await client.query("COMMIT");
+      return notification;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   },
 
   // Finds the still-active (unresolved) alert notification for this
@@ -87,12 +119,12 @@ export const notificationsRepository = {
       const { rows } = await pool.query<Notification>(
         `SELECT n.*, (r.user_id IS NOT NULL) AS is_read FROM notifications n
          LEFT JOIN notification_staff_reads r ON r.notification_id = n.id AND r.user_id = $3
-         WHERE n.salon_id = $1 AND n.type = 'appointment' AND $3::uuid = ANY(n.recipient_user_ids)
+         WHERE n.salon_id = $1 AND n.type IN ('appointment', 'attendance') AND $3::uuid = ANY(n.recipient_user_ids)
          ORDER BY n.created_at DESC LIMIT $2`, [salonId, limit, staffUserId]);
       return rows;
     }
     const { rows } = await pool.query<Notification>(
-      `SELECT * FROM notifications WHERE salon_id = $1 ORDER BY created_at DESC LIMIT $2`, [salonId, limit]);
+      `SELECT * FROM notifications WHERE salon_id = $1 AND (type <> 'attendance' OR COALESCE(cardinality(recipient_user_ids), 0) = 0) ORDER BY created_at DESC LIMIT $2`, [salonId, limit]);
     return rows;
   },
 
@@ -101,33 +133,33 @@ export const notificationsRepository = {
       const { rows } = await pool.query<Notification>(
         `WITH read_row AS (INSERT INTO notification_staff_reads (notification_id, user_id)
           SELECT id, $3 FROM notifications WHERE id = $1 AND salon_id = $2
-          AND type = 'appointment' AND $3::uuid = ANY(recipient_user_ids)
+          AND type IN ('appointment', 'attendance') AND $3::uuid = ANY(recipient_user_ids)
           ON CONFLICT DO NOTHING)
          SELECT n.*, true AS is_read FROM notifications n WHERE n.id = $1 AND n.salon_id = $2
-         AND n.type = 'appointment' AND $3::uuid = ANY(n.recipient_user_ids)`, [id, salonId, staffUserId]);
+         AND n.type IN ('appointment', 'attendance') AND $3::uuid = ANY(n.recipient_user_ids)`, [id, salonId, staffUserId]);
       return rows[0] ?? null;
     }
     const { rows } = await pool.query<Notification>(
-      `UPDATE notifications SET is_read = true WHERE id = $1 AND salon_id = $2 RETURNING *`, [id, salonId]);
+      `UPDATE notifications SET is_read = true WHERE id = $1 AND salon_id = $2 AND (type <> 'attendance' OR COALESCE(cardinality(recipient_user_ids), 0) = 0) RETURNING *`, [id, salonId]);
     return rows[0] ?? null;
   },
 
   async markAllRead(salonId: string, staffUserId?: string) {
     if (staffUserId) {
       await pool.query(`INSERT INTO notification_staff_reads (notification_id, user_id)
-        SELECT id, $2 FROM notifications WHERE salon_id = $1 AND type = 'appointment'
+        SELECT id, $2 FROM notifications WHERE salon_id = $1 AND type IN ('appointment', 'attendance')
         AND $2::uuid = ANY(recipient_user_ids) ON CONFLICT DO NOTHING`, [salonId, staffUserId]);
       return;
     }
-    await pool.query(`UPDATE notifications SET is_read = true WHERE salon_id = $1 AND is_read = false`, [salonId]);
+    await pool.query(`UPDATE notifications SET is_read = true WHERE salon_id = $1 AND is_read = false AND (type <> 'attendance' OR COALESCE(cardinality(recipient_user_ids), 0) = 0)`, [salonId]);
   },
 
   async getUnreadCount(salonId: string, staffUserId?: string): Promise<number> {
     const { rows } = staffUserId ? await pool.query<{ count: string }>(
-      `SELECT COUNT(*)::int AS count FROM notifications n WHERE salon_id = $1 AND type = 'appointment'
+      `SELECT COUNT(*)::int AS count FROM notifications n WHERE salon_id = $1 AND type IN ('appointment', 'attendance')
        AND $2::uuid = ANY(recipient_user_ids) AND NOT EXISTS (
          SELECT 1 FROM notification_staff_reads r WHERE r.notification_id = n.id AND r.user_id = $2)`, [salonId, staffUserId])
-      : await pool.query<{ count: string }>(`SELECT COUNT(*)::int AS count FROM notifications WHERE salon_id = $1 AND is_read = false`, [salonId]);
+      : await pool.query<{ count: string }>(`SELECT COUNT(*)::int AS count FROM notifications WHERE salon_id = $1 AND is_read = false AND (type <> 'attendance' OR COALESCE(cardinality(recipient_user_ids), 0) = 0)`, [salonId]);
     return parseInt(rows[0]?.count ?? "0", 10);
   },
 
@@ -142,7 +174,7 @@ export const notificationsRepository = {
       `SELECT n.*, COALESCE(s.business_name, s.slug, 'Unnamed') AS salon_name
        FROM notifications n
        JOIN salons s ON s.id = n.salon_id
-       WHERE n.salon_id = ANY($1::uuid[])
+       WHERE n.salon_id = ANY($1::uuid[]) AND (n.type <> 'attendance' OR COALESCE(cardinality(n.recipient_user_ids), 0) = 0)
        ORDER BY n.created_at DESC
        LIMIT $2`,
       [salonIds, limit]
@@ -154,7 +186,7 @@ export const notificationsRepository = {
   async markAllReadForSalons(salonIds: string[]) {
     if (salonIds.length === 0) return;
     await pool.query(
-      `UPDATE notifications SET is_read = true WHERE salon_id = ANY($1::uuid[]) AND is_read = false`,
+      `UPDATE notifications SET is_read = true WHERE salon_id = ANY($1::uuid[]) AND is_read = false AND (type <> 'attendance' OR COALESCE(cardinality(recipient_user_ids), 0) = 0)`,
       [salonIds]
     );
   },
@@ -163,7 +195,7 @@ export const notificationsRepository = {
   async getUnreadCountForSalons(salonIds: string[]): Promise<number> {
     if (salonIds.length === 0) return 0;
     const { rows } = await pool.query<{ count: string }>(
-      `SELECT COUNT(*)::int AS count FROM notifications WHERE salon_id = ANY($1::uuid[]) AND is_read = false`,
+      `SELECT COUNT(*)::int AS count FROM notifications WHERE salon_id = ANY($1::uuid[]) AND is_read = false AND (type <> 'attendance' OR COALESCE(cardinality(recipient_user_ids), 0) = 0)`,
       [salonIds]
     );
     return parseInt(rows[0]?.count ?? "0", 10);

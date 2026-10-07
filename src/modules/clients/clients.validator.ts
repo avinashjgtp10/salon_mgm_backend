@@ -365,11 +365,12 @@ export const validateSearchClients = (req: Request, _res: Response, next: NextFu
     try {
         const q = req.query.q;
 
-        if (q === undefined || q === null || String(q).trim() === "")
+        // `browse=true` lists every client A→Z (a dropdown opened before
+        // anything is typed) — the only case an empty q is allowed.
+        const browse = String(req.query.browse ?? "").toLowerCase() === "true";
+        if (!browse && (q === undefined || q === null || String(q).trim() === ""))
             throw new AppError(400, "q query param is required", "VALIDATION_ERROR");
 
-        if (String(q).trim().length < 2)
-            throw new AppError(400, "q must be at least 2 characters", "VALIDATION_ERROR");
 
         return next();
     } catch (e) {

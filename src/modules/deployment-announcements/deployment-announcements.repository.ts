@@ -17,11 +17,16 @@ export const deploymentAnnouncementsRepository = {
   // (start_time <= now < end_time). A window that has simply elapsed is
   // never written back to status='stopped'; that distinction only matters
   // for the Super Admin's own history view, not for what clients should see.
+  //
+  // Also returns a scheduled one (start_time still in the future) when nothing
+  // is running yet, so a dashboard loaded before the scheduled minute still
+  // learns about it; the client keeps it hidden until start_time (see
+  // DeploymentBanner.tsx). A running announcement always wins.
   async getActive(): Promise<DeploymentAnnouncement | null> {
     const { rows } = await pool.query(
       `SELECT * FROM deployment_announcements
-       WHERE status = 'active' AND start_time <= NOW() AND end_time > NOW()
-       ORDER BY created_at DESC
+       WHERE status = 'active' AND end_time > NOW()
+       ORDER BY (start_time <= NOW()) DESC, start_time ASC, created_at DESC
        LIMIT 1`,
     );
     return rows[0] || null;
@@ -30,6 +35,14 @@ export const deploymentAnnouncementsRepository = {
   async stop(id: string): Promise<DeploymentAnnouncement | null> {
     const { rows } = await pool.query(
       `UPDATE deployment_announcements SET status = 'stopped', updated_at = NOW() WHERE id = $1 RETURNING *`,
+      [id],
+    );
+    return rows[0] || null;
+  },
+
+  async remove(id: string): Promise<DeploymentAnnouncement | null> {
+    const { rows } = await pool.query(
+      `DELETE FROM deployment_announcements WHERE id = $1 RETURNING *`,
       [id],
     );
     return rows[0] || null;

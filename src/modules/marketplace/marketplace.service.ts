@@ -11,7 +11,7 @@ import {
   MarketplaceProfile, MarketplaceProfileFull, WorkingHoursDay,
   UpsertEssentialsBody, UpsertAboutBody, UpsertLocationBody,
   UpsertWorkingHoursBody, AddImageBody, ReorderImagesBody, UpsertFeaturesBody,
-  UpsertBookingPolicyBody,
+  UpsertBookingPolicyBody, UpsertThemeBody, UpsertHeadlineBody,
 } from "./marketplace.types";
 
 const MAX_IMAGES = 10;
@@ -83,6 +83,42 @@ export const marketplaceService = {
     // the rest of the Marketplace Profile save (essentials/hours/publish).
     const updated = await marketplaceProfileRepo.upsertBookingPolicy(salonId, data);
     return updated ?? profile;
+  },
+
+  // ── Theme colour ────────────────────────────────────────────────────────────
+
+  async upsertTheme(salonId: string, data: UpsertThemeBody) {
+    logger.info("marketplace.upsertTheme", { salonId });
+    await _ensureProfile(salonId);
+    try {
+      const updated = await marketplaceProfileRepo.upsertTheme(salonId, data.theme_color);
+      if (!updated) throw new AppError(404, "Online booking profile not found", "NOT_FOUND");
+      return updated;
+    } catch (err: any) {
+      if (err?.code === "42703") {
+        // Migration/add_marketplace_theme_color.sql not run on this database.
+        throw new AppError(503, "Theme colour isn't available on this environment yet. Ask your admin to apply the pending update.", "FEATURE_UNAVAILABLE");
+      }
+      throw err;
+    }
+  },
+
+  // ── Booking page heading ────────────────────────────────────────────────────
+
+  async upsertHeadline(salonId: string, data: UpsertHeadlineBody) {
+    logger.info("marketplace.upsertHeadline", { salonId });
+    await _ensureProfile(salonId);
+    try {
+      const updated = await marketplaceProfileRepo.upsertHeadline(salonId, data.booking_headline, data.booking_subheadline);
+      if (!updated) throw new AppError(404, "Online booking profile not found", "NOT_FOUND");
+      return updated;
+    } catch (err: any) {
+      if (err?.code === "42703") {
+        // Migration/add_marketplace_booking_headline.sql not run on this database.
+        throw new AppError(503, "Editing the booking page heading isn't available on this environment yet. Ask your admin to apply the pending update.", "FEATURE_UNAVAILABLE");
+      }
+      throw err;
+    }
   },
 
   // ── Location ────────────────────────────────────────────────────────────────

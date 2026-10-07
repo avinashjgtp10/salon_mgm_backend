@@ -155,6 +155,7 @@ export const superAdminRepository = {
       SELECT
         s.id,
         COALESCE(s.business_name, s.slug, 'Unnamed')                                    AS name,
+        u.id                                                                              AS owner_id,
         u.email                                                                           AS owner_email,
         TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,'')))                         AS owner_name,
         CASE WHEN s.is_active THEN 'active' ELSE 'inactive' END                         AS status,
@@ -168,8 +169,12 @@ export const superAdminRepository = {
           WHERE salon_id = s.id AND status IN ('completed','partial')
         ), 0)::numeric                                                                    AS revenue,
         sub.status                                                                        AS subscription_status,
-        sp.name                                                                           AS plan_name,
-        COALESCE(sub.trial_end, sub.current_period_end)                                   AS plan_expires_at
+        -- The plan Super Admin assigned (Plans & Subscriptions → Salon Customization)
+        -- is what the salon's own Billing page and feature gating use, so it wins;
+        -- the subscription row's plan is the fallback for salons never customized.
+        COALESCE(spd.name, sp.name)                                                       AS plan_name,
+        spc.base_tier                                                                     AS plan_tier,
+        COALESCE(sub.trial_end, sub.current_period_end, spc.expiry_date)                  AS plan_expires_at
       FROM salons s
       LEFT JOIN users u ON u.id = s.owner_id
       LEFT JOIN LATERAL (
@@ -179,6 +184,8 @@ export const superAdminRepository = {
         LIMIT 1
       ) sub ON true
       LEFT JOIN subscription_plans sp ON sp.id = sub.plan_id
+      LEFT JOIN salon_plan_customizations spc ON spc.salon_id = s.id
+      LEFT JOIN salon_plan_definitions spd ON spd.tier = spc.base_tier
       WHERE ($1::text IS NULL
          OR s.business_name ILIKE $1
          OR s.slug          ILIKE $1
@@ -873,11 +880,55 @@ export const superAdminRepository = {
         ownerEmail = ownerRows[0]?.email ?? null;
       }
 
+      // The salon's staff LOGINS, found BEFORE the purge: users has no usable
+      // salon link (users.salon_id is empty for everyone), the only link is
+      // staff.user_id, and purgeSalon deletes the staff rows. Without this
+      // the staff users rows (and their emails) outlived the salon. Only
+      // plain staff/admin logins qualify, and only if they have no staff row
+      // at any OTHER salon and don't own another salon — a shared login must
+      // survive. The owner is handled separately below.
+      const { rows: staffLogins } = await client.query(
+        `SELECT DISTINCT u.id, u.email, u.role,
+                TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,''))) AS name
+         FROM users u
+         JOIN staff s ON s.user_id = u.id
+         WHERE s.salon_id = $1
+           AND u.role IN ('staff', 'admin')
+           AND u.id IS DISTINCT FROM $2
+           AND NOT EXISTS (SELECT 1 FROM staff s2 WHERE s2.user_id = u.id AND s2.salon_id <> $1)
+           AND NOT EXISTS (SELECT 1 FROM salons o WHERE o.owner_id = u.id AND o.id <> $1)`,
+        [id, ownerId]
+      );
+
       // Deletes every row scoped to this salon, including tables with no FK
       // to salons (appointments, sales, bundles, etc.) that ON DELETE CASCADE
       // never reaches on its own — see purgeSalon's own comment for the full
       // list and why each one needs an explicit delete.
       const deleted = await purgeSalon(client, id);
+
+      // Staff logins — same cleanup deleteUser does for one account, applied
+      // to each (staff rows are already gone via purgeSalon, so no staff.user_id
+      // to detach). Each gets its own deleted_account_log line.
+      if (staffLogins.length > 0) {
+        const staffIds = staffLogins.map((u: { id: string }) => u.id);
+        await client.query(`DELETE FROM refresh_tokens WHERE user_id = ANY($1::uuid[])`, [staffIds]);
+        await client.query(`DELETE FROM otp_verifications WHERE user_id = ANY($1::uuid[])`, [staffIds]);
+        await client.query(`DELETE FROM user_identities WHERE user_id = ANY($1::uuid[])`, [staffIds]);
+        await client.query(`UPDATE support_tickets SET user_id = NULL, updated_at = NOW() WHERE user_id = ANY($1::uuid[])`, [staffIds]);
+        const { rows: removed } = await client.query(
+          `DELETE FROM users WHERE id = ANY($1::uuid[]) AND role IN ('staff', 'admin') RETURNING id`,
+          [staffIds]
+        );
+        const removedIds = new Set(removed.map((r: { id: string }) => r.id));
+        for (const u of staffLogins) {
+          if (!removedIds.has(u.id)) continue;
+          await client.query(
+            `INSERT INTO deleted_account_log (account_type, account_id, account_email, account_name, account_role, deleted_by, reason)
+             VALUES ('user', $1, $2, $3, $4, $5, $6)`,
+            [u.id, u.email, u.name, u.role, deletedByUserId, `Deleted with salon "${salons[0].name}"${reason ? ` — ${reason}` : ""}`]
+          );
+        }
+      }
 
       // "Delete the salon" means every account related to it, not just the
       // business data — an ownerless (salon_id-less) user row left behind
