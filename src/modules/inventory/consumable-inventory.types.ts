@@ -38,6 +38,9 @@ export type ConsumableListRow = {
   total_stock: number; // product_qty * unit_size (== remaining_stock when unit_size is null)
   remaining_stock: number; // products.amount — canonical remaining volume
   qty_alert: number | null;
+  // Low Stock Alert = qty_alert (Product Quantity) × qty_alert_unit_size, in base units.
+  qty_alert_unit_size: number | null;
+  low_stock_threshold: number | null;
   used_today: number;
   used_this_month: number;
   assigned_services_count: number;

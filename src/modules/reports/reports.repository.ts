@@ -1,5 +1,6 @@
 import pool, { safeQuery } from "../../config/database";
 import { STOCK_LEDGER_IN_TYPES } from "../inventory/stock-ledger.types";
+import { lowStockThresholdSql } from "../inventory/low-stock.sql";
 import {
     SalesSummaryReportRow,
     SalesSummaryFiltersAvailable,
@@ -1339,22 +1340,8 @@ const STOCK_IN_PRICING_UNITS_SQL = `
 
 const UNIT_COST_SQL = `COALESCE(NULLIF(p.supply_price, 0), p.retail_price, 0)`;
 
-// Stock counted in the same unit qty_alert is entered in.
-//
-// The form asks for "Low Stock Alert (in bottles/units)", so the threshold is a
-// PACKAGE count while p.amount is base units. Comparing them raw meant a
-// consumable only ever tripped its own alert once it was down to the last few
-// millilitres (495 bottles vs an alert of 2 needed amount <= 2 ml), so Low
-// Stock was effectively dead for every product with a bottle_size.
-//
-// CEIL here, matching consumable-inventory.repository.ts's PRODUCT_QTY_EXPR,
-// which already compared correctly — this brings the report in line with the
-// Consumable Inventory page rather than inventing a third convention.
-const STOCK_IN_ALERT_UNITS_SQL = `
-  CASE WHEN p.bottle_size IS NOT NULL AND p.bottle_size > 0
-       THEN CEIL(COALESCE(p.amount, 0) / p.bottle_size)
-       ELSE COALESCE(p.amount, 0)
-  END`;
+// Low stock in these reports uses the shared rule in inventory/low-stock.sql.ts:
+// stock (base units) <= Low Stock Alert Product Quantity × Unit Size.
 
 // ======================================================
 // SALES SUMMARY REPORT (independent report API)
@@ -5101,11 +5088,11 @@ _buildProductInventoryWhere(
     values.push(filters.brand_id);
   }
   if (filters.stock_status === "low_stock") {
-    where.push(`(p.amount > 0 AND (${STOCK_IN_ALERT_UNITS_SQL}) <= p.qty_alert)`);
+    where.push(`(p.amount > 0 AND COALESCE(p.amount, 0) <= ${lowStockThresholdSql("p")})`);
   } else if (filters.stock_status === "out_of_stock") {
     where.push(`p.amount = 0`);
   } else if (filters.stock_status === "in_stock") {
-    where.push(`(${STOCK_IN_ALERT_UNITS_SQL}) > p.qty_alert`);
+    where.push(`COALESCE(p.amount, 0) > ${lowStockThresholdSql("p")}`);
   }
   if (filters.date_from) {
     where.push(`p.created_at >= $${idx++}::date`);
@@ -5142,7 +5129,7 @@ async getProductInventoryReportStats(
     SELECT
       COUNT(*)::int AS total_products,
       COALESCE(SUM((${STOCK_IN_PRICING_UNITS_SQL}) * ${UNIT_COST_SQL}), 0) AS total_stock_value,
-      COUNT(*) FILTER (WHERE p.amount > 0 AND (${STOCK_IN_ALERT_UNITS_SQL}) <= p.qty_alert)::int AS low_stock_items,
+      COUNT(*) FILTER (WHERE p.amount > 0 AND COALESCE(p.amount, 0) <= ${lowStockThresholdSql("p")})::int AS low_stock_items,
       COUNT(*) FILTER (WHERE p.amount = 0)::int AS out_of_stock_items
     FROM products p
     WHERE ${where}
@@ -5201,7 +5188,7 @@ async getProductInventoryReportRows(
       COALESCE(sales_agg.revenue, 0) AS sales_revenue,
       CASE
         WHEN COALESCE(p.amount, 0) = 0 THEN 'out_of_stock'
-        WHEN (${STOCK_IN_ALERT_UNITS_SQL}) <= p.qty_alert THEN 'low_stock'
+        WHEN COALESCE(p.amount, 0) <= ${lowStockThresholdSql("p")} THEN 'low_stock'
         ELSE 'in_stock'
       END AS status,
       COUNT(*) OVER() AS total_count
@@ -5273,7 +5260,7 @@ async getProductInventoryChartByStatus(
     SELECT
       CASE
         WHEN COALESCE(p.amount, 0) = 0 THEN 'out_of_stock'
-        WHEN (${STOCK_IN_ALERT_UNITS_SQL}) <= p.qty_alert THEN 'low_stock'
+        WHEN COALESCE(p.amount, 0) <= ${lowStockThresholdSql("p")} THEN 'low_stock'
         ELSE 'in_stock'
       END AS status,
       COUNT(*)::int AS count,
@@ -6012,11 +5999,11 @@ _buildStockMovementWhere(
     values.push(filters.product_type);
   }
   if (filters.stock_status === "low_stock") {
-    where.push(`(p.amount > 0 AND (${STOCK_IN_ALERT_UNITS_SQL}) <= p.qty_alert)`);
+    where.push(`(p.amount > 0 AND COALESCE(p.amount, 0) <= ${lowStockThresholdSql("p")})`);
   } else if (filters.stock_status === "out_of_stock") {
     where.push(`p.amount = 0`);
   } else if (filters.stock_status === "in_stock") {
-    where.push(`(${STOCK_IN_ALERT_UNITS_SQL}) > p.qty_alert`);
+    where.push(`COALESCE(p.amount, 0) > ${lowStockThresholdSql("p")}`);
   }
   if (filters.search?.trim()) {
     where.push(`p.name ILIKE $${idx++}`);

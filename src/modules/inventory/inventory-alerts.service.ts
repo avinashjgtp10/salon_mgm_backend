@@ -18,6 +18,7 @@
 
 import pool from "../../config/database";
 import logger from "../../config/logger";
+import { alertUnitSizeSql, lowStockThreshold } from "./low-stock.sql";
 import { notificationsService } from "../notifications/notifications.service";
 import { notificationsRepository } from "../notifications/notifications.repository";
 
@@ -31,6 +32,7 @@ interface AlertCandidateRow {
   name: string;
   amount: number;
   qty_alert: number | null;
+  qty_alert_unit_size: number | null;
   bottle_size: number | null;
   expiry_date: string | null;
   branch_id: string | null;
@@ -47,7 +49,7 @@ async function fetchCandidates(productIds: string[], salonId: string): Promise<A
   const { rows } = await pool.query<AlertCandidateRow>(
     `SELECT p.id, p.salon_id, p.name,
             COALESCE(p.amount, 0)::float8 AS amount,
-            p.qty_alert, p.bottle_size, p.expiry_date,
+            p.qty_alert, ${alertUnitSizeSql("p")}::float8 AS qty_alert_unit_size, p.bottle_size, p.expiry_date,
             (
               SELECT sm.branch_id FROM stock_movements sm
                WHERE sm.product_id = p.id
@@ -65,10 +67,19 @@ function stockInPacks(row: AlertCandidateRow): number {
   return bottleSize > 0 ? row.amount / bottleSize : row.amount;
 }
 
+// The threshold in the same pack unit as the "left" figure beside it in the message.
+function thresholdInPacks(row: AlertCandidateRow): number {
+  const threshold = lowStockThreshold(row) ?? 0;
+  const bottleSize = Number(row.bottle_size) || 0;
+  return bottleSize > 0 ? Math.round((threshold / bottleSize) * 100) / 100 : threshold;
+}
+
 function deriveStatus(row: AlertCandidateRow): InventoryAlertStatus | null {
   if (row.amount <= 0) return "out_of_stock";
 
-  if (row.qty_alert != null && row.qty_alert > 0 && Math.ceil(stockInPacks(row)) <= row.qty_alert) {
+  // Low = stock at/below Product Quantity × Unit Size, in base units (see low-stock.sql.ts).
+  const threshold = lowStockThreshold(row);
+  if (threshold != null && row.amount <= threshold) {
     return "low_stock";
   }
 
@@ -94,7 +105,7 @@ function buildNotificationCopy(row: AlertCandidateRow, status: InventoryAlertSta
     case "low_stock":
       return {
         title: "Low stock alert",
-        body: `${row.name} is low on stock — ${Math.ceil(stockInPacks(row))} left (threshold: ${row.qty_alert}).`,
+        body: `${row.name} is low on stock — ${Math.ceil(stockInPacks(row))} left (threshold: ${thresholdInPacks(row)}).`,
       };
     case "expired": {
       return { title: "Product expired", body: `${row.name} has expired (expiry date: ${row.expiry_date}).` };
@@ -173,7 +184,7 @@ export const inventoryAlertsService = {
     const { rows } = await pool.query<AlertCandidateRow>(
       `SELECT p.id, p.salon_id, p.name,
               COALESCE(p.amount, 0)::float8 AS amount,
-              p.qty_alert, p.bottle_size, p.expiry_date,
+              p.qty_alert, ${alertUnitSizeSql("p")}::float8 AS qty_alert_unit_size, p.bottle_size, p.expiry_date,
               (
                 SELECT sm.branch_id FROM stock_movements sm
                  WHERE sm.product_id = p.id
