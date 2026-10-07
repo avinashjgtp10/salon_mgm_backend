@@ -1,18 +1,10 @@
 import { buildSalonPlanInvoiceHtml, SalonPlanInvoicePrintPayload } from "./salon-plan-invoice-html.template";
+import { renderHtmlToPdf } from "../../config/puppeteer";
 
-// Same Puppeteer pattern as sales/receipt-pdf.service.ts — dynamic import
-// because Puppeteer 25.x ships ESM-only and a static import breaks in this
-// CommonJS project.
+// Uses the shared Chromium instance (config/puppeteer.ts) instead of
+// launching a fresh browser process per call — see receipt-pdf.service.ts's
+// comment for why.
 export async function renderSalonPlanInvoicePdf(payload: SalonPlanInvoicePrintPayload): Promise<Buffer> {
-    const puppeteer = (await import("puppeteer")).default;
     const html = buildSalonPlanInvoiceHtml(payload);
-    const browser = await puppeteer.launch({ headless: true, args: ["--no-sandbox"] });
-    try {
-        const page = await browser.newPage();
-        await page.setContent(html, { waitUntil: "load" });
-        const pdf = await page.pdf({ format: "A4", printBackground: true });
-        return Buffer.from(pdf);
-    } finally {
-        await browser.close();
-    }
+    return renderHtmlToPdf(html, { format: "A4", printBackground: true });
 }
