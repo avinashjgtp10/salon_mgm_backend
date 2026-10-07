@@ -12,6 +12,7 @@ import { blockedTimesRepository } from "../blocked_times/blocked_times.repositor
 import { hasFeature } from "../../middleware/planFeature.middleware";
 import { PublicBookingRequest } from "./bookings.types";
 import { bookingEmailOtpService } from "./booking-email-otp.service";
+import { loadStaffPresence } from "../attendance/attendance.presence";
 import logger from "../../config/logger";
 
 // Attaches booking policy, brand kit, the marketplace gallery, and (only when
@@ -274,6 +275,26 @@ async function getStaffWindowsForDate(
             // No exact-date row and no weekly baseline for this day — fall back
             // to the salon's general hours, which carry no per-staff breaks.
             windowByStaff.set(id, { open: salonOpenMin!, close: salonCloseMin!, breaks: [] });
+        }
+    }
+
+    // Attendance "show only checked-in staff": when the salon has it on, TODAY's
+    // slots are offered only for staff who are checked in and not yet checked
+    // out. Check-in only exists for today, so any other date keeps using the
+    // schedule alone — otherwise every future date would offer nobody. Living
+    // here means the slot list and createBooking's submit-time re-check (both
+    // call this) can't disagree. Fails open: an attendance lookup error must
+    // not take public booking down.
+    if (dateStr === salonLocalParts(new Date()).dateStr && windowByStaff.size > 0) {
+        try {
+            const presence = await loadStaffPresence(salonId, dateStr);
+            if (presence) {
+                for (const id of Array.from(windowByStaff.keys())) {
+                    if (presence.get(id) !== "checked_in") windowByStaff.delete(id);
+                }
+            }
+        } catch (err: any) {
+            logger.error("bookings.presenceFilterFailed", { salonId, message: err?.message });
         }
     }
     return { windowByStaff, stepMin };

@@ -47,6 +47,9 @@ export type AttendanceSettings = {
     half_day_deduction_amount: number;   // fixed amount; 0 falls back to half of per-day salary
     staff_scope: "all" | "selected";     // who the Half Day Rule applies to
     selected_staff_ids: string[];        // only meaningful when staff_scope = "selected"
+    // When true, staff who haven't checked in today are hidden from the
+    // Calendar, Quick Sale stylist picker and today's online-booking slots.
+    require_checkin_for_visibility?: boolean;
     created_at: string;
     updated_at: string;
 };
@@ -102,6 +105,15 @@ export type UpdateSettingsBody = {
     half_day_deduction_amount?: number;
     staff_scope?: "all" | "selected";
     selected_staff_ids?: string[];
+    require_checkin_for_visibility?: boolean;
+};
+
+export type StaffPresenceState = 'checked_in' | 'checked_out' | 'not_checked_in';
+
+export type StaffPresence = {
+    enabled: boolean;
+    date: string;   // YYYY-MM-DD, salon-local "today"
+    staff: { staff_id: string; state: StaffPresenceState }[];
 };
 
 export type DailySummary = {

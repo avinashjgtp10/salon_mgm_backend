@@ -25,6 +25,11 @@ const viewAttendanceListOrReport = requireAnyPermission(["view_attendance_list",
 router.get("/settings",    authMiddleware, ownerAdminStaff, viewAttendanceRules, attendanceController.getSettings);
 router.put("/settings",    authMiddleware, ownerAdminStaff, viewAttendanceRules, attendanceController.updateSettings);
 
+// Who is checked in today — feeds the Calendar / Quick Sale "show only
+// checked-in staff" filter, so it can't sit behind the attendance permissions
+// those users may not hold. Exposes only staff ids + in/out state.
+router.get("/staff-presence", authMiddleware, ownerAdminStaff, attendanceController.getStaffPresence);
+
 // Dashboard + grid
 router.get("/today",       authMiddleware, ownerAdminStaff, (req, res, next) => isMobileStaffRequest(req) ? next() : viewAttendanceList(req, res, next), attendanceController.getToday);
 router.get("/monthly",     authMiddleware, ownerAdminStaff, viewAttendanceList, attendanceController.getMonthly);
