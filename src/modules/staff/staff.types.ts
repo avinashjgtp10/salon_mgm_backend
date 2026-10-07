@@ -428,6 +428,10 @@ export type StaffListQuery = {
     allow_calendar_bookings?: boolean;
     sort_by?: "first_name" | "last_name" | "email" | "created_at" | "invitation_status" | "designation" | "joined_date";
     sort_order?: "ASC" | "DESC";
+    // Response projection. Omitted = the full staff row (Calendar, Edit Staff and
+    // others rely on schedule/blocked_times etc.). "select" = { id, name } only,
+    // for pickers/filters. "list" = just what the Staff list grid shows.
+    fields?: "select" | "list";
 };
 
 // ─── Scheduler staff order ──────────────────────────────────────────────────
