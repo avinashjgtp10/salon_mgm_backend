@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
+import { getSharedBrowser, shutdownSharedBrowser } from "../../config/puppeteer";
 import {
   buildDocument, renderDesign, renderSheet, type SheetOptions,
 } from "./render/design-render";
@@ -10,38 +11,15 @@ import {
  * Server-side export for coupon designs.
  *
  * Modelled on sales/receipt-pdf.service.ts, but deliberately does NOT inherit
- * its two habits:
- *   • it launches a browser on every call — here one lazily-created browser is
- *     reused, because Chrome costs 150–300MB RSS and a small instance OOMs on
- *     three concurrent launches;
- *   • it never deletes anything — here old exports are swept, because a
- *     300-DPI A4 PNG is several MB and fills a disk quickly.
+ * its old habit of never deleting anything — here old exports are swept,
+ * because a 300-DPI A4 PNG is several MB and fills a disk quickly. The
+ * shared-browser idea this file pioneered (one lazily-created Chromium
+ * reused forever, since it costs 150–300MB RSS and a small instance OOMs on
+ * concurrent launches) has since moved to config/puppeteer.ts so every PDF
+ * service in the app shares the SAME single browser process, not just this one.
  */
 
 type ExportFormat = "png" | "jpeg" | "pdf";
-
-/**
- * Structural types instead of `import type { Browser } from "puppeteer"`.
- *
- * Puppeteer 25 is ESM-only, and a type-import of it from this CommonJS build
- * needs a resolution-mode attribute that the current tsconfig doesn't support.
- * receipt-pdf.service.ts sidesteps the same problem with a bare dynamic
- * import; describing only what we call keeps that working and keeps this file
- * honest about its actual surface area.
- */
-interface HeadlessPage {
-  setViewport(v: { width: number; height: number; deviceScaleFactor: number }): Promise<void>;
-  setContent(html: string, o?: { waitUntil?: string }): Promise<unknown>;
-  evaluateHandle(fn: string): Promise<unknown>;
-  pdf(o: Record<string, unknown>): Promise<Buffer | Uint8Array>;
-  screenshot(o: Record<string, unknown>): Promise<Buffer | Uint8Array>;
-  close(): Promise<void>;
-}
-interface HeadlessBrowser {
-  newPage(): Promise<HeadlessPage>;
-  close(): Promise<void>;
-  on(event: string, cb: () => void): void;
-}
 
 export interface ExportOptions {
   format: ExportFormat;
@@ -73,35 +51,13 @@ const MAX_CONCURRENT = 2;
 // rather than OOM the box.
 const MAX_PIXELS = 40_000_000;
 
-let browserPromise: Promise<HeadlessBrowser> | null = null;
 let active = 0;
 const waiters: (() => void)[] = [];
 
-async function getBrowser(): Promise<HeadlessBrowser> {
-  if (!browserPromise) {
-    browserPromise = (async () => {
-      const puppeteer = (await import("puppeteer")).default;
-      const b = (await puppeteer.launch({
-        headless: true,
-        args: ["--no-sandbox", "--disable-dev-shm-usage"],
-        // Set in the Dockerfile so we use the apt-installed Chromium rather
-        // than a second downloaded copy.
-        ...(process.env.PUPPETEER_EXECUTABLE_PATH
-          ? { executablePath: process.env.PUPPETEER_EXECUTABLE_PATH }
-          : {}),
-      })) as unknown as HeadlessBrowser;
-      // If Chrome dies (OOM, crash), drop the cached promise so the next call
-      // launches a fresh one instead of reusing a dead handle forever.
-      b.on("disconnected", () => { browserPromise = null; });
-      return b;
-    })().catch((err) => {
-      browserPromise = null;
-      throw err;
-    });
-  }
-  return browserPromise;
-}
-
+// getBrowser() used to live here (lazy singleton launch) — now shared across
+// the whole app via config/puppeteer.ts's getSharedBrowser(). This file's own
+// acquire()/release() concurrency gate (max 2 pages in flight) stays local,
+// since it's specific to this feature's high-DPI image-export memory profile.
 async function acquire(): Promise<void> {
   if (active < MAX_CONCURRENT) { active++; return; }
   await new Promise<void>((resolve) => waiters.push(resolve));
@@ -169,7 +125,7 @@ export const designExportService = {
     await acquire();
     let page;
     try {
-      const browser = await getBrowser();
+      const browser = await getSharedBrowser();
       page = await browser.newPage();
       await page.setViewport({ width: Math.ceil(vpW), height: Math.ceil(vpH), deviceScaleFactor: scale });
       await page.setContent(html, { waitUntil: "load" });
@@ -207,11 +163,8 @@ export const designExportService = {
     }
   },
 
-  /** For tests and graceful shutdown. */
-  async shutdown(): Promise<void> {
-    if (!browserPromise) return;
-    const b = await browserPromise.catch(() => null);
-    browserPromise = null;
-    if (b) await b.close().catch(() => undefined);
-  },
+  /** For tests and graceful shutdown. Delegates to the app-wide shared
+   *  browser (config/puppeteer.ts) — kept here too since other code may
+   *  already call designExportService.shutdown(). */
+  shutdown: shutdownSharedBrowser,
 };
