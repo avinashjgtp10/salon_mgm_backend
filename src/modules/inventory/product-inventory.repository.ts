@@ -1,4 +1,5 @@
 import pool from "../../config/database";
+import { isLowStockSql } from "./low-stock.sql";
 import { productSuppliersRepository } from "./product-suppliers.repository";
 import { ProductSupplier } from "./product-suppliers.types";
 
@@ -105,8 +106,7 @@ function buildProductInventoryQuery(whereClause: string): string {
            COALESCE(p.amount, 0)::float8               AS amount,
            (${STOCK_IN_PACKS})::float8                 AS stock,
            p.qty_alert,
-           (p.qty_alert IS NOT NULL AND p.qty_alert > 0
-              AND CEIL(${STOCK_IN_PACKS}) <= p.qty_alert) AS low_stock,
+           ${isLowStockSql("p")} AS low_stock,
            p.retail_price::float8                      AS retail_price,
            p.supply_price::float8                      AS supply_price,
            COALESCE(purchased_agg.qty, 0)::float8       AS purchased,
@@ -116,8 +116,7 @@ function buildProductInventoryQuery(whereClause: string): string {
            CASE
              WHEN COALESCE(p.amount, 0) = 0 THEN 'out_of_stock'
              WHEN COALESCE(expiry_agg.latest_expiry, p.expiry_date) < CURRENT_DATE THEN 'expired'
-             WHEN (p.qty_alert IS NOT NULL AND p.qty_alert > 0
-                     AND CEIL(${STOCK_IN_PACKS}) <= p.qty_alert) THEN 'low_stock'
+             WHEN ${isLowStockSql("p")} THEN 'low_stock'
              WHEN COALESCE(expiry_agg.soonest_upcoming_expiry, p.expiry_date) IS NOT NULL
                   AND COALESCE(expiry_agg.soonest_upcoming_expiry, p.expiry_date) <= CURRENT_DATE + INTERVAL '30 days'
                THEN 'expiring_soon'
@@ -178,7 +177,7 @@ export const productInventoryRepository = {
         if (filters.category_id) { conditions.push(`p.category_id = $${idx++}`); values.push(filters.category_id); }
         if (filters.brand_id) { conditions.push(`p.brand_id = $${idx++}`); values.push(filters.brand_id); }
         if (filters.stock_status === "low") {
-            conditions.push(`(p.qty_alert IS NOT NULL AND p.qty_alert > 0 AND CEIL(${STOCK_IN_PACKS}) <= p.qty_alert)`);
+            conditions.push(isLowStockSql("p"));
         }
         if (filters.product_id) { conditions.push(`p.id = $${idx++}`); values.push(filters.product_id); }
 

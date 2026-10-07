@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import pool, { safeQuery } from "../../config/database";
+import { lowStockThresholdSql } from "../inventory/low-stock.sql";
 
 export const branchOwnerRepository = {
 
@@ -755,7 +756,7 @@ export const branchOwnerRepository = {
       `SELECT
          COUNT(p.id)::int AS total_products,
          COALESCE(SUM(p.amount * COALESCE(p.retail_price, p.supply_price, 0)), 0)::numeric AS total_stock_value,
-         COUNT(p.id) FILTER (WHERE p.qty_alert IS NOT NULL AND p.amount <= p.qty_alert)::int AS low_stock_count
+         COUNT(p.id) FILTER (WHERE p.qty_alert IS NOT NULL AND p.amount <= ${lowStockThresholdSql("p")})::int AS low_stock_count
        FROM branch_owner_salons bos
        JOIN products p ON p.salon_id = bos.salon_id AND p.is_active = true
        WHERE bos.branch_owner_id = $1${salonFilter}`,
@@ -791,12 +792,12 @@ export const branchOwnerRepository = {
          CASE WHEN p.amount <= 0 THEN 'out_of_stock' ELSE 'low_stock' END AS severity,
          CASE
            WHEN p.amount <= 0 THEN p.name || ' is out of stock (0 remaining).'
-           ELSE p.name || ' is low on stock — ' || p.amount || ' left (threshold: ' || p.qty_alert || ').'
+           ELSE p.name || ' is low on stock — ' || p.amount || ' left (threshold: ' || ${lowStockThresholdSql("p")} || ').'
          END AS message
        FROM branch_owner_salons bos
        JOIN salons s ON s.id = bos.salon_id
        JOIN products p ON p.salon_id = s.id AND p.is_active = true
-       WHERE bos.branch_owner_id = $1 AND p.qty_alert IS NOT NULL AND p.amount <= p.qty_alert${salonFilter}
+       WHERE bos.branch_owner_id = $1 AND p.qty_alert IS NOT NULL AND p.amount <= ${lowStockThresholdSql("p")}${salonFilter}
        ORDER BY (p.amount <= 0) DESC, p.updated_at DESC, p.amount ASC
        LIMIT 50`,
       values

@@ -3,16 +3,19 @@ import {
     Product, CreateProductBody, UpdateProductBody, ProductListFilters,
     ProductPhoto, Brand, CreateBrandBody, UpdateBrandBody,
 } from "./products.types";
+import { alertUnitSizeSql, isLowStockSql } from "../inventory/low-stock.sql";
 
 const PRODUCT_COLUMNS = `id, name, barcode, brand_id, category_id, supplier_id, measure_unit, product_type, size, amount, bottle_size, qty_alert,
     short_description, description, remark, lot_number, supply_price, retail_sales_enabled,
     retail_price, markup_percentage, tax_type, custom_tax_rate, tax_group, hsn_sac,
-    team_commission_enabled, team_commission_rate, expiry_date, is_active, is_public, created_at, updated_at`;
+    team_commission_enabled, team_commission_rate, expiry_date, is_active, is_public, created_at, updated_at,
+    ${alertUnitSizeSql("products")} AS qty_alert_unit_size`;
 
 const PRODUCT_COLUMNS_P = `p.id, p.name, p.barcode, p.brand_id, p.category_id, p.supplier_id, p.measure_unit, p.product_type, p.size, p.amount, p.bottle_size, p.qty_alert,
     p.short_description, p.description, p.remark, p.lot_number, p.supply_price, p.retail_sales_enabled,
     p.retail_price, p.markup_percentage, p.tax_type, p.custom_tax_rate, p.tax_group, p.hsn_sac,
-    p.team_commission_enabled, p.team_commission_rate, p.expiry_date, p.is_active, p.is_public, p.created_at, p.updated_at`;
+    p.team_commission_enabled, p.team_commission_rate, p.expiry_date, p.is_active, p.is_public, p.created_at, p.updated_at,
+    ${alertUnitSizeSql("p")} AS qty_alert_unit_size`;
 
 // ─── Products Repository ──────────────────────────────────────────────────────
 
@@ -122,15 +125,10 @@ export const productsRepository = {
         }
         if (filters.stock !== undefined && filters.stock !== "all") {
             if (filters.stock === "low") {
-                // qty_alert is a PACKAGE count ("Low Stock Alert (in bottles/
-                // units)") while amount is base units, so a consumable has to
-                // be compared as bottles or this filter never matches it —
-                // same CEIL the Consumable Inventory page uses.
-                conditions.push(`(${prefix}amount > 0 AND (
-                    CASE WHEN ${prefix}bottle_size IS NOT NULL AND ${prefix}bottle_size > 0
-                         THEN CEIL(COALESCE(${prefix}amount, 0) / ${prefix}bottle_size)
-                         ELSE COALESCE(${prefix}amount, 0)
-                    END) <= ${prefix}qty_alert)`);
+                // Low = in stock but at/below the Low Stock Alert threshold
+                // (Product Quantity × Unit Size, in base units) — the one shared
+                // rule in inventory/low-stock.sql.ts. `prefix` is "" or "p.".
+                conditions.push(`(${prefix}amount > 0 AND ${isLowStockSql(prefix ? "p" : "products")})`);
             } else if (filters.stock === "in_stock") {
                 conditions.push(`${prefix}amount > 0`);
             } else if (filters.stock === "out_of_stock") {
@@ -220,6 +218,16 @@ export const productsRepository = {
                 data.is_public ?? true,
             ]
         );
+        // Kept out of the INSERT above so creating a product doesn't depend on
+        // the qty_alert_unit_size column existing — only a product that really
+        // sets a Low Stock Alert unit size needs the migration.
+        if (data.qty_alert_unit_size != null) {
+            const { rows: withAlert } = await pool.query(
+                `UPDATE products SET qty_alert_unit_size = $1 WHERE id = $2 AND salon_id = $3 RETURNING ${PRODUCT_COLUMNS}`,
+                [data.qty_alert_unit_size, rows[0].id, salonId]
+            );
+            return withAlert[0];
+        }
         return rows[0];
     },
 
