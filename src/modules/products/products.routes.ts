@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, Request, Response, RequestHandler } from "express";
 import { uploadMiddleware } from "../../middleware/upload.middleware";
 import { importUpload } from "./products.upload";
 import { authMiddleware } from "../../middleware/auth.middleware";
@@ -22,7 +22,24 @@ const ownerAdminStaff = roleMiddleware("salon_owner", "admin", "staff");
 // view permissions — so this passes if they can view products OR sell OR
 // manage the calendar.
 const viewProducts = requireAnyPermission(["view_products", "create_sales", "manage_calendar"]);
-const editProducts = requirePermission("edit_products");
+// view_products is the parent of every Catalog > Products action — each
+// action route also requires it, so a child left ON under a View-OFF role
+// can't reach its API. Warehouse's own dedicated keys (add_consumable,
+// edit_product, delete_product, ...) stay valid on their own, hence either().
+const requireView = requirePermission("view_products");
+type Chain = RequestHandler[];
+const runChain = (chain: Chain, req: Request, res: Response) =>
+  chain.reduce<Promise<void>>((p, mw) => p.then(() => new Promise<void>((resolve, reject) => {
+    Promise.resolve(mw(req, res, (err?: unknown) => (err ? reject(err) : resolve()))).catch(reject);
+  })), Promise.resolve());
+const either = (...chains: Chain[]): RequestHandler => async (req, res, next) => {
+  let last: unknown;
+  for (const chain of chains) {
+    try { await runChain(chain, req, res); return next(); } catch (err) { last = err; }
+  }
+  return next(last);
+};
+const editProducts: Chain = [requireView, requirePermission("edit_products")];
 // Consumables ARE products (product_type consumable/both), and Warehouse's
 // Product Inventory page's Edit/Delete row actions also call these same
 // PATCH/DELETE routes — both Warehouse sections' dedicated permissions are
@@ -30,15 +47,15 @@ const editProducts = requirePermission("edit_products");
 // A staff member granted ONLY add_consumable/edit_consumable/edit_product/
 // delete_product (without the broader Catalog create_products/edit_products/
 // delete_products) can still use those specific Warehouse actions.
-const createProductsOrConsumable = requireAnyPermission(["create_products", "add_consumable"]);
-const editProductsOrConsumable = requireAnyPermission(["edit_products", "edit_consumable", "activate_deactivate_consumable", "edit_product"]);
-const deleteProductsOrInventory = requireAnyPermission(["delete_products", "delete_product"]);
+const createProductsOrConsumable = either([requireView, requirePermission("create_products")], [requirePermission("add_consumable")]);
+const editProductsOrConsumable = either([requireView, requirePermission("edit_products")], [requireAnyPermission(["edit_consumable", "activate_deactivate_consumable", "edit_product"])]);
+const deleteProductsOrInventory = either([requireView, requirePermission("delete_products")], [requirePermission("delete_product")]);
 // Import/Export Products are their own dedicated permissions (Products
 // permissions ticket). import_file/export_csv/excel/pdf (System) are now
 // global master gates, not OR'd fallbacks — BOTH the specific permission
 // (import_products OR the broader create_products) AND the matching global
 // switch are required (Global Download Switches ticket).
-const importProducts = [requireAnyPermission(["import_products", "create_products"]), requirePermission("import_file")];
+const importProducts = [requireView, requireAnyPermission(["import_products", "create_products"]), requirePermission("import_file")];
 const exportProductsCsv = [requirePermission("download_products_csv"), requirePermission("export_csv")];
 const exportProductsExcel = [requirePermission("download_products_excel"), requirePermission("export_excel")];
 const exportProductsPdf = [requirePermission("download_products_pdf"), requirePermission("export_pdf")];
@@ -56,9 +73,9 @@ router.patch("/brands/:id", authMiddleware, ownerAdminStaff, manageBrands, valid
 router.delete("/brands/:id", authMiddleware, ownerAdminStaff, manageBrands, brandsController.delete);
 
 // Products
-router.get("/export/csv", authMiddleware, ownerAdminStaff, viewProducts, ...exportProductsCsv, productsController.exportCSV);
-router.get("/export/excel", authMiddleware, ownerAdminStaff, viewProducts, ...exportProductsExcel, productsController.exportExcel);
-router.get("/export/pdf", authMiddleware, ownerAdminStaff, viewProducts, ...exportProductsPdf, productsController.exportPDF);
+router.get("/export/csv", authMiddleware, ownerAdminStaff, requireView, ...exportProductsCsv, productsController.exportCSV);
+router.get("/export/excel", authMiddleware, ownerAdminStaff, requireView, ...exportProductsExcel, productsController.exportExcel);
+router.get("/export/pdf", authMiddleware, ownerAdminStaff, requireView, ...exportProductsPdf, productsController.exportPDF);
 router.post("/import", authMiddleware, ownerAdminStaff, ...importProducts, importUpload.single("file"), productsController.importProducts);
 
 router.get("/", authMiddleware, ownerAdminStaff, viewProducts, validateListQuery, productsController.list);
@@ -69,8 +86,8 @@ router.patch("/:id", authMiddleware, ownerAdminStaff, editProductsOrConsumable, 
 router.delete("/:id", authMiddleware, ownerAdminStaff, deleteProductsOrInventory, productsController.delete);
 
 // Product Photos
-router.post("/:id/photos", authMiddleware, ownerAdminStaff, editProducts, uploadMiddleware.array("photos", 5), productsController.uploadPhotos);
-router.put("/:id/photos/reorder", authMiddleware, ownerAdminStaff, editProducts, validateReorderPhotos, productsController.reorderPhotos);
-router.delete("/:id/photos/:photoId", authMiddleware, ownerAdminStaff, editProducts, productsController.deletePhoto);
+router.post("/:id/photos", authMiddleware, ownerAdminStaff, ...editProducts, uploadMiddleware.array("photos", 5), productsController.uploadPhotos);
+router.put("/:id/photos/reorder", authMiddleware, ownerAdminStaff, ...editProducts, validateReorderPhotos, productsController.reorderPhotos);
+router.delete("/:id/photos/:photoId", authMiddleware, ownerAdminStaff, ...editProducts, productsController.deletePhoto);
 
 export default router;
