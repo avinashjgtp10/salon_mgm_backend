@@ -170,11 +170,13 @@ export const commissionRulesRepository = {
         if (!rule || rule.type !== "tiered_target" || rule.condition_target == null || !rule.scope_id) return null;
 
         const IST = "Asia/Kolkata";
+        // Same window the calculation engine uses: per IST day for a Daily rule.
+        const unit = rule.frequency === "daily" ? "day" : "month";
         const { rows } = await pool.query(
             `SELECT COALESCE(SUM(revenue_amount),0)::float AS total
              FROM commission_earned
              WHERE staff_id = $1 AND rule_id = $2
-               AND date_trunc('month', earned_at AT TIME ZONE '${IST}') = date_trunc('month', NOW() AT TIME ZONE '${IST}')`,
+               AND date_trunc('${unit}', earned_at AT TIME ZONE '${IST}') = date_trunc('${unit}', NOW() AT TIME ZONE '${IST}')`,
             [rule.scope_id, id]
         );
         return { target: Number(rule.condition_target), achieved: parseFloat(rows[0]?.total ?? "0") };
