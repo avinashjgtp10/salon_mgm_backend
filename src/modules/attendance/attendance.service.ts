@@ -14,7 +14,9 @@ import {
     UpdateSettingsBody,
     DailySummary,
     TodayStaffRecord,
+    StaffPresence,
 } from "./attendance.types";
+import { loadStaffPresence } from "./attendance.presence";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -92,6 +94,7 @@ const UPDATABLE_SETTINGS_FIELDS: (keyof UpdateSettingsBody)[] = [
     "attendance_bonus", "commission_threshold_days",
     "active", "threshold_hours",
     "half_day_deduction_amount", "staff_scope", "selected_staff_ids",
+    "require_checkin_for_visibility",
 ];
 
 function sanitizeSettingsUpdate(data: UpdateSettingsBody): UpdateSettingsBody {
@@ -116,6 +119,7 @@ function defaultSettings(): Omit<AttendanceSettings, "id" | "salon_id" | "create
         half_day_deduction_amount: 0,
         staff_scope: "all",
         selected_staff_ids: [],
+        require_checkin_for_visibility: false,
     };
 }
 
@@ -140,9 +144,26 @@ export const attendanceService = {
 
     async updateSettings(salonId: string, data: UpdateSettingsBody): Promise<AttendanceSettings> {
         const clean = sanitizeSettingsUpdate(data);
+        if (clean.require_checkin_for_visibility !== undefined && typeof clean.require_checkin_for_visibility !== "boolean")
+            throw new AppError(400, "require_checkin_for_visibility must be true or false", "VALIDATION_ERROR");
         if (Object.keys(clean).length === 0)
             throw new AppError(400, "No fields provided to update", "VALIDATION_ERROR");
         return attendanceRepository.upsertSettings(salonId, clean);
+    },
+
+    // Who is in today, for the "show only checked-in staff" setting. Open to any
+    // signed-in salon user — Calendar / Quick Sale users needn't hold the
+    // attendance-rules permission just to be filtered by it. Staff with no row
+    // today are simply absent from the list; callers treat that as not checked in.
+    async getStaffPresence(salonId: string): Promise<StaffPresence> {
+        const date = todayIST();
+        const presence = await loadStaffPresence(salonId, date);
+        if (!presence) return { enabled: false, date, staff: [] };
+        return {
+            enabled: true,
+            date,
+            staff: Array.from(presence, ([staff_id, state]) => ({ staff_id, state })),
+        };
     },
 
     // ── Check In ──────────────────────────────────────────────────────────────

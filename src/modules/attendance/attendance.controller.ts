@@ -33,6 +33,15 @@ export const attendanceController = {
         } catch (err) { return next(err); }
     },
 
+    async getStaffPresence(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const salonId = req.user?.salonId;
+            if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+            const presence = await attendanceService.getStaffPresence(salonId);
+            return sendSuccess(res, 200, presence, "Staff presence fetched");
+        } catch (err) { return next(err); }
+    },
+
     // ── Check In / Out ────────────────────────────────────────────────────────
 
     async checkIn(req: AuthRequest, res: Response, next: NextFunction) {
