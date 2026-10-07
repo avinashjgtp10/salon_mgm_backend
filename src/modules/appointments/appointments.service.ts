@@ -707,13 +707,14 @@ export const appointmentsService = {
         clientId?: string;
         date?: string;
         staffId?: string;
+        assignedStaffId?: string;
         status?: string;
         startDate?: string;
         endDate?: string;
         page?: number;
         limit?: number;
     }): Promise<{ data: Appointment[]; totalRecords: number; totalPages: number; currentPage: number } | Appointment[]> {
-        const { salonId, clientId, date, staffId, status, startDate, endDate, page, limit } = params;
+        const { salonId, clientId, date, staffId, assignedStaffId, status, startDate, endDate, page, limit } = params;
         if (clientId) {
             let appts = (await appointmentsRepository.listByClientId(clientId)).map(deriveDisplayStatus);
             appts = await enrichManyWithTax(appts);
@@ -724,7 +725,7 @@ export const appointmentsService = {
         }
         if (!salonId) throw new AppError(400, "salon_id or client_id is required", "VALIDATION_ERROR");
         const rawResult = await appointmentsRepository.listBySalonId(salonId, {
-            date, staff_id: staffId, status,
+            date, staff_id: staffId, assigned_staff_id: assignedStaffId, status,
             start_date: startDate, end_date: endDate,
             page, limit,
         });

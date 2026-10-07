@@ -157,6 +157,10 @@ export const appointmentsRepository = {
         filters: {
             date?: string;
             staff_id?: string;
+            // Matches the appointment's main staff OR any service row assigned
+            // to this staff member (multi-staff bookings). Used by the mobile
+            // staff API so staff see every appointment they work on.
+            assigned_staff_id?: string;
             status?: string;
             start_date?: string;
             end_date?: string;
@@ -194,6 +198,12 @@ export const appointmentsRepository = {
         if (filters.staff_id) {
             conditions.push(`a.staff_id = $${idx}`);
             values.push(filters.staff_id); idx++;
+        }
+        if (filters.assigned_staff_id) {
+            conditions.push(`(a.staff_id::text = $${idx} OR EXISTS (
+                SELECT 1 FROM jsonb_array_elements(COALESCE(a.services::jsonb, '[]'::jsonb)) service
+                WHERE service->>'staff_id' = $${idx}))`);
+            values.push(filters.assigned_staff_id); idx++;
         }
         if (filters.status) {
             conditions.push(`a.status = $${idx}`);
