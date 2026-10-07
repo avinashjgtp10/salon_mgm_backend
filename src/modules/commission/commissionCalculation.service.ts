@@ -418,6 +418,9 @@ async function tryNewEngineRule(params: {
     const rule = await commissionRulesRepository.findActiveForCalculation(salonId, source, staff_id, designation);
     if (!rule) return false;
 
+    // Window the threshold / once-per-period checks below are measured over.
+    const periodUnit: "day" | "month" = rule.frequency === "daily" ? "day" : "month";
+
     if (fullyCovered) {
         // Record the ₹0 explicitly instead of running threshold/milestone/rate
         // logic against a ₹0 base, so reports.repository.ts's staff-commission
@@ -487,10 +490,11 @@ async function tryNewEngineRule(params: {
     let periodMetric: number | null = null;
     if (rule.condition_target && rule.condition_metric) {
         const IST = "Asia/Kolkata";
-        // Threshold always resets monthly — there's no separate period selector for the
-        // condition itself in the simplified single-reward model (frequency governs payout
-        // cadence, not the threshold window).
-        const dateClause = `AND date_trunc('month', earned_at AT TIME ZONE '${IST}') = date_trunc('month', NOW() AT TIME ZONE '${IST}')`;
+        // The threshold window follows the rule's Payout Frequency: a Daily rule's
+        // condition is a DAILY target (resets each IST day); anything else resets
+        // monthly. It used to be monthly regardless, so a rule set to Daily with a
+        // ₹5,000 condition was really asking for ₹5,000 over the whole month.
+        const dateClause = `AND date_trunc('${periodUnit}', earned_at AT TIME ZONE '${IST}') = date_trunc('${periodUnit}', NOW() AT TIME ZONE '${IST}')`;
 
         const { rows: metricRows } = await pool.query(
             rule.condition_metric === "count"
@@ -507,7 +511,8 @@ async function tryNewEngineRule(params: {
                 // (rule.rate) instead of nothing, unlike milestone's all-or-nothing gate.
                 const beforeRate = Number(rule.rate);
                 const commissionAmount = parseFloat((revenue * beforeRate / 100).toFixed(2));
-                if (commissionAmount > 0) {
+                // Written even at ₹0 — the period total is the SUM of these rows' revenue.
+                if (commissionAmount > 0 || revenue > 0) {
                     inserts.push(
                         commissionEarnedRepository.insert({
                             salon_id: salonId, staff_id, sale_id: saleId,
@@ -525,8 +530,26 @@ async function tryNewEngineRule(params: {
                 });
                 return true;
             }
+            // Remember this sale (₹0 commission) so it counts toward the period
+            // total. With no row, Client A's ₹3,000 left no trace and Client B's
+            // ₹2,000 started again from zero — a ₹5,000 target was unreachable
+            // across separate bills. A ₹0 row also counts as one toward a "count"
+            // metric, which is the intent there too.
+            if (revenue > 0 || rule.condition_metric === "count") {
+                inserts.push(
+                    commissionEarnedRepository.insert({
+                        salon_id: salonId, staff_id, sale_id: saleId,
+                        appointment_id: appointmentId ?? null,
+                        category, revenue_amount: parseFloat(revenue.toFixed(2)),
+                        commission_kind: rule.type === "percentage" ? "percentage" : "fixed_rate",
+                        commission_rate: Number(rule.rate),
+                        commission_amount: 0,
+                        rule_id: rule.id,
+                    })
+                );
+            }
             logger.info("commissionCalculationService: below condition threshold", {
-                staff_id, category, ruleId: rule.id, periodMetric, target: rule.condition_target,
+                staff_id, category, ruleId: rule.id, periodMetric, target: rule.condition_target, periodUnit,
             });
             return true; // handled — just didn't earn anything yet
         }
@@ -536,11 +559,13 @@ async function tryNewEngineRule(params: {
 
     if (rule.type === "milestone") {
         // One-time bonus per period once the threshold is crossed — check it hasn't
-        // already been paid out this month before awarding again.
+        // already been paid out this period before awarding again. Only rows that
+        // actually paid (commission_amount > 0) count — the ₹0 "remember this sale"
+        // rows written below the threshold must not be mistaken for an award.
         const IST = "Asia/Kolkata";
-        const dateClause = `AND date_trunc('month', earned_at AT TIME ZONE '${IST}') = date_trunc('month', NOW() AT TIME ZONE '${IST}')`;
+        const dateClause = `AND date_trunc('${periodUnit}', earned_at AT TIME ZONE '${IST}') = date_trunc('${periodUnit}', NOW() AT TIME ZONE '${IST}')`;
         const { rows: alreadyPaidRows } = await pool.query(
-            `SELECT 1 FROM commission_earned WHERE staff_id=$1 AND rule_id=$2 ${dateClause} LIMIT 1`,
+            `SELECT 1 FROM commission_earned WHERE staff_id=$1 AND rule_id=$2 AND commission_amount > 0 ${dateClause} LIMIT 1`,
             [staff_id, rule.id]
         );
         if (alreadyPaidRows.length > 0) return true; // already awarded this period
@@ -909,12 +934,35 @@ export const commissionCalculationService = {
                         logger.warn("commissionCalculationService: period revenue query failed, using sale revenue", { staff_id, category, qErr });
                     }
 
+                    // A sale that doesn't (yet) reach the period target still has to be
+                    // REMEMBERED: the running period total above is the SUM of this
+                    // table's revenue_amount, and a sale that earns nothing used to write
+                    // no row at all. So Client A's ₹3,000 vanished, Client B's ₹2,000
+                    // saw a day total of ₹2,000, and a ₹5,000 daily target was never
+                    // reached no matter how many clients paid. Write the revenue with a
+                    // ₹0 commission instead (same convention as milestone_ladder and the
+                    // fully-covered case above). Replaced, not duplicated, if this sale is
+                    // ever re-processed — reverseForSale clears its pending rows first.
+                    const rememberBelowTarget = () => {
+                        inserts.push(
+                            commissionEarnedRepository.insert({
+                                salon_id: salonId, staff_id, sale_id: saleId,
+                                appointment_id: appointmentId ?? null, category,
+                                revenue_amount: parseFloat(revenue.toFixed(2)),
+                                commission_kind: rule.commission_kind,
+                                commission_rate: Number(rule.default_rate),
+                                commission_amount: 0,
+                            })
+                        );
+                    };
+
                     // ── Check minimum period revenue threshold ──────────────────────────
                     const minRevenue = Number((rule as any).min_monthly_revenue ?? 0);
                     if (minRevenue > 0 && periodRevenue < minRevenue) {
                         logger.info("commissionCalculationService: below min threshold", {
                             staff_id, category, periodRevenue, minRevenue, period,
                         });
+                        rememberBelowTarget();
                         continue;
                     }
 
@@ -945,7 +993,7 @@ export const commissionCalculationService = {
                             totalCommission += slabCommission;
                         }
 
-                        if (totalCommission <= 0) continue;
+                        if (totalCommission <= 0) { rememberBelowTarget(); continue; }
 
                         inserts.push(
                             commissionEarnedRepository.insert({
@@ -979,6 +1027,7 @@ export const commissionCalculationService = {
                             logger.info("commissionCalculationService: period revenue below target", {
                                 staff_id, category, periodRevenue, revenueTarget, period,
                             });
+                            rememberBelowTarget();
                             continue;
                         }
 
