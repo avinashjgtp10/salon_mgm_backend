@@ -7,7 +7,7 @@
 // blob was built from the (wrong) frontend keys, so a lookup for the
 // backend's real keys (`customPerms["create_sales"]`) always missed and
 // silently resolved to `false`. Both sides now agree on view_sales/
-// create_sales/import_sales (see permissionMatrix.ts and DEFAULT_STAFF_PERMS
+// create_sales/import_sales (see permissionMatrix.ts
 // below) — this file proves an unrelated override can no longer take Sales
 // access down with it, and pins the bug's mechanics so a future rename on
 // either side gets caught here instead of in production.
@@ -90,22 +90,18 @@ describe("staffHasPermission — Sales permission-key regression", () => {
     await expect(staffHasPermission(user, "view_sales")).resolves.toBe(false);
   });
 
-  it("legacy fallback (nothing configured for this salon at all): DEFAULT_STAFF_PERMS grants the canonical Sales keys, not the old ones", async () => {
+  it("legacy fallback (nothing configured for this salon at all): no built-in defaults, everything is denied", async () => {
     const user: PermUser = { userId: "user-4", role: "staff", salonId: "salon-2" };
 
     mockRows((sql) => {
       if (sql.includes("role_id FROM staff")) return [{ id: "staff-4", role_id: null }];
       if (sql.includes("custom_permissions FROM staff")) return [{ custom_permissions: null }];
-      if (sql.includes("FROM salon_settings")) return []; // no role_permissions row saved yet
+      if (sql.includes("FROM salon_settings")) return [];
       return null;
     });
 
-    await expect(staffHasPermission(user, "view_sales")).resolves.toBe(true);
-    await expect(staffHasPermission(user, "create_sales")).resolves.toBe(true);
-    // import_sales is deliberately off by default (bulk billing import is
-    // higher-risk than an ordinary sale) — must be explicitly granted.
+    await expect(staffHasPermission(user, "view_sales")).resolves.toBe(false);
+    await expect(staffHasPermission(user, "create_sales")).resolves.toBe(false);
     await expect(staffHasPermission(user, "import_sales")).resolves.toBe(false);
-    // The old key names were never part of DEFAULT_STAFF_PERMS to begin with.
-    await expect(staffHasPermission(user, "create_quick_sale")).resolves.toBe(false);
   });
 });
