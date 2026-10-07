@@ -35,6 +35,7 @@ router.post(
     "/saved",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
+    requirePermission("view_link_builder"),
     requirePermission("manage_link_builder"),
     linkBuilderController.save
 );
@@ -43,6 +44,7 @@ router.delete(
     "/saved/:id",
     authMiddleware,
     roleMiddleware("salon_owner", "admin", "staff"),
+    requirePermission("view_link_builder"),
     requirePermission("manage_link_builder"),
     linkBuilderController.deleteSaved
 );
