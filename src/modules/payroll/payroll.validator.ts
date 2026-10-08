@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import { AppError } from "../../middleware/error.middleware";
 
-const ADJUSTMENT_FIELDS = ["commission", "bonus", "tips", "deduction", "other_earning", "salary"];
+const ADJUSTMENT_FIELDS = ["commission", "bonus", "tips", "deduction", "other_earning", "salary", "salary_advance"];
 
 export function validateStaffSummaryQuery(req: Request, _res: Response, next: NextFunction) {
     const { period_start, period_end } = req.query;

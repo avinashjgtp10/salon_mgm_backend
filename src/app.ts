@@ -89,6 +89,7 @@ import supportRoutes from "./modules/support/support.routes";
 import clientRequirementsRoutes from "./modules/client-requirements/client-requirements.routes";
 import notificationsRoutes from "./modules/notifications/notifications.routes";
 import mobileStaffRoutes from "./modules/mobile-staff/mobileStaff.routes";
+import mobileOwnerRoutes from "./modules/mobile-staff/mobileOwner.routes";
 import deploymentAnnouncementsRoutes from "./modules/deployment-announcements/deployment-announcements.routes";
 import appVersionRoutes from "./modules/app-version/app-version.routes";
 import enquiriesRoutes from "./modules/enquiries/enquiries.routes";
@@ -346,6 +347,9 @@ app.use("/api/v1/notifications", notificationsRoutes);
 // Staff-only mobile API: caller's own profile, appointments, schedule,
 // attendance and notifications. Identity comes from the JWT + staff record.
 app.use("/api/v1/mobile/staff", mobileStaffRoutes);
+// Owner/admin settings that exist only in the mobile app (e.g. a staff
+// member's Calendar & Quick Sale access).
+app.use("/api/v1/mobile/owner", mobileOwnerRoutes);
 app.use("/api/v1/deployment-announcements", deploymentAnnouncementsRoutes);
 // Global mobile app version configuration. GET /api/v1/app/version is public.
 // Distinct from /api/v1/appointments: Express matches mount paths on segment

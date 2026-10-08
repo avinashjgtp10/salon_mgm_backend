@@ -11,6 +11,7 @@ import {
 } from "../staff/staff.service";
 import type { Staff } from "../staff/staff.types";
 import type { MobileStaffContext, MobileStaffRequest } from "./mobileStaff.middleware";
+import { getStaffMobileCalendarAccess } from "./mobileCalendarAccess";
 
 // Every handler reads identity ONLY from req.staff (set by requireMobileStaff
 // from the verified JWT + server-side staff row). No handler reads a staff,
@@ -89,6 +90,16 @@ export const mobileStaffController = {
       const { id, salonId } = getStaff(req);
       const staff = await staffService.getById(id, salonId);
       return sendSuccess(res, 200, toOwnProfile(staff), "Staff profile fetched successfully");
+    } catch (err) { return next(err); }
+  },
+
+  // Owner-controlled switch (see mobileCalendarAccess.ts). The app reads it to
+  // decide whether the Calendar opens Quick Sale for this staff member.
+  async calendarAccess(req: MobileStaffRequest, res: Response, next: NextFunction) {
+    try {
+      const { id, salonId } = getStaff(req);
+      const calendarAccess = await getStaffMobileCalendarAccess(id, salonId);
+      return sendSuccess(res, 200, { calendarAccess }, "Calendar access fetched successfully");
     } catch (err) { return next(err); }
   },
 
