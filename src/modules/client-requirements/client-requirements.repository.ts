@@ -201,7 +201,7 @@ export const clientRequirementsRepository = {
     const { rows } = await safeQuery(() =>
       pool.query(
         `UPDATE client_requirements
-         SET status = $2, updated_at = NOW(), completed_at = CASE WHEN $2 = 'completed' THEN NOW() ELSE completed_at END
+         SET status = $2::varchar, updated_at = NOW(), completed_at = CASE WHEN $2::varchar = 'completed' THEN NOW() ELSE completed_at END
          WHERE id = $1
          RETURNING *`,
         [id, status]

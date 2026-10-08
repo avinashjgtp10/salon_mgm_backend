@@ -1,4 +1,5 @@
 import { superAdminRepository } from "./super-admin.repository";
+import { supportRepo } from "../support/support.repository";
 import { authRepository } from "../auth/auth.repository";
 import { demoRequestsService } from "../demo-requests/demo-requests.service";
 import { emailService } from "../utils/email.service";
@@ -70,6 +71,26 @@ export const superAdminService = {
 
   async getStats() {
     return superAdminRepository.getStats();
+  },
+
+  // Everything the super-admin Overview page renders, in one round trip.
+  async getDashboard(opts: { frequentLoginsLimit?: number; usersNoPlanLimit?: number } = {}) {
+    const [stats, salons, payments, frequentLogins, usersNoPlan, supportStats] = await Promise.all([
+      superAdminRepository.getStats(),
+      superAdminRepository.getAllSalons(),
+      superAdminRepository.getAllPayments(),
+      superAdminRepository.getFrequentLogins(opts.frequentLoginsLimit),
+      superAdminRepository.getUsersWithoutSubscription(opts.usersNoPlanLimit),
+      supportRepo.getStats(),
+    ]);
+    return {
+      stats,
+      salons,
+      payments,
+      frequent_logins: frequentLogins,
+      users_no_plan: usersNoPlan,
+      support_stats: supportStats,
+    };
   },
 
   // ── SALONS ────────────────────────────────────────────────────────────────────

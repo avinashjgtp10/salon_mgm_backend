@@ -237,6 +237,15 @@ export const ordersRepository = {
                 );
                 values.push(filters.status);
                 idx++;
+            } else if (filters.status === "sent") {
+                // The Ordered list shows only orders that are still just
+                // Ordered. Once "Confirm Order" has been clicked
+                // (verification_started_at set) the order belongs to Verify
+                // Order — which picks it up by the same column, above — so it
+                // must not ALSO stay here, or one order sits on two tabs.
+                conditions.push(`(o.status = $${idx} AND o.verification_started_at IS NULL)`);
+                values.push(filters.status);
+                idx++;
             } else {
                 conditions.push(`o.status = $${idx++}`);
                 values.push(filters.status);

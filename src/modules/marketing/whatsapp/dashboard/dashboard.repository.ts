@@ -213,6 +213,54 @@ export const dashboardRepository = {
     return rows
   },
 
+  // Paginated sibling of getTopTemplates — that one stays a fixed top-5 for
+  // the combined /stats payload (dashboard's first paint shouldn't pay for a
+  // COUNT(*) it doesn't need); this one powers the "Top Performing Templates"
+  // card's own page-through once a salon wants to see more than 5.
+  async getTopTemplatesPaged(salonId: string, page: number, limit: number): Promise<{ rows: WATopTemplate[]; total: number }> {
+    const offset = (page - 1) * limit
+    const { rows: countRows } = await pool.query(`
+      SELECT COUNT(*)::int AS total FROM (
+        SELECT c.template_id
+        FROM wa_campaigns c
+        LEFT JOIN wa_campaign_contacts cc ON cc.campaign_id = c.id
+        WHERE c.salon_id = $1 AND c.template_id IS NOT NULL
+        GROUP BY c.template_id
+        HAVING COUNT(CASE WHEN cc.status IN ('SENT','DELIVERED','READ','FAILED','BLOCKED') THEN 1 END) > 0
+      ) sub
+    `, [salonId])
+
+    const { rows } = await pool.query(`
+      SELECT
+        c.template_id,
+        COALESCE(t.name, c.template_id::text)                                    AS template_name,
+        COUNT(DISTINCT c.id)                                                      AS times_used,
+        COUNT(CASE WHEN cc.status IN ('SENT','DELIVERED','READ','FAILED','BLOCKED') THEN 1 END) AS total_sent,
+        COUNT(CASE WHEN cc.status IN ('DELIVERED','READ') THEN 1 END)             AS total_delivered,
+        COUNT(CASE WHEN cc.status = 'READ'                THEN 1 END)             AS total_read,
+        CASE
+          WHEN COUNT(CASE WHEN cc.status IN ('SENT','DELIVERED','READ','FAILED','BLOCKED') THEN 1 END) > 0
+          THEN ROUND(
+            COUNT(CASE WHEN cc.status = 'READ' THEN 1 END)::numeric /
+            COUNT(CASE WHEN cc.status IN ('SENT','DELIVERED','READ','FAILED','BLOCKED') THEN 1 END) * 100, 1)
+          ELSE 0
+        END AS avg_read_rate
+      FROM wa_campaigns c
+      LEFT JOIN wa_campaign_contacts cc ON cc.campaign_id = c.id
+      LEFT JOIN wa_templates t
+        ON t.id::text = c.template_id::text
+       AND t.salon_id = c.salon_id
+      WHERE c.salon_id = $1
+        AND c.template_id IS NOT NULL
+      GROUP BY c.template_id, t.name
+      HAVING COUNT(CASE WHEN cc.status IN ('SENT','DELIVERED','READ','FAILED','BLOCKED') THEN 1 END) > 0
+      ORDER BY avg_read_rate DESC, total_sent DESC
+      LIMIT $2 OFFSET $3
+    `, [salonId, limit, offset])
+
+    return { rows, total: countRows[0]?.total ?? 0 }
+  },
+
   async getEngagedContacts(salonId: string): Promise<WAEngagedContact[]> {
   const { rows } = await pool.query(`
     SELECT
@@ -240,4 +288,45 @@ export const dashboardRepository = {
   `, [salonId])
   return rows
 },
+
+  // Paginated sibling of getEngagedContacts — same reasoning as
+  // getTopTemplatesPaged above.
+  async getEngagedContactsPaged(salonId: string, page: number, limit: number): Promise<{ rows: WAEngagedContact[]; total: number }> {
+    const offset = (page - 1) * limit
+    const { rows: countRows } = await pool.query(`
+      SELECT COUNT(*)::int AS total FROM (
+        SELECT '+' || REGEXP_REPLACE(cc.phone, '[^0-9]', '', 'g') AS phone
+        FROM wa_campaign_contacts cc
+        JOIN wa_campaigns c ON c.id = cc.campaign_id
+        WHERE c.salon_id = $1
+        GROUP BY '+' || REGEXP_REPLACE(cc.phone, '[^0-9]', '', 'g')
+        HAVING COUNT(CASE WHEN cc.status = 'READ' THEN 1 END) > 0
+      ) sub
+    `, [salonId])
+
+    const { rows } = await pool.query(`
+      SELECT
+        '+' || REGEXP_REPLACE(cc.phone, '[^0-9]', '', 'g') AS phone,
+        (ARRAY_REMOVE(ARRAY_AGG(cc.name ORDER BY cc.updated_at DESC), NULL))[1] AS name,
+        COUNT(CASE WHEN cc.status = 'READ' THEN 1 END)  AS campaigns_read,
+        COUNT(CASE WHEN cc.status IN ('SENT','DELIVERED','READ','FAILED','BLOCKED') THEN 1 END) AS total_received,
+        CASE
+          WHEN COUNT(CASE WHEN cc.status IN ('SENT','DELIVERED','READ','FAILED','BLOCKED') THEN 1 END) > 0
+          THEN ROUND(
+            COUNT(CASE WHEN cc.status = 'READ' THEN 1 END)::numeric /
+            COUNT(CASE WHEN cc.status IN ('SENT','DELIVERED','READ','FAILED','BLOCKED') THEN 1 END) * 100, 1)
+          ELSE 0
+        END AS read_rate,
+        MAX(CASE WHEN cc.status = 'READ' THEN cc.updated_at END) AS last_read_at
+      FROM wa_campaign_contacts cc
+      JOIN wa_campaigns c ON c.id = cc.campaign_id
+      WHERE c.salon_id = $1
+      GROUP BY '+' || REGEXP_REPLACE(cc.phone, '[^0-9]', '', 'g')
+      HAVING COUNT(CASE WHEN cc.status = 'READ' THEN 1 END) > 0
+      ORDER BY campaigns_read DESC, read_rate DESC
+      LIMIT $2 OFFSET $3
+    `, [salonId, limit, offset])
+
+    return { rows, total: countRows[0]?.total ?? 0 }
+  },
 }

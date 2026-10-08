@@ -121,7 +121,7 @@ export const salonPlansController = {
 
     // ── Billing & Invoices page (filtered list/summary/branches/print) ─────────
 
-    _parseListFilters(query: Request["query"]) {
+    _parseListFilters(query: Request["query"] | Record<string, unknown>) {
         const { salon_id, status, branch, search, date_from, date_to, page, limit } = query;
         return {
             salon_id: typeof salon_id === "string" ? salon_id : undefined,
@@ -130,8 +130,8 @@ export const salonPlansController = {
             search: typeof search === "string" ? search : undefined,
             date_from: typeof date_from === "string" ? date_from : undefined,
             date_to: typeof date_to === "string" ? date_to : undefined,
-            page: page ? parseInt(page as string, 10) : undefined,
-            limit: limit ? parseInt(limit as string, 10) : undefined,
+            page: page ? parseInt(String(page), 10) : undefined,
+            limit: limit ? parseInt(String(limit), 10) : undefined,
         };
     },
 
@@ -145,6 +145,14 @@ export const salonPlansController = {
     async invoicesSummary(req: Request, res: Response, next: NextFunction) {
         try {
             const data = await salonPlansService.invoicesSummary(salonPlansController._parseListFilters(req.query));
+            return res.json({ success: true, data });
+        } catch (err) { return next(err); }
+    },
+
+    // POST /invoices/overview — same filters as the GET list/summary, sent in the body.
+    async invoicesOverview(req: Request, res: Response, next: NextFunction) {
+        try {
+            const data = await salonPlansService.invoicesOverview(salonPlansController._parseListFilters(req.body ?? {}));
             return res.json({ success: true, data });
         } catch (err) { return next(err); }
     },

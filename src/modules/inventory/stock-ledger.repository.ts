@@ -19,12 +19,18 @@ const SELECT_WITH_JOINS = `
            p.bottle_size AS bottle_size,
            sc.name AS category,
            sup.name AS supplier_name,
+           br.name AS branch_name,
+           sbr.name AS source_branch_name,
+           dbr.name AS destination_branch_name,
            NULLIF(TRIM(CONCAT(u.first_name, ' ', COALESCE(u.last_name, ''))), '') AS created_by_name
     FROM stock_ledger sl
     JOIN products p ON p.id = sl.product_id
     LEFT JOIN service_categories sc ON sc.id = p.category_id
     LEFT JOIN suppliers sup ON sup.id = sl.supplier_id
-    LEFT JOIN users u ON u.id = sl.created_by`;
+    LEFT JOIN users u ON u.id = sl.created_by
+    LEFT JOIN branches br ON br.id = sl.branch_id
+    LEFT JOIN branches sbr ON sbr.id = sl.source_branch_id
+    LEFT JOIN branches dbr ON dbr.id = sl.destination_branch_id`;
 
 export const stockLedgerRepository = {
     async findById(id: string, salonId: string): Promise<StockLedgerEntry | null> {

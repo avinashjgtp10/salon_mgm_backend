@@ -20,6 +20,9 @@ export type Product = {
     // — not stored redundantly here.
     bottle_size: number | null;
     qty_alert: number | null;
+    // Unit Size of the Low Stock Alert (qty_alert × this = threshold in base
+    // units). null = use bottle_size. Needs Migration/add_qty_alert_unit_size.sql.
+    qty_alert_unit_size?: number | null;
     short_description: string | null;
     description: string | null;
     remark: string | null;
@@ -78,6 +81,7 @@ export type CreateProductBody = {
     amount?: number;
     bottle_size?: number | null;
     qty_alert?: number;
+    qty_alert_unit_size?: number | null;
     short_description?: string;
     description?: string;
     remark?: string;

@@ -1,3 +1,4 @@
+import { isMobileStaffRequest } from "../notifications/staffNotificationScope";
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
@@ -107,7 +108,7 @@ router.post("/invite/accept", validateAcceptInvitation, staffInvitationControlle
 // alone, not just manage_calendar, has to be enough — you don't need edit
 // rights on the calendar to see who it's organized by).
 const viewTeamOrBooking = requireAnyPermission(["view_team", "create_sales", "manage_calendar", "view_calendar"]);
-router.get("/", auth, ownerAdminStaff, viewTeamOrBooking, staffController.list);
+router.get("/", auth, ownerAdminStaff, (req, res, next) => isMobileStaffRequest(req) ? next() : viewTeamOrBooking(req, res, next), staffController.list);
 router.post("/", auth, ownerAdminStaff, createStaff, validateCreateStaff, staffController.create);
 
 // ─── Live email-availability check for the Staff Login email field (must be

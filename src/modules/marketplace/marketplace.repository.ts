@@ -72,6 +72,31 @@ export const marketplaceProfileRepo = {
     }
   },
 
+  // Theme colour. Returns null if there is no profile row for the salon;
+  // throws UNDEFINED_COLUMN through to the service if the migration hasn't run
+  // (unlike the booking-policy save, silently dropping a colour the user just
+  // picked would look like it saved and then vanish on refresh).
+  async upsertTheme(salonId: string, themeColor: string | null): Promise<MarketplaceProfile | null> {
+    const { rows } = await pool.query(
+      `UPDATE marketplace_profiles SET theme_color = $1, updated_at = NOW()
+       WHERE salon_id = $2 RETURNING *`,
+      [themeColor, salonId]
+    );
+    return rows[0] || null;
+  },
+
+  // Public booking page title/subtitle. Same contract as upsertTheme: null =
+  // no profile row; an unmigrated column bubbles up as 42703 to the service.
+  async upsertHeadline(salonId: string, headline: string | null, subheadline: string | null): Promise<MarketplaceProfile | null> {
+    const { rows } = await pool.query(
+      `UPDATE marketplace_profiles
+         SET booking_headline = $1, booking_subheadline = $2, updated_at = NOW()
+       WHERE salon_id = $3 RETURNING *`,
+      [headline, subheadline, salonId]
+    );
+    return rows[0] || null;
+  },
+
   async upsertBookingPolicy(salonId: string, data: UpsertBookingPolicyBody): Promise<MarketplaceProfile | null> {
     const BASE_SET = `
            max_advance_days          = COALESCE($1, max_advance_days),

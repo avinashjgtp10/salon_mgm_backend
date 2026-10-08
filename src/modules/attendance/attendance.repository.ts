@@ -35,6 +35,23 @@ export const attendanceRepository = {
         return rows[0] ? deserializeSettings(rows[0]) : null;
     },
 
+    // Read on the public booking path and on every Calendar load, so it must
+    // never take them down: a database that hasn't run
+    // add_attendance_checkin_visibility.sql yet (no column, or no
+    // attendance_settings table at all) simply means the feature is off.
+    async isCheckinVisibilityEnabled(salonId: string): Promise<boolean> {
+        try {
+            const { rows } = await pool.query(
+                `SELECT require_checkin_for_visibility AS enabled FROM attendance_settings WHERE salon_id = $1`,
+                [salonId]
+            );
+            return rows[0]?.enabled === true;
+        } catch (err: any) {
+            if (err?.code === "42703" || err?.code === "42P01") return false;
+            throw err;
+        }
+    },
+
     async upsertSettings(salonId: string, data: UpdateSettingsBody): Promise<AttendanceSettings> {
         const keys = Object.keys(data) as (keyof UpdateSettingsBody)[];
         const setParts = keys.map((k, i) => `${String(k)} = $${i + 2}`);

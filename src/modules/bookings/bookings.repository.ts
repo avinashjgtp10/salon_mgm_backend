@@ -239,6 +239,43 @@ export const bookingsRepository = {
         }
     },
 
+    // The accent colour the salon picked in Online Booking > Theme Colour
+    // ("#rrggbb"), or null for the page's default palette. Tolerates the column
+    // not existing yet (Migration/add_marketplace_theme_color.sql not run).
+    async findThemeColor(salonId: string): Promise<string | null> {
+        try {
+            const { rows } = await pool.query(
+                `SELECT theme_color FROM marketplace_profiles WHERE salon_id = $1`,
+                [salonId]
+            );
+            return rows[0]?.theme_color ?? null;
+        } catch (err: any) {
+            if (err?.code === UNDEFINED_TABLE || err?.code === UNDEFINED_COLUMN) return null;
+            throw err;
+        }
+    },
+
+    // Custom title/subtitle for the public booking page's first step (Online
+    // Booking > Page Heading); nulls mean "use the built-in wording". Tolerates
+    // the columns not existing yet (Migration/add_marketplace_booking_headline.sql).
+    async findBookingHeadline(salonId: string): Promise<{ booking_headline: string | null; booking_subheadline: string | null }> {
+        try {
+            const { rows } = await pool.query(
+                `SELECT booking_headline, booking_subheadline FROM marketplace_profiles WHERE salon_id = $1`,
+                [salonId]
+            );
+            return {
+                booking_headline: rows[0]?.booking_headline ?? null,
+                booking_subheadline: rows[0]?.booking_subheadline ?? null,
+            };
+        } catch (err: any) {
+            if (err?.code === UNDEFINED_TABLE || err?.code === UNDEFINED_COLUMN) {
+                return { booking_headline: null, booking_subheadline: null };
+            }
+            throw err;
+        }
+    },
+
     // Staff a customer is actually allowed to book online.
     //
     // Three gates:

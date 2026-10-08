@@ -38,7 +38,7 @@ const VALID_PRODUCT_TYPES: ProductType[] = ["retail", "consumable", "both"];
 
 const coerceProductFields = (b: Record<string, any>) => {
     if (!b || typeof b !== "object") return;
-    const floatFields = ["amount", "bottle_size", "qty_alert", "supply_price", "retail_price", "markup_percentage", "custom_tax_rate", "team_commission_rate"];
+    const floatFields = ["amount", "bottle_size", "qty_alert", "qty_alert_unit_size", "supply_price", "retail_price", "markup_percentage", "custom_tax_rate", "team_commission_rate"];
     for (const f of floatFields) {
         if (typeof b[f] === "string" && b[f].trim() !== "") {
             const parsed = parseFloat(b[f]);
@@ -119,6 +119,11 @@ const validateProductFields = (b: Record<string, unknown>, requireName = false) 
     if (!isOptionalNonNeg(b.qty_alert)) {
         throw new AppError(400, "qty_alert must be a non-negative number", "VALIDATION_ERROR");
     }
+    // Unit Size of the Low Stock Alert (Product Quantity × Unit Size = threshold).
+    // null/omitted means "use the product's own unit size".
+    if (b.qty_alert_unit_size !== undefined && b.qty_alert_unit_size !== null && !(typeof b.qty_alert_unit_size === "number" && Number.isFinite(b.qty_alert_unit_size) && b.qty_alert_unit_size > 0)) {
+        throw new AppError(400, "qty_alert_unit_size must be a positive number, or null to use the product's unit size", "VALIDATION_ERROR");
+    }
     // Both fields are always sent together by the Create/Edit Product forms
     // (a full-form submit, not a sparse patch) — safe to cross-validate here
     // without needing the existing DB row for whichever field is "missing".
@@ -129,12 +134,17 @@ const validateProductFields = (b: Record<string, unknown>, requireName = false) 
     // unenforceable for consumables (50 >= 10000 is false), so an alert of 50
     // bottles against 10 bottles of stock saved happily while the identical
     // mistake on a retail product was correctly rejected.
+    //
+    // Low Stock Alert is now Product Quantity × Unit Size, so the comparison is
+    // threshold-vs-stock in BASE units (the alert's unit size, else the
+    // product's own, else single units). With the default unit size this is
+    // identical to the old bottles-vs-bottles check.
     if (typeof b.amount === "number" && typeof b.qty_alert === "number") {
-        const stockInAlertUnits = (typeof b.bottle_size === "number" && b.bottle_size > 0)
-            ? Math.ceil(b.amount / b.bottle_size)
-            : b.amount;
-        if (b.qty_alert >= stockInAlertUnits) {
-            throw new AppError(400, "Low Stock Alert Quantity must be less than the Product Quantity.", "VALIDATION_ERROR");
+        const alertUnitSize = (typeof b.qty_alert_unit_size === "number" && b.qty_alert_unit_size > 0)
+            ? b.qty_alert_unit_size
+            : (typeof b.bottle_size === "number" && b.bottle_size > 0) ? b.bottle_size : 1;
+        if (b.qty_alert * alertUnitSize >= b.amount) {
+            throw new AppError(400, "Low Stock Alert (Product Quantity × Unit Size) must be less than the available stock.", "VALIDATION_ERROR");
         }
     }
     if (!isOptionalString(b.short_description)) {

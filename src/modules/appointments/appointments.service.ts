@@ -18,7 +18,6 @@ import { recordTransaction } from "../transactions/transaction-recorder.service"
 import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
 import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
 import { waScheduledMessagesService } from "../whatsapp-automation/wa-scheduled-messages.service";
-import { attendanceService } from "../attendance/attendance.service";
 import { notificationsService } from "../notifications/notifications.service";
 import { emailService } from "../utils/email.service";
 import { canSendEmail } from "../utils/notif-prefs";
@@ -707,13 +706,14 @@ export const appointmentsService = {
         clientId?: string;
         date?: string;
         staffId?: string;
+        assignedStaffId?: string;
         status?: string;
         startDate?: string;
         endDate?: string;
         page?: number;
         limit?: number;
     }): Promise<{ data: Appointment[]; totalRecords: number; totalPages: number; currentPage: number } | Appointment[]> {
-        const { salonId, clientId, date, staffId, status, startDate, endDate, page, limit } = params;
+        const { salonId, clientId, date, staffId, assignedStaffId, status, startDate, endDate, page, limit } = params;
         if (clientId) {
             let appts = (await appointmentsRepository.listByClientId(clientId)).map(deriveDisplayStatus);
             appts = await enrichManyWithTax(appts);
@@ -724,7 +724,7 @@ export const appointmentsService = {
         }
         if (!salonId) throw new AppError(400, "salon_id or client_id is required", "VALIDATION_ERROR");
         const rawResult = await appointmentsRepository.listBySalonId(salonId, {
-            date, staff_id: staffId, status,
+            date, staff_id: staffId, assigned_staff_id: assignedStaffId, status,
             start_date: startDate, end_date: endDate,
             page, limit,
         });
@@ -1437,15 +1437,10 @@ export const appointmentsService = {
                 items:         saleItems.map((i) => ({ item_type: i.item_type, item_id: i.item_id, quantity: Number(i.quantity) || 0 })),
             }).catch(() => {});
 
-            // Auto-mark attendance (fire-and-forget)
-            if (existing.staff_id) {
-                attendanceService.autoMarkFromAppointment({
-                    salonId:         existing.salon_id,
-                    staffId:         existing.staff_id,
-                    scheduledAt:     existing.scheduled_at,
-                    durationMinutes: existing.duration_minutes,
-                }).catch(() => {});
-            }
+            // Attendance is NOT marked here. Completing a bill (or booking) used to write a
+            // check-in/out row for the staff member from the appointment's times; that made
+            // staff look checked in without ever punching in. Attendance now comes only
+            // from the Check-in / Check-out buttons and the staff app.
 
             // Mark appointment as paid
             const completedAppt = await appointmentsRepository.updateStatus(appointmentId, "paid");
@@ -1717,15 +1712,10 @@ export const appointmentsService = {
             items:         items.map((i: any) => ({ item_type: i.item_type, item_id: i.item_id, quantity: Number(i.quantity) || 0 })),
         }).catch(() => {});
 
-        // ── Auto-mark attendance for the staff member (fire-and-forget) ───────
-        if (existing.staff_id) {
-            attendanceService.autoMarkFromAppointment({
-                salonId:         existing.salon_id,
-                staffId:         existing.staff_id,
-                scheduledAt:     existing.scheduled_at,
-                durationMinutes: existing.duration_minutes,
-            }).catch(() => {});
-        }
+        // Attendance is NOT marked here. Completing a bill (or booking) used to write a
+        // check-in/out row for the staff member from the appointment's times; that made
+        // staff look checked in without ever punching in. Attendance now comes only
+        // from the Check-in / Check-out buttons and the staff app.
 
         // ── WhatsApp Automation: Payment Received ─────────────────────────────
         // Calendar only — see the matching comment on the preExistingSale

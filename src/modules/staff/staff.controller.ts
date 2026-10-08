@@ -1,3 +1,4 @@
+import { isMobileStaffRequest, ownStaffId } from "../notifications/staffNotificationScope";
 import { Request, Response, NextFunction } from "express";
 import * as XLSX from "xlsx";
 import * as Papa from "papaparse";
@@ -5,8 +6,10 @@ import { Parser as CsvParser } from "json2csv";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { invalidateStaffPermCache } from "../../middleware/permission.middleware";
+import { isMobileCalendarAccessEnabled } from "../mobile-staff/mobileCalendarAccess";
 import { sendSuccess } from "../utils/response.util";
 import { uploadAvatarToS3 } from "../utils/avatar.upload";
+import { publicStaff, publicStaffList } from "./staff.public";
 import {
   staffService, staffInvitationService, staffAddressService,
   staffEmergencyContactService, staffWagesService, staffCommissionsService,
@@ -38,6 +41,31 @@ export const staffController = {
       if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR");
       logger.info("GET /staff", { salonId });
 
+      // Authenticated mobile staff can resolve only their own active profile.
+      // Caller-supplied staff, user and branch filters never expand this scope.
+      if (isMobileStaffRequest(req)) {
+        const ownSalonId = getSalonId(req);
+
+        // With the owner's mobile Calendar & Quick Sale switch on, the staff
+        // Calendar shows every active staff member's column — id + name only.
+        if (await isMobileCalendarAccessEnabled(req.user!.userId, ownSalonId)) {
+          const page = req.query.page ? Number(req.query.page) : 1;
+          const limit = req.query.limit ? Number(req.query.limit) : 20;
+          const { data, total } = await staffService.list(ownSalonId, { page, limit, is_active: true, fields: "select" });
+          return sendSuccess(res, 200, {
+            items: data,
+            pagination: { total, page, limit, total_pages: Math.ceil(total / limit) },
+          }, "Staff list fetched successfully");
+        }
+
+        const staffId = await ownStaffId(req.user!.userId, ownSalonId);
+        const items = staffId ? [publicStaff(await staffService.getById(staffId, ownSalonId))] : [];
+        return sendSuccess(res, 200, {
+          items,
+          pagination: { total: items.length, page: 1, limit: 1, total_pages: items.length },
+        }, "Staff profile fetched successfully");
+      }
+
       const query: StaffListQuery = {
         page: req.query.page ? Number(req.query.page) : undefined,
         limit: req.query.limit ? Number(req.query.limit) : undefined,
@@ -50,6 +78,7 @@ export const staffController = {
           ? req.query.allow_calendar_bookings === "true" : undefined,
         sort_by: req.query.sort_by as any,
         sort_order: req.query.sort_order as any,
+        fields: req.query.fields === "select" || req.query.fields === "list" ? req.query.fields : undefined,
       };
 
       const { data, total } = await staffService.list(salonId, query);
@@ -57,7 +86,8 @@ export const staffController = {
       const limit = query.limit ?? 20;
 
       return sendSuccess(res, 200, {
-        items: data,
+        // Never ship password_hash / invitation_token & co. — see staff.public.ts.
+        items: publicStaffList(data as any[]),
         pagination: { total, page, limit, total_pages: Math.ceil(total / limit) },
       }, "Staff list fetched successfully");
     } catch (err) { return next(err); }
@@ -100,7 +130,7 @@ export const staffController = {
         requesterRole: req.user?.role,
         body: req.body as CreateStaffBody,
       });
-      return sendSuccess(res, 201, result, "Staff member created successfully");
+      return sendSuccess(res, 201, publicStaff(result as any), "Staff member created successfully");
     } catch (error: any) {
       console.error("[DEBUG] Controller: POST /staff FAILED", {
         message: error.message, code: error.code, stack: error.stack,
@@ -144,7 +174,7 @@ export const staffController = {
       const id = String(req.params.id);
       logger.info("GET /staff/:id", { id, salonId });
       const staff = await staffService.getById(id, salonId);
-      return sendSuccess(res, 200, staff, "Staff fetched successfully");
+      return sendSuccess(res, 200, publicStaff(staff as any), "Staff fetched successfully");
     } catch (err) { return next(err); }
   },
 
@@ -165,7 +195,7 @@ export const staffController = {
       if ("custom_permissions" in patch && updated.user_id) {
         invalidateStaffPermCache(updated.user_id);
       }
-      return sendSuccess(res, 200, updated, "Staff updated successfully");
+      return sendSuccess(res, 200, publicStaff(updated as any), "Staff updated successfully");
     } catch (err) { return next(err); }
   },
 

@@ -1,5 +1,6 @@
 import pool, { safeQuery } from "../../config/database";
 import { STOCK_LEDGER_IN_TYPES } from "../inventory/stock-ledger.types";
+import { lowStockThresholdSql } from "../inventory/low-stock.sql";
 import {
     SalesSummaryReportRow,
     SalesSummaryFiltersAvailable,
@@ -1339,22 +1340,25 @@ const STOCK_IN_PRICING_UNITS_SQL = `
 
 const UNIT_COST_SQL = `COALESCE(NULLIF(p.supply_price, 0), p.retail_price, 0)`;
 
-// Stock counted in the same unit qty_alert is entered in.
-//
-// The form asks for "Low Stock Alert (in bottles/units)", so the threshold is a
-// PACKAGE count while p.amount is base units. Comparing them raw meant a
-// consumable only ever tripped its own alert once it was down to the last few
-// millilitres (495 bottles vs an alert of 2 needed amount <= 2 ml), so Low
-// Stock was effectively dead for every product with a bottle_size.
-//
-// CEIL here, matching consumable-inventory.repository.ts's PRODUCT_QTY_EXPR,
-// which already compared correctly — this brings the report in line with the
-// Consumable Inventory page rather than inventing a third convention.
-const STOCK_IN_ALERT_UNITS_SQL = `
-  CASE WHEN p.bottle_size IS NOT NULL AND p.bottle_size > 0
-       THEN CEIL(COALESCE(p.amount, 0) / p.bottle_size)
-       ELSE COALESCE(p.amount, 0)
-  END`;
+// Low stock in these reports uses the shared rule in inventory/low-stock.sql.ts:
+// stock (base units) <= Low Stock Alert Product Quantity × Unit Size.
+
+// ── Campaign eligibility for the All Clients report ───────────────────────────
+// One definition, used by the stat card, the per-row flag and (via that flag)
+// the Send Campaign modal's recipient list, so the three can never disagree:
+// a client can be messaged when they are active, not blocked, and have a usable
+// phone (>= 7 digits in phone_number — a bare country code like "+91" is not a
+// phone). The phone is normalised exactly as SendCampaignModal's cleanPhone()
+// does (strip spaces/dashes/dots/brackets; leading 0 -> +91; no "+" -> +91) so
+// "same number on two clients" is detected on the value that is actually sent.
+const ALL_CLIENTS_CAMPAIGN_RAW_PHONE_SQL = `REGEXP_REPLACE(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), '[[:space:]().-]', '', 'g')`;
+const ALL_CLIENTS_CAMPAIGN_PHONE_SQL = `(CASE
+    WHEN ${ALL_CLIENTS_CAMPAIGN_RAW_PHONE_SQL} LIKE '0%' THEN '+91' || SUBSTRING(${ALL_CLIENTS_CAMPAIGN_RAW_PHONE_SQL} FROM 2)
+    WHEN ${ALL_CLIENTS_CAMPAIGN_RAW_PHONE_SQL} LIKE '+%' THEN ${ALL_CLIENTS_CAMPAIGN_RAW_PHONE_SQL}
+    ELSE '+91' || ${ALL_CLIENTS_CAMPAIGN_RAW_PHONE_SQL}
+  END)`;
+const ALL_CLIENTS_CAMPAIGN_ELIGIBLE_SQL = `(c.is_active = true AND c.is_blocked = false
+    AND LENGTH(REGEXP_REPLACE(COALESCE(c.phone_number, ''), '[^0-9]', '', 'g')) >= 7)`;
 
 // ======================================================
 // SALES SUMMARY REPORT (independent report API)
@@ -5101,11 +5105,11 @@ _buildProductInventoryWhere(
     values.push(filters.brand_id);
   }
   if (filters.stock_status === "low_stock") {
-    where.push(`(p.amount > 0 AND (${STOCK_IN_ALERT_UNITS_SQL}) <= p.qty_alert)`);
+    where.push(`(p.amount > 0 AND COALESCE(p.amount, 0) <= ${lowStockThresholdSql("p")})`);
   } else if (filters.stock_status === "out_of_stock") {
     where.push(`p.amount = 0`);
   } else if (filters.stock_status === "in_stock") {
-    where.push(`(${STOCK_IN_ALERT_UNITS_SQL}) > p.qty_alert`);
+    where.push(`COALESCE(p.amount, 0) > ${lowStockThresholdSql("p")}`);
   }
   if (filters.date_from) {
     where.push(`p.created_at >= $${idx++}::date`);
@@ -5142,7 +5146,7 @@ async getProductInventoryReportStats(
     SELECT
       COUNT(*)::int AS total_products,
       COALESCE(SUM((${STOCK_IN_PRICING_UNITS_SQL}) * ${UNIT_COST_SQL}), 0) AS total_stock_value,
-      COUNT(*) FILTER (WHERE p.amount > 0 AND (${STOCK_IN_ALERT_UNITS_SQL}) <= p.qty_alert)::int AS low_stock_items,
+      COUNT(*) FILTER (WHERE p.amount > 0 AND COALESCE(p.amount, 0) <= ${lowStockThresholdSql("p")})::int AS low_stock_items,
       COUNT(*) FILTER (WHERE p.amount = 0)::int AS out_of_stock_items
     FROM products p
     WHERE ${where}
@@ -5201,7 +5205,7 @@ async getProductInventoryReportRows(
       COALESCE(sales_agg.revenue, 0) AS sales_revenue,
       CASE
         WHEN COALESCE(p.amount, 0) = 0 THEN 'out_of_stock'
-        WHEN (${STOCK_IN_ALERT_UNITS_SQL}) <= p.qty_alert THEN 'low_stock'
+        WHEN COALESCE(p.amount, 0) <= ${lowStockThresholdSql("p")} THEN 'low_stock'
         ELSE 'in_stock'
       END AS status,
       COUNT(*) OVER() AS total_count
@@ -5273,7 +5277,7 @@ async getProductInventoryChartByStatus(
     SELECT
       CASE
         WHEN COALESCE(p.amount, 0) = 0 THEN 'out_of_stock'
-        WHEN (${STOCK_IN_ALERT_UNITS_SQL}) <= p.qty_alert THEN 'low_stock'
+        WHEN COALESCE(p.amount, 0) <= ${lowStockThresholdSql("p")} THEN 'low_stock'
         ELSE 'in_stock'
       END AS status,
       COUNT(*)::int AS count,
@@ -6012,11 +6016,11 @@ _buildStockMovementWhere(
     values.push(filters.product_type);
   }
   if (filters.stock_status === "low_stock") {
-    where.push(`(p.amount > 0 AND (${STOCK_IN_ALERT_UNITS_SQL}) <= p.qty_alert)`);
+    where.push(`(p.amount > 0 AND COALESCE(p.amount, 0) <= ${lowStockThresholdSql("p")})`);
   } else if (filters.stock_status === "out_of_stock") {
     where.push(`p.amount = 0`);
   } else if (filters.stock_status === "in_stock") {
-    where.push(`(${STOCK_IN_ALERT_UNITS_SQL}) > p.qty_alert`);
+    where.push(`COALESCE(p.amount, 0) > ${lowStockThresholdSql("p")}`);
   }
   if (filters.search?.trim()) {
     where.push(`p.name ILIKE $${idx++}`);
@@ -6936,7 +6940,8 @@ async getAllClientsReportStats(
       COUNT(*)::int                                                                       AS total_clients,
       COUNT(*) FILTER (WHERE c.is_active = true AND c.is_blocked = false)::int             AS active_clients,
       COUNT(*) FILTER (WHERE c.is_blocked = true)::int                                     AS blocked_clients,
-      COUNT(*) FILTER (WHERE c.created_at >= date_trunc('month', CURRENT_DATE))::int        AS new_this_month
+      COUNT(*) FILTER (WHERE c.created_at >= date_trunc('month', CURRENT_DATE))::int        AS new_this_month,
+      COUNT(DISTINCT ${ALL_CLIENTS_CAMPAIGN_PHONE_SQL}) FILTER (WHERE ${ALL_CLIENTS_CAMPAIGN_ELIGIBLE_SQL})::int AS campaign_recipients
     FROM clients c
     ${joinSql}
     WHERE ${where}
@@ -6948,6 +6953,7 @@ async getAllClientsReportStats(
     active_clients: Number(r.active_clients ?? 0),
     blocked_clients: Number(r.blocked_clients ?? 0),
     new_this_month: Number(r.new_this_month ?? 0),
+    campaign_recipients: Number(r.campaign_recipients ?? 0),
   };
 },
 
@@ -6988,6 +6994,8 @@ async getAllClientsReportRows(
       NULLIF(TRIM(c.client_source), '') AS client_source,
       CASE WHEN c.is_blocked = true THEN 'Blocked' ELSE 'Active' END AS status,
       TO_CHAR(c.created_at, 'YYYY-MM-DD') AS joined_date,
+      (${ALL_CLIENTS_CAMPAIGN_ELIGIBLE_SQL}) AS can_receive_campaign,
+      CASE WHEN ${ALL_CLIENTS_CAMPAIGN_ELIGIBLE_SQL} THEN ${ALL_CLIENTS_CAMPAIGN_PHONE_SQL} END AS campaign_phone,
       COUNT(*) OVER() AS total_count
     FROM clients c
     ${joinSql}
@@ -7009,6 +7017,8 @@ async getAllClientsReportRows(
     client_source: row.client_source,
     status: row.status,
     joined_date: row.joined_date,
+    can_receive_campaign: row.can_receive_campaign === true,
+    campaign_phone: row.campaign_phone ?? null,
   }));
   const effectiveLimit = limit ?? Math.max(total, 1);
   return {

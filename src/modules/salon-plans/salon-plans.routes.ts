@@ -49,6 +49,7 @@ router.get("/invoices/filtered",           salonPlansController.listInvoicesFilt
 router.get("/invoices/summary",            salonPlansController.invoicesSummary);
 router.get("/invoices/branches",           salonPlansController.invoiceBranches);
 router.get("/invoices/:id/print",          salonPlansController.getInvoiceForPrint);
+router.post("/invoices/overview",          salonPlansController.invoicesOverview);
 router.post("/invoices",                   salonPlansController.createInvoice);
 router.patch("/invoices/:id/status",       salonPlansController.updateInvoiceStatus);
 router.delete("/invoices/:id",             salonPlansController.deleteInvoice);

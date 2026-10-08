@@ -9,6 +9,7 @@ import { initSocket } from './config/socket'
 import { startCampaignScheduler, stopCampaignScheduler } from './modules/marketing/whatsapp/queue/campaign.scheduler'
 import { startAutomationScheduler, stopAutomationScheduler } from './modules/whatsapp-automation/whatsapp-automation.scheduler'
 import { startWaLimitSyncScheduler, stopWaLimitSyncScheduler } from './modules/marketing/whatsapp/config/wa-limit-sync.scheduler'
+import { startAttendanceReminderScheduler, stopAttendanceReminderScheduler } from './modules/attendance/staffAttendance.scheduler'
 import { startNoShowScheduler, stopNoShowScheduler } from './modules/appointments/appointments.scheduler'
 import { startPushReceiptScheduler, stopPushReceiptScheduler } from './modules/notifications/pushNotification.service'
 import { startBotQuestionsCleanupScheduler, stopBotQuestionsCleanupScheduler } from './modules/bot/bot-questions-cleanup.scheduler'
@@ -52,6 +53,7 @@ httpServer.listen(PORT, () => {
 
   // Auto-flip overdue unpaid appointments to no-show
   startNoShowScheduler()
+  startAttendanceReminderScheduler()
 
   // Retry Expo push receipt processing after restarts.
   startPushReceiptScheduler()
@@ -80,6 +82,7 @@ process.on('SIGTERM', () => {
   stopAutomationScheduler()
   stopWaLimitSyncScheduler()
   stopNoShowScheduler()
+  stopAttendanceReminderScheduler()
   stopPushReceiptScheduler()
   stopBotQuestionsCleanupScheduler()
   stopExpiryWriteOffScheduler()

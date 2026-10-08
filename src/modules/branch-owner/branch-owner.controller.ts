@@ -20,7 +20,8 @@ export const branchOwnerController = {
   async listMySalons(req: AuthedRequest, res: Response, next: NextFunction) {
     try {
       const branchOwnerId = req.user!.userId;
-      const data = await branchOwnerService.getMySalons(branchOwnerId);
+      // data = { salons, summary } — the My Salons tiles come from the backend too.
+      const data = await branchOwnerService.getMySalonsList(branchOwnerId);
       return res.json({ success: true, data });
     } catch (err) { return next(err); }
   },
@@ -29,6 +30,15 @@ export const branchOwnerController = {
     try {
       const branchOwnerId = req.user!.userId;
       const data = await branchOwnerService.getDashboard(branchOwnerId);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
+  async getDashboardCards(req: AuthedRequest, res: Response, next: NextFunction) {
+    try {
+      const branchOwnerId = req.user!.userId;
+      const salonId = typeof req.query.salonId === "string" && req.query.salonId ? req.query.salonId : undefined;
+      const data = await branchOwnerService.getDashboardCards(branchOwnerId, salonId);
       return res.json({ success: true, data });
     } catch (err) { return next(err); }
   },

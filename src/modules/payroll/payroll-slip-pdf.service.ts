@@ -1,18 +1,12 @@
 import { buildPayrollSlipHtml } from "./payroll-slip.template";
+import { renderHtmlToPdf } from "../../config/puppeteer";
 
-// Same puppeteer pattern as renderPayrollReceiptPdf — kept as a separate
-// sibling function rather than a shared generic renderer since the Slip and
-// Receipt are two distinct documents with unrelated param shapes.
+// Uses the shared Chromium instance (config/puppeteer.ts) instead of
+// launching a fresh browser process per call — see sales/receipt-pdf.service.ts's
+// comment for why. Kept as a separate sibling function from
+// renderPayrollReceiptPdf rather than a shared generic renderer since the
+// Slip and Receipt are two distinct documents with unrelated param shapes.
 export async function renderPayrollSlipPdf(params: Parameters<typeof buildPayrollSlipHtml>[0]): Promise<Buffer> {
-    const puppeteer = (await import("puppeteer")).default;
     const html = buildPayrollSlipHtml(params);
-    const browser = await puppeteer.launch({ headless: true, args: ["--no-sandbox"] });
-    try {
-        const page = await browser.newPage();
-        await page.setContent(html, { waitUntil: "load" });
-        const pdf = await page.pdf({ format: "A4", printBackground: true });
-        return Buffer.from(pdf);
-    } finally {
-        await browser.close();
-    }
+    return renderHtmlToPdf(html, { format: "A4", printBackground: true });
 }

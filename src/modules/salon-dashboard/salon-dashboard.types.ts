@@ -44,6 +44,36 @@ export interface TodaysBirthdays {
   clients: BirthdayClient[];
 }
 
+// Same row shape as a birthday — just clients whose anniversary falls today.
+export interface TodaysAnniversaries {
+  clients: BirthdayClient[];
+}
+
+// "Monthly Projection & Growth" card. Everything is the current IST calendar
+// month; "sales" is money received (same definition as the other dashboard
+// revenue cards) and a "walk-in" is one completed bill.
+export interface MonthlyProjection {
+  asOf: string;            // IST date the figures run to, YYYY-MM-DD
+  monthLabel: string;      // "October 2026"
+  daysPassed: number;      // day-of-month of asOf (today counts)
+  daysInMonth: number;
+  remainingDays: number;   // daysInMonth - daysPassed (today excluded — it is already in MTD)
+  mtdSales: number;
+  lmmtdSales: number;      // last month, same day-of-month window
+  projectedSales: number;  // (mtd / daysPassed) * daysInMonth
+  growthPct: number | null;          // null when last month's MTD is 0
+  target: number | null;
+  achievedPct: number | null;
+  remainingTarget: number | null;    // max(0, target - mtd)
+  requiredDailySales: number | null; // remainingTarget / remainingDays; null on the last day
+  todaySales: number;
+  todayWalkins: number;
+  dayAbv: number | null;   // null when no walk-ins
+  mtdWalkins: number;
+  monthAbv: number | null;
+  daily: Array<{ day: number; sales: number }>; // 1..daysPassed
+}
+
 export interface RevenueDataPoint {
   // Short, period-appropriate X-axis tick — hour ("09:00 AM") for today,
   // weekday ("Tue") for weekly, bare day-of-month ("28") for monthly, month
@@ -98,5 +128,6 @@ export interface DashboardCombined {
   revenueChart: RevenueDataPoint[];
   pendingPayments: PendingPayments;
   todaysBirthdays: TodaysBirthdays;
+  todaysAnniversaries: TodaysAnniversaries;
   paymentModeBreakdown: PaymentModeBreakdown;
 }

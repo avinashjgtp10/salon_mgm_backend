@@ -122,7 +122,22 @@ export const appointmentsRepository = {
                 COALESCE((SELECT SUM(amount_deducted) FROM membership_usage_log WHERE appointment_id = a.id AND notes = 'membership_discount'), 0) AS membership_percentage_discount_used,
                 COALESCE((SELECT SUM(ewallet_used) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS ewallet_used,
                 COALESCE((SELECT SUM(referral_credit_used) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS referral_credit_used,
-                (SELECT split_details FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) AS split_details,
+                -- Per-method legs summed across EVERY payment on this appointment, not just the
+                -- latest row: each row's split_details holds only that call's legs (usePayment.ts
+                -- sends the current charge), while paid_amount above is already summed over all
+                -- rows — taking only the latest made a bill paid in instalments print legs that
+                -- no longer added up to the amount paid. Keys are re-cased so "cash"/"Cash"
+                -- from different rows merge into one leg; non-numeric values count as 0.
+                (SELECT jsonb_object_agg(leg.method, leg.amount)
+                 FROM (
+                   SELECT CASE lower(e.key) WHEN 'upi' THEN 'UPI' WHEN 'ewallet' THEN 'eWallet' ELSE initcap(e.key) END AS method,
+                          SUM(CASE WHEN e.value ~ '^-?[0-9]+([.][0-9]+)?$' THEN e.value::numeric ELSE 0 END) AS amount
+                   FROM payments p
+                   CROSS JOIN LATERAL jsonb_each_text(p.split_details::jsonb) AS e(key, value)
+                   WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')
+                     AND p.split_details IS NOT NULL AND jsonb_typeof(p.split_details::jsonb) = 'object'
+                   GROUP BY 1
+                 ) leg) AS split_details,
                 (SELECT tax_breakdown FROM payments p WHERE p.appointment_id = a.id AND p.tax_breakdown IS NOT NULL ORDER BY p.created_at DESC LIMIT 1) AS tax_breakdown,
                 (SELECT MAX(created_at) FROM payments p WHERE p.appointment_id = a.id AND p.tax_breakdown IS NOT NULL) AS last_payment_at
              FROM appointments a
@@ -142,6 +157,10 @@ export const appointmentsRepository = {
         filters: {
             date?: string;
             staff_id?: string;
+            // Matches the appointment's main staff OR any service row assigned
+            // to this staff member (multi-staff bookings). Used by the mobile
+            // staff API so staff see every appointment they work on.
+            assigned_staff_id?: string;
             status?: string;
             start_date?: string;
             end_date?: string;
@@ -179,6 +198,12 @@ export const appointmentsRepository = {
         if (filters.staff_id) {
             conditions.push(`a.staff_id = $${idx}`);
             values.push(filters.staff_id); idx++;
+        }
+        if (filters.assigned_staff_id) {
+            conditions.push(`(a.staff_id::text = $${idx} OR EXISTS (
+                SELECT 1 FROM jsonb_array_elements(COALESCE(a.services::jsonb, '[]'::jsonb)) service
+                WHERE service->>'staff_id' = $${idx}))`);
+            values.push(filters.assigned_staff_id); idx++;
         }
         if (filters.status) {
             conditions.push(`a.status = $${idx}`);
@@ -236,7 +261,22 @@ export const appointmentsRepository = {
                COALESCE((SELECT SUM(amount_deducted) FROM membership_usage_log WHERE appointment_id = a.id AND notes = 'membership_discount'), 0) AS membership_percentage_discount_used,
                COALESCE(pa.total_ewallet_used, 0) AS ewallet_used,
                COALESCE(pa.total_referral_credit_used, 0) AS referral_credit_used,
-               (SELECT split_details FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) AS split_details,
+               -- Per-method legs summed across EVERY payment on this appointment, not just the
+               -- latest row: each row's split_details holds only that call's legs (usePayment.ts
+               -- sends the current charge), while paid_amount above is already summed over all
+               -- rows — taking only the latest made a bill paid in instalments print legs that
+               -- no longer added up to the amount paid. Keys are re-cased so "cash"/"Cash"
+               -- from different rows merge into one leg; non-numeric values count as 0.
+               (SELECT jsonb_object_agg(leg.method, leg.amount)
+                FROM (
+                  SELECT CASE lower(e.key) WHEN 'upi' THEN 'UPI' WHEN 'ewallet' THEN 'eWallet' ELSE initcap(e.key) END AS method,
+                         SUM(CASE WHEN e.value ~ '^-?[0-9]+([.][0-9]+)?$' THEN e.value::numeric ELSE 0 END) AS amount
+                  FROM payments p
+                  CROSS JOIN LATERAL jsonb_each_text(p.split_details::jsonb) AS e(key, value)
+                  WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')
+                    AND p.split_details IS NOT NULL AND jsonb_typeof(p.split_details::jsonb) = 'object'
+                  GROUP BY 1
+                ) leg) AS split_details,
                (SELECT tax_breakdown FROM payments p WHERE p.appointment_id = a.id AND p.tax_breakdown IS NOT NULL ORDER BY p.created_at DESC LIMIT 1) AS tax_breakdown,
                (SELECT MAX(created_at) FROM payments p WHERE p.appointment_id = a.id AND p.tax_breakdown IS NOT NULL) AS last_payment_at
              FROM appointments a

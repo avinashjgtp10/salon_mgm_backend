@@ -2,6 +2,8 @@ import { Request, Response, NextFunction } from "express";
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { attendanceService } from "./attendance.service";
+import { isMobileStaffRequest } from "../notifications/staffNotificationScope";
+import { staffAttendanceState, staffSelfCheckIn, staffSelfCheckOut } from "./staffAttendance.service";
 import {
     CheckInBody, CheckOutBody, PushAttendanceBody,
     ManualMarkBody, UpdateAttendanceBody, UpdateSettingsBody,
@@ -31,13 +33,24 @@ export const attendanceController = {
         } catch (err) { return next(err); }
     },
 
+    async getStaffPresence(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const salonId = req.user?.salonId;
+            if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+            const presence = await attendanceService.getStaffPresence(salonId);
+            return sendSuccess(res, 200, presence, "Staff presence fetched");
+        } catch (err) { return next(err); }
+    },
+
     // ── Check In / Out ────────────────────────────────────────────────────────
 
     async checkIn(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const salonId = req.user?.salonId;
             if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
-            const record = await attendanceService.checkIn(salonId, req.body as CheckInBody);
+            const record = isMobileStaffRequest(req)
+                ? (await staffSelfCheckIn(req.user!.userId, salonId)).record
+                : await attendanceService.checkIn(salonId, req.body as CheckInBody);
             return sendSuccess(res, 200, record, "Checked in successfully");
         } catch (err) { return next(err); }
     },
@@ -46,7 +59,9 @@ export const attendanceController = {
         try {
             const salonId = req.user?.salonId;
             if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
-            const record = await attendanceService.checkOut(salonId, req.body as CheckOutBody);
+            const record = isMobileStaffRequest(req)
+                ? (await staffSelfCheckOut(req.user!.userId, salonId)).record
+                : await attendanceService.checkOut(salonId, req.body as CheckOutBody);
             return sendSuccess(res, 200, record, "Checked out successfully");
         } catch (err) { return next(err); }
     },
@@ -99,6 +114,13 @@ export const attendanceController = {
         try {
             const salonId = req.user?.salonId;
             if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+            if (isMobileStaffRequest(req)) {
+                const state = await staffAttendanceState(req.user!.userId, salonId);
+                return sendSuccess(res, 200, {
+                    staff: state.record ? [state.record] : [],
+                    self_attendance: state,
+                }, "Attendance fetched");
+            }
             const date = String(req.query.date || "").trim() || undefined;
             if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date))
                 throw new AppError(400, "date must be YYYY-MM-DD", "VALIDATION_ERROR");

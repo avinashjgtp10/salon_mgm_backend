@@ -9,8 +9,8 @@
  * What it does, per salon:
  *   1. Reads the existing salon_settings row (key='role_permissions'), if any.
  *   2. Creates (or reuses, if re-run) a "Staff" and a "Manager" role for the
- *      salon, populating role_permissions from that blob's staff/manager
- *      values — or from the DEFAULT_STAFF_PERMS/manager-default snapshot
+ *      salon, populating Manager's role_permissions from that blob's manager
+ *      values (the Staff role is seeded blank) — or from the manager-default
  *      below if the salon never had a role_permissions setting.
  *   3. For every staff row with role_id still NULL: sets role_id to the new
  *      Staff role.
@@ -33,48 +33,6 @@
  */
 
 import pool from '../src/config/database';
-
-// Snapshot of permission.middleware.ts's DEFAULT_STAFF_PERMS at the time
-// this script was written. If that map has changed since, reconcile before
-// re-running against a salon that would fall back to it (i.e. one with no
-// salon_settings role_permissions row).
-const DEFAULT_STAFF_PERMS: Record<string, boolean> = {
-  view_campaigns: false,
-  create_campaigns: false,
-  design_coupons: false,
-  view_calendar: true,
-  manage_calendar: false,
-  view_clients: true,
-  create_clients: true,
-  edit_clients: true,
-  delete_clients: false,
-  view_sales: true,
-  create_sales: true,
-  view_services: true,
-  create_services: false,
-  edit_services: false,
-  view_products: true,
-  create_products: false,
-  view_packages: true,
-  create_packages: false,
-  view_memberships: true,
-  create_memberships: false,
-  view_inventory: true,
-  manage_inventory: false,
-  stock_adjustment: false,
-  view_booking: true,
-  manage_booking: false,
-  view_team: true,
-  add_team_member: false,
-  edit_team_member: false,
-  manage_shifts: false,
-  view_payroll: false,
-  view_reports: false,
-  export_reports: false,
-  general_settings: false,
-  manage_pos_payments: false,
-  view_enquiries: true,
-};
 
 // permissionMatrix.ts hardcodes `manager: true` on every current entry —
 // this preserves that as the Manager role's starting point (adjustable
@@ -134,7 +92,8 @@ async function migrateSalon(
       }
     }
 
-    const staffDefault = (key: string) => blob[key]?.staff ?? DEFAULT_STAFF_PERMS[key] ?? false;
+    // Staff role is seeded blank: no legacy staff defaults.
+    const staffDefault = (_key: string) => false;
     const managerDefault = (key: string) => blob[key]?.manager ?? DEFAULT_MANAGER_VALUE;
 
     // 2. Ensure Staff + Manager roles exist for this salon.
