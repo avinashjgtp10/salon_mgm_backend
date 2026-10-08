@@ -1737,6 +1737,13 @@ export interface AllClientsReportRow {
     client_source: string | null;
     status: "Active" | "Blocked";
     joined_date: string;
+    // Campaign eligibility — the ONE rule the stat card, the "everyone matching"
+    // selection and the Send Campaign modal all share (see ALL_CLIENTS_CAMPAIGN_*
+    // in reports.repository.ts): active, not blocked, with a usable phone number.
+    can_receive_campaign: boolean;
+    // The phone exactly as the campaign sends it (+91-normalised) — also what
+    // duplicate numbers are detected on.
+    campaign_phone: string | null;
 }
 
 export interface AllClientsReportStats {
@@ -1744,6 +1751,10 @@ export interface AllClientsReportStats {
     active_clients: number;
     blocked_clients: number;
     new_this_month: number;
+    // Distinct phone numbers a campaign to these (filtered) clients would reach.
+    // Always <= total_clients: excludes blocked, inactive, no/invalid phone, and
+    // clients sharing a number (messaged once).
+    campaign_recipients: number;
 }
 
 export interface AllClientsReportPagination {

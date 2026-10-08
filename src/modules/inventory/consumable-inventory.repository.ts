@@ -1,4 +1,5 @@
 import pool from "../../config/database";
+import { alertUnitSizeSql, isLowStockSql, lowStockThresholdSql } from "./low-stock.sql";
 import {
   AssignedServiceRow,
   ConsumableDetail,
@@ -30,7 +31,7 @@ const TOTAL_STOCK_EXPR = `CASE WHEN p.bottle_size IS NOT NULL AND p.bottle_size 
 const STATUS_EXPR = `CASE
   WHEN p.is_active = false THEN 'deactivated'
   WHEN COALESCE(p.amount, 0) <= 0 THEN 'out_of_stock'
-  WHEN p.qty_alert IS NOT NULL AND (${PRODUCT_QTY_EXPR}) <= p.qty_alert THEN 'low'
+  WHEN ${isLowStockSql("p")} THEN 'low'
   ELSE 'healthy' END`;
 
 // pg returns NUMERIC columns as strings (no type parser registered for oid
@@ -47,8 +48,8 @@ function coerceRowNumerics<T extends Record<string, unknown>>(row: T, fields: (k
   return out;
 }
 
-const LIST_ROW_NUMERIC_FIELDS = ["unit_size", "product_qty", "total_stock", "remaining_stock", "qty_alert", "used_today", "used_this_month"] as const;
-const DETAIL_ROW_NUMERIC_FIELDS = ["bottle_size", "unit_size", "product_qty", "total_stock", "remaining_stock", "qty_alert", "supply_price"] as const;
+const LIST_ROW_NUMERIC_FIELDS = ["unit_size", "product_qty", "total_stock", "remaining_stock", "qty_alert", "qty_alert_unit_size", "low_stock_threshold", "used_today", "used_this_month"] as const;
+const DETAIL_ROW_NUMERIC_FIELDS = ["bottle_size", "unit_size", "product_qty", "total_stock", "remaining_stock", "qty_alert", "qty_alert_unit_size", "low_stock_threshold", "supply_price"] as const;
 
 function buildWhere(filters: ConsumableListFilters, salonId: string): { where: string; values: unknown[] } {
   // Deactivated products stay VISIBLE here (unlike the Products list) —
@@ -127,6 +128,8 @@ export const consumableInventoryRepository = {
          (${TOTAL_STOCK_EXPR}) AS total_stock,
          COALESCE(p.amount, 0) AS remaining_stock,
          p.qty_alert,
+         ${alertUnitSizeSql("p")} AS qty_alert_unit_size,
+         ${lowStockThresholdSql("p")} AS low_stock_threshold,
          COALESCE((
            SELECT SUM(CASE WHEN cu.direction = 'return' THEN -cu.qty ELSE cu.qty END)
            FROM consumable_usage cu
@@ -181,7 +184,7 @@ export const consumableInventoryRepository = {
          (${PRODUCT_QTY_EXPR}) AS product_qty,
          (${TOTAL_STOCK_EXPR}) AS total_stock,
          COALESCE(p.amount, 0) AS remaining_stock,
-         p.qty_alert, p.supply_price,
+         p.qty_alert, ${alertUnitSizeSql("p")} AS qty_alert_unit_size, ${lowStockThresholdSql("p")} AS low_stock_threshold, p.supply_price,
          COALESCE((SELECT COUNT(*)::int FROM service_consumables sc WHERE sc.product_id = p.id), 0) AS assigned_services_count,
          (SELECT MAX(cu.created_at) FROM consumable_usage cu WHERE cu.product_id = p.id) AS last_used_at,
          (${STATUS_EXPR}) AS status

@@ -8,6 +8,7 @@ import { AppError } from "../../middleware/error.middleware";
 import { invalidateStaffPermCache } from "../../middleware/permission.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { uploadAvatarToS3 } from "../utils/avatar.upload";
+import { publicStaff, publicStaffList } from "./staff.public";
 import {
   staffService, staffInvitationService, staffAddressService,
   staffEmergencyContactService, staffWagesService, staffCommissionsService,
@@ -44,7 +45,7 @@ export const staffController = {
       if (isMobileStaffRequest(req)) {
         const ownSalonId = getSalonId(req);
         const staffId = await ownStaffId(req.user!.userId, ownSalonId);
-        const items = staffId ? [await staffService.getById(staffId, ownSalonId)] : [];
+        const items = staffId ? [publicStaff(await staffService.getById(staffId, ownSalonId))] : [];
         return sendSuccess(res, 200, {
           items,
           pagination: { total: items.length, page: 1, limit: 1, total_pages: items.length },
@@ -63,6 +64,7 @@ export const staffController = {
           ? req.query.allow_calendar_bookings === "true" : undefined,
         sort_by: req.query.sort_by as any,
         sort_order: req.query.sort_order as any,
+        fields: req.query.fields === "select" || req.query.fields === "list" ? req.query.fields : undefined,
       };
 
       const { data, total } = await staffService.list(salonId, query);
@@ -70,7 +72,8 @@ export const staffController = {
       const limit = query.limit ?? 20;
 
       return sendSuccess(res, 200, {
-        items: data,
+        // Never ship password_hash / invitation_token & co. — see staff.public.ts.
+        items: publicStaffList(data as any[]),
         pagination: { total, page, limit, total_pages: Math.ceil(total / limit) },
       }, "Staff list fetched successfully");
     } catch (err) { return next(err); }
@@ -113,7 +116,7 @@ export const staffController = {
         requesterRole: req.user?.role,
         body: req.body as CreateStaffBody,
       });
-      return sendSuccess(res, 201, result, "Staff member created successfully");
+      return sendSuccess(res, 201, publicStaff(result as any), "Staff member created successfully");
     } catch (error: any) {
       console.error("[DEBUG] Controller: POST /staff FAILED", {
         message: error.message, code: error.code, stack: error.stack,
@@ -157,7 +160,7 @@ export const staffController = {
       const id = String(req.params.id);
       logger.info("GET /staff/:id", { id, salonId });
       const staff = await staffService.getById(id, salonId);
-      return sendSuccess(res, 200, staff, "Staff fetched successfully");
+      return sendSuccess(res, 200, publicStaff(staff as any), "Staff fetched successfully");
     } catch (err) { return next(err); }
   },
 
@@ -178,7 +181,7 @@ export const staffController = {
       if ("custom_permissions" in patch && updated.user_id) {
         invalidateStaffPermCache(updated.user_id);
       }
-      return sendSuccess(res, 200, updated, "Staff updated successfully");
+      return sendSuccess(res, 200, publicStaff(updated as any), "Staff updated successfully");
     } catch (err) { return next(err); }
   },
 
