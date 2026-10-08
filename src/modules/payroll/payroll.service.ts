@@ -138,7 +138,10 @@ export const payrollService = {
             const bonus = entry?.bonus ?? 0;
             const deductions = entry?.deductions ?? 0;
             const otherEarning = entry?.other_earning ?? 0;
-            const netSalary = baseSalary + commissionTotal + tipsTotal + bonus + otherEarning - deductions - advanceTotal;
+            // payroll_entries.salary_advance holds a manual adjustment override once
+            // one has been made; otherwise the recorded advances total applies.
+            const advance = entry && entry.salary_advance > 0 ? entry.salary_advance : advanceTotal;
+            const netSalary = baseSalary + commissionTotal + tipsTotal + bonus + otherEarning - deductions - advance;
 
             const adjustments = entry ? await payrollAdjustmentRepository.listByEntry(entry.id) : [];
 
@@ -159,7 +162,7 @@ export const payrollService = {
                 bonus,
                 deductions,
                 other_earning: otherEarning,
-                salary_advance: advanceTotal,
+                salary_advance: advance,
                 net_salary: Math.round(netSalary * 100) / 100,
                 status: entry?.status ?? "draft",
                 payment_method: entry?.payment_method ?? null,
@@ -192,6 +195,9 @@ export const payrollService = {
             deduction: entry.deductions,
             other_earning: entry.other_earning,
             salary: entry.base_salary,
+            salary_advance: entry.salary_advance > 0
+                ? entry.salary_advance
+                : await salaryAdvanceRepository.totalForPeriod(salonId, staffId, body.period_start, body.period_end),
         };
         const originalValue = COLUMN_TO_FIELD_VALUE[body.field];
 
