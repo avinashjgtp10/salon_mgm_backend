@@ -64,6 +64,7 @@ export const payrollEntryRepository = {
             deduction: "deductions",
             other_earning: "other_earning",
             salary: "base_salary",
+            salary_advance: "salary_advance",
         };
         const column = COLUMN[field];
         const { rows } = await pool.query(

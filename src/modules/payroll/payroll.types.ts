@@ -1,5 +1,5 @@
 export type PayrollEntryStatus = "draft" | "pending" | "paid";
-export type PayrollAdjustmentField = "commission" | "bonus" | "tips" | "deduction" | "other_earning" | "salary";
+export type PayrollAdjustmentField = "commission" | "bonus" | "tips" | "deduction" | "other_earning" | "salary" | "salary_advance";
 
 export type PayrollEntry = {
     id: string;
