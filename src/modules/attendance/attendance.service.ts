@@ -442,43 +442,4 @@ export const attendanceService = {
             filename: `attendance_${year}_${monthStr}.csv`,
         };
     },
-
-    // ── Auto-mark from appointment checkout ───────────────────────────────────
-
-    async autoMarkFromAppointment(params: {
-        salonId: string;
-        staffId: string;
-        scheduledAt: string;
-        durationMinutes: number;
-    }): Promise<void> {
-        try {
-            const { salonId, staffId, scheduledAt, durationMinutes } = params;
-            const date = new Date(scheduledAt).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
-
-            const onLeave = await attendanceRepository.hasApprovedLeave(staffId, date);
-            if (onLeave) return;
-
-            const checkIn  = scheduledAt;
-            const checkOut = new Date(new Date(scheduledAt).getTime() + durationMinutes * 60_000).toISOString();
-            const hours    = hoursFromTimestamps(checkIn, checkOut);
-            const settings = await attendanceService.getSettings(salonId);
-            const status   = calcStatus(checkIn, checkOut, settings);
-
-            await attendanceRepository.upsert({
-                salonId,
-                staffId,
-                date,
-                status,
-                source: "appointment",
-                checkIn,
-                checkOut,
-                hoursWorked: hours,
-            });
-
-            logger.info("attendance.autoMarkFromAppointment", { salonId, staffId, date, status });
-        } catch (err) {
-            // Never block appointment checkout
-            logger.error("attendance.autoMarkFromAppointment failed", { err });
-        }
-    },
 };
