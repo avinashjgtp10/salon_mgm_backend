@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import pool from "../config/database";
 import { AppError } from "./error.middleware";
+import { mobileCalendarAccessGrants } from "../modules/mobile-staff/mobileCalendarAccess";
 
 export interface PermUser {
     userId: string;
@@ -201,7 +202,10 @@ export const requirePermission = (permKey: string) =>
             if (user.role === "staff") {
                 if (!user.salonId) return next(new AppError(403, "No salon context", "FORBIDDEN"));
 
-                const allowed = await staffHasPermission(user, permKey);
+                // The mobile-only Calendar & Quick Sale switch can grant a
+                // subset of keys — see mobile-staff/mobileCalendarAccess.ts.
+                const allowed = await staffHasPermission(user, permKey)
+                    || await mobileCalendarAccessGrants(req, [permKey]);
                 if (!allowed) {
                     return next(new AppError(
                         403,
@@ -262,6 +266,7 @@ export const requireAnyPermission = (permKeys: string[]) =>
                 for (const key of permKeys) {
                     if (await staffHasPermission(user, key)) return next();
                 }
+                if (await mobileCalendarAccessGrants(req, permKeys)) return next();
                 return next(new AppError(
                     403,
                     `You do not have permission to perform this action (${permKeys.join(" / ")})`,

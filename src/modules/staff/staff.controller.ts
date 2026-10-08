@@ -6,6 +6,7 @@ import { Parser as CsvParser } from "json2csv";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { invalidateStaffPermCache } from "../../middleware/permission.middleware";
+import { isMobileCalendarAccessEnabled } from "../mobile-staff/mobileCalendarAccess";
 import { sendSuccess } from "../utils/response.util";
 import { uploadAvatarToS3 } from "../utils/avatar.upload";
 import { publicStaff, publicStaffList } from "./staff.public";
@@ -44,6 +45,19 @@ export const staffController = {
       // Caller-supplied staff, user and branch filters never expand this scope.
       if (isMobileStaffRequest(req)) {
         const ownSalonId = getSalonId(req);
+
+        // With the owner's mobile Calendar & Quick Sale switch on, the staff
+        // Calendar shows every active staff member's column — id + name only.
+        if (await isMobileCalendarAccessEnabled(req.user!.userId, ownSalonId)) {
+          const page = req.query.page ? Number(req.query.page) : 1;
+          const limit = req.query.limit ? Number(req.query.limit) : 20;
+          const { data, total } = await staffService.list(ownSalonId, { page, limit, is_active: true, fields: "select" });
+          return sendSuccess(res, 200, {
+            items: data,
+            pagination: { total, page, limit, total_pages: Math.ceil(total / limit) },
+          }, "Staff list fetched successfully");
+        }
+
         const staffId = await ownStaffId(req.user!.userId, ownSalonId);
         const items = staffId ? [publicStaff(await staffService.getById(staffId, ownSalonId))] : [];
         return sendSuccess(res, 200, {
