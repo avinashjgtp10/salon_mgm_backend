@@ -21,14 +21,6 @@ export const salonPlansController = {
         } catch (err) { return next(err); }
     },
 
-    async syncToRazorpay(req: AuthedRequest, res: Response, next: NextFunction) {
-        try {
-            const updatedBy = req.user?.userId ?? "";
-            const data = await salonPlansService.syncToRazorpay(String(req.params.tier), updatedBy);
-            return res.json({ success: true, data });
-        } catch (err) { return next(err); }
-    },
-
     // ── Salon Customizations ─────────────────────────────────────────────────
 
     async searchCustomizations(req: Request, res: Response, next: NextFunction) {

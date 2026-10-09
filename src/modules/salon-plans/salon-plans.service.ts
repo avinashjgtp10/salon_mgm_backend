@@ -1,7 +1,6 @@
 import pool from "../../config/database";
 import { AppError } from "../../middleware/error.middleware";
 import { invalidatePlanFeatureCache, invalidateAllPlanFeatureCaches, loadSalonFeatureKeys } from "../../middleware/planFeature.middleware";
-import { subscriptionsService } from "../subscriptions/subscriptions.service";
 import { superAdminRepository } from "../super-admin/super-admin.repository";
 import { emailService } from "../utils/email.service";
 import { renderSalonPlanInvoicePdf } from "./salon-plan-invoice-pdf.service";
@@ -85,73 +84,10 @@ export const salonPlansService = {
                 }
             }
         }
-        let updated = await planDefinitionsRepository.update(tier, patch, updatedBy);
+        const updated = await planDefinitionsRepository.update(tier, patch, updatedBy);
         if (!updated) throw new AppError(404, "Plan tier not found", "NOT_FOUND");
         invalidateAllPlanFeatureCaches();
-
-        // Razorpay plans are immutable (no "update price" API) — a price or
-        // name edit here would otherwise leave checkout silently charging
-        // the OLD amount forever against the previously-linked plan. Only
-        // re-sync when one of those two actually changed, not on every save
-        // (e.g. editing just the tagline or feature list shouldn't spawn a
-        // new Razorpay plan object).
-        if (patch.price !== undefined || patch.name !== undefined) {
-            try {
-                updated = await this.syncToRazorpay(tier, updatedBy);
-            } catch (err: any) {
-                // The price is already saved above but the linked Razorpay plan
-                // still holds the old amount — surface that instead of a bare
-                // 500 so it isn't mistaken for "nothing saved" and left stale.
-                logger.error(`Razorpay re-sync failed for tier ${tier} after price/name update`, { err });
-                throw new AppError(
-                    502,
-                    `Plan saved, but syncing it to Razorpay failed — checkout will keep using the old amount until a sync succeeds. Retry via sync-razorpay. (${err?.message ?? "unknown error"})`,
-                    "RAZORPAY_SYNC_FAILED"
-                );
-            }
-        }
         return updated;
-    },
-
-    // Creates a real, checkout-capable Razorpay plan (via the existing
-    // modules/subscriptions machinery — see that module's own createPlan,
-    // which calls razorpay.plans.create() and stores the result in
-    // subscription_plans) for this tier, and links it so the salon-facing
-    // "Pay & Continue" button can create a live subscription against it.
-    // First sync creates the subscription_plans row. Every later sync UPDATES
-    // that same row in place (same id, new price/razorpay_plan_id) instead of
-    // inserting another — Razorpay itself can't edit a plan's amount, so only
-    // the Razorpay-side plan object is new. Called automatically from
-    // updatePlanDefinition whenever price/name change (see above); the
-    // standalone sync-razorpay endpoint re-runs it without any other change.
-    async syncToRazorpay(tier: string, updatedBy: string) {
-        assertValidTier(tier);
-        const plan = await planDefinitionsRepository.findByTier(tier);
-        if (!plan) throw new AppError(404, "Plan tier not found", "NOT_FOUND");
-
-        if (plan.linked_subscription_plan_id) {
-            await subscriptionsService.updatePlanPricing(plan.linked_subscription_plan_id, {
-                name: `SalonOx ${plan.name}`,
-                description: plan.tagline ?? undefined,
-                price: parseFloat(plan.price),
-            });
-            const relinked = await planDefinitionsRepository.findByTier(tier);
-            if (!relinked) throw new AppError(404, "Plan tier not found", "NOT_FOUND");
-            return relinked;
-        }
-
-        // First-time sync — slug must be globally unique on subscription_plans.
-        const created = await subscriptionsService.createPlan({
-            name: `SalonOx ${plan.name}`,
-            slug: `salonox-${plan.tier}-yearly-${Date.now()}`,
-            description: plan.tagline ?? undefined,
-            price: parseFloat(plan.price),
-            billing_cycle: "yearly",
-        });
-
-        const linked = await planDefinitionsRepository.setLinkedSubscriptionPlan(tier, created.id, updatedBy);
-        if (!linked) throw new AppError(500, "Failed to link plan after Razorpay sync", "SERVER_ERROR");
-        return linked;
     },
 
     // ── Salon Customizations ─────────────────────────────────────────────────
@@ -235,8 +171,8 @@ export const salonPlansService = {
     // Powers the salon's own Billing page (Settings → Billing): its actual
     // Basic/Advance/Pro assignment plus the full catalog, so that page can
     // show real "Current Plan" + "Available Plans" cards instead of the
-    // separate Razorpay billing_plans catalog, which has no relationship to
-    // what super admin configures here.
+    // separate billing_plans catalog, which has no relationship to what
+    // super admin configures here.
     async getMyPlan(salonId: string) {
         const [customization, catalog] = await Promise.all([
             this.getCustomization(salonId),

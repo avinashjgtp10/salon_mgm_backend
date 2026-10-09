@@ -35,7 +35,7 @@ export const branchOwnerRepository = {
       FROM branch_owner_salons bos
       JOIN salons s ON s.id = bos.salon_id
       LEFT JOIN users u ON u.id = s.owner_id
-      -- Authoritative subscription source (Razorpay-hosted) — same table/
+      -- Authoritative subscription source — same table/
       -- pattern used by subscription.middleware.ts and the super-admin
       -- salons query. billing_subscriptions is the legacy/manual-comp path
       -- and is empty for almost every real account, so a plan/expiry read

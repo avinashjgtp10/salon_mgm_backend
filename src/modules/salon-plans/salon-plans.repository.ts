@@ -55,17 +55,6 @@ export const planDefinitionsRepository = {
         );
         return rows[0] || null;
     },
-
-    // Links this tier to a real subscription_plans row (see
-    // Migration/add_razorpay_link_to_salon_plans.sql) so the salon-facing
-    // checkout button can create a live Razorpay subscription against it.
-    async setLinkedSubscriptionPlan(tier: PlanTier, subscriptionPlanId: string, updatedBy: string): Promise<SalonPlanDefinition | null> {
-        const { rows } = await pool.query(
-            `UPDATE salon_plan_definitions SET linked_subscription_plan_id = $1, updated_by = $2, updated_at = NOW() WHERE tier = $3 RETURNING *`,
-            [subscriptionPlanId, updatedBy, tier]
-        );
-        return rows[0] || null;
-    },
 };
 
 // ─── Salon Customizations ───────────────────────────────────────────────────────

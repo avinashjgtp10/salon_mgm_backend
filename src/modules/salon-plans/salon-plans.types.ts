@@ -21,11 +21,6 @@ export type SalonPlanDefinition = {
     default_appointment_limit: number | null;
     default_branch_limit: number | null;
     default_storage_limit_gb: number | null;
-    // subscription_plans.id this tier is linked to for real checkout (see
-    // Migration/add_razorpay_link_to_salon_plans.sql) — null until a super
-    // admin runs the "sync to Razorpay" action for this tier. The frontend
-    // treats null as "no live checkout yet, show Contact support instead".
-    linked_subscription_plan_id: string | null;
     updated_by: string | null;
     created_at: string;
     updated_at: string;

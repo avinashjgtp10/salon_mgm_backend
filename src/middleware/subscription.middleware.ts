@@ -47,7 +47,7 @@ export async function subscriptionMiddleware(
     }
 
     try {
-        // Check subscriptions table (Razorpay hosted — new flow)
+        // Check subscriptions table (subscriptions table)
         const { rows: subRows } = await pool.query(
             `SELECT id, status, current_period_end
              FROM subscriptions
