@@ -83,6 +83,10 @@ export const deviceTokensRepository = {
     }
   },
 
+  async removeAllForUser(userId: string): Promise<void> {
+    await pool.query(`DELETE FROM device_tokens WHERE user_id = $1`, [userId]);
+  },
+
   async removeToken(expoPushToken: string, userId?: string): Promise<void> {
     await pool.query(
       `DELETE FROM device_tokens

@@ -12,6 +12,7 @@
 // deleting all rows ends any impersonation session too.
 import jwt, { SignOptions } from "jsonwebtoken";
 import { authRepository } from "./auth.repository";
+import { deviceTokensRepository } from "../notifications/deviceTokens.repository";
 
 // Roles that may hold several sessions at once: super-admins work across
 // many tabs, and public-booking `client` accounts have no salon seat to
@@ -43,6 +44,10 @@ export async function issueSessionTokens(opts: {
   const { userId, role, salonId, kickOthers } = opts;
   if (kickOthers && !MULTI_SESSION_ROLES.has(role)) {
     await authRepository.deleteAllRefreshTokensForUser(userId);
+    // A signed-out phone can't unregister itself, so drop its push token here;
+    // otherwise it keeps showing this account's pushes after being kicked.
+    // The device logging in now re-registers its token right after login.
+    await deviceTokensRepository.removeAllForUser(userId);
   }
   const refreshToken = jwt.sign({ userId }, process.env.JWT_REFRESH_SECRET as string, refreshOptions());
   const row = await authRepository.saveRefreshToken({
