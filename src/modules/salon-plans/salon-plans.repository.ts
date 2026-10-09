@@ -1,6 +1,9 @@
 import pool from "../../config/database";
 import crypto from "crypto";
 import {
+    GST_RATE_PERCENT,
+    BillingCycle,
+    PlanPrices,
     PlanTier,
     SalonPlanDefinition,
     UpdatePlanDefinitionBody,
@@ -54,6 +57,69 @@ export const planDefinitionsRepository = {
             values
         );
         return rows[0] || null;
+    },
+};
+
+// ─── Plan prices (3 tiers x 3 billing cycles, excluding GST) ───────────────────
+// Table: salon_plan_prices (Migration/create_salon_plan_prices.sql).
+
+export const planPricesRepository = {
+    // tier -> { monthly, quarterly, annual }. A missing row is simply absent
+    // from the map (callers treat that as "not priced").
+    async findAllByTier(): Promise<Record<string, Partial<PlanPrices>>> {
+        let rows: { tier: string; billing_cycle: BillingCycle; price: string }[];
+        try {
+            ({ rows } = await pool.query(`SELECT tier, billing_cycle, price FROM salon_plan_prices`));
+        } catch (err: any) {
+            // 42P01 = table not created yet (migration not run on this
+            // environment). /definitions also feeds the public landing page,
+            // so degrade to "no per-cycle prices" instead of a 500.
+            if (err?.code === "42P01") return {};
+            throw err;
+        }
+        const out: Record<string, Partial<PlanPrices>> = {};
+        for (const r of rows) {
+            (out[r.tier] ??= {})[r.billing_cycle] = r.price;
+        }
+        return out;
+    },
+
+    async findPrice(tier: PlanTier, cycle: BillingCycle): Promise<string | null> {
+        const { rows } = await pool.query(
+            `SELECT price FROM salon_plan_prices WHERE tier = $1 AND billing_cycle = $2`, [tier, cycle]
+        );
+        return rows[0]?.price ?? null;
+    },
+
+    // Upserts the given cycles for one tier in a single transaction. The
+    // annual price is mirrored into salon_plan_definitions.price, the legacy
+    // single-price column other screens (landing page, Billing page) still read.
+    async upsertMany(tier: PlanTier, prices: Partial<Record<BillingCycle, number>>, updatedBy: string): Promise<void> {
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            for (const [cycle, price] of Object.entries(prices)) {
+                await client.query(
+                    `INSERT INTO salon_plan_prices (tier, billing_cycle, price, updated_by, updated_at)
+                     VALUES ($1, $2, $3, $4, NOW())
+                     ON CONFLICT (tier, billing_cycle)
+                     DO UPDATE SET price = EXCLUDED.price, updated_by = EXCLUDED.updated_by, updated_at = NOW()`,
+                    [tier, cycle, price, updatedBy]
+                );
+            }
+            if (prices.annual !== undefined) {
+                await client.query(
+                    `UPDATE salon_plan_definitions SET price = $1, updated_by = $2, updated_at = NOW() WHERE tier = $3`,
+                    [prices.annual, updatedBy, tier]
+                );
+            }
+            await client.query("COMMIT");
+        } catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        } finally {
+            client.release();
+        }
     },
 };
 
@@ -285,7 +351,7 @@ export const salonPlanInvoicesRepository = {
         const financialYear = financialYearFor(issuedDate);
         const subtotal = body.amount;
         const applyGst = body.apply_gst ?? true;
-        const gstAmount = applyGst ? Math.round(subtotal * 0.18 * 100) / 100 : 0;
+        const gstAmount = applyGst ? Math.round(subtotal * (GST_RATE_PERCENT / 100) * 100) / 100 : 0;
         const totalAmount = subtotal + gstAmount;
 
         const { rows: seqRows } = await pool.query(`SELECT nextval('salon_plan_invoice_no_seq') AS seq`);

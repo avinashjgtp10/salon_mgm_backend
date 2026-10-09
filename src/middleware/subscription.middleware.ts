@@ -7,6 +7,7 @@ const EXEMPT_PREFIXES = [
     "/api/v1/oauth",
     "/api/v1/billing",
     "/api/v1/subscriptions",
+    "/api/v1/plan-payments", // an expired salon must still be able to pay
     "/api/v1/webhooks",
     "/api/v1/profile",
     "/api/v1/users/me",

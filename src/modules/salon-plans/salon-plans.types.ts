@@ -26,6 +26,27 @@ export type SalonPlanDefinition = {
     updated_at: string;
 };
 
+// GST charged on top of every listed plan price (India). Single source for
+// checkout totals and invoice rows.
+export const GST_RATE_PERCENT = 18;
+
+export type BillingCycle = "monthly" | "quarterly" | "annual";
+export const BILLING_CYCLES: BillingCycle[] = ["monthly", "quarterly", "annual"];
+export const BILLING_CYCLE_LABEL: Record<BillingCycle, string> = {
+    monthly: "Monthly Plan",
+    quarterly: "Quarterly Plan",
+    annual: "Annual Plan",
+};
+
+// Listed price per billing cycle, EXCLUDING GST. Numeric columns come back
+// from pg as strings; null = that cycle isn't priced (e.g. the prices
+// migration hasn't been run yet).
+export type PlanPrices = Record<BillingCycle, string | null>;
+
+export type SalonPlanDefinitionWithPrices = SalonPlanDefinition & { prices: PlanPrices };
+
+export type UpdatePlanPricesBody = Partial<Record<BillingCycle, number>>;
+
 export type UpdatePlanDefinitionBody = {
     name?: string;
     tagline?: string | null;
@@ -76,13 +97,6 @@ export type UpsertSalonCustomizationBody = {
 };
 
 export type SalonPlanInvoiceStatus = "paid" | "open" | "pending" | "overdue" | "failed" | "void";
-
-export type BillingCycle = "monthly" | "quarterly" | "annual";
-export const BILLING_CYCLE_LABEL: Record<BillingCycle, string> = {
-    monthly: "Monthly Plan",
-    quarterly: "Quarterly Plan",
-    annual: "Annual Plan",
-};
 
 export type SalonPlanInvoice = {
     id: string;

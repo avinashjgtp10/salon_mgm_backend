@@ -21,6 +21,14 @@ export const salonPlansController = {
         } catch (err) { return next(err); }
     },
 
+    async updatePlanPrices(req: AuthedRequest, res: Response, next: NextFunction) {
+        try {
+            const updatedBy = req.user?.userId ?? "";
+            const data = await salonPlansService.updatePlanPrices(String(req.params.tier), req.body, updatedBy);
+            return res.json({ success: true, data });
+        } catch (err) { return next(err); }
+    },
+
     // ── Salon Customizations ─────────────────────────────────────────────────
 
     async searchCustomizations(req: Request, res: Response, next: NextFunction) {

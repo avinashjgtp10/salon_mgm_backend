@@ -7,12 +7,18 @@ import { renderSalonPlanInvoicePdf } from "./salon-plan-invoice-pdf.service";
 import logger from "../../config/logger";
 import {
     planDefinitionsRepository,
+    planPricesRepository,
     salonCustomizationsRepository,
     salonPlanInvoicesRepository,
 } from "./salon-plans.repository";
 import {
     PlanTier,
     PLAN_TIER_ORDER,
+    GST_RATE_PERCENT,
+    BILLING_CYCLES,
+    SalonPlanDefinition,
+    SalonPlanDefinitionWithPrices,
+    UpdatePlanPricesBody,
     UpdatePlanDefinitionBody,
     UpsertSalonCustomizationBody,
     CreateInvoiceBody,
@@ -49,8 +55,55 @@ function assertValidTier(tier: string): asserts tier is PlanTier {
 export const salonPlansService = {
     // ── Plan Definitions ─────────────────────────────────────────────────────
 
+    // Attaches the per-cycle price map to each definition. `annual` falls
+    // back to the legacy single price column so nothing renders blank before
+    // the prices migration has been run.
+    async withPrices(defs: SalonPlanDefinition[]): Promise<SalonPlanDefinitionWithPrices[]> {
+        const byTier = await planPricesRepository.findAllByTier();
+        return defs.map((d) => {
+            const p = byTier[d.tier] ?? {};
+            return {
+                ...d,
+                prices: {
+                    monthly: p.monthly ?? null,
+                    quarterly: p.quarterly ?? null,
+                    annual: p.annual ?? d.price,
+                },
+            };
+        });
+    },
+
     async listPlanDefinitions() {
-        return planDefinitionsRepository.findAll();
+        return this.withPrices(await planDefinitionsRepository.findAll());
+    },
+
+    // Super-admin: set any of the 3 cycle prices (before GST) for one tier.
+    async updatePlanPrices(tier: string, body: UpdatePlanPricesBody, updatedBy: string) {
+        assertValidTier(tier);
+        const entries = Object.entries(body ?? {}).filter(([, v]) => v !== undefined);
+        if (entries.length === 0) {
+            throw new AppError(400, "Provide at least one of monthly, quarterly, annual", "VALIDATION_ERROR");
+        }
+        const clean: Partial<Record<BillingCycle, number>> = {};
+        for (const [cycle, value] of entries) {
+            if (!BILLING_CYCLES.includes(cycle as BillingCycle)) {
+                throw new AppError(400, `Invalid billing cycle "${cycle}" — must be one of ${BILLING_CYCLES.join(", ")}`, "VALIDATION_ERROR");
+            }
+            const n = Number(value);
+            if (!Number.isFinite(n) || n <= 0 || n > 10_000_000) {
+                throw new AppError(400, `${cycle} price must be a positive number`, "VALIDATION_ERROR");
+            }
+            clean[cycle as BillingCycle] = Math.round(n * 100) / 100;
+        }
+        const def = await planDefinitionsRepository.findByTier(tier);
+        if (!def) throw new AppError(404, "Plan tier not found", "NOT_FOUND");
+
+        await planPricesRepository.upsertMany(tier, clean, updatedBy);
+        invalidateAllPlanFeatureCaches();
+
+        const fresh = await planDefinitionsRepository.findByTier(tier);
+        const [withPrices] = await this.withPrices([fresh!]);
+        return withPrices;
     },
 
     async updatePlanDefinition(tier: string, patch: UpdatePlanDefinitionBody, updatedBy: string) {
@@ -86,8 +139,18 @@ export const salonPlansService = {
         }
         const updated = await planDefinitionsRepository.update(tier, patch, updatedBy);
         if (!updated) throw new AppError(404, "Plan tier not found", "NOT_FOUND");
+        // The legacy single `price` IS the annual price — keep the new
+        // per-cycle table in step if an older client still edits it.
+        if (patch.price !== undefined) {
+            try {
+                await planPricesRepository.upsertMany(tier, { annual: patch.price }, updatedBy);
+            } catch (err: any) {
+                if (err?.code !== "42P01") throw err; // prices migration not run yet
+            }
+        }
         invalidateAllPlanFeatureCaches();
-        return updated;
+        const [withPrices] = await this.withPrices([updated]);
+        return withPrices;
     },
 
     // ── Salon Customizations ─────────────────────────────────────────────────
@@ -176,7 +239,7 @@ export const salonPlansService = {
     async getMyPlan(salonId: string) {
         const [customization, catalog] = await Promise.all([
             this.getCustomization(salonId),
-            planDefinitionsRepository.findAll(),
+            planDefinitionsRepository.findAll().then((defs) => this.withPrices(defs)),
         ]);
         const basePlan = catalog.find((p) => p.tier === customization.base_tier) ?? null;
         return {
@@ -187,6 +250,7 @@ export const salonPlansService = {
             is_customized: customization.custom_price !== null,
             start_date: customization.start_date,
             expiry_date: customization.expiry_date,
+            gst_rate_percent: GST_RATE_PERCENT,
             catalog,
         };
     },

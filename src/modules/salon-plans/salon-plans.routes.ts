@@ -34,6 +34,7 @@ router.use(authMiddleware, superAdminMiddleware);
 // Plan definitions — GET is salon-facing (registered above); only editing
 // stays super-admin-only.
 router.put("/definitions/:tier",                salonPlansController.updatePlanDefinition);
+router.put("/definitions/:tier/prices",         salonPlansController.updatePlanPrices);
 
 // Salon customizations
 router.get("/customizations",                salonPlansController.searchCustomizations);

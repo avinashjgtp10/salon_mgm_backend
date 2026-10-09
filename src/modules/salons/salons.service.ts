@@ -4,6 +4,7 @@ import { salonsRepository } from "./salons.repository";
 import { CreateSalonBody, UpdateSalonBody, Salon } from "./salons.types";
 import { authRepository } from "../auth/auth.repository";
 import { issueSessionTokens } from "../auth/session.util";
+import { planPaymentsService } from "../plan-payments/plan-payments.service";
 
 const slugify = (text: string) =>
     text
@@ -39,6 +40,16 @@ export const salonsService = {
 
         try {
             const salon = await salonsRepository.create(ownerId, { ...body, slug: finalSlug });
+
+            // New accounts go from sign-up straight to the subscription page, so
+            // a plan may already be paid for. Apply it to this brand-new salon
+            // BEFORE the tokens below are issued and the app first checks the
+            // subscription status. Never allowed to fail onboarding.
+            try {
+                await planPaymentsService.applyPendingForNewSalon(ownerId, salon.id);
+            } catch (err) {
+                logger.error("salonsService.create — applying pre-paid plan failed", { ownerId, salonId: salon.id, err });
+            }
 
             // Fetch user so we can embed the correct role in the new token
             const user = await authRepository.findUserById(ownerId);
