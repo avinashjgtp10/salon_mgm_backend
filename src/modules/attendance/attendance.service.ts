@@ -1,3 +1,4 @@
+import { attendanceActivity } from "./attendance.activity";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { attendanceRepository } from "./attendance.repository";
@@ -37,7 +38,8 @@ function hoursFromTimestamps(checkIn: string, checkOut: string): number {
 function calcStatus(
     checkIn: string,
     checkOut: string | null,
-    settings: AttendanceSettings
+    settings: AttendanceSettings,
+    workedHours?: number
 ): AttendanceStatus {
     const checkInDate = new Date(checkIn);
     const checkInMinutes = checkInDate.getUTCHours() * 60 + checkInDate.getUTCMinutes();
@@ -48,7 +50,7 @@ function calcStatus(
         return isLate ? "late" : "present";
     }
 
-    const hours = hoursFromTimestamps(checkIn, checkOut);
+    const hours = workedHours ?? hoursFromTimestamps(checkIn, checkOut);
 
     if (hours < settings.min_half_day_hours) return "absent";
     if (hours < settings.min_full_day_hours) return "half_day";
@@ -57,17 +59,28 @@ function calcStatus(
 
 const VALID_STATUSES: AttendanceStatus[] = ["present", "absent", "half_day", "late", "on_leave"];
 
+function istClock(timestamp: string) {
+    const ist = new Date(new Date(timestamp).getTime() + 330 * 60_000);
+    const hour = ist.getUTCHours();
+    return {
+        clock: `${String(hour % 12 || 12).padStart(2, "0")}:${String(ist.getUTCMinutes()).padStart(2, "0")} ${hour >= 12 ? "PM" : "AM"}`,
+        day: `${String(ist.getUTCDate()).padStart(2, "0")}-${String(ist.getUTCMonth() + 1).padStart(2, "0")}-${ist.getUTCFullYear()}`,
+    };
+}
+
+async function attendanceStaffName(record: Attendance) {
+    const details = await attendanceRepository.findById(record.id);
+    if (!details || details.salon_id !== record.salon_id || details.staff_id !== record.staff_id) return null;
+    return details.staff_name?.trim() || "A staff member";
+}
+
 export async function notifyAttendancePunch(record: Attendance, action: "in" | "out"): Promise<void> {
     try {
         const timestamp = action === "in" ? record.check_in : record.check_out;
         if (!timestamp) return;
-        const details = await attendanceRepository.findById(record.id);
-        if (!details || details.salon_id !== record.salon_id || details.staff_id !== record.staff_id) return;
-        const name = details.staff_name?.trim() || "A staff member";
-        const ist = new Date(new Date(timestamp).getTime() + 330 * 60_000);
-        const hour = ist.getUTCHours();
-        const clock = `${String(hour % 12 || 12).padStart(2, "0")}:${String(ist.getUTCMinutes()).padStart(2, "0")} ${hour >= 12 ? "PM" : "AM"}`;
-        const day = `${String(ist.getUTCDate()).padStart(2, "0")}-${String(ist.getUTCMonth() + 1).padStart(2, "0")}-${ist.getUTCFullYear()}`;
+        const name = await attendanceStaffName(record);
+        if (!name) return;
+        const { clock, day } = istClock(timestamp);
         await notificationsService.create({
             salon_id: record.salon_id,
             reference_id: record.id,
@@ -80,6 +93,38 @@ export async function notifyAttendancePunch(record: Attendance, action: "in" | "
         // Attendance is already saved; notification outages must not undo punches.
         logger.error("Attendance notification failed", {
             attendanceId: record.id, salonId: record.salon_id, action, message: error?.message,
+        });
+    }
+}
+
+// Keyed on the break id (not the attendance id) so every break in a day gets
+// its own owner notification while a retried request still sends only one.
+export async function notifyAttendanceBreak(
+    record: Attendance,
+    brk: { id: string; planned_end: string; actual_start: string; actual_end: string | null; note?: string | null },
+    action: "start" | "end",
+): Promise<void> {
+    try {
+        const timestamp = action === "start" ? brk.actual_start : brk.actual_end;
+        if (!timestamp) return;
+        const name = await attendanceStaffName(record);
+        if (!name) return;
+        const { clock, day } = istClock(timestamp);
+        const note = brk.note?.trim() ? ` Note: ${brk.note.trim()}` : "";
+        await notificationsService.create({
+            salon_id: record.salon_id,
+            reference_id: brk.id,
+            type: "attendance",
+            title: action === "start" ? "Staff On Break" : "Staff Back From Break",
+            body: action === "start"
+                ? `${name} started a break at ${clock} on ${day} (until ${istClock(brk.planned_end).clock}).${note}`
+                : `${name} returned from break at ${clock} on ${day}.`,
+            event_key: "otherUpdates",
+        }, { deduplicate: true, persistWhenPushDisabled: true });
+    } catch (error: any) {
+        // The break is already saved; notification outages must not undo it.
+        logger.error("Attendance break notification failed", {
+            attendanceId: record.id, breakId: brk.id, salonId: record.salon_id, action, message: error?.message,
         });
     }
 }
@@ -172,6 +217,8 @@ export const attendanceService = {
         const { staff_id, check_in, status: clientStatus, note, location } = body;
         const checkInTs = check_in || new Date().toISOString();
         const date = new Date(checkInTs).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+        const existing = await attendanceRepository.findByStaffAndDate(staff_id, date);
+        if (existing?.check_in) throw new AppError(409, "Attendance already has a check-in. Staff on break must check in through their own app.", "ALREADY_CHECKED_IN");
 
         const onLeave = await attendanceRepository.hasApprovedLeave(staff_id, date);
         if (onLeave) throw new AppError(400, "Staff member is on approved leave today", "ON_LEAVE");
@@ -210,7 +257,8 @@ export const attendanceService = {
         if (!existing.check_in) throw new AppError(400, "Staff has not checked in yet", "NOT_CHECKED_IN");
         if (existing.check_out) throw new AppError(400, "Staff has already checked out", "ALREADY_CHECKED_OUT");
 
-        const hours = hoursFromTimestamps(existing.check_in, checkOutTs);
+        if (existing.active_break) throw new AppError(409, "Finish the break before checkout", "ON_BREAK");
+        const hours = attendanceActivity(existing, existing.breaks, new Date(checkOutTs)).total_worked_seconds / 3600;
 
         // Half day already decided at check-in time by the owner's Half Day Rule
         // takes precedence — don't let the duration-based calculation below
@@ -218,7 +266,7 @@ export const attendanceService = {
         let status: AttendanceStatus = existing.status;
         if (status !== "half_day") {
             const settings = await attendanceService.getSettings(salonId);
-            status = calcStatus(existing.check_in, checkOutTs, settings);
+            status = calcStatus(existing.check_in, checkOutTs, settings, hours);
         }
 
         const record = await attendanceRepository.upsertCheckOut({
@@ -265,8 +313,9 @@ export const attendanceService = {
         }
 
         const settings = await attendanceService.getSettings(salonId);
-        const hours = hoursFromTimestamps(existing.check_in, ts);
-        const status = calcStatus(existing.check_in, ts, settings);
+        if (existing.active_break) throw new AppError(409, "Finish the break before checkout", "ON_BREAK");
+        const hours = attendanceActivity(existing, existing.breaks, new Date(ts)).total_worked_seconds / 3600;
+        const status = calcStatus(existing.check_in, ts, settings, hours);
         const record = await attendanceRepository.upsertCheckOut({
             salonId, staffId: staff_id, date, checkOut: ts, status, hoursWorked: hours,
         });
@@ -278,6 +327,8 @@ export const attendanceService = {
 
     async manualMark(salonId: string, body: ManualMarkBody): Promise<Attendance> {
         const { staff_id, date, status, check_in, check_out, note } = body;
+        const existing = await attendanceRepository.findByStaffAndDate(staff_id, date);
+        if (existing?.break_count) throw new AppError(409, "Use the attendance activity history for this day; its punches cannot be overwritten.", "HAS_BREAK_HISTORY");
         let hoursWorked: number | undefined;
         if (check_in && check_out) {
             hoursWorked = hoursFromTimestamps(check_in, check_out);
@@ -292,16 +343,30 @@ export const attendanceService = {
     async updateRecord(id: string, patch: UpdateAttendanceBody): Promise<Attendance> {
         const existing = await attendanceRepository.findById(id);
         if (!existing) throw new AppError(404, "Attendance record not found", "NOT_FOUND");
+        // The web Edit dialog always resends the current punches at minute
+        // precision, so a punch only counts as changed when its minute differs.
+        const changed = (next: string | undefined, current: string | null | undefined) =>
+            next !== undefined && (!current || Math.floor(Date.parse(next) / 60_000) !== Math.floor(Date.parse(current) / 60_000));
+        const checkInChanged  = changed(patch.check_in, existing.check_in);
+        const checkOutChanged = changed(patch.check_out, existing.check_out);
+        if (existing.break_count && (checkInChanged || checkOutChanged)) throw new AppError(409, "Punch edits cannot overwrite break history.", "HAS_BREAK_HISTORY");
 
-        const checkIn  = patch.check_in  ?? existing.check_in  ?? undefined;
-        const checkOut = patch.check_out ?? existing.check_out ?? undefined;
+        const checkIn  = checkInChanged  ? patch.check_in  : existing.check_in  ?? undefined;
+        const checkOut = checkOutChanged ? patch.check_out : existing.check_out ?? undefined;
 
-        let finalPatch: UpdateAttendanceBody = { ...patch };
-        if (checkIn && checkOut) {
-            finalPatch.status = (patch.status as AttendanceStatus) ?? (await (async () => {
-                const settings = await attendanceService.getSettings(existing.salon_id);
-                return calcStatus(checkIn, checkOut, settings);
-            })());
+        // Unchanged punches are not rewritten, so their stored seconds survive.
+        const finalPatch: UpdateAttendanceBody = {};
+        if (patch.status !== undefined) finalPatch.status = patch.status;
+        if (patch.note !== undefined) finalPatch.note = patch.note;
+        if (checkInChanged) finalPatch.check_in = patch.check_in;
+        if (checkOutChanged) finalPatch.check_out = patch.check_out;
+        // Recalculate only when a punch actually moved and no status was chosen:
+        // a note-only edit must not override the stored (break-aware, or Half
+        // Day Rule) status. Punch edits are refused above when breaks exist, so
+        // gross hours equal worked hours here.
+        if (patch.status === undefined && (checkInChanged || checkOutChanged) && checkIn && checkOut) {
+            const settings = await attendanceService.getSettings(existing.salon_id);
+            finalPatch.status = calcStatus(checkIn, checkOut, settings);
         }
         return attendanceRepository.updateById(id, finalPatch);
     },
@@ -327,6 +392,7 @@ export const attendanceService = {
         const staff: TodayStaffRecord[] = allStaff.map(s => {
             const rec = recordMap.get(s.id);
             return {
+                ...attendanceActivity(rec ?? null, rec?.breaks),
                 staff_id: s.id,
                 staff_name: s.full_name,
                 staff_role: s.role,

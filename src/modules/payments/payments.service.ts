@@ -19,7 +19,7 @@ import { whatsappAutomationService } from '../whatsapp-automation/whatsapp-autom
 import { whatsappAutomationRepository } from '../whatsapp-automation/whatsapp-automation.repository';
 import { salonsRepository } from '../salons/salons.repository';
 import { clientsRepository } from '../clients/clients.repository';
-import { getIO } from '../../config/socket';
+import { getIO, salonRoom, salonStaffRoom } from '../../config/socket';
 import { getActiveTaxes } from '../settings/tax.util';
 import { computeBillTotals, allocateMembershipDiscount } from '../pricing/pricing.engine';
 import pool from '../../config/database';
@@ -1601,7 +1601,8 @@ export const paymentsService = {
     // bell spam on every checkout. useBookings.ts listens for this alongside
     // the "notification" event to refetch the visible calendar range.
     try {
-      getIO().to(`salon:${data.salon_id}`).emit('payment_updated', {
+      // No amounts in this payload, so mobile staff calendars may refresh on it too.
+      getIO().to([salonRoom(data.salon_id), salonStaffRoom(data.salon_id)]).emit('payment_updated', {
         appointment_id: data.appointment_id,
         salon_id: data.salon_id,
         // Not persisted anywhere new — carried only on this socket push so a

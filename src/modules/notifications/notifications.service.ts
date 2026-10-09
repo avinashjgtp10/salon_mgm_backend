@@ -1,5 +1,5 @@
 import { notificationsRepository } from "./notifications.repository";
-import { getIO } from "../../config/socket";
+import { getIO, salonRoom, userRoom } from "../../config/socket";
 import { canSendPush } from "../utils/notif-prefs";
 import logger from "../../config/logger";
 import { deviceTokensRepository } from "./deviceTokens.repository";
@@ -77,7 +77,8 @@ export const notificationsService = {
     });
 
     try {
-      getIO().to(`salon:${data.salon_id}`).emit(
+      // Managers get every notification; staff only those addressed to them.
+      getIO().to([salonRoom(data.salon_id), ...recipientUserIds.map(userRoom)]).emit(
         "notification",
         data.scheduled_at ? { ...notification, scheduled_at: data.scheduled_at } : notification
       );

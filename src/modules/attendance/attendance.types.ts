@@ -1,7 +1,8 @@
+import type { attendanceActivity } from "./attendance.activity";
 export type AttendanceStatus = 'present' | 'absent' | 'half_day' | 'late' | 'on_leave';
 export type AttendanceSource = 'manual' | 'biometric' | 'qr' | 'gps' | 'appointment';
 
-export type Attendance = {
+export type Attendance = Partial<ReturnType<typeof attendanceActivity>> & {
     id: string;
     salon_id: string;
     staff_id: string;
@@ -108,7 +109,7 @@ export type UpdateSettingsBody = {
     require_checkin_for_visibility?: boolean;
 };
 
-export type StaffPresenceState = 'checked_in' | 'checked_out' | 'not_checked_in';
+export type StaffPresenceState = 'checked_in' | 'checked_out' | 'not_checked_in' | 'on_break';
 
 export type StaffPresence = {
     enabled: boolean;
@@ -126,7 +127,7 @@ export type DailySummary = {
     total_staff: number;
 };
 
-export type TodayStaffRecord = {
+export type TodayStaffRecord = Partial<ReturnType<typeof attendanceActivity>> & {
     staff_id: string;
     staff_name: string;
     staff_role: string;

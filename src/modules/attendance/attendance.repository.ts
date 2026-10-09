@@ -1,3 +1,4 @@
+import { attendanceActivity } from "./attendance.activity";
 import pool, { safeQuery } from "../../config/database";
 import {
     Attendance,
@@ -21,6 +22,16 @@ function deserializeSettings(row: any): AttendanceSettings {
         }
     }
     return row;
+}
+
+async function withActivity<T extends Attendance>(rows: T[]): Promise<T[]> {
+    if (!rows.length) return rows;
+    const result = await pool.query("SELECT * FROM attendance_breaks WHERE attendance_id = ANY($1::uuid[]) ORDER BY actual_start", [rows.map(row => row.id)]);
+    const now = new Date();
+    return rows.map(row => {
+      const activity = attendanceActivity(row, result.rows.filter(item => item.attendance_id === row.id), now);
+      return { ...row, ...activity, hours_worked: row.check_in ? Number((activity.total_worked_seconds / 3600).toFixed(2)) : row.hours_worked };
+    });
 }
 
 export const attendanceRepository = {
@@ -85,7 +96,7 @@ export const attendanceRepository = {
              WHERE a.staff_id = $1 AND a.date = $2::date`,
             [staffId, date]
         );
-        return rows[0] || null;
+        return rows[0] ? (await withActivity(rows))[0] : null;
     },
 
     // ── Single staff, date range (for Staff History Attendance tab / Timeline) ──
@@ -119,7 +130,7 @@ export const attendanceRepository = {
             values
         ));
         const total = rows.length ? Number(rows[0].total_count) : 0;
-        const items = rows.map(({ total_count, ...r }) => r);
+        const items = await withActivity(rows.map(({ total_count, ...r }) => r));
         const effectiveLimit = limit ?? Math.max(total, 1);
         return { items, pagination: { total, page, limit: effectiveLimit, total_pages: Math.max(1, Math.ceil(total / effectiveLimit)) } };
     },
@@ -134,7 +145,7 @@ export const attendanceRepository = {
              WHERE a.id = $1`,
             [id]
         );
-        return rows[0] || null;
+        return rows[0] ? (await withActivity(rows))[0] : null;
     },
 
     // ── Today view ───────────────────────────────────────────────────────────
@@ -150,7 +161,7 @@ export const attendanceRepository = {
              ORDER BY st.first_name ASC`,
             [salonId, date]
         ));
-        return rows;
+        return withActivity(rows);
     },
 
     // ── Monthly view ─────────────────────────────────────────────────────────
@@ -168,7 +179,7 @@ export const attendanceRepository = {
              ORDER BY st.first_name ASC, a.date ASC`,
             [salonId, startDate]
         );
-        return rows;
+        return withActivity(rows);
     },
 
     // ── Date-range view ──────────────────────────────────────────────────────
@@ -185,7 +196,7 @@ export const attendanceRepository = {
              ORDER BY st.first_name ASC, a.date ASC`,
             [salonId, startDate, endDate]
         );
-        return rows;
+        return withActivity(rows);
     },
 
     // ── Upsert check-in ──────────────────────────────────────────────────────
