@@ -38,7 +38,10 @@ export const ordersRepository = {
                     [salonId],
                 );
                 const seq = seqRows[0].seq;
-                const orderNumber = `ORD-${String(seq).padStart(5, "0")}`;
+                // PO-0001 format. Orders created before this change keep their
+                // ORD-00001 numbers (order_number is never rewritten); both share
+                // the same per-salon sequence + UNIQUE(salon_id, order_number).
+                const orderNumber = `PO-${String(seq).padStart(4, "0")}`;
 
                 await client.query("SAVEPOINT order_insert_attempt");
                 try {
@@ -89,12 +92,12 @@ export const ordersRepository = {
                 const { rows: itemRows } = await client.query(
                     `INSERT INTO order_items (
                        order_id, product_id, product_code, qty, selling_price,
-                       discount_percent, cost_price, cost_wo_tax, total_cost_wo_tax, total_tax
-                     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                       discount_percent, cost_price, cost_wo_tax, total_cost_wo_tax, total_tax, expiry_date
+                     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
                      RETURNING *`,
                     [
                         order.id, item.product_id, item.product_code ?? null, item.qty, item.selling_price,
-                        discountPercent, item.cost_price, costWoTax, totalCostWoTax, totalTax,
+                        discountPercent, item.cost_price, costWoTax, totalCostWoTax, totalTax, item.expiry_date ?? null,
                     ],
                 );
                 items.push(itemRows[0]);
@@ -182,12 +185,12 @@ export const ordersRepository = {
                 const { rows: itemRows } = await client.query(
                     `INSERT INTO order_items (
                        order_id, product_id, product_code, qty, selling_price,
-                       discount_percent, cost_price, cost_wo_tax, total_cost_wo_tax, total_tax
-                     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                       discount_percent, cost_price, cost_wo_tax, total_cost_wo_tax, total_tax, expiry_date
+                     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
                      RETURNING *`,
                     [
                         id, item.product_id, item.product_code ?? null, item.qty, item.selling_price,
-                        discountPercent, item.cost_price, costWoTax, totalCostWoTax, totalTax,
+                        discountPercent, item.cost_price, costWoTax, totalCostWoTax, totalTax, item.expiry_date ?? null,
                     ],
                 );
                 items.push(itemRows[0]);
@@ -292,7 +295,7 @@ export const ordersRepository = {
         if (!orderRows.length) return null;
 
         const { rows: itemRows } = await pool.query(
-            `SELECT oi.*, p.name AS product_name
+            `SELECT oi.*, oi.expiry_date::text AS expiry_date, p.name AS product_name
                FROM order_items oi
                JOIN products p ON p.id = oi.product_id
               WHERE oi.order_id = $1
@@ -339,7 +342,7 @@ export const ordersRepository = {
         if (order.status === "received") throw new AppError(400, "Order is already fully received", "ORDER_ALREADY_RECEIVED");
 
         const itemsById = new Map((order.items ?? []).map((i) => [i.id, i]));
-        const purchaseItems: { product_id: string; quantity: number; purchase_price: number }[] = [];
+        const purchaseItems: { product_id: string; quantity: number; purchase_price: number; expiry_date: string | null }[] = [];
 
         for (const line of data.items) {
             const orderItem = itemsById.get(line.order_item_id);
@@ -352,7 +355,7 @@ export const ordersRepository = {
             // Only the good units are ever stocked in — damaged ones are
             // recorded on order_items below but never touch products.amount.
             if (line.received_qty > 0) {
-                purchaseItems.push({ product_id: orderItem.product_id, quantity: line.received_qty, purchase_price: Number(orderItem.cost_price) });
+                purchaseItems.push({ product_id: orderItem.product_id, quantity: line.received_qty, purchase_price: Number(orderItem.cost_price), expiry_date: line.expiry_date ?? orderItem.expiry_date ?? null });
             }
         }
 

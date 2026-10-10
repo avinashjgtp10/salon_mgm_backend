@@ -29,6 +29,8 @@ export interface Purchase {
     // who entered it. Null for purchases recorded before this existed.
     received_by_staff_id?: string | null;
     received_by_name?: string | null;
+    // order_number of the Purchase Order this delivery was received against.
+    po_number?: string | null;
     created_at: string;
     updated_at: string;
     items?: PurchaseItem[];

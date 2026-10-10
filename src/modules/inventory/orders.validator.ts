@@ -88,6 +88,9 @@ export const validateCreateOrder = (
                     throw new AppError(400, `items[${i}].discount_percent must be between 0 and 100`, "VALIDATION_ERROR");
                 }
             }
+            if (!isOptionalDate(item.expiry_date)) {
+                throw new AppError(400, `items[${i}].expiry_date must be in YYYY-MM-DD format`, "VALIDATION_ERROR");
+            }
             if (!isOptionalString(item.product_code)) {
                 throw new AppError(400, `items[${i}].product_code must be a string`, "VALIDATION_ERROR");
             }
@@ -124,6 +127,9 @@ export const validateReceiveOrder = (
             }
             if (typeof item.received_qty !== "number" || !Number.isFinite(item.received_qty) || item.received_qty < 0) {
                 throw new AppError(400, `items[${i}].received_qty must be a non-negative number`, "VALIDATION_ERROR");
+            }
+            if (!isOptionalDate(item.expiry_date)) {
+                throw new AppError(400, `items[${i}].expiry_date must be in YYYY-MM-DD format`, "VALIDATION_ERROR");
             }
             if (item.damaged_qty !== undefined && (typeof item.damaged_qty !== "number" || !Number.isFinite(item.damaged_qty) || item.damaged_qty < 0)) {
                 throw new AppError(400, `items[${i}].damaged_qty must be a non-negative number`, "VALIDATION_ERROR");
