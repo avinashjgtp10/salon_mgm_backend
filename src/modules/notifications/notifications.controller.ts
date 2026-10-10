@@ -5,8 +5,9 @@ import { deviceTokensService } from "./deviceTokens.service";
 import { getSalonId } from "../utils/tenant.util";
 
 import { isMobileStaffRequest } from "./staffNotificationScope";
+import { isSessionActiveUncached } from "../auth/session.util";
 
-type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string | null } };
+type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string | null; sid?: string } };
 
 export const notificationsController = {
   async registerDevice(req: AuthRequest, res: Response, next: NextFunction) {
@@ -29,6 +30,18 @@ export const notificationsController = {
       }
       if (platform !== "android" && platform !== "ios") {
         throw new AppError(400, "platform must be android or ios", "VALIDATION_ERROR");
+      }
+
+      // authMiddleware trusts a cached "session active" for a few seconds. A
+      // phone kicked by a login elsewhere must not slip its push token back in
+      // during that window, or it keeps receiving this account's pushes.
+      const sid = req.user?.sid;
+      if (sid && !(await isSessionActiveUncached(String(sid)))) {
+        throw new AppError(
+          401,
+          "You were signed out because this account was logged in on another device.",
+          "SESSION_REPLACED",
+        );
       }
 
       const data = await deviceTokensService.registerExpoPushToken({
