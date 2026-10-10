@@ -261,11 +261,12 @@ export const authRepository = {
     user_id: string;
     token: string;
     expires_at: Date;
+    client_type?: "web" | "mobile";
   }) {
     const { rows } = await safeQuery(() =>
       pool.query(
-        `INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES ($1,$2,$3) RETURNING id, user_id, token, expires_at, created_at`,
-        [data.user_id, data.token, data.expires_at],
+        `INSERT INTO refresh_tokens (user_id, token, expires_at, client_type) VALUES ($1,$2,$3,$4) RETURNING id, user_id, token, expires_at, created_at`,
+        [data.user_id, data.token, data.expires_at, data.client_type ?? "web"],
       ),
     );
     return rows[0];
@@ -308,6 +309,16 @@ export const authRepository = {
   async deleteAllRefreshTokensForUser(userId: string) {
     await safeQuery(() =>
       pool.query(`DELETE FROM refresh_tokens WHERE user_id = $1`, [userId]),
+    );
+  },
+
+  /**
+   * Delete only this user's sessions of one client type (web or mobile), so a
+   * web login doesn't end the phone's session and vice versa.
+   */
+  async deleteRefreshTokensForUserByClientType(userId: string, clientType: "web" | "mobile") {
+    await safeQuery(() =>
+      pool.query(`DELETE FROM refresh_tokens WHERE user_id = $1 AND client_type = $2`, [userId, clientType]),
     );
   },
 
