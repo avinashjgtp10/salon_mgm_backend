@@ -95,3 +95,12 @@ export async function isSessionActive(sid: string): Promise<boolean> {
   }
   return ok;
 }
+
+/**
+ * Skips the cache. For writes that must not survive a kick, e.g. a phone
+ * re-registering its push token in the seconds after another login dropped it.
+ */
+export async function isSessionActiveUncached(sid: string): Promise<boolean> {
+  activeUntil.delete(sid);
+  return isSessionActive(sid);
+}
