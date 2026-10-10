@@ -1,17 +1,19 @@
 import { notificationsRepository } from "./notifications.repository";
-import { getIO, salonRoom, userRoom } from "../../config/socket";
+import { getIO, salonRoom, mobileStaffUserRoom } from "../../config/socket";
 import { canSendPush } from "../utils/notif-prefs";
 import logger from "../../config/logger";
 import { deviceTokensRepository } from "./deviceTokens.repository";
 import { pushNotificationService } from "./pushNotification.service";
 
-import { appointmentRecipients } from "./staffNotificationScope";
+import { appointmentStaffNotifications } from "./staffNotificationScope";
+import type { Notification } from "./notifications.repository";
 
 const ANDROID_NOTIFICATION_CHANNEL_ID = "salonox";
 
 type CreateNotificationData = {
   salon_id: string;
   reference_id?: string;
+  appointment_id?: string;
   type: string;
   title: string;
   body?: string;
@@ -52,7 +54,9 @@ export const notificationsService = {
       logger.info("Notification skipped by push preference", { salonId: data.salon_id, eventKey: preferenceEvent });
       return null;
     }
-    const recipientUserIds = data.type === "appointment" ? await appointmentRecipients(data.salon_id, data.reference_id) : [];
+    const appointmentId = data.type === "appointment" ? data.reference_id : data.appointment_id;
+    const staffMessages = await appointmentStaffNotifications(data.salon_id, appointmentId);
+    const recipientUserIds = staffMessages.map(item => item.userId);
     const createData = {
       reference_id: data.reference_id,
       recipient_user_ids: recipientUserIds,
@@ -78,10 +82,18 @@ export const notificationsService = {
 
     try {
       // Managers get every notification; staff only those addressed to them.
-      getIO().to([salonRoom(data.salon_id), ...recipientUserIds.map(userRoom)]).emit(
+      getIO().to(salonRoom(data.salon_id)).emit(
         "notification",
         data.scheduled_at ? { ...notification, scheduled_at: data.scheduled_at } : notification
       );
+      for (const message of staffMessages) {
+        getIO().to(mobileStaffUserRoom(message.userId)).emit("notification", {
+          ...notification, title: message.title, body: message.body,
+          type: "appointment", reference_id: appointmentId,
+          recipient_user_ids: [message.userId], contact_phone: null,
+          ...(data.scheduled_at ? { scheduled_at: data.scheduled_at } : {}),
+        });
+      }
       logger.info("Socket notification emitted", {
         notificationId: notification.id,
         salonId: notification.salon_id,
@@ -116,49 +128,60 @@ export const notificationsService = {
       });
 
       if (tokens.length > 0) {
-        pushStage = "expo_send";
-        logger.info("Expo send started", {
-          notificationId: notification.id,
-          salonId: notification.salon_id,
-          tokenCount: tokens.length,
-        });
+        const staffByUser = new Map(staffMessages.map(message => [message.userId, message]));
+        const groups = new Map<string, typeof devices>();
+        for (const device of devices) {
+          const key = staffByUser.has(device.user_id) ? device.user_id : "owners";
+          const group = groups.get(key) ?? [];
+          group.push(device);
+          groups.set(key, group);
+        }
+        for (const [key, group] of groups) {
+          const staffMessage = staffByUser.get(key);
+          pushStage = "expo_send";
+          logger.info("Expo send started", {
+            notificationId: notification.id,
+            salonId: notification.salon_id,
+            tokenCount: tokens.length,
+          });
 
-        const result = await pushNotificationService.sendToTokens({
-          tokens,
-          notificationId: notification.id,
-          salonId: notification.salon_id,
-          title: data.title,
-          body: data.body,
-          data: {
-            notification_id: notification.id,
-            salon_id: notification.salon_id,
-            type: notification.type,
-            reference_id: data.reference_id,
-            recipient_user_ids: recipientUserIds,
-            event_key: preferenceEvent,
-          },
-          sound: "default",
-          priority: "high",
-          channelId: ANDROID_NOTIFICATION_CHANNEL_ID,
-        });
+          const result = await pushNotificationService.sendToTokens({
+            tokens: [...new Set(group.map(device => device.expo_push_token).filter(Boolean))],
+            notificationId: notification.id,
+            salonId: notification.salon_id,
+            title: staffMessage?.title ?? data.title,
+            body: staffMessage?.body ?? data.body,
+            data: {
+              notification_id: notification.id,
+              salon_id: notification.salon_id,
+              type: staffMessage ? "appointment" : notification.type,
+              reference_id: staffMessage ? appointmentId : data.reference_id,
+              recipient_user_ids: staffMessage ? [staffMessage.userId] : recipientUserIds,
+              event_key: preferenceEvent,
+            },
+            sound: "default",
+            priority: "high",
+            channelId: ANDROID_NOTIFICATION_CHANNEL_ID,
+          });
 
-        pushStage = "expo_send_result";
-        logger.info("Expo send result", {
-          notificationId: notification.id,
-          salonId: notification.salon_id,
-          sentCount: result.sentCount,
-          failedCount: result.failedCount,
-          receiptCount: result.receiptReferences.length,
-          removedTokenCount: result.removedTokens.length,
-        });
+          pushStage = "expo_send_result";
+          logger.info("Expo send result", {
+            notificationId: notification.id,
+            salonId: notification.salon_id,
+            sentCount: result.sentCount,
+            failedCount: result.failedCount,
+            receiptCount: result.receiptReferences.length,
+            removedTokenCount: result.removedTokens.length,
+          });
 
-        pushStage = "receipt_schedule";
-        pushNotificationService.scheduleReceiptCheck(result.receiptReferences);
-        logger.info("Receipt records created and scheduled", {
-          notificationId: notification.id,
-          salonId: notification.salon_id,
-          receiptCount: result.receiptReferences.length,
-        });
+          pushStage = "receipt_schedule";
+          pushNotificationService.scheduleReceiptCheck(result.receiptReferences);
+          logger.info("Receipt records created and scheduled", {
+            notificationId: notification.id,
+            salonId: notification.salon_id,
+            receiptCount: result.receiptReferences.length,
+          });
+        }
       } else {
         logger.info("Expo send skipped because no device tokens were selected", {
           notificationId: notification.id,
@@ -188,7 +211,10 @@ export const notificationsService = {
   },
 
   async list(salonId: string, staffUserId?: string) {
-    return notificationsRepository.listBySalon(salonId, 30, staffUserId);
+    const notifications = await notificationsRepository.listBySalon(salonId, 30, staffUserId);
+    if (!staffUserId) return notifications;
+    const projected = await Promise.all(notifications.map(notification => staffView(notification, staffUserId)));
+    return projected.filter((notification): notification is Notification => notification !== null);
   },
 
   // "All Branches" aggregate — same 30-row cap as the single-salon list,
@@ -200,7 +226,8 @@ export const notificationsService = {
   },
 
   async markRead(id: string, salonId: string, staffUserId?: string) {
-    return notificationsRepository.markRead(id, salonId, staffUserId);
+    const notification = await notificationsRepository.markRead(id, salonId, staffUserId);
+    return notification && staffUserId ? staffView(notification, staffUserId) : notification;
   },
 
   async markAllRead(salonId: string, staffUserId?: string) {
@@ -219,3 +246,14 @@ export const notificationsService = {
     return notificationsRepository.getUnreadCountForSalons(salonIds);
   },
 };
+
+// Older stored rows contain owner text too. Never return that text to staff.
+async function staffView(notification: Notification, userId: string): Promise<Notification | null> {
+  if (notification.type !== "appointment") return notification;
+  const messages = await appointmentStaffNotifications(notification.salon_id, notification.reference_id ?? undefined);
+  const message = messages.find(item => item.userId === userId);
+  return message ? {
+    ...notification, title: message.title, body: message.body,
+    recipient_user_ids: [userId], contact_phone: null,
+  } : null;
+}

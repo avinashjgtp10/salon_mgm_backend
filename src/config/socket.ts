@@ -17,6 +17,7 @@ type SocketUser = { userId: string; role: string; salonId: string | null; mobile
 export const salonRoom = (salonId: string) => `salon:${salonId}`
 export const salonStaffRoom = (salonId: string) => `salon:${salonId}:staff`
 export const userRoom = (userId: string) => `user:${userId}`
+export const mobileStaffUserRoom = (userId: string) => `mobile-staff-user:${userId}`
 
 function getAllowedOrigins(): string | string[] | boolean {
   if (process.env.CORS_ALLOW_ALL_ORIGINS === 'true') return true
@@ -89,6 +90,7 @@ export function initSocket(httpServer: HttpServer): SocketIOServer {
     const user = socket.data.user as SocketUser | null
     logger.info(`🔌 Socket connected: ${socket.id}`, { userId: user?.userId, role: user?.role })
     if (user) socket.join(userRoom(user.userId))
+    if (user?.mobileStaff) socket.join(mobileStaffUserRoom(user.userId))
 
     // Client joins their salon room so we can target events per salon
     socket.on('join_salon', async (salonId: unknown, ack?: unknown) => {
