@@ -1564,6 +1564,7 @@ export const appointmentsService = {
             notificationsService.create({
                 salon_id: existing.salon_id,
                 type:     "payment",
+                appointment_id: existing.id,
                 title:    "Payment Complete",
                 body:     `${existing.client_name ?? "Walk-in"} — ₹${preExistingSale.total_amount ?? 0}`,
                 event_key: "newPayment",
@@ -1828,6 +1829,7 @@ export const appointmentsService = {
         notificationsService.create({
             salon_id: existing.salon_id,
             type:     "payment",
+                appointment_id: existing.id,
             title:    "Payment Complete",
             body:     `${existing.client_name ?? "Walk-in"} — ₹${sale.total_amount ?? 0}`,
             event_key: "newPayment",
