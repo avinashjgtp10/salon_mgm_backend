@@ -20432,6 +20432,7 @@ async getStaffAttendanceReport(
         a.check_in,
         a.check_out,
         a.hours_worked,
+        COALESCE((SELECT SUM(EXTRACT(EPOCH FROM (COALESCE(b.actual_end, a.check_out, NOW()) - b.actual_start))) FROM attendance_breaks b WHERE b.attendance_id = a.id), 0) AS break_seconds,
         a.status,
         s.employee_code,
         s.staff_name,
@@ -20692,6 +20693,7 @@ async getStaffAttendanceReport(
         check_in,
         check_out,
         hours_worked,
+        break_seconds,
         late_by_minutes,
         overtime_minutes,
         completed_appointments,
@@ -20733,7 +20735,10 @@ async getStaffAttendanceReport(
     const totalMinutes = Math.max(0, Math.round(Number(hours ?? 0) * 60));
     const h = Math.floor(totalMinutes / 60);
     const m = totalMinutes % 60;
-    return `${h}h ${m}m`;
+    const parts: string[] = [];
+    if (h > 0) parts.push(`${h} ${h === 1 ? "hour" : "hours"}`);
+    if (m > 0 || h === 0) parts.push(`${m} min`);
+    return parts.join(" ");
   };
   const formatTime = (value: string | null) => {
     if (!value) return "-";
@@ -20858,6 +20863,7 @@ async getStaffAttendanceReport(
       }),
       checkIn: formatTime(item.check_in),
       checkOut: formatTime(item.check_out),
+      breakTime: formatHours(Number(item.break_seconds ?? 0) / 3600),
       workingHours: formatHours(item.hours_worked),
       lateBy: formatMinutes(Number(item.late_by_minutes ?? 0)),
       overtime: formatMinutes(Number(item.overtime_minutes ?? 0)),

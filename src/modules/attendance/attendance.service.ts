@@ -170,6 +170,16 @@ function defaultSettings(): Omit<AttendanceSettings, "id" | "salon_id" | "create
 
 // ── Service ────────────────────────────────────────────────────────────────────
 
+// "1 hour 30 min" — same wording as the frontend's formatDurationHours.
+function fmtDuration(hours: number): string {
+    const total = Math.max(0, Math.round(hours * 60));
+    const h = Math.floor(total / 60), m = total % 60;
+    const parts: string[] = [];
+    if (h > 0) parts.push(`${h} ${h === 1 ? "hour" : "hours"}`);
+    if (m > 0 || h === 0) parts.push(`${m} min`);
+    return parts.join(" ");
+}
+
 export const attendanceService = {
 
     // ── Settings ──────────────────────────────────────────────────────────────
@@ -487,7 +497,7 @@ export const attendanceService = {
     async exportCSV(salonId: string, year: number, month: number): Promise<{ buffer: Buffer; filename: string }> {
         const records = await attendanceRepository.getMonthlyForExport(salonId, year, month);
 
-        const headers = ["Date", "Staff Name", "Role", "Status", "Check In", "Check Out", "Hours Worked", "Source", "Note"];
+        const headers = ["Date", "Staff Name", "Role", "Status", "Check In", "Check Out", "Break Time", "Actual Working Hours", "Source", "Note"];
         const rows = records.map(r => [
             r.date,
             r.staff_name ?? "",
@@ -495,7 +505,8 @@ export const attendanceService = {
             r.status,
             r.check_in  ? new Date(r.check_in).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })  : "",
             r.check_out ? new Date(r.check_out).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) : "",
-            r.hours_worked != null ? String(r.hours_worked) : "",
+            fmtDuration(Number((r as any).break_seconds ?? 0) / 3600),
+            r.hours_worked != null ? fmtDuration(Number(r.hours_worked)) : "",
             r.source,
             r.note ?? "",
         ]);
