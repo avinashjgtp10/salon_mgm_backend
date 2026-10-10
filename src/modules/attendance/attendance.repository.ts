@@ -24,13 +24,25 @@ function deserializeSettings(row: any): AttendanceSettings {
     return row;
 }
 
+// pg parses a DATE column into a JS Date at *local* midnight; serialised to JSON
+// that becomes the previous day in UTC (IST midnight = 18:30Z the day before),
+// so every consumer that did slice(0,10) showed the wrong date. Normalise to the
+// plain calendar day using the same local fields pg used to build the Date.
+function toDateOnly(value: unknown): string {
+    if (value instanceof Date && !isNaN(value.getTime())) {
+        const p = (n: number) => String(n).padStart(2, "0");
+        return `${value.getFullYear()}-${p(value.getMonth() + 1)}-${p(value.getDate())}`;
+    }
+    return typeof value === "string" ? value.slice(0, 10) : (value as any);
+}
+
 async function withActivity<T extends Attendance>(rows: T[]): Promise<T[]> {
     if (!rows.length) return rows;
     const result = await pool.query("SELECT * FROM attendance_breaks WHERE attendance_id = ANY($1::uuid[]) ORDER BY actual_start", [rows.map(row => row.id)]);
     const now = new Date();
     return rows.map(row => {
       const activity = attendanceActivity(row, result.rows.filter(item => item.attendance_id === row.id), now);
-      return { ...row, ...activity, hours_worked: row.check_in ? Number((activity.total_worked_seconds / 3600).toFixed(2)) : row.hours_worked };
+      return { ...row, ...activity, date: toDateOnly(row.date), hours_worked: row.check_in ? Number((activity.total_worked_seconds / 3600).toFixed(2)) : row.hours_worked };
     });
 }
 
@@ -381,6 +393,7 @@ export const attendanceRepository = {
         const startDate = `${year}-${String(month).padStart(2, "0")}-01`;
         const { rows } = await pool.query(
             `SELECT a.*,
+                    COALESCE((SELECT SUM(EXTRACT(EPOCH FROM (COALESCE(b.actual_end, a.check_out, NOW()) - b.actual_start))) FROM attendance_breaks b WHERE b.attendance_id = a.id), 0) AS break_seconds,
                     TRIM(CONCAT(st.first_name, ' ', COALESCE(st.last_name, ''))) AS staff_name,
                     COALESCE(st.designation, '') AS staff_role
              FROM attendance a
@@ -390,7 +403,7 @@ export const attendanceRepository = {
              ORDER BY st.first_name ASC, a.date ASC`,
             [salonId, startDate]
         );
-        return rows;
+        return rows.map((r: any) => ({ ...r, date: toDateOnly(r.date) }));
     },
 
     // ── Scheduled hours from shift (for today view) ───────────────────────────
