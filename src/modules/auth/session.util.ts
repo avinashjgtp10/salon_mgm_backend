@@ -83,7 +83,8 @@ export async function isSessionActive(sid: string): Promise<boolean> {
   const hit = activeUntil.get(sid);
   if (hit && hit > now) return true;
 
-  const ok = await authRepository.isRefreshSessionActive(sid);  if (ok) {
+  const ok = await authRepository.isRefreshSessionActive(sid);
+  if (ok) {
     if (activeUntil.size >= MAX_CACHE) {
       for (const [k, until] of activeUntil) if (until <= now) activeUntil.delete(k);
       if (activeUntil.size >= MAX_CACHE) activeUntil.clear();
