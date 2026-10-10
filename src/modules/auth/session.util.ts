@@ -1,4 +1,4 @@
-// Single-login-per-account sessions.
+// Single-login-per-account sessions, one per client type (web / mobile).
 //
 // A "session" is simply a row in refresh_tokens. Every access token minted
 // for it carries that row's id as `sid`; authMiddleware then rejects the
@@ -13,6 +13,7 @@
 import jwt, { SignOptions } from "jsonwebtoken";
 import { authRepository } from "./auth.repository";
 import { deviceTokensRepository } from "../notifications/deviceTokens.repository";
+import type { ClientType } from "./auth.types";
 
 // Roles that may hold several sessions at once: super-admins work across
 // many tabs, and public-booking `client` accounts have no salon seat to
@@ -40,20 +41,26 @@ export async function issueSessionTokens(opts: {
   role: string;
   salonId?: string | null;
   kickOthers: boolean;
+  clientType?: ClientType;
 }): Promise<{ accessToken: string; refreshToken: string }> {
   const { userId, role, salonId, kickOthers } = opts;
+  const clientType: ClientType = opts.clientType === "mobile" ? "mobile" : "web";
   if (kickOthers && !MULTI_SESSION_ROLES.has(role)) {
-    await authRepository.deleteAllRefreshTokensForUser(userId);
+    // One session per client type: only the same type is ended, so a web
+    // login and a phone login can coexist.
+    await authRepository.deleteRefreshTokensForUserByClientType(userId, clientType);
     // A signed-out phone can't unregister itself, so drop its push token here;
     // otherwise it keeps showing this account's pushes after being kicked.
     // The device logging in now re-registers its token right after login.
-    await deviceTokensRepository.removeAllForUser(userId);
+    // Only a mobile login kicks a phone, so a web login must leave them alone.
+    if (clientType === "mobile") await deviceTokensRepository.removeAllForUser(userId);
   }
   const refreshToken = jwt.sign({ userId }, process.env.JWT_REFRESH_SECRET as string, refreshOptions());
   const row = await authRepository.saveRefreshToken({
     user_id: userId,
     token: refreshToken,
     expires_at: refreshExpiryDate(),
+    client_type: clientType,
   });
   const accessToken = jwt.sign(
     { userId, role, salonId: salonId ?? null, sid: String(row.id) },
@@ -76,8 +83,7 @@ export async function isSessionActive(sid: string): Promise<boolean> {
   const hit = activeUntil.get(sid);
   if (hit && hit > now) return true;
 
-  const ok = await authRepository.isRefreshSessionActive(sid);
-  if (ok) {
+  const ok = await authRepository.isRefreshSessionActive(sid);  if (ok) {
     if (activeUntil.size >= MAX_CACHE) {
       for (const [k, until] of activeUntil) if (until <= now) activeUntil.delete(k);
       if (activeUntil.size >= MAX_CACHE) activeUntil.clear();

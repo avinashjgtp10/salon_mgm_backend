@@ -88,7 +88,12 @@ export const authController = {
         );
       }
 
-      const data = await authService.login({ email, password });
+      // Mobile app sends clientType "mobile" (body or X-Client-Type header);
+      // anything else, including web, is "web".
+      const rawType = String(req.body?.clientType ?? req.headers["x-client-type"] ?? "").toLowerCase();
+      const clientType = rawType === "mobile" ? "mobile" : "web";
+
+      const data = await authService.login({ email, password, clientType });
 
       resetLoginFails(email, ip).catch(() => {/* Redis down — non-fatal */});
 

@@ -182,7 +182,7 @@ export const authService = {
     // previous device is signed out on its next request). Impersonation
     // sessions are not affected by this call starting, and are ended by it.
     const { accessToken, refreshToken } = await issueSessionTokens({
-      userId: user.id, role: user.role, salonId, kickOthers: true,
+      userId: user.id, role: user.role, salonId, kickOthers: true, clientType: body.clientType,
     });
 
     logger.info("[authService.login] Login successful", { email, userId: user.id, role: user.role, salonId });
