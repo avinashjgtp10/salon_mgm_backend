@@ -88,10 +88,14 @@ export const authController = {
         );
       }
 
-      // Mobile app sends clientType "mobile" (body or X-Client-Type header);
-      // anything else, including web, is "web".
-      const rawType = String(req.body?.clientType ?? req.headers["x-client-type"] ?? "").toLowerCase();
-      const clientType = rawType === "mobile" ? "mobile" : "web";
+      // An explicit clientType (body or X-Client-Type header) wins. Without one,
+      // browsers are web and native/React-Native HTTP clients are mobile.
+      const explicit = String(req.body?.clientType ?? req.headers["x-client-type"] ?? "").toLowerCase();
+      const ua = String(req.headers["user-agent"] || "");
+      const clientType =
+        explicit === "mobile" || explicit === "web"
+          ? explicit
+          : /okhttp|cfnetwork|darwin|expo|react-?native/i.test(ua) ? "mobile" : "web";
 
       const data = await authService.login({ email, password, clientType });
 
