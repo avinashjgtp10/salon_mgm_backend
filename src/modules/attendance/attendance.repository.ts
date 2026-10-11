@@ -62,6 +62,19 @@ export const attendanceRepository = {
     // never take them down: a database that hasn't run
     // add_attendance_checkin_visibility.sql yet (no column, or no
     // attendance_settings table at all) simply means the feature is off.
+    // Open breaks (no actual_end yet) on the given day: when each started and when the
+    // staff member said they would be back.
+    async findActiveBreaks(salonId: string, date: string): Promise<{ staff_id: string; since: string; until: string }[]> {
+        const { rows } = await pool.query(
+            `SELECT a.staff_id, b.actual_start AS since, b.planned_end AS until
+             FROM attendance_breaks b
+             JOIN attendance a ON a.id = b.attendance_id
+             WHERE a.salon_id = $1 AND a.date = $2::date AND b.actual_end IS NULL`,
+            [salonId, date]
+        );
+        return rows.map((r: any) => ({ staff_id: String(r.staff_id), since: new Date(r.since).toISOString(), until: new Date(r.until).toISOString() }));
+    },
+
     async isCheckinVisibilityEnabled(salonId: string): Promise<boolean> {
         try {
             const { rows } = await pool.query(

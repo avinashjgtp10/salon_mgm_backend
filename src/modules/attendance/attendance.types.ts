@@ -115,6 +115,9 @@ export type StaffPresence = {
     enabled: boolean;
     date: string;   // YYYY-MM-DD, salon-local "today"
     staff: { staff_id: string; state: StaffPresenceState }[];
+    // Everyone on a break right now, regardless of the check-in-visibility
+    // setting — the Calendar warns before booking someone who is on break.
+    breaks: { staff_id: string; since: string; until: string }[];
 };
 
 export type DailySummary = {
