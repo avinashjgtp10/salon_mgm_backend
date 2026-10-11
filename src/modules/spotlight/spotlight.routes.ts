@@ -15,6 +15,8 @@ router.post("/upload-image", authMiddleware, superAdminMiddleware, uploadMiddlew
 router.get("/admin", authMiddleware, superAdminMiddleware, spotlightController.adminList);
 router.get("/admin/:id", authMiddleware, superAdminMiddleware, spotlightController.adminGetById);
 router.post("/admin", authMiddleware, superAdminMiddleware, spotlightController.create);
+// Must stay above PATCH /admin/:id so "bulk-status" is not read as an id.
+router.patch("/admin/bulk-status", authMiddleware, superAdminMiddleware, spotlightController.bulkStatus);
 router.patch("/admin/:id", authMiddleware, superAdminMiddleware, spotlightController.update);
 router.post("/admin/:id/publish", authMiddleware, superAdminMiddleware, spotlightController.publish);
 router.delete("/admin/:id", authMiddleware, superAdminMiddleware, spotlightController.remove);

@@ -20,6 +20,8 @@ export interface OrderItem {
     cost_wo_tax: number;
     total_cost_wo_tax: number;
     total_tax: number;
+    // Set on Create Order, carried onto the purchase line when received.
+    expiry_date: string | null;
     // How much of `qty` has actually arrived so far AS STOCK — written ONLY
     // by receive() (Product Inventory → Record Purchase → pick this
     // supplier's open order). Never exceeds qty (receive() clamps it).
@@ -88,6 +90,7 @@ export interface CreateOrderItemDTO {
     selling_price: number;
     discount_percent?: number;
     cost_price: number;
+    expiry_date?: string | null;
 }
 
 export interface CreateOrderDTO {
@@ -123,6 +126,8 @@ export interface ReceiveOrderItemDTO {
     // just accumulated on order_items.damaged_qty. Optional so a plain
     // "receive N good units" call still works without sending 0 explicitly.
     damaged_qty?: number;
+    // Optional override; defaults to the expiry saved on the order line.
+    expiry_date?: string | null;
 }
 
 export interface ReceiveOrderDTO {

@@ -2,6 +2,7 @@ import { Worker, Job } from 'bullmq'
 import pool from '../../../../config/database'
 import { redisConnection, CampaignJobData } from './campaign.queue'
 import { whatsappMetaApi } from '../shared/whatsapp.api'
+import { buildOfferComponents } from '../shared/offer-components'
 import { inboxRepository } from '../inbox/inbox.repository'
 import { webhooksRepository } from '../webhooks/webhooks.repository'
 
@@ -35,7 +36,8 @@ export const campaignWorker = new Worker<CampaignJobData>(
 
     const { rows: [campaign] } = await pool.query(`
       SELECT c.*, t.name AS template_name, t.body_text,
-             t.language, t.header_type, t.header_media_id
+             t.language, t.header_type, t.header_media_id,
+             t.buttons, to_jsonb(t)->>'lto_text' AS lto_text, to_jsonb(t)->'carousel' AS carousel
       FROM wa_campaigns c
       LEFT JOIN wa_templates t ON t.id = c.template_id
       WHERE c.id = $1
@@ -84,6 +86,18 @@ export const campaignWorker = new Worker<CampaignJobData>(
       // ← normalize phone before sending — prevents duplicate conversations
       const normalizedPhone = normalizePhone(contact.phone)
 
+      // Stalled-campaign recovery (and a manual Resume) re-queues contacts that are
+      // still PENDING. If the original batch turns out to still be queued, both copies
+      // would read the contact as PENDING and message the customer twice. Claim each
+      // contact first: only one job gets it. The key includes updated_at, so a later
+      // deliberate resend of the same contact (which touches updated_at) gets a fresh
+      // claim. If Redis hiccups we send anyway - better a rare duplicate than a stall.
+      try {
+        const claimKey = `wa-claim:${contact.id}:${new Date(contact.updated_at).getTime()}`
+        const claimed = await redisConnection.set(claimKey, '1', 'EX', 6 * 3600, 'NX')
+        if (!claimed) continue
+      } catch { /* fail open */ }
+
       try {
         const matches    = (campaign.body_text ?? '').match(/\{\{\d+\}\}/g) ?? []
         const components: any[] = []
@@ -108,6 +122,16 @@ export const campaignWorker = new Worker<CampaignJobData>(
             ),
           }))
           components.push({ type: 'body', parameters: params })
+        }
+
+        // Offer templates: expiry countdown + copy-code button, per-contact values.
+        {
+          const cv = contact.variables ?? {}
+          const { afterBody } = buildOfferComponents(
+            { buttons: campaign.buttons, lto_text: campaign.lto_text, carousel: campaign.carousel },
+            { couponCode: cv.coupon_code, expiresAt: cv.offer_expires_at, flowToken: `${salonId}:${campaignId}` }
+          )
+          components.push(...afterBody)
         }
 
         const result = await whatsappMetaApi.sendTemplateMessage({
@@ -208,4 +232,7 @@ export const campaignWorker = new Worker<CampaignJobData>(
   { connection: redisConnection, concurrency: 10 }
 )
 
-campaignWorker.on('failed', (j, e) => console.error(`❌ WA Job ${j?.id} failed:`, e.message))
+campaignWorker.on('failed', (j, e) => console.error(
+  `❌ WA Job ${j?.id} (campaign ${j?.data?.campaignId}, batch ${j?.data?.batchIndex}, attempt ${j?.attemptsMade}/${j?.opts?.attempts}) failed:`,
+  e.message
+))

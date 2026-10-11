@@ -7,6 +7,7 @@ const EXEMPT_PREFIXES = [
     "/api/v1/oauth",
     "/api/v1/billing",
     "/api/v1/subscriptions",
+    "/api/v1/plan-payments", // an expired salon must still be able to pay
     "/api/v1/webhooks",
     "/api/v1/profile",
     "/api/v1/users/me",
@@ -47,7 +48,7 @@ export async function subscriptionMiddleware(
     }
 
     try {
-        // Check subscriptions table (Razorpay hosted — new flow)
+        // Check subscriptions table (subscriptions table)
         const { rows: subRows } = await pool.query(
             `SELECT id, status, current_period_end
              FROM subscriptions

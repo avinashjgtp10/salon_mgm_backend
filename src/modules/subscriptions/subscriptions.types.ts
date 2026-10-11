@@ -28,7 +28,6 @@ export type SubscriptionPlan = {
     max_bookings_per_month: number | null
     ai_features_enabled: boolean
     is_active: boolean
-    razorpay_plan_id: string | null
     created_at: string
 }
 
@@ -36,8 +35,6 @@ export type Subscription = {
     id: string
     salon_id: string
     plan_id: string
-    razorpay_subscription_id: string | null
-    razorpay_plan_id: string | null
     status: SubscriptionStatus
     current_period_start: string | null
     current_period_end: string | null
@@ -65,30 +62,7 @@ export type SubscriptionPayment = {
 
 // ─── Request Bodies ───────────────────────────────────────────
 
-export type CreatePlanBody = {
-    name: string
-    slug: string
-    description?: string
-    price: number
-    billing_cycle: BillingCycle
-    features?: Record<string, any>
-    max_branches?: number
-    max_staff?: number
-    max_bookings_per_month?: number
-    ai_features_enabled?: boolean
-}
-
-export type CreateSubscriptionBody = {
-    salon_id: string
-    plan_id: string
-    total_count?: number
-}
-
 export type StartTrialBody = {
     salon_id: string
     plan_id: string
-}
-
-export type CancelSubscriptionBody = {
-    cancel_at_cycle_end?: boolean
 }

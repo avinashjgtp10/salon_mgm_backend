@@ -28,6 +28,14 @@ router.get(
   templatesController.getAll
 )
 
+// GET /api/v1/templates/:id/media — the template's real header image/video/document
+router.get(
+  '/:id/media',
+  authMiddleware,
+  ownerAdminStaff, viewTemplatesOrDashboard,
+  templatesController.headerMedia
+)
+
 // GET /api/v1/templates/:id
 router.get(
   '/:id',
@@ -44,6 +52,15 @@ router.post(
   upload.single('headerFile'),
   validateCreateTemplate,
   templatesController.create
+)
+
+// POST /api/v1/templates/carousel - body + 2-10 image cards (fields card_0, card_1, ...)
+router.post(
+  '/carousel',
+  authMiddleware,
+  ownerAdminStaff, addTemplate,
+  upload.any(),
+  templatesController.createCarousel
 )
 
 // PATCH /api/v1/templates/:id/media — re-upload file, update header_media_id only

@@ -133,6 +133,26 @@ export const emailService = {
     });
   },
 
+  // Sent to the fixed approver mailbox when a super admin is about to change a
+  // salon's WhatsApp credentials (see config-otp.service.ts).
+  async sendWhatsAppConfigOtpEmail(email: string, otp: string, salonId: string) {
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to: email,
+      subject: "SalonOx - OTP to change WhatsApp credentials",
+      html: `
+        <div style="font-family: Arial, sans-serif">
+          <h2>WhatsApp credentials change</h2>
+          <p>A change to a salon's WhatsApp connection was requested in Super Admin.</p>
+          <p style="color:#666">Salon ID: ${salonId}</p>
+          <p>Your one-time code is:</p>
+          <h1 style="letter-spacing: 4px;">${otp}</h1>
+          <p>It expires in 10 minutes. If you did not request this, ignore this email and do not share the code.</p>
+        </div>
+      `,
+    });
+  },
+
   async sendPasswordResetOtpEmail(email: string, otp: string) {
     await transporter.sendMail({
       from: config.smtp.from,

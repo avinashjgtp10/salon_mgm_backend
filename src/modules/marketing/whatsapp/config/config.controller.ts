@@ -12,7 +12,11 @@ export const configController = {
     try {
       const salonId = req.user?.salonId
       if (!salonId) return res.status(400).json({ error: 'salonId missing from token' })
-      const data = await configService.getConfig(salonId)
+      // Real secrets ONLY for super admin (Super Admin > Salons > <salon>). Every
+      // salon-side user - owner included - gets them masked.
+      const reveal = req.user?.role === 'super_admin'
+      const data = await configService.getConfig(salonId, reveal)
+      res.setHeader('Cache-Control', 'no-store')
       return res.status(200).json(data)
     } catch (e) { return next(e) }
   },

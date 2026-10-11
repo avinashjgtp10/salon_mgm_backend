@@ -154,8 +154,17 @@ export const inventoryTransactionsRepository = {
     return shortfalls;
   },
 
+  // Low-stock alerts are evaluated from a SEPARATE database connection, so they can
+  // only see this change once it is committed. When this call owns its transaction
+  // (no client passed) it has committed by the time applyMovement returns, so the
+  // check runs right here. When the caller passed its OWN open transaction (the
+  // appointment-payment path), the change is still uncommitted: checking now read the
+  // OLD stock, so a consumable that had just dropped below its alert level never
+  // raised one - and nothing checked again after the commit. In that case the caller
+  // must run inventoryAlertsService.checkAndNotify(...) itself AFTER its COMMIT.
   async deduct(params: InventoryTransactionParams, client?: PoolClient): Promise<void> {
     await applyMovement(params, "deduct", client);
+    if (client) return;
     inventoryAlertsService
       .checkAndNotify(params.items.map((i) => i.product_id), params.salonId)
       .catch(() => { /* logged internally, never blocks the caller */ });
@@ -163,6 +172,7 @@ export const inventoryTransactionsRepository = {
 
   async restore(params: InventoryTransactionParams, client?: PoolClient): Promise<void> {
     await applyMovement(params, "return", client);
+    if (client) return;   // same reason as deduct(): the caller re-checks after its COMMIT
     inventoryAlertsService
       .checkAndNotify(params.items.map((i) => i.product_id), params.salonId)
       .catch(() => { /* logged internally, never blocks the caller */ });

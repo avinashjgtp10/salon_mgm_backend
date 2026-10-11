@@ -93,6 +93,146 @@ export const templatesService = {
     return t
   },
 
+  // The template's actual header image/video/document, pulled from Meta (we
+  // never keep our own copy of the upload). Tries the live media id first, then
+  // falls back to the sample Meta stored with the template.
+  async getHeaderMedia(id: string, salonId: string, card?: number): Promise<{ buffer: Buffer; mimeType: string }> {
+    const template = await templatesRepository.findById(id, salonId)
+    if (!template) throw new AppError(404, 'Template not found', 'NOT_FOUND')
+    const config = await configRepository.findBySalonId(salonId)
+    if (!config) throw new AppError(404, 'WhatsApp not configured', 'WA_NOT_CONFIGURED')
+
+    // A carousel card's image (by position) - the card media id is all we keep.
+    if (card !== undefined) {
+      const cards: any[] = (template as any).carousel ?? []
+      const mediaId = cards[card]?.header_media_id
+      if (!mediaId) throw new AppError(404, 'Card image not found', 'MEDIA_NOT_FOUND')
+      try { return await whatsappMetaApi.downloadMedia(config.access_token, mediaId) }
+      catch { throw new AppError(404, 'Header media is no longer available', 'MEDIA_NOT_FOUND') }
+    }
+
+    if (template.header_media_id) {
+      try { return await whatsappMetaApi.downloadMedia(config.access_token, template.header_media_id) } catch { /* expired — try the sample */ }
+    }
+    if (template.meta_template_id) {
+      try {
+        const sample = await whatsappMetaApi.getTemplateHeaderExample(config.access_token, template.meta_template_id)
+        if (sample) return sample
+      } catch { /* fall through */ }
+    }
+    throw new AppError(404, 'Header media is no longer available', 'MEDIA_NOT_FOUND')
+  },
+
+  // Carousel template: a message body plus 2-10 swipeable cards, each an image
+  // with a short text and up to 2 buttons. Every card must have the same buttons
+  // (same types, same count) - that is Meta's rule, enforced here before anything
+  // is uploaded.
+  async createCarousel(
+    salonId: string,
+    input: {
+      name: string; language: string; body_text: string
+      cards: Array<{ body: string; buttons: Array<{ type: string; text: string; value?: string }> }>
+    },
+    files: Express.Multer.File[]
+  ) {
+    const bad = (m: string) => new AppError(400, m, 'VALIDATION_ERROR')
+    const { name, language, body_text, cards } = input
+    if (!/^[a-z0-9_]+$/.test(name ?? '')) throw bad('name must be lowercase letters, numbers and underscores only')
+    if (!language) throw bad('language is required')
+    if (!body_text || body_text.trim().length < 10) throw bad('The message above the cards must be at least 10 characters')
+    if (body_text.length > 1024) throw bad('The message above the cards must be under 1024 characters')
+    if (!Array.isArray(cards) || cards.length < 2 || cards.length > 10) throw bad('A carousel needs between 2 and 10 cards')
+    if (files.length !== cards.length) throw bad('Every card needs an image')
+
+    const shape = cards[0].buttons.map(b => b.type).join(',')
+    cards.forEach((c, i) => {
+      const n = i + 1
+      if (!c.body?.trim()) throw bad(`Card ${n}: text is required`)
+      if (c.body.length > 160) throw bad(`Card ${n}: text is ${c.body.length} characters (max 160)`)
+      if (/\{\{\s*\d+\s*\}\}/.test(c.body)) throw bad(`Card ${n}: variables are not supported in card text`)
+      if (!c.buttons?.length || c.buttons.length > 2) throw bad(`Card ${n}: add 1 or 2 buttons`)
+      if (c.buttons.map(b => b.type).join(',') !== shape) throw bad('Every card must have the same buttons (same types, same order)')
+      c.buttons.forEach((b, j) => {
+        if (!['quick_reply', 'url', 'phone'].includes(b.type)) throw bad(`Card ${n}: button ${j + 1} has an unsupported type`)
+        if (!b.text?.trim() || b.text.length > 25) throw bad(`Card ${n}: button ${j + 1} text must be 1-25 characters`)
+        if (b.type === 'url' && !/^https:\/\/\S+\.\S+/.test(b.value ?? '')) throw bad(`Card ${n}: button ${j + 1} link must start with https://`)
+        if (b.type === 'phone' && !/^\+\d{8,15}$/.test((b.value ?? '').replace(/[\s-]/g, ''))) throw bad(`Card ${n}: button ${j + 1} phone must be in +91... format`)
+      })
+    })
+    files.forEach((f, i) => {
+      if (!['image/jpeg', 'image/png'].includes(f.mimetype)) throw bad(`Card ${i + 1}: image must be JPEG or PNG`)
+      if (f.size > 5 * 1024 * 1024) throw bad(`Card ${i + 1}: image is larger than 5 MB`)
+    })
+
+    // Fail BEFORE touching Meta if the database can't store the cards.
+    if (!(await templatesRepository.hasCarouselColumn())) {
+      throw new AppError(500, 'Carousel templates need a one-time server setup - run Migration/add_wa_templates_carousel.sql', 'CAROUSEL_NOT_MIGRATED')
+    }
+    const config = await configRepository.findBySalonId(salonId)
+    if (!config) throw new AppError(400, 'WhatsApp not configured for this salon', 'WA_NOT_CONFIGURED')
+    const appId = (config as any).app_id
+    if (!appId) throw new AppError(400, 'app_id not configured in WhatsApp settings', 'WA_NOT_CONFIGURED')
+
+    // Each card image goes to Meta twice: a "handle" Meta shows its reviewers, and
+    // a media id we send with every message.
+    const stored: Array<{ body: string; header_media_id: string; buttons: any[] }> = []
+    const metaCards: any[] = []
+    for (let i = 0; i < cards.length; i++) {
+      let handle: string, mediaId: string
+      try {
+        handle  = await uploadMediaHandle(files[i], appId, config.access_token)
+        mediaId = await uploadMediaId(files[i], config.phone_number_id, config.access_token)
+      } catch (err: any) {
+        const m = err?.response?.data?.error?.message
+        throw new AppError(400, m ? `Failed to upload card ${i + 1} image: ${m}` : `Failed to upload card ${i + 1} image.`, 'MEDIA_UPLOAD_FAILED')
+      }
+      const c = cards[i]
+      stored.push({ body: c.body.trim(), header_media_id: mediaId, buttons: c.buttons.map(b => ({ type: b.type, text: b.text.trim(), value: (b.value ?? '').trim() })) })
+      metaCards.push({
+        components: [
+          { type: 'header', format: 'image', example: { header_handle: [handle] } },
+          { type: 'body', text: c.body.trim() },
+          {
+            type: 'buttons',
+            buttons: c.buttons.map(b => {
+              if (b.type === 'quick_reply') return { type: 'quick_reply', text: b.text.trim() }
+              if (b.type === 'url')         return { type: 'url', text: b.text.trim(), url: b.value!.trim() }
+              return { type: 'phone_number', text: b.text.trim(), phone_number: b.value!.replace(/[\s-]/g, '') }
+            }),
+          },
+        ],
+      })
+    }
+
+    const bodyComponent: any = { type: 'BODY', text: body_text }
+    const examples = extractExamples(body_text)
+    if (examples.length > 0) bodyComponent.example = { body_text: [examples] }
+
+    let metaTemplateId: string | undefined
+    let status = 'PENDING'
+    try {
+      const meta = await whatsappMetaApi.submitTemplate({
+        wabaId: config.waba_id, accessToken: config.access_token,
+        name, category: 'MARKETING', language,
+        components: [bodyComponent, { type: 'carousel', cards: metaCards }],
+      })
+      metaTemplateId = meta.id
+      status = meta.status ?? 'PENDING'
+    } catch (err: any) {
+      // Unlike an ordinary template, say so: a rejected carousel submission is almost always a rule
+      // about the cards, and the reason is what the user needs to fix it.
+      const m = err?.response?.data?.error?.error_user_msg ?? err?.response?.data?.error?.message
+      throw new AppError(400, `Meta rejected the carousel: ${m ?? err.message}`, 'META_REJECTED')
+    }
+
+    const created = await templatesRepository.create(salonId, {
+      name, category: 'MARKETING', language, header_type: 'none', body_text,
+      buttons: [], meta_template_id: metaTemplateId, status,
+    } as any)
+    await templatesRepository.setCarousel(created.id, stored)
+    return { ...created, carousel: stored }
+  },
+
   async create(salonId: string, body: CreateTemplateBody, file?: Express.Multer.File) {
     const config = await configRepository.findBySalonId(salonId)
     if (!config) throw new AppError(400, 'WhatsApp not configured for this salon', 'WA_NOT_CONFIGURED')
@@ -159,6 +299,12 @@ export const templatesService = {
       }
     }
 
+    // Limited-time offer: the countdown badge. Its text is fixed here; the actual
+    // expiry timestamp is supplied on every send (see buildOfferComponents).
+    if (body.lto_text) {
+      components.push({ type: 'limited_time_offer', limited_time_offer: { text: body.lto_text, has_expiration: true } })
+    }
+
     const bodyExamples = extractExamples(body.body_text)
     const bodyComponent: any = { type: 'BODY', text: body.body_text }
     if (bodyExamples.length > 0) bodyComponent.example = { body_text: [bodyExamples] }
@@ -175,6 +321,12 @@ export const templatesService = {
           if (b.type === 'quick_reply') return { type: 'QUICK_REPLY',  text: b.text }
           if (b.type === 'url')         return { type: 'URL',          text: b.text, url: b.value }
           if (b.type === 'phone')       return { type: 'PHONE_NUMBER', text: b.text, phone_number: b.value }
+          // "Copy offer code" — `example` is only the sample Meta reviews; the
+          // real code is supplied on every send.
+          if (b.type === 'copy_code')   return { type: 'COPY_CODE',    example: b.value }
+          // Opens a published WhatsApp Flow straight from the template (value = flow id).
+          // Created only by the booking-form invitation, never from the template form.
+          if (b.type === 'flow')        return { type: 'FLOW', text: b.text, flow_id: b.value, flow_action: 'navigate', navigate_screen: 'BOOKING' }
           return null
         }).filter(Boolean),
       })

@@ -18,9 +18,12 @@ export type RegisterBody = {
 
 // LOGIN
 
+export type ClientType = "web" | "mobile";
+
 export type LoginBody = {
   email: string;
   password: string;
+  clientType?: ClientType; // defaults to "web"
 };
 
 

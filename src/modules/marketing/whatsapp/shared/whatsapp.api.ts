@@ -120,6 +120,48 @@ export const whatsappMetaApi = {
     return res.data.id
   },
 
+  // Free-form media message (image / video / audio / document) from a media id
+  // returned by uploadMedia. Like any non-template message it is only
+  // deliverable inside the 24h service window.
+  async sendMediaMessage(params: {
+    phoneNumberId: string
+    accessToken:   string
+    to:            string
+    type:          'image' | 'video' | 'audio' | 'document'
+    mediaId:       string
+    caption?:      string
+    filename?:     string
+  }) {
+    const media: Record<string, any> = { id: params.mediaId }
+    if (params.caption && params.type !== 'audio')   media.caption  = params.caption
+    if (params.filename && params.type === 'document') media.filename = params.filename
+    const res = await http.post(
+      `${WA_BASE_URL}/${WA_API_VERSION}/${params.phoneNumberId}/messages`,
+      { messaging_product: 'whatsapp', recipient_type: 'individual', to: params.to, type: params.type, [params.type]: media },
+      { headers: { Authorization: `Bearer ${params.accessToken}`, 'Content-Type': 'application/json' } }
+    )
+    return res.data
+  },
+
+  // Emoji reaction to a message (pass emoji '' to remove ours).
+  async sendReaction(params: {
+    phoneNumberId: string
+    accessToken:   string
+    to:            string
+    messageId:     string
+    emoji:         string
+  }) {
+    const res = await http.post(
+      `${WA_BASE_URL}/${WA_API_VERSION}/${params.phoneNumberId}/messages`,
+      {
+        messaging_product: 'whatsapp', recipient_type: 'individual', to: params.to, type: 'reaction',
+        reaction: { message_id: params.messageId, emoji: params.emoji },
+      },
+      { headers: { Authorization: `Bearer ${params.accessToken}`, 'Content-Type': 'application/json' } }
+    )
+    return res.data
+  },
+
   // Freeform document message — only deliverable within 24h of the customer's
   // last inbound message (Meta's "service window"). Outside that window this
   // requires a pre-approved media-header template instead; the caller should
@@ -281,6 +323,126 @@ async verifyAccessToken(params: {
       { headers: { Authorization: `Bearer ${accessToken}` }, params: { fields: 'id,name,status,category,quality_score,rejected_reason' } }
     )
     return res.data
+  },
+
+  // Creates (and optionally publishes) a WhatsApp Flow under the WABA. Meta
+  // returns { id, success, validation_errors? } - a flow with validation errors
+  // is left as a draft, so the caller must check validation_errors.
+  async createFlow(params: {
+    wabaId:      string
+    accessToken: string
+    name:        string
+    flowJson:    object
+    publish:     boolean
+    categories?: string[]
+  }) {
+    const res = await http.post(
+      `${WA_BASE_URL}/${WA_API_VERSION}/${params.wabaId}/flows`,
+      {
+        name:       params.name,
+        categories: params.categories ?? ['APPOINTMENT_BOOKING'],
+        flow_json:  JSON.stringify(params.flowJson),
+        publish:    params.publish,
+      },
+      { headers: { Authorization: `Bearer ${params.accessToken}`, 'Content-Type': 'application/json' } }
+    )
+    return res.data
+  },
+
+  // Sends a published Flow as an interactive message - only deliverable inside
+  // the 24h service window, like any non-template message.
+  async sendFlowMessage(params: {
+    phoneNumberId: string
+    accessToken:   string
+    to:            string
+    flowId:        string
+    flowToken:     string
+    screen:        string
+    bodyText:      string
+    buttonText:    string
+  }) {
+    const res = await http.post(
+      `${WA_BASE_URL}/${WA_API_VERSION}/${params.phoneNumberId}/messages`,
+      {
+        messaging_product: 'whatsapp',
+        recipient_type:    'individual',
+        to:                params.to,
+        type:              'interactive',
+        interactive: {
+          type: 'flow',
+          body: { text: params.bodyText },
+          action: {
+            name: 'flow',
+            parameters: {
+              flow_message_version: '3',
+              flow_token:           params.flowToken,
+              flow_id:              params.flowId,
+              flow_cta:             params.buttonText,
+              flow_action:          'navigate',
+              flow_action_payload:  { screen: params.screen },
+            },
+          },
+        },
+      },
+      { headers: { Authorization: `Bearer ${params.accessToken}`, 'Content-Type': 'application/json' } }
+    )
+    return res.data
+  },
+
+  // Downloads a media object by its Meta media id (two hops: id → short-lived
+  // url, then the bytes — both need the bearer token). Meta keeps an uploaded
+  // media id for ~30 days, after which this 404s.
+  // Marks a customer message as read on WhatsApp (blue ticks on their phone —
+  // Meta treats everything up to this message as read). With typing:true it also
+  // shows "typing…" on their side for up to 25s or until we send something.
+  async markAsRead(params: {
+    phoneNumberId: string
+    accessToken:   string
+    messageId:     string
+    typing?:       boolean
+  }) {
+    const payload: any = { messaging_product: 'whatsapp', status: 'read', message_id: params.messageId }
+    if (params.typing) payload.typing_indicator = { type: 'text' }
+    const res = await http.post(
+      `${WA_BASE_URL}/${WA_API_VERSION}/${params.phoneNumberId}/messages`,
+      payload,
+      { headers: { Authorization: `Bearer ${params.accessToken}`, 'Content-Type': 'application/json' } }
+    )
+    return res.data
+  },
+
+  async downloadMedia(accessToken: string, mediaId: string): Promise<{ buffer: Buffer; mimeType: string }> {
+    const meta = await http.get(
+      `${WA_BASE_URL}/${WA_API_VERSION}/${mediaId}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    )
+    const url: string | undefined = meta.data?.url
+    if (!url) throw new Error('Meta returned no media url')
+    const file = await http.get(url, {
+      headers:      { Authorization: `Bearer ${accessToken}` },
+      responseType: 'arraybuffer',
+    })
+    return {
+      buffer:   Buffer.from(file.data),
+      mimeType: meta.data?.mime_type ?? file.headers?.['content-type'] ?? 'application/octet-stream',
+    }
+  },
+
+  // The sample file a template was submitted with — lives on Meta for as long
+  // as the template does, so it outlives the 30-day media id above.
+  async getTemplateHeaderExample(accessToken: string, metaTemplateId: string): Promise<{ buffer: Buffer; mimeType: string } | null> {
+    const res = await http.get(
+      `${WA_BASE_URL}/${WA_API_VERSION}/${metaTemplateId}`,
+      { headers: { Authorization: `Bearer ${accessToken}` }, params: { fields: 'components' } }
+    )
+    const header = (res.data?.components ?? []).find((c: any) => c.type === 'HEADER')
+    const exampleUrl: string | undefined = header?.example?.header_handle?.[0]
+    if (!exampleUrl) return null
+    const file = await http.get(exampleUrl, { responseType: 'arraybuffer' })
+    return {
+      buffer:   Buffer.from(file.data),
+      mimeType: String(file.headers?.['content-type'] ?? 'application/octet-stream'),
+    }
   },
 
   async testConnection(phoneNumberId: string, accessToken: string) {

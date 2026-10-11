@@ -588,24 +588,28 @@ export const appointmentsService = {
         // reused below for WhatsApp automation, rather than querying twice.
         const full = appointment.client_id ? await appointmentsRepository.findById(appointment.id) : null;
 
-        // Fire notification (fire-and-forget)
-        notificationsService.create({
-            salon_id: appointment.salon_id,
-            type:     "appointment",
-            reference_id: appointment.id,
-            title:    "New Appointment Booked",
-            body:     `${full?.client_name ?? "Walk-in"} — ${formatDate(appointment.scheduled_at)} at ${formatTime(appointment.scheduled_at)}`,
-            event_key: "newAppointment",
-            scheduled_at: appointment.scheduled_at,
-        }).catch((err: any) => {
-            logger.error("New appointment notification failed", {
-                appointmentId: appointment.id,
-                salonId: appointment.salon_id,
-                message: err?.message,
-                stack: err?.stack,
-                error: err,
+        // Fire notification (fire-and-forget). Skipped for Quick Sale: it books
+        // and checks out in one step, so nothing was "booked" for later and the
+        // checkout's "Payment Complete" notification is the only one wanted.
+        if (body.source !== "quick_sale") {
+            notificationsService.create({
+                salon_id: appointment.salon_id,
+                type:     "appointment",
+                reference_id: appointment.id,
+                title:    "New Appointment Booked",
+                body:     `${full?.client_name ?? "Walk-in"} — ${formatDate(appointment.scheduled_at)} at ${formatTime(appointment.scheduled_at)}`,
+                event_key: "newAppointment",
+                scheduled_at: appointment.scheduled_at,
+            }).catch((err: any) => {
+                logger.error("New appointment notification failed", {
+                    appointmentId: appointment.id,
+                    salonId: appointment.salon_id,
+                    message: err?.message,
+                    stack: err?.stack,
+                    error: err,
+                });
             });
-        });
+        }
 
         // ── WhatsApp Automation: Appointment Confirmation ─────────────────────
         // Calendar only — a Quick Sale appointment is booked and paid in the
@@ -1564,6 +1568,7 @@ export const appointmentsService = {
             notificationsService.create({
                 salon_id: existing.salon_id,
                 type:     "payment",
+                appointment_id: existing.id,
                 title:    "Payment Complete",
                 body:     `${existing.client_name ?? "Walk-in"} — ₹${preExistingSale.total_amount ?? 0}`,
                 event_key: "newPayment",
@@ -1828,6 +1833,7 @@ export const appointmentsService = {
         notificationsService.create({
             salon_id: existing.salon_id,
             type:     "payment",
+                appointment_id: existing.id,
             title:    "Payment Complete",
             body:     `${existing.client_name ?? "Walk-in"} — ₹${sale.total_amount ?? 0}`,
             event_key: "newPayment",

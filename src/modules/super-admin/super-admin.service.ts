@@ -95,8 +95,15 @@ export const superAdminService = {
 
   // ── SALONS ────────────────────────────────────────────────────────────────────
 
-  async getAllSalons(search?: string) {
-    return superAdminRepository.getAllSalons(search);
+  async getAllSalons(search?: string, kind?: "real" | "dummy") {
+    return superAdminRepository.getAllSalons(search, kind);
+  },
+
+  // Moves a salon between the Real and Dummy lists.
+  async setSalonDummy(id: string, isDummy: boolean) {
+    const result = await superAdminRepository.setSalonDummy(id, isDummy);
+    if (!result) throw new AppError(404, "Salon not found", "NOT_FOUND");
+    return result;
   },
 
   async getSalonStaff(salonId: string) {
@@ -404,7 +411,7 @@ export const superAdminService = {
 
   // ── USERS ─────────────────────────────────────────────────────────────────────
 
-  async createUser(data: { first_name: string; last_name?: string; email: string; password: string; phone?: string; role: string; business_name?: string; address?: string }, createdByUserId?: string) {
+  async createUser(data: { first_name: string; last_name?: string; email: string; password: string; phone?: string; role: string; business_name?: string; address?: string; is_dummy?: boolean }, createdByUserId?: string) {
     const allowed = ["salon_owner", "admin", "staff", "client", "branch_owner"];
     if (!allowed.includes(data.role)) throw new AppError(400, "Invalid role", "VALIDATION_ERROR");
     if (!data.email?.trim()) throw new AppError(400, "Email is required", "VALIDATION_ERROR");
@@ -422,6 +429,7 @@ export const superAdminService = {
       role: data.role,
       business_name: data.business_name?.trim(),
       address: data.address?.trim(),
+      is_dummy: data.is_dummy === true,
       createdByUserId: createdByUserId?.trim() || undefined,
     });
 
