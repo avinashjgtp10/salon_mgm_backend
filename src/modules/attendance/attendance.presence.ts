@@ -8,7 +8,8 @@ import type { Attendance, StaffPresenceState } from "./attendance.types";
 // a bill was completed, which stamps check_out with the appointment's END time
 // — so a stylist who punched in and just finished a service would otherwise
 // read as "checked out" mid-shift. Only a real punch-out counts as one.
-export function presenceState(row: Pick<Attendance, "check_in" | "check_out" | "source"> | undefined): StaffPresenceState {
+export function presenceState(row: Pick<Attendance, "check_in" | "check_out" | "source" | "current_status"> | undefined): StaffPresenceState {
+    if (row?.current_status === "ON_BREAK") return "on_break";
     if (!row?.check_in) return "not_checked_in";
     if (row.check_out && row.source !== "appointment") return "checked_out";
     return "checked_in";

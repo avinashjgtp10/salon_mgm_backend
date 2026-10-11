@@ -49,7 +49,29 @@ export const templatesRepository = {
       body.header_media_id  ?? null,
       body.status           ?? 'PENDING',
     ])
-    return rows[0]
+    const created: WATemplate = rows[0]
+
+    // lto_text lives in its own column (Migration/add_wa_template_lto.sql). It is
+    // written in a SEPARATE statement, and only when an offer badge was actually
+    // asked for, so every ordinary template keeps working on a database that
+    // has not had that migration run yet.
+    if (body.lto_text) {
+      await pool.query(`UPDATE wa_templates SET lto_text = $1 WHERE id = $2`, [body.lto_text, created.id])
+      created.lto_text = body.lto_text
+    }
+    return created
+  },
+
+  // carousel column comes from Migration/add_wa_templates_carousel.sql
+  async hasCarouselColumn(): Promise<boolean> {
+    const { rows } = await pool.query(
+      `SELECT 1 FROM information_schema.columns WHERE table_name = 'wa_templates' AND column_name = 'carousel' LIMIT 1`
+    )
+    return rows.length > 0
+  },
+
+  async setCarousel(id: string, cards: unknown[]): Promise<void> {
+    await pool.query(`UPDATE wa_templates SET carousel = $1::jsonb WHERE id = $2`, [JSON.stringify(cards), id])
   },
 
   async updateStatus(

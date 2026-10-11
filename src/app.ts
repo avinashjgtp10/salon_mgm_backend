@@ -34,11 +34,15 @@ import spotlightRoutes from "./modules/spotlight/spotlight.routes";
 import billingRoutes from "./modules/billing/billing.routes";
 import pricingRoutes from "./modules/pricing/pricing.routes";
 import subscriptionsRoutes from "./modules/subscriptions/subscriptions.routes";
+import planPaymentsRoutes from "./modules/plan-payments/plan-payments.routes";
+import { planPaymentsController } from "./modules/plan-payments/plan-payments.controller";
 import marketingDashboardRoutes from './modules/marketing/whatsapp/dashboard/dashboard.routes'
 import marketingTemplatesRoutes from './modules/marketing/whatsapp/templates/templates.routes'
 import marketingCampaignsRoutes from './modules/marketing/whatsapp/campaigns/campaigns.routes'
 import marketingConfigRoutes from './modules/marketing/whatsapp/config/config.routes'
 import marketingWebhooksRoutes from './modules/marketing/whatsapp/webhooks/webhooks.routes'
+import marketingFlowsRoutes from './modules/marketing/whatsapp/flows/flows.routes'
+import marketingInsightsRoutes from './modules/marketing/whatsapp/insights/insights.routes'
 import profileRoutes from "./modules/profile/profile.routes";
 import inboxRouter from './modules/marketing/whatsapp/inbox/inbox.routes';
 import salonDashboardRoutes from "./modules/salon-dashboard/salon-dashboard.routes";
@@ -52,7 +56,6 @@ import settingsRoutes from "./modules/settings/settings.routes";
 import reportsRoutes from "./modules/reports/reports.routes";
 import legacyReportsRoutes from "./modules/reports/legacyReports.routes";
 import blockedTimesRoutes from "./modules/blocked_times/blocked_times.routes";
-import analyticsRoutes from './modules/marketing/whatsapp/analytics/analytics.routes'
 import reviewsRoutes from './modules/reviews/reviews.routes'
 import reviewsPublicRoutes from './modules/reviews/reviews.public.routes'
 import botRoutes from "./modules/bot/bot.routes";
@@ -174,6 +177,15 @@ app.use(corsMiddleware);
 // have their raw text body consumed by the global urlencoded parser.
 app.use("/iclock", admsRouter);
 
+// Razorpay webhook — mounted BEFORE the JSON body parser on purpose: the
+// signature is computed over the exact bytes Razorpay sent, so this route
+// needs the raw Buffer, not a parsed-and-re-serialised object.
+app.post(
+  "/api/v1/plan-payments/webhook",
+  express.raw({ type: "*/*", limit: "1mb" }),
+  planPaymentsController.webhook
+);
+
 // Body parsing middleware
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
@@ -263,6 +275,7 @@ app.use("/api/v1/oauth", authRoutes);
 app.use("/api/v1/billing", billingRoutes);
 app.use("/api/v1/pricing", pricingRoutes);
 app.use("/api/v1/subscriptions", subscriptionsRoutes);
+app.use("/api/v1/plan-payments", planPaymentsRoutes);
 app.use("/api/v1/webhooks", marketingWebhooksRoutes);
 // Alias: some Meta app webhook configs point at a bare "/webhook" path. Accept
 // it too so inbound messages/verification work regardless of which callback URL
@@ -302,10 +315,11 @@ app.use("/api/v1/inventory", inventoryRoutes);
 app.use("/api/v1/spotlight", spotlightRoutes);
 //app.use('/api/v1//dashboard', marketingDashboardRoutes)
 app.use('/api/v1/marketing/dashboard', marketingDashboardRoutes);
-app.use('/api/v1/marketing/analytics', analyticsRoutes)
 app.use('/api/v1/templates', marketingTemplatesRoutes)
 app.use('/api/v1/campaigns', marketingCampaignsRoutes)
 app.use('/api/v1/wa-config', marketingConfigRoutes)
+app.use('/api/v1/wa-flows', marketingFlowsRoutes)
+app.use('/api/v1/wa-insights', marketingInsightsRoutes)
 app.use('/api/v1/reviews', reviewsRoutes)
 // PUBLIC — client-facing feedback form, deep-linked from the review_request
 // WhatsApp button, no login.

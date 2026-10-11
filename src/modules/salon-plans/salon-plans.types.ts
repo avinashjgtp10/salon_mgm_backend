@@ -21,15 +21,31 @@ export type SalonPlanDefinition = {
     default_appointment_limit: number | null;
     default_branch_limit: number | null;
     default_storage_limit_gb: number | null;
-    // subscription_plans.id this tier is linked to for real checkout (see
-    // Migration/add_razorpay_link_to_salon_plans.sql) — null until a super
-    // admin runs the "sync to Razorpay" action for this tier. The frontend
-    // treats null as "no live checkout yet, show Contact support instead".
-    linked_subscription_plan_id: string | null;
     updated_by: string | null;
     created_at: string;
     updated_at: string;
 };
+
+// GST charged on top of every listed plan price (India). Single source for
+// checkout totals and invoice rows.
+export const GST_RATE_PERCENT = 18;
+
+export type BillingCycle = "monthly" | "quarterly" | "annual";
+export const BILLING_CYCLES: BillingCycle[] = ["monthly", "quarterly", "annual"];
+export const BILLING_CYCLE_LABEL: Record<BillingCycle, string> = {
+    monthly: "Monthly Plan",
+    quarterly: "Quarterly Plan",
+    annual: "Annual Plan",
+};
+
+// Listed price per billing cycle, EXCLUDING GST. Numeric columns come back
+// from pg as strings; null = that cycle isn't priced (e.g. the prices
+// migration hasn't been run yet).
+export type PlanPrices = Record<BillingCycle, string | null>;
+
+export type SalonPlanDefinitionWithPrices = SalonPlanDefinition & { prices: PlanPrices };
+
+export type UpdatePlanPricesBody = Partial<Record<BillingCycle, number>>;
 
 export type UpdatePlanDefinitionBody = {
     name?: string;
@@ -81,13 +97,6 @@ export type UpsertSalonCustomizationBody = {
 };
 
 export type SalonPlanInvoiceStatus = "paid" | "open" | "pending" | "overdue" | "failed" | "void";
-
-export type BillingCycle = "monthly" | "quarterly" | "annual";
-export const BILLING_CYCLE_LABEL: Record<BillingCycle, string> = {
-    monthly: "Monthly Plan",
-    quarterly: "Quarterly Plan",
-    annual: "Annual Plan",
-};
 
 export type SalonPlanInvoice = {
     id: string;

@@ -3,61 +3,11 @@ import {
     SubscriptionPlan,
     Subscription,
     SubscriptionPayment,
-    CreatePlanBody,
-    SubscriptionStatus,
 } from "./subscriptions.types"
 
 export const subscriptionsRepository = {
 
     // ─── Plans ──────────────────────────────────────────────────
-
-    async createPlan(data: CreatePlanBody & {
-        razorpay_plan_id: string
-    }): Promise<SubscriptionPlan> {
-        const { rows } = await pool.query(
-            `INSERT INTO subscription_plans (
-        name, slug, description, price, billing_cycle,
-        features, max_branches, max_staff,
-        max_bookings_per_month, ai_features_enabled,
-        razorpay_plan_id, is_active
-      )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,true)
-      RETURNING *`,
-            [
-                data.name,
-                data.slug,
-                data.description ?? null,
-                data.price,
-                data.billing_cycle,
-                data.features ? JSON.stringify(data.features) : null,
-                data.max_branches ?? null,
-                data.max_staff ?? null,
-                data.max_bookings_per_month ?? null,
-                data.ai_features_enabled ?? false,
-                data.razorpay_plan_id,
-            ]
-        )
-        return rows[0]
-    },
-
-    // Re-points an existing plan row at a fresh Razorpay plan (Razorpay plans
-    // are immutable, so a price change needs a new Razorpay plan object) while
-    // keeping the same subscription_plans.id — no extra rows per price edit.
-    async updatePlanPricing(id: string, data: {
-        name: string
-        description?: string | null
-        price: number
-        razorpay_plan_id: string
-    }): Promise<SubscriptionPlan | null> {
-        const { rows } = await pool.query(
-            `UPDATE subscription_plans
-       SET name = $2, description = $3, price = $4, razorpay_plan_id = $5, is_active = true
-       WHERE id = $1
-       RETURNING *`,
-            [id, data.name, data.description ?? null, data.price, data.razorpay_plan_id]
-        )
-        return rows[0] || null
-    },
 
     async listPlans(): Promise<SubscriptionPlan[]> {
         const { rows } = await pool.query(
@@ -76,32 +26,6 @@ export const subscriptionsRepository = {
     },
 
     // ─── Subscriptions ──────────────────────────────────────────
-
-    async createSubscription(data: {
-        salon_id: string
-        plan_id: string
-        razorpay_subscription_id: string
-        razorpay_plan_id: string
-        status: SubscriptionStatus
-    }): Promise<Subscription> {
-        const { rows } = await pool.query(
-            `INSERT INTO subscriptions (
-        salon_id, plan_id,
-        razorpay_subscription_id, razorpay_plan_id,
-        status, is_trial
-      )
-      VALUES ($1,$2,$3,$4,$5,false)
-      RETURNING *`,
-            [
-                data.salon_id,
-                data.plan_id,
-                data.razorpay_subscription_id,
-                data.razorpay_plan_id,
-                data.status,
-            ]
-        )
-        return rows[0]
-    },
 
     async startTrial(data: {
         salon_id: string
@@ -132,14 +56,6 @@ export const subscriptionsRepository = {
     async findSubscriptionById(id: string): Promise<Subscription | null> {
         const { rows } = await pool.query(
             `SELECT * FROM subscriptions WHERE id = $1`, [id]
-        )
-        return rows[0] || null
-    },
-
-    async findByRazorpayId(razorpaySubId: string): Promise<Subscription | null> {
-        const { rows } = await pool.query(
-            `SELECT * FROM subscriptions
-       WHERE razorpay_subscription_id = $1`, [razorpaySubId]
         )
         return rows[0] || null
     },
@@ -210,9 +126,8 @@ export const subscriptionsRepository = {
     },
 
     // Super-admin manual comp/override for an account with NO existing
-    // subscription row at all — creates one directly, bypassing Razorpay
-    // entirely (razorpay_subscription_id/razorpay_plan_id stay NULL, which
-    // every consumer of those fields already null-guards against). Needs
+    // subscription row at all — creates one directly (the legacy
+    // razorpay_subscription_id/razorpay_plan_id columns stay NULL). Needs
     // SOME plan_id (subscriptions.plan_id is NOT NULL, FK'd to
     // subscription_plans) — caller passes whichever plan it picked;
     // current_period_end is exactly `days` from now, nothing more.
@@ -223,10 +138,10 @@ export const subscriptionsRepository = {
     }): Promise<Subscription> {
         const { rows } = await pool.query(
             `INSERT INTO subscriptions (
-                salon_id, plan_id, razorpay_subscription_id, razorpay_plan_id,
+                salon_id, plan_id,
                 status, is_trial, current_period_start, current_period_end
             )
-            VALUES ($1, $2, NULL, NULL, 'active', false, NOW(), NOW() + ($3 || ' days')::interval)
+            VALUES ($1, $2, 'active', false, NOW(), NOW() + ($3 || ' days')::interval)
             RETURNING *`,
             [data.salon_id, data.plan_id, data.days]
         )
@@ -263,18 +178,17 @@ export const subscriptionsRepository = {
     }): Promise<Subscription> {
         const { rows } = await pool.query(
             `INSERT INTO subscriptions (
-                salon_id, plan_id, razorpay_subscription_id, razorpay_plan_id,
+                salon_id, plan_id,
                 status, is_trial, current_period_start, current_period_end
             )
-            VALUES ($1, $2, NULL, NULL, 'active', false, $3, $4)
+            VALUES ($1, $2, 'active', false, $3, $4)
             RETURNING *`,
             [data.salon_id, data.plan_id, data.start_date, data.end_date]
         )
         return rows[0]
     },
 
-    // Super-admin "Remove Subscription" — immediately deactivates, same
-    // shape as the Razorpay webhook cancellation path (subscriptions.service.ts).
+    // Super-admin "Remove Subscription" — immediately deactivates.
     // billingSlice's fetchSubscriptionStatusThunk treats the salon as active
     // if ANY of its subscription rows is 'active' or 'trialing' (not just
     // the most recent) — so removing a subscription must deactivate every
@@ -295,32 +209,6 @@ export const subscriptionsRepository = {
             [salonId]
         )
         return rows
-    },
-
-    async updateSubscriptionStatus(
-        razorpaySubId: string,
-        status: SubscriptionStatus,
-        extra: Record<string, unknown> = {}
-    ): Promise<Subscription> {
-        const extraKeys = Object.keys(extra)
-        const setParts = [`status = $1`, `updated_at = NOW()`]
-        const values: unknown[] = [status]
-
-        extraKeys.forEach((k, i) => {
-            setParts.push(`${k} = $${i + 2}`)
-            values.push(extra[k])
-        })
-
-        values.push(razorpaySubId)
-
-        const { rows } = await pool.query(
-            `UPDATE subscriptions
-       SET ${setParts.join(", ")}
-       WHERE razorpay_subscription_id = $${values.length}
-       RETURNING *`,
-            values
-        )
-        return rows[0]
     },
 
     // ─── Payments ───────────────────────────────────────────────

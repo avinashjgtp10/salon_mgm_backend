@@ -84,6 +84,9 @@ export const appointmentsRepository = {
                 -- (paid or not), which diverged from Sales Summary/reports
                 -- (both read sales.invoice_number directly).
                 (SELECT s.invoice_number FROM sales s WHERE s.appointment_id = a.id LIMIT 1) AS invoice_number,
+                -- A pending bill saved from the mobile staff Calendar Quick Sale
+                -- is a draft sale linked here; the app reopens it to take payment.
+                (SELECT s.id FROM sales s WHERE s.appointment_id = a.id AND s.status = 'draft' AND s.deleted_at IS NULL LIMIT 1) AS pending_sale_id,
                 -- Coupon discount/code only ever land on the linked sale (set at
                 -- actual payment time — see payments.service.ts/sales.repository.ts),
                 -- never copied back onto the appointment row itself. Without these,
@@ -245,6 +248,8 @@ export const appointmentsRepository = {
                -- from the linked sale's own sequential number, not an
                -- appointment-count, so it matches Sales Summary/reports.
                (SELECT s.invoice_number FROM sales s WHERE s.appointment_id = a.id LIMIT 1) AS invoice_number,
+               -- See findById()'s identical comment.
+               (SELECT s.id FROM sales s WHERE s.appointment_id = a.id AND s.status = 'draft' AND s.deleted_at IS NULL LIMIT 1) AS pending_sale_id,
                -- See findById()'s identical comment — coupon discount/code only
                -- ever land on the linked sale, never the appointment row itself.
                (SELECT s.coupon_discount_amount FROM sales s WHERE s.appointment_id = a.id LIMIT 1) AS coupon_discount_amount,

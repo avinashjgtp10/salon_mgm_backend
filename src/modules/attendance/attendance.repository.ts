@@ -1,3 +1,4 @@
+import { attendanceActivity } from "./attendance.activity";
 import pool, { safeQuery } from "../../config/database";
 import {
     Attendance,
@@ -23,6 +24,28 @@ function deserializeSettings(row: any): AttendanceSettings {
     return row;
 }
 
+// pg parses a DATE column into a JS Date at *local* midnight; serialised to JSON
+// that becomes the previous day in UTC (IST midnight = 18:30Z the day before),
+// so every consumer that did slice(0,10) showed the wrong date. Normalise to the
+// plain calendar day using the same local fields pg used to build the Date.
+function toDateOnly(value: unknown): string {
+    if (value instanceof Date && !isNaN(value.getTime())) {
+        const p = (n: number) => String(n).padStart(2, "0");
+        return `${value.getFullYear()}-${p(value.getMonth() + 1)}-${p(value.getDate())}`;
+    }
+    return typeof value === "string" ? value.slice(0, 10) : (value as any);
+}
+
+async function withActivity<T extends Attendance>(rows: T[]): Promise<T[]> {
+    if (!rows.length) return rows;
+    const result = await pool.query("SELECT * FROM attendance_breaks WHERE attendance_id = ANY($1::uuid[]) ORDER BY actual_start", [rows.map(row => row.id)]);
+    const now = new Date();
+    return rows.map(row => {
+      const activity = attendanceActivity(row, result.rows.filter(item => item.attendance_id === row.id), now);
+      return { ...row, ...activity, date: toDateOnly(row.date), hours_worked: row.check_in ? Number((activity.total_worked_seconds / 3600).toFixed(2)) : row.hours_worked };
+    });
+}
+
 export const attendanceRepository = {
 
     // ── Settings ──────────────────────────────────────────────────────────────
@@ -39,6 +62,19 @@ export const attendanceRepository = {
     // never take them down: a database that hasn't run
     // add_attendance_checkin_visibility.sql yet (no column, or no
     // attendance_settings table at all) simply means the feature is off.
+    // Open breaks (no actual_end yet) on the given day: when each started and when the
+    // staff member said they would be back.
+    async findActiveBreaks(salonId: string, date: string): Promise<{ staff_id: string; since: string; until: string }[]> {
+        const { rows } = await pool.query(
+            `SELECT a.staff_id, b.actual_start AS since, b.planned_end AS until
+             FROM attendance_breaks b
+             JOIN attendance a ON a.id = b.attendance_id
+             WHERE a.salon_id = $1 AND a.date = $2::date AND b.actual_end IS NULL`,
+            [salonId, date]
+        );
+        return rows.map((r: any) => ({ staff_id: String(r.staff_id), since: new Date(r.since).toISOString(), until: new Date(r.until).toISOString() }));
+    },
+
     async isCheckinVisibilityEnabled(salonId: string): Promise<boolean> {
         try {
             const { rows } = await pool.query(
@@ -85,7 +121,7 @@ export const attendanceRepository = {
              WHERE a.staff_id = $1 AND a.date = $2::date`,
             [staffId, date]
         );
-        return rows[0] || null;
+        return rows[0] ? (await withActivity(rows))[0] : null;
     },
 
     // ── Single staff, date range (for Staff History Attendance tab / Timeline) ──
@@ -119,7 +155,7 @@ export const attendanceRepository = {
             values
         ));
         const total = rows.length ? Number(rows[0].total_count) : 0;
-        const items = rows.map(({ total_count, ...r }) => r);
+        const items = await withActivity(rows.map(({ total_count, ...r }) => r));
         const effectiveLimit = limit ?? Math.max(total, 1);
         return { items, pagination: { total, page, limit: effectiveLimit, total_pages: Math.max(1, Math.ceil(total / effectiveLimit)) } };
     },
@@ -134,7 +170,7 @@ export const attendanceRepository = {
              WHERE a.id = $1`,
             [id]
         );
-        return rows[0] || null;
+        return rows[0] ? (await withActivity(rows))[0] : null;
     },
 
     // ── Today view ───────────────────────────────────────────────────────────
@@ -150,7 +186,7 @@ export const attendanceRepository = {
              ORDER BY st.first_name ASC`,
             [salonId, date]
         ));
-        return rows;
+        return withActivity(rows);
     },
 
     // ── Monthly view ─────────────────────────────────────────────────────────
@@ -168,7 +204,7 @@ export const attendanceRepository = {
              ORDER BY st.first_name ASC, a.date ASC`,
             [salonId, startDate]
         );
-        return rows;
+        return withActivity(rows);
     },
 
     // ── Date-range view ──────────────────────────────────────────────────────
@@ -185,7 +221,7 @@ export const attendanceRepository = {
              ORDER BY st.first_name ASC, a.date ASC`,
             [salonId, startDate, endDate]
         );
-        return rows;
+        return withActivity(rows);
     },
 
     // ── Upsert check-in ──────────────────────────────────────────────────────
@@ -370,6 +406,7 @@ export const attendanceRepository = {
         const startDate = `${year}-${String(month).padStart(2, "0")}-01`;
         const { rows } = await pool.query(
             `SELECT a.*,
+                    COALESCE((SELECT SUM(EXTRACT(EPOCH FROM (COALESCE(b.actual_end, a.check_out, NOW()) - b.actual_start))) FROM attendance_breaks b WHERE b.attendance_id = a.id), 0) AS break_seconds,
                     TRIM(CONCAT(st.first_name, ' ', COALESCE(st.last_name, ''))) AS staff_name,
                     COALESCE(st.designation, '') AS staff_role
              FROM attendance a
@@ -379,7 +416,7 @@ export const attendanceRepository = {
              ORDER BY st.first_name ASC, a.date ASC`,
             [salonId, startDate]
         );
-        return rows;
+        return rows.map((r: any) => ({ ...r, date: toDateOnly(r.date) }));
     },
 
     // ── Scheduled hours from shift (for today view) ───────────────────────────

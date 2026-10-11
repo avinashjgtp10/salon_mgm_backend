@@ -75,7 +75,8 @@ export const superAdminController = {
   async getAllSalons(req: Request, res: Response, next: NextFunction) {
     try {
       const search = typeof req.query.search === "string" ? req.query.search : undefined;
-      const data = await superAdminService.getAllSalons(search);
+      const kind = req.query.kind === "dummy" ? "dummy" : req.query.kind === "real" ? "real" : undefined;
+      const data = await superAdminService.getAllSalons(search, kind);
       return res.json({ success: true, data });
     } catch (err) { return next(err); }
   },
@@ -84,6 +85,18 @@ export const superAdminController = {
     try {
       const id = String(req.params.id);
       const data = await superAdminService.getSalonStaff(id);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
+  async setSalonDummy(req: Request, res: Response, next: NextFunction) {
+    try {
+      const id = String(req.params.id);
+      const { is_dummy } = req.body;
+      if (typeof is_dummy !== "boolean") {
+        return res.status(400).json({ success: false, error: { message: "is_dummy (boolean) required" } });
+      }
+      const data = await superAdminService.setSalonDummy(id, is_dummy);
       return res.json({ success: true, data });
     } catch (err) { return next(err); }
   },
@@ -273,9 +286,9 @@ export const superAdminController = {
 
   async createUser(req: Request & { user?: { userId: string } }, res: Response, next: NextFunction) {
     try {
-      const { first_name, last_name, email, password, phone, role, business_name, address } = req.body;
+      const { first_name, last_name, email, password, phone, role, business_name, address, is_dummy } = req.body;
       const createdByUserId = req.user?.userId ?? "";
-      const data = await superAdminService.createUser({ first_name, last_name, email, password, phone, role, business_name, address }, createdByUserId);
+      const data = await superAdminService.createUser({ first_name, last_name, email, password, phone, role, business_name, address, is_dummy: is_dummy === true }, createdByUserId);
       return res.status(201).json({ success: true, data });
     } catch (err) { return next(err); }
   },

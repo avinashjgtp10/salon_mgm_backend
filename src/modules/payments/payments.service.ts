@@ -13,13 +13,14 @@ import { referralRepository } from '../referral/referral.repository';
 import { CreatePaymentBody, Payment } from './payments.types';
 import type { Appointment, AppointmentServiceConsumableRecord } from '../appointments/appointments.types';
 import { appointmentConsumablesService } from '../inventory/inventory.service';
+import { inventoryAlertsService } from '../inventory/inventory-alerts.service';
 import logger from '../../config/logger';
 import { sendPurchaseReceipt } from '../sales/receipt-send.helper';
 import { whatsappAutomationService } from '../whatsapp-automation/whatsapp-automation.service';
 import { whatsappAutomationRepository } from '../whatsapp-automation/whatsapp-automation.repository';
 import { salonsRepository } from '../salons/salons.repository';
 import { clientsRepository } from '../clients/clients.repository';
-import { getIO } from '../../config/socket';
+import { getIO, salonRoom, salonStaffRoom } from '../../config/socket';
 import { getActiveTaxes } from '../settings/tax.util';
 import { computeBillTotals, allocateMembershipDiscount } from '../pricing/pricing.engine';
 import pool from '../../config/database';
@@ -1177,6 +1178,15 @@ export const paymentsService = {
                   bookingId: data.appointment_id, userId: requesterUserId,
                 }, txClient);
                 await txClient.query('COMMIT');
+                // The stock change is only visible to the alert check now that it has
+                // committed - checking earlier (inside the deduction) read the old stock
+                // and never raised a low-stock alert for what this payment just used.
+                inventoryAlertsService
+                  .checkAndNotify(
+                    appointmentConsumablesService.collectServiceRowItems(pendingConsumableRows).map((i) => i.product_id),
+                    data.salon_id
+                  )
+                  .catch(() => { /* logged internally, never blocks the payment */ });
               } catch (err: any) {
                 await txClient.query('ROLLBACK');
                 // The pre-check above already validated stock moments ago —
@@ -1601,7 +1611,8 @@ export const paymentsService = {
     // bell spam on every checkout. useBookings.ts listens for this alongside
     // the "notification" event to refetch the visible calendar range.
     try {
-      getIO().to(`salon:${data.salon_id}`).emit('payment_updated', {
+      // No amounts in this payload, so mobile staff calendars may refresh on it too.
+      getIO().to([salonRoom(data.salon_id), salonStaffRoom(data.salon_id)]).emit('payment_updated', {
         appointment_id: data.appointment_id,
         salon_id: data.salon_id,
         // Not persisted anywhere new — carried only on this socket push so a

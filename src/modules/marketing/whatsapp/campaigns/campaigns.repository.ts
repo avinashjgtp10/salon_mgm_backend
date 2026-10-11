@@ -120,12 +120,50 @@ export const campaignsRepository = {
   // whole worker was down) never gets touched again on its own — updated_at
   // only advances when a batch job actually finishes. 10+ minutes with zero
   // progress on a still-"SENDING" campaign means something's stuck.
+  // A SENDING campaign counts as stalled when contacts are still PENDING but nothing
+  // has actually been sent for a few minutes.
+  //
+  // This used to be just "updated_at older than 10 minutes" - but updated_at is
+  // refreshed by every batch AND by every delivery / read receipt Meta sends back
+  // (refreshCampaignCounts), so a campaign that had lost some batches but was still
+  // receiving receipts never looked stale, and sat half-sent until someone pressed
+  // Pause then Resume by hand.
+  //
+  // "Last activity" therefore only looks at contacts that are still PENDING, or whose
+  // status is the send result itself (SENT / FAILED / BLOCKED). DELIVERED and READ
+  // rows are left out, because those are receipts, not sending progress.
   async findStalledSending(): Promise<WACampaign[]> {
     const { rows } = await pool.query(`
-      SELECT * FROM wa_campaigns
-      WHERE status = 'SENDING'
-        AND updated_at < NOW() - INTERVAL '10 minutes'
+      SELECT c.*
+      FROM wa_campaigns c
+      WHERE c.status = 'SENDING'
+        AND (
+          -- pending contacts but no sending progress for 3 minutes
+          (
+            EXISTS (SELECT 1 FROM wa_campaign_contacts p WHERE p.campaign_id = c.id AND p.status = 'PENDING')
+            AND COALESCE(
+                  (SELECT MAX(a.updated_at) FROM wa_campaign_contacts a
+                   WHERE a.campaign_id = c.id AND a.status IN ('SENT', 'FAILED', 'BLOCKED')),
+                  c.started_at, c.created_at
+                ) < NOW() - INTERVAL '3 minutes'
+          )
+          -- or: nothing pending any more yet the campaign never flipped to COMPLETED
+          OR c.updated_at < NOW() - INTERVAL '10 minutes'
+        )
     `)
+    return rows
+  },
+
+  // Why messages of one campaign were not delivered: how many contacts per
+  // (status, Meta error code, Meta's own text). Powers the "reasons" summary.
+  async getFailureReasons(campaignId: string): Promise<Array<{ status: string; error_code: string | null; error_message: string | null; count: number }>> {
+    const { rows } = await pool.query(`
+      SELECT status, error_code, error_message, COUNT(*)::int AS count
+      FROM wa_campaign_contacts
+      WHERE campaign_id = $1 AND status IN ('FAILED', 'BLOCKED')
+      GROUP BY status, error_code, error_message
+      ORDER BY count DESC, status
+    `, [campaignId])
     return rows
   },
 

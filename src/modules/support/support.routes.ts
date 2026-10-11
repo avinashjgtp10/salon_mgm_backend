@@ -8,6 +8,7 @@ const router = Router();
 // ── Salon user routes (any authenticated user) ─────────────────────────────
 router.post("/",     authMiddleware, supportController.submitTicket);
 router.get("/my",    authMiddleware, supportController.getMyTickets);
+router.patch("/:id/read", authMiddleware, supportController.markReplyRead);
 
 // ── Super admin routes ──────────────────────────────────────────────────────
 router.get("/stats", authMiddleware, superAdminMiddleware, supportController.getStats);

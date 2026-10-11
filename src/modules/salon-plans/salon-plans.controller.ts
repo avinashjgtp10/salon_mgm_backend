@@ -21,10 +21,10 @@ export const salonPlansController = {
         } catch (err) { return next(err); }
     },
 
-    async syncToRazorpay(req: AuthedRequest, res: Response, next: NextFunction) {
+    async updatePlanPrices(req: AuthedRequest, res: Response, next: NextFunction) {
         try {
             const updatedBy = req.user?.userId ?? "";
-            const data = await salonPlansService.syncToRazorpay(String(req.params.tier), updatedBy);
+            const data = await salonPlansService.updatePlanPrices(String(req.params.tier), req.body, updatedBy);
             return res.json({ success: true, data });
         } catch (err) { return next(err); }
     },

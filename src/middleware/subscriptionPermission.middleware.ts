@@ -79,6 +79,14 @@ export function invalidateSubscriptionPermCache(salonId: string) {
     subscriptionPermCache.delete(salonId);
 }
 
+// Same check requireSubscriptionPermission() does, for callers that only know
+// which action applies after looking at the request (e.g. plan checkout:
+// renew vs upgrade vs downgrade depends on the tier being bought).
+export async function isSubscriptionActionAllowed(salonId: string, key: SubscriptionPermissionKey): Promise<boolean> {
+    const perms = await loadSubscriptionPerms(salonId);
+    return Object.prototype.hasOwnProperty.call(perms, key) ? perms[key] : DEFAULT_ALLOWED;
+}
+
 // Unlike requirePermission()/requireAnyPermission() (which only ever
 // restrict staff — salon_owner/admin always pass through), this middleware
 // applies to owner/admin too. Its whole purpose is letting a super admin

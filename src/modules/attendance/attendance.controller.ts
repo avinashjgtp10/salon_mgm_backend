@@ -1,3 +1,5 @@
+import pool from "../../config/database";
+import { attendanceRepository } from "./attendance.repository";
 import { Request, Response, NextFunction } from "express";
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
@@ -11,6 +13,15 @@ import {
 
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string | null } };
 
+// The staff member must belong to the caller's salon. Only the mobile staff
+// app is limited to its own staff record; web staff keep what their Roles &
+// Permissions allow (enforced on the routes).
+async function assertStaffScope(req: AuthRequest, staffId: string) {
+  const salonId = req.user?.salonId;
+  if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+  const { rows } = await pool.query("SELECT user_id FROM staff WHERE id = $1 AND salon_id = $2", [staffId, salonId]);
+  if (!rows.length || (isMobileStaffRequest(req) && rows[0].user_id !== req.user?.userId)) throw new AppError(403, "Attendance access denied", "FORBIDDEN");
+}
 export const attendanceController = {
 
     // ── Settings ──────────────────────────────────────────────────────────────
@@ -48,6 +59,7 @@ export const attendanceController = {
         try {
             const salonId = req.user?.salonId;
             if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+            if (!isMobileStaffRequest(req)) await assertStaffScope(req, req.body.staff_id);
             const record = isMobileStaffRequest(req)
                 ? (await staffSelfCheckIn(req.user!.userId, salonId)).record
                 : await attendanceService.checkIn(salonId, req.body as CheckInBody);
@@ -59,6 +71,7 @@ export const attendanceController = {
         try {
             const salonId = req.user?.salonId;
             if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+            if (!isMobileStaffRequest(req)) await assertStaffScope(req, req.body.staff_id);
             const record = isMobileStaffRequest(req)
                 ? (await staffSelfCheckOut(req.user!.userId, salonId)).record
                 : await attendanceService.checkOut(salonId, req.body as CheckOutBody);
@@ -78,6 +91,8 @@ export const attendanceController = {
                 throw new AppError(400, "check_type must be 'in' or 'out'", "VALIDATION_ERROR");
             if (!["biometric", "qr", "gps"].includes(body.source))
                 throw new AppError(400, "source must be biometric, qr, or gps", "VALIDATION_ERROR");
+            await assertStaffScope(req, body.staff_id);
+            if (isMobileStaffRequest(req)) throw new AppError(403, "Use self attendance to punch", "FORBIDDEN");
             const record = await attendanceService.push(salonId, body);
             return sendSuccess(res, 200, record, "Attendance recorded");
         } catch (err) { return next(err); }
@@ -92,6 +107,7 @@ export const attendanceController = {
             const body = req.body as ManualMarkBody;
             if (!body.staff_id || !body.date || !body.status)
                 throw new AppError(400, "staff_id, date, and status are required", "VALIDATION_ERROR");
+            await assertStaffScope(req, body.staff_id);
             const record = await attendanceService.manualMark(salonId, body);
             return sendSuccess(res, 200, record, "Attendance marked");
         } catch (err) { return next(err); }
@@ -103,6 +119,9 @@ export const attendanceController = {
         try {
             const id = String(req.params.id || "").trim();
             if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
+            const existing = await attendanceRepository.findById(id);
+            if (!existing) throw new AppError(404, "Attendance not found", "NOT_FOUND");
+            await assertStaffScope(req, existing.staff_id);
             const record = await attendanceService.updateRecord(id, req.body as UpdateAttendanceBody);
             return sendSuccess(res, 200, record, "Attendance updated");
         } catch (err) { return next(err); }
@@ -134,6 +153,7 @@ export const attendanceController = {
     async getForStaff(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const staffId = String(req.params.staffId);
+            await assertStaffScope(req, staffId);
             const data = await attendanceService.getForStaff(staffId, {
                 startDate: req.query.start_date ? String(req.query.start_date) : undefined,
                 endDate: req.query.end_date ? String(req.query.end_date) : undefined,
@@ -155,6 +175,7 @@ export const attendanceController = {
             const month = parseInt(String(req.query.month || new Date().getMonth() + 1), 10);
             if (isNaN(year) || isNaN(month) || month < 1 || month > 12)
                 throw new AppError(400, "Valid year and month (1-12) are required", "VALIDATION_ERROR");
+            if (isMobileStaffRequest(req)) throw new AppError(403, "Use your own attendance history", "FORBIDDEN");
             const data = await attendanceService.getMonthly(salonId, year, month);
             return sendSuccess(res, 200, data, "Monthly attendance fetched");
         } catch (err) { return next(err); }
@@ -170,6 +191,7 @@ export const attendanceController = {
             const endDate   = String(req.query.end_date   || "").trim();
             if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate))
                 throw new AppError(400, "start_date and end_date (YYYY-MM-DD) are required", "VALIDATION_ERROR");
+            if (isMobileStaffRequest(req)) throw new AppError(403, "Use your own attendance history", "FORBIDDEN");
             const data = await attendanceService.getRange(salonId, startDate, endDate);
             return sendSuccess(res, 200, data, "Attendance range fetched");
         } catch (err) { return next(err); }
@@ -182,6 +204,7 @@ export const attendanceController = {
             const salonId = req.user?.salonId;
             if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
             const date = String(req.query.date || "").trim() || new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+            if (isMobileStaffRequest(req)) throw new AppError(403, "Use your own attendance history", "FORBIDDEN");
             const data = await attendanceService.getDailySummary(salonId, date);
             return sendSuccess(res, 200, data, "Daily summary fetched");
         } catch (err) { return next(err); }
@@ -195,6 +218,7 @@ export const attendanceController = {
             if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
             const year  = parseInt(String(req.query.year  || new Date().getFullYear()), 10);
             const month = parseInt(String(req.query.month || new Date().getMonth() + 1), 10);
+            if (isMobileStaffRequest(req)) throw new AppError(403, "Use your own attendance history", "FORBIDDEN");
             const { buffer, filename } = await attendanceService.exportCSV(salonId, year, month);
             res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
             res.setHeader("Content-Type", "text/csv");

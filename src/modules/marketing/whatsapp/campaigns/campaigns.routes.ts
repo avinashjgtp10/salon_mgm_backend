@@ -82,6 +82,11 @@ router.get('/:id/contacts',
   campaignsController.getContacts
 )
 
+router.get('/:id/failure-reasons',
+  authMiddleware, ownerAdminStaff, viewCampaigns,
+  campaignsController.getFailureReasons
+)
+
 router.get('/:id/report/:type',
   authMiddleware, ownerAdminStaff, viewCampaigns,
   campaignsController.getReport

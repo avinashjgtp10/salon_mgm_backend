@@ -37,6 +37,16 @@ export const supportController = {
     } catch (err) { next(err); }
   },
 
+  // PATCH /api/v1/support/:id/read — owner marks the support reply as seen
+  async markReplyRead(req: Request & { user?: any }, res: Response, next: NextFunction) {
+    try {
+      const user_id  = req.user?.userId ?? req.user?.id;
+      const salon_id = req.user?.salonId;
+      const ticket = await supportService.markReplyRead(String(req.params.id), user_id, salon_id);
+      return res.json({ success: true, data: ticket });
+    } catch (err) { next(err); }
+  },
+
   // GET /api/v1/support — super admin lists ALL tickets
   async getAllTickets(req: Request, res: Response, next: NextFunction) {
     try {

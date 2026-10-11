@@ -15,7 +15,11 @@ function getWebhookUrl(salonId: string): string {
 
 export const configService = {
 
-  async getConfig(salonId: string) {
+  // revealSecrets: true returns the real access_token / app_secret instead of the
+  // masked form. Only the controller passes true, and only for a caller who holds
+  // edit_whatsapp_config - everyone else (including staff who merely view the
+  // Inbox/Campaigns) keeps getting the redacted values.
+  async getConfig(salonId: string, revealSecrets: boolean = false) {
     const config = await configRepository.findBySalonId(salonId)
     if (!config) return null
     // sent_today powers the Send Campaign modal's "messages remaining today"
@@ -24,10 +28,14 @@ export const configService = {
     const sentToday = await dashboardRepository.getSentToday(salonId)
     return {
       ...config,
-      access_token: config.access_token
-        ? config.access_token.slice(0, 8) + '••••••••'
-        : null,
-      app_secret: config.app_secret ? '••••••••' : null,
+      access_token: revealSecrets
+        ? (config.access_token ?? null)
+        : config.access_token
+          ? config.access_token.slice(0, 8) + '••••••••'
+          : null,
+      app_secret: revealSecrets
+        ? (config.app_secret ?? null)
+        : config.app_secret ? '••••••••' : null,
       sent_today: sentToday,
     }
   },

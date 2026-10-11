@@ -1,19 +1,24 @@
 import pool from "../../config/database";
 import { AppError } from "../../middleware/error.middleware";
 import { invalidatePlanFeatureCache, invalidateAllPlanFeatureCaches, loadSalonFeatureKeys } from "../../middleware/planFeature.middleware";
-import { subscriptionsService } from "../subscriptions/subscriptions.service";
 import { superAdminRepository } from "../super-admin/super-admin.repository";
 import { emailService } from "../utils/email.service";
 import { renderSalonPlanInvoicePdf } from "./salon-plan-invoice-pdf.service";
 import logger from "../../config/logger";
 import {
     planDefinitionsRepository,
+    planPricesRepository,
     salonCustomizationsRepository,
     salonPlanInvoicesRepository,
 } from "./salon-plans.repository";
 import {
     PlanTier,
     PLAN_TIER_ORDER,
+    GST_RATE_PERCENT,
+    BILLING_CYCLES,
+    SalonPlanDefinition,
+    SalonPlanDefinitionWithPrices,
+    UpdatePlanPricesBody,
     UpdatePlanDefinitionBody,
     UpsertSalonCustomizationBody,
     CreateInvoiceBody,
@@ -50,8 +55,55 @@ function assertValidTier(tier: string): asserts tier is PlanTier {
 export const salonPlansService = {
     // ── Plan Definitions ─────────────────────────────────────────────────────
 
+    // Attaches the per-cycle price map to each definition. `annual` falls
+    // back to the legacy single price column so nothing renders blank before
+    // the prices migration has been run.
+    async withPrices(defs: SalonPlanDefinition[]): Promise<SalonPlanDefinitionWithPrices[]> {
+        const byTier = await planPricesRepository.findAllByTier();
+        return defs.map((d) => {
+            const p = byTier[d.tier] ?? {};
+            return {
+                ...d,
+                prices: {
+                    monthly: p.monthly ?? null,
+                    quarterly: p.quarterly ?? null,
+                    annual: p.annual ?? d.price,
+                },
+            };
+        });
+    },
+
     async listPlanDefinitions() {
-        return planDefinitionsRepository.findAll();
+        return this.withPrices(await planDefinitionsRepository.findAll());
+    },
+
+    // Super-admin: set any of the 3 cycle prices (before GST) for one tier.
+    async updatePlanPrices(tier: string, body: UpdatePlanPricesBody, updatedBy: string) {
+        assertValidTier(tier);
+        const entries = Object.entries(body ?? {}).filter(([, v]) => v !== undefined);
+        if (entries.length === 0) {
+            throw new AppError(400, "Provide at least one of monthly, quarterly, annual", "VALIDATION_ERROR");
+        }
+        const clean: Partial<Record<BillingCycle, number>> = {};
+        for (const [cycle, value] of entries) {
+            if (!BILLING_CYCLES.includes(cycle as BillingCycle)) {
+                throw new AppError(400, `Invalid billing cycle "${cycle}" — must be one of ${BILLING_CYCLES.join(", ")}`, "VALIDATION_ERROR");
+            }
+            const n = Number(value);
+            if (!Number.isFinite(n) || n <= 0 || n > 10_000_000) {
+                throw new AppError(400, `${cycle} price must be a positive number`, "VALIDATION_ERROR");
+            }
+            clean[cycle as BillingCycle] = Math.round(n * 100) / 100;
+        }
+        const def = await planDefinitionsRepository.findByTier(tier);
+        if (!def) throw new AppError(404, "Plan tier not found", "NOT_FOUND");
+
+        await planPricesRepository.upsertMany(tier, clean, updatedBy);
+        invalidateAllPlanFeatureCaches();
+
+        const fresh = await planDefinitionsRepository.findByTier(tier);
+        const [withPrices] = await this.withPrices([fresh!]);
+        return withPrices;
     },
 
     async updatePlanDefinition(tier: string, patch: UpdatePlanDefinitionBody, updatedBy: string) {
@@ -85,73 +137,20 @@ export const salonPlansService = {
                 }
             }
         }
-        let updated = await planDefinitionsRepository.update(tier, patch, updatedBy);
+        const updated = await planDefinitionsRepository.update(tier, patch, updatedBy);
         if (!updated) throw new AppError(404, "Plan tier not found", "NOT_FOUND");
-        invalidateAllPlanFeatureCaches();
-
-        // Razorpay plans are immutable (no "update price" API) — a price or
-        // name edit here would otherwise leave checkout silently charging
-        // the OLD amount forever against the previously-linked plan. Only
-        // re-sync when one of those two actually changed, not on every save
-        // (e.g. editing just the tagline or feature list shouldn't spawn a
-        // new Razorpay plan object).
-        if (patch.price !== undefined || patch.name !== undefined) {
+        // The legacy single `price` IS the annual price — keep the new
+        // per-cycle table in step if an older client still edits it.
+        if (patch.price !== undefined) {
             try {
-                updated = await this.syncToRazorpay(tier, updatedBy);
+                await planPricesRepository.upsertMany(tier, { annual: patch.price }, updatedBy);
             } catch (err: any) {
-                // The price is already saved above but the linked Razorpay plan
-                // still holds the old amount — surface that instead of a bare
-                // 500 so it isn't mistaken for "nothing saved" and left stale.
-                logger.error(`Razorpay re-sync failed for tier ${tier} after price/name update`, { err });
-                throw new AppError(
-                    502,
-                    `Plan saved, but syncing it to Razorpay failed — checkout will keep using the old amount until a sync succeeds. Retry via sync-razorpay. (${err?.message ?? "unknown error"})`,
-                    "RAZORPAY_SYNC_FAILED"
-                );
+                if (err?.code !== "42P01") throw err; // prices migration not run yet
             }
         }
-        return updated;
-    },
-
-    // Creates a real, checkout-capable Razorpay plan (via the existing
-    // modules/subscriptions machinery — see that module's own createPlan,
-    // which calls razorpay.plans.create() and stores the result in
-    // subscription_plans) for this tier, and links it so the salon-facing
-    // "Pay & Continue" button can create a live subscription against it.
-    // First sync creates the subscription_plans row. Every later sync UPDATES
-    // that same row in place (same id, new price/razorpay_plan_id) instead of
-    // inserting another — Razorpay itself can't edit a plan's amount, so only
-    // the Razorpay-side plan object is new. Called automatically from
-    // updatePlanDefinition whenever price/name change (see above); the
-    // standalone sync-razorpay endpoint re-runs it without any other change.
-    async syncToRazorpay(tier: string, updatedBy: string) {
-        assertValidTier(tier);
-        const plan = await planDefinitionsRepository.findByTier(tier);
-        if (!plan) throw new AppError(404, "Plan tier not found", "NOT_FOUND");
-
-        if (plan.linked_subscription_plan_id) {
-            await subscriptionsService.updatePlanPricing(plan.linked_subscription_plan_id, {
-                name: `SalonOx ${plan.name}`,
-                description: plan.tagline ?? undefined,
-                price: parseFloat(plan.price),
-            });
-            const relinked = await planDefinitionsRepository.findByTier(tier);
-            if (!relinked) throw new AppError(404, "Plan tier not found", "NOT_FOUND");
-            return relinked;
-        }
-
-        // First-time sync — slug must be globally unique on subscription_plans.
-        const created = await subscriptionsService.createPlan({
-            name: `SalonOx ${plan.name}`,
-            slug: `salonox-${plan.tier}-yearly-${Date.now()}`,
-            description: plan.tagline ?? undefined,
-            price: parseFloat(plan.price),
-            billing_cycle: "yearly",
-        });
-
-        const linked = await planDefinitionsRepository.setLinkedSubscriptionPlan(tier, created.id, updatedBy);
-        if (!linked) throw new AppError(500, "Failed to link plan after Razorpay sync", "SERVER_ERROR");
-        return linked;
+        invalidateAllPlanFeatureCaches();
+        const [withPrices] = await this.withPrices([updated]);
+        return withPrices;
     },
 
     // ── Salon Customizations ─────────────────────────────────────────────────
@@ -235,12 +234,12 @@ export const salonPlansService = {
     // Powers the salon's own Billing page (Settings → Billing): its actual
     // Basic/Advance/Pro assignment plus the full catalog, so that page can
     // show real "Current Plan" + "Available Plans" cards instead of the
-    // separate Razorpay billing_plans catalog, which has no relationship to
-    // what super admin configures here.
+    // separate billing_plans catalog, which has no relationship to what
+    // super admin configures here.
     async getMyPlan(salonId: string) {
         const [customization, catalog] = await Promise.all([
             this.getCustomization(salonId),
-            planDefinitionsRepository.findAll(),
+            planDefinitionsRepository.findAll().then((defs) => this.withPrices(defs)),
         ]);
         const basePlan = catalog.find((p) => p.tier === customization.base_tier) ?? null;
         return {
@@ -251,6 +250,7 @@ export const salonPlansService = {
             is_customized: customization.custom_price !== null,
             start_date: customization.start_date,
             expiry_date: customization.expiry_date,
+            gst_rate_percent: GST_RATE_PERCENT,
             catalog,
         };
     },

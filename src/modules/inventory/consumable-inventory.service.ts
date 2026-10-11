@@ -3,6 +3,7 @@ import { AppError } from "../../middleware/error.middleware";
 import { productsRepository } from "../products/products.repository";
 import { consumableInventoryRepository } from "./consumable-inventory.repository";
 import { inventoryTransactionsRepository } from "./inventory-transactions.repository";
+import { inventoryAlertsService } from "./inventory-alerts.service";
 import { appointmentConsumablesService } from "./inventory.service";
 import {
   AdjustStockBody,
@@ -231,6 +232,12 @@ export const consumableInventoryService = {
       }
 
       await client.query("COMMIT");
+
+      // Stock went back up - let an open low-stock alert for it resolve (checked only
+      // after the commit; restore() above no longer checks inside this transaction).
+      inventoryAlertsService
+        .checkAndNotify([row.product_id], salonId)
+        .catch(() => { /* logged internally */ });
 
       return {
         product_name: row.product_name,

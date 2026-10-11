@@ -1,12 +1,16 @@
 import { Router } from 'express'
+import multer from 'multer'
 import { authMiddleware } from '../../../../middleware/auth.middleware'
 import { roleMiddleware } from '../../../../middleware/role.middleware'
 import { requirePermission } from '../../../../middleware/permission.middleware'
 import { validateBody } from '../../../../middleware/validation.middleware'
 import { inboxController } from './inbox.controller'
-import { sendReplySchema } from './inbox.validator'
+import { flowsController } from '../flows/flows.controller'
+import { sendReplySchema, sendTemplateSchema } from './inbox.validator'
 
 const router = Router()
+// Files are held in memory just long enough to hand to Meta; 16 MB is WhatsApp's cap for video/audio.
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 16 * 1024 * 1024 } })
 
 const auth = [authMiddleware, roleMiddleware('salon_owner', 'admin', 'staff')]
 const viewInbox = requirePermission('view_inbox')
@@ -29,7 +33,26 @@ router.get('/conversations/:phone/messages', auth, viewInbox, inboxController.ge
 // GET  /api/v1/inbox/conversations/:phone/customer — Customer Info sidebar
 router.get('/conversations/:phone/customer', auth, viewInbox, inboxController.getCustomerInfo)
 
+// GET  /api/v1/inbox/media/:mediaId — bytes of an image/video/document shown in a thread
+router.get('/media/:mediaId', auth, viewInbox, inboxController.getMedia)
+
+// POST /api/v1/inbox/conversations/:phone/typing — shows "typing…" on the customer's phone
+router.post('/conversations/:phone/typing', auth, replyToConversation, inboxController.typing)
+
+// POST /api/v1/inbox/conversations/:phone/media - send a photo / video / audio / document
+router.post('/conversations/:phone/media', auth, replyToConversation, upload.single('file'), inboxController.sendMedia)
+
+// POST /api/v1/inbox/messages/:id/react - emoji reaction to a message ({ emoji }, '' removes)
+router.post('/messages/:id/react', auth, replyToConversation, inboxController.react)
+
 // POST /api/v1/inbox/conversations/:phone/reply
 router.post('/conversations/:phone/reply', auth, replyToConversation, validateBody(sendReplySchema), inboxController.sendReply)
+
+// POST /api/v1/inbox/conversations/:phone/template — send an approved template
+// (the only message type Meta allows once the 24hr window has closed)
+router.post('/conversations/:phone/template', auth, replyToConversation, validateBody(sendTemplateSchema), inboxController.sendTemplate)
+
+// POST /api/v1/inbox/conversations/:phone/flow - send the booking form (WhatsApp Flow)
+router.post('/conversations/:phone/flow', auth, replyToConversation, flowsController.sendBooking)
 
 export default router

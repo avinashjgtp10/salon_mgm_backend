@@ -299,11 +299,12 @@ export const purchasesRepository = {
         const total = parseInt(countRows[0].count, 10);
 
         const { rows } = await pool.query(
-            `SELECT pu.*, sup.name AS supplier_name,
+            `SELECT pu.*, sup.name AS supplier_name, po.order_number AS po_number,
                     NULLIF(TRIM(CONCAT(rb.first_name, ' ', COALESCE(rb.last_name, ''))), '') AS received_by_name,
                     (SELECT COUNT(*) FROM purchase_items pi WHERE pi.purchase_id = pu.id)::int AS item_count
                FROM purchases pu
                LEFT JOIN suppliers sup ON sup.id = pu.supplier_id
+               LEFT JOIN orders po ON po.id = pu.order_id
                LEFT JOIN staff rb ON rb.id = pu.received_by_staff_id
                ${where}
               ORDER BY pu.created_at DESC
@@ -480,10 +481,11 @@ export const purchasesRepository = {
 
     async getById(id: string, salonId: string): Promise<Purchase | null> {
         const { rows: purchaseRows } = await pool.query(
-            `SELECT pu.*, sup.name AS supplier_name,
+            `SELECT pu.*, sup.name AS supplier_name, po.order_number AS po_number,
                     NULLIF(TRIM(CONCAT(rb.first_name, ' ', COALESCE(rb.last_name, ''))), '') AS received_by_name
                FROM purchases pu
                LEFT JOIN suppliers sup ON sup.id = pu.supplier_id
+               LEFT JOIN orders po ON po.id = pu.order_id
                LEFT JOIN staff rb ON rb.id = pu.received_by_staff_id
               WHERE pu.id = $1 AND pu.salon_id = $2`,
             [id, salonId],

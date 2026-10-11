@@ -35,6 +35,12 @@ export const supportService = {
     return supportRepo.getTicketsByUser(userId, salonId);
   },
 
+  async markReplyRead(id: string, userId: string, salonId: string) {
+    const ticket = await supportRepo.markReplyRead(id, userId, salonId);
+    if (!ticket) throw new Error("Ticket not found");
+    return ticket;
+  },
+
   async getAllTickets(filters: { status?: string; priority?: string; search?: string }) {
     return supportRepo.getAllTickets(filters);
   },

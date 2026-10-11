@@ -3,7 +3,7 @@ import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
 import { appointmentsService } from "../appointments/appointments.service";
 import { attendanceService } from "../attendance/attendance.service";
-import { staffAttendanceState, staffSelfCheckIn, staffSelfCheckOut } from "../attendance/staffAttendance.service";
+import { staffAttendanceState, staffSelfCheckIn, staffSelfCheckOut, staffSelfStartBreak } from "../attendance/staffAttendance.service";
 import { notificationsService } from "../notifications/notifications.service";
 import {
   staffService, staffAddressService, staffEmergencyContactService,
@@ -192,6 +192,14 @@ export const mobileStaffController = {
       const { userId, salonId } = getStaff(req);
       const state = await staffSelfCheckIn(userId, salonId, new Date(), punchLocation(req.body));
       return sendSuccess(res, 200, { self_attendance: state }, "Checked in successfully");
+    } catch (err) { return next(err); }
+  },
+
+  async startBreak(req: MobileStaffRequest, res: Response, next: NextFunction) {
+    try {
+      const { userId, salonId } = getStaff(req);
+      const state = await staffSelfStartBreak(userId, salonId, req.body ?? {});
+      return sendSuccess(res, 200, { self_attendance: state }, "Break started");
     } catch (err) { return next(err); }
   },
 

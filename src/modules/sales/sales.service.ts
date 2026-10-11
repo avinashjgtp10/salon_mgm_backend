@@ -39,6 +39,7 @@ export const salesService = {
         notificationsService.create({
             salon_id: sale.salon_id,
             type:     "payment",
+            appointment_id: sale.appointment_id ?? undefined,
             title:    "New Sale Created",
             body:     `${(sale as any).client_name ?? "Walk-in"} — ₹${sale.total_amount ?? 0}`,
             event_key: "newPayment",

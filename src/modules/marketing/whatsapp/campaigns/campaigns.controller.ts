@@ -104,6 +104,15 @@ export const campaignsController = {
   } catch (e) { return next(e) }
 },
 
+  async getFailureReasons(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId
+      if (!salonId) return res.status(400).json({ error: 'salonId missing from token' })
+      const data = await campaignsService.getFailureReasons(req.params.id as string, salonId)
+      return sendSuccess(res, 200, data, 'Failure reasons fetched successfully')
+    } catch (e) { return next(e) }
+  },
+
   async getReport(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = req.user?.salonId

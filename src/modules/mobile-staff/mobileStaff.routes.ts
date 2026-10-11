@@ -25,6 +25,7 @@ router.get("/schedule", mobileStaffController.schedule);
 
 router.get("/attendance", mobileStaffController.attendance);
 router.post("/attendance/check-in", mobileStaffController.checkIn);
+router.post("/attendance/break", mobileStaffController.startBreak);
 router.post("/attendance/check-out", mobileStaffController.checkOut);
 
 router.get("/notifications", mobileStaffController.notifications);
