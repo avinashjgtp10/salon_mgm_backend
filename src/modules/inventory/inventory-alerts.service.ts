@@ -34,6 +34,7 @@ interface AlertCandidateRow {
   qty_alert: number | null;
   qty_alert_unit_size: number | null;
   bottle_size: number | null;
+  measure_unit: string | null;
   expiry_date: string | null;
   branch_id: string | null;
 }
@@ -49,7 +50,7 @@ async function fetchCandidates(productIds: string[], salonId: string): Promise<A
   const { rows } = await pool.query<AlertCandidateRow>(
     `SELECT p.id, p.salon_id, p.name,
             COALESCE(p.amount, 0)::float8 AS amount,
-            p.qty_alert, ${alertUnitSizeSql("p")}::float8 AS qty_alert_unit_size, p.bottle_size, p.expiry_date,
+            p.qty_alert, ${alertUnitSizeSql("p")}::float8 AS qty_alert_unit_size, p.bottle_size, p.measure_unit, p.expiry_date,
             (
               SELECT sm.branch_id FROM stock_movements sm
                WHERE sm.product_id = p.id
@@ -62,16 +63,25 @@ async function fetchCandidates(productIds: string[], salonId: string): Promise<A
   return rows;
 }
 
-function stockInPacks(row: AlertCandidateRow): number {
-  const bottleSize = Number(row.bottle_size) || 0;
-  return bottleSize > 0 ? row.amount / bottleSize : row.amount;
+// 880 -> "880", 0.25 -> "0.25", 12000 -> "12,000" (no trailing zeros, Indian grouping)
+function fmtQty(n: number): string {
+  return Number(n.toFixed(2)).toLocaleString("en-IN", { maximumFractionDigits: 2 });
 }
 
-// The threshold in the same pack unit as the "left" figure beside it in the message.
-function thresholdInPacks(row: AlertCandidateRow): number {
-  const threshold = lowStockThreshold(row) ?? 0;
+// What is actually left, in the product's own unit, with the bottle count beside it for
+// bottle-sized consumables: "880 ml left (about 9 bottles)" - never just a bottle count,
+// since a part-used bottle (9 x 80 ml left in the last one) is still stock that has gone.
+function describeRemaining(row: AlertCandidateRow): string {
+  const unit = (row.measure_unit ?? "").trim();
   const bottleSize = Number(row.bottle_size) || 0;
-  return bottleSize > 0 ? Math.round((threshold / bottleSize) * 100) / 100 : threshold;
+  const amount = `${fmtQty(row.amount)}${unit ? ` ${unit}` : ""}`;
+  return bottleSize > 0 ? `${amount} left (about ${Math.ceil(row.amount / bottleSize)} bottle${Math.ceil(row.amount / bottleSize) === 1 ? "" : "s"})` : `${amount} left`;
+}
+
+function describeThreshold(row: AlertCandidateRow): string {
+  const unit = (row.measure_unit ?? "").trim();
+  const t = lowStockThreshold(row) ?? 0;
+  return `${fmtQty(t)}${unit ? ` ${unit}` : ""}`;
 }
 
 function deriveStatus(row: AlertCandidateRow): InventoryAlertStatus | null {
@@ -105,7 +115,7 @@ function buildNotificationCopy(row: AlertCandidateRow, status: InventoryAlertSta
     case "low_stock":
       return {
         title: "Low stock alert",
-        body: `${row.name} is low on stock — ${Math.ceil(stockInPacks(row))} left (threshold: ${thresholdInPacks(row)}).`,
+        body: `${row.name} is low on stock — ${describeRemaining(row)}; alert level is ${describeThreshold(row)}.`,
       };
     case "expired": {
       return { title: "Product expired", body: `${row.name} has expired (expiry date: ${row.expiry_date}).` };
@@ -184,7 +194,7 @@ export const inventoryAlertsService = {
     const { rows } = await pool.query<AlertCandidateRow>(
       `SELECT p.id, p.salon_id, p.name,
               COALESCE(p.amount, 0)::float8 AS amount,
-              p.qty_alert, ${alertUnitSizeSql("p")}::float8 AS qty_alert_unit_size, p.bottle_size, p.expiry_date,
+              p.qty_alert, ${alertUnitSizeSql("p")}::float8 AS qty_alert_unit_size, p.bottle_size, p.measure_unit, p.expiry_date,
               (
                 SELECT sm.branch_id FROM stock_movements sm
                  WHERE sm.product_id = p.id
