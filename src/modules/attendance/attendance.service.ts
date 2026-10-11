@@ -265,6 +265,7 @@ export const attendanceService = {
         const existing = await attendanceRepository.findByStaffAndDate(staff_id, date);
         if (!existing) throw new AppError(400, "No check-in found for this staff today", "NOT_CHECKED_IN");
         if (!existing.check_in) throw new AppError(400, "Staff has not checked in yet", "NOT_CHECKED_IN");
+        if (Date.parse(checkOutTs) <= Date.parse(existing.check_in)) throw new AppError(400, "You cannot check out before the check-in time. Select a time after check-in.", "INVALID_CHECKOUT");
         if (existing.check_out) throw new AppError(400, "Staff has already checked out", "ALREADY_CHECKED_OUT");
 
         if (existing.active_break) throw new AppError(409, "Finish the break before checkout", "ON_BREAK");
@@ -339,6 +340,9 @@ export const attendanceService = {
         const { staff_id, date, status, check_in, check_out, note } = body;
         const existing = await attendanceRepository.findByStaffAndDate(staff_id, date);
         if (existing?.break_count) throw new AppError(409, "Use the attendance activity history for this day; its punches cannot be overwritten.", "HAS_BREAK_HISTORY");
+        if (check_in && check_out && Date.parse(check_out) <= Date.parse(check_in)) {
+            throw new AppError(400, "You cannot check out before the check-in time. Select a time after check-in.", "INVALID_CHECKOUT");
+        }
         let hoursWorked: number | undefined;
         if (check_in && check_out) {
             hoursWorked = hoursFromTimestamps(check_in, check_out);
@@ -363,6 +367,9 @@ export const attendanceService = {
 
         const checkIn  = checkInChanged  ? patch.check_in  : existing.check_in  ?? undefined;
         const checkOut = checkOutChanged ? patch.check_out : existing.check_out ?? undefined;
+        if (checkIn && checkOut && Date.parse(checkOut) <= Date.parse(checkIn)) {
+            throw new AppError(400, "You cannot check out before the check-in time. Select a time after check-in.", "INVALID_CHECKOUT");
+        }
 
         // Unchanged punches are not rewritten, so their stored seconds survive.
         const finalPatch: UpdateAttendanceBody = {};
