@@ -575,6 +575,12 @@ export const staffCommissionsController = {
   async getStaffHistory(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const staffId = String(req.params.staffId);
+      if (isMobileStaffRequest(req)) {
+        const currentStaffId = await ownStaffId(String(req.user?.userId ?? ""), getSalonId(req));
+        if (!currentStaffId || currentStaffId !== staffId) {
+          throw new AppError(403, "You can only view your own commission history", "FORBIDDEN");
+        }
+      }
       const data = await staffCommissionsService.getStaffHistory(staffId, {
         month: req.query.month ? String(req.query.month) : undefined,
         start_date: req.query.start_date ? String(req.query.start_date) : undefined,
