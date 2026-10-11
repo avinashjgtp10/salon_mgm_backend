@@ -13,6 +13,7 @@ import { referralRepository } from '../referral/referral.repository';
 import { CreatePaymentBody, Payment } from './payments.types';
 import type { Appointment, AppointmentServiceConsumableRecord } from '../appointments/appointments.types';
 import { appointmentConsumablesService } from '../inventory/inventory.service';
+import { inventoryAlertsService } from '../inventory/inventory-alerts.service';
 import logger from '../../config/logger';
 import { sendPurchaseReceipt } from '../sales/receipt-send.helper';
 import { whatsappAutomationService } from '../whatsapp-automation/whatsapp-automation.service';
@@ -1177,6 +1178,15 @@ export const paymentsService = {
                   bookingId: data.appointment_id, userId: requesterUserId,
                 }, txClient);
                 await txClient.query('COMMIT');
+                // The stock change is only visible to the alert check now that it has
+                // committed - checking earlier (inside the deduction) read the old stock
+                // and never raised a low-stock alert for what this payment just used.
+                inventoryAlertsService
+                  .checkAndNotify(
+                    appointmentConsumablesService.collectServiceRowItems(pendingConsumableRows).map((i) => i.product_id),
+                    data.salon_id
+                  )
+                  .catch(() => { /* logged internally, never blocks the payment */ });
               } catch (err: any) {
                 await txClient.query('ROLLBACK');
                 // The pre-check above already validated stock moments ago —
