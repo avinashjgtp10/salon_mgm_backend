@@ -356,6 +356,11 @@ export const campaignsService = {
     }
   },
 
+  async getFailureReasons(id: string, salonId: string) {
+    await this.getById(id, salonId)   // 404s if it isn't this salon's campaign
+    return campaignsRepository.getFailureReasons(id)
+  },
+
   async getContacts(id: string, salonId: string, status?: string, page?: number, limit?: number) {
   const campaign = await campaignsRepository.findById(id, salonId)
   if (!campaign) throw new AppError(404, 'Campaign not found', 'NOT_FOUND')

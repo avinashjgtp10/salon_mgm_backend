@@ -3,7 +3,7 @@ export type WATemplateCategory = 'MARKETING' | 'UTILITY' | 'AUTHENTICATION'
 export type WAHeaderType       = 'none' | 'text' | 'image' | 'video' | 'document'
 
 export type WAButton = {
-  type:   'quick_reply' | 'url' | 'phone'
+  type:   'quick_reply' | 'url' | 'phone' | 'copy_code' | 'flow'
   text:   string
   value?: string
 }
@@ -21,6 +21,8 @@ export type WATemplate = {
   body_text:        string
   footer_text:      string | null
   buttons:          WAButton[]
+  // Limited-time-offer badge text (<=16 chars); column from Migration/add_wa_template_lto.sql
+  lto_text?:        string | null
   meta_template_id: string | null
   rejection_reason: string | null
   approved_at:      string | null
@@ -38,4 +40,5 @@ export type CreateTemplateBody = {
   body_text:        string
   footer_text?:     string | null
   buttons?:         WAButton[]
+  lto_text?:        string | null
 }

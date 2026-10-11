@@ -34,7 +34,12 @@ export const campaignQueue = new Queue<CampaignJobData>('wa-campaign-messages', 
   // to ever retry it. 3 attempts with exponential backoff rides out the kind
   // of momentary connection-pool contention this worker is prone to under load.
   defaultJobOptions: {
-    attempts: 3,
+    attempts: 5,
     backoff: { type: 'exponential', delay: 5000 },
+    // BullMQ keeps every finished job forever by default, so a busy salon sending
+    // thousands of messages a day slowly fills Redis. Keep a day of history for
+    // debugging and drop the rest.
+    removeOnComplete: { age: 24 * 3600, count: 2000 },
+    removeOnFail:     { age: 7 * 24 * 3600 },
   },
 })
