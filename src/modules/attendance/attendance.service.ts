@@ -212,12 +212,16 @@ export const attendanceService = {
     // today are simply absent from the list; callers treat that as not checked in.
     async getStaffPresence(salonId: string): Promise<StaffPresence> {
         const date = todayIST();
-        const presence = await loadStaffPresence(salonId, date);
-        if (!presence) return { enabled: false, date, staff: [] };
+        const [presence, breaks] = await Promise.all([
+            loadStaffPresence(salonId, date),
+            attendanceRepository.findActiveBreaks(salonId, date),
+        ]);
+        if (!presence) return { enabled: false, date, staff: [], breaks };
         return {
             enabled: true,
             date,
             staff: Array.from(presence, ([staff_id, state]) => ({ staff_id, state })),
+            breaks,
         };
     },
 
