@@ -1,4 +1,5 @@
 import pool from '../../../../config/database'
+import { mobileCampaignNotificationsService } from '../../../notifications/mobileCampaignNotifications.service'
 
 export const webhooksRepository = {
 
@@ -84,7 +85,13 @@ export const webhooksRepository = {
     const done    = parseInt(c.sent_count) + parseInt(c.failed_count) + parseInt(c.blocked_count)
     const allDone = done >= parseInt(c.total)
 
-    await pool.query(`
+    // This runs from the batch processor and delivery/read webhooks. The
+    // conditional status update below makes completion a one-time transition.
+    const { rows: [before] } = allDone
+      ? await pool.query(`SELECT name, salon_id FROM wa_campaigns WHERE id = $1`, [campaignId])
+      : { rows: [null] }
+
+    const updateResult = await pool.query(`
       UPDATE wa_campaigns SET
         sent_count      = $1,
         delivered_count = $2,
@@ -93,7 +100,24 @@ export const webhooksRepository = {
         blocked_count   = $5,
         ${allDone ? "status = 'COMPLETED', completed_at = NOW()," : ''}
         updated_at      = NOW()
-      WHERE id = $6
+      WHERE id = $6${allDone ? " AND status <> 'COMPLETED'" : ''}
     `, [c.sent_count, c.delivered_count, c.read_count, c.failed_count, c.blocked_count, campaignId])
+
+    const justCompleted = allDone && before && (updateResult.rowCount ?? 0) > 0
+    if (justCompleted) {
+      const sent   = parseInt(c.sent_count)
+      const failed = parseInt(c.failed_count) + parseInt(c.blocked_count)
+      const body   = failed > 0
+        ? `Sent to ${sent} of ${c.total} contacts — ${failed} failed.`
+        : `Sent to all ${sent} contacts.`
+
+      void mobileCampaignNotificationsService.send({
+        salonId: before.salon_id,
+        campaignId,
+        campaignName: before.name,
+        phase: 'ended',
+        body,
+      })
+    }
   },
 }

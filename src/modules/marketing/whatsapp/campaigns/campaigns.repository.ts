@@ -155,6 +155,50 @@ export const campaignsRepository = {
     return rows[0]
   },
 
+  async completeIfSending(id: string): Promise<WACampaign | null> {
+    const { rows } = await pool.query(
+      `UPDATE wa_campaigns
+       SET status = 'COMPLETED', completed_at = COALESCE(completed_at, NOW()), updated_at = NOW()
+       WHERE id = $1 AND status = 'SENDING'
+       RETURNING *`,
+      [id]
+    )
+    return rows[0] ?? null
+  },
+
+  async failIfSending(id: string): Promise<WACampaign | null> {
+    const { rows } = await pool.query(
+      `UPDATE wa_campaigns
+       SET status = 'FAILED', updated_at = NOW()
+       WHERE id = $1 AND status = 'SENDING'
+       RETURNING *`,
+      [id]
+    )
+    return rows[0] ?? null
+  },
+
+  async startScheduledIfDue(id: string): Promise<WACampaign | null> {
+    const { rows } = await pool.query(
+      `UPDATE wa_campaigns
+       SET status = 'SENDING', started_at = NOW(), updated_at = NOW()
+       WHERE id = $1 AND status = 'SCHEDULED' AND scheduled_at <= NOW()
+       RETURNING *`,
+      [id]
+    )
+    return rows[0] ?? null
+  },
+
+  async resumeIfPaused(id: string): Promise<WACampaign | null> {
+    const { rows } = await pool.query(
+      `UPDATE wa_campaigns
+       SET status = 'SENDING', updated_at = NOW()
+       WHERE id = $1 AND status = 'PAUSED'
+       RETURNING *`,
+      [id]
+    )
+    return rows[0] ?? null
+  },
+
   // ── Per-contact manual Resend (FAILED/BLOCKED only) ───────────────────────
   async findContactById(contactId: string, campaignId: string): Promise<WACampaignContact | null> {
     const { rows } = await pool.query(
