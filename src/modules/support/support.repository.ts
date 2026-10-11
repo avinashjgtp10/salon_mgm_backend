@@ -97,13 +97,28 @@ export const supportRepo = {
     const { rows } = await safeQuery(() =>
       pool.query(
         `UPDATE support_tickets
-         SET admin_reply=$2, replied_at=NOW(), status='in_progress', updated_at=NOW()
+         SET admin_reply=$2, replied_at=NOW(), reply_read_at=NULL, status='in_progress', updated_at=NOW()
          WHERE id=$1
          RETURNING *`,
         [id, reply]
       )
     );
     return rows[0];
+  },
+
+  // Only the ticket's own submitter can mark its reply read — the WHERE on
+  // user_id/salon_id keeps one user from touching another's tickets.
+  async markReplyRead(id: string, userId: string, salonId: string) {
+    const { rows } = await safeQuery(() =>
+      pool.query(
+        `UPDATE support_tickets
+         SET reply_read_at = COALESCE(reply_read_at, NOW())
+         WHERE id = $1 AND user_id = $2 AND salon_id = $3 AND admin_reply IS NOT NULL
+         RETURNING *`,
+        [id, userId, salonId]
+      )
+    );
+    return rows[0] ?? null;
   },
 
   async updateTicketStatus(id: string, status: string) {
