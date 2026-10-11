@@ -171,7 +171,9 @@ router.get("/tips/:staffId/settlements", auth, ownerAdminStaff, viewTips, staffT
 // ─── Commission Slabs + History — per staff ──────────────────────────────────
 router.get("/:staffId/commissions/slabs",   auth, ownerAdminStaff, viewCommissions, staffCommissionsController.getSlabs);
 router.put("/:staffId/commissions/slabs",   auth, ownerAdminStaff, manageCommissions, staffCommissionsController.upsertSlabs);
-router.get("/:staffId/commissions/history", auth, ownerAdminStaff, viewCommissions, staffCommissionsController.getStaffHistory);
+// Mobile staff skip view_commissions here — getStaffHistory restricts them to
+// their own staffId (My Commission card on the staff app home screen).
+router.get("/:staffId/commissions/history", auth, ownerAdminStaff, (req, res, next) => isMobileStaffRequest(req) ? next() : viewCommissions(req, res, next), staffCommissionsController.getStaffHistory);
 
 // ─── Roles & Permissions — bulk (must be BEFORE /:id routes, same reason as
 // Commissions/Tips above) ──────────────────────────────────────────────────
