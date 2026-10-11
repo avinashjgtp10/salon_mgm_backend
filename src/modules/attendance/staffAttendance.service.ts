@@ -109,7 +109,11 @@ export async function staffSelfStartBreak(userId: string, salonId: string, body:
     const day = { ...record, scheduled_start: record.scheduled_start ?? state.shift_start, scheduled_end: record.scheduled_end ?? state.shift_end };
     validateBreak(day, breaks, body.from, body.to, now);
     if (!record.scheduled_start) await client.query("UPDATE attendance SET scheduled_start = $2, scheduled_end = $3 WHERE id = $1", [record.id, day.scheduled_start, day.scheduled_end]);
-    started = { record, brk: (await client.query<AttendanceBreak>(`INSERT INTO attendance_breaks (attendance_id,request_id,planned_start,planned_end,actual_start,note) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`, [record.id, body.request_id, body.from, body.to, now.toISOString(), note])).rows[0] };
+    // A "From" chosen ahead of now is a genuine future-scheduled start, so honor it.
+    // A "From" at or before now falls back to the server clock, same as before, so
+    // staff can't backdate actual_start by submitting an earlier "From".
+    const actualStart = new Date(String(body.from)).getTime() > now.getTime() ? String(body.from) : now.toISOString();
+    started = { record, brk: (await client.query<AttendanceBreak>(`INSERT INTO attendance_breaks (attendance_id,request_id,planned_start,planned_end,actual_start,note) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`, [record.id, body.request_id, body.from, body.to, actualStart, note])).rows[0] };
     await client.query("UPDATE attendance SET updated_at = NOW() WHERE id = $1", [record.id]);
   }, () => { if (started) void notifyAttendanceBreak(started.record, started.brk, "start"); });
 }

@@ -13,11 +13,17 @@ const seconds = (start: string, end: string) => Math.max(0, Math.floor((ms(end) 
 // The first/final punches plus actual breaks reconstruct every work segment,
 // including legacy attendance with no break rows. Planned return never closes a break.
 export function attendanceActivity(day: Day | null, breaks: AttendanceBreak[] = [], now = new Date()) {
-  const active = breaks.find(item => !item.actual_end) ?? null;
+  // A break whose actual_start is still ahead of now was scheduled for later and
+  // hasn't begun yet: keep status WORKING and leave it out of the timeline until
+  // the wall clock reaches it, instead of showing "on break" early.
+  const hasStarted = (item: AttendanceBreak) => ms(item.actual_start) <= now.getTime();
+  const active = breaks.find(item => !item.actual_end && hasStarted(item)) ?? null;
+  const pendingBreak = breaks.find(item => !item.actual_end && !hasStarted(item)) ?? null;
   const end = day?.check_out ?? now.toISOString();
   const sessions: { type: "WORK" | "BREAK"; start_time: string; end_time: string | null; duration_seconds: number }[] = [];
   let cursor = day?.check_in;
   for (const item of breaks) {
+    if (!hasStarted(item)) continue;
     if (cursor) sessions.push({ type: "WORK", start_time: cursor, end_time: item.actual_start, duration_seconds: seconds(cursor, item.actual_start) });
     sessions.push({ type: "BREAK", start_time: item.actual_start, end_time: item.actual_end, duration_seconds: seconds(item.actual_start, item.actual_end ?? end) });
     cursor = item.actual_end;
@@ -29,7 +35,7 @@ export function attendanceActivity(day: Day | null, breaks: AttendanceBreak[] = 
     scheduled_seconds: day?.scheduled_start && day.scheduled_end ? seconds(day.scheduled_start, day.scheduled_end) : null,
     total_worked_seconds: sessions.filter(item => item.type === "WORK").reduce((sum, item) => sum + item.duration_seconds, 0),
     total_break_seconds: sessions.filter(item => item.type === "BREAK").reduce((sum, item) => sum + item.duration_seconds, 0),
-    break_count: breaks.length, active_break: active, breaks, sessions,
+    break_count: breaks.length, active_break: active, pending_break: pendingBreak, breaks, sessions,
   };
 }
 
