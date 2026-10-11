@@ -56,6 +56,14 @@ export const spotlightController = {
     } catch (err) { return next(err); }
   },
 
+  async bulkStatus(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { ids, status } = req.body ?? {};
+      const data = await spotlightService.bulkUpdateStatus(Array.isArray(ids) ? ids : [], String(status ?? ""));
+      return sendSuccess(res, 200, data);
+    } catch (err) { return next(err); }
+  },
+
   async publish(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const data = await spotlightService.publish(String(req.params.id ?? ""));

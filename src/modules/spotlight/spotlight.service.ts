@@ -88,6 +88,30 @@ export const spotlightService = {
         return created;
     },
 
+    // Bulk status change for the Super Admin list. Each record goes through the
+    // normal update() path (so publishing still broadcasts exactly once, on a
+    // genuine first publish). One failing record never blocks or rolls back the
+    // others — the caller gets the rows that changed and the ones that did not.
+    async bulkUpdateStatus(ids: string[], status: string): Promise<{ updated: SpotlightFeature[]; failed: { id: string; message: string }[] }> {
+        if (!["draft", "published", "archived"].includes(status)) {
+            throw new AppError(400, "status must be draft, published or archived", "VALIDATION_ERROR");
+        }
+        const unique = Array.from(new Set((ids ?? []).filter((id) => typeof id === "string" && id)));
+        if (unique.length === 0) throw new AppError(400, "Select at least one feature", "VALIDATION_ERROR");
+        if (unique.length > 200) throw new AppError(400, "Too many features selected (max 200)", "VALIDATION_ERROR");
+
+        const updated: SpotlightFeature[] = [];
+        const failed: { id: string; message: string }[] = [];
+        for (const id of unique) {
+            try {
+                updated.push(await spotlightService.update(id, { status } as SpotlightUpdateBody));
+            } catch (err: any) {
+                failed.push({ id, message: err?.message ?? "Failed to update" });
+            }
+        }
+        return { updated, failed };
+    },
+
     async update(id: string, body: SpotlightUpdateBody): Promise<SpotlightFeature> {
         await getOwned(id);
         assertValidVideoUrl(body.videoDataUrl);
