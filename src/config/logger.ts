@@ -32,7 +32,7 @@ if (process.env.SOLARWINDS_LOG_TOKEN) {
       endpoint: process.env.SOLARWINDS_LOG_ENDPOINT ||
         'https://logs.collector.ap-01.cloud.solarwinds.com/v1/logs',
       token: process.env.SOLARWINDS_LOG_TOKEN,
-      serviceName: process.env.SOLARWINDS_SERVICE_NAME || 'salonox-backend-dev',
+      serviceName: process.env.SOLARWINDS_SERVICE_NAME || `salonox-backend-${config.env}`,
     })
   );
 }
