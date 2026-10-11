@@ -118,19 +118,87 @@ export const inboxRepository = {
     return rows[0]
   },
 
+  // Newest message the customer sent us — the one a read receipt / typing
+  // indicator has to reference. status lets callers skip an already-read one.
+  async getLatestInbound(salonId: string, phone: string): Promise<{ wamid: string; status: string | null } | null> {
+    const { rows } = await pool.query(`
+      SELECT m.wamid, m.status
+      FROM wa_messages m
+      JOIN wa_conversations c ON c.id = m.conversation_id
+      WHERE c.salon_id = $1 AND c.contact_phone = $2
+        AND m.direction = 'INBOUND' AND m.wamid IS NOT NULL
+      ORDER BY m.sent_at DESC
+      LIMIT 1
+    `, [salonId, normalizePhone(phone)])
+    return rows[0] ?? null
+  },
+
   async getMessages(salonId: string, phone: string): Promise<WAMessage[]> {
     const normalizedPhone = normalizePhone(phone)   // ← normalize
     const { rows } = await pool.query(`
       SELECT
         m.id, m.conversation_id, m.direction, m.body,
         m.wamid, m.status, m.media_type, m.media_url,
-        m.sent_at, m.delivered_at, m.read_at
+        m.sent_at, m.delivered_at, m.read_at,
+        to_jsonb(m)->>'reaction' AS reaction
       FROM wa_messages m
       JOIN wa_conversations c ON c.id = m.conversation_id
       WHERE c.salon_id = $1 AND c.contact_phone = $2
       ORDER BY m.sent_at ASC
     `, [salonId, normalizedPhone])
     return rows
+  },
+
+  // When the customer last wrote to us (null = never) - the start of the 24h window.
+  async getLastInboundAt(salonId: string, phone: string): Promise<Date | null> {
+    const { rows } = await pool.query(`
+      SELECT MAX(m.sent_at) AS t
+      FROM wa_messages m JOIN wa_conversations c ON c.id = m.conversation_id
+      WHERE c.salon_id = $1 AND c.contact_phone = $2 AND m.direction = 'INBOUND'
+    `, [salonId, phone])
+    return rows[0]?.t ? new Date(rows[0].t) : null
+  },
+
+  // One message with the phone of its conversation - what a reaction needs.
+  async findMessageForReaction(salonId: string, messageId: string): Promise<{ id: string; wamid: string | null; contact_phone: string } | null> {
+    const { rows } = await pool.query(`
+      SELECT m.id, m.wamid, c.contact_phone
+      FROM wa_messages m JOIN wa_conversations c ON c.id = m.conversation_id
+      WHERE m.id = $1 AND c.salon_id = $2
+    `, [messageId, salonId])
+    return rows[0] ?? null
+  },
+
+  // Remembers a reaction. reaction column comes from Migration/add_wa_messages_reaction.sql;
+  // before that runs this quietly does nothing (the reaction still went to WhatsApp).
+  async setReaction(by: { id?: string; wamid?: string }, emoji: string): Promise<{ contact_phone: string; wamid: string | null } | null> {
+    try {
+      const { rows } = await pool.query(`
+        UPDATE wa_messages m SET reaction = NULLIF($1, '')
+        FROM wa_conversations c
+        WHERE c.id = m.conversation_id AND ${by.id ? 'm.id = $2' : 'm.wamid = $2'}
+        RETURNING c.contact_phone, m.wamid
+      `, [emoji, by.id ?? by.wamid])
+      return rows[0] ?? null
+    } catch (err: any) {
+      if (err?.code === '42703') return null   // undefined_column: migration not run yet
+      throw err
+    }
+  },
+
+  // Delivery receipt from Meta for a message we sent from the Inbox. Only ever
+  // moves a message forward (SENT -> DELIVERED -> READ, or SENT -> FAILED), so a
+  // late/duplicate callback can't downgrade it.
+  async applyDeliveryStatus(wamid: string, status: 'SENT' | 'DELIVERED' | 'READ' | 'FAILED', at: Date): Promise<void> {
+    await pool.query(`
+      UPDATE wa_messages SET
+        status       = $1,
+        delivered_at = CASE WHEN $1 IN ('DELIVERED','READ') THEN COALESCE(delivered_at, $2) ELSE delivered_at END,
+        read_at      = CASE WHEN $1 = 'READ' THEN COALESCE(read_at, $2) ELSE read_at END
+      WHERE wamid = $3 AND direction = 'OUTBOUND'
+        AND (CASE COALESCE(status,'SENT') WHEN 'SENT' THEN 1 WHEN 'DELIVERED' THEN 2 WHEN 'READ' THEN 3 ELSE 0 END)
+          < (CASE $1 WHEN 'SENT' THEN 1 WHEN 'DELIVERED' THEN 2 WHEN 'READ' THEN 3 ELSE 2 END)
+    `, [status, at, wamid])
   },
 
   async updateMessageStatus(
@@ -166,7 +234,7 @@ export const inboxRepository = {
     // uses for its own History tab.
     const { rows } = await pool.query(`
       SELECT
-        c.id, c.full_name, c.phone_number,
+        c.id, c.full_name, c.phone_number, c.avatar_url,
         COALESCE(appt.total_visits, 0) AS total_visits,
         appt.last_visit_date,
         COALESCE(pay.lifetime_spend, 0) AS lifetime_spend,

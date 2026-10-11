@@ -41,6 +41,8 @@ import marketingTemplatesRoutes from './modules/marketing/whatsapp/templates/tem
 import marketingCampaignsRoutes from './modules/marketing/whatsapp/campaigns/campaigns.routes'
 import marketingConfigRoutes from './modules/marketing/whatsapp/config/config.routes'
 import marketingWebhooksRoutes from './modules/marketing/whatsapp/webhooks/webhooks.routes'
+import marketingFlowsRoutes from './modules/marketing/whatsapp/flows/flows.routes'
+import marketingInsightsRoutes from './modules/marketing/whatsapp/insights/insights.routes'
 import profileRoutes from "./modules/profile/profile.routes";
 import inboxRouter from './modules/marketing/whatsapp/inbox/inbox.routes';
 import salonDashboardRoutes from "./modules/salon-dashboard/salon-dashboard.routes";
@@ -54,7 +56,6 @@ import settingsRoutes from "./modules/settings/settings.routes";
 import reportsRoutes from "./modules/reports/reports.routes";
 import legacyReportsRoutes from "./modules/reports/legacyReports.routes";
 import blockedTimesRoutes from "./modules/blocked_times/blocked_times.routes";
-import analyticsRoutes from './modules/marketing/whatsapp/analytics/analytics.routes'
 import reviewsRoutes from './modules/reviews/reviews.routes'
 import reviewsPublicRoutes from './modules/reviews/reviews.public.routes'
 import botRoutes from "./modules/bot/bot.routes";
@@ -314,10 +315,11 @@ app.use("/api/v1/inventory", inventoryRoutes);
 app.use("/api/v1/spotlight", spotlightRoutes);
 //app.use('/api/v1//dashboard', marketingDashboardRoutes)
 app.use('/api/v1/marketing/dashboard', marketingDashboardRoutes);
-app.use('/api/v1/marketing/analytics', analyticsRoutes)
 app.use('/api/v1/templates', marketingTemplatesRoutes)
 app.use('/api/v1/campaigns', marketingCampaignsRoutes)
 app.use('/api/v1/wa-config', marketingConfigRoutes)
+app.use('/api/v1/wa-flows', marketingFlowsRoutes)
+app.use('/api/v1/wa-insights', marketingInsightsRoutes)
 app.use('/api/v1/reviews', reviewsRoutes)
 // PUBLIC — client-facing feedback form, deep-linked from the review_request
 // WhatsApp button, no login.

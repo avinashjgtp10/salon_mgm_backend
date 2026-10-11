@@ -33,6 +33,23 @@ export const templatesController = {
     } catch (e) { return next(e) }
   },
 
+  async createCarousel(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId
+      if (!salonId) return res.status(400).json({ error: 'salonId missing from token' })
+      const b = req.body ?? {}
+      let cards: any[] = []
+      try { cards = typeof b.cards === 'string' ? JSON.parse(b.cards) : (b.cards ?? []) } catch { cards = [] }
+      // Card images arrive as card_0, card_1 ... in card order.
+      const all = (req.files as Express.Multer.File[] | undefined) ?? []
+      const files = cards.map((_c, i) => all.find(f => f.fieldname === `card_${i}`)).filter(Boolean) as Express.Multer.File[]
+      const data = await templatesService.createCarousel(salonId, {
+        name: String(b.name ?? ''), language: String(b.language ?? ''), body_text: String(b.body_text ?? ''), cards,
+      }, files)
+      return sendSuccess(res, 201, data, 'Carousel template created successfully')
+    } catch (e) { return next(e) }
+  },
+
   async fixMedia(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = req.user?.salonId
@@ -40,6 +57,19 @@ export const templatesController = {
       if (!req.file)  return res.status(400).json({ error: 'No file uploaded' })
       const data = await templatesService.fixMedia(req.params.id as string, salonId, req.file)
       return sendSuccess(res, 200, data, 'Media ID updated successfully')
+    } catch (e) { return next(e) }
+  },
+
+  async headerMedia(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId
+      if (!salonId) return res.status(400).json({ error: 'salonId missing from token' })
+      const cardRaw = req.query.card
+      const card = cardRaw !== undefined && /^\d+$/.test(String(cardRaw)) ? parseInt(String(cardRaw), 10) : undefined
+      const { buffer, mimeType } = await templatesService.getHeaderMedia(req.params.id as string, salonId, card)
+      res.setHeader('Content-Type', mimeType)
+      res.setHeader('Cache-Control', 'private, max-age=3600')
+      return res.send(buffer)
     } catch (e) { return next(e) }
   },
 

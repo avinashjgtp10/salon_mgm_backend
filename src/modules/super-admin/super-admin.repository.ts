@@ -163,6 +163,15 @@ export const superAdminRepository = {
         TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,'')))                         AS owner_name,
         CASE WHEN s.is_active THEN 'active' ELSE 'inactive' END                         AS status,
         COALESCE(u.is_onboarding_complete, false)                                       AS is_onboarding_complete,
+        -- Meta (WhatsApp Cloud API) setup: complete only when the salon has a saved,
+        -- verified connection with every credential present.
+        COALESCE((
+          SELECT (wc.is_verified = true
+                  AND COALESCE(wc.phone_number_id, '') <> ''
+                  AND COALESCE(wc.waba_id, '')         <> ''
+                  AND COALESCE(wc.access_token, '')    <> '')
+          FROM whatsapp_configs wc WHERE wc.salon_id = s.id LIMIT 1
+        ), false)                                                                         AS meta_setup_complete,
         s.created_at,
         s.is_dummy,
         (SELECT COUNT(*)::int  FROM staff        WHERE salon_id = s.id)                  AS staff_count,

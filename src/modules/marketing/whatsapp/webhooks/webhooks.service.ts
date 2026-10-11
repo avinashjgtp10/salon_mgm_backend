@@ -1,6 +1,8 @@
 import { AppError } from '../../../../middleware/error.middleware'
 import { webhooksRepository } from './webhooks.repository'
 import { inboxService } from '../inbox/inbox.service'
+import { flowsService } from '../flows/flows.service'
+import { inboxRepository } from '../inbox/inbox.repository'
 import { whatsappAutomationService } from '../../../whatsapp-automation/whatsapp-automation.service'
 import { notificationsService } from '../../../notifications/notifications.service'
 import { aiEngineService } from '../../../ai-engine/ai-engine.service'
@@ -139,15 +141,66 @@ export const webhooksService = {
   },
 
   async processInboundMessage(salonId: string, msg: any, contact: any) {
-    if (msg.type !== 'text') return
     const senderName = contact?.profile?.name ?? msg.from
-    const messageBody = msg.text?.body ?? ''
+
+    // Booking form submitted - handled end to end (thread line, enquiry,
+    // notification, confirmation) by the flows service.
+    if (msg.type === 'interactive' && msg.interactive?.type === 'nfm_reply') {
+      await flowsService.handleBookingResponse(
+        salonId, msg.from, contact?.profile?.name ?? null, msg.id,
+        msg.interactive.nfm_reply?.response_json ?? '{}'
+      )
+      return
+    }
+
+    // The customer reacted to one of our messages with an emoji (or removed it).
+    if (msg.type === 'reaction') {
+      await inboxService.handleInboundReaction(salonId, msg.reaction?.message_id ?? '', msg.reaction?.emoji ?? '')
+      return
+    }
+
+    // Everything else a customer can send. Previously only plain text was kept,
+    // so template quick-reply taps, list/button replies and photos vanished.
+    let messageBody = ''
+    let mediaType: 'image' | 'video' | 'audio' | 'document' | null = null
+    let mediaId: string | null = null
+    switch (msg.type) {
+      case 'text':        messageBody = msg.text?.body ?? ''; break
+      case 'button':      messageBody = msg.button?.text ?? ''; break
+      case 'interactive':
+        messageBody = msg.interactive?.button_reply?.title ?? msg.interactive?.list_reply?.title ?? ''
+        break
+      case 'image':
+      case 'video':
+      case 'document':
+        mediaType   = msg.type
+        mediaId     = msg[msg.type]?.id ?? null
+        messageBody = msg[msg.type]?.caption ?? ''
+        break
+      case 'audio':
+        mediaType   = 'audio'
+        mediaId     = msg.audio?.id ?? null
+        messageBody = '🎤 Voice message'
+        break
+      case 'sticker':     messageBody = '🙂 Sticker'; break
+      case 'location':    messageBody = '📍 Location shared'; break
+      case 'contacts':    messageBody = '👤 Contact shared'; break
+      default:            return   // reactions, system messages, unsupported - ignore as before
+    }
+    if (!messageBody && !mediaId) return
+
+    // Read BEFORE this message is stored: tells the auto-send rule below whether
+    // this reply re-opens a closed 24h window.
+    const prevInboundAt = await flowsService.getLastInboundAt(salonId, msg.from).catch(() => null)
+
     await inboxService.handleInboundMessage({
       salonId,
       phone: msg.from,
       name:  senderName,
       body:  messageBody,
       wamid: msg.id,
+      mediaType,
+      mediaUrl: mediaId,
     })
 
     // Fire notification for incoming WhatsApp message (fire-and-forget)
@@ -170,8 +223,11 @@ export const webhooksService = {
 
     // ── LUNOX AI receptionist — opt-in per salon, off by default ────────────
     // handleIncomingMessage never throws (it catches internally), so this is
-    // safe to await without risking the webhook response.
-    const aiEnabled = await aiEngineRepository.isAiReceptionistEnabled(salonId).catch(() => false)
+    // safe to await without risking the webhook response. Plain text only, as
+    // before - button taps and media must not be fed to it as if typed.
+    const aiEnabled = msg.type === 'text'
+      ? await aiEngineRepository.isAiReceptionistEnabled(salonId).catch(() => false)
+      : false
     if (aiEnabled) {
       await aiEngineService.handleIncomingMessage({
         salonId,
@@ -179,6 +235,15 @@ export const webhooksService = {
         name:  senderName,
         text:  messageBody,
       })
+    } else {
+      // Auto-send the booking form on a window-reopening reply (if the salon
+      // enabled it). Skipped when the AI receptionist is on - it books itself.
+      const aiOn = await aiEngineRepository.isAiReceptionistEnabled(salonId).catch(() => false)
+      if (!aiOn) {
+        flowsService.autoSendOnReply(salonId, msg.from, prevInboundAt).catch((err: any) =>
+          logger.warn('Booking form auto-send failed', { salonId, message: err?.message })
+        )
+      }
     }
   },
 
@@ -189,7 +254,9 @@ export const webhooksService = {
     const type      = status.status?.toUpperCase()
     const timestamp = new Date(parseInt(status.timestamp) * 1000)
     const errorCode = status.errors?.[0]?.code?.toString() ?? null
-    const errorMsg  = status.errors?.[0]?.title            ?? null
+    const errTitle   = status.errors?.[0]?.title ?? status.errors?.[0]?.message ?? null
+    const errDetails = status.errors?.[0]?.error_data?.details ?? null
+    const errorMsg   = errTitle && errDetails && errDetails !== errTitle ? `${errTitle} — ${errDetails}` : (errTitle ?? errDetails)
 
     // Logged for every status, not just FAILED — a SENT/DELIVERED/READ update
     // previously left no trace at all, so there was no way to tell "webhook
@@ -203,6 +270,16 @@ export const webhooksService = {
         rawErrors: status.errors,
         fullStatus: status,
       })
+    }
+
+    // ── One-to-one Inbox messages: persist the receipt so the thread can show
+    // delivered / read / failed. (Previously only campaign contacts and
+    // automation logs were updated, so an undeliverable Inbox message sat at a
+    // single tick forever.) Best-effort - never blocks the existing handling.
+    if (type === 'SENT' || type === 'DELIVERED' || type === 'READ' || type === 'FAILED') {
+      inboxRepository.applyDeliveryStatus(wamid, type, timestamp).catch((err: any) =>
+        logger.warn('Inbox delivery status update failed', { wamid, message: err?.message })
+      )
     }
 
     // ── Check campaign contacts first (existing behaviour) ────────────────────
