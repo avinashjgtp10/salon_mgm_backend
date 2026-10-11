@@ -41,6 +41,7 @@ router.post("/dashboard", superAdminController.getDashboard);
 router.get("/salons",                       superAdminController.getAllSalons);
 router.get("/salons/:id/staff",             superAdminController.getSalonStaff);
 router.patch("/salons/:id/status",          superAdminController.setSalonStatus);
+router.patch("/salons/:id/dummy",           superAdminController.setSalonDummy);
 router.patch("/salons/:id/onboarding",      superAdminController.forceOnboarding);
 router.post("/salons/:id/impersonate",      superAdminController.impersonateSalon);
 router.delete("/salons/:id",               superAdminController.deleteSalon);

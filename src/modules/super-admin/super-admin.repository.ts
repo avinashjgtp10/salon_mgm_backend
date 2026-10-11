@@ -149,8 +149,11 @@ export const superAdminRepository = {
   // searchSalonsForSubscriptionPermissions/getSubscriptionPermissionsById
   // above. trial_end/current_period_end cover trial and paid accounts
   // respectively.
-  async getAllSalons(search?: string) {
+  // kind: "real" | "dummy" limits to that group (Super Admin's two Salons pages);
+  // omitted = every salon (Overview dashboard).
+  async getAllSalons(search?: string, kind?: "real" | "dummy") {
     const param = search ? `%${search}%` : null;
+    const dummyFilter = kind ? (kind === "dummy" ? "AND s.is_dummy = true" : "AND s.is_dummy = false") : "";
     const { rows } = await pool.query(`
       SELECT
         s.id,
@@ -161,6 +164,7 @@ export const superAdminRepository = {
         CASE WHEN s.is_active THEN 'active' ELSE 'inactive' END                         AS status,
         COALESCE(u.is_onboarding_complete, false)                                       AS is_onboarding_complete,
         s.created_at,
+        s.is_dummy,
         (SELECT COUNT(*)::int  FROM staff        WHERE salon_id = s.id)                  AS staff_count,
         (SELECT COUNT(*)::int  FROM clients      WHERE salon_id = s.id)                  AS client_count,
         (SELECT COUNT(*)::int  FROM appointments WHERE salon_id = s.id)                  AS total_bookings,
@@ -191,6 +195,7 @@ export const superAdminRepository = {
          OR s.slug          ILIKE $1
          OR u.email         ILIKE $1
          OR u.first_name    ILIKE $1)
+      ${dummyFilter}
       ORDER BY s.created_at DESC
     `, [param]);
     return rows;
@@ -290,6 +295,14 @@ export const superAdminRepository = {
       WHERE s.id = $1 LIMIT 1
     `, [id]);
     return rows[0] || null;
+  },
+
+  async setSalonDummy(id: string, isDummy: boolean) {
+    const { rows } = await pool.query(
+      `UPDATE salons SET is_dummy = $1, updated_at = NOW() WHERE id = $2 RETURNING id, is_dummy`,
+      [isDummy, id]
+    );
+    return rows[0];
   },
 
   async setSalonStatus(id: string, isActive: boolean) {
@@ -616,6 +629,7 @@ export const superAdminRepository = {
     role: string;
     business_name?: string;
     address?: string;
+    is_dummy?: boolean;
     createdByUserId?: string;
   }) {
     const client = await pool.connect();
@@ -639,10 +653,10 @@ export const superAdminRepository = {
       if (data.business_name?.trim() && data.role === "salon_owner") {
         const slug = data.business_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") + "-" + Date.now();
         const { rows: salonRows } = await client.query(`
-          INSERT INTO salons (owner_id, business_name, slug, address, is_active, onboarding_completed)
-          VALUES ($1, $2, $3, $4, true, false)
+          INSERT INTO salons (owner_id, business_name, slug, address, is_active, onboarding_completed, is_dummy)
+          VALUES ($1, $2, $3, $4, true, false, $5)
           RETURNING id
-        `, [user.id, data.business_name.trim(), slug, data.address?.trim() ?? null]);
+        `, [user.id, data.business_name.trim(), slug, data.address?.trim() ?? null, data.is_dummy === true]);
 
         // New accounts default to the Pro tier so they aren't left on the
         // implicit Basic fallback (see salon-plans.service.ts getCustomization)
