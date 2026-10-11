@@ -4,8 +4,6 @@ import { redisConnection, CampaignJobData } from './campaign.queue'
 import { whatsappMetaApi } from '../shared/whatsapp.api'
 import { inboxRepository } from '../inbox/inbox.repository'
 import { webhooksRepository } from '../webhooks/webhooks.repository'
-import { campaignsRepository } from '../campaigns/campaigns.repository'
-import { mobileCampaignNotificationsService } from '../../../notifications/mobileCampaignNotifications.service'
 
 // ── Normalize phone to E.164 ──────────────────────────────────────────────────
 function normalizePhone(phone: string): string {
@@ -61,21 +59,11 @@ export const campaignWorker = new Worker<CampaignJobData>(
 
       await pool.query(`
         UPDATE wa_campaigns
-        SET failed_count = failed_count + $1,
+        SET status       = 'FAILED',
+            failed_count = failed_count + $1,
             updated_at   = NOW()
         WHERE id = $2
       `, [contactIds.length, campaignId])
-
-      const failedCampaign = await campaignsRepository.failIfSending(campaignId)
-      if (failedCampaign) {
-        await mobileCampaignNotificationsService.send({
-          salonId,
-          campaignId,
-          campaignName: campaign.name,
-          phase: 'ended',
-          body: `Campaign stopped because template "${campaign.template_name}" is missing its required media file.`,
-        })
-      }
 
       console.error(`❌ Campaign ${campaignId} aborted: template "${campaign.template_name}" has ${campaign.header_type} header but no header_media_id in DB.`)
       return

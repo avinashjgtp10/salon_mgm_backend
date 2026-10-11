@@ -4,7 +4,6 @@ import { campaignsRepository } from './campaigns.repository'
 import { campaignQueue } from '../queue/campaign.queue'
 import { CreateCampaignBody } from './campaigns.types'
 import logger from '../../../../config/logger'
-import { mobileCampaignNotificationsService } from '../../../notifications/mobileCampaignNotifications.service'
 
 function chunk<T>(arr: T[], size: number): T[][] {
   const chunks: T[][] = []
@@ -56,16 +55,6 @@ async function queueCampaignBatches(
       contactIds: batches[i],
     }, { delay: i * 500 })
   }
-}
-
-async function notifyCampaignStarted(salonId: string, campaignId: string, campaignName: string) {
-  await mobileCampaignNotificationsService.send({
-    salonId,
-    campaignId,
-    campaignName,
-    phase: 'started',
-    body: 'Your campaign is now sending.',
-  })
 }
 
 export const campaignsService = {
@@ -127,7 +116,6 @@ export const campaignsService = {
     if (!isScheduled) {
       // Send immediately
       await queueCampaignBatches(campaignId, salonId, batchSize)
-      await notifyCampaignStarted(salonId, campaignId, body.name)
     } else {
       logger.info(`📅 Campaign "${body.name}" scheduled for ${scheduledAt}`)
     }
@@ -198,7 +186,6 @@ export const campaignsService = {
     }
 
     await queueCampaignBatches(newCampaignId, salonId, campaign.batch_size)
-    await notifyCampaignStarted(salonId, newCampaignId, `${campaign.name} (Resend)`)
 
     return campaignsRepository.findById(newCampaignId, salonId)
   },
@@ -286,8 +273,6 @@ export const campaignsService = {
 
   async resume(id: string, salonId: string) {
     const campaign = await this.getById(id, salonId)
-    const resumed = await campaignsRepository.resumeIfPaused(id)
-    if (!resumed) throw new AppError(409, 'Campaign is no longer paused', 'CAMPAIGN_NOT_PAUSED')
     const pending  = await campaignsRepository.getPendingContactIds(id)
 
     if (pending.length > 0) {
@@ -301,8 +286,7 @@ export const campaignsService = {
       }
     }
 
-    await notifyCampaignStarted(salonId, id, campaign.name)
-    return resumed
+    return campaignsRepository.updateStatus(id, 'SENDING')
   },
 
   // ── Self-heal campaigns whose batch jobs died with no automatic retry left ──
@@ -326,31 +310,13 @@ export const campaignsService = {
           // failure, not a finished send, and must not be reported as one.
           const actualContacts = await campaignsRepository.countContacts(campaign.id)
           if (actualContacts === 0) {
-            const failed = await campaignsRepository.failIfSending(campaign.id)
-            if (failed) {
-              await mobileCampaignNotificationsService.send({
-                salonId: campaign.salon_id,
-                campaignId: campaign.id,
-                campaignName: campaign.name,
-                phase: 'ended',
-                body: 'The campaign could not be started because no contacts were available.',
-              })
-            }
+            await campaignsRepository.updateStatus(campaign.id, 'FAILED')
             logger.error(`❌ Campaign "${campaign.name}" (${campaign.id}) stalled with zero contact rows — marked FAILED instead of COMPLETED`)
             continue
           }
           // Everything was actually processed — just the final completion
           // update itself never landed. Finish it, nothing left to send.
-          const completed = await campaignsRepository.completeIfSending(campaign.id)
-          if (completed) {
-            await mobileCampaignNotificationsService.send({
-              salonId: campaign.salon_id,
-              campaignId: campaign.id,
-              campaignName: campaign.name,
-              phase: 'ended',
-              body: 'Your campaign has finished sending.',
-            })
-          }
+          await campaignsRepository.updateStatus(campaign.id, 'COMPLETED')
           continue
         }
 
@@ -381,10 +347,8 @@ export const campaignsService = {
 
     for (const campaign of due) {
       try {
-        const started = await campaignsRepository.startScheduledIfDue(campaign.id)
-        if (!started) continue
+        await campaignsRepository.updateStatus(campaign.id, 'SENDING', { started_at: true })
         await queueCampaignBatches(campaign.id, campaign.salon_id, campaign.batch_size)
-        await notifyCampaignStarted(campaign.salon_id, campaign.id, campaign.name)
         logger.info(`✅ Scheduled campaign "${campaign.name}" started`)
       } catch (err: any) {
         logger.error(`❌ Failed to start scheduled campaign "${campaign.name}": ${err.message}`)
