@@ -78,3 +78,26 @@ export const validateCheckoutAppointment = (req: Request, _res: Response, next: 
         return next();
     } catch (err) { return next(err); }
 };
+
+const VALID_ITEM_STATUSES = ["in_progress", "completed"] as const;
+
+// Staff handoff workflow — PATCH .../items/:itemId/status only ever moves a
+// row FORWARD (pending -> in_progress -> completed); "pending" is never a
+// valid target here, it's only the implicit starting point.
+export const validateUpdateItemStatus = (req: Request, _res: Response, next: NextFunction) => {
+    try {
+        const b = req.body;
+        if (!VALID_ITEM_STATUSES.includes(b.status))
+            throw new AppError(400, `status must be one of: ${VALID_ITEM_STATUSES.join(", ")}`, "VALIDATION_ERROR");
+        return next();
+    } catch (err) { return next(err); }
+};
+
+export const validateHandoffItem = (req: Request, _res: Response, next: NextFunction) => {
+    try {
+        const b = req.body;
+        if (!isUUID(b.to_staff_id))
+            throw new AppError(400, "to_staff_id is required and must be a UUID", "VALIDATION_ERROR");
+        return next();
+    } catch (err) { return next(err); }
+};
