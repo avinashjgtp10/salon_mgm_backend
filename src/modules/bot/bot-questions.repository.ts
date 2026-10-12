@@ -11,9 +11,12 @@ const GROQ_FAILURE_STRINGS = [
   "I couldn't find an answer. Please contact support.",
 ];
 
+// A direct Super Admin reply always counts as answered.
 const UNANSWERED_SQL = `(
-  bq.source = 'error'
-  OR (bq.source = 'groq' AND (bq.answer IS NULL OR bq.answer = ANY($ANSWERED_PARAM::text[])))
+  bq.admin_reply IS NULL AND (
+    bq.source = 'error'
+    OR (bq.source = 'groq' AND (bq.answer IS NULL OR bq.answer = ANY($ANSWERED_PARAM::text[])))
+  )
 )`;
 
 export const botQuestionsRepository = {
@@ -87,6 +90,45 @@ export const botQuestionsRepository = {
   // variants of the same qa.json entry count as one question. Unmatched
   // (Groq/error) rows have no matched_id and are excluded — there's no
   // stable grouping key for free-text questions.
+  // Direct reply to ONE question: stored on the row, never touches the shared
+  // knowledge base. Only a question that was asked by a known user in a known salon
+  // can be replied to (otherwise nobody could receive it).
+  async replyDirect(id: string, reply: string): Promise<BotQuestion | "no_recipient" | null> {
+    const { rows } = await pool.query(`SELECT id, user_id, salon_id FROM bot_questions WHERE id = $1`, [id]);
+    if (!rows[0]) return null;
+    if (!rows[0].user_id || !rows[0].salon_id) return "no_recipient";
+    const { rows: out } = await pool.query(
+      `UPDATE bot_questions
+       SET admin_reply = $2, admin_replied_at = NOW(), admin_reply_read_at = NULL
+       WHERE id = $1
+       RETURNING *`,
+      [id, reply]
+    );
+    return out[0] ?? null;
+  },
+
+  // Replies addressed to this exact user in this exact salon — nobody else's.
+  async listRepliesForUser(userId: string, salonId: string): Promise<Pick<BotQuestion, "id" | "question" | "admin_reply" | "admin_replied_at" | "admin_reply_read_at">[]> {
+    const { rows } = await pool.query(
+      `SELECT id, question, admin_reply, admin_replied_at, admin_reply_read_at
+       FROM bot_questions
+       WHERE user_id = $1 AND salon_id = $2 AND admin_reply IS NOT NULL
+       ORDER BY admin_replied_at DESC
+       LIMIT 20`,
+      [userId, salonId]
+    );
+    return rows;
+  },
+
+  async markReplyRead(id: string, userId: string, salonId: string): Promise<boolean> {
+    const { rowCount } = await pool.query(
+      `UPDATE bot_questions SET admin_reply_read_at = COALESCE(admin_reply_read_at, NOW())
+       WHERE id = $1 AND user_id = $2 AND salon_id = $3 AND admin_reply IS NOT NULL`,
+      [id, userId, salonId]
+    );
+    return (rowCount ?? 0) > 0;
+  },
+
   async mostFrequent(limit = 20): Promise<FrequentQuestion[]> {
     const { rows } = await pool.query(
       `SELECT
