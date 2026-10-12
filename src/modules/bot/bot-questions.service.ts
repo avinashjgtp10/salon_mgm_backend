@@ -30,6 +30,18 @@ export const botQuestionsService = {
     return botQuestionsRepository.deleteOlderThan(RETENTION_DAYS);
   },
 
+  async replyDirect(id: string, reply: string) {
+    return botQuestionsRepository.replyDirect(id, reply);
+  },
+
+  async listRepliesForUser(userId: string, salonId: string) {
+    return botQuestionsRepository.listRepliesForUser(userId, salonId);
+  },
+
+  async markReplyRead(id: string, userId: string, salonId: string) {
+    return botQuestionsRepository.markReplyRead(id, userId, salonId);
+  },
+
   async saveAnswer(input: SaveAnswerInput) {
     return botQuestionsRepository.saveAnswer(input);
   },
