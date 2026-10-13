@@ -57,10 +57,17 @@ export const superAdminRepository = {
       LEFT JOIN salons s ON s.owner_id = u.id
       WHERE u.role IN ('salon_owner', 'admin')
         AND u.is_active = true
+        -- Real plans (trial, paid, super-admin granted) live in \`subscriptions\`,
+        -- not the legacy billing_subscriptions. Same "active" rule the Branch
+        -- Owner portal uses: active/trialing and not past its end date.
         AND NOT EXISTS (
-          SELECT 1 FROM billing_subscriptions bs
-          WHERE bs.salon_id = s.id
-            AND bs.status IN ('active', 'trialing')
+          SELECT 1 FROM subscriptions sub
+          WHERE sub.salon_id = s.id
+            AND (
+              (sub.status = 'active'   AND (sub.current_period_end IS NULL OR sub.current_period_end > NOW()))
+              OR
+              (sub.status = 'trialing' AND (sub.trial_end          IS NULL OR sub.trial_end          > NOW()))
+            )
         )
         AND s.id IS NOT NULL
       ORDER BY u.last_login DESC NULLS LAST
@@ -134,7 +141,9 @@ export const superAdminRepository = {
            WHERE role != 'super_admin' AND created_at >= date_trunc('month', NOW()))    AS signups_this_month,
         (SELECT COUNT(*)::int FROM payments WHERE status = 'failed')                     AS failed_payments,
         (SELECT COUNT(*)::int FROM salons WHERE created_at >= date_trunc('month', NOW())) AS new_salons_this_month,
-        (SELECT COUNT(*)::int FROM billing_subscriptions WHERE status IN ('active','trialing')) AS active_subscriptions
+        (SELECT COUNT(DISTINCT salon_id)::int FROM subscriptions
+           WHERE (status = 'active'   AND (current_period_end IS NULL OR current_period_end > NOW()))
+              OR (status = 'trialing' AND (trial_end          IS NULL OR trial_end          > NOW()))) AS active_subscriptions
     `);
     return rows[0];
   },
