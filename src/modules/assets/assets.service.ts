@@ -33,11 +33,11 @@ const when = (v: unknown, field: string): string | null => {
   return d.toISOString();
 };
 
-// asset_categories comes from Migration/create_tool_tracking.sql; say so instead of a bare 500 when it has not been run.
+// asset_categories / asset_brands come from Migration/create_tool_tracking.sql; say so instead of a bare 500 when it has not been run.
 async function withCategoriesTable<T>(fn: () => Promise<T>): Promise<T> {
   try { return await fn(); }
   catch (e: any) {
-    if (e?.code === "42P01") throw new AppError(503, "Categories are not set up on this database yet - run Migration/create_tool_tracking.sql", "MIGRATION_PENDING");
+    if (e?.code === "42P01") throw new AppError(503, "Categories and brands are not set up on this database yet - run Migration/create_tool_tracking.sql", "MIGRATION_PENDING");
     throw e;
   }
 }
@@ -82,6 +82,15 @@ export const assetsService = {
     }
     await withCategoriesTable(() => repo.deleteCategory(actor.salonId, name));
     return repo.categories(actor.salonId);
+  },
+  brands: (salonId: string) => repo.brands(salonId),
+  async addBrand(actor: Actor, body: Record<string, any>) {
+    const name = str(body.name, 80);
+    if (!name) throw bad("Brand name is required");
+    if (!(await withCategoriesTable(() => repo.addBrand(actor.salonId, name, actor.userId)))) {
+      throw new AppError(409, `Brand "${name}" already exists`, "BRAND_EXISTS");
+    }
+    return repo.brands(actor.salonId);
   },
   async addCategory(actor: Actor, body: Record<string, any>) {
     const name = str(body.name, 80);

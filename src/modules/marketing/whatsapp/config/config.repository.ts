@@ -85,6 +85,15 @@ export const configRepository = {
     return rows[0] || null
   },
 
+  // Only the shown phone number - used to fill in a connection that was saved without one.
+  async setDisplayPhone(salonId: string, displayPhone: string): Promise<WhatsAppConfig | null> {
+    const { rows } = await pool.query(
+      `UPDATE whatsapp_configs SET display_phone = $2, updated_at = NOW() WHERE salon_id = $1 RETURNING *`,
+      [salonId, displayPhone],
+    )
+    return rows[0] || null
+  },
+
   async setVerified(
     salonId:      string,
     displayPhone: string,

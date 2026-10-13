@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import { AppError } from "./error.middleware";
-import { isSessionActive } from "../modules/auth/session.util";
+import { isSessionActive, getSessionPlatform } from "../modules/auth/session.util";
+import { clientActivityTracker } from "../modules/client-activity/client-activity.tracker";
 
 export const authMiddleware = async (
   req: Request & { user?: any },
@@ -48,6 +49,18 @@ export const authMiddleware = async (
           "You were signed out because this account was logged in on another device.",
           "SESSION_REPLACED",
         ));
+      }
+    }
+
+    // Client Activity Tracking (Super Admin): tie this request to the account and the platform (Web / App)
+    // its login session came from. Fire-and-forget; super-admins and impersonation tokens (no sid) skip it.
+    if (decoded?.sid && decoded.role !== "super_admin") {
+      const platform = getSessionPlatform(String(decoded.sid));
+      if (platform) {
+        clientActivityTracker.touch({
+          userId: String(decoded.userId), salonId: decoded.salonId ?? null, platform,
+          url: req.originalUrl, ip: req.ip, userAgent: String(req.headers["user-agent"] || ""),
+        });
       }
     }
 

@@ -79,6 +79,7 @@ export const assetsRepository = {
     if (f.status?.length) add("a.status = ANY(?::text[])", f.status);
     if (f.condition?.length) add("a.condition = ANY(?::text[])", f.condition);
     if (f.category?.length) add("LOWER(a.category) = ANY(?::text[])", f.category.map((c) => c.toLowerCase()));
+    if (f.brand?.length) add("LOWER(a.brand) = ANY(?::text[])", f.brand.map((b) => b.toLowerCase()));
     if (f.branch_id?.length) add("a.branch_id = ANY(?::uuid[])", f.branch_id);
     if (f.search) {
       vals.push(`%${f.search}%`);
@@ -121,6 +122,42 @@ export const assetsRepository = {
       );
       return rows.map((r) => r.category);
     }
+  },
+
+  async brands(salonId: string): Promise<string[]> {
+    // Same idea as categories(): added brands + any already typed onto an asset, de-duplicated ignoring case.
+    try {
+      const { rows } = await pool.query(
+        `SELECT DISTINCT ON (LOWER(name)) name FROM (
+           SELECT name FROM asset_brands WHERE salon_id = $1
+           UNION ALL
+           SELECT brand AS name FROM assets WHERE salon_id = $1 AND brand IS NOT NULL AND brand <> ''
+         ) b ORDER BY LOWER(name), name`,
+        [salonId],
+      );
+      return rows.map((r) => r.name);
+    } catch (e: any) {
+      if (e?.code !== "42P01") throw e;   // asset_brands not migrated yet: fall back to brands used on assets
+      const { rows } = await pool.query(
+        `SELECT DISTINCT brand FROM assets WHERE salon_id = $1 AND brand IS NOT NULL AND brand <> '' ORDER BY brand`,
+        [salonId],
+      );
+      return rows.map((r) => r.brand);
+    }
+  },
+
+  // Returns false when the (case-insensitive) name already exists.
+  async addBrand(salonId: string, name: string, userId: string): Promise<boolean> {
+    const { rows: used } = await pool.query(
+      `SELECT 1 FROM assets WHERE salon_id = $1 AND LOWER(brand) = LOWER($2) LIMIT 1`,
+      [salonId, name],
+    );
+    if (used.length) return false;
+    const { rowCount } = await pool.query(
+      `INSERT INTO asset_brands (salon_id, name, created_by) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+      [salonId, name, userId],
+    );
+    return (rowCount ?? 0) > 0;
   },
 
   async assetsUsingCategory(salonId: string, name: string): Promise<number> {
