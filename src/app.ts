@@ -56,6 +56,7 @@ import settingsRoutes from "./modules/settings/settings.routes";
 import reportsRoutes from "./modules/reports/reports.routes";
 import legacyReportsRoutes from "./modules/reports/legacyReports.routes";
 import blockedTimesRoutes from "./modules/blocked_times/blocked_times.routes";
+import assetsRoutes from "./modules/assets/assets.routes";
 import reviewsRoutes from './modules/reviews/reviews.routes'
 import reviewsPublicRoutes from './modules/reviews/reviews.public.routes'
 import botRoutes from "./modules/bot/bot.routes";
@@ -333,6 +334,7 @@ app.use("/api/v1/payments", paymentsRoutes);
 app.use("/api/v1/pos-payments", posPaymentsRoutes);
 app.use("/api/v1/payment-settings", paymentSettingsRoutes);
 app.use("/api/v1/blocked-times", blockedTimesRoutes);
+app.use("/api/v1/assets", assetsRoutes);
 app.use("/api/v1/settings", settingsRoutes);
 app.use("/api/v1/bot", botRoutes);
 app.use("/api/v1/bot-questions", botQuestionsRoutes);
