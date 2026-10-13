@@ -272,11 +272,12 @@ export const superAdminRepository = {
         st.phone,
         COALESCE(st.designation, 'staff')                          AS role,
         st.is_active,
-        NULL::timestamptz                                          AS last_login,
-        0                                                           AS login_count,
+        su.last_login                                              AS last_login,
+        COALESCE(su.login_count, 0)                                AS login_count,
         COALESCE(rbs.revenue, 0)::numeric                          AS revenue,
         1                                                           AS sort_rank
       FROM staff st
+      LEFT JOIN users su ON su.id = st.user_id
       LEFT JOIN revenue_by_staff rbs ON rbs.staff_id = st.id
       WHERE st.salon_id = $1
 
