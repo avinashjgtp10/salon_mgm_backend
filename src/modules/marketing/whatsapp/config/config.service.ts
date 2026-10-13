@@ -13,6 +13,34 @@ function getWebhookUrl(salonId: string): string {
   return `${base}/api/v1/webhooks/${salonId}/meta`
 }
 
+// A connection saved without its display number (the Super Admin form does not ask for it) is filled in from
+// Meta the first time it is needed, then kept. A failed lookup is not retried for a while, so a bad token or a
+// Meta outage cannot turn every config read into a Meta call.
+const DISPLAY_PHONE_RETRY_MS = 10 * 60 * 1000
+const displayPhoneFailedAt = new Map<string, number>()
+
+async function withDisplayPhone<T extends { salon_id?: any; phone_number_id?: any; access_token?: any; display_phone?: any }>(
+  salonId: string,
+  config: T,
+): Promise<T> {
+  if (String(config.display_phone ?? '').trim() || !config.phone_number_id || !config.access_token) return config
+  const failedAt = displayPhoneFailedAt.get(salonId)
+  if (failedAt && Date.now() - failedAt < DISPLAY_PHONE_RETRY_MS) return config
+  try {
+    const found = await whatsappMetaApi.verifyPhoneNumberId({ phoneNumberId: config.phone_number_id, accessToken: config.access_token })
+    if (found.valid && found.displayPhone) {
+      const updated = await configRepository.setDisplayPhone(salonId, found.displayPhone)
+      displayPhoneFailedAt.delete(salonId)
+      return { ...config, display_phone: updated?.display_phone ?? found.displayPhone }
+    }
+    displayPhoneFailedAt.set(salonId, Date.now())
+  } catch (err: any) {
+    displayPhoneFailedAt.set(salonId, Date.now())
+    logger.warn('[wa-config] could not look up the display phone number', { salonId, error: err?.message })
+  }
+  return config
+}
+
 export const configService = {
 
   // revealSecrets: true returns the real access_token / app_secret instead of the
@@ -20,8 +48,9 @@ export const configService = {
   // edit_whatsapp_config - everyone else (including staff who merely view the
   // Inbox/Campaigns) keeps getting the redacted values.
   async getConfig(salonId: string, revealSecrets: boolean = false) {
-    const config = await configRepository.findBySalonId(salonId)
-    if (!config) return null
+    const found = await configRepository.findBySalonId(salonId)
+    if (!found) return null
+    const config = await withDisplayPhone(salonId, found)
     // sent_today powers the Send Campaign modal's "messages remaining today"
     // usage bar — cheap enough to compute on every config fetch, and this is
     // the endpoint every report/campaign page already loads waConfig from.
@@ -196,7 +225,7 @@ export const configService = {
 
     return configRepository.setVerified(
       salonId,
-      config.display_phone ?? '',
+      (await withDisplayPhone(salonId, config)).display_phone ?? '',
       limits.quality_rating,
       resolvedLimit
     )

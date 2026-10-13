@@ -92,6 +92,7 @@ export interface AssetListFilters {
   status?: AssetStatus[];
   condition?: AssetCondition[];
   category?: string[];
+  brand?: string[];
   branch_id?: string[];
   page?: number;
   limit?: number;

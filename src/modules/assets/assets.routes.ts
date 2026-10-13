@@ -20,6 +20,8 @@ const investigate = requirePermission("manage_asset_investigations");
 // Static paths first — otherwise "/:id" swallows them.
 router.get("/categories", ...guard, view, c.categories);
 router.post("/categories", ...guard, manage, c.addCategory);
+router.get("/brands", ...guard, view, c.brands);
+router.post("/brands", ...guard, manage, c.addBrand);
 router.delete("/categories", ...guard, manage, c.deleteCategory);
 router.get("/incidents", ...guard, view, c.listIncidents);
 router.patch("/incidents/:incidentId", ...guard, investigate, c.updateIncident);

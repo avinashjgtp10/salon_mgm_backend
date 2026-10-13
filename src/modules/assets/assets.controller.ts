@@ -39,6 +39,7 @@ export const assetsController = {
         status: csvOf(q.status, ASSET_STATUSES),
         condition: csvOf(q.condition, ASSET_CONDITIONS),
         category: csv(q.category).length ? csv(q.category) : undefined,
+        brand: csv(q.brand).length ? csv(q.brand) : undefined,
         branch_id: csv(q.branch_id).length ? csv(q.branch_id) : undefined,
         page: Number(q.page) || 1,
         limit: Number(q.limit) || 20,
@@ -49,6 +50,16 @@ export const assetsController = {
 
   async categories(req: AuthRequest, res: Response, next: NextFunction) {
     try { return sendSuccess(res, 200, await assetsService.categories(actorOf(req).salonId), "Categories fetched"); }
+    catch (e) { return next(e); }
+  },
+
+  async brands(req: AuthRequest, res: Response, next: NextFunction) {
+    try { return sendSuccess(res, 200, await assetsService.brands(actorOf(req).salonId), "Brands fetched"); }
+    catch (e) { return next(e); }
+  },
+
+  async addBrand(req: AuthRequest, res: Response, next: NextFunction) {
+    try { return sendSuccess(res, 201, await assetsService.addBrand(actorOf(req), req.body ?? {}), "Brand added"); }
     catch (e) { return next(e); }
   },
 

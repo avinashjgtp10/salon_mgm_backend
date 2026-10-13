@@ -67,6 +67,17 @@ CREATE TABLE IF NOT EXISTS asset_categories (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_asset_categories_salon_name ON asset_categories (salon_id, LOWER(name));
 
+-- Brands the salon has added from the Register asset form (shown in its Brand list even before an asset
+-- uses them). Brands already typed onto assets are merged in by the API.
+CREATE TABLE IF NOT EXISTS asset_brands (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  salon_id    UUID NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+  name        VARCHAR(80) NOT NULL,
+  created_by  UUID,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_asset_brands_salon_name ON asset_brands (salon_id, LOWER(name));
+
 CREATE TABLE IF NOT EXISTS asset_incidents (
   id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   salon_id               UUID NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
