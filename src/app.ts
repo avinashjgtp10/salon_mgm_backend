@@ -1,3 +1,4 @@
+import userGuideRoutes from "./modules/user-guide/user-guide.routes";
 import express, { Application } from "express";
 //import cors from "cors";
 import helmet from "helmet";
@@ -284,6 +285,7 @@ app.use("/api/v1/webhooks", marketingWebhooksRoutes);
 // (salon is identified by phone_number_id inside the payload, so this is safe).
 app.use("/webhook", marketingWebhooksRoutes);
 app.use("/api/v1/profile", profileRoutes);
+app.use("/api/v1/user-guide", userGuideRoutes);
 
 // ── Subscription gate — applied after exempt routes are registered ─────────────
 // Every route registered BELOW this line requires an active/trialing subscription.
