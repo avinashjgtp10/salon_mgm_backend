@@ -423,7 +423,8 @@ export const attendanceService = {
                 check_in_location: (rec as Attendance & { check_in_location?: string | null })?.check_in_location ?? null,
                 check_out_location: (rec as Attendance & { check_out_location?: string | null })?.check_out_location ?? null,
                 hours_worked: rec?.hours_worked ?? null,
-                scheduled_hours: scheduledMap.get(s.id) ?? null,
+                scheduled_hours: scheduledMap.get(s.id)?.scheduled_hours ?? null,
+                shift_start: scheduledMap.get(s.id)?.shift_start ?? null,
                 attendance_id: rec?.id ?? null,
             };
         });
