@@ -18,6 +18,13 @@ import {
     StaffPresence,
 } from "./attendance.types";
 import { loadStaffPresence } from "./attendance.presence";
+import { getIO, salonRoom, salonStaffRoom } from "../../config/socket";
+
+// Invalidation only (no staff data is sent): open Calendars / Quick Sale screens refetch staff-presence
+// when they hear this, instead of polling for it.
+export function emitAttendanceUpdated(salonId: string): void {
+    try { getIO().to([salonRoom(salonId), salonStaffRoom(salonId)]).emit("attendance:updated", {}); } catch { /* Socket not initialized in tests. */ }
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -75,6 +82,7 @@ async function attendanceStaffName(record: Attendance) {
 }
 
 export async function notifyAttendancePunch(record: Attendance, action: "in" | "out"): Promise<void> {
+    emitAttendanceUpdated(record.salon_id);
     try {
         const timestamp = action === "in" ? record.check_in : record.check_out;
         if (!timestamp) return;
@@ -104,6 +112,7 @@ export async function notifyAttendanceBreak(
     brk: { id: string; planned_end: string; actual_start: string; actual_end: string | null; note?: string | null },
     action: "start" | "end",
 ): Promise<void> {
+    emitAttendanceUpdated(record.salon_id);
     try {
         const timestamp = action === "start" ? brk.actual_start : brk.actual_end;
         if (!timestamp) return;
@@ -203,7 +212,9 @@ export const attendanceService = {
             throw new AppError(400, "require_checkin_for_visibility must be true or false", "VALIDATION_ERROR");
         if (Object.keys(clean).length === 0)
             throw new AppError(400, "No fields provided to update", "VALIDATION_ERROR");
-        return attendanceRepository.upsertSettings(salonId, clean);
+        const saved = await attendanceRepository.upsertSettings(salonId, clean);
+        emitAttendanceUpdated(salonId);   // the "show only checked-in staff" switch changes who every open screen shows
+        return saved;
     },
 
     // Who is in today, for the "show only checked-in staff" setting. Open to any
@@ -351,9 +362,11 @@ export const attendanceService = {
         if (check_in && check_out) {
             hoursWorked = hoursFromTimestamps(check_in, check_out);
         }
-        return attendanceRepository.manualUpsert({
+        const saved = await attendanceRepository.manualUpsert({
             salonId, staffId: staff_id, date, status, checkIn: check_in, checkOut: check_out, hoursWorked, note,
         });
+        emitAttendanceUpdated(salonId);
+        return saved;
     },
 
     // ── Edit existing record ──────────────────────────────────────────────────
@@ -389,7 +402,9 @@ export const attendanceService = {
             const settings = await attendanceService.getSettings(existing.salon_id);
             finalPatch.status = calcStatus(checkIn, checkOut, settings);
         }
-        return attendanceRepository.updateById(id, finalPatch);
+        const saved = await attendanceRepository.updateById(id, finalPatch);
+        emitAttendanceUpdated(existing.salon_id);
+        return saved;
     },
 
     // ── Today dashboard ───────────────────────────────────────────────────────

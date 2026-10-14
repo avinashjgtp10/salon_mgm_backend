@@ -51,6 +51,9 @@ ALTER TABLE assets ADD COLUMN IF NOT EXISTS icon VARCHAR(40);
 -- Optional uploaded images: purchase receipt and warranty card.
 ALTER TABLE assets ADD COLUMN IF NOT EXISTS receipt_url TEXT;
 ALTER TABLE assets ADD COLUMN IF NOT EXISTS warranty_card_url TEXT;
+-- Purchase date and (optional) expiry date of the tool.
+ALTER TABLE assets ADD COLUMN IF NOT EXISTS purchase_date DATE;
+ALTER TABLE assets ADD COLUMN IF NOT EXISTS expiry_date   DATE;
 
 CREATE INDEX IF NOT EXISTS idx_assets_salon_status ON assets (salon_id, status);
 CREATE INDEX IF NOT EXISTS idx_assets_salon_branch ON assets (salon_id, branch_id);

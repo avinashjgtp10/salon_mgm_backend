@@ -10,8 +10,11 @@ type Db = Pool | PoolClient;
 const STAFF_NAME = (alias: string) =>
   `NULLIF(TRIM(CONCAT_WS(' ', ${alias}.first_name, ${alias}.last_name)), '')`;
 
+// DATE columns as plain YYYY-MM-DD strings (a JS Date would serialise as a timezone-shifted timestamp).
+const DATE_COLS = `to_char(purchase_date, 'YYYY-MM-DD') AS purchase_date, to_char(expiry_date, 'YYYY-MM-DD') AS expiry_date`;
+
 const ASSET_SELECT = `
-  a.*, b.name AS branch_name, ${STAFF_NAME("s")} AS current_staff_name
+  a.*, to_char(a.purchase_date, 'YYYY-MM-DD') AS purchase_date, to_char(a.expiry_date, 'YYYY-MM-DD') AS expiry_date, b.name AS branch_name, ${STAFF_NAME("s")} AS current_staff_name
   FROM assets a
   LEFT JOIN branches b ON b.id = a.branch_id
   LEFT JOIN staff s ON s.id = a.current_staff_id`;
@@ -51,13 +54,14 @@ export const assetsRepository = {
   async insert(client: PoolClient, v: {
     salonId: string; branchId: string | null; seq: number; code: string; name: string; category: string | null;
     brand: string | null; model: string | null; serial: string | null; photoUrl: string | null; icon: string | null; receiptUrl: string | null; warrantyUrl: string | null;
+    purchaseDate: string | null; expiryDate: string | null;
     condition: AssetCondition; notes: string | null; userId: string;
   }): Promise<Asset> {
     const { rows } = await client.query(
       `INSERT INTO assets (salon_id, branch_id, asset_seq, asset_code, name, category, brand, model, serial_number,
-                           photo_url, icon, receipt_url, warranty_card_url, condition, status, notes, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'available',$15,$16) RETURNING *`,
-      [v.salonId, v.branchId, v.seq, v.code, v.name, v.category, v.brand, v.model, v.serial, v.photoUrl, v.icon, v.receiptUrl, v.warrantyUrl, v.condition, v.notes, v.userId],
+                           photo_url, icon, receipt_url, warranty_card_url, purchase_date, expiry_date, condition, status, notes, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'available',$17,$18) RETURNING *, ${DATE_COLS}`,
+      [v.salonId, v.branchId, v.seq, v.code, v.name, v.category, v.brand, v.model, v.serial, v.photoUrl, v.icon, v.receiptUrl, v.warrantyUrl, v.purchaseDate, v.expiryDate, v.condition, v.notes, v.userId],
     );
     return rows[0];
   },
@@ -93,7 +97,8 @@ export const assetsRepository = {
     const [{ rows: cnt }, { rows }] = await Promise.all([
       pool.query(`SELECT COUNT(*) AS total ${from}`, vals),
       pool.query(
-        `SELECT a.*, b.name AS branch_name, ${STAFF_NAME("s")} AS current_staff_name ${from}
+        `SELECT a.*, to_char(a.purchase_date, 'YYYY-MM-DD') AS purchase_date, to_char(a.expiry_date, 'YYYY-MM-DD') AS expiry_date,
+                b.name AS branch_name, ${STAFF_NAME("s")} AS current_staff_name ${from}
          ORDER BY a.asset_seq DESC LIMIT $${vals.length + 1} OFFSET $${vals.length + 2}`,
         [...vals, limit, (page - 1) * limit],
       ),
@@ -191,7 +196,7 @@ export const assetsRepository = {
     const keys = Object.keys(patch);
     const sets = keys.map((k, i) => `${k} = $${i + 3}`).join(", ");
     const { rows } = await client.query(
-      `UPDATE assets SET ${sets}${keys.length ? ", " : ""}updated_at = NOW() WHERE id = $1 AND salon_id = $2 RETURNING *`,
+      `UPDATE assets SET ${sets}${keys.length ? ", " : ""}updated_at = NOW() WHERE id = $1 AND salon_id = $2 RETURNING *, ${DATE_COLS}`,
       [id, salonId, ...keys.map((k) => patch[k])],
     );
     return rows[0];
