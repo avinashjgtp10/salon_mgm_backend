@@ -19,9 +19,16 @@ export async function appointmentStaffNotifications(salonId: string, appointment
      LEFT JOIN clients c ON c.id = a.client_id AND c.salon_id = a.salon_id
      LEFT JOIN services svc ON svc.id = a.service_id
      WHERE a.id::text = $2 AND a.salon_id = $1 AND s.user_id IS NOT NULL AND s.is_active = true
+       -- Matches a row in ANY of services/package_items/membership_items,
+       -- not just services — a staff member assigned only via a package or
+       -- membership redemption used to be silently excluded from fan-out.
        AND (a.staff_id = s.id OR EXISTS (
-         SELECT 1 FROM jsonb_array_elements(COALESCE(a.services::jsonb, '[]'::jsonb)) service
-         WHERE service->>'staff_id' = s.id::text))`, [salonId, appointmentId]);
+         SELECT 1 FROM jsonb_array_elements(
+           COALESCE(a.services::jsonb, '[]'::jsonb) ||
+           COALESCE(a.package_items::jsonb, '[]'::jsonb) ||
+           COALESCE(a.membership_items::jsonb, '[]'::jsonb)
+         ) item
+         WHERE item->>'staff_id' = s.id::text))`, [salonId, appointmentId]);
   return buildStaffNotificationContent(rows);
 }
 

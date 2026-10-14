@@ -24,6 +24,9 @@ export type LoginBody = {
   email: string;
   password: string;
   clientType?: ClientType; // defaults to "web"
+  // Set by the controller from the request, only to record the login for Client Activity Tracking.
+  ip?: string | null;
+  userAgent?: string | null;
 };
 
 

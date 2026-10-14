@@ -87,6 +87,10 @@ function buildMembershipWhere(q: MembershipsListQuery, salonId: string): { where
   const appliesTo = splitMulti(q.appliesTo);
   if (appliesTo.length) { conditions.push(`m.applies_to = ANY($${idx++}::text[])`); values.push(appliesTo); }
 
+  const isDate = (s?: string) => !!s && /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(s);
+  if (isDate(q.createdFrom)) { conditions.push(`m.created_at >= $${idx++}::date`); values.push(q.createdFrom); }
+  if (isDate(q.createdTo))   { conditions.push(`m.created_at < ($${idx++}::date + INTERVAL '1 day')`); values.push(q.createdTo); }
+
   return { where: `WHERE ${conditions.join(" AND ")}`, values, nextIdx: idx };
 }
 

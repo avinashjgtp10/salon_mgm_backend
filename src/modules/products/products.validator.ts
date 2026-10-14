@@ -139,12 +139,15 @@ const validateProductFields = (b: Record<string, unknown>, requireName = false) 
     // threshold-vs-stock in BASE units (the alert's unit size, else the
     // product's own, else single units). With the default unit size this is
     // identical to the old bottles-vs-bottles check.
-    if (typeof b.amount === "number" && typeof b.qty_alert === "number") {
+    //
+    // An alert of 0 means "no low-stock alert" and is always valid. A real (> 0) threshold may equal
+    // the stock (it just means "already at the alert level") but not exceed it.
+    if (typeof b.amount === "number" && typeof b.qty_alert === "number" && b.qty_alert > 0) {
         const alertUnitSize = (typeof b.qty_alert_unit_size === "number" && b.qty_alert_unit_size > 0)
             ? b.qty_alert_unit_size
             : (typeof b.bottle_size === "number" && b.bottle_size > 0) ? b.bottle_size : 1;
-        if (b.qty_alert * alertUnitSize >= b.amount) {
-            throw new AppError(400, "Low Stock Alert (Product Quantity × Unit Size) must be less than the available stock.", "VALIDATION_ERROR");
+        if (b.qty_alert * alertUnitSize > b.amount) {
+            throw new AppError(400, "Low Stock Alert (Product Quantity × Unit Size) cannot be more than the available stock.", "VALIDATION_ERROR");
         }
     }
     if (!isOptionalString(b.short_description)) {

@@ -97,7 +97,7 @@ export const authController = {
           ? explicit
           : /okhttp|cfnetwork|darwin|expo|react-?native/i.test(ua) ? "mobile" : "web";
 
-      const data = await authService.login({ email, password, clientType });
+      const data = await authService.login({ email, password, clientType, ip, userAgent: ua });
 
       resetLoginFails(email, ip).catch(() => {/* Redis down — non-fatal */});
 

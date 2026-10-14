@@ -24,6 +24,11 @@ type CreateNotificationData = {
   alert_status?: string;
   spotlight_feature_id?: string;
   contact_phone?: string;
+  // Staff handoff workflow: addresses exactly this ONE staff member's
+  // user_id with `title`/`body` as-is, instead of the usual per-appointment
+  // fan-out to everyone with a row in it (appointmentStaffNotifications).
+  // The salon-room broadcast to owners/managers still happens as normal.
+  target_staff_user_id?: string;
 };
 
 type CreateNotificationOptions = {
@@ -55,7 +60,9 @@ export const notificationsService = {
       return null;
     }
     const appointmentId = data.type === "appointment" ? data.reference_id : data.appointment_id;
-    const staffMessages = await appointmentStaffNotifications(data.salon_id, appointmentId);
+    const staffMessages = data.target_staff_user_id
+      ? [{ userId: data.target_staff_user_id, title: data.title, body: data.body ?? "" }]
+      : await appointmentStaffNotifications(data.salon_id, appointmentId);
     const recipientUserIds = staffMessages.map(item => item.userId);
     const createData = {
       reference_id: data.reference_id,

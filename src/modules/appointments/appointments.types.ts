@@ -44,6 +44,13 @@ export type AppointmentServiceItem = {
     // row's own real GST, read back from the linked sale's sale_items once
     // one exists. See appointmentsService's enrichItemsWithTax.
     tax_amount?: number;
+    // Staff handoff workflow (services.module.handoff) — purely a progress
+    // tracker, independent of the appointment's own payment `status`.
+    // Undefined/missing on rows written before this existed; treated as
+    // "pending" by the handoff feature's own reads.
+    status?: "pending" | "in_progress" | "completed";
+    started_at?: string | null;
+    completed_at?: string | null;
 };
 
 // What the frontend actually sends per service row — layers a transient
@@ -84,6 +91,10 @@ export type AppointmentServiceConsumableRecord = {
 };
 
 export type AppointmentPackageItem = {
+    // Stable row id — same purpose/assignment as AppointmentServiceItem.id
+    // (added alongside the handoff feature's status fields below; absent on
+    // rows written before this existed).
+    id?: string;
     package_id: string;
     name: string;
     price: number;
@@ -111,6 +122,10 @@ export type AppointmentPackageItem = {
             staffId?:    string;
         };
     }>;
+    // Staff handoff workflow — see AppointmentServiceItem.status.
+    status?: "pending" | "in_progress" | "completed";
+    started_at?: string | null;
+    completed_at?: string | null;
 };
 
 export type AppointmentProductItem = {
@@ -128,6 +143,8 @@ export type AppointmentProductItem = {
 };
 
 export type AppointmentMembershipItem = {
+    // Stable row id — same purpose/assignment as AppointmentServiceItem.id.
+    id?: string;
     membership_id?: string | null;
     name: string;
     duration?: string | null;
@@ -137,6 +154,10 @@ export type AppointmentMembershipItem = {
     staff_name?: string | null;
     start_time?: string | null;
     tax_amount?: number;
+    // Staff handoff workflow — see AppointmentServiceItem.status.
+    status?: "pending" | "in_progress" | "completed";
+    started_at?: string | null;
+    completed_at?: string | null;
 };
 
 // ─── Core Appointment type ───────────────────────────────────────────────────

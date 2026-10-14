@@ -4,6 +4,7 @@ import jwt, { Secret, SignOptions } from "jsonwebtoken";
 import { AppError } from "../../middleware/error.middleware";
 import { authRepository } from "./auth.repository";
 import { issueSessionTokens } from "./session.util";
+import { clientActivityTracker } from "../client-activity/client-activity.tracker";
 import type { RegisterBody, LoginBody } from "./auth.types";
 import { generateOtp, hashOtp, compareOtp, otpExpiry } from "../utils/otp.util";
 import { emailService } from "../utils/email.service";
@@ -183,6 +184,7 @@ export const authService = {
     // sessions are not affected by this call starting, and are ended by it.
     const { accessToken, refreshToken } = await issueSessionTokens({
       userId: user.id, role: user.role, salonId, kickOthers: true, clientType: body.clientType,
+      meta: { ip: body.ip ?? null, userAgent: body.userAgent ?? null },
     });
 
     logger.info("[authService.login] Login successful", { email, userId: user.id, role: user.role, salonId });
@@ -300,7 +302,12 @@ export const authService = {
 
   async logout(refreshToken: string) {
     logger.info("[authService.logout] Logout requested");
+    // Read the session before deleting it so the logout is attributed to the right account + platform.
+    const session = await authRepository.findRefreshToken(refreshToken).catch(() => null);
     await authRepository.deleteRefreshToken(refreshToken);
+    if (session?.user_id) {
+      void clientActivityTracker.recordLogout({ userId: String(session.user_id), platform: session.client_type === "mobile" ? "app" : "web" });
+    }
     logger.info("[authService.logout] Refresh token deleted");
     return { message: "Logged out" };
   },
