@@ -10703,6 +10703,9 @@ async getStaffSalesReport(
     WITH sales_side AS (
       SELECT
         s.id, s.created_at,
+        -- One row per line item, so the sale id repeats across a multi-service
+        -- bill; this is the row's own unique key (the grid must not key on s.id).
+        sli.id AS line_item_id,
         ${this._STATUS_EXPR} AS status,
         -- Package/Membership are benefits/credits applied against the bill,
         -- never real payment methods (sales.payment_method is the
@@ -10756,7 +10759,7 @@ async getStaffSalesReport(
     ),
     appt_side AS (
       SELECT
-        u.id, u.created_at, u.status, u.payment_method,
+        u.id, u.created_at, NULL::uuid AS line_item_id, u.status, u.payment_method,
         -- _UNBILLED_APPOINTMENT_ROWS_CTE always returns u.price gross of GST
         -- (plus u.tax_amount separately) since it's shared by several other
         -- reports that don't take this toggle — subtract it back out here
@@ -10784,6 +10787,7 @@ async getStaffSalesReport(
   const total = rows.length ? Number(rows[0].total_count) : 0;
   const items: StaffSalesReportRow[] = rows.map((row: any) => ({
     id: row.id,
+    line_item_id: row.line_item_id ?? null,
     staff_id: row.staff_id ?? null,
     staff_name: row.staff_name ?? "—",
     is_unbilled: Boolean(row.is_unbilled),
