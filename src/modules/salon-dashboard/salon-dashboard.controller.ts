@@ -3,6 +3,7 @@ import { sendSuccess } from "../utils/response.util";
 import { salonDashboardService } from "./salon-dashboard.service";
 import { getSalonId } from "../utils/salon.util";
 import { staffHasPermission } from "../../middleware/permission.middleware";
+import type { MonthlyProjection } from "./salon-dashboard.types";
 
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string | null } };
 
@@ -69,6 +70,20 @@ function redactPendingPayments(pendingPayments: { count?: number; amount?: numbe
   return { count: pendingPayments?.count ?? 0, amount: 0 };
 }
 
+// Zeroes every money figure (keeps day/count/label fields) so a user without
+// view_dashboard_financials never receives the real numbers, only the masked
+// card shape. Shared by GET /monthly-projection and the combined bundle.
+function redactMonthlyProjection<T extends MonthlyProjection>(data: T): T {
+  return {
+    ...data,
+    mtdSales: 0, lmmtdSales: 0, projectedSales: 0, growthPct: null,
+    target: data.target != null ? 0 : null, achievedPct: null,
+    remainingTarget: null, requiredDailySales: null,
+    todaySales: 0, dayAbv: null, monthAbv: null,
+    daily: data.daily.map((d) => ({ day: d.day, sales: 0 })),
+  };
+}
+
 export const salonDashboardController = {
   async getRevenueChart(req: AuthRequest, res: Response, next: NextFunction) {
     try {
@@ -94,14 +109,7 @@ export const salonDashboardController = {
       const data = await salonDashboardService.getMonthlyProjection(salonId, gender);
       const canFinancials = await checkDashboardSubPermission(req, "view_dashboard_financials");
       if (!canFinancials) {
-        return sendSuccess(res, 200, {
-          ...data,
-          mtdSales: 0, lmmtdSales: 0, projectedSales: 0, growthPct: null,
-          target: data.target != null ? 0 : null, achievedPct: null,
-          remainingTarget: null, requiredDailySales: null,
-          todaySales: 0, dayAbv: null, monthAbv: null,
-          daily: data.daily.map((d) => ({ day: d.day, sales: 0 })),
-        }, "Monthly projection fetched successfully");
+        return sendSuccess(res, 200, redactMonthlyProjection(data), "Monthly projection fetched successfully");
       }
       return sendSuccess(res, 200, data, "Monthly projection fetched successfully");
     } catch (err) {
@@ -175,12 +183,15 @@ export const salonDashboardController = {
       const period = typeof body.period === "string" ? body.period : undefined;
       const date = typeof body.date === "string" ? body.date : undefined;
       const collectionPeriod = typeof body.collectionPeriod === "string" ? body.collectionPeriod : undefined;
-      const data = await salonDashboardService.getCombined(salonId, period, date, collectionPeriod) as any;
+      // Monthly Projection card's own gender filter ("all" / "male" / "female").
+      const gender = typeof body.gender === "string" ? body.gender : undefined;
+      const data = await salonDashboardService.getCombined(salonId, period, date, collectionPeriod, gender) as any;
 
       const [
-        canTotalRevenue, canTodayRevenue, canDueAmount, canAppointments,
+        canFinancials, canTotalRevenue, canTodayRevenue, canDueAmount, canAppointments,
         canBirthdays, canAnniversaries, canNewClients, canRevenueOverview, canOverallCollection,
       ] = await Promise.all([
+        checkDashboardSubPermission(req, "view_dashboard_financials"),
         checkDashboardSubPermission(req, "view_dashboard_card_total_revenue"),
         checkDashboardSubPermission(req, "view_dashboard_card_today_revenue"),
         checkDashboardSubPermission(req, "view_dashboard_card_due_amount"),
@@ -215,6 +226,11 @@ export const salonDashboardController = {
       }
       if (!canRevenueOverview) {
         data.revenueChart = redactRevenueChart(data.revenueChart ?? []);
+      }
+      // Same gates the standalone /monthly-projection route used: the card
+      // permission to see it at all, view_dashboard_financials for real money.
+      if (data.monthlyProjection && (!canRevenueOverview || !canFinancials)) {
+        data.monthlyProjection = redactMonthlyProjection(data.monthlyProjection);
       }
       if (!canOverallCollection) {
         data.paymentModeBreakdown = redactPaymentModeBreakdown();
