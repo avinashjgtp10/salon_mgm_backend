@@ -416,6 +416,15 @@ router.get(
     ordersController.listSignatures
 );
 
+// Must stay above /orders/:id ("next-number" would otherwise be read as an id).
+router.get(
+    "/orders/next-number",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    createOrder,
+    ordersController.nextNumber
+);
+
 router.post(
     "/orders",
     authMiddleware,
