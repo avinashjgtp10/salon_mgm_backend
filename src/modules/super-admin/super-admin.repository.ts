@@ -160,6 +160,11 @@ export const superAdminRepository = {
   // respectively.
   // kind: "real" | "dummy" limits to that group (Super Admin's two Salons pages);
   // omitted = every salon (Overview dashboard).
+  async getAllSalonIds(): Promise<string[]> {
+    const { rows } = await pool.query(`SELECT id FROM salons`);
+    return rows.map((r: { id: string }) => r.id);
+  },
+
   async getAllSalons(search?: string, kind?: "real" | "dummy") {
     const param = search ? `%${search}%` : null;
     const dummyFilter = kind ? (kind === "dummy" ? "AND s.is_dummy = true" : "AND s.is_dummy = false") : "";
