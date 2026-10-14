@@ -46,6 +46,13 @@ const validateSupplierBody = (b: Record<string, unknown>): void => {
         }
     }
 
+    // The supplier contact's mobile number: exactly 10 digits when given (the
+    // Add Supplier form enforces the same rule; this stops API/imports bypassing it).
+    if (typeof b.mobile_number === "string" && b.mobile_number.trim() !== ""
+        && !/^\d{10}$/.test(b.mobile_number.trim())) {
+        throw new AppError(400, "mobile_number must be exactly 10 digits", "VALIDATION_ERROR");
+    }
+
     if (!isOptionalBoolean(b.same_as_physical)) {
         throw new AppError(400, "same_as_physical must be a boolean", "VALIDATION_ERROR");
     }
