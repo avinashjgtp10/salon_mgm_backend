@@ -5,7 +5,8 @@ import * as Papa from "papaparse";
 import { Parser as CsvParser } from "json2csv";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
-import { invalidateStaffPermCache } from "../../middleware/permission.middleware";
+import { invalidateStaffPermCache, staffHasPermission } from "../../middleware/permission.middleware";
+import { commissionRulesService } from "../commissionRules/commissionRules.service";
 import { isMobileCalendarAccessEnabled } from "../mobile-staff/mobileCalendarAccess";
 import { sendSuccess } from "../utils/response.util";
 import { uploadAvatarToS3 } from "../utils/avatar.upload";
@@ -696,6 +697,50 @@ export const staffCommissionsController = {
       const limit = req.query.limit ? Number(req.query.limit) : undefined;
       const data = await staffCommissionsService.getSettlementHistory(salonId, staffId, limit);
       return sendSuccess(res, 200, data, "Settlement history fetched successfully");
+    } catch (err) { return next(err); }
+  },
+
+  // ── POST /staff/commissions — everything the Tip & Commission >
+  // Commission page needs on load, in ONE request instead of four (earnings
+  // summary, earned-by-staff, active staff for the pickers, commission rules).
+  // The route is gated on view_commissions / view_commission_report like
+  // /commissions/summary; the staff list and the rules keep the permission
+  // their own endpoints require and come back empty (not 403) without it, so a
+  // user who may only see the report still gets the summary.
+  async getCommissions(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId ?? String(req.query.salon_id ?? "");
+      if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+      // POST body (not query): date range for the summary + earned figures.
+      const body = (req.body ?? {}) as { start_date?: unknown; end_date?: unknown };
+      const startDate = typeof body.start_date === "string" && body.start_date ? body.start_date : undefined;
+      const endDate   = typeof body.end_date   === "string" && body.end_date   ? body.end_date   : undefined;
+
+      const role = req.user?.role;
+      const can = async (permKeys: string[]): Promise<boolean> => {
+        if (role === "salon_owner" || role === "admin") return true;
+        const userId = req.user?.userId;
+        if (!userId) return false;
+        for (const key of permKeys) {
+          if (await staffHasPermission({ userId, role, salonId }, key)) return true;
+        }
+        return false;
+      };
+      const [canRules, canStaff] = await Promise.all([
+        can(["view_commissions"]),
+        can(["view_team", "create_sales", "manage_calendar", "view_calendar"]),
+      ]);
+
+      const [summary, earned, staff, rules] = await Promise.all([
+        staffCommissionsService.getSalonSummary(salonId, undefined, startDate, endDate),
+        staffCommissionsService.getEarnedBySalon(salonId, undefined, startDate, endDate),
+        canStaff
+          ? staffService.list(salonId, { page: 1, limit: 200, is_active: true, fields: "select" }).then((r) => r.data)
+          : Promise.resolve([]),
+        canRules ? commissionRulesService.list(salonId, {}) : Promise.resolve([]),
+      ]);
+
+      return sendSuccess(res, 200, { summary, earned, staff, rules }, "Commission dashboard fetched successfully");
     } catch (err) { return next(err); }
   },
 
