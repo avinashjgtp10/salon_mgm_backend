@@ -147,6 +147,7 @@ router.get("/export/csv",    auth, ownerAdminStaff, ...exportStaffCsv,   staffCo
 // Previously owner/admin-only with no permission key — opened to staff via
 // view_commissions/manage_commissions per the same decision that opened
 // Payroll/Wages/Tips/Marketing this phase.
+router.post("/commissions",                     auth, ownerAdminStaff, viewCommissionsOrReport, staffCommissionsController.getCommissions);
 router.get("/commissions/summary",              auth, ownerAdminStaff, viewCommissionsOrReport, staffCommissionsController.getCommissionSummary);
 router.get("/commissions/earned",               auth, ownerAdminStaff, viewCommissionsOrReport, staffCommissionsController.getEarnedBySalon);
 router.get("/commissions/export",               auth, ownerAdminStaff, viewCommissions, exportCommissionsFormat, staffCommissionsController.exportCommissions);
