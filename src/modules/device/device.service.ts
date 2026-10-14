@@ -2,12 +2,38 @@ import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { deviceRepository } from "./device.repository";
 import { attendanceService } from "../attendance/attendance.service";
+import { getIO, salonRoom } from "../../config/socket";
 import { Device, StaffBiometricMapping, CreateDeviceBody, UpdateDeviceBody, CreateMappingBody } from "./device.types";
 
 // In-memory store for machines that have connected but aren't registered yet.
 // Cleared on server restart (machines reconnect quickly, so that's fine).
 type PendingEntry = { sn: string; ip: string; firstSeen: Date; lastSeen: Date };
 const pendingDevices = new Map<string, PendingEntry>();
+
+// ── Live device updates (socket, no polling) ─────────────────────────────────
+// The Attendance page's Connected Devices card is event-driven: it loads once
+// and then listens for "devices:changed" instead of re-requesting on a timer.
+//   { refresh: true }                 -> list / pending set changed (add, edit,
+//                                        remove, connect, new device discovered):
+//                                        the client refetches once.
+//   { device_id, last_seen, last_ip } -> a registered device's heartbeat: the
+//                                        client patches that card in place, no request.
+// A device can't announce going offline, so "offline" is derived client-side
+// from how long ago last_seen was. That makes heartbeats the one genuinely live
+// signal — they are forwarded at most once per HEARTBEAT_EMIT_MS per device (a
+// machine may ping far more often), comfortably inside the 2-minute online
+// window the UI uses.
+const HEARTBEAT_EMIT_MS = 45_000;
+const lastHeartbeatEmit = new Map<string, number>();
+
+function emitDevicesChanged(salonId: string | null, payload: Record<string, unknown>): void {
+    try {
+        const io = getIO();
+        // Unknown (unregistered) devices have no salon yet — the pending list is
+        // shared, so every connected dashboard is nudged to refresh it.
+        (salonId ? io.to(salonRoom(salonId)) : io).emit("devices:changed", payload);
+    } catch { /* socket not initialised (tests) */ }
+}
 
 export const deviceService = {
 
@@ -22,14 +48,18 @@ export const deviceService = {
         if (!data.name?.trim())      throw new AppError(400, "name is required",      "VALIDATION_ERROR");
         const existing = await deviceRepository.findBySerialNo(data.serial_no.trim().toUpperCase());
         if (existing) throw new AppError(409, "A device with this serial number is already registered", "DUPLICATE");
-        return deviceRepository.create(salonId, data);
+        const created = await deviceRepository.create(salonId, data);
+        emitDevicesChanged(salonId, { refresh: true });
+        return created;
     },
 
     async updateDevice(id: string, salonId: string, data: UpdateDeviceBody): Promise<Device> {
         const device = await deviceRepository.findById(id);
         if (!device || device.salon_id !== salonId)
             throw new AppError(404, "Device not found", "NOT_FOUND");
-        return deviceRepository.update(id, data);
+        const updated = await deviceRepository.update(id, data);
+        emitDevicesChanged(salonId, { refresh: true });
+        return updated;
     },
 
     async removeDevice(id: string, salonId: string): Promise<void> {
@@ -37,6 +67,7 @@ export const deviceService = {
         if (!device || device.salon_id !== salonId)
             throw new AppError(404, "Device not found", "NOT_FOUND");
         await deviceRepository.delete(id);
+        emitDevicesChanged(salonId, { refresh: true });
     },
 
     // ── Staff PIN mappings ────────────────────────────────────────────────────
@@ -116,10 +147,21 @@ export const deviceService = {
         const device = await deviceRepository.findBySerialNo(serialNo);
         if (device) {
             await deviceRepository.updateLastSeen(serialNo, ip);
-            pendingDevices.delete(serialNo); // already registered — clean up if it was pending
+            const wasPending = pendingDevices.delete(serialNo); // already registered — clean up if it was pending
+            if (wasPending) emitDevicesChanged(null, { refresh: true });
+            const now = Date.now();
+            if (now - (lastHeartbeatEmit.get(serialNo) ?? 0) >= HEARTBEAT_EMIT_MS) {
+                lastHeartbeatEmit.set(serialNo, now);
+                emitDevicesChanged(device.salon_id, {
+                    device_id: device.id,
+                    last_seen: new Date(now).toISOString(),
+                    last_ip: ip,
+                });
+            }
         } else {
             // Unknown device — park it in the pending map for the UI to discover
             const existing = pendingDevices.get(serialNo);
+            if (!existing) emitDevicesChanged(null, { refresh: true }); // newly discovered — show it now
             pendingDevices.set(serialNo, {
                 sn: serialNo,
                 ip,
@@ -146,6 +188,7 @@ export const deviceService = {
             location: location?.trim() || undefined,
         });
         pendingDevices.delete(sn);
+        emitDevicesChanged(salonId, { refresh: true });
         return device;
     },
 };
