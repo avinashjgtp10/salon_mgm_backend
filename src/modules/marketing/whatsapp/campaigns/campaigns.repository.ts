@@ -21,7 +21,8 @@ export const campaignsRepository = {
       COUNT(cc.id) FILTER (WHERE cc.status IN ('DELIVERED','READ'))::int AS delivered_count,
       COUNT(cc.id) FILTER (WHERE cc.status = 'READ')::int    AS read_count,
       COUNT(cc.id) FILTER (WHERE cc.status = 'FAILED')::int  AS failed_count,
-      COUNT(cc.id) FILTER (WHERE cc.status = 'BLOCKED')::int AS blocked_count
+      COUNT(cc.id) FILTER (WHERE cc.status = 'BLOCKED')::int AS blocked_count,
+      COUNT(cc.id) FILTER (WHERE cc.status = 'SKIPPED')::int AS skipped_count
     FROM wa_campaigns c
     LEFT JOIN wa_templates t ON t.id = c.template_id
     LEFT JOIN wa_campaign_contacts cc ON cc.campaign_id = c.id
