@@ -16,6 +16,7 @@ export type WACampaign = {
   read_count:     number
   failed_count:   number
   blocked_count:  number
+  skipped_count?: number   // contacts not sent because the template already went to them in the last 24h
   scheduled_at:   string | null
   started_at:     string | null
   completed_at:   string | null
