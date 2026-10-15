@@ -16,6 +16,8 @@ export type SafeUser = {
     id: string;
     email: string;
     phone: string | null;
+    /** Extra WhatsApp Alerts numbers besides `phone`; digits only. */
+    alertPhones: string[];
     firstName: string;
     lastName: string | null;
     fullName: string;

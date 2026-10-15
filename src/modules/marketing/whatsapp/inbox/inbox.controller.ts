@@ -93,6 +93,15 @@ export const inboxController = {
     } catch (e) { return next(e) }
   },
 
+  async deleteConversations(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId
+      if (!salonId) return res.status(400).json({ error: 'salonId missing from token' })
+      const data = await inboxService.deleteConversations(salonId, req.body?.phones)
+      return sendSuccess(res, 200, data, data.deleted === 1 ? 'Conversation deleted' : `${data.deleted} conversations deleted`)
+    } catch (e) { return next(e) }
+  },
+
   async getMedia(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = req.user?.salonId

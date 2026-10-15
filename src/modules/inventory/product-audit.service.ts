@@ -27,6 +27,43 @@ async function getOwned(auditId: string, salonId: string): Promise<ProductAuditW
     return audit;
 }
 
+// Who an audit is recorded against. `recordUserId` goes in the NOT NULL auditor_id / reviewer_id column
+// (the staff member's own login when they have one, else whoever is acting); `staffId` says which staff
+// member it really was; `loginUserId` is that staff member's login (null when they have none) and is
+// only used to tell whether two roles are the same person.
+type AuditPerson = { recordUserId: string; staffId: string | null; loginUserId: string | null };
+
+async function resolvePerson(opts: {
+    staffId?: string; userId?: string; actingUserId: string; salonId: string;
+    notFoundMessage: string; notFoundCode: string;
+}): Promise<AuditPerson> {
+    const { staffId, userId, actingUserId, salonId } = opts;
+    if (staffId) {
+        const row = await productAuditRepository.findStaff(staffId, salonId);
+        if (!row || row.is_active === false) throw new AppError(404, opts.notFoundMessage, opts.notFoundCode);
+        return { recordUserId: row.user_id ?? actingUserId, staffId: row.id, loginUserId: row.user_id };
+    }
+    // Older callers (and the mobile app) still send a user id.
+    const chosenUser = userId && userId !== actingUserId ? userId : actingUserId;
+    if (chosenUser !== actingUserId && !(await productAuditRepository.isSalonMember(chosenUser, salonId))) {
+        throw new AppError(404, opts.notFoundMessage, opts.notFoundCode);
+    }
+    return { recordUserId: chosenUser, staffId: await productAuditRepository.staffIdForUser(chosenUser, salonId), loginUserId: chosenUser };
+}
+
+// The same human? Compare staff members when both are known, otherwise compare logins. A staff member with
+// no login never matches on login, so a manager can review an audit that was recorded for them.
+function isSamePerson(a: { staffId: string | null; loginUserId: string | null }, b: { staffId: string | null; loginUserId: string | null }): boolean {
+    if (a.staffId && b.staffId) return a.staffId === b.staffId;
+    return !!a.loginUserId && !!b.loginUserId && a.loginUserId === b.loginUserId;
+}
+
+async function auditAuditor(audit: { auditor_id: string; auditor_staff_id?: string | null }, salonId: string): Promise<{ staffId: string | null; loginUserId: string | null }> {
+    if (!audit.auditor_staff_id) return { staffId: null, loginUserId: audit.auditor_id };
+    const row = await productAuditRepository.findStaff(audit.auditor_staff_id, salonId);
+    return { staffId: audit.auditor_staff_id, loginUserId: row?.user_id ?? null };
+}
+
 export const productAuditService = {
     async create(params: { salonId: string; auditorId: string; body: CreateProductAuditBody }): Promise<ProductAuditWithDetail> {
         const { salonId, body } = params;
@@ -36,13 +73,11 @@ export const productAuditService = {
         // Auditor defaults to whoever is creating the audit, but can be
         // assigned to a different staff member — same "creator picks an
         // assignee" convention as appointments' staff_id.
-        let auditorId = params.auditorId;
-        if (body.auditor_id && body.auditor_id !== params.auditorId) {
-            const isMember = await productAuditRepository.isSalonMember(body.auditor_id, salonId);
-            if (!isMember) throw new AppError(404, "auditor_id is not a staff member of this salon", "AUDITOR_NOT_FOUND");
-            auditorId = body.auditor_id;
-        }
-        const created = await productAuditRepository.create(body, salonId, auditorId);
+        const auditor = await resolvePerson({
+            staffId: body.auditor_staff_id, userId: body.auditor_id, actingUserId: params.auditorId, salonId,
+            notFoundMessage: "auditor is not a staff member of this salon", notFoundCode: "AUDITOR_NOT_FOUND",
+        });
+        const created = await productAuditRepository.create(body, salonId, auditor.recordUserId, auditor.staffId);
         // create() only returns the header row's raw shape server-side; refetch
         // through getById so the caller always gets the same envelope
         // (items/history included) as every other read.
@@ -174,36 +209,35 @@ export const productAuditService = {
     // approving on a colleague's behalf) — same pattern as auditor_id on
     // create. Both still go through the same salon-membership + self-review
     // checks regardless of which one ends up recorded.
-    async approve(params: { auditId: string; salonId: string; reviewerId: string; requestedReviewerId?: string }): Promise<ProductAuditWithDetail> {
-        const { auditId, salonId, reviewerId, requestedReviewerId } = params;
+    async approve(params: { auditId: string; salonId: string; reviewerId: string; requestedReviewerId?: string; requestedReviewerStaffId?: string }): Promise<ProductAuditWithDetail> {
+        const { auditId, salonId, reviewerId, requestedReviewerId, requestedReviewerStaffId } = params;
         const audit = await getOwned(auditId, salonId);
 
         if (!ALLOWED_TRANSITIONS[audit.status].includes("complete")) {
             throw new AppError(409, `Cannot approve an audit that is ${audit.status}`, "INVALID_TRANSITION");
         }
 
-        let finalReviewerId = reviewerId;
-        if (requestedReviewerId && requestedReviewerId !== reviewerId) {
-            const isMember = await productAuditRepository.isSalonMember(requestedReviewerId, salonId);
-            if (!isMember) throw new AppError(404, "reviewer_id is not a staff member of this salon", "REVIEWER_NOT_FOUND");
-            finalReviewerId = requestedReviewerId;
-        }
-        if (audit.auditor_id === finalReviewerId) {
+        const reviewer = await resolvePerson({
+            staffId: requestedReviewerStaffId, userId: requestedReviewerId, actingUserId: reviewerId, salonId,
+            notFoundMessage: "reviewer is not a staff member of this salon", notFoundCode: "REVIEWER_NOT_FOUND",
+        });
+        if (isSamePerson(await auditAuditor(audit, salonId), reviewer)) {
             throw new AppError(403, "An audit must be reviewed by someone other than the auditor", "SELF_REVIEW_NOT_ALLOWED");
         }
+        const finalReviewerId = reviewer.recordUserId;
 
         // Approval is the moment the physical count becomes the official
         // stock — this applies every item's variance to products.amount and
         // writes the matching Stock Ledger entries atomically with the status
         // flip, not just a status change. See approveWithAdjustments.
-        await productAuditRepository.approveWithAdjustments(auditId, salonId, finalReviewerId);
+        await productAuditRepository.approveWithAdjustments(auditId, salonId, finalReviewerId, reviewer.staffId);
         return getOwned(auditId, salonId);
     },
 
     async reject(params: {
-        auditId: string; salonId: string; reviewerId: string; requestedReviewerId?: string; reason: string;
+        auditId: string; salonId: string; reviewerId: string; requestedReviewerId?: string; requestedReviewerStaffId?: string; reason: string;
     }): Promise<ProductAuditWithDetail> {
-        const { auditId, salonId, reviewerId, requestedReviewerId, reason } = params;
+        const { auditId, salonId, reviewerId, requestedReviewerId, requestedReviewerStaffId, reason } = params;
         if (!reason || !reason.trim()) throw new AppError(400, "Rejection reason is required", "VALIDATION_ERROR");
 
         const audit = await getOwned(auditId, salonId);
@@ -211,18 +245,17 @@ export const productAuditService = {
             throw new AppError(409, `Cannot reject an audit that is ${audit.status}`, "INVALID_TRANSITION");
         }
 
-        let finalReviewerId = reviewerId;
-        if (requestedReviewerId && requestedReviewerId !== reviewerId) {
-            const isMember = await productAuditRepository.isSalonMember(requestedReviewerId, salonId);
-            if (!isMember) throw new AppError(404, "reviewer_id is not a staff member of this salon", "REVIEWER_NOT_FOUND");
-            finalReviewerId = requestedReviewerId;
-        }
-        if (audit.auditor_id === finalReviewerId) {
+        const reviewer = await resolvePerson({
+            staffId: requestedReviewerStaffId, userId: requestedReviewerId, actingUserId: reviewerId, salonId,
+            notFoundMessage: "reviewer is not a staff member of this salon", notFoundCode: "REVIEWER_NOT_FOUND",
+        });
+        if (isSamePerson(await auditAuditor(audit, salonId), reviewer)) {
             throw new AppError(403, "An audit must be reviewed by someone other than the auditor", "SELF_REVIEW_NOT_ALLOWED");
         }
+        const finalReviewerId = reviewer.recordUserId;
 
         await productAuditRepository.transitionStatus(auditId, salonId, {
-            status: "rejected", reviewer_id: finalReviewerId, rejection_reason: reason.trim(),
+            status: "rejected", reviewer_id: finalReviewerId, reviewer_staff_id: reviewer.staffId, rejection_reason: reason.trim(),
         });
         await productAuditRepository.addHistory(auditId, finalReviewerId, "Rejected", reason.trim());
         return getOwned(auditId, salonId);

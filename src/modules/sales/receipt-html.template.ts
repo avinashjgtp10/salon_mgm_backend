@@ -1,4 +1,5 @@
 import { Sale, SaleItem, TipBreakdownEntry } from "./sales.types";
+import { formatSalonPhones } from "../salons/salon-phones";
 import { TaxBreakdownEntry } from "../payments/payments.types";
 import config from "../../config/env";
 
@@ -17,6 +18,7 @@ export function buildReceiptHtml(params: {
         logo_url: string | null;
         email: string | null;
         phone: string | null;
+        additional_phones?: string[] | null;
         website_url: string | null;
         gst_number: string | null;
     };
@@ -60,7 +62,7 @@ export function buildReceiptHtml(params: {
     const findStaffName = (id: string | null) => (id && staffNames[id]) || "";
 
     const salonName = salon.business_name || "Salon";
-    const salonPhone = salon.phone || "";
+    const salonPhone = formatSalonPhones(salon);   // main number + additional business numbers
     const salonEmail = salon.email || "";
     const salonWebsite = salon.website_url || "";
     const gst = salon.gst_number || "";

@@ -206,6 +206,12 @@ export type AutomationTriggerPayload = {
   // scheduler events (reminders, birthday) leave it off; they do their own
   // date-keyed guarding and intentionally re-send over time.
   dedupeByReference?: boolean
+  // Appended to the once-per-(event, reference) guard key, so one event can still go to SEVERAL recipients
+  // (e.g. every WhatsApp Alerts number of the owner) instead of the second one being dropped as a duplicate.
+  dedupeKeySuffix?: string
+  // Skip the SMS / Email fan-out for this call - set on the 2nd+ recipient of the same event so the same
+  // person is not emailed once per number.
+  whatsappOnly?: boolean
   // Per-recipient suffix appended to the template's stored button_url_base at
   // send time (Meta's dynamic URL button mechanism). Only meaningful when the
   // resolved template has has_button = true; ignored otherwise.
