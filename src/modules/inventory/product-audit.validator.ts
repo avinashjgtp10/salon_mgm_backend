@@ -26,6 +26,9 @@ export const validateCreateProductAudit = (
         if (!isOptionalUUID(b.auditor_id)) {
             throw new AppError(400, "auditor_id must be a UUID", "VALIDATION_ERROR");
         }
+        if (!isOptionalUUID(b.auditor_staff_id)) {
+            throw new AppError(400, "auditor_staff_id must be a UUID", "VALIDATION_ERROR");
+        }
         return next();
     } catch (err) { return next(err); }
 };
@@ -99,6 +102,9 @@ export const validateRejectAudit = (
         if (!isOptionalUUID(b.reviewer_id)) {
             throw new AppError(400, "reviewer_id must be a UUID", "VALIDATION_ERROR");
         }
+        if (!isOptionalUUID(b.reviewer_staff_id)) {
+            throw new AppError(400, "reviewer_staff_id must be a UUID", "VALIDATION_ERROR");
+        }
         return next();
     } catch (err) { return next(err); }
 };
@@ -110,6 +116,9 @@ export const validateApproveAudit = (
         const b = req.body;
         if (!isOptionalUUID(b.reviewer_id)) {
             throw new AppError(400, "reviewer_id must be a UUID", "VALIDATION_ERROR");
+        }
+        if (!isOptionalUUID(b.reviewer_staff_id)) {
+            throw new AppError(400, "reviewer_staff_id must be a UUID", "VALIDATION_ERROR");
         }
         return next();
     } catch (err) { return next(err); }
