@@ -12,7 +12,27 @@ export const flowsController = {
       if (!salonId) return res.status(400).json({ error: 'salonId missing from token' })
       const state  = await flowsService.getBookingFlow(salonId)
       const invite = state.migrated ? await flowsService.getInviteTemplate(salonId).catch(() => null) : null
-      return sendSuccess(res, 200, { ...state, invite }, 'OK')
+      const form   = await flowsService.getBookingConfig(salonId)
+      return sendSuccess(res, 200, {
+        ...state, invite,
+        config: form.config, config_updated_at: form.updated_at, config_migrated: form.migrated,
+      }, 'OK')
+    } catch (e) { return next(e) }
+  },
+
+  async listServices(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId
+      if (!salonId) return res.status(400).json({ error: 'salonId missing from token' })
+      return sendSuccess(res, 200, await flowsService.listServicesForPicker(salonId), 'OK')
+    } catch (e) { return next(e) }
+  },
+
+  async saveConfig(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = req.user?.salonId
+      if (!salonId) return res.status(400).json({ error: 'salonId missing from token' })
+      return sendSuccess(res, 200, await flowsService.saveBookingConfig(salonId, req.body), 'Booking form changes saved')
     } catch (e) { return next(e) }
   },
 

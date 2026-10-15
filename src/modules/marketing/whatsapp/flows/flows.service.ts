@@ -9,6 +9,7 @@ import { enquiriesService } from '../../../enquiries/enquiries.service'
 import { notificationsService } from '../../../notifications/notifications.service'
 import { getIO } from '../../../../config/socket'
 import { templatesService } from '../templates/templates.service'
+import { BookingFormConfig, DEFAULT_BOOKING_CONFIG, MAX_SERVICES as DROPDOWN_CAP, normalizeBookingConfig, timeOptions } from './booking-form.config'
 
 // Flow JSON schema version. Meta freezes old versions (5.0 can no longer be
 // published as of Sept 2025) and currently recommends 7.3. If Meta rejects this
@@ -16,7 +17,6 @@ import { templatesService } from '../templates/templates.service'
 // - the error Meta returns is shown in the Inbox.
 const FLOW_JSON_VERSION = process.env.WA_FLOW_JSON_VERSION ?? '7.3'
 const BOOKING_SCREEN    = 'BOOKING'
-const MAX_SERVICES      = 200   // Meta's dropdown cap
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 function normalizePhone(phone: string): string {
@@ -27,65 +27,89 @@ function normalizePhone(phone: string): string {
   return '+' + digits
 }
 
-// 30-minute slots, 10:00 AM - 8:00 PM. A plain request form - staff confirm the
-// real slot, so these are preferences, not live availability.
-function timeOptions() {
-  const out: Array<{ id: string; title: string }> = []
-  for (let m = 10 * 60; m <= 20 * 60; m += 30) {
-    const h24 = Math.floor(m / 60), mm = m % 60
-    const h12 = h24 % 12 === 0 ? 12 : h24 % 12
-    out.push({
-      id:    `${String(h24).padStart(2, '0')}:${String(mm).padStart(2, '0')}`,
-      title: `${h12}:${String(mm).padStart(2, '0')} ${h24 < 12 ? 'AM' : 'PM'}`,
+// Builds the form from the salon's saved choices (a plain request form - staff
+// confirm the real slot, so times are preferences, not live availability). Only
+// enabled questions are emitted, and the submit payload must reference exactly
+// those: a payload pointing at a field the form does not have is a Meta
+// validation error.
+function buildBookingFlowJson(services: Array<{ id: string; name: string }>, cfg: BookingFormConfig) {
+  const f = cfg.fields
+  const children: any[] = [
+    { type: 'TextInput', name: 'name', label: f.name.label, 'input-type': 'text', required: f.name.required },
+  ]
+  if (f.service.enabled) {
+    children.push({
+      type: 'Dropdown', name: 'service', label: f.service.label, required: f.service.required,
+      'data-source': services.map(s => ({ id: s.id, title: s.name.slice(0, 30) })),
     })
   }
-  return out
-}
+  if (f.other.enabled) {
+    children.push({ type: 'TextInput', name: 'other_service', label: f.other.label, 'input-type': 'text', required: f.other.required })
+  }
+  if (f.date.enabled) children.push({ type: 'DatePicker', name: 'date', label: f.date.label, required: f.date.required })
+  if (f.time.enabled) {
+    children.push({ type: 'Dropdown', name: 'time', label: f.time.label, required: f.time.required, 'data-source': timeOptions(cfg) })
+  }
+  if (f.notes.enabled) children.push({ type: 'TextArea', name: 'notes', label: f.notes.label, required: f.notes.required })
 
-function buildBookingFlowJson(services: Array<{ id: string; name: string }>) {
+  const payload: Record<string, string> = {}
+  for (const c of children) payload[c.name] = '${form.' + c.name + '}'
+
+  children.push({ type: 'Footer', label: cfg.buttonLabel, 'on-click-action': { name: 'complete', payload } })
+
   return {
     version: FLOW_JSON_VERSION,
     screens: [{
       id: BOOKING_SCREEN,
-      title: 'Book Appointment',
+      title: cfg.title,
       terminal: true,
       success: true,
       layout: {
         type: 'SingleColumnLayout',
-        children: [{
-          type: 'Form',
-          name: 'form',
-          children: [
-            { type: 'TextInput', name: 'name', label: 'Your name', 'input-type': 'text', required: true },
-            {
-              type: 'Dropdown', name: 'service', label: 'Service', required: true,
-              'data-source': services.map(s => ({ id: s.id, title: s.name.slice(0, 30) })),
-            },
-            { type: 'DatePicker', name: 'date', label: 'Preferred date', required: true },
-            { type: 'Dropdown', name: 'time', label: 'Preferred time', required: true, 'data-source': timeOptions() },
-            { type: 'TextArea', name: 'notes', label: 'Anything else? (optional)', required: false },
-            {
-              type: 'Footer',
-              label: 'Request appointment',
-              'on-click-action': {
-                name: 'complete',
-                payload: {
-                  name:    '${form.name}',
-                  service: '${form.service}',
-                  date:    '${form.date}',
-                  time:    '${form.time}',
-                  notes:   '${form.notes}',
-                },
-              },
-            },
-          ],
-        }],
+        children: [{ type: 'Form', name: 'form', children }],
       },
     }],
   }
 }
 
 export const flowsService = {
+
+  // The owner's saved form choices, merged over the built-in defaults. A salon
+  // that never edited anything - or a server where the config migration has not
+  // run yet - simply gets the defaults. `updated_at` lets the UI tell whether
+  // edits were saved after the form was last published.
+  async getBookingConfig(salonId: string): Promise<{ config: BookingFormConfig; updated_at: string | null; migrated: boolean }> {
+    try {
+      const { rows } = await pool.query(
+        `SELECT config, updated_at FROM wa_booking_form_config WHERE salon_id = $1`, [salonId]
+      )
+      if (!rows[0]) return { config: DEFAULT_BOOKING_CONFIG, updated_at: null, migrated: true }
+      return { config: normalizeBookingConfig(rows[0].config).config, updated_at: rows[0].updated_at, migrated: true }
+    } catch (err: any) {
+      if (err?.code === '42P01') return { config: DEFAULT_BOOKING_CONFIG, updated_at: null, migrated: false }   // undefined_table
+      throw err
+    }
+  },
+
+  // Saves the edits only - nothing reaches customers until publishBookingFlow.
+  async saveBookingConfig(salonId: string, input: any) {
+    const { config, error } = normalizeBookingConfig(input)
+    if (error) throw new AppError(400, error, 'FORM_CONFIG_INVALID')
+    try {
+      const { rows: [r] } = await pool.query(
+        `INSERT INTO wa_booking_form_config (salon_id, config) VALUES ($1, $2::jsonb)
+         ON CONFLICT (salon_id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW()
+         RETURNING updated_at`,
+        [salonId, JSON.stringify(config)]
+      )
+      return { config, updated_at: r.updated_at as string }
+    } catch (err: any) {
+      if (err?.code === '42P01') {
+        throw new AppError(500, 'Editing the booking form needs a one-time server setup - run Migration/create_wa_booking_form_config.sql', 'FLOWS_NOT_MIGRATED')
+      }
+      throw err
+    }
+  },
 
   // flow=null means never created. migrated=false means the wa_booking_flows
   // table does not exist yet (Migration/create_wa_booking_flows.sql not run).
@@ -230,13 +254,24 @@ export const flowsService = {
     const config = await configRepository.findBySalonId(salonId)
     if (!config) throw new AppError(400, 'WhatsApp not configured', 'WA_NOT_CONFIGURED')
 
+    const { config: formConfig } = await this.getBookingConfig(salonId)
+    // The owner's chosen services (still-active ones only), else every active
+    // service. A Meta dropdown holds 200 - never cut the list silently, make the
+    // owner choose.
     const { rows: services } = await pool.query(
       `SELECT id::text AS id, name FROM services
-       WHERE salon_id = $1 AND is_active = true
-       ORDER BY name ASC LIMIT $2`,
-      [salonId, MAX_SERVICES]
+       WHERE salon_id = $1 AND is_active = true AND ($2::text[] IS NULL OR id::text = ANY($2::text[]))
+       ORDER BY name ASC`,
+      [salonId, formConfig.serviceIds]
     )
-    if (services.length === 0) throw new AppError(400, 'Add at least one active service first', 'NO_SERVICES')
+    if (formConfig.fields.service.enabled) {
+      if (services.length === 0) {
+        throw new AppError(400, 'Add at least one active service first, or turn off the Service question', 'NO_SERVICES')
+      }
+      if (services.length > DROPDOWN_CAP) {
+        throw new AppError(400, `You have ${services.length} active services but a WhatsApp dropdown holds ${DROPDOWN_CAP}. Open Customise form and choose which services to offer.`, 'SERVICES_OVER_LIMIT')
+      }
+    }
 
     let result: any
     try {
@@ -244,7 +279,7 @@ export const flowsService = {
         wabaId:      config.waba_id,
         accessToken: config.access_token,
         name:        `salonox_booking_${Date.now()}`,
-        flowJson:    buildBookingFlowJson(services),
+        flowJson:    buildBookingFlowJson(services, formConfig),
         publish:     true,
       })
     } catch (err: any) {
@@ -264,6 +299,18 @@ export const flowsService = {
       [salonId, String(result.id)]
     )
     return { flow_id: String(result.id), services: services.length }
+  },
+
+  // Every active service, for the owner's picker in Customise form.
+  async listServicesForPicker(salonId: string) {
+    const { rows } = await pool.query(
+      `SELECT s.id::text AS id, s.name, COALESCE(c.name, 'Other') AS category
+       FROM services s LEFT JOIN service_categories c ON c.id = s.category_id
+       WHERE s.salon_id = $1 AND s.is_active = true
+       ORDER BY COALESCE(c.name, 'Other') ASC, s.name ASC`,
+      [salonId]
+    )
+    return rows as Array<{ id: string; name: string; category: string }>
   },
 
   // Sends the published form to one customer. Interactive messages are only
@@ -294,7 +341,7 @@ export const flowsService = {
       )
     }
 
-    const bodyText = 'Tap below to request your appointment - pick a service, date and time and our team will confirm.'
+    const bodyText = 'Tap below to request your appointment and our team will confirm.'
     let result: any
     try {
       result = await whatsappMetaApi.sendFlowMessage({
@@ -335,6 +382,7 @@ export const flowsService = {
     const date  = String(resp.date || '').trim()
     const time  = String(resp.time || '').trim()
     const notes = String(resp.notes || '').trim()
+    const otherService = String(resp.other_service || '').trim()
     const svcId = UUID_RE.test(String(resp.service || '')) ? String(resp.service) : null
 
     let serviceName: string | null = null
@@ -344,7 +392,8 @@ export const flowsService = {
     }
 
     const when = [date, time].filter(Boolean).join(' ')
-    const summary = `📋 Booking request - ${serviceName ?? 'service not specified'}${when ? `, ${when}` : ''}${notes ? ` · ${notes}` : ''}`
+    const serviceLabel = [serviceName, otherService && `other: ${otherService}`].filter(Boolean).join(' + ') || 'service not specified'
+    const summary = `📋 Booking request - ${serviceLabel}${when ? `, ${when}` : ''}${notes ? ` · ${notes}` : ''}`
 
     // Thread line (the customer's submission) + unread bump
     await inboxService.handleInboundMessage({ salonId, phone: fromPhone, name: profileName ?? name, body: summary, wamid })
@@ -359,7 +408,7 @@ export const flowsService = {
         service_id:   svcId,
         status:       'New',
         source:       'WhatsApp Flow',
-        notes:        `Preferred: ${when || 'not given'}${notes ? `\n${notes}` : ''}`,
+        notes:        `Preferred: ${when || 'not given'}${otherService ? `\nOther service: ${otherService}` : ''}${notes ? `\n${notes}` : ''}`,
         follow_up_at: date && time ? `${date} ${time}` : null,
       }, salonId)
     } catch (err: any) {

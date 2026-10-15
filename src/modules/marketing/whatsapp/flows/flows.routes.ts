@@ -20,7 +20,20 @@ router.post('/booking',
   flowsController.publishBooking
 )
 
-// POST /api/v1/wa-flows/booking/invite - create the invitation template (needs Meta approval)
+// GET /api/v1/wa-flows/booking/services - active services for the "choose services" picker
+router.get('/booking/services',
+  authMiddleware, ownerAdminStaff,
+  requireAnyPermission(['view_inbox', 'view_whatsapp_config']),
+  flowsController.listServices
+)
+
+// PUT /api/v1/wa-flows/booking/config - save the owner's form edits (a draft until published)
+router.put('/booking/config',
+  authMiddleware, ownerAdminStaff, requirePermission('edit_whatsapp_config'),
+  flowsController.saveConfig
+)
+
+// POST /api/v1/wa-flows/booking/invite- create the invitation template (needs Meta approval)
 router.post('/booking/invite',
   authMiddleware, ownerAdminStaff, requirePermission('add_template'),
   flowsController.createInvite
