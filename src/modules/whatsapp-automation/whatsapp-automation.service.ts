@@ -100,7 +100,7 @@ export const whatsappAutomationService = {
       // "does a log exist?" read leaves open. Won-the-race → proceed; lost → a
       // duplicate is already in flight/sent, skip silently.
       if (dedupeByReference && referenceId) {
-        const won = await whatsappAutomationRepository.guardInsertIfNotExists(`trigger:${eventType}:${referenceId}`)
+        const won = await whatsappAutomationRepository.guardInsertIfNotExists(`trigger:${eventType}:${referenceId}${payload.dedupeKeySuffix ? `:${payload.dedupeKeySuffix}` : ""}`)
         if (!won) {
           logger.info(`[WA-TRACE] SKIP ${eventType} — duplicate for reference ${referenceId}`)
           return
@@ -112,7 +112,7 @@ export const whatsappAutomationService = {
       // so a salon with no WhatsApp set up still gets SMS/Email. Fire-and-
       // forget, same "never blocks/throws to caller" contract this function
       // itself has — see notification-channels.service.ts.
-      notificationChannelsService.dispatchNonWhatsappChannels(payload).catch(() => {})
+      if (!payload.whatsappOnly) notificationChannelsService.dispatchNonWhatsappChannels(payload).catch(() => {})
 
       // 2. Check salon has this automation enabled
       const salonEnabled = await whatsappAutomationRepository.isSalonAutomationEnabled(salonId, eventType)

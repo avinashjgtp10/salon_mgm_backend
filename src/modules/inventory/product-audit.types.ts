@@ -42,8 +42,10 @@ export type ProductAudit = {
     notes: string | null;
     status: ProductAuditStatus;
     auditor_id: string;
+    auditor_staff_id?: string | null;
     auditor_name: string | null;
     reviewer_id: string | null;
+    reviewer_staff_id?: string | null;
     reviewer_name: string | null;
     rejection_reason: string | null;
     created_at: string;
@@ -67,6 +69,8 @@ export type CreateProductAuditBody = {
     /** Defaults to the creating user when omitted — same "creator can assign
      *  to someone else" convention as appointments.staff_id. */
     auditor_id?: string;
+    /** Preferred over auditor_id: any staff member of the salon, with or without a login account. */
+    auditor_staff_id?: string;
 };
 
 export type AddAuditItemsBody = {

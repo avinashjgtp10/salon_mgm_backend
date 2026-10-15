@@ -141,5 +141,7 @@ export type TodayStaffRecord = Partial<ReturnType<typeof attendanceActivity>> & 
     check_out: string | null;
     hours_worked: number | null;
     scheduled_hours: number | null;
+    // Start of the day's scheduled shift as "HH:MM", or null when none is scheduled.
+    shift_start: string | null;
     attendance_id: string | null;
 };

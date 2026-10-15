@@ -12,13 +12,21 @@ import { inventoryAlertsService } from "./inventory-alerts.service";
 // auto-run. See Migration/create_product_audits_tables.sql; run it by hand
 // against each environment before using this module.
 
+// The auditor / reviewer name is the chosen STAFF member's name when one was recorded (that works for staff
+// with no login account), else the login user's name (audits made before auditor_staff_id existed).
+const PERSON_NAME = (staffAlias: string, userAlias: string) =>
+  `COALESCE(NULLIF(TRIM(CONCAT(${staffAlias}.first_name, ' ', COALESCE(${staffAlias}.last_name, ''))), ''),
+            NULLIF(TRIM(CONCAT(${userAlias}.first_name, ' ', COALESCE(${userAlias}.last_name, ''))), ''))`;
+
 const AUDIT_SELECT = `
   SELECT pa.*,
-         NULLIF(TRIM(CONCAT(au.first_name, ' ', COALESCE(au.last_name, ''))), '') AS auditor_name,
-         NULLIF(TRIM(CONCAT(ru.first_name, ' ', COALESCE(ru.last_name, ''))), '') AS reviewer_name
+         ${PERSON_NAME("asx", "au")} AS auditor_name,
+         ${PERSON_NAME("rsx", "ru")} AS reviewer_name
     FROM product_audits pa
     LEFT JOIN users au ON au.id = pa.auditor_id
-    LEFT JOIN users ru ON ru.id = pa.reviewer_id`;
+    LEFT JOIN users ru ON ru.id = pa.reviewer_id
+    LEFT JOIN staff asx ON asx.id = pa.auditor_staff_id
+    LEFT JOIN staff rsx ON rsx.id = pa.reviewer_staff_id`;
 
 // product_audit_items only stores product_id — name/sku/category are always
 // resolved live via this join (never denormalized onto the row), so a later
@@ -63,15 +71,33 @@ export const productAuditRepository = {
         return rows.length > 0;
     },
 
-    async create(data: CreateProductAuditBody, salonId: string, auditorId: string): Promise<ProductAudit> {
+    /** A staff row of this salon (any role, with or without a login) — for picking an auditor / reviewer. */
+    async findStaff(staffId: string, salonId: string): Promise<{ id: string; user_id: string | null; is_active: boolean } | null> {
+        const { rows } = await pool.query(
+            `SELECT id, user_id, is_active FROM staff WHERE id = $1 AND salon_id = $2`,
+            [staffId, salonId],
+        );
+        return rows[0] ?? null;
+    },
+
+    /** The staff row belonging to a login user, if they have one (the salon owner may not). */
+    async staffIdForUser(userId: string, salonId: string): Promise<string | null> {
+        const { rows } = await pool.query(
+            `SELECT id FROM staff WHERE user_id = $1 AND salon_id = $2 LIMIT 1`,
+            [userId, salonId],
+        );
+        return rows[0]?.id ?? null;
+    },
+
+    async create(data: CreateProductAuditBody, salonId: string, auditorId: string, auditorStaffId: string | null = null): Promise<ProductAudit> {
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
             const { rows } = await client.query(
-                `INSERT INTO product_audits (salon_id, branch_id, name, notes, auditor_id)
-                 VALUES ($1, $2, $3, $4, $5)
+                `INSERT INTO product_audits (salon_id, branch_id, name, notes, auditor_id, auditor_staff_id)
+                 VALUES ($1, $2, $3, $4, $5, $6)
                  RETURNING *`,
-                [salonId, data.branch_id, data.name, data.notes ?? null, auditorId],
+                [salonId, data.branch_id, data.name, data.notes ?? null, auditorId, auditorStaffId],
             );
             const audit = rows[0];
             await client.query(
@@ -113,8 +139,8 @@ export const productAuditRepository = {
 
         const { rows } = await pool.query(
             `SELECT pa.*,
-                    NULLIF(TRIM(CONCAT(au.first_name, ' ', COALESCE(au.last_name, ''))), '') AS auditor_name,
-                    NULLIF(TRIM(CONCAT(ru.first_name, ' ', COALESCE(ru.last_name, ''))), '') AS reviewer_name,
+                    ${PERSON_NAME("asx", "au")} AS auditor_name,
+                    ${PERSON_NAME("rsx", "ru")} AS reviewer_name,
                     (SELECT COUNT(*) FROM product_audit_items pai WHERE pai.audit_id = pa.id)::int AS item_count,
                     (SELECT COUNT(*) FROM product_audit_items pai
                        WHERE pai.audit_id = pa.id
@@ -123,6 +149,8 @@ export const productAuditRepository = {
                FROM product_audits pa
                LEFT JOIN users au ON au.id = pa.auditor_id
                LEFT JOIN users ru ON ru.id = pa.reviewer_id
+               LEFT JOIN staff asx ON asx.id = pa.auditor_staff_id
+               LEFT JOIN staff rsx ON rsx.id = pa.reviewer_staff_id
                ${where}
               ORDER BY pa.updated_at DESC
               LIMIT $${idx++} OFFSET $${idx++}`,
@@ -274,17 +302,18 @@ export const productAuditRepository = {
     async transitionStatus(
         auditId: string,
         salonId: string,
-        patch: { status: ProductAuditStatus; reviewer_id?: string | null; rejection_reason?: string | null },
+        patch: { status: ProductAuditStatus; reviewer_id?: string | null; reviewer_staff_id?: string | null; rejection_reason?: string | null },
     ): Promise<ProductAudit> {
         const { rows } = await pool.query(
             `UPDATE product_audits
                 SET status = $1,
                     reviewer_id = COALESCE($2, reviewer_id),
+                    reviewer_staff_id = COALESCE($6, reviewer_staff_id),
                     rejection_reason = $3,
                     updated_at = NOW()
               WHERE id = $4 AND salon_id = $5
               RETURNING *`,
-            [patch.status, patch.reviewer_id ?? null, patch.rejection_reason ?? null, auditId, salonId],
+            [patch.status, patch.reviewer_id ?? null, patch.rejection_reason ?? null, auditId, salonId, patch.reviewer_staff_id ?? null],
         );
         return rows[0];
     },
@@ -320,6 +349,7 @@ export const productAuditRepository = {
         auditId: string,
         salonId: string,
         reviewerId: string,
+        reviewerStaffId: string | null = null,
     ): Promise<{ audit: ProductAudit; adjustedCount: number }> {
         const client = await pool.connect();
         try {
@@ -386,10 +416,10 @@ export const productAuditRepository = {
 
             const { rows: updatedRows } = await client.query(
                 `UPDATE product_audits
-                    SET status = 'complete', reviewer_id = $1, rejection_reason = NULL, updated_at = NOW()
+                    SET status = 'complete', reviewer_id = $1, reviewer_staff_id = $4, rejection_reason = NULL, updated_at = NOW()
                   WHERE id = $2 AND salon_id = $3
                   RETURNING *`,
-                [reviewerId, auditId, salonId],
+                [reviewerId, auditId, salonId, reviewerStaffId],
             );
 
             await client.query(

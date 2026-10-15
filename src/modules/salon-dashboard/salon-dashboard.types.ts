@@ -130,4 +130,7 @@ export interface DashboardCombined {
   todaysBirthdays: TodaysBirthdays;
   todaysAnniversaries: TodaysAnniversaries;
   paymentModeBreakdown: PaymentModeBreakdown;
+  // "Monthly Projection & Growth" card — null only if its query failed (the
+  // card then shows its retry state); always current IST month.
+  monthlyProjection: MonthlyProjection | null;
 }

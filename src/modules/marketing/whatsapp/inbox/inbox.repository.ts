@@ -57,6 +57,33 @@ export const inboxRepository = {
     return rows
   },
 
+  // Deletes whole conversations (the thread and every message in it) for this salon. Returns how many
+  // conversations were removed. Messages go first, in the same transaction, so nothing is left dangling.
+  // A customer who writes again later simply starts a fresh conversation.
+  async deleteConversations(salonId: string, phones: string[]): Promise<number> {
+    const normalized = phones.map(normalizePhone)
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      const { rows } = await client.query(
+        `SELECT id FROM wa_conversations WHERE salon_id = $1 AND contact_phone = ANY($2::text[])`,
+        [salonId, normalized]
+      )
+      const ids: string[] = rows.map((r: any) => r.id)
+      if (ids.length > 0) {
+        await client.query(`DELETE FROM wa_messages WHERE conversation_id = ANY($1::uuid[])`, [ids])
+        await client.query(`DELETE FROM wa_conversations WHERE id = ANY($1::uuid[]) AND salon_id = $2`, [ids, salonId])
+      }
+      await client.query('COMMIT')
+      return ids.length
+    } catch (err) {
+      try { await client.query('ROLLBACK') } catch { /* connection may already be dead */ }
+      throw err
+    } finally {
+      client.release()
+    }
+  },
+
   // Just the total — powers the sidebar's unread badge without shipping the
   // whole conversation list on every page.
   async getUnreadTotal(salonId: string): Promise<number> {

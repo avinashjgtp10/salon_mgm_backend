@@ -21,6 +21,19 @@ export const ordersRepository = {
      * multiplied by the order's flat tax_rate (Tax Group's rate, not a
      * per-line rate — see CreateOrderDTO.tax_rate).
      */
+    /**
+     * The PO number the NEXT order created for this salon will get — a read-only
+     * preview of create()'s own counter (salons.next_order_seq, same PO-0001
+     * format), shown on the New Purchase Order form. It does not reserve the
+     * number: the real one is assigned atomically inside create(), so two people
+     * opening the form at once may see the same preview, but never get duplicates.
+     */
+    async getNextOrderNumber(salonId: string): Promise<string> {
+        const { rows } = await pool.query(`SELECT next_order_seq FROM salons WHERE id = $1`, [salonId]);
+        const seq = Number(rows[0]?.next_order_seq ?? 1);
+        return `PO-${String(seq).padStart(4, "0")}`;
+    },
+
     async create(data: CreateOrderDTO, salonId: string, createdBy: string): Promise<Order> {
         const taxRate = data.tax_rate ?? 0;
 

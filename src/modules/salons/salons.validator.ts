@@ -17,6 +17,16 @@ const validateTaxFields = (b: Record<string, unknown>) => {
     }
 };
 
+// Shape only (an array of strings, not absurdly long); the real rules - digits, de-duplication, the cap and
+// "not the primary number" - are applied in salons.service.ts, which also knows the stored primary number.
+const validateAdditionalPhones = (b: Record<string, unknown>) => {
+    if (b.additional_phones === undefined) return;
+    if (!Array.isArray(b.additional_phones) || b.additional_phones.length > 20
+        || b.additional_phones.some((p) => typeof p !== "string" || p.length > 30)) {
+        throw new AppError(400, "additional_phones must be a list of phone numbers", "VALIDATION_ERROR");
+    }
+};
+
 export const validateCreateSalon = (req: Request, _res: Response, next: NextFunction) => {
     try {
         const b = req.body;
@@ -51,6 +61,7 @@ export const validateCreateSalon = (req: Request, _res: Response, next: NextFunc
         }
 
         validateTaxFields(b);
+        validateAdditionalPhones(b);
 
         return next();
     } catch (err) {
@@ -97,6 +108,7 @@ export const validateUpdateSalon = (req: Request, _res: Response, next: NextFunc
         }
 
         validateTaxFields(b);
+        validateAdditionalPhones(b);
 
         return next();
     } catch (err) {

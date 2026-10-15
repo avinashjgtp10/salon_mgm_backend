@@ -128,6 +128,7 @@ export const productAuditController = {
             const audit = await productAuditService.approve({
                 auditId: String(req.params.id), salonId, reviewerId: userId,
                 requestedReviewerId: req.body.reviewer_id || undefined,
+                requestedReviewerStaffId: req.body.reviewer_staff_id || undefined,
             });
             sendSuccess(res, 200, audit, "Audit approved and completed");
         } catch (err) { next(err); }
@@ -140,6 +141,7 @@ export const productAuditController = {
             const audit = await productAuditService.reject({
                 auditId: String(req.params.id), salonId, reviewerId: userId, reason: String(req.body.reason || ""),
                 requestedReviewerId: req.body.reviewer_id || undefined,
+                requestedReviewerStaffId: req.body.reviewer_staff_id || undefined,
             });
             sendSuccess(res, 200, audit, "Audit rejected");
         } catch (err) { next(err); }

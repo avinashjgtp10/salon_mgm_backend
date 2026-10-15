@@ -10703,6 +10703,9 @@ async getStaffSalesReport(
     WITH sales_side AS (
       SELECT
         s.id, s.created_at,
+        -- One row per line item, so the sale id repeats across a multi-service
+        -- bill; this is the row's own unique key (the grid must not key on s.id).
+        sli.id AS line_item_id,
         ${this._STATUS_EXPR} AS status,
         -- Package/Membership are benefits/credits applied against the bill,
         -- never real payment methods (sales.payment_method is the
@@ -10756,7 +10759,7 @@ async getStaffSalesReport(
     ),
     appt_side AS (
       SELECT
-        u.id, u.created_at, u.status, u.payment_method,
+        u.id, u.created_at, NULL::uuid AS line_item_id, u.status, u.payment_method,
         -- _UNBILLED_APPOINTMENT_ROWS_CTE always returns u.price gross of GST
         -- (plus u.tax_amount separately) since it's shared by several other
         -- reports that don't take this toggle — subtract it back out here
@@ -10784,6 +10787,7 @@ async getStaffSalesReport(
   const total = rows.length ? Number(rows[0].total_count) : 0;
   const items: StaffSalesReportRow[] = rows.map((row: any) => ({
     id: row.id,
+    line_item_id: row.line_item_id ?? null,
     staff_id: row.staff_id ?? null,
     staff_name: row.staff_name ?? "—",
     is_unbilled: Boolean(row.is_unbilled),
@@ -11204,7 +11208,11 @@ async getStaffPerformanceReportStats(
       COALESCE(SUM(product_revenue), 0) AS product_revenue,
       COALESCE(SUM(package_revenue), 0) AS package_revenue,
       COALESCE(SUM(membership_revenue), 0) AS membership_revenue,
-      COALESCE(SUM(commission), 0) AS total_commission
+      COALESCE(SUM(commission), 0) AS total_commission,
+      -- Same per-staff due the table's Due column shows (each sale's outstanding
+      -- amount counted once, for its resolved staff), summed over the WHOLE
+      -- filtered set — not just the current page.
+      COALESCE(SUM(due), 0) AS total_due
     FROM combined
   `;
 
@@ -11220,7 +11228,7 @@ async getStaffPerformanceReportStats(
     package_revenue: Number(r.package_revenue ?? 0),
     membership_revenue: Number(r.membership_revenue ?? 0),
     total_commission: Number(r.total_commission ?? 0),
-    avg_revenue_per_staff: totalStaff > 0 ? totalRevenue / totalStaff : 0,
+    total_due: Number(r.total_due ?? 0),
   };
 },
 

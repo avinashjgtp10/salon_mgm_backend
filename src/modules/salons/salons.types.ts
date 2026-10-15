@@ -9,6 +9,8 @@ export type Salon = {
     banner_url: string | null;
     email: string | null;
     phone: string | null;
+    /** Extra business numbers besides `phone` (the primary one); digits only. */
+    additional_phones?: string[];
     website_url: string | null;
     google_review_url: string | null;
     gst_number: string | null;
@@ -39,6 +41,7 @@ export type CreateSalonBody = {
     banner_url?: string;
     email?: string;
     phone?: string;
+    additional_phones?: string[];
     website_url?: string;
     google_review_url?: string;
     gst_number?: string;

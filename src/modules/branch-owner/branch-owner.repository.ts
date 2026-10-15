@@ -2,6 +2,48 @@ import { randomUUID } from "crypto";
 import pool, { safeQuery } from "../../config/database";
 import { lowStockThresholdSql } from "../inventory/low-stock.sql";
 
+// Mirrors salon-dashboard.repository.ts's revenue_events exactly (see the long
+// comments there): an appointment-linked sale counts what was actually collected
+// on it (payments.paid_amount), a walk-in sale counts its rounded total, an open
+// partial deposit with no completed sale yet counts as collected — all dated by
+// the appointment's scheduled visit (sale/payment creation only as a fallback).
+// Expects a `my_salons(salon_id)` CTE in scope.
+const REVENUE_EVENTS_CTES = `
+      sales_rows AS (
+        SELECT COALESCE(a.scheduled_at, s.created_at) AS event_at,
+          CASE
+            WHEN s.appointment_id IS NOT NULL THEN COALESCE(pay.paid_from_payments, 0)
+            ELSE ROUND(s.total_amount)
+          END AS amount
+        FROM sales s
+        LEFT JOIN appointments a ON a.id = s.appointment_id
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(SUM(p.paid_amount) FILTER (WHERE p.status IN ('completed', 'partial')), 0) AS paid_from_payments
+          FROM payments p
+          WHERE p.appointment_id = s.appointment_id
+        ) pay ON s.appointment_id IS NOT NULL
+        WHERE s.salon_id IN (SELECT salon_id FROM my_salons)
+          AND s.status = 'completed'
+          AND (a.id IS NULL OR (a.status IN ('paid', 'partial') AND a.deleted_at IS NULL))
+      ),
+      open_partial_rows AS (
+        SELECT COALESCE(a.scheduled_at, p.created_at) AS event_at, p.paid_amount AS amount
+        FROM payments p
+        JOIN appointments a ON a.id = p.appointment_id
+        WHERE p.salon_id IN (SELECT salon_id FROM my_salons)
+          AND p.status = 'partial'
+          AND a.deleted_at IS NULL
+          AND a.status NOT IN ('cancelled', 'no-show')
+          AND NOT EXISTS (
+            SELECT 1 FROM sales s2 WHERE s2.appointment_id = p.appointment_id AND s2.status = 'completed'
+          )
+      ),
+      revenue_events AS (
+        SELECT event_at, amount FROM sales_rows
+        UNION ALL
+        SELECT event_at, amount FROM open_partial_rows
+      )`;
+
 export const branchOwnerRepository = {
 
   // Per-salon breakdown for the "My Salons" table — same revenue convention
@@ -270,9 +312,10 @@ export const branchOwnerRepository = {
     };
   },
 
-  // Bucketed revenue for the dashboard's trend chart — same revenue_events
-  // convention (completed sale, or an open partial deposit with no completed
-  // sale yet) as getDashboardStats(), just bucketed by day/week/month over a
+  // Bucketed revenue for the dashboard's trend chart — the SAME revenue_events
+  // definition as the salon dashboard (salon-dashboard.repository.ts getSummary:
+  // money actually collected on a bill, dated by the visit, in IST), so the bars
+  // add up to what each salon sees. Just bucketed by day/week/month over a
   // trailing window instead of summed into one total. generate_series fills
   // in empty buckets so the chart doesn't skip gaps. Also returns the sum of
   // the immediately preceding window of the same length, so the frontend can
@@ -292,35 +335,11 @@ export const branchOwnerRepository = {
         SELECT salon_id FROM branch_owner_salons
         WHERE branch_owner_id = $1 AND ($3::uuid IS NULL OR salon_id = $3::uuid)
       ),
-      sales_rows AS (
-        SELECT s.created_at AS event_at, ROUND(s.total_amount) AS amount
-        FROM sales s
-        LEFT JOIN appointments a ON a.id = s.appointment_id
-        WHERE s.salon_id IN (SELECT salon_id FROM my_salons)
-          AND s.status = 'completed'
-          AND (a.id IS NULL OR (a.status IN ('paid', 'partial') AND a.deleted_at IS NULL))
-      ),
-      open_partial_rows AS (
-        SELECT p.created_at AS event_at, p.paid_amount AS amount
-        FROM payments p
-        JOIN appointments a ON a.id = p.appointment_id
-        WHERE p.salon_id IN (SELECT salon_id FROM my_salons)
-          AND p.status = 'partial'
-          AND a.deleted_at IS NULL
-          AND a.status NOT IN ('cancelled', 'no-show')
-          AND NOT EXISTS (
-            SELECT 1 FROM sales s2 WHERE s2.appointment_id = p.appointment_id AND s2.status = 'completed'
-          )
-      ),
-      revenue_events AS (
-        SELECT event_at, amount FROM sales_rows
-        UNION ALL
-        SELECT event_at, amount FROM open_partial_rows
-      ),
+      ${REVENUE_EVENTS_CTES},
       buckets_series AS (
         SELECT generate_series(
-          date_trunc('${bucketUnit}', CURRENT_DATE) - (($2::int - 1) || ' ${bucketUnit}')::interval,
-          date_trunc('${bucketUnit}', CURRENT_DATE),
+          date_trunc('${bucketUnit}', (NOW() AT TIME ZONE 'Asia/Kolkata')::date) - (($2::int - 1) || ' ${bucketUnit}')::interval,
+          date_trunc('${bucketUnit}', (NOW() AT TIME ZONE 'Asia/Kolkata')::date),
           ('1 ${bucketUnit}')::interval
         )::date AS bucket
       )
@@ -328,7 +347,7 @@ export const branchOwnerRepository = {
         bs.bucket::text AS bucket,
         COALESCE(SUM(re.amount), 0)::numeric AS revenue
       FROM buckets_series bs
-      LEFT JOIN revenue_events re ON date_trunc('${bucketUnit}', re.event_at) = bs.bucket
+      LEFT JOIN revenue_events re ON date_trunc('${bucketUnit}', (re.event_at AT TIME ZONE 'Asia/Kolkata')::date) = bs.bucket
       GROUP BY bs.bucket
       ORDER BY bs.bucket
     `, [branchOwnerId, bucketCount, salonId ?? null]);
@@ -342,39 +361,15 @@ export const branchOwnerRepository = {
         SELECT salon_id FROM branch_owner_salons
         WHERE branch_owner_id = $1 AND ($3::uuid IS NULL OR salon_id = $3::uuid)
       ),
-      sales_rows AS (
-        SELECT s.created_at AS event_at, ROUND(s.total_amount) AS amount
-        FROM sales s
-        LEFT JOIN appointments a ON a.id = s.appointment_id
-        WHERE s.salon_id IN (SELECT salon_id FROM my_salons)
-          AND s.status = 'completed'
-          AND (a.id IS NULL OR (a.status IN ('paid', 'partial') AND a.deleted_at IS NULL))
-      ),
-      open_partial_rows AS (
-        SELECT p.created_at AS event_at, p.paid_amount AS amount
-        FROM payments p
-        JOIN appointments a ON a.id = p.appointment_id
-        WHERE p.salon_id IN (SELECT salon_id FROM my_salons)
-          AND p.status = 'partial'
-          AND a.deleted_at IS NULL
-          AND a.status NOT IN ('cancelled', 'no-show')
-          AND NOT EXISTS (
-            SELECT 1 FROM sales s2 WHERE s2.appointment_id = p.appointment_id AND s2.status = 'completed'
-          )
-      ),
-      revenue_events AS (
-        SELECT event_at, amount FROM sales_rows
-        UNION ALL
-        SELECT event_at, amount FROM open_partial_rows
-      ),
+      ${REVENUE_EVENTS_CTES},
       window_bounds AS (
         SELECT
-          date_trunc('${bucketUnit}', CURRENT_DATE) - ($2::int || ' ${bucketUnit}')::interval AS prior_start,
-          date_trunc('${bucketUnit}', CURRENT_DATE) - (($2::int - 1) || ' ${bucketUnit}')::interval AS prior_end
+          date_trunc('${bucketUnit}', (NOW() AT TIME ZONE 'Asia/Kolkata')::date) - ($2::int || ' ${bucketUnit}')::interval AS prior_start,
+          date_trunc('${bucketUnit}', (NOW() AT TIME ZONE 'Asia/Kolkata')::date) - (($2::int - 1) || ' ${bucketUnit}')::interval AS prior_end
       )
       SELECT COALESCE(SUM(re.amount), 0)::numeric AS prior_revenue
       FROM revenue_events re, window_bounds wb
-      WHERE re.event_at >= wb.prior_start AND re.event_at < wb.prior_end
+      WHERE (re.event_at AT TIME ZONE 'Asia/Kolkata') >= wb.prior_start AND (re.event_at AT TIME ZONE 'Asia/Kolkata') < wb.prior_end
     `, [branchOwnerId, bucketCount, salonId ?? null]);
 
     return { points, priorPeriodRevenue: Number(priorRows[0]?.prior_revenue ?? 0) };

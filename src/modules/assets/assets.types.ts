@@ -33,6 +33,8 @@ export interface Asset {
   icon: string | null;
   receipt_url: string | null;
   warranty_card_url: string | null;
+  purchase_date: string | null;   // YYYY-MM-DD
+  expiry_date: string | null;     // YYYY-MM-DD
   condition: AssetCondition;
   status: AssetStatus;
   needs_inspection: boolean;

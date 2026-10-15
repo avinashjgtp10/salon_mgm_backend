@@ -2823,6 +2823,10 @@ export interface StaffSalesReportFilters {
 
 export interface StaffSalesReportRow {
     id: string;
+    // The sale_items row this report row is for (null for an unbilled
+    // appointment). `id` is the SALE id and repeats once per line item, so
+    // anything keying rows (a grid) must use this instead.
+    line_item_id: string | null;
     // Resolved staff (see the sales_side/appt_side st.id join) — null on the
     // rare row where no staff could be resolved at all. Powers the Staff
     // Sales report's staff-name click-through to that staff's history.
@@ -2959,7 +2963,8 @@ export interface StaffPerformanceReportStats {
     package_revenue: number;
     membership_revenue: number;
     total_commission: number;
-    avg_revenue_per_staff: number;
+    // Outstanding amount across the filtered report (sum of the rows' `due`).
+    total_due: number;
 }
 
 export interface StaffPerformanceFilterOption {

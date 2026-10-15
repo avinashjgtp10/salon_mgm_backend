@@ -42,6 +42,14 @@ async function withCategoriesTable<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+// Optional YYYY-MM-DD date: blank -> null, anything unparseable is rejected.
+function dateOnly(v: unknown): string | null {
+  const s = typeof v === "string" ? v.trim().slice(0, 10) : "";
+  if (!s) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || Number.isNaN(Date.parse(s))) throw bad("Enter a valid date");
+  return s;
+}
+
 async function inTx<T>(fn: (c: PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
   try {
@@ -134,7 +142,8 @@ export const assetsService = {
         salonId: actor.salonId, branchId, seq, code: `AST-${String(seq).padStart(5, "0")}`, name,
         category: str(b.category, 80), brand: str(b.brand, 80), model: str(b.model, 80),
         serial: str(b.serial_number, 120), photoUrl: str(b.photo_url, 1000), icon: iconId(b.icon),
-        receiptUrl: str(b.receipt_url, 1000), warrantyUrl: str(b.warranty_card_url, 1000), condition, notes: str(b.notes, 2000),
+        receiptUrl: str(b.receipt_url, 1000), warrantyUrl: str(b.warranty_card_url, 1000),
+        purchaseDate: dateOnly(b.purchase_date), expiryDate: dateOnly(b.expiry_date), condition, notes: str(b.notes, 2000),
         userId: actor.userId,
       });
       await repo.addEvent(c, {
@@ -157,6 +166,8 @@ export const assetsService = {
         if (key in b) patch[key] = str(b[key], max);
       }
       if ("icon" in b) patch.icon = iconId(b.icon);
+      if ("purchase_date" in b) patch.purchase_date = dateOnly(b.purchase_date);
+      if ("expiry_date" in b) patch.expiry_date = dateOnly(b.expiry_date);
       if ("category" in b && !patch.category) throw bad("Category is required");
 
       let transferTo: string | null = null;

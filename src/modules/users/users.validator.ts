@@ -62,6 +62,8 @@ export const updateUserSchema = z.object({
     firstName: z.string().trim().min(1).max(50).optional(),
     lastName: z.string().trim().max(50).optional().nullable(),
     phone: phoneSchema,
+    // Extra WhatsApp Alerts numbers; the real rules (digits, repeats, cap) are applied in users.service.ts.
+    alertPhones: z.array(z.string().max(30)).max(10).optional(),
     avatarUrl: z.string().url().optional().nullable(),
     isActive: z.boolean().optional(),
     role: z.enum(["salon_owner", "staff", "client", "admin"]).optional(),
