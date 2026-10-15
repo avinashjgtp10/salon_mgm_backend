@@ -11208,7 +11208,11 @@ async getStaffPerformanceReportStats(
       COALESCE(SUM(product_revenue), 0) AS product_revenue,
       COALESCE(SUM(package_revenue), 0) AS package_revenue,
       COALESCE(SUM(membership_revenue), 0) AS membership_revenue,
-      COALESCE(SUM(commission), 0) AS total_commission
+      COALESCE(SUM(commission), 0) AS total_commission,
+      -- Same per-staff due the table's Due column shows (each sale's outstanding
+      -- amount counted once, for its resolved staff), summed over the WHOLE
+      -- filtered set — not just the current page.
+      COALESCE(SUM(due), 0) AS total_due
     FROM combined
   `;
 
@@ -11224,7 +11228,7 @@ async getStaffPerformanceReportStats(
     package_revenue: Number(r.package_revenue ?? 0),
     membership_revenue: Number(r.membership_revenue ?? 0),
     total_commission: Number(r.total_commission ?? 0),
-    avg_revenue_per_staff: totalStaff > 0 ? totalRevenue / totalStaff : 0,
+    total_due: Number(r.total_due ?? 0),
   };
 },
 
