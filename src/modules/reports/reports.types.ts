@@ -2963,7 +2963,8 @@ export interface StaffPerformanceReportStats {
     package_revenue: number;
     membership_revenue: number;
     total_commission: number;
-    avg_revenue_per_staff: number;
+    // Outstanding amount across the filtered report (sum of the rows' `due`).
+    total_due: number;
 }
 
 export interface StaffPerformanceFilterOption {
