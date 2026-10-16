@@ -11,6 +11,7 @@ router.get("/my",    authMiddleware, supportController.getMyTickets);
 router.patch("/:id/read", authMiddleware, supportController.markReplyRead);
 
 // ── Super admin routes ──────────────────────────────────────────────────────
+router.get("/attention", authMiddleware, superAdminMiddleware, supportController.getAttention);
 router.get("/stats", authMiddleware, superAdminMiddleware, supportController.getStats);
 router.get("/",      authMiddleware, superAdminMiddleware, supportController.getAllTickets);
 router.patch("/:id/reply",  authMiddleware, superAdminMiddleware, supportController.replyToTicket);

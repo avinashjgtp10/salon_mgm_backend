@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { supportService } from "./support.service";
+import { botQuestionsService } from "../bot/bot-questions.service";
 
 export const supportController = {
   // POST /api/v1/support — salon user submits a ticket
@@ -64,6 +65,27 @@ export const supportController = {
     } catch (err) { next(err); }
   },
 
+  // GET /api/v1/support/attention — everything the Super Admin's notification badges, bell
+  // and toast need in ONE round trip (it used to be three separate requests every poll):
+  // the ticket stats, the chatbot question stats and the newest unanswered chatbot questions.
+  async getAttention(_req: Request, res: Response, next: NextFunction) {
+    try {
+      const [supportStats, botStats, unanswered] = await Promise.all([
+        supportService.getStats(),
+        botQuestionsService.stats(),
+        botQuestionsService.list({ answered: "unanswered", page: 1, limit: 5 }),
+      ]);
+      return res.json({
+        success: true,
+        data: {
+          support_stats: supportStats,
+          chatbot_stats: botStats,
+          recent_chatbot: unanswered.rows,
+        },
+      });
+    } catch (err) { next(err); }
+  },
+
   // PATCH /api/v1/support/:id/reply — super admin replies
   async replyToTicket(req: Request, res: Response, next: NextFunction) {
     try {
@@ -71,7 +93,7 @@ export const supportController = {
       if (!reply?.trim()) {
         return res.status(400).json({ success: false, error: { message: "Reply text is required" } });
       }
-      const ticket = await supportService.replyToTicket(req.params.id, reply.trim());
+      const ticket = await supportService.replyToTicket(String(req.params.id), reply.trim());
       return res.json({ success: true, data: ticket });
     } catch (err) { next(err); }
   },
@@ -80,7 +102,7 @@ export const supportController = {
   async updateStatus(req: Request, res: Response, next: NextFunction) {
     try {
       const { status } = req.body;
-      const ticket = await supportService.updateStatus(req.params.id, status);
+      const ticket = await supportService.updateStatus(String(req.params.id), status);
       return res.json({ success: true, data: ticket });
     } catch (err) { next(err); }
   },

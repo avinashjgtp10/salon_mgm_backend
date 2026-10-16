@@ -311,11 +311,13 @@ export const superAdminRepository = {
         u.id                                                                  AS owner_user_id,
         bs.status                                                             AS subscription_status,
         bp.name                                                               AS plan_name,
+        spc.base_tier                                                         AS plan_tier,
         bp.price_per_unit                                                     AS plan_price
       FROM salons s
       LEFT JOIN users u               ON u.id     = s.owner_id
       LEFT JOIN billing_subscriptions bs ON bs.salon_id = s.id AND bs.status IN ('active','trialing')
       LEFT JOIN billing_plans bp      ON bp.id    = bs.plan_id
+      LEFT JOIN salon_plan_customizations spc ON spc.salon_id = s.id
       WHERE s.id = $1 LIMIT 1
     `, [id]);
     return rows[0] || null;
@@ -489,6 +491,7 @@ export const superAdminRepository = {
         u.email                                                  AS owner_email,
         TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,''))) AS owner_name,
         sp.name                                                  AS plan_name,
+        spc.base_tier                                            AS plan_tier,
         sub.status                                               AS subscription_status,
         COALESCE(sub.trial_start, sub.current_period_start)      AS subscription_start_date,
         COALESCE(sub.trial_end, sub.current_period_end)          AS subscription_end_date,
@@ -505,6 +508,7 @@ export const superAdminRepository = {
         LIMIT 1
       ) sub ON true
       LEFT JOIN subscription_plans sp ON sp.id = sub.plan_id
+      LEFT JOIN salon_plan_customizations spc ON spc.salon_id = s.id
       LEFT JOIN salon_settings ss ON ss.salon_id = s.id AND ss.key = 'subscription_permissions'
       WHERE (
         s.business_name ILIKE $1
@@ -528,6 +532,7 @@ export const superAdminRepository = {
         u.email                                                  AS owner_email,
         TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,''))) AS owner_name,
         sp.name                                                  AS plan_name,
+        spc.base_tier                                            AS plan_tier,
         sub.status                                               AS subscription_status,
         COALESCE(sub.trial_start, sub.current_period_start)      AS subscription_start_date,
         COALESCE(sub.trial_end, sub.current_period_end)          AS subscription_end_date,
@@ -544,6 +549,7 @@ export const superAdminRepository = {
         LIMIT 1
       ) sub ON true
       LEFT JOIN subscription_plans sp ON sp.id = sub.plan_id
+      LEFT JOIN salon_plan_customizations spc ON spc.salon_id = s.id
       LEFT JOIN salon_settings ss ON ss.salon_id = s.id AND ss.key = 'subscription_permissions'
       WHERE s.id = $1
       LIMIT 1

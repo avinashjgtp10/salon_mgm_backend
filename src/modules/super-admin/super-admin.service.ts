@@ -253,7 +253,7 @@ export const superAdminService = {
     return {
       salon: {
         id: salon.id, name: salon.name, owner_email: salon.owner_email, owner_name: salon.owner_name,
-        plan_name: salon.plan_name, is_active: salon.is_active,
+        plan_name: salon.plan_name, plan_tier: salon.plan_tier ?? null, is_active: salon.is_active,
         subscription_status: salon.subscription_status,
         subscription_start_date: salon.subscription_start_date,
         subscription_end_date: salon.subscription_end_date,

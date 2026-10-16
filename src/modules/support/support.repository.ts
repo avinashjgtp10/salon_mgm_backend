@@ -103,7 +103,9 @@ export const supportRepo = {
         [id, reply]
       )
     );
-    return rows[0];
+    // Re-read with the submitter/salon joins so the UI can swap the row in place
+    // without losing salon_name / submitter_name / attachments.
+    return rows[0] ? (await supportRepo.getTicketById(id)) ?? rows[0] : rows[0];
   },
 
   // Only the ticket's own submitter can mark its reply read — the WHERE on
@@ -131,7 +133,9 @@ export const supportRepo = {
         [id, status]
       )
     );
-    return rows[0];
+    // Re-read with the submitter/salon joins so the UI can swap the row in place
+    // without losing salon_name / submitter_name / attachments.
+    return rows[0] ? (await supportRepo.getTicketById(id)) ?? rows[0] : rows[0];
   },
 
   async getStats() {
