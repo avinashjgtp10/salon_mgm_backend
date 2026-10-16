@@ -23,7 +23,8 @@ const auth = [authMiddleware, requireSalon, roleMiddleware("salon_owner", "admin
 // read a selected client's package coverage just to build a booking/sale,
 // or show it inside View Appointment) OR the new dedicated
 // view_client_packages, for the Client Packages page itself.
-const readPurchaseHistory = requireAnyPermission(["view_clients", "view_appointment", "view_client_packages"]);
+// create_sales: Quick Sale needs a selected client's package coverage without view_clients.
+const readPurchaseHistory = requireAnyPermission(["view_clients", "view_appointment", "view_client_packages", "create_sales"]);
 const createPackage = requirePermission("create_package");
 const editPackage = requirePermission("edit_package");
 const deletePackage = requirePermission("delete_package");

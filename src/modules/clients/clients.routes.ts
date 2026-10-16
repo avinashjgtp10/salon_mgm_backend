@@ -34,6 +34,12 @@ const ownerAdminStaff = roleMiddleware("salon_owner", "admin", "staff");
 // booking, since it has neither view_clients nor create_sales.
 const viewClients = requireAnyPermission(["view_clients", "create_sales", "create_appointment", "manage_calendar"]);
 
+// Quick Sale's client panel has its own independent Edit / History keys (quick_sale_edit_client,
+// quick_sale_client_history). They are NOT the Clients module's edit_clients / view_client_history:
+// either key grants the action, and neither one switches the other on.
+const editClients = requireAnyPermission(["edit_clients", "quick_sale_edit_client"]);
+const viewClientHistory = requireAnyPermission(["view_client_history", "quick_sale_client_history"]);
+
 // featureKey "clients" — Basic tier and up by default, but a super admin can
 // still revoke it per salon via feature_overrides. See inventory.routes.ts
 // for the same router.use() pattern and why authMiddleware needs repeating
@@ -87,7 +93,7 @@ router.get(
     "/with-history-stats",
     authMiddleware,
     ownerAdminStaff,
-    requirePermission("view_client_history"),
+    viewClientHistory,
     clientsController.listWithHistoryStats
 );
 
@@ -96,7 +102,7 @@ router.get(
     "/:clientId/history",
     authMiddleware,
     ownerAdminStaff,
-    requirePermission("view_client_history"),
+    viewClientHistory,
     clientsController.getHistory
 );
 
@@ -115,14 +121,14 @@ router.post(
 
 // GET / PATCH / DELETE by id
 router.get("/:clientId", authMiddleware, ownerAdminStaff, viewClients, clientsController.getById);
-router.patch("/:clientId", authMiddleware, ownerAdminStaff, requirePermission("edit_clients"), validateUpdateClient, clientsController.update);
+router.patch("/:clientId", authMiddleware, ownerAdminStaff, editClients, validateUpdateClient, clientsController.update);
 router.delete("/:clientId", authMiddleware, ownerAdminStaff, requirePermission("delete_clients"), clientsController.remove);
 
 // NOTES
 router.get("/:clientId/notes", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), clientNotesController.list);
-router.post("/:clientId/notes", authMiddleware, ownerAdminStaff, requirePermission("edit_clients"), clientNotesController.create);
-router.patch("/:clientId/notes/:id", authMiddleware, ownerAdminStaff, requirePermission("edit_clients"), clientNotesController.update);
-router.delete("/:clientId/notes/:id", authMiddleware, ownerAdminStaff, requirePermission("edit_clients"), clientNotesController.delete);
+router.post("/:clientId/notes", authMiddleware, ownerAdminStaff, editClients, clientNotesController.create);
+router.patch("/:clientId/notes/:id", authMiddleware, ownerAdminStaff, editClients, clientNotesController.update);
+router.delete("/:clientId/notes/:id", authMiddleware, ownerAdminStaff, editClients, clientNotesController.delete);
 
 // COMMUNICATIONS
 router.get("/:clientId/communications", authMiddleware, ownerAdminStaff, requirePermission("view_clients"), clientCommunicationController.list);

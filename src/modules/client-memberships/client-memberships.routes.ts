@@ -16,7 +16,8 @@ const auth = [authMiddleware, requireSalon, roleMiddleware('salon_owner', 'admin
 // fetches this list for ANY selected client (eWallet/membership-balance
 // display during Quick Sale/Calendar checkout, or inside View Appointment),
 // which is routine client-viewing.
-const readPurchaseHistory = requireAnyPermission(['view_clients', 'view_appointment']);
+// Quick Sale access (create_sales) is accepted too, so checkout does not require view_clients.
+const readPurchaseHistory = requireAnyPermission(['view_clients', 'view_appointment', 'create_sales']);
 
 router.get('/',              ...auth, readPurchaseHistory, clientMembershipsController.list);
 router.post('/',             ...auth, clientMembershipsController.purchase);
