@@ -52,62 +52,6 @@ const EXPENSE_SORT_COLUMNS: Record<string, string> = {
   created_at: "cme.created_at",
 };
 
-// const cashRevenueUnionSql = `
-//   SELECT SUM(amount)::numeric AS total
-//   FROM (
-//     SELECT
-//       CASE
-//         WHEN py.payment_method = 'cash' THEN COALESCE(py.paid_amount, py.net_amount, py.amount, 0)::numeric
-//         WHEN py.payment_method = 'split' THEN COALESCE(NULLIF(py.split_details->>'cash', '')::numeric, 0)
-//         ELSE 0::numeric
-//       END AS amount
-//     FROM payments py
-//     JOIN appointments a
-//       ON a.id = py.appointment_id
-//     WHERE py.salon_id = $1
-//       AND a.branch_id = $2
-//       AND py.status IN ('partial', 'completed')
-//       AND COALESCE(py.paid_at, py.created_at) >= $3::timestamptz
-//       AND COALESCE(py.paid_at, py.created_at) <= COALESCE($4::timestamptz, NOW())
-//       AND (
-//         py.payment_method = 'cash'
-//         OR (
-//           py.payment_method = 'split'
-//           AND py.split_details IS NOT NULL
-//           AND COALESCE(NULLIF(py.split_details->>'cash', '')::numeric, 0) > 0
-//         )
-//       )
-
-//     UNION ALL
-
-//     SELECT
-//       CASE
-//         WHEN s.payment_method = 'cash' THEN COALESCE(s.total_amount, 0)::numeric
-//         WHEN s.payment_method = 'split' THEN COALESCE(NULLIF(py.split_details->>'cash', '')::numeric, 0)
-//         ELSE 0::numeric
-//       END AS amount
-//     FROM sales s
-//     JOIN staff st
-//       ON st.id = s.staff_id
-//     LEFT JOIN payments py
-//       ON py.salon_id = s.salon_id
-//      AND py.notes = ('Payment for Sale ID: ' || s.id)
-//     WHERE s.salon_id = $1
-//       AND st.branch_id = $2
-//       AND s.appointment_id IS NULL
-//       AND s.status = 'completed'
-//       AND s.created_at >= $3::timestamptz
-//       AND s.created_at <= COALESCE($4::timestamptz, NOW())
-//       AND (
-//         s.payment_method = 'cash'
-//         OR (
-//           s.payment_method = 'split'
-//           AND COALESCE(NULLIF(py.split_details->>'cash', '')::numeric, 0) > 0
-//         )
-//       )
-//   ) cash_revenue
-// `;
-
 async function getCounterContext(
   client: DbClient,
   cashManagementId: string,
@@ -161,10 +105,17 @@ async function recalculateCounterById(client: DbClient, counterId: string, salon
        UNION ALL
 
        SELECT
-         COALESCE(cp.paid_amount, 0)::numeric AS amount
+         CASE
+             WHEN LOWER(COALESCE(cp.payment_method, '')) = 'cash'
+               THEN COALESCE(cp.paid_amount, 0)::numeric
+             ELSE COALESCE((
+               SELECT SUM(value::numeric)
+               FROM jsonb_each_text(COALESCE(cp.split_details::jsonb, '{}'::jsonb)) AS cash_part(key, value)
+               WHERE LOWER(key) = 'cash'
+             ), 0::numeric)
+           END AS amount
        FROM client_packages cp
        WHERE cp.salon_id = $1
-         AND LOWER(COALESCE(cp.payment_method, '')) = 'cash'
          AND COALESCE(cp.paid_amount, 0) > 0
          AND cp.created_date >= $2::timestamptz
          AND cp.created_date <= COALESCE($3::timestamptz, NOW())
@@ -481,45 +432,6 @@ export const cashManagementRepository = {
     }
   },
 
-  // async findCounterForDashboard(salonId: string, branchId: string, cashManagementId?: string) {
-  //   await assertBranchInSalon(branchId, salonId);
-  //
-  //   if (cashManagementId) {
-  //     const { rows } = await safeQuery(() =>
-  //       pool.query<CashManagementRecord>(
-  //         `SELECT *
-  //          FROM cash_management
-  //          WHERE id = $1
-  //            AND salon_id = $2
-  //            AND branch_id = $3
-  //          LIMIT 1`,
-  //         [cashManagementId, salonId, branchId],
-  //       ),
-  //     );
-  //     if (!rows[0]) {
-  //       throw new AppError(404, "Cash counter not found", "CASH_COUNTER_NOT_FOUND");
-  //     }
-  //     return rows[0];
-  //   }
-  //
-  //   const { rows } = await safeQuery(() =>
-  //     pool.query<CashManagementRecord>(
-  //       `SELECT *
-  //        FROM cash_management
-  //        WHERE salon_id = $1
-  //          AND branch_id = $2
-  //        ORDER BY CASE WHEN status = 'open' THEN 0 ELSE 1 END, opened_at DESC
-  //        LIMIT 1`,
-  //       [salonId, branchId],
-  //     ),
-  //   );
-  //
-  //   if (!rows[0]) {
-  //     throw new AppError(404, "No cash counter found for this branch", "CASH_COUNTER_NOT_FOUND");
-  //   }
-  //   return rows[0];
-  // },
-
   async findCounterForDashboard(salonId: string, cashManagementId?: string) {
     if (cashManagementId) {
       const { rows } = await safeQuery(() =>
@@ -589,7 +501,12 @@ export const cashManagementRepository = {
       }
       throw err;
     }
-    const refreshed = await recalculateCounterById(pool, counter.id, salonId);
+    // A closed counter's figures are frozen at close. Recalculating here
+    // re-sums payments by updated_at, so a later edit to an old payment would
+    // silently rewrite a finished day (and drift from the saved variance).
+    const refreshed = counter.status === "closed"
+      ? counter
+      : await recalculateCounterById(pool, counter.id, salonId);
     const methodCounts = await getPaymentMethodCounts(
       pool,
       salonId,
@@ -674,10 +591,17 @@ export const cashManagementRepository = {
             'Package' AS source,
             COALESCE(cp.package_name, '') AS reference,
             COALESCE(cp.client_name, 'Walk-in') AS client_name,
-            COALESCE(cp.paid_amount, 0)::numeric AS amount
+            CASE
+             WHEN LOWER(COALESCE(cp.payment_method, '')) = 'cash'
+               THEN COALESCE(cp.paid_amount, 0)::numeric
+             ELSE COALESCE((
+               SELECT SUM(value::numeric)
+               FROM jsonb_each_text(COALESCE(cp.split_details::jsonb, '{}'::jsonb)) AS cash_part(key, value)
+               WHERE LOWER(key) = 'cash'
+             ), 0::numeric)
+           END AS amount
           FROM client_packages cp
           WHERE cp.salon_id = $1
-            AND LOWER(COALESCE(cp.payment_method, '')) = 'cash'
             AND COALESCE(cp.paid_amount, 0) > 0
             AND cp.created_date >= $2::timestamptz
             AND cp.created_date <= COALESCE($3::timestamptz, NOW())

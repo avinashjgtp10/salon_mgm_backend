@@ -41,6 +41,33 @@ async function withDisplayPhone<T extends { salon_id?: any; phone_number_id?: an
   return config
 }
 
+// The messaging tier (daily limit) and quality rating live on Meta, so the config read refreshes them from
+// Meta instead of trusting the stored copy (which the 6-hourly scheduler alone can leave hours stale after a
+// tier upgrade). Throttled per salon so the many report pages that load this config don't each call Meta, and
+// bounded by a timeout so a slow Meta never delays the page — on any failure the stored value is used.
+const LIMIT_REFRESH_MS = 5 * 60 * 1000
+const LIMIT_REFRESH_TIMEOUT_MS = 4000
+const limitRefreshedAt = new Map<string, number>()
+
+async function refreshLimitsFromMeta<T extends { is_verified?: any }>(salonId: string, config: T): Promise<T> {
+  // Only an already-verified connection — syncLimitsForSalon marks the row verified, which must never happen
+  // as a side effect of merely reading an unverified config.
+  if (!config.is_verified) return config
+  const last = limitRefreshedAt.get(salonId)
+  if (last && Date.now() - last < LIMIT_REFRESH_MS) return config
+  limitRefreshedAt.set(salonId, Date.now())
+  try {
+    const refreshed = await Promise.race([
+      configService.syncLimitsForSalon(salonId),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), LIMIT_REFRESH_TIMEOUT_MS)),
+    ])
+    if (refreshed) return { ...config, ...refreshed }
+  } catch (err: any) {
+    logger.warn('[wa-config] live limit refresh from Meta failed', { salonId, error: err?.message })
+  }
+  return config
+}
+
 export const configService = {
 
   // revealSecrets: true returns the real access_token / app_secret instead of the
@@ -50,7 +77,7 @@ export const configService = {
   async getConfig(salonId: string, revealSecrets: boolean = false) {
     const found = await configRepository.findBySalonId(salonId)
     if (!found) return null
-    const config = await withDisplayPhone(salonId, found)
+    const config = await refreshLimitsFromMeta(salonId, await withDisplayPhone(salonId, found))
     // sent_today powers the Send Campaign modal's "messages remaining today"
     // usage bar — cheap enough to compute on every config fetch, and this is
     // the endpoint every report/campaign page already loads waConfig from.

@@ -79,6 +79,8 @@ import {
     LostCustomersReportRow,
     LostCustomersReportStats,
     ReferralReportRow,
+    ClientSourceReportFilters,
+    ClientSourceReportRow,
     ReferralReportStats,
     PaymentCollectionReportRow,
     PaymentCollectionReportStats,
@@ -9443,6 +9445,66 @@ async getReferralReportRows(
       total_pages: Math.max(1, Math.ceil(total / effectiveLimit)),
     },
   };
+},
+
+// ======================================================
+// CLIENT SOURCE REPORT (independent report API)
+// POST /api/report/client-source — one row per client_source. Clients are
+// counted by when they were created (IST date, same convention as the
+// Referral report); visits and revenue are those clients' completed sales.
+// ======================================================
+
+async getClientSourceReportRows(
+  salonId: string,
+  filters: ClientSourceReportFilters
+): Promise<ClientSourceReportRow[]> {
+  const values: any[] = [salonId];
+  const where = ["c.salon_id = $1", "c.is_active = true"];
+  let idx = 2;
+
+  // clients.created_at is a naive UTC timestamp — stamp it UTC, then convert to
+  // IST, or the date shifts back 5.5 hours (see _REFERRAL_AGG).
+  const istDate = `((c.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata')::date`;
+  if (filters.start_date) { where.push(`${istDate} >= $${idx++}::date`); values.push(filters.start_date); }
+  if (filters.end_date)   { where.push(`${istDate} <= $${idx++}::date`); values.push(filters.end_date); }
+
+  const sourceExpr = `COALESCE(NULLIF(LOWER(TRIM(c.client_source)), ''), 'not_set')`;
+  if (filters.sources && filters.sources.length > 0) {
+    where.push(`${sourceExpr} = ANY($${idx++}::text[])`);
+    values.push(filters.sources.map((s) => String(s).toLowerCase().trim()));
+  }
+
+  const { rows } = await safeQuery(() => pool.query(`
+    WITH base AS (
+      SELECT c.id, ${sourceExpr} AS source
+      FROM clients c
+      WHERE ${where.join(" AND ")}
+    ),
+    sale_agg AS (
+      SELECT s.client_id,
+             COUNT(*)::int AS visits,
+             COALESCE(SUM(s.total_amount::numeric), 0) AS revenue
+      FROM sales s
+      WHERE s.status = 'completed'
+        AND s.client_id IN (SELECT id FROM base)
+      GROUP BY s.client_id
+    )
+    SELECT b.source,
+           COUNT(*)::int AS clients,
+           COALESCE(SUM(sa.visits), 0)::int AS total_visits,
+           COALESCE(SUM(sa.revenue), 0) AS revenue
+    FROM base b
+    LEFT JOIN sale_agg sa ON sa.client_id = b.id
+    GROUP BY b.source
+    ORDER BY clients DESC, b.source ASC
+  `, values));
+
+  return rows.map((r: any) => ({
+    source: r.source,
+    clients: Number(r.clients ?? 0),
+    total_visits: Number(r.total_visits ?? 0),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
 },
 
 // ======================================================
