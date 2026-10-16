@@ -1270,6 +1270,9 @@ export interface RewardPointsReportResponse {
 export interface EwalletReportFilters {
     search?: string;
     as_of_date?: string;
+    /** Wallet activity range (YYYY-MM-DD). Blank = all time. Balance is shown as of end_date. */
+    start_date?: string;
+    end_date?: string;
     status?: string;
     balance_min?: number;
     balance_max?: number;
@@ -2823,6 +2826,10 @@ export interface StaffSalesReportFilters {
 
 export interface StaffSalesReportRow {
     id: string;
+    // The sale_items row this report row is for (null for an unbilled
+    // appointment). `id` is the SALE id and repeats once per line item, so
+    // anything keying rows (a grid) must use this instead.
+    line_item_id: string | null;
     // Resolved staff (see the sales_side/appt_side st.id join) — null on the
     // rare row where no staff could be resolved at all. Powers the Staff
     // Sales report's staff-name click-through to that staff's history.
@@ -2959,7 +2966,8 @@ export interface StaffPerformanceReportStats {
     package_revenue: number;
     membership_revenue: number;
     total_commission: number;
-    avg_revenue_per_staff: number;
+    // Outstanding amount across the filtered report (sum of the rows' `due`).
+    total_due: number;
 }
 
 export interface StaffPerformanceFilterOption {
@@ -3563,6 +3571,8 @@ export interface OnlineAppointmentReportFilters {
 
 export interface OnlineAppointmentReportRow extends AppointmentDetailReportRow {
     client_phone: string | null;
+    /** The salon's running Booking ID (1, 2, 3 ...). null for bookings created before booking numbers existed. */
+    booking_number: number | null;
 }
 export type OnlineAppointmentReportPagination = AppointmentDetailReportPagination;
 
@@ -4220,5 +4230,35 @@ export interface ConsumableAnalyticsReportResponse {
         clients: ConsumableAnalyticsFilterOption[];
         products: ConsumableAnalyticsFilterOption[];
         services: ConsumableAnalyticsFilterOption[];
+    };
+}
+
+// ======================================================
+// CLIENT SOURCE REPORT (independent report API)
+// One row per client_source — how many clients each acquisition channel
+// brought in (by the date the client was created), and the visits/revenue
+// those same clients have generated.
+// ======================================================
+
+export interface ClientSourceReportFilters {
+    start_date?: string;
+    end_date?: string;
+    // raw client_source values; 'not_set' selects clients with no source
+    sources?: string[];
+}
+
+export interface ClientSourceReportRow {
+    source: string;
+    clients: number;
+    total_visits: number;
+    revenue: number;
+}
+
+export interface ClientSourceReportResponse {
+    rows: ClientSourceReportRow[];
+    stats: {
+        total_clients: number;
+        total_visits: number;
+        total_revenue: number;
     };
 }

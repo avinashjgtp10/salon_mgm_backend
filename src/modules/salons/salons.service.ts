@@ -27,6 +27,33 @@ export async function ensureUniqueSlug(base: string): Promise<string> {
     return finalSlug;
 }
 
+// A business can list up to this many numbers in total: the primary salons.phone plus the additional ones.
+const MAX_BUSINESS_NUMBERS = 5;
+
+// Cleans the extra business numbers: digits only, 7-15 digits, no blanks, no repeats and none equal to the
+// primary number. Anything wrong is rejected with a message naming the number, never silently dropped.
+function normalizeAdditionalPhones(input: unknown, primary: string | null | undefined): string[] {
+    const primaryDigits = String(primary ?? "").replace(/\D/g, "");
+    const seen = new Set<string>(primaryDigits ? [primaryDigits] : []);
+    const out: string[] = [];
+    for (const raw of Array.isArray(input) ? input : []) {
+        const digits = String(raw ?? "").replace(/\D/g, "");
+        if (!digits) continue;   // a blank row is just removed
+        if (digits.length < 7 || digits.length > 15) {
+            throw new AppError(400, `"${raw}" is not a valid phone number`, "VALIDATION_ERROR");
+        }
+        if (seen.has(digits)) {
+            throw new AppError(400, `${digits === primaryDigits ? "The main business number can't be added again" : `"${raw}" is entered more than once`}`, "VALIDATION_ERROR");
+        }
+        seen.add(digits);
+        out.push(digits);
+    }
+    if (out.length + 1 > MAX_BUSINESS_NUMBERS) {
+        throw new AppError(400, `You can add up to ${MAX_BUSINESS_NUMBERS - 1} additional business numbers`, "VALIDATION_ERROR");
+    }
+    return out;
+}
+
 export const salonsService = {
     async create(ownerId: string, body: CreateSalonBody) {
         logger.info("salonsService.create called", { ownerId });
@@ -38,8 +65,18 @@ export const salonsService = {
 
         const finalSlug = await ensureUniqueSlug(body.slug?.trim() || body.business_name);
 
+        // The business address lives on the salon only. Registration collected an address/country
+        // on the user row before any salon existed — carry those over so the salon starts with them
+        // (anything sent in the onboarding body wins).
+        const registrant = await authRepository.findUserById(ownerId);
+
         try {
-            const salon = await salonsRepository.create(ownerId, { ...body, slug: finalSlug });
+            const salon = await salonsRepository.create(ownerId, {
+                ...body,
+                slug: finalSlug,
+                address: body.address || registrant?.address || undefined,
+                country: body.country || registrant?.country || undefined,
+            });
 
             // New accounts go from sign-up straight to the subscription page, so
             // a plan may already be paid for. Apply it to this brand-new salon
@@ -157,6 +194,10 @@ export const salonsService = {
         }
 
         if (patch.slug) patch.slug = slugify(patch.slug);
+
+        if (patch.additional_phones !== undefined) {
+            patch.additional_phones = normalizeAdditionalPhones(patch.additional_phones, patch.phone ?? salon.phone);
+        }
 
         try {
             const updated = await salonsRepository.update(salonId, patch);

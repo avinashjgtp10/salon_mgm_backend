@@ -11,6 +11,10 @@ export interface BotQuestion {
   matched_id: string | null;
   matched_category: string | null;
   created_at: string;
+  // Direct reply from Super Admin, visible only to the user who asked.
+  admin_reply?: string | null;
+  admin_replied_at?: string | null;
+  admin_reply_read_at?: string | null;
 }
 
 export interface LogBotQuestionInput {

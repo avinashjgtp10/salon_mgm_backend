@@ -42,6 +42,8 @@ export type Payment = {
   // welcome reward couldn't apply as an instant discount (bill below
   // min_bill_amount) and was credited to their referral balance instead.
   referral_wallet_credited?: number;
+  // Response-only: the invoice number of the sale this payment created / updated (omitted when none).
+  invoice_number?: string;
 };
 
 export type CreatePaymentBody = {

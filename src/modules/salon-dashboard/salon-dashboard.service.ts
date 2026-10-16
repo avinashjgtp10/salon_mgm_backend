@@ -65,8 +65,9 @@ export const salonDashboardService = {
     period?: string,
     date?: string,
     collectionPeriod?: string,
+    gender?: string,
   ): Promise<DashboardCombined> {
     if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR");
-    return salonDashboardRepository.getCombined(salonId, period, date, collectionPeriod);
+    return salonDashboardRepository.getCombined(salonId, period, date, collectionPeriod, gender);
   },
 };

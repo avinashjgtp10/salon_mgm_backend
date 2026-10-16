@@ -187,6 +187,24 @@ export const inboxService = {
   // Bytes for a media id shown in the thread (a template's image header, or a
   // file the customer sent) — pulled from Meta with this salon's own token, so a
   // media id belonging to another salon's number simply fails to resolve.
+  // Delete one or many conversations (a single chat is just a list of one). Other open Inbox screens of the
+  // same salon get the fresh list over the socket so the deleted chats disappear there too.
+  async deleteConversations(salonId: string, phones: unknown) {
+    const list = Array.isArray(phones) ? phones.filter((p): p is string => typeof p === 'string' && p.trim().length > 0) : []
+    if (list.length === 0) throw new AppError(400, 'Select at least one conversation to delete', 'VALIDATION_ERROR')
+    if (list.length > 500) throw new AppError(400, 'You can delete up to 500 conversations at a time', 'VALIDATION_ERROR')
+
+    const deleted = await inboxRepository.deleteConversations(salonId, list)
+
+    try {
+      const conversations = await inboxRepository.getConversations(salonId)
+      getIO().to(`salon:${salonId}`).emit('inbox:conversations', conversations)
+    } catch (err) {
+      console.error('Socket emit error:', err)
+    }
+    return { deleted }
+  },
+
   async getMedia(salonId: string, mediaId: string) {
     const config = await configRepository.findBySalonId(salonId)
     if (!config) throw new AppError(404, 'WhatsApp not configured', 'WA_NOT_CONFIGURED')

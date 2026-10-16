@@ -81,7 +81,7 @@ function suggestionFor(reason: string): string | undefined {
     if (reason.includes("Category is required")) return "Add a value in the Category column.";
     if (reason.includes("Stock Quantity is required")) return "Add a Stock Quantity of 0 or more.";
     if (reason.includes("Unit Size is required")) return "Add a Unit Size — required for Consumable/Both products.";
-    if (reason.includes("Low Stock Alert must be less than")) return "Lower the Low Stock Alert below the Stock Quantity, or leave it blank.";
+    if (reason.includes("Low Stock Alert cannot be more than")) return "Lower the Low Stock Alert to the Stock Quantity or less, or leave it blank.";
     if (reason.includes("Retail Price is required")) return "Add a Retail Price (or MRP/Sell Price/Full Price/Paid Price) greater than 0.";
     if (reason.includes("Cost price cannot be negative") || reason.includes("Supply Price cannot be negative")) return "Enter a non-negative Supply Price, or leave it blank.";
     if (reason.includes("Invalid Product Type")) return "Set Product Type to one of: Retail, Consumable, Both (any case).";
@@ -409,8 +409,9 @@ function validateRow(row: ImportRow, todayIso: string): {
     const unit = resolveUnit(row.measureUnit, isConsumable);
     if ("error" in unit) return { valid: false, error: unit.error };
 
-    if (row.qtyAlert !== undefined && row.stockQuantity > 0 && row.qtyAlert >= row.stockQuantity) {
-        return { valid: false, error: "Low Stock Alert must be less than the Stock Quantity" };
+    // 0 = no alert (always fine); an alert equal to the stock is allowed, one above it is not.
+    if (row.qtyAlert !== undefined && row.qtyAlert > 0 && row.qtyAlert > row.stockQuantity) {
+        return { valid: false, error: "Low Stock Alert cannot be more than the Stock Quantity" };
     }
 
     if (row.supplyPrice !== undefined && row.supplyPrice < 0) {

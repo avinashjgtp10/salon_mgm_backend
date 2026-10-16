@@ -14,6 +14,7 @@ import jwt, { SignOptions } from "jsonwebtoken";
 import { authRepository } from "./auth.repository";
 import { deviceTokensRepository } from "../notifications/deviceTokens.repository";
 import type { ClientType } from "./auth.types";
+import { clientActivityTracker, type ActivityPlatform } from "../client-activity/client-activity.tracker";
 
 // Roles that may hold several sessions at once: super-admins work across
 // many tabs, and public-booking `client` accounts have no salon seat to
@@ -42,6 +43,8 @@ export async function issueSessionTokens(opts: {
   salonId?: string | null;
   kickOthers: boolean;
   clientType?: ClientType;
+  /** Request details of a real login, kept in the Super Admin client-activity history. */
+  meta?: { ip?: string | null; userAgent?: string | null };
 }): Promise<{ accessToken: string; refreshToken: string }> {
   const { userId, role, salonId, kickOthers } = opts;
   const clientType: ClientType = opts.clientType === "mobile" ? "mobile" : "web";
@@ -62,6 +65,13 @@ export async function issueSessionTokens(opts: {
     expires_at: refreshExpiryDate(),
     client_type: clientType,
   });
+  // A real login (not an impersonation / super-admin session) is recorded for Client Activity Tracking.
+  if (kickOthers && role !== "super_admin") {
+    void clientActivityTracker.recordLogin({
+      userId, salonId: salonId ?? null, platform: clientType === "mobile" ? "app" : "web",
+      ip: opts.meta?.ip ?? null, userAgent: opts.meta?.userAgent ?? null,
+    });
+  }
   const accessToken = jwt.sign(
     { userId, role, salonId: salonId ?? null, sid: String(row.id) },
     process.env.JWT_ACCESS_SECRET as string,
@@ -77,21 +87,31 @@ export async function issueSessionTokens(opts: {
 const ACTIVE_TTL_MS = 5_000;
 const MAX_CACHE = 5_000;
 const activeUntil = new Map<string, number>();
+// Which platform each live session belongs to (filled whenever a session is verified), so the request
+// tracker can tell Web from App without another query.
+const platformBySid = new Map<string, ActivityPlatform>();
+
+export function getSessionPlatform(sid: string): ActivityPlatform | null {
+  return platformBySid.get(sid) ?? null;
+}
 
 export async function isSessionActive(sid: string): Promise<boolean> {
   const now = Date.now();
   const hit = activeUntil.get(sid);
   if (hit && hit > now) return true;
 
-  const ok = await authRepository.isRefreshSessionActive(sid);
+  const clientType = await authRepository.getRefreshSessionClientType(sid);
+  const ok = clientType !== null;
   if (ok) {
     if (activeUntil.size >= MAX_CACHE) {
-      for (const [k, until] of activeUntil) if (until <= now) activeUntil.delete(k);
-      if (activeUntil.size >= MAX_CACHE) activeUntil.clear();
+      for (const [k, until] of activeUntil) if (until <= now) { activeUntil.delete(k); platformBySid.delete(k); }
+      if (activeUntil.size >= MAX_CACHE) { activeUntil.clear(); platformBySid.clear(); }
     }
     activeUntil.set(sid, now + ACTIVE_TTL_MS);
+    platformBySid.set(sid, clientType === "mobile" ? "app" : "web");
   } else {
     activeUntil.delete(sid);
+    platformBySid.delete(sid);
   }
   return ok;
 }

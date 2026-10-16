@@ -5,6 +5,7 @@ import { salonsRepository } from "../salons/salons.repository";
 import { usersRepo } from "../users/users.repository";
 import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
 import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
+import { configRepository } from "../marketing/whatsapp/config/config.repository";
 import logger from "../../config/logger";
 import type {
   CloseCounterBody,
@@ -39,12 +40,37 @@ const formatMoney = (n: number) => `₹${(Number.isFinite(n) ? n : 0).toFixed(2)
 // where these operational messages get sent. Falls back to Business Phone
 // for any salon that hasn't set a personal alerts number, so this doesn't
 // silently stop working for existing salons.
-async function resolveOwnerNotifyPhone(salon: any): Promise<string | null> {
+// The owner can list several alert numbers (Settings > Profile): the primary users.phone first, then the
+// extra users.alert_phones. Business Phone is still the fallback when none is set.
+async function resolveOwnerNotifyPhones(salon: any): Promise<string[]> {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (p: unknown) => {
+    const s = String(p ?? "").trim();
+    const key = s.replace(/\D/g, "").slice(-10);
+    if (!s || seen.has(key)) return;
+    seen.add(key);
+    out.push(s);
+  };
   if (salon?.owner_id) {
-    const owner = await usersRepo.findById(salon.owner_id);
-    if (owner?.phone) return owner.phone;
+    const owner: any = await usersRepo.findById(salon.owner_id);
+    add(owner?.phone);
+    for (const p of owner?.alert_phones ?? []) add(p);
   }
-  return salon?.phone || null;
+  if (out.length === 0) add(salon?.phone);
+  return out;
+}
+
+// Sends one alert to every number. The first is a normal send; the rest get their own dedupe key (so the
+// once-per-counter guard doesn't drop them) and skip the SMS/Email fan-out (the owner is not emailed per number).
+async function triggerForOwnerPhones(phones: string[], payload: Omit<Parameters<typeof whatsappAutomationService.trigger>[0], "phone">): Promise<void> {
+  for (const [i, phone] of phones.entries()) {
+    await whatsappAutomationService.trigger({
+      ...payload,
+      phone,
+      ...(i > 0 ? { dedupeKeySuffix: phone.replace(/\D/g, "").slice(-10), whatsappOnly: true } : {}),
+    });
+  }
 }
 
 // Fire-and-forget WhatsApp alert to the SALON OWNER (never a client) after a
@@ -57,8 +83,8 @@ async function resolveOwnerNotifyPhone(salon: any): Promise<string | null> {
 async function notifyOwnerCashCounterOpened(salonId: string, counter: any): Promise<void> {
   try {
     const salon = await salonsRepository.findById(salonId);
-    const ownerPhone = await resolveOwnerNotifyPhone(salon);
-    if (!ownerPhone) {
+    const ownerPhones = await resolveOwnerNotifyPhones(salon);
+    if (ownerPhones.length === 0) {
       logger.info(`[WA-AUTO] cash_counter_opened skipped — salon ${salonId} has no owner WhatsApp number on file`);
       return;
     }
@@ -68,11 +94,10 @@ async function notifyOwnerCashCounterOpened(salonId: string, counter: any): Prom
       "3": formatTimeIST(counter.opened_at),
       "4": formatMoney(parseFloat(counter.opening_balance ?? "0")),
     };
-    await whatsappAutomationService.trigger({
+    await triggerForOwnerPhones(ownerPhones, {
       salonId,
       eventType: "cash_counter_opened",
       clientId: null,
-      phone: ownerPhone,
       countryCode: null,
       variables,
       referenceId: counter.id,
@@ -91,8 +116,8 @@ async function notifyOwnerCashCounterClosed(
 ): Promise<void> {
   try {
     const salon = await salonsRepository.findById(salonId);
-    const ownerPhone = await resolveOwnerNotifyPhone(salon);
-    if (!ownerPhone) {
+    const ownerPhones = await resolveOwnerNotifyPhones(salon);
+    if (ownerPhones.length === 0) {
       logger.info(`[WA-AUTO] cash_counter_closed skipped — salon ${salonId} has no owner WhatsApp number on file`);
       return;
     }
@@ -133,11 +158,10 @@ async function notifyOwnerCashCounterClosed(
       "6": formatMoney(expenses),
       "7": formatMoney(inStoreCash),
     };
-    await whatsappAutomationService.trigger({
+    await triggerForOwnerPhones(ownerPhones, {
       salonId,
       eventType: "cash_counter_closed",
       clientId: null,
-      phone: ownerPhone,
       countryCode: null,
       variables,
       referenceId: counter.id,
@@ -277,6 +301,13 @@ export const cashManagementService = {
   // is a deliberate user action that needs a real success/failure result to
   // show a toast for, not a background side effect.
   async resendClosedCounterMessage(salonId: string, dateIso: string) {
+    // No verified Meta connection means trigger() returns silently without writing any log, so the
+    // wait loop below would find nothing and report "in progress" — a false success. Say so instead.
+    const waConfig = await configRepository.findBySalonId(salonId);
+    if (!waConfig?.is_verified) {
+      throw new AppError(400, "WhatsApp (Meta) is not connected for this salon, so the message can't be sent.", "WHATSAPP_NOT_CONNECTED");
+    }
+
     const counter = await cashManagementRepository.findClosedCounterByOpenedDate(salonId, dateIso);
     if (!counter) {
       throw new AppError(404, `No closed cash counter found for ${dateIso}`, "COUNTER_NOT_FOUND");

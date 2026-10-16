@@ -377,7 +377,7 @@ export async function clearSalonData(client: PoolClient, salonId: string): Promi
 // alert.
 const SALON_SELECT_WITH_OWNER_CONTACT = `
     SELECT s.id, s.owner_id, s.business_name, s.business_type, s.slug, s.description,
-           s.logo_url, s.banner_url, s.email, s.phone, s.website_url, s.google_review_url,
+           s.logo_url, s.banner_url, s.email, s.phone, s.additional_phones, s.website_url, s.google_review_url,
            s.gst_number, s.pan_number, s.is_verified, s.is_active, s.onboarding_completed,
            s.address, s.address_line2, s.city, s.state, s.country, s.pincode, s.timezone,
            s.currency, s.business_category, s.gst_registration_type, s.created_at, s.updated_at
@@ -436,9 +436,10 @@ export const salonsRepository = {
         const { rows } = await pool.query(
             `INSERT INTO salons (
         owner_id, business_name, business_type, slug, description,
-        logo_url, banner_url, email, phone, website_url, gst_number, pan_number
+        logo_url, banner_url, email, phone, website_url, gst_number, pan_number,
+        address, address_line2, city, state, country, pincode
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
       RETURNING *`,
             [
                 ownerId,
@@ -453,6 +454,12 @@ export const salonsRepository = {
                 data.website_url ?? null,
                 data.gst_number ?? null,
                 data.pan_number ?? null,
+                data.address ?? null,
+                data.address_line2 ?? null,
+                data.city ?? null,
+                data.state ?? null,
+                data.country ?? null,
+                data.pincode ?? null,
             ]
         );
 

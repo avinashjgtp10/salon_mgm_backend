@@ -48,6 +48,14 @@ export const ordersController = {
         } catch (err) { next(err); }
     },
 
+    // GET /orders/next-number — preview of the PO number the next order will get.
+    async nextNumber(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const orderNumber = await ordersRepository.getNextOrderNumber(getSalonId(req));
+            sendSuccess(res, 200, { order_number: orderNumber });
+        } catch (err) { next(err); }
+    },
+
     async list(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             const salonId = getSalonId(req);

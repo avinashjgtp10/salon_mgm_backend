@@ -57,10 +57,17 @@ export const superAdminRepository = {
       LEFT JOIN salons s ON s.owner_id = u.id
       WHERE u.role IN ('salon_owner', 'admin')
         AND u.is_active = true
+        -- Real plans (trial, paid, super-admin granted) live in \`subscriptions\`,
+        -- not the legacy billing_subscriptions. Same "active" rule the Branch
+        -- Owner portal uses: active/trialing and not past its end date.
         AND NOT EXISTS (
-          SELECT 1 FROM billing_subscriptions bs
-          WHERE bs.salon_id = s.id
-            AND bs.status IN ('active', 'trialing')
+          SELECT 1 FROM subscriptions sub
+          WHERE sub.salon_id = s.id
+            AND (
+              (sub.status = 'active'   AND (sub.current_period_end IS NULL OR sub.current_period_end > NOW()))
+              OR
+              (sub.status = 'trialing' AND (sub.trial_end          IS NULL OR sub.trial_end          > NOW()))
+            )
         )
         AND s.id IS NOT NULL
       ORDER BY u.last_login DESC NULLS LAST
@@ -134,7 +141,9 @@ export const superAdminRepository = {
            WHERE role != 'super_admin' AND created_at >= date_trunc('month', NOW()))    AS signups_this_month,
         (SELECT COUNT(*)::int FROM payments WHERE status = 'failed')                     AS failed_payments,
         (SELECT COUNT(*)::int FROM salons WHERE created_at >= date_trunc('month', NOW())) AS new_salons_this_month,
-        (SELECT COUNT(*)::int FROM billing_subscriptions WHERE status IN ('active','trialing')) AS active_subscriptions
+        (SELECT COUNT(DISTINCT salon_id)::int FROM subscriptions
+           WHERE (status = 'active'   AND (current_period_end IS NULL OR current_period_end > NOW()))
+              OR (status = 'trialing' AND (trial_end          IS NULL OR trial_end          > NOW()))) AS active_subscriptions
     `);
     return rows[0];
   },
@@ -151,6 +160,11 @@ export const superAdminRepository = {
   // respectively.
   // kind: "real" | "dummy" limits to that group (Super Admin's two Salons pages);
   // omitted = every salon (Overview dashboard).
+  async getAllSalonIds(): Promise<string[]> {
+    const { rows } = await pool.query(`SELECT id FROM salons`);
+    return rows.map((r: { id: string }) => r.id);
+  },
+
   async getAllSalons(search?: string, kind?: "real" | "dummy") {
     const param = search ? `%${search}%` : null;
     const dummyFilter = kind ? (kind === "dummy" ? "AND s.is_dummy = true" : "AND s.is_dummy = false") : "";
@@ -272,11 +286,12 @@ export const superAdminRepository = {
         st.phone,
         COALESCE(st.designation, 'staff')                          AS role,
         st.is_active,
-        NULL::timestamptz                                          AS last_login,
-        0                                                           AS login_count,
+        su.last_login                                              AS last_login,
+        COALESCE(su.login_count, 0)                                AS login_count,
         COALESCE(rbs.revenue, 0)::numeric                          AS revenue,
         1                                                           AS sort_rank
       FROM staff st
+      LEFT JOIN users su ON su.id = st.user_id
       LEFT JOIN revenue_by_staff rbs ON rbs.staff_id = st.id
       WHERE st.salon_id = $1
 
@@ -296,11 +311,13 @@ export const superAdminRepository = {
         u.id                                                                  AS owner_user_id,
         bs.status                                                             AS subscription_status,
         bp.name                                                               AS plan_name,
+        spc.base_tier                                                         AS plan_tier,
         bp.price_per_unit                                                     AS plan_price
       FROM salons s
       LEFT JOIN users u               ON u.id     = s.owner_id
       LEFT JOIN billing_subscriptions bs ON bs.salon_id = s.id AND bs.status IN ('active','trialing')
       LEFT JOIN billing_plans bp      ON bp.id    = bs.plan_id
+      LEFT JOIN salon_plan_customizations spc ON spc.salon_id = s.id
       WHERE s.id = $1 LIMIT 1
     `, [id]);
     return rows[0] || null;
@@ -474,6 +491,7 @@ export const superAdminRepository = {
         u.email                                                  AS owner_email,
         TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,''))) AS owner_name,
         sp.name                                                  AS plan_name,
+        spc.base_tier                                            AS plan_tier,
         sub.status                                               AS subscription_status,
         COALESCE(sub.trial_start, sub.current_period_start)      AS subscription_start_date,
         COALESCE(sub.trial_end, sub.current_period_end)          AS subscription_end_date,
@@ -490,6 +508,7 @@ export const superAdminRepository = {
         LIMIT 1
       ) sub ON true
       LEFT JOIN subscription_plans sp ON sp.id = sub.plan_id
+      LEFT JOIN salon_plan_customizations spc ON spc.salon_id = s.id
       LEFT JOIN salon_settings ss ON ss.salon_id = s.id AND ss.key = 'subscription_permissions'
       WHERE (
         s.business_name ILIKE $1
@@ -513,6 +532,7 @@ export const superAdminRepository = {
         u.email                                                  AS owner_email,
         TRIM(CONCAT(u.first_name,' ',COALESCE(u.last_name,''))) AS owner_name,
         sp.name                                                  AS plan_name,
+        spc.base_tier                                            AS plan_tier,
         sub.status                                               AS subscription_status,
         COALESCE(sub.trial_start, sub.current_period_start)      AS subscription_start_date,
         COALESCE(sub.trial_end, sub.current_period_end)          AS subscription_end_date,
@@ -529,6 +549,7 @@ export const superAdminRepository = {
         LIMIT 1
       ) sub ON true
       LEFT JOIN subscription_plans sp ON sp.id = sub.plan_id
+      LEFT JOIN salon_plan_customizations spc ON spc.salon_id = s.id
       LEFT JOIN salon_settings ss ON ss.salon_id = s.id AND ss.key = 'subscription_permissions'
       WHERE s.id = $1
       LIMIT 1

@@ -1218,6 +1218,9 @@ export const paymentsService = {
     // block's own try/scope — can still link back to this bill's real sale
     // row for Invoice No / Staff lookups.
     let checkoutSaleId: string | undefined;
+    // The invoice number of that sale - returned on the payment response so the client can print the bill
+    // without fetching the appointment again.
+    let checkoutInvoiceNumber: string | undefined;
 
     // ── Auto-create sale record on any real calendar payment (partial or full) ──
     // Previously gated on data.status === 'completed' only, so a deposit/
@@ -1361,6 +1364,7 @@ export const paymentsService = {
           items,
         });
         checkoutSaleId = sale.id;
+        checkoutInvoiceNumber = sale.invoice_number ? String(sale.invoice_number) : undefined;
 
         // Note: appointment.status is managed by the checkout flow
         // (POST /api/v1/appointments/:id/checkout) to avoid double-completion
@@ -1496,6 +1500,7 @@ export const paymentsService = {
             items,
           });
           checkoutSaleId = sale.id;
+          checkoutInvoiceNumber = sale.invoice_number ? String(sale.invoice_number) : undefined;
         }
       } catch (err) {
         logger.error('[paymentsService] Failed to auto-create zero-revenue sale for package-covered visit:', { error: err });
@@ -1625,7 +1630,10 @@ export const paymentsService = {
       // socket not ready — ignore, client will see it on next manual refresh
     }
 
-    return refereeWalletCredit > 0 ? { ...payment, referral_wallet_credited: refereeWalletCredit } : payment;
+    const extras: { referral_wallet_credited?: number; invoice_number?: string } = {};
+    if (refereeWalletCredit > 0) extras.referral_wallet_credited = refereeWalletCredit;
+    if (checkoutInvoiceNumber) extras.invoice_number = checkoutInvoiceNumber;
+    return Object.keys(extras).length ? { ...payment, ...extras } : payment;
   },
 
   async getByAppointmentId(appointmentId: string): Promise<Payment | null> {

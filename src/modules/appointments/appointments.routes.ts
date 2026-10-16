@@ -3,9 +3,10 @@ import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { requirePermission, requireAnyPermission, requireExportFormatPermission } from "../../middleware/permission.middleware";
 import { appointmentsController } from "./appointments.controller";
-import { requirePaidBillEditPermission } from "./appointments.guards";
+import { requirePaidBillEditPermission, requireAssignedItemStaff, requireParticipatingStaff } from "./appointments.guards";
 import {
     validateCreateAppointment, validateUpdateAppointment, validateCheckoutAppointment,
+    validateUpdateItemStatus, validateHandoffItem,
 } from "./appointments.validator";
 
 const router = Router();
@@ -50,5 +51,24 @@ router.delete("/:id", authMiddleware, ownerAdminStaff, requirePermission("delete
 // checkout sales".
 router.post("/:id/checkout", authMiddleware, ownerAdminStaff, requireAnyPermission(["edit_appointment", "create_sales"]), validateCheckoutAppointment, appointmentsController.checkout);
 router.get("/:id/receipt-pdf", authMiddleware, ownerAdminStaff, requirePermission("view_payment_details"), appointmentsController.getReceiptPdf);
+
+// Staff handoff workflow — a per-service/package/membership-row progress
+// tracker, deliberately separate from the appointment's own payment status
+// (see appointments.guards.ts's doc comments). edit_appointment is still the
+// base permission gate; requireAssignedItemStaff/requireParticipatingStaff
+// add the row-ownership check neither the generic PATCH /:id route nor any
+// other route in this file has today.
+router.patch(
+    "/:id/items/:itemId/status",
+    authMiddleware, ownerAdminStaff, requirePermission("edit_appointment"),
+    requireAssignedItemStaff, validateUpdateItemStatus,
+    appointmentsController.updateItemStatus,
+);
+router.post(
+    "/:id/items/:itemId/handoff",
+    authMiddleware, ownerAdminStaff, requirePermission("edit_appointment"),
+    requireParticipatingStaff, validateHandoffItem,
+    appointmentsController.handoffItem,
+);
 
 export default router;

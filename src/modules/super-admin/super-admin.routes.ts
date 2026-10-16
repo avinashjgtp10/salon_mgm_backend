@@ -4,6 +4,7 @@ import { superAdminMiddleware } from "../../middleware/role.middleware";
 import { superAdminController } from "./super-admin.controller";
 import { salonClientInvoicesController } from "../salon-client-invoices/salon-client-invoices.controller";
 import waConfigSuperAdminRoutes from "../marketing/whatsapp/config/config.super-admin.routes";
+import clientActivityRoutes from "../client-activity/client-activity.super-admin.routes";
 
 const router = Router();
 
@@ -12,6 +13,9 @@ router.post("/login", superAdminController.login);
 
 // ── All routes below require valid JWT + super_admin role ─────────────────────
 router.use(authMiddleware, superAdminMiddleware);
+
+// Client Activity Tracking: Web + App logins and usage per account (Super Admin only).
+router.use("/client-activity", clientActivityRoutes);
 
 // A salon's WhatsApp (Meta Cloud API) connection — managed here, by us, not by the salon.
 router.use("/salons/:salonId/wa-config", waConfigSuperAdminRoutes);

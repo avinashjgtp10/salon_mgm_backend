@@ -569,20 +569,25 @@ export const bookingsRepository = {
         services: unknown[];
     }) {
         const { rows } = await pool.query(
-            `INSERT INTO appointments (
+            `WITH n AS (
+              INSERT INTO salon_booking_counters (salon_id, last_number) VALUES ($1, 1)
+              ON CONFLICT (salon_id) DO UPDATE SET last_number = salon_booking_counters.last_number + 1
+              RETURNING last_number
+            )
+            INSERT INTO appointments (
                 salon_id, client_id, staff_id, service_id,
                 title, notes, status,
                 scheduled_at, duration_minutes,
                 ends_at,
                 colour, created_by,
-                services, source, is_any_staff
+                services, source, is_any_staff, booking_number
             ) VALUES (
                 $1, $2, $3, $4,
                 $5, $6, $7,
                 $8, $9,
                 ($8::timestamptz + ($9::integer * INTERVAL '1 minute')),
                 $10, $11,
-                $12::jsonb, $13, $14
+                $12::jsonb, $13, $14, (SELECT last_number FROM n)
             )
             RETURNING *`,
             [

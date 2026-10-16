@@ -143,6 +143,7 @@ async function gatherReceiptContext(params: ReceiptContextParams) {
             logo_url: (salonRecord as any)?.logo_url ?? null,
             email: salonRecord?.email ?? null,
             phone: salonRecord?.phone ?? null,
+            additional_phones: (salonRecord as any)?.additional_phones ?? null,
             website_url: salonRecord?.website_url ?? null,
             gst_number: salonRecord?.gst_number ?? null,
         },

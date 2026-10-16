@@ -79,6 +79,8 @@ import {
     LostCustomersReportRow,
     LostCustomersReportStats,
     ReferralReportRow,
+    ClientSourceReportFilters,
+    ClientSourceReportRow,
     ReferralReportStats,
     PaymentCollectionReportRow,
     PaymentCollectionReportStats,
@@ -4929,36 +4931,59 @@ async getRewardPointsReportRows(
 _buildEwalletWhere(
   salonId: string,
   filters: {
-    search?: string; as_of_date?: string; status?: string;
+    search?: string; as_of_date?: string; start_date?: string; end_date?: string; status?: string;
     balance_min?: number; balance_max?: number;
   }
-): { where: string; values: any[]; nextIndex: number } {
+): { where: string; values: any[]; nextIndex: number; balanceExpr: string } {
   const values: any[] = [salonId];
   const where = ["c.salon_id = $1"];
   let idx = 2;
 
-  // Wallet balance is a live running total (clients.ewallet_balance) — there's
-  // no historical snapshot to reconstruct, so "as of date" only narrows which
-  // clients are included (those who existed by that date), not the balance
-  // value itself. No lower bound: every client registered on/before the date
-  // is in scope, so existing clients never vanish just because they signed
-  // up before some earlier "from" date (the previous From/To range bug).
-  if (filters.as_of_date) {
-    where.push(`c.created_at < ($${idx++}::date + interval '1 day')`);
-    values.push(filters.as_of_date);
+  // Date range = wallet ACTIVITY in the period: only clients with at least one e-wallet ledger entry
+  // (top-up, redemption, adjustment) between start_date and end_date are listed, and their balance is
+  // the balance as of the END of the range, read from the ledger's running balance_after. Previously
+  // the range only trimmed clients by sign-up date and always showed today's live balance, so picking
+  // a different range appeared to do nothing. A blank range ("All time") applies no date filter.
+  // as_of_date (the old single-date knob) still works as an end date with no start.
+  const startDate = filters.start_date || undefined;
+  const endDate = filters.end_date || filters.as_of_date || undefined;
+
+  if (endDate) {
+    where.push(`c.created_at < (($${idx++}::date + interval '1 day')::timestamp AT TIME ZONE 'Asia/Kolkata')`);
+    values.push(endDate);
   }
+  if (startDate || endDate) {
+    const conds: string[] = ["l.client_id = c.id"];
+    if (startDate) { conds.push(`l.created_at >= ($${idx++}::date::timestamp AT TIME ZONE 'Asia/Kolkata')`); values.push(startDate); }
+    if (endDate)   { conds.push(`l.created_at < (($${idx++}::date + interval '1 day')::timestamp AT TIME ZONE 'Asia/Kolkata')`); values.push(endDate); }
+    where.push(`EXISTS (SELECT 1 FROM ewallet_ledger l WHERE ${conds.join(" AND ")})`);
+  }
+
+  // Balance as of the end of the range. Today / no end date = the live balance. A past end date reads the
+  // last ledger row up to that day (0 when the client had no ledger activity by then).
+  const todayIso = new Date().toISOString().slice(0, 10);
+  let balanceExpr = "COALESCE(c.ewallet_balance, 0)";
+  if (endDate && endDate < todayIso) {
+    balanceExpr = `COALESCE((
+      SELECT l2.balance_after FROM ewallet_ledger l2
+      WHERE l2.client_id = c.id AND l2.created_at < (($${idx++}::date + interval '1 day')::timestamp AT TIME ZONE 'Asia/Kolkata')
+      ORDER BY l2.created_at DESC LIMIT 1
+    ), 0)`;
+    values.push(endDate);
+  }
+
   // Same has-balance/no-balance split as the stats card's with_balance count.
   if (filters.status === "with_balance") {
-    where.push(`COALESCE(c.ewallet_balance, 0) > 0`);
+    where.push(`${balanceExpr} > 0`);
   } else if (filters.status === "no_balance") {
-    where.push(`COALESCE(c.ewallet_balance, 0) = 0`);
+    where.push(`${balanceExpr} = 0`);
   }
   if (filters.balance_min != null) {
-    where.push(`COALESCE(c.ewallet_balance, 0) >= $${idx++}`);
+    where.push(`${balanceExpr} >= $${idx++}`);
     values.push(filters.balance_min);
   }
   if (filters.balance_max != null) {
-    where.push(`COALESCE(c.ewallet_balance, 0) <= $${idx++}`);
+    where.push(`${balanceExpr} <= $${idx++}`);
     values.push(filters.balance_max);
   }
   if (filters.search?.trim()) {
@@ -4971,20 +4996,20 @@ _buildEwalletWhere(
     idx++;
   }
 
-  return { where: where.join(" AND "), values, nextIndex: idx };
+  return { where: where.join(" AND "), values, nextIndex: idx, balanceExpr };
 },
 
 async getEwalletReportStats(
   salonId: string,
-  filters: { search?: string; as_of_date?: string; status?: string; balance_min?: number; balance_max?: number }
+  filters: { search?: string; as_of_date?: string; start_date?: string; end_date?: string; status?: string; balance_min?: number; balance_max?: number }
 ): Promise<EwalletReportStats> {
-  const { where, values } = this._buildEwalletWhere(salonId, filters);
+  const { where, values, balanceExpr } = this._buildEwalletWhere(salonId, filters);
 
   const query = `
     SELECT
       COUNT(*)::int AS total_clients,
-      COUNT(*) FILTER (WHERE COALESCE(c.ewallet_balance, 0) > 0)::int AS with_balance,
-      COALESCE(SUM(c.ewallet_balance), 0) AS total_wallet_value
+      COUNT(*) FILTER (WHERE ${balanceExpr} > 0)::int AS with_balance,
+      COALESCE(SUM(${balanceExpr}), 0) AS total_wallet_value
     FROM clients c
     WHERE ${where}
   `;
@@ -5004,7 +5029,7 @@ async getEwalletReportStats(
 async getEwalletReportRows(
   salonId: string,
   filters: {
-    search?: string; as_of_date?: string; status?: string;
+    search?: string; as_of_date?: string; start_date?: string; end_date?: string; status?: string;
     balance_min?: number; balance_max?: number;
     page?: number; limit?: number; is_export?: boolean;
   }
@@ -5012,7 +5037,7 @@ async getEwalletReportRows(
   items: EwalletReportRow[];
   pagination: { total: number; page: number; limit: number; total_pages: number };
 }> {
-  const { where, values, nextIndex } = this._buildEwalletWhere(salonId, filters);
+  const { where, values, nextIndex, balanceExpr } = this._buildEwalletWhere(salonId, filters);
   let idx = nextIndex;
 
   const page = Math.max(1, Number(filters.page ?? 1));
@@ -5028,11 +5053,11 @@ async getEwalletReportRows(
       COALESCE(NULLIF(TRIM(c.full_name), ''), '—') AS client_name,
       COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS phone,
       COALESCE(NULLIF(c.email, ''), '—') AS email,
-      COALESCE(c.ewallet_balance, 0) AS balance,
+      ${balanceExpr} AS balance,
       COUNT(*) OVER() AS total_count
     FROM clients c
     WHERE ${where}
-    ORDER BY COALESCE(c.ewallet_balance, 0) DESC
+    ORDER BY ${balanceExpr} DESC
     ${limitClause}
   `;
 
@@ -9423,6 +9448,66 @@ async getReferralReportRows(
 },
 
 // ======================================================
+// CLIENT SOURCE REPORT (independent report API)
+// POST /api/report/client-source — one row per client_source. Clients are
+// counted by when they were created (IST date, same convention as the
+// Referral report); visits and revenue are those clients' completed sales.
+// ======================================================
+
+async getClientSourceReportRows(
+  salonId: string,
+  filters: ClientSourceReportFilters
+): Promise<ClientSourceReportRow[]> {
+  const values: any[] = [salonId];
+  const where = ["c.salon_id = $1", "c.is_active = true"];
+  let idx = 2;
+
+  // clients.created_at is a naive UTC timestamp — stamp it UTC, then convert to
+  // IST, or the date shifts back 5.5 hours (see _REFERRAL_AGG).
+  const istDate = `((c.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata')::date`;
+  if (filters.start_date) { where.push(`${istDate} >= $${idx++}::date`); values.push(filters.start_date); }
+  if (filters.end_date)   { where.push(`${istDate} <= $${idx++}::date`); values.push(filters.end_date); }
+
+  const sourceExpr = `COALESCE(NULLIF(LOWER(TRIM(c.client_source)), ''), 'not_set')`;
+  if (filters.sources && filters.sources.length > 0) {
+    where.push(`${sourceExpr} = ANY($${idx++}::text[])`);
+    values.push(filters.sources.map((s) => String(s).toLowerCase().trim()));
+  }
+
+  const { rows } = await safeQuery(() => pool.query(`
+    WITH base AS (
+      SELECT c.id, ${sourceExpr} AS source
+      FROM clients c
+      WHERE ${where.join(" AND ")}
+    ),
+    sale_agg AS (
+      SELECT s.client_id,
+             COUNT(*)::int AS visits,
+             COALESCE(SUM(s.total_amount::numeric), 0) AS revenue
+      FROM sales s
+      WHERE s.status = 'completed'
+        AND s.client_id IN (SELECT id FROM base)
+      GROUP BY s.client_id
+    )
+    SELECT b.source,
+           COUNT(*)::int AS clients,
+           COALESCE(SUM(sa.visits), 0)::int AS total_visits,
+           COALESCE(SUM(sa.revenue), 0) AS revenue
+    FROM base b
+    LEFT JOIN sale_agg sa ON sa.client_id = b.id
+    GROUP BY b.source
+    ORDER BY clients DESC, b.source ASC
+  `, values));
+
+  return rows.map((r: any) => ({
+    source: r.source,
+    clients: Number(r.clients ?? 0),
+    total_visits: Number(r.total_visits ?? 0),
+    revenue: Math.round(Number(r.revenue ?? 0)),
+  }));
+},
+
+// ======================================================
 // PAYMENT COLLECTION REPORT (independent report API)
 // POST /api/report/payment-collection — one row per billed appointment,
 // showing amount billed / collected / still due.
@@ -10703,6 +10788,9 @@ async getStaffSalesReport(
     WITH sales_side AS (
       SELECT
         s.id, s.created_at,
+        -- One row per line item, so the sale id repeats across a multi-service
+        -- bill; this is the row's own unique key (the grid must not key on s.id).
+        sli.id AS line_item_id,
         ${this._STATUS_EXPR} AS status,
         -- Package/Membership are benefits/credits applied against the bill,
         -- never real payment methods (sales.payment_method is the
@@ -10756,7 +10844,7 @@ async getStaffSalesReport(
     ),
     appt_side AS (
       SELECT
-        u.id, u.created_at, u.status, u.payment_method,
+        u.id, u.created_at, NULL::uuid AS line_item_id, u.status, u.payment_method,
         -- _UNBILLED_APPOINTMENT_ROWS_CTE always returns u.price gross of GST
         -- (plus u.tax_amount separately) since it's shared by several other
         -- reports that don't take this toggle — subtract it back out here
@@ -10784,6 +10872,7 @@ async getStaffSalesReport(
   const total = rows.length ? Number(rows[0].total_count) : 0;
   const items: StaffSalesReportRow[] = rows.map((row: any) => ({
     id: row.id,
+    line_item_id: row.line_item_id ?? null,
     staff_id: row.staff_id ?? null,
     staff_name: row.staff_name ?? "—",
     is_unbilled: Boolean(row.is_unbilled),
@@ -11204,7 +11293,11 @@ async getStaffPerformanceReportStats(
       COALESCE(SUM(product_revenue), 0) AS product_revenue,
       COALESCE(SUM(package_revenue), 0) AS package_revenue,
       COALESCE(SUM(membership_revenue), 0) AS membership_revenue,
-      COALESCE(SUM(commission), 0) AS total_commission
+      COALESCE(SUM(commission), 0) AS total_commission,
+      -- Same per-staff due the table's Due column shows (each sale's outstanding
+      -- amount counted once, for its resolved staff), summed over the WHOLE
+      -- filtered set — not just the current page.
+      COALESCE(SUM(due), 0) AS total_due
     FROM combined
   `;
 
@@ -11220,7 +11313,7 @@ async getStaffPerformanceReportStats(
     package_revenue: Number(r.package_revenue ?? 0),
     membership_revenue: Number(r.membership_revenue ?? 0),
     total_commission: Number(r.total_commission ?? 0),
-    avg_revenue_per_staff: totalStaff > 0 ? totalRevenue / totalStaff : 0,
+    total_due: Number(r.total_due ?? 0),
   };
 },
 
@@ -13637,12 +13730,14 @@ async getOnlineAppointmentReport(
       GROUP BY e.id
     )
     SELECT
-      id, appointment_date, time, booked_date, client_name, client_phone,
-      item_name, item_type, staff_name, duration, amount,
-      payment_method, payment_status,
+      g.id, ap.booking_number, g.appointment_date, g.time, g.booked_date, g.client_name, g.client_phone,
+      g.item_name, g.item_type, g.staff_name, g.duration, g.amount,
+      g.payment_method, g.payment_status,
       COUNT(*) OVER() AS total_count
-    FROM grouped
-    ORDER BY scheduled_at DESC
+    FROM grouped g
+    -- booking_number is the salon's running Booking ID (1, 2, 3 ...); NULL for bookings made before it existed.
+    LEFT JOIN appointments ap ON ap.id = g.id
+    ORDER BY g.scheduled_at DESC
     ${limitClause}
   `;
 
@@ -13650,6 +13745,7 @@ async getOnlineAppointmentReport(
   const total = rows.length ? Number(rows[0].total_count) : 0;
   const items: OnlineAppointmentReportRow[] = rows.map((row: any) => ({
     id: row.id,
+    booking_number: row.booking_number != null ? Number(row.booking_number) : null,
     appointment_date: row.appointment_date,
     time: row.time,
     booked_date: row.booked_date,

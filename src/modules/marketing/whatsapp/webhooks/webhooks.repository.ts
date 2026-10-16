@@ -77,11 +77,12 @@ export const webhooksRepository = {
         COUNT(*) FILTER (WHERE status = 'READ')                       AS read_count,
         COUNT(*) FILTER (WHERE status = 'FAILED')                     AS failed_count,
         COUNT(*) FILTER (WHERE status = 'BLOCKED')                    AS blocked_count,
+        COUNT(*) FILTER (WHERE status = 'SKIPPED')                    AS skipped_count,
         COUNT(*)                                                       AS total
       FROM wa_campaign_contacts WHERE campaign_id = $1
     `, [campaignId])
 
-    const done    = parseInt(c.sent_count) + parseInt(c.failed_count) + parseInt(c.blocked_count)
+    const done    = parseInt(c.sent_count) + parseInt(c.failed_count) + parseInt(c.blocked_count) + parseInt(c.skipped_count)
     const allDone = done >= parseInt(c.total)
 
     await pool.query(`

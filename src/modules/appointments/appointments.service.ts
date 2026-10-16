@@ -19,6 +19,7 @@ import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-autom
 import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
 import { waScheduledMessagesService } from "../whatsapp-automation/wa-scheduled-messages.service";
 import { notificationsService } from "../notifications/notifications.service";
+import { ownStaffId } from "../notifications/staffNotificationScope";
 import { emailService } from "../utils/email.service";
 import { canSendEmail } from "../utils/notif-prefs";
 import { salonsRepository } from "../salons/salons.repository";
@@ -38,6 +39,7 @@ import { clientMembershipsRepository } from "../client-memberships/client-member
 import {
     Appointment,
     AppointmentServiceConsumableRecord,
+    AppointmentServiceItem,
     CreateAppointmentBody,
     IncomingAppointmentServiceItem,
     UpdateAppointmentBody,
@@ -313,6 +315,18 @@ function assignServiceRowIds(services?: IncomingAppointmentServiceItem[]): void 
     }
 }
 
+// Same stable-id stamping as assignServiceRowIds, for package_items/
+// membership_items — needed so the staff handoff feature's
+// PATCH/POST .../items/:itemId/* endpoints have a join key for these rows
+// too (they previously had none; package_items was only ever diffed by
+// name). Mutates in place; rows round-tripped from a prior save keep theirs.
+function assignItemRowIds(items?: { id?: string }[]): void {
+    if (!items) return;
+    for (const item of items) {
+        if (!item.id) item.id = randomUUID();
+    }
+}
+
 // Looks up, once per flattenServiceConsumables() call, every distinct
 // product referenced by services[].consumables[]: its base unit
 // (products.measure_unit) and its configured packaging conversions
@@ -553,6 +567,8 @@ export const appointmentsService = {
         // services array and stages it for a relational write once the
         // appointment row (and therefore its id) exists.
         assignServiceRowIds(body.services);
+        assignItemRowIds(body.package_items);
+        assignItemRowIds(body.membership_items);
         let consumableRows: AppointmentServiceConsumableRecord[] = [];
         if (body.services?.some((s) => s.consumables?.length)) {
             const branchId = await appointmentConsumablesService.resolveBranchId(body.salon_id, body.branch_id ?? null);
@@ -703,6 +719,132 @@ export const appointmentsService = {
         if (!needsTaxBackfill(appointment)) return appointment;
         const activeTaxes = await getActiveTaxes(appointment.salon_id).catch(() => []);
         return backfillTaxBreakdown(appointment, activeTaxes);
+    },
+
+    // ── Staff handoff workflow ──────────────────────────────────────────────
+    // A per-row (service/package/membership) progress tracker, deliberately
+    // separate from the appointment's own payment `status` column — see
+    // appointments.guards.ts's doc comments for why. Both methods below
+    // write only the one JSONB array the target row lives in, via the
+    // repository's generic update() (never routed through update()'s own
+    // pricing/consumables/notification logic above, which doesn't apply
+    // here), then re-read through getById() so the response is enriched the
+    // same way every other appointment read is.
+
+    async updateItemStatus(params: {
+        appointmentId: string;
+        itemId: string;
+        salonId: string;
+        status: "in_progress" | "completed";
+    }): Promise<Appointment> {
+        const { appointmentId, itemId, salonId, status } = params;
+        const existing = await appointmentsRepository.findById(appointmentId);
+        if (!existing || existing.salon_id !== salonId) {
+            throw new AppError(404, "Appointment not found", "NOT_FOUND");
+        }
+
+        const RANK: Record<string, number> = { pending: 0, in_progress: 1, completed: 2 };
+        const arrayKey = (["services", "package_items", "membership_items"] as const)
+            .find((key) => (existing[key] as { id?: string }[] | undefined)?.some((row) => row.id === itemId));
+        if (!arrayKey) throw new AppError(404, "Service/package/membership row not found", "NOT_FOUND");
+
+        const now = new Date().toISOString();
+        const items = (existing[arrayKey] as (AppointmentServiceItem & { status?: string })[]).map((row) => {
+            if (row.id !== itemId) return row;
+            const currentRank = RANK[row.status ?? "pending"] ?? 0;
+            if (RANK[status] <= currentRank) {
+                throw new AppError(
+                    400,
+                    `Cannot move this ${arrayKey === "services" ? "service" : arrayKey === "package_items" ? "package" : "membership"} row from "${row.status ?? "pending"}" to "${status}".`,
+                    "VALIDATION_ERROR"
+                );
+            }
+            return {
+                ...row,
+                status,
+                started_at: status === "in_progress" ? now : row.started_at,
+                completed_at: status === "completed" ? now : row.completed_at,
+            };
+        });
+
+        await appointmentsRepository.update(appointmentId, { [arrayKey]: items } as UpdateAppointmentBody);
+        return appointmentsService.getById(appointmentId);
+    },
+
+    async handoffItem(params: {
+        appointmentId: string;
+        itemId: string;
+        salonId: string;
+        toStaffId: string;
+        requesterUserId: string;
+        requesterRole?: string;
+    }): Promise<Appointment> {
+        const { appointmentId, itemId, salonId, toStaffId, requesterUserId, requesterRole } = params;
+        const existing = await appointmentsRepository.findById(appointmentId);
+        if (!existing || existing.salon_id !== salonId) {
+            throw new AppError(404, "Appointment not found", "NOT_FOUND");
+        }
+
+        const arrayKey = (["services", "package_items", "membership_items"] as const)
+            .find((key) => (existing[key] as { id?: string }[] | undefined)?.some((row) => row.id === itemId));
+        if (!arrayKey) throw new AppError(404, "Service/package/membership row not found", "NOT_FOUND");
+
+        // Owners/admins can hand off freely; a staff member must have
+        // already completed at least one of their own rows in this same
+        // appointment first — they're passing the client along, not
+        // reassigning someone else's unrelated work sight unseen. (Route-
+        // level requireParticipatingStaff already confirmed they own SOME
+        // row here; this confirms that row is actually done.)
+        if (requesterRole !== "salon_owner" && requesterRole !== "admin") {
+            const requesterStaffId = await ownStaffId(requesterUserId, salonId);
+            const hasCompletedOwnRow = requesterStaffId && (
+                [...existing.services, ...existing.package_items, ...existing.membership_items] as
+                    (AppointmentServiceItem & { status?: string })[]
+            ).some((row) => row.staff_id === requesterStaffId && row.status === "completed");
+            if (!hasCompletedOwnRow) {
+                throw new AppError(
+                    403,
+                    "Complete your own service before handing this appointment off.",
+                    "FORBIDDEN"
+                );
+            }
+        }
+
+        const toStaff = await staffService.getById(toStaffId, salonId);
+        if (!toStaff.is_active) throw new AppError(400, "That staff member is inactive.", "VALIDATION_ERROR");
+        if (!toStaff.user_id) {
+            throw new AppError(400, "That staff member has no linked login — they can't receive the handoff notification.", "VALIDATION_ERROR");
+        }
+        const toStaffName = [toStaff.first_name, toStaff.last_name].filter(Boolean).join(" ").trim() || "Staff";
+
+        const now = new Date().toISOString();
+        const items = (existing[arrayKey] as (AppointmentServiceItem & { status?: string })[]).map((row) =>
+            row.id !== itemId ? row : {
+                ...row,
+                staff_id: toStaffId,
+                staff_name: toStaffName,
+                status: "in_progress" as const,
+                started_at: now,
+                completed_at: null,
+            });
+        const handedOffItem = items.find((row) => row.id === itemId)!;
+
+        await appointmentsRepository.update(appointmentId, { [arrayKey]: items } as UpdateAppointmentBody);
+
+        notificationsService.create({
+            salon_id: salonId,
+            type: "appointment",
+            reference_id: appointmentId,
+            target_staff_user_id: toStaff.user_id,
+            title: "It's your turn",
+            body: `${existing.client_name ?? "Walk-in"} is ready for ${handedOffItem.name}`,
+        }).catch((err: any) => {
+            logger.error("Handoff notification failed", {
+                appointmentId, itemId, toStaffId, message: err?.message, stack: err?.stack, error: err,
+            });
+        });
+
+        return appointmentsService.getById(appointmentId);
     },
 
     async list(params: {
@@ -979,6 +1121,8 @@ export const appointmentsService = {
         // and flooring products.amount at 0 rather than refusing the edit.
         let newConsumableRows: AppointmentServiceConsumableRecord[] | null = null;
         let applyConsumableChange: (() => Promise<void>) | null = null;
+        if (patch.package_items !== undefined) assignItemRowIds(patch.package_items);
+        if (patch.membership_items !== undefined) assignItemRowIds(patch.membership_items);
         if (patch.services !== undefined) {
             assignServiceRowIds(patch.services as IncomingAppointmentServiceItem[]);
             const hadPriorDeduction = existing.status === "paid" || existing.reopened_from_paid === true;

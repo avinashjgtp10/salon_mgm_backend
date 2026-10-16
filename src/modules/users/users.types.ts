@@ -16,6 +16,8 @@ export type SafeUser = {
     id: string;
     email: string;
     phone: string | null;
+    /** Extra WhatsApp Alerts numbers besides `phone`; digits only. */
+    alertPhones: string[];
     firstName: string;
     lastName: string | null;
     fullName: string;
@@ -33,8 +35,6 @@ export type SafeUser = {
     updatedAt: string;
     // Extended profile fields
     businessName: string | null;
-    address: string | null;
-    country: string | null;
     countryCode: string | null;
     isOnboardingComplete: boolean;
     custom_permissions: Record<string, boolean> | null;

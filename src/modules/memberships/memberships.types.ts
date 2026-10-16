@@ -7,6 +7,8 @@ export interface MembershipsListQuery {
   validFor?:    string;
   pricingType?: string;
   appliesTo?:   string;
+  createdFrom?: string;   // YYYY-MM-DD, inclusive
+  createdTo?:   string;   // YYYY-MM-DD, inclusive
   page?:        number;
   limit?:       number;
 }

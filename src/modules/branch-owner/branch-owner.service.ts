@@ -4,6 +4,7 @@ import { branchOwnerRepository } from "./branch-owner.repository";
 import { superAdminRepository } from "../super-admin/super-admin.repository";
 import { AppError } from "../../middleware/error.middleware";
 import { salonDashboardRepository } from "../salon-dashboard/salon-dashboard.repository";
+import { getRevenueFiguresBySalon } from "../salon-dashboard/salon-revenue";
 import { staffCommissionsService, staffService } from "../staff/staff.service";
 import { rolesService } from "../roles/roles.service";
 import { billingService } from "../billing/billing.service";
@@ -31,7 +32,10 @@ export const branchOwnerService = {
   // the raw strings concatenates them instead of adding.
   async getMySalonsList(branchOwnerId: string) {
     const rows: any[] = await branchOwnerRepository.getMySalons(branchOwnerId);
-    const salons = rows.map((s) => ({ ...s, revenue_today: Number(s.revenue_today) || 0 }));
+    // Today's revenue is the salon dashboard's own figure, not this query's
+    // older sales.created_at-based sum, so it matches what each salon sees.
+    const figures = await getRevenueFiguresBySalon(rows.map((s) => s.id));
+    const salons = rows.map((s) => ({ ...s, revenue_today: figures.get(s.id)?.today ?? (Number(s.revenue_today) || 0) }));
     const active = salons.filter((s) => s.status === "active").length;
     const summary = {
       total_salons: salons.length,
@@ -61,11 +65,31 @@ export const branchOwnerService = {
       branchOwnerRepository.getInventorySummary(branchOwnerId),
       branchOwnerRepository.getAttentionMetrics(branchOwnerId),
     ]);
+    // Revenue KPIs come from each salon's own dashboard figures (sum across the
+    // assigned salons) instead of this module's legacy revenue_events query,
+    // which dated sales by created_at and used sales.total_amount — so the
+    // totals here never matched the salon website for the same salon.
+    const figures = await getRevenueFiguresBySalon((salons as any[]).map((s) => s.id));
+    let allTime = 0, today = 0, newClients = 0, appointments = 0;
+    for (const f of figures.values()) {
+      allTime += f.allTime; today += f.today; newClients += f.newClientsToday; appointments += f.appointmentsToday;
+    }
+    const salonRows = (salons as any[]).map((s) => ({
+      ...s,
+      revenue_today: figures.get(s.id)?.today ?? s.revenue_today,
+      appointments_today: figures.get(s.id)?.appointmentsToday ?? s.appointments_today,
+    }));
+    if (figures.size > 0) {
+      (stats as any).total_revenue = allTime;
+      (stats as any).revenue_today = today;
+      (stats as any).new_clients_today = newClients;
+      (stats as any).bookings_today = appointments;
+    }
     // Dashboard's initial paint only needs the daily points array — the
     // priorPeriodRevenue figure is only meaningful once the frontend also
     // knows which period it belongs to, which the dedicated revenue-trend
     // endpoint provides when the Daily/Weekly/Monthly toggle is used.
-    return { salons, stats, payments, revenueTrend: dailyTrend.points, inventorySummary, attention };
+    return { salons: salonRows, stats, payments, revenueTrend: dailyTrend.points, inventorySummary, attention };
   },
 
   // Everything the dashboard KPI cards show, in one payload, scoped to either

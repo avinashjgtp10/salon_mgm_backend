@@ -5,6 +5,7 @@ import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { requirePermission, requireAnyPermission } from "../../middleware/permission.middleware";
 import { productsController, brandsController } from "./products.controller";
+import { productsBootstrapController } from "./products.bootstrap";
 import {
     validateCreateProduct,
     validateUpdateProduct,
@@ -60,17 +61,18 @@ const exportProductsCsv = [requirePermission("download_products_csv"), requirePe
 const exportProductsExcel = [requirePermission("download_products_excel"), requirePermission("export_excel")];
 const exportProductsPdf = [requirePermission("download_products_pdf"), requirePermission("export_pdf")];
 
-// Brands — "Manage My Brands" (Products permissions ticket) is its own
-// independent permission, not coupled to View/Create Product. OR'd in
-// alongside the pre-existing view_products/create_products checks so a role
-// that already relied on those keeps working unchanged.
-const viewBrands = requireAnyPermission(["manage_my_brands", "view_products", "create_sales", "manage_calendar"]);
-const manageBrands = requireAnyPermission(["manage_my_brands", "create_products"]);
+// Brands — "Manage My Brands" depends on View Products (like every other Catalog > Products
+// action): the Roles & Permissions editors lock it while View Products is off and clear it when
+// View Products is switched off. Enforced here too, so a stale grant or a direct API call can never
+// reach brand management without View Products. Reading brands stays open to Quick Sale / Calendar
+// (create_sales / manage_calendar), as before.
+const viewBrands = requireAnyPermission(["view_products", "create_sales", "manage_calendar"]);
+const manageBrands: RequestHandler[] = [requireView, requireAnyPermission(["manage_my_brands", "create_products"])];
 router.get("/brands", authMiddleware, ownerAdminStaff, viewBrands, brandsController.list);
 router.get("/brands/:id", authMiddleware, ownerAdminStaff, viewBrands, brandsController.getById);
-router.post("/brands", authMiddleware, ownerAdminStaff, manageBrands, validateCreateBrand, brandsController.create);
-router.patch("/brands/:id", authMiddleware, ownerAdminStaff, manageBrands, validateUpdateBrand, brandsController.update);
-router.delete("/brands/:id", authMiddleware, ownerAdminStaff, manageBrands, brandsController.delete);
+router.post("/brands", authMiddleware, ownerAdminStaff, ...manageBrands, validateCreateBrand, brandsController.create);
+router.patch("/brands/:id", authMiddleware, ownerAdminStaff, ...manageBrands, validateUpdateBrand, brandsController.update);
+router.delete("/brands/:id", authMiddleware, ownerAdminStaff, ...manageBrands, brandsController.delete);
 
 // Products
 router.get("/export/csv", authMiddleware, ownerAdminStaff, requireView, ...exportProductsCsv, productsController.exportCSV);
@@ -80,6 +82,10 @@ router.post("/import", authMiddleware, ownerAdminStaff, ...importProducts, impor
 
 router.get("/", authMiddleware, ownerAdminStaff, viewProducts, validateListQuery, productsController.list);
 router.post("/search", authMiddleware, ownerAdminStaff, viewProducts, validateSearchBody, productsController.search);
+// One request per screen: the Products list (rows + dropdown lookups) and the Add/Edit Product form
+// (every dropdown + the product being edited). Both are declared before "/:id".
+router.post("/list-view", authMiddleware, ownerAdminStaff, viewProducts, validateSearchBody, productsBootstrapController.listView);
+router.get("/product-list", authMiddleware, ownerAdminStaff, viewProducts, productsBootstrapController.formData);
 router.get("/:id", authMiddleware, ownerAdminStaff, viewProducts, productsController.getById);
 router.post("/", authMiddleware, ownerAdminStaff, createProductsOrConsumable, uploadMiddleware.array("photos", 5), validateCreateProduct, productsController.create);
 router.patch("/:id", authMiddleware, ownerAdminStaff, editProductsOrConsumable, validateUpdateProduct, productsController.update);

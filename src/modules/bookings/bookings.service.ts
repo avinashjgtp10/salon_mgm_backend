@@ -811,6 +811,9 @@ export const bookingsService = {
                     last_name: nameParts.slice(1).join(" ") || null,
                     email: body.client_email || null,
                     phone_number: phoneDigits,
+                    // Only a client created here is stamped; an existing client matched
+                    // by phone keeps whatever source they already have.
+                    client_source: "online_booking",
                 },
                 body.salon_id,
                 { code: referralCode, rewardStatus: null }
@@ -916,7 +919,9 @@ export const bookingsService = {
                     : (full.staff_name ?? "our team");
 
                 const extraVariables: Record<string, string> = {
-                    booking_id:        appointment.id,
+                    // The customer-facing Booking ID is the salon's own running number (1, 2, 3 ...);
+                    // older appointments created before booking numbers existed fall back to the id.
+                    booking_id:        String((appointment as any).booking_number ?? appointment.id),
                     appointment_id:    appointment.id,
                     appointment_amount: formatMoney(totalAmount, (salon as any).currency),
                     paid_amount:       formatMoney(paidAmount, (salon as any).currency),

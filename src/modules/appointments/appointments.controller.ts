@@ -119,6 +119,37 @@ export const appointmentsController = {
         } catch (err) { return next(err); }
     },
 
+    async updateItemStatus(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const userId = req.user?.userId;
+            const salonId = req.user?.salonId;
+            const id = String(req.params.id || "").trim();
+            const itemId = String(req.params.itemId || "").trim();
+            if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+            if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+            const appointment = await appointmentsService.updateItemStatus({
+                appointmentId: id, itemId, salonId, status: req.body.status,
+            });
+            return sendSuccess(res, 200, appointment, "Service status updated successfully");
+        } catch (err) { return next(err); }
+    },
+
+    async handoffItem(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const userId = req.user?.userId;
+            const salonId = req.user?.salonId;
+            const id = String(req.params.id || "").trim();
+            const itemId = String(req.params.itemId || "").trim();
+            if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
+            if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
+            const appointment = await appointmentsService.handoffItem({
+                appointmentId: id, itemId, salonId, toStaffId: req.body.to_staff_id,
+                requesterUserId: userId, requesterRole: req.user?.role,
+            });
+            return sendSuccess(res, 200, appointment, "Service handed off successfully");
+        } catch (err) { return next(err); }
+    },
+
     async getReceiptPdf(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const salonId = req.user?.salonId;

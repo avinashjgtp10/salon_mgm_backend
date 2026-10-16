@@ -1014,6 +1014,7 @@ export const salonDashboardRepository = {
     period: string = "monthly",
     date?: string,
     collectionPeriod: string = "today",
+    gender?: string,
   ): Promise<DashboardCombined> {
     const safe = <T>(p: Promise<T>, fallback: T, label: string): Promise<T> =>
       p.catch((err) => {
@@ -1039,7 +1040,11 @@ export const salonDashboardRepository = {
       .list({ salonId, date: date ?? new Date().toISOString().slice(0, 10), limit: 200 })
       .then((result) => (Array.isArray(result) ? result : result.data));
 
-    const [summary, todayAppointments, revenueChart, pendingPayments, todaysBirthdays, todaysAnniversaries, paymentModeBreakdown] = await Promise.all([
+    const whatsappConnectedPromise = pool
+      .query(`SELECT 1 FROM whatsapp_configs WHERE salon_id = $1 AND is_verified = true LIMIT 1`, [salonId])
+      .then((r) => (r.rowCount ?? 0) > 0);
+
+    const [summary, todayAppointments, revenueChart, pendingPayments, todaysBirthdays, todaysAnniversaries, paymentModeBreakdown, monthlyProjection, whatsappConnected] = await Promise.all([
       safe(this.getSummary(salonId),                        defaultSummary,   "getSummary"),
       safe(todayAppointmentsPromise,                         [],               "getTodayAppointments"),
       safe(this.getRevenueChart(salonId, period),            [],               "getRevenueChart"),
@@ -1047,8 +1052,10 @@ export const salonDashboardRepository = {
       safe(this.getTodaysBirthdays(salonId),                 defaultBirthdays, "getTodaysBirthdays"),
       safe(this.getTodaysAnniversaries(salonId),             defaultAnniversaries, "getTodaysAnniversaries"),
       safe(this.getPaymentModeBreakdown(salonId, collectionPeriod), defaultBreakdown, "getPaymentModeBreakdown"),
+      safe<MonthlyProjection | null>(this.getMonthlyProjection(salonId, gender), null, "getMonthlyProjection"),
+      safe<boolean>(whatsappConnectedPromise, false, "getWhatsappConnected"),
     ]);
 
-    return { summary, todayAppointments, revenueChart, pendingPayments, todaysBirthdays, todaysAnniversaries, paymentModeBreakdown };
+    return { summary, todayAppointments, revenueChart, pendingPayments, todaysBirthdays, todaysAnniversaries, paymentModeBreakdown, monthlyProjection, whatsappConnected };
   },
 };

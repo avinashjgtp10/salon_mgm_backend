@@ -43,6 +43,8 @@ export const membershipsService = {
       validFor:    query.validFor,
       pricingType: query.pricingType,
       appliesTo:   query.appliesTo,
+      createdFrom: query.createdFrom,
+      createdTo:   query.createdTo,
       colour:      query.colour,
       page:        query.page  ? Number(query.page)  : undefined,
       limit:       query.limit ? Number(query.limit) : undefined,
@@ -58,6 +60,8 @@ export const membershipsService = {
       validFor:    query.validFor,
       pricingType: query.pricingType,
       appliesTo:   query.appliesTo,
+      createdFrom: query.createdFrom,
+      createdTo:   query.createdTo,
       colour:      query.colour,
     }, salonId);
   },

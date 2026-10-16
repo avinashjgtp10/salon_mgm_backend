@@ -1,4 +1,5 @@
 import { superAdminRepository } from "./super-admin.repository";
+import { getAllTimeRevenueBySalon } from "../salon-dashboard/salon-revenue";
 import { supportRepo } from "../support/support.repository";
 import { authRepository } from "../auth/auth.repository";
 import { demoRequestsService } from "../demo-requests/demo-requests.service";
@@ -69,13 +70,25 @@ export const superAdminService = {
 
   // ── STATS ─────────────────────────────────────────────────────────────────────
 
+  // Revenue is the salon website's own figure (Sales Summary "Received Amount",
+  // i.e. the dashboard's allTimeRevenue), not SUM(payments.net_amount) — that
+  // raw payments sum counted money the salon's reports exclude (cancelled /
+  // deleted visits etc.), so Super Admin showed more than the salon itself.
+  async _withSalonSiteRevenue<T extends { id: string; revenue?: unknown }>(salons: T[]): Promise<T[]> {
+    const revenue = await getAllTimeRevenueBySalon(salons.map((s) => s.id));
+    return salons.map((s) => (revenue.has(s.id) ? { ...s, revenue: revenue.get(s.id)! } : s));
+  },
+
   async getStats() {
-    return superAdminRepository.getStats();
+    const [stats, ids] = await Promise.all([superAdminRepository.getStats(), superAdminRepository.getAllSalonIds()]);
+    const revenue = await getAllTimeRevenueBySalon(ids);
+    const total = ids.reduce((sum, id) => sum + (revenue.get(id) ?? 0), 0);
+    return { ...stats, total_revenue: revenue.size > 0 ? total : stats.total_revenue };
   },
 
   // Everything the super-admin Overview page renders, in one round trip.
   async getDashboard(opts: { frequentLoginsLimit?: number; usersNoPlanLimit?: number } = {}) {
-    const [stats, salons, payments, frequentLogins, usersNoPlan, supportStats] = await Promise.all([
+    const [stats, rawSalons, payments, frequentLogins, usersNoPlan, supportStats] = await Promise.all([
       superAdminRepository.getStats(),
       superAdminRepository.getAllSalons(),
       superAdminRepository.getAllPayments(),
@@ -83,8 +96,10 @@ export const superAdminService = {
       superAdminRepository.getUsersWithoutSubscription(opts.usersNoPlanLimit),
       supportRepo.getStats(),
     ]);
+    const salons = await this._withSalonSiteRevenue(rawSalons);
+    const totalRevenue = salons.reduce((sum, s) => sum + (Number((s as { revenue?: unknown }).revenue) || 0), 0);
     return {
-      stats,
+      stats: { ...stats, total_revenue: totalRevenue },
       salons,
       payments,
       frequent_logins: frequentLogins,
@@ -96,7 +111,7 @@ export const superAdminService = {
   // ── SALONS ────────────────────────────────────────────────────────────────────
 
   async getAllSalons(search?: string, kind?: "real" | "dummy") {
-    return superAdminRepository.getAllSalons(search, kind);
+    return this._withSalonSiteRevenue(await superAdminRepository.getAllSalons(search, kind));
   },
 
   // Moves a salon between the Real and Dummy lists.
@@ -238,7 +253,7 @@ export const superAdminService = {
     return {
       salon: {
         id: salon.id, name: salon.name, owner_email: salon.owner_email, owner_name: salon.owner_name,
-        plan_name: salon.plan_name, is_active: salon.is_active,
+        plan_name: salon.plan_name, plan_tier: salon.plan_tier ?? null, is_active: salon.is_active,
         subscription_status: salon.subscription_status,
         subscription_start_date: salon.subscription_start_date,
         subscription_end_date: salon.subscription_end_date,

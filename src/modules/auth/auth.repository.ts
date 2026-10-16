@@ -35,12 +35,17 @@ export const authRepository = {
   async findUserByEmail(email: string) {
     const { rows } = await safeQuery(() =>
       pool.query(
+        // Case-insensitive: login lowercases the typed email, but staff emails
+        // used to be stored exactly as typed (e.g. "Rupesh@gmail.com"), which
+        // made those accounts unfindable — "Invalid credentials" on every login
+        // once their session expired. An exact-case match is still preferred.
         `SELECT u.*, s.custom_permissions
          FROM users u
          LEFT JOIN staff s ON s.user_id = u.id
-         WHERE u.email = $1
+         WHERE LOWER(u.email) = LOWER($1)
+         ORDER BY (u.email = $1) DESC
          LIMIT 1`,
-        [email]
+        [String(email ?? "").trim()]
       ),
     );
     return rows[0] || null;
@@ -287,6 +292,15 @@ export const authRepository = {
    * token's `sid` claim) still alive? False once it was deleted by a newer
    * login, a logout, a password reset, etc., or has expired.
    */
+  /** The session's client type (web | mobile), or null when it no longer exists / has expired. */
+  async getRefreshSessionClientType(id: string): Promise<"web" | "mobile" | null> {
+    const { rows } = await safeQuery(() =>
+      pool.query(`SELECT client_type FROM refresh_tokens WHERE id = $1 AND expires_at > NOW() LIMIT 1`, [id]),
+    );
+    if (!rows.length) return null;
+    return rows[0].client_type === "mobile" ? "mobile" : "web";
+  },
+
   async isRefreshSessionActive(id: string): Promise<boolean> {
     const { rows } = await safeQuery(() =>
       pool.query(`SELECT 1 FROM refresh_tokens WHERE id = $1 AND expires_at > NOW() LIMIT 1`, [id]),

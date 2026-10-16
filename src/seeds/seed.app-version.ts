@@ -27,12 +27,8 @@ const SHIPPED_VERSION = "1.0.0";
 
 const ANDROID_STORE_URL = "https://play.google.com/store/apps/details?id=com.salonox.app";
 
-// The iOS app has no App Store ID yet. Leaving this null is deliberate: a
-// fabricated apps.apple.com/id... link would send users to a dead page or, in
-// the worst case, to somebody else's app. The mobile client already treats a
-// null store URL as "no action available". Fill this in once the app is
-// registered in App Store Connect.
-const IOS_STORE_URL: string | null = null;
+// Public App Store page for App Store Connect app ID 6814854823.
+const IOS_STORE_URL: string | null = "https://apps.apple.com/in/app/id6814854823";
 
 const CONFIGS: UpsertAppVersionBody[] = [
   {

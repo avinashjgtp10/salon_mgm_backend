@@ -481,6 +481,18 @@ router.post(
 );
 
 // ======================================================
+// CLIENT SOURCE REPORT (independent report API)
+// One row per client_source — clients acquired per channel, with the visits
+// and revenue they've generated. Reads clients/sales directly.
+// ======================================================
+
+router.post(
+    "/client-source",
+    ...baseGuard, viewReport("view_report_client_source"),
+    reportsController.getClientSourceReport
+);
+
+// ======================================================
 // CLIENT RATING REPORT (independent report API)
 // Reads the reviews table directly — never calls into the reviews module's
 // service/repository, and never calls the Appointment API/service. Shows

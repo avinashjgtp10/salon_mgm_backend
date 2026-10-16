@@ -466,6 +466,13 @@ export const clientsService = {
             })();
         }
 
+        // Resolve the referrer's name so the checkout screen can show who the code belongs to
+        // right after it's applied (GET does this too; this PATCH response didn't).
+        const referredById = (withRel as any)?.referred_by_client_id;
+        if (withRel && referredById) {
+            (withRel as any).referred_by = await clientsRepository.getReferrerInfo(referredById);
+        }
+
         return withRel as ClientWithRelations;
     },
 

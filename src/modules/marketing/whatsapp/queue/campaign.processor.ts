@@ -6,6 +6,12 @@ import { buildOfferComponents } from '../shared/offer-components'
 import { inboxRepository } from '../inbox/inbox.repository'
 import { webhooksRepository } from '../webhooks/webhooks.repository'
 
+// A template is not sent to the same number again within this many hours (see the cooldown block below).
+const TEMPLATE_COOLDOWN_HOURS = 24
+
+// Last 10 digits of a number, so "+91 98765 43210", "919876543210" and "9876543210" are one person.
+const digitsOf = (phone: unknown): string => String(phone ?? '').replace(/[^0-9]/g, '').slice(-10)
+
 // ── Normalize phone to E.164 ──────────────────────────────────────────────────
 function normalizePhone(phone: string): string {
   const digits = phone.replace(/[^0-9]/g, '')
@@ -80,6 +86,27 @@ export const campaignWorker = new Worker<CampaignJobData>(
       [contactIds]
     )
 
+    // ── 24-hour cooldown: the same template is never sent to the same number twice inside
+    // TEMPLATE_COOLDOWN_HOURS, whichever campaign / resend / schedule it comes from. Only messages that
+    // actually went out count (SENT / DELIVERED / READ) - an earlier FAILED or BLOCKED attempt never
+    // reached the customer, so retrying it is still allowed. One query per batch, matched on the last 10
+    // digits so "+91 98..." and "9198..." are the same person.
+    const batchDigits = contacts.map((c: any) => digitsOf(c.phone)).filter(Boolean)
+    const recentlySent = new Set<string>()
+    if (batchDigits.length > 0) {
+      const { rows: recent } = await pool.query(`
+        SELECT DISTINCT right(regexp_replace(cc.phone, '[^0-9]', '', 'g'), 10) AS digits
+        FROM wa_campaign_contacts cc
+        JOIN wa_campaigns c ON c.id = cc.campaign_id
+        WHERE c.salon_id = $1
+          AND c.template_id = $2
+          AND cc.status IN ('SENT','DELIVERED','READ')
+          AND cc.sent_at > NOW() - make_interval(hours => $3)
+          AND right(regexp_replace(cc.phone, '[^0-9]', '', 'g'), 10) = ANY($4::text[])
+      `, [salonId, campaign.template_id, TEMPLATE_COOLDOWN_HOURS, batchDigits])
+      for (const r of recent) recentlySent.add(r.digits)
+    }
+
     let sent = 0, failed = 0, blocked = 0
 
     for (const contact of contacts) {
@@ -97,6 +124,16 @@ export const campaignWorker = new Worker<CampaignJobData>(
         const claimed = await redisConnection.set(claimKey, '1', 'EX', 6 * 3600, 'NX')
         if (!claimed) continue
       } catch { /* fail open */ }
+
+      if (recentlySent.has(digitsOf(contact.phone))) {
+        await pool.query(
+          `UPDATE wa_campaign_contacts
+           SET status='SKIPPED', error_code='RECENTLY_SENT', error_message=$1, updated_at=NOW()
+           WHERE id=$2`,
+          [`This template was already sent to this number in the last ${TEMPLATE_COOLDOWN_HOURS} hours`, contact.id]
+        )
+        continue
+      }
 
       try {
         const matches    = (campaign.body_text ?? '').match(/\{\{\d+\}\}/g) ?? []

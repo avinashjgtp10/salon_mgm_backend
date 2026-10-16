@@ -1,3 +1,5 @@
+import { rateLimit } from "express-rate-limit";
+import { recognizeAuditProduct, validateRecognition } from "./product-scanner.controller";
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
@@ -414,6 +416,15 @@ router.get(
     ordersController.listSignatures
 );
 
+// Must stay above /orders/:id ("next-number" would otherwise be read as an id).
+router.get(
+    "/orders/next-number",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    createOrder,
+    ordersController.nextNumber
+);
+
 router.post(
     "/orders",
     authMiddleware,
@@ -701,6 +712,21 @@ router.put(
 
 // ─── Product Audit (mock-adjacent workflow — read-only against real stock;
 // see product-audit.repository.ts) ────────────────────────────────────────────
+
+
+// Smart Product Scanner: suggestion-only; audit and stock writes stay in the
+// existing product/audit endpoints. Keys are derived from authenticated users.
+router.post(
+    "/product-audits/:id/recognize",
+    authMiddleware,
+    roleMiddleware("salon_owner", "admin", "staff"),
+    createProductAudit,
+    rateLimit({ windowMs: 60000, limit: 10, standardHeaders: "draft-7", legacyHeaders: false,
+        keyGenerator: (req) => (req as typeof req & { user?: { userId?: string } }).user?.userId ?? "unauthenticated",
+        message: { success: false, message: "Too many scans. Please wait a minute and retry." } }),
+    validateRecognition,
+    recognizeAuditProduct,
+);
 
 router.post(
     "/product-audits",

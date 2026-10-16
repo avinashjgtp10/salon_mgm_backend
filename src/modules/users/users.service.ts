@@ -6,6 +6,33 @@ import logger from "../../config/logger";
 import { getEffectivePermissionsForUser } from "../../middleware/permission.middleware";
 import { rolesRepository } from "../roles/roles.repository";
 
+// A user's WhatsApp Alerts list: the primary users.phone plus up to this many numbers in total.
+const MAX_ALERT_NUMBERS = 5;
+
+// Cleans the extra alert numbers: digits only, 8-15 digits, no blanks, no repeats and none equal to the
+// primary number. Anything wrong is rejected with a message naming the number, never silently dropped.
+function normalizeAlertPhones(input: unknown, primary: string | null | undefined): string[] {
+  const primaryDigits = String(primary ?? "").replace(/\D/g, "");
+  const seen = new Set<string>(primaryDigits ? [primaryDigits] : []);
+  const out: string[] = [];
+  for (const raw of Array.isArray(input) ? input : []) {
+    const digits = String(raw ?? "").replace(/\D/g, "");
+    if (!digits) continue;   // a blank row is just removed
+    if (digits.length < 8 || digits.length > 15 || digits.startsWith("0")) {
+      throw new AppError(400, `"${raw}" is not a valid phone number`, "VALIDATION_ERROR");
+    }
+    if (seen.has(digits)) {
+      throw new AppError(400, digits === primaryDigits ? "The main alerts number can't be added again" : `"${raw}" is entered more than once`, "VALIDATION_ERROR");
+    }
+    seen.add(digits);
+    out.push(digits);
+  }
+  if (out.length + 1 > MAX_ALERT_NUMBERS) {
+    throw new AppError(400, `You can add up to ${MAX_ALERT_NUMBERS - 1} additional alert numbers`, "VALIDATION_ERROR");
+  }
+  return out;
+}
+
 function toSafeUser(u: any, effectivePermissions: Record<string, boolean> | null = null): SafeUser {
   const fullName =
     (u.full_name?.trim()) ||
@@ -19,6 +46,7 @@ function toSafeUser(u: any, effectivePermissions: Record<string, boolean> | null
     id: u.id,
     email: u.email,
     phone: u.phone ?? null,
+    alertPhones: u.alert_phones ?? [],
     firstName: u.first_name ?? "",
     lastName: u.last_name ?? null,
     fullName,
@@ -31,8 +59,6 @@ function toSafeUser(u: any, effectivePermissions: Record<string, boolean> | null
     createdAt: u.created_at,
     updatedAt: u.updated_at,
     businessName: u.business_name ?? null,
-    address: u.address ?? null,
-    country: u.country ?? null,
     countryCode: u.country_code ?? null,
     isOnboardingComplete: u.is_onboarding_complete ?? false,
     custom_permissions: u.custom_permissions ?? null,
@@ -115,6 +141,12 @@ export const usersService = {
     if (input.phone !== undefined)
       updates["phone"] = input.phone || null;
 
+    if ((input as any).alertPhones !== undefined) {
+      // Compared against the primary number being saved now, else the one already stored.
+      const primary = input.phone !== undefined ? input.phone : (await usersRepo.findById(id))?.phone;
+      updates["alert_phones"] = normalizeAlertPhones((input as any).alertPhones, primary);
+    }
+
     if (input.avatarUrl !== undefined)
       updates["avatar_url"] = input.avatarUrl;
 
@@ -128,11 +160,7 @@ export const usersService = {
     if ((input as any).businessName !== undefined)
       updates["business_name"] = (input as any).businessName || null;
 
-    if ((input as any).address !== undefined)
-      updates["address"] = (input as any).address || null;
 
-    if ((input as any).country !== undefined)
-      updates["country"] = (input as any).country || null;
 
     if ((input as any).countryCode !== undefined)
       updates["country_code"] = (input as any).countryCode || null;
