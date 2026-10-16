@@ -1270,6 +1270,9 @@ export interface RewardPointsReportResponse {
 export interface EwalletReportFilters {
     search?: string;
     as_of_date?: string;
+    /** Wallet activity range (YYYY-MM-DD). Blank = all time. Balance is shown as of end_date. */
+    start_date?: string;
+    end_date?: string;
     status?: string;
     balance_min?: number;
     balance_max?: number;
