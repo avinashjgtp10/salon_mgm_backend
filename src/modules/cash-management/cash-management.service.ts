@@ -5,6 +5,7 @@ import { salonsRepository } from "../salons/salons.repository";
 import { usersRepo } from "../users/users.repository";
 import { whatsappAutomationService } from "../whatsapp-automation/whatsapp-automation.service";
 import { whatsappAutomationRepository } from "../whatsapp-automation/whatsapp-automation.repository";
+import { configRepository } from "../marketing/whatsapp/config/config.repository";
 import logger from "../../config/logger";
 import type {
   CloseCounterBody,
@@ -300,6 +301,13 @@ export const cashManagementService = {
   // is a deliberate user action that needs a real success/failure result to
   // show a toast for, not a background side effect.
   async resendClosedCounterMessage(salonId: string, dateIso: string) {
+    // No verified Meta connection means trigger() returns silently without writing any log, so the
+    // wait loop below would find nothing and report "in progress" — a false success. Say so instead.
+    const waConfig = await configRepository.findBySalonId(salonId);
+    if (!waConfig?.is_verified) {
+      throw new AppError(400, "WhatsApp (Meta) is not connected for this salon, so the message can't be sent.", "WHATSAPP_NOT_CONNECTED");
+    }
+
     const counter = await cashManagementRepository.findClosedCounterByOpenedDate(salonId, dateIso);
     if (!counter) {
       throw new AppError(404, `No closed cash counter found for ${dateIso}`, "COUNTER_NOT_FOUND");

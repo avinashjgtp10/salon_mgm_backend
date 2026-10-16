@@ -65,8 +65,18 @@ export const salonsService = {
 
         const finalSlug = await ensureUniqueSlug(body.slug?.trim() || body.business_name);
 
+        // The business address lives on the salon only. Registration collected an address/country
+        // on the user row before any salon existed — carry those over so the salon starts with them
+        // (anything sent in the onboarding body wins).
+        const registrant = await authRepository.findUserById(ownerId);
+
         try {
-            const salon = await salonsRepository.create(ownerId, { ...body, slug: finalSlug });
+            const salon = await salonsRepository.create(ownerId, {
+                ...body,
+                slug: finalSlug,
+                address: body.address || registrant?.address || undefined,
+                country: body.country || registrant?.country || undefined,
+            });
 
             // New accounts go from sign-up straight to the subscription page, so
             // a plan may already be paid for. Apply it to this brand-new salon
