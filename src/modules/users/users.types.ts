@@ -35,8 +35,6 @@ export type SafeUser = {
     updatedAt: string;
     // Extended profile fields
     businessName: string | null;
-    address: string | null;
-    country: string | null;
     countryCode: string | null;
     isOnboardingComplete: boolean;
     custom_permissions: Record<string, boolean> | null;

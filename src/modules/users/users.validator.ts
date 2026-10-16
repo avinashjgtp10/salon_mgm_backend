@@ -69,8 +69,6 @@ export const updateUserSchema = z.object({
     role: z.enum(["salon_owner", "staff", "client", "admin"]).optional(),
     // Profile fields
     businessName: z.string().trim().max(255).optional().nullable(),
-    address: z.string().trim().max(500).optional().nullable(),
-    country: z.string().trim().max(100).optional().nullable(),
     countryCode: z.string().trim().max(10).optional().nullable(),
   }),
 });

@@ -59,8 +59,6 @@ function toSafeUser(u: any, effectivePermissions: Record<string, boolean> | null
     createdAt: u.created_at,
     updatedAt: u.updated_at,
     businessName: u.business_name ?? null,
-    address: u.address ?? null,
-    country: u.country ?? null,
     countryCode: u.country_code ?? null,
     isOnboardingComplete: u.is_onboarding_complete ?? false,
     custom_permissions: u.custom_permissions ?? null,
@@ -162,11 +160,7 @@ export const usersService = {
     if ((input as any).businessName !== undefined)
       updates["business_name"] = (input as any).businessName || null;
 
-    if ((input as any).address !== undefined)
-      updates["address"] = (input as any).address || null;
 
-    if ((input as any).country !== undefined)
-      updates["country"] = (input as any).country || null;
 
     if ((input as any).countryCode !== undefined)
       updates["country_code"] = (input as any).countryCode || null;
