@@ -811,6 +811,9 @@ export const bookingsService = {
                     last_name: nameParts.slice(1).join(" ") || null,
                     email: body.client_email || null,
                     phone_number: phoneDigits,
+                    // Only a client created here is stamped; an existing client matched
+                    // by phone keeps whatever source they already have.
+                    client_source: "online_booking",
                 },
                 body.salon_id,
                 { code: referralCode, rewardStatus: null }

@@ -4232,3 +4232,33 @@ export interface ConsumableAnalyticsReportResponse {
         services: ConsumableAnalyticsFilterOption[];
     };
 }
+
+// ======================================================
+// CLIENT SOURCE REPORT (independent report API)
+// One row per client_source — how many clients each acquisition channel
+// brought in (by the date the client was created), and the visits/revenue
+// those same clients have generated.
+// ======================================================
+
+export interface ClientSourceReportFilters {
+    start_date?: string;
+    end_date?: string;
+    // raw client_source values; 'not_set' selects clients with no source
+    sources?: string[];
+}
+
+export interface ClientSourceReportRow {
+    source: string;
+    clients: number;
+    total_visits: number;
+    revenue: number;
+}
+
+export interface ClientSourceReportResponse {
+    rows: ClientSourceReportRow[];
+    stats: {
+        total_clients: number;
+        total_visits: number;
+        total_revenue: number;
+    };
+}

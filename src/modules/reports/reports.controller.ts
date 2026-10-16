@@ -2369,6 +2369,36 @@ async getReferralReport(
 },
 
 // ======================================================
+// CLIENT SOURCE REPORT (independent report API)
+// POST /api/report/client-source
+// ======================================================
+
+async getClientSourceReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            sources: Array.isArray(body.sources)
+                ? body.sources.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+        };
+
+        const data = await reportsService.getClientSourceReport(salonId, filters);
+
+        sendSuccess(res, 200, data, "Client source report fetched successfully");
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
 // CUSTOMER SPEND SEGMENTS REPORT (independent report API)
 // POST /api/report/customer-spend
 // ======================================================
