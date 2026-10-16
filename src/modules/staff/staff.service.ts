@@ -19,6 +19,8 @@ import { salonsRepository } from "../salons/salons.repository";
 import { authService } from "../auth/auth.service";
 import { commissionCalculationService } from "../commission/commissionCalculation.service";
 import { tipCalculationService } from "../tips/tipCalculation.service";
+
+const normalizeEmail = (email: string) => email.trim().toLowerCase();
 import {
     Staff, StaffAddress, StaffEmergencyContact, StaffLeave, StaffSchedule,
     StaffWageSettings, StaffCommissionSettings, StaffPayRunSettings,
@@ -110,7 +112,9 @@ export const staffService = {
     async create(params: {
         salonId: string; requesterUserId: string; requesterRole?: string; body: CreateStaffBody;
     }): Promise<{ staffId: string }> {
-        const { salonId, requesterUserId, requesterRole, body } = params;
+        const { salonId, requesterUserId, requesterRole } = params;
+        // Login looks accounts up by lowercase email, so store it that way.
+        const body = { ...params.body, ...(params.body.email ? { email: normalizeEmail(params.body.email) } : {}) };
         console.log("[DEBUG] staffService.create - params:", { salonId, requesterUserId, requesterRole, email: body.email });
 
         try {
@@ -198,6 +202,9 @@ export const staffService = {
                     } as any);
                 } else {
                     await authRepository.updateUserRole(user.id, "staff");
+                    // The password the owner just set must be the one login checks;
+                    // an existing (e.g. invite placeholder) account kept its old hash.
+                    await authRepository.updatePassword(user.id, passwordHash);
                 }
                 await staffRepository.linkUserToStaff(staff.id, user.id, body.first_name, body.last_name);
                 await authRepository.markUserVerified(user.id);
@@ -275,6 +282,7 @@ export const staffService = {
 
         // Split out blocked_times — handled separately, not a staff table column
         const { blocked_times: blockedTimesToCreate, ...staffPatch } = patch as any;
+        if (typeof staffPatch.email === "string") staffPatch.email = normalizeEmail(staffPatch.email);
 
         // Email is now editable from the Edit Staff screen. Only act on it when
         // it's actually changing — this keeps clients that still echo the
