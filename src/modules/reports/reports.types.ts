@@ -3571,6 +3571,8 @@ export interface OnlineAppointmentReportFilters {
 
 export interface OnlineAppointmentReportRow extends AppointmentDetailReportRow {
     client_phone: string | null;
+    /** The salon's running Booking ID (1, 2, 3 ...). null for bookings created before booking numbers existed. */
+    booking_number: number | null;
 }
 export type OnlineAppointmentReportPagination = AppointmentDetailReportPagination;
 
