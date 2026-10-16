@@ -133,4 +133,7 @@ export interface DashboardCombined {
   // "Monthly Projection & Growth" card — null only if its query failed (the
   // card then shows its retry state); always current IST month.
   monthlyProjection: MonthlyProjection | null;
+  // True only when this salon has a verified WhatsApp (Meta) connection. The Overall Collection
+  // card's "Resend" button is shown only then — without a connection a resend can never go out.
+  whatsappConnected: boolean;
 }

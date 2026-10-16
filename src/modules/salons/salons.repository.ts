@@ -436,9 +436,10 @@ export const salonsRepository = {
         const { rows } = await pool.query(
             `INSERT INTO salons (
         owner_id, business_name, business_type, slug, description,
-        logo_url, banner_url, email, phone, website_url, gst_number, pan_number
+        logo_url, banner_url, email, phone, website_url, gst_number, pan_number,
+        address, address_line2, city, state, country, pincode
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
       RETURNING *`,
             [
                 ownerId,
@@ -453,6 +454,12 @@ export const salonsRepository = {
                 data.website_url ?? null,
                 data.gst_number ?? null,
                 data.pan_number ?? null,
+                data.address ?? null,
+                data.address_line2 ?? null,
+                data.city ?? null,
+                data.state ?? null,
+                data.country ?? null,
+                data.pincode ?? null,
             ]
         );
 
