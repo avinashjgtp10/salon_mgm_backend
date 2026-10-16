@@ -4929,36 +4929,59 @@ async getRewardPointsReportRows(
 _buildEwalletWhere(
   salonId: string,
   filters: {
-    search?: string; as_of_date?: string; status?: string;
+    search?: string; as_of_date?: string; start_date?: string; end_date?: string; status?: string;
     balance_min?: number; balance_max?: number;
   }
-): { where: string; values: any[]; nextIndex: number } {
+): { where: string; values: any[]; nextIndex: number; balanceExpr: string } {
   const values: any[] = [salonId];
   const where = ["c.salon_id = $1"];
   let idx = 2;
 
-  // Wallet balance is a live running total (clients.ewallet_balance) — there's
-  // no historical snapshot to reconstruct, so "as of date" only narrows which
-  // clients are included (those who existed by that date), not the balance
-  // value itself. No lower bound: every client registered on/before the date
-  // is in scope, so existing clients never vanish just because they signed
-  // up before some earlier "from" date (the previous From/To range bug).
-  if (filters.as_of_date) {
-    where.push(`c.created_at < ($${idx++}::date + interval '1 day')`);
-    values.push(filters.as_of_date);
+  // Date range = wallet ACTIVITY in the period: only clients with at least one e-wallet ledger entry
+  // (top-up, redemption, adjustment) between start_date and end_date are listed, and their balance is
+  // the balance as of the END of the range, read from the ledger's running balance_after. Previously
+  // the range only trimmed clients by sign-up date and always showed today's live balance, so picking
+  // a different range appeared to do nothing. A blank range ("All time") applies no date filter.
+  // as_of_date (the old single-date knob) still works as an end date with no start.
+  const startDate = filters.start_date || undefined;
+  const endDate = filters.end_date || filters.as_of_date || undefined;
+
+  if (endDate) {
+    where.push(`c.created_at < (($${idx++}::date + interval '1 day')::timestamp AT TIME ZONE 'Asia/Kolkata')`);
+    values.push(endDate);
   }
+  if (startDate || endDate) {
+    const conds: string[] = ["l.client_id = c.id"];
+    if (startDate) { conds.push(`l.created_at >= ($${idx++}::date::timestamp AT TIME ZONE 'Asia/Kolkata')`); values.push(startDate); }
+    if (endDate)   { conds.push(`l.created_at < (($${idx++}::date + interval '1 day')::timestamp AT TIME ZONE 'Asia/Kolkata')`); values.push(endDate); }
+    where.push(`EXISTS (SELECT 1 FROM ewallet_ledger l WHERE ${conds.join(" AND ")})`);
+  }
+
+  // Balance as of the end of the range. Today / no end date = the live balance. A past end date reads the
+  // last ledger row up to that day (0 when the client had no ledger activity by then).
+  const todayIso = new Date().toISOString().slice(0, 10);
+  let balanceExpr = "COALESCE(c.ewallet_balance, 0)";
+  if (endDate && endDate < todayIso) {
+    balanceExpr = `COALESCE((
+      SELECT l2.balance_after FROM ewallet_ledger l2
+      WHERE l2.client_id = c.id AND l2.created_at < (($${idx++}::date + interval '1 day')::timestamp AT TIME ZONE 'Asia/Kolkata')
+      ORDER BY l2.created_at DESC LIMIT 1
+    ), 0)`;
+    values.push(endDate);
+  }
+
   // Same has-balance/no-balance split as the stats card's with_balance count.
   if (filters.status === "with_balance") {
-    where.push(`COALESCE(c.ewallet_balance, 0) > 0`);
+    where.push(`${balanceExpr} > 0`);
   } else if (filters.status === "no_balance") {
-    where.push(`COALESCE(c.ewallet_balance, 0) = 0`);
+    where.push(`${balanceExpr} = 0`);
   }
   if (filters.balance_min != null) {
-    where.push(`COALESCE(c.ewallet_balance, 0) >= $${idx++}`);
+    where.push(`${balanceExpr} >= $${idx++}`);
     values.push(filters.balance_min);
   }
   if (filters.balance_max != null) {
-    where.push(`COALESCE(c.ewallet_balance, 0) <= $${idx++}`);
+    where.push(`${balanceExpr} <= $${idx++}`);
     values.push(filters.balance_max);
   }
   if (filters.search?.trim()) {
@@ -4971,20 +4994,20 @@ _buildEwalletWhere(
     idx++;
   }
 
-  return { where: where.join(" AND "), values, nextIndex: idx };
+  return { where: where.join(" AND "), values, nextIndex: idx, balanceExpr };
 },
 
 async getEwalletReportStats(
   salonId: string,
-  filters: { search?: string; as_of_date?: string; status?: string; balance_min?: number; balance_max?: number }
+  filters: { search?: string; as_of_date?: string; start_date?: string; end_date?: string; status?: string; balance_min?: number; balance_max?: number }
 ): Promise<EwalletReportStats> {
-  const { where, values } = this._buildEwalletWhere(salonId, filters);
+  const { where, values, balanceExpr } = this._buildEwalletWhere(salonId, filters);
 
   const query = `
     SELECT
       COUNT(*)::int AS total_clients,
-      COUNT(*) FILTER (WHERE COALESCE(c.ewallet_balance, 0) > 0)::int AS with_balance,
-      COALESCE(SUM(c.ewallet_balance), 0) AS total_wallet_value
+      COUNT(*) FILTER (WHERE ${balanceExpr} > 0)::int AS with_balance,
+      COALESCE(SUM(${balanceExpr}), 0) AS total_wallet_value
     FROM clients c
     WHERE ${where}
   `;
@@ -5004,7 +5027,7 @@ async getEwalletReportStats(
 async getEwalletReportRows(
   salonId: string,
   filters: {
-    search?: string; as_of_date?: string; status?: string;
+    search?: string; as_of_date?: string; start_date?: string; end_date?: string; status?: string;
     balance_min?: number; balance_max?: number;
     page?: number; limit?: number; is_export?: boolean;
   }
@@ -5012,7 +5035,7 @@ async getEwalletReportRows(
   items: EwalletReportRow[];
   pagination: { total: number; page: number; limit: number; total_pages: number };
 }> {
-  const { where, values, nextIndex } = this._buildEwalletWhere(salonId, filters);
+  const { where, values, nextIndex, balanceExpr } = this._buildEwalletWhere(salonId, filters);
   let idx = nextIndex;
 
   const page = Math.max(1, Number(filters.page ?? 1));
@@ -5028,11 +5051,11 @@ async getEwalletReportRows(
       COALESCE(NULLIF(TRIM(c.full_name), ''), '—') AS client_name,
       COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS phone,
       COALESCE(NULLIF(c.email, ''), '—') AS email,
-      COALESCE(c.ewallet_balance, 0) AS balance,
+      ${balanceExpr} AS balance,
       COUNT(*) OVER() AS total_count
     FROM clients c
     WHERE ${where}
-    ORDER BY COALESCE(c.ewallet_balance, 0) DESC
+    ORDER BY ${balanceExpr} DESC
     ${limitClause}
   `;
 
