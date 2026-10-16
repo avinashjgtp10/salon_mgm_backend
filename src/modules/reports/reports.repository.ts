@@ -13668,12 +13668,14 @@ async getOnlineAppointmentReport(
       GROUP BY e.id
     )
     SELECT
-      id, appointment_date, time, booked_date, client_name, client_phone,
-      item_name, item_type, staff_name, duration, amount,
-      payment_method, payment_status,
+      g.id, ap.booking_number, g.appointment_date, g.time, g.booked_date, g.client_name, g.client_phone,
+      g.item_name, g.item_type, g.staff_name, g.duration, g.amount,
+      g.payment_method, g.payment_status,
       COUNT(*) OVER() AS total_count
-    FROM grouped
-    ORDER BY scheduled_at DESC
+    FROM grouped g
+    -- booking_number is the salon's running Booking ID (1, 2, 3 ...); NULL for bookings made before it existed.
+    LEFT JOIN appointments ap ON ap.id = g.id
+    ORDER BY g.scheduled_at DESC
     ${limitClause}
   `;
 
@@ -13681,6 +13683,7 @@ async getOnlineAppointmentReport(
   const total = rows.length ? Number(rows[0].total_count) : 0;
   const items: OnlineAppointmentReportRow[] = rows.map((row: any) => ({
     id: row.id,
+    booking_number: row.booking_number != null ? Number(row.booking_number) : null,
     appointment_date: row.appointment_date,
     time: row.time,
     booked_date: row.booked_date,
