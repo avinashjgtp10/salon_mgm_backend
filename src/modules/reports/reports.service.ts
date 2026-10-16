@@ -289,6 +289,8 @@ import {
     LostCustomersReportFilters,
     LostCustomersReportResponse,
     ReferralReportFilters,
+    ClientSourceReportFilters,
+    ClientSourceReportResponse,
     ReferralReportResponse,
     PaymentCollectionReportFilters,
     PaymentCollectionReportResponse,
@@ -2025,6 +2027,25 @@ async getReferralReport(
         rows: rowsResult.items,
         pagination: rowsResult.pagination,
         stats,
+    };
+},
+
+// ======================================================
+// CLIENT SOURCE REPORT (independent report API)
+// ======================================================
+
+async getClientSourceReport(
+    salonId: string,
+    filters: ClientSourceReportFilters
+): Promise<ClientSourceReportResponse> {
+    const rows = await reportsRepository.getClientSourceReportRows(salonId, filters);
+    return {
+        rows,
+        stats: {
+            total_clients: rows.reduce((s, r) => s + r.clients, 0),
+            total_visits: rows.reduce((s, r) => s + r.total_visits, 0),
+            total_revenue: rows.reduce((s, r) => s + r.revenue, 0),
+        },
     };
 },
 

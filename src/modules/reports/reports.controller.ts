@@ -1430,6 +1430,8 @@ async getEwalletReport(
         const filters = {
             search: asString(body.search),
             as_of_date: asString(body.as_of_date),
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
             status: asString(body.status),
             balance_min: body.balance_min !== undefined ? Number(body.balance_min) : undefined,
             balance_max: body.balance_max !== undefined ? Number(body.balance_max) : undefined,
@@ -2361,6 +2363,36 @@ async getReferralReport(
             data,
             "Referral report fetched successfully"
         );
+    } catch (error) {
+        next(error);
+    }
+},
+
+// ======================================================
+// CLIENT SOURCE REPORT (independent report API)
+// POST /api/report/client-source
+// ======================================================
+
+async getClientSourceReport(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+): Promise<void> {
+    try {
+        const salonId = await getSalonId(req);
+        const body = req.body ?? {};
+
+        const filters = {
+            start_date: asString(body.start_date),
+            end_date: asString(body.end_date),
+            sources: Array.isArray(body.sources)
+                ? body.sources.map((v: unknown) => String(v)).filter(Boolean)
+                : undefined,
+        };
+
+        const data = await reportsService.getClientSourceReport(salonId, filters);
+
+        sendSuccess(res, 200, data, "Client source report fetched successfully");
     } catch (error) {
         next(error);
     }

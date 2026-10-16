@@ -16,6 +16,9 @@ const TIER_LIMIT_MAP: Record<string, number> = {
   TIER_2K:        2000,
   TIER_10K:       10000,
   TIER_100K:      100000,
+  // The frontend reads >= 999999999 as "Unlimited". Without this entry an unlimited tier mapped to 0 and the
+  // sync kept the old stored limit instead.
+  TIER_UNLIMITED: 999999999,
   NOT_APPLICABLE: 0,
   NOT_SET:        0,
 }

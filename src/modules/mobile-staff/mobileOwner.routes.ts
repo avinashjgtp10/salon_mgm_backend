@@ -15,4 +15,9 @@ router.get("/staff/calendar-access", mobileOwnerController.listCalendarAccess);
 router.get("/staff/:staffId/calendar-access", mobileOwnerController.getCalendarAccess);
 router.put("/staff/:staffId/calendar-access", mobileOwnerController.setCalendarAccess);
 
+// Per-staff "Product Audit access" switch — see mobileProductAuditAccess.ts.
+router.get("/staff/product-audit-access", mobileOwnerController.listProductAuditAccess);
+router.get("/staff/:staffId/product-audit-access", mobileOwnerController.getProductAuditAccess);
+router.put("/staff/:staffId/product-audit-access", mobileOwnerController.setProductAuditAccess);
+
 export default router;

@@ -7,6 +7,11 @@ import {
   listStaffMobileCalendarAccess,
   setStaffMobileCalendarAccess,
 } from "./mobileCalendarAccess";
+import {
+  getStaffMobileProductAuditAccess,
+  listStaffMobileProductAuditAccess,
+  setStaffMobileProductAuditAccess,
+} from "./mobileProductAuditAccess";
 
 type AuthRequest = Request & { user?: { userId: string; role?: string; salonId?: string | null } };
 
@@ -45,6 +50,33 @@ export const mobileOwnerController = {
       }
       const calendarAccess = await setStaffMobileCalendarAccess(staffId, getSalonId(req), enabled);
       return sendSuccess(res, 200, { staffId, calendarAccess }, "Calendar access updated successfully");
+    } catch (err) { return next(err); }
+  },
+
+  async listProductAuditAccess(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const items = await listStaffMobileProductAuditAccess(getSalonId(req));
+      return sendSuccess(res, 200, { items }, "Product audit access fetched successfully");
+    } catch (err) { return next(err); }
+  },
+
+  async getProductAuditAccess(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const staffId = getStaffId(req);
+      const productAuditAccess = await getStaffMobileProductAuditAccess(staffId, getSalonId(req));
+      return sendSuccess(res, 200, { staffId, productAuditAccess }, "Product audit access fetched successfully");
+    } catch (err) { return next(err); }
+  },
+
+  async setProductAuditAccess(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const staffId = getStaffId(req);
+      const enabled = (req.body as { productAuditAccess?: unknown } | undefined)?.productAuditAccess;
+      if (typeof enabled !== "boolean") {
+        throw new AppError(400, "productAuditAccess is required and must be a boolean", "VALIDATION_ERROR");
+      }
+      const productAuditAccess = await setStaffMobileProductAuditAccess(staffId, getSalonId(req), enabled);
+      return sendSuccess(res, 200, { staffId, productAuditAccess }, "Product audit access updated successfully");
     } catch (err) { return next(err); }
   },
 };

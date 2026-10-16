@@ -329,7 +329,12 @@ export const appointmentsRepository = {
 
     async create(data: CreateAppointmentBody, createdBy: string): Promise<Appointment> {
         const { rows } = await pool.query(
-            `INSERT INTO appointments (
+            `WITH n AS (
+              INSERT INTO salon_booking_counters (salon_id, last_number) VALUES ($1, 1)
+              ON CONFLICT (salon_id) DO UPDATE SET last_number = salon_booking_counters.last_number + 1
+              RETURNING last_number
+            )
+            INSERT INTO appointments (
                 salon_id, branch_id, client_id, staff_id, service_id,
                 title, notes, staff_alert, status,
                 scheduled_at, duration_minutes,
@@ -337,7 +342,7 @@ export const appointmentsRepository = {
                 colour, created_by, source,
                 services, package_items, product_items, membership_items,
                 discount_value, discount_type, discount_applies_to, ex_charges, tip_amount, tip_added_to_salon, tip_breakdown, gst_percent,
-                apply_membership_wallet, include_gst
+                apply_membership_wallet, include_gst, booking_number
             )
             VALUES (
                 $1, $2, $3, $4, $5,
@@ -347,7 +352,7 @@ export const appointmentsRepository = {
                 $12, $13, $28,
                 $14::jsonb, $15::jsonb, $16::jsonb, $17::jsonb,
                 $18, $19, $20::jsonb, $21, $22, $23, $24::jsonb, $25,
-                $26, $27
+                $26, $27, (SELECT last_number FROM n)
             )
             RETURNING *`,
             [

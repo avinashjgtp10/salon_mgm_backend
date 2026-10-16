@@ -1,4 +1,5 @@
 import { appVersionRepository } from "./app-version.repository";
+import { getLiveStoreVersion } from "./store-version";
 import { AppError } from "../../middleware/error.middleware";
 import {
   AppEnvironment,
@@ -49,6 +50,12 @@ export const compareVersions = (left?: string | null, right?: string | null): nu
 // if a row predates that constraint or is written out of band.
 const canForceUpdate = (environment: AppEnvironment) => environment === "production";
 
+// Public App Store page for the production app (App Store Connect app ID
+// 6814854823). Used when the production row has no ios_store_url, so the
+// mobile "Update" button can open the App Store without a database edit.
+// Dev/QA builds are not on any store, so they never get this fallback.
+export const PRODUCTION_IOS_STORE_URL = "https://apps.apple.com/in/app/id6814854823";
+
 // Returned when no configuration row exists for the requested pair. Missing
 // configuration must never be an update blocker: latestVersion is null, which
 // the mobile client reads as "nothing to do", and forceUpdate is false.
@@ -84,7 +91,7 @@ export const toPublicPayload = (
     minimumSupportedVersion: row.minimum_supported_version,
     forceUpdate,
     androidStoreUrl: row.android_store_url ?? null,
-    iosStoreUrl: row.ios_store_url ?? null,
+    iosStoreUrl: row.ios_store_url ?? (row.environment === "production" ? PRODUCTION_IOS_STORE_URL : null),
     title: row.title ?? null,
     message: row.message ?? null,
     releaseNotes: Array.isArray(row.release_notes) ? row.release_notes : [],
@@ -110,6 +117,16 @@ export const toPublicPayload = (
 
   return payload;
 };
+
+/**
+ * Advertises the version a store is actually serving when it is newer than
+ * the stored one. Never lowers latest_version, and never touches the minimum
+ * supported version or force_update, so it can't force anyone to update.
+ */
+export const withLiveStoreVersion = (row: AppVersionRow, liveVersion: string | null): AppVersionRow =>
+  liveVersion && compareVersions(liveVersion, row.latest_version) > 0
+    ? { ...row, latest_version: liveVersion }
+    : row;
 
 export const appVersionService = {
   async announceProductionAndroidRelease(version: string): Promise<AppVersionRow> {
@@ -144,7 +161,11 @@ export const appVersionService = {
       return buildUnconfiguredPayload(platform, environment);
     }
 
-    return toPublicPayload(row, currentVersion);
+    // Production apps are announced automatically once a store is really
+    // serving a newer version; dev/QA builds are not on any store.
+    const liveVersion = environment === "production" ? await getLiveStoreVersion(platform) : null;
+
+    return toPublicPayload(withLiveStoreVersion(row, liveVersion), currentVersion);
   },
 
   async list(): Promise<AppVersionRow[]> {

@@ -12,6 +12,7 @@ import {
 import type { Staff } from "../staff/staff.types";
 import type { MobileStaffContext, MobileStaffRequest } from "./mobileStaff.middleware";
 import { getStaffMobileCalendarAccess } from "./mobileCalendarAccess";
+import { getStaffMobileProductAuditAccess } from "./mobileProductAuditAccess";
 
 // Every handler reads identity ONLY from req.staff (set by requireMobileStaff
 // from the verified JWT + server-side staff row). No handler reads a staff,
@@ -100,6 +101,16 @@ export const mobileStaffController = {
       const { id, salonId } = getStaff(req);
       const calendarAccess = await getStaffMobileCalendarAccess(id, salonId);
       return sendSuccess(res, 200, { calendarAccess }, "Calendar access fetched successfully");
+    } catch (err) { return next(err); }
+  },
+
+  // Owner-controlled switch (see mobileProductAuditAccess.ts). The app reads it
+  // to decide whether this staff member sees and can perform Product Audits.
+  async productAuditAccess(req: MobileStaffRequest, res: Response, next: NextFunction) {
+    try {
+      const { id, salonId } = getStaff(req);
+      const productAuditAccess = await getStaffMobileProductAuditAccess(id, salonId);
+      return sendSuccess(res, 200, { productAuditAccess }, "Product audit access fetched successfully");
     } catch (err) { return next(err); }
   },
 
