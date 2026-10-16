@@ -40,7 +40,7 @@ const parseListFilters = (req: AuthRequest) => {
 
 // Same shape as parseListFilters, sourced from a JSON body instead of query
 // params — used by POST /products/search.
-const parseSearchFilters = (req: AuthRequest) => {
+export const parseSearchFilters = (req: AuthRequest) => {
     const { search, category_id, brand_id, product_type, retail_sales_enabled, min_price, max_price, stock, sort_by, sort_order } = req.body ?? {};
     return {
         search: search as string | undefined,

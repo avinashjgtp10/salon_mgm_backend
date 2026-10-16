@@ -5,6 +5,7 @@ import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { requirePermission, requireAnyPermission } from "../../middleware/permission.middleware";
 import { productsController, brandsController } from "./products.controller";
+import { productsBootstrapController } from "./products.bootstrap";
 import {
     validateCreateProduct,
     validateUpdateProduct,
@@ -80,6 +81,10 @@ router.post("/import", authMiddleware, ownerAdminStaff, ...importProducts, impor
 
 router.get("/", authMiddleware, ownerAdminStaff, viewProducts, validateListQuery, productsController.list);
 router.post("/search", authMiddleware, ownerAdminStaff, viewProducts, validateSearchBody, productsController.search);
+// One request per screen: the Products list (rows + dropdown lookups) and the Add/Edit Product form
+// (every dropdown + the product being edited). Both are declared before "/:id".
+router.post("/list-view", authMiddleware, ownerAdminStaff, viewProducts, validateSearchBody, productsBootstrapController.listView);
+router.get("/product-list", authMiddleware, ownerAdminStaff, viewProducts, productsBootstrapController.formData);
 router.get("/:id", authMiddleware, ownerAdminStaff, viewProducts, productsController.getById);
 router.post("/", authMiddleware, ownerAdminStaff, createProductsOrConsumable, uploadMiddleware.array("photos", 5), validateCreateProduct, productsController.create);
 router.patch("/:id", authMiddleware, ownerAdminStaff, editProductsOrConsumable, validateUpdateProduct, productsController.update);
