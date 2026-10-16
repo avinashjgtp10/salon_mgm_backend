@@ -42,7 +42,7 @@ async function canAny(req: AuthRequest, keys: string[]): Promise<boolean> {
 
 // Gates mirror the route each lookup used to come from.
 const PERMS = {
-    brands:     ["manage_my_brands", "view_products", "create_sales", "manage_calendar"],
+    brands:     ["view_products", "create_sales", "manage_calendar"],
     categories: ["view_services", "create_sales", "manage_calendar"],
     suppliers:  ["view_suppliers"],
     branches:   ["view_branches", "stock_ledger_adjustment", "edit_stock_ledger", "create_product_audit"],
