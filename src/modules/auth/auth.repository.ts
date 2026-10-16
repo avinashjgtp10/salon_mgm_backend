@@ -35,12 +35,17 @@ export const authRepository = {
   async findUserByEmail(email: string) {
     const { rows } = await safeQuery(() =>
       pool.query(
+        // Case-insensitive: login lowercases the typed email, but staff emails
+        // used to be stored exactly as typed (e.g. "Rupesh@gmail.com"), which
+        // made those accounts unfindable — "Invalid credentials" on every login
+        // once their session expired. An exact-case match is still preferred.
         `SELECT u.*, s.custom_permissions
          FROM users u
          LEFT JOIN staff s ON s.user_id = u.id
-         WHERE u.email = $1
+         WHERE LOWER(u.email) = LOWER($1)
+         ORDER BY (u.email = $1) DESC
          LIMIT 1`,
-        [email]
+        [String(email ?? "").trim()]
       ),
     );
     return rows[0] || null;
