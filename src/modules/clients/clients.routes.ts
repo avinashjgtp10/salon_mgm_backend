@@ -3,7 +3,6 @@ import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { requirePermission, requireAnyPermission } from "../../middleware/permission.middleware";
-import { requirePlanFeature } from "../../middleware/planFeature.middleware";
 import { uploadMiddleware } from "../../middleware/upload.middleware";
 import { clientsController } from "./clients.controller";
 import { upload } from "./clients.upload";
@@ -40,11 +39,7 @@ const viewClients = requireAnyPermission(["view_clients", "create_sales", "creat
 const editClients = requireAnyPermission(["edit_clients", "quick_sale_edit_client"]);
 const viewClientHistory = requireAnyPermission(["view_client_history", "quick_sale_client_history"]);
 
-// featureKey "clients" — Basic tier and up by default, but a super admin can
-// still revoke it per salon via feature_overrides. See inventory.routes.ts
-// for the same router.use() pattern and why authMiddleware needs repeating
-// here even though each route below also calls it.
-router.use(authMiddleware, requirePlanFeature("clients"));
+router.use(authMiddleware);
 
 // LIST + CREATE
 router.get("/", authMiddleware, ownerAdminStaff, viewClients, validateClientsListQuery, clientsController.list);
