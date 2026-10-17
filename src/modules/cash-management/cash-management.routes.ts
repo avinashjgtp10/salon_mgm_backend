@@ -3,7 +3,6 @@ import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { requireSalon } from "../../middleware/salon.middleware";
-import { requirePlanFeature } from "../../middleware/planFeature.middleware";
 import { requirePermission } from "../../middleware/permission.middleware";
 import { cashManagementController } from "./cash-management.controller";
 
@@ -24,9 +23,7 @@ const addExpense = requirePermission("add_expense");
 const editExpense = requirePermission("edit_expense");
 const deleteExpense = requirePermission("delete_expense");
 
-// featureKey "cash_management" — Basic tier and up by default, revocable per
-// salon via feature_overrides.
-router.use(authMiddleware, requirePlanFeature("cash_management"));
+router.use(authMiddleware);
 
 router.post("/open", ...guard, openCounter, cashManagementController.openCounter);
 router.get("/cashdashboard", ...guard, viewCash, cashManagementController.getDashboard);

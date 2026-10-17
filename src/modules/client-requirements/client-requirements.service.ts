@@ -22,9 +22,7 @@ export function formatReqNumber(n: number): string {
 export const clientRequirementsService = {
   // Super Admin raises this on the salon's behalf — there's no salon-facing
   // self-submission, so the "client" (who gets the created/status/update
-  // emails) is resolved here as that salon's own owner, the same
-  // getSalonOwnerContact lookup already used for subscription-invoice
-  // emails (salon-plans.service.ts).
+  // emails) is resolved here as that salon's own owner.
   async submit(data: {
     salon_id: string;
     title: string;

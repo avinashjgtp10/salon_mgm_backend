@@ -34,8 +34,6 @@ import spotlightRoutes from "./modules/spotlight/spotlight.routes";
 import billingRoutes from "./modules/billing/billing.routes";
 import pricingRoutes from "./modules/pricing/pricing.routes";
 import subscriptionsRoutes from "./modules/subscriptions/subscriptions.routes";
-import planPaymentsRoutes from "./modules/plan-payments/plan-payments.routes";
-import { planPaymentsController } from "./modules/plan-payments/plan-payments.controller";
 import marketingDashboardRoutes from './modules/marketing/whatsapp/dashboard/dashboard.routes'
 import marketingTemplatesRoutes from './modules/marketing/whatsapp/templates/templates.routes'
 import marketingCampaignsRoutes from './modules/marketing/whatsapp/campaigns/campaigns.routes'
@@ -87,7 +85,6 @@ import { ensureTable as ensureDigitalMenuTables } from "./modules/digital-menu/d
 import superAdminRoutes from "./modules/super-admin/super-admin.routes";
 import branchOwnerRoutes from "./modules/branch-owner/branch-owner.routes";
 import { ensureBranchOwnerTables } from "./modules/branch-owner/branch-owner.repository";
-import salonPlansRoutes from "./modules/salon-plans/salon-plans.routes";
 import demoRequestsRoutes from "./modules/demo-requests/demo-requests.routes";
 import supportRoutes from "./modules/support/support.routes";
 import clientRequirementsRoutes from "./modules/client-requirements/client-requirements.routes";
@@ -178,15 +175,6 @@ app.use(corsMiddleware);
 // have their raw text body consumed by the global urlencoded parser.
 app.use("/iclock", admsRouter);
 
-// Razorpay webhook — mounted BEFORE the JSON body parser on purpose: the
-// signature is computed over the exact bytes Razorpay sent, so this route
-// needs the raw Buffer, not a parsed-and-re-serialised object.
-app.post(
-  "/api/v1/plan-payments/webhook",
-  express.raw({ type: "*/*", limit: "1mb" }),
-  planPaymentsController.webhook
-);
-
 // Body parsing middleware
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
@@ -276,7 +264,6 @@ app.use("/api/v1/oauth", authRoutes);
 app.use("/api/v1/billing", billingRoutes);
 app.use("/api/v1/pricing", pricingRoutes);
 app.use("/api/v1/subscriptions", subscriptionsRoutes);
-app.use("/api/v1/plan-payments", planPaymentsRoutes);
 app.use("/api/v1/webhooks", marketingWebhooksRoutes);
 // Alias: some Meta app webhook configs point at a bare "/webhook" path. Accept
 // it too so inbound messages/verification work regardless of which callback URL
@@ -355,7 +342,6 @@ app.use("/api/v1/reward-points", rewardPointsRoutes);
 app.use("/api/v1/referral", referralRoutes);
 app.use("/api/v1/super-admin", superAdminRoutes);
 app.use("/api/v1/branch-owner", branchOwnerRoutes);
-app.use("/api/v1/salon-plans", salonPlansRoutes);
 app.use("/api/v1/demo-requests", demoRequestsRoutes);
 app.use("/api/v1/support", supportRoutes);
 app.use("/api/v1/requirements", clientRequirementsRoutes);
