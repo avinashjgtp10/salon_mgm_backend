@@ -2,11 +2,13 @@ import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { requirePermission } from "../../middleware/permission.middleware";
+import { requireModule } from "../../middleware/moduleLock.middleware";
 import { salonDashboardController } from "./salon-dashboard.controller";
 
 const router = Router();
 
-const guard = [authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), requirePermission("view_dashboard")];
+// requireModule: Salon Customization can lock Home/Dashboard for a salon.
+const guard = [authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), requireModule("dashboard"), requirePermission("view_dashboard")];
 
 // GET /api/v1/dashboard/revenue — "Revenue Overview" chart card
 router.get("/revenue", ...guard, requirePermission("view_dashboard_card_revenue_overview"), salonDashboardController.getRevenueChart);
@@ -17,7 +19,7 @@ router.get("/monthly-projection", ...guard, requirePermission("view_dashboard_ca
 
 // PUT /api/v1/dashboard/monthly-target — set/clear the salon's monthly sales
 // target. Owner/admin only: it is a business goal, not something staff edit.
-router.put("/monthly-target", authMiddleware, roleMiddleware("salon_owner", "admin"), requirePermission("view_dashboard"), salonDashboardController.setMonthlyTarget);
+router.put("/monthly-target", authMiddleware, roleMiddleware("salon_owner", "admin"), requireModule("dashboard"), requirePermission("view_dashboard"), salonDashboardController.setMonthlyTarget);
 
 // GET /api/v1/dashboard/payment-mode-breakdown — "Overall Collection" card
 router.get("/payment-mode-breakdown", ...guard, requirePermission("view_dashboard_card_overall_collection"), salonDashboardController.getPaymentModeBreakdown);

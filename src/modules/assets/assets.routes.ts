@@ -3,12 +3,13 @@ import { authMiddleware } from "../../middleware/auth.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { requirePermission, requireAnyPermission } from "../../middleware/permission.middleware";
 import { uploadMiddleware } from "../../middleware/upload.middleware";
+import { requireModule } from "../../middleware/moduleLock.middleware";
 import { assetsController as c } from "./assets.controller";
 
 // Catalog → Tool Tracking. Every route is salon-scoped through the JWT's salonId; each
 // action has its own permission key (see Migration/create_tool_tracking.sql).
 const router = Router();
-const guard = [authMiddleware, roleMiddleware("salon_owner", "admin", "staff")];
+const guard = [authMiddleware, roleMiddleware("salon_owner", "admin", "staff"), requireModule("tool_tracking")];
 
 const view = requirePermission("view_assets");
 const viewHistory = requirePermission("view_asset_history");
