@@ -8,19 +8,44 @@ export const MODULE_KEYS = [
     "quick_sale",
     "calendar",
     "clients",
+    "clients_list",
+    "referral_rewards",
+    "client_history",
     "enquiries",
     "catalog",
     "services",
     "products",
     "packages",
     "memberships",
+    "tool_tracking",
     "inventory",
+    "suppliers",
+    "orders",
+    "product_inventory",
+    "consumable_inventory",
+    "product_audit",
+    "stock_ledger",
     "staff",
+    "staff_members",
+    "scheduled_shifts",
+    "tip_commission",
+    "attendance",
+    "staff_history",
     "payroll",
     "cash_management",
     "marketing",
     "online_booking",
     "reports",
+    "coupons",
+    "referral_earn",
+    "pos_payments",
+    "reward_points",
+    "roles_permissions",
+    "coupons",
+    "referral_earn",
+    "pos_payments",
+    "reward_points",
+    "roles_permissions",
 ] as const;
 
 export type ModuleKey = (typeof MODULE_KEYS)[number];
@@ -28,8 +53,10 @@ export type ModuleKey = (typeof MODULE_KEYS)[number];
 // Locking a parent locks everything under it; locking a child leaves its
 // siblings alone.
 export const MODULE_CHILDREN: Partial<Record<ModuleKey, ModuleKey[]>> = {
-    catalog: ["services", "products", "packages", "memberships"],
-    staff: ["payroll"],
+    clients: ["clients_list", "referral_rewards", "client_history", "enquiries"],
+    catalog: ["services", "products", "packages", "memberships", "tool_tracking"],
+    inventory: ["suppliers", "orders", "product_inventory", "consumable_inventory", "product_audit", "stock_ledger"],
+    staff: ["staff_members", "payroll", "scheduled_shifts", "tip_commission", "attendance", "staff_history"],
 };
 
 export const MODULE_LOCKED_MESSAGE =
