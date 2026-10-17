@@ -1,12 +1,13 @@
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
+import { requireModule } from "../../middleware/moduleLock.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { requirePermission } from "../../middleware/permission.middleware";
 import { enquiriesController } from "./enquiries.controller";
 
 const router = Router();
 
-router.use(authMiddleware);
+router.use(authMiddleware, requireModule("enquiries"));
 
 const ownerAdminStaff = roleMiddleware("salon_owner", "admin", "staff");
 // Split from one shared view_enquiries key, which previously gated all 5

@@ -2,6 +2,7 @@ import { rateLimit } from "express-rate-limit";
 import { recognizeAuditProduct, validateRecognition } from "./product-scanner.controller";
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
+import { requireModule } from "../../middleware/moduleLock.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { requirePermission, requireAnyPermission } from "../../middleware/permission.middleware";
 import { uploadMiddleware } from "../../middleware/upload.middleware";
@@ -149,7 +150,7 @@ const viewProductAudit = requirePermission("view_product_audit");
 const createProductAudit = requirePermission("create_product_audit");
 const approveProductAudit = requirePermission("approve_product_audit");
 
-router.use(authMiddleware);
+router.use(authMiddleware, requireModule("inventory"));
 
 // ─── Suppliers ────────────────────────────────────────────────────────────────
 

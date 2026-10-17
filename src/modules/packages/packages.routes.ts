@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
+import { requireModule } from "../../middleware/moduleLock.middleware";
 import { requireSalon } from "../../middleware/salon.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { requirePermission, requireAnyPermission } from "../../middleware/permission.middleware";
@@ -23,15 +24,15 @@ const editPackages = requirePermission("edit_packages");
 const deletePackages = requirePermission("delete_packages");
 
 // Export routes MUST come before /:id to avoid param matching
-router.get("/export/csv",   ...auth, viewPackages, requirePermission("export_csv"),   packagesController.exportCsv);
-router.get("/export/excel", ...auth, viewPackages, requirePermission("export_excel"), packagesController.exportExcel);
-router.get("/export/pdf",   ...auth, viewPackages, requirePermission("export_pdf"),   packagesController.exportPdf);
+router.get("/export/csv",   ...auth, requireModule("packages"), viewPackages, requirePermission("export_csv"),   packagesController.exportCsv);
+router.get("/export/excel", ...auth, requireModule("packages"), viewPackages, requirePermission("export_excel"), packagesController.exportExcel);
+router.get("/export/pdf",   ...auth, requireModule("packages"), viewPackages, requirePermission("export_pdf"),   packagesController.exportPdf);
 
 // CRUD
-router.get("/",      ...auth, viewPackages, validatePackagesListQuery, packagesController.list);
-router.post("/",     ...auth, createPackages, validateCreatePackage,  packagesController.create);
+router.get("/",      ...auth, requireModule("packages"), viewPackages, validatePackagesListQuery, packagesController.list);
+router.post("/",     ...auth, requireModule("packages"), createPackages, validateCreatePackage,  packagesController.create);
 router.get("/:id",   ...auth, viewPackages, packagesController.getById);
-router.patch("/:id", ...auth, editPackages, validateUpdatePackage,  packagesController.update);
-router.delete("/:id",...auth, deletePackages, packagesController.delete);
+router.patch("/:id", ...auth, requireModule("packages"), editPackages, validateUpdatePackage,  packagesController.update);
+router.delete("/:id",...auth, requireModule("packages"), deletePackages, packagesController.delete);
 
 export default router;

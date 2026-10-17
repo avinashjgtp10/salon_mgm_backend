@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { authMiddleware } from '../../../../middleware/auth.middleware'
+import { requireModule } from '../../../../middleware/moduleLock.middleware';
 import { roleMiddleware } from '../../../../middleware/role.middleware'
 import { requirePermission, requireAnyPermission } from '../../../../middleware/permission.middleware'
 import { campaignsController } from './campaigns.controller'
@@ -24,7 +25,7 @@ const sendCampaign = requirePermission('send_campaign')
 // the list route the dashboard actually calls.
 const viewCampaignsOrDashboard = requireAnyPermission(['view_campaigns', 'view_marketing_dashboard'])
 
-router.use(authMiddleware);
+router.use(authMiddleware, requireModule('marketing'));
 
 router.get('/',
   authMiddleware, ownerAdminStaff, viewCampaignsOrDashboard,

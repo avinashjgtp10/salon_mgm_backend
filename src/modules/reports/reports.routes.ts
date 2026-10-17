@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
+import { requireModule } from "../../middleware/moduleLock.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { subscriptionMiddleware } from "../../middleware/subscription.middleware";
 import { requirePermission, requireAnyPermission } from "../../middleware/permission.middleware";
@@ -21,6 +22,7 @@ const baseGuard = [
     authMiddleware,
     subscriptionMiddleware,
     roleMiddleware("salon_owner", "admin", "staff", "super_admin"),
+    requireModule("reports"),
 ];
 const viewReport = (key: string) => requirePermission(key);
 
@@ -414,7 +416,7 @@ router.post(
 
 router.post(
     "/membership-history",
-    ...baseGuard, viewReport("view_report_membership_history"),
+    ...baseGuard, requireModule("memberships"), viewReport("view_report_membership_history"),
     reportsController.getMembershipHistoryReport
 );
 
@@ -590,13 +592,13 @@ router.post(
 
 router.post(
     "/package-sale",
-    ...baseGuard, viewReport("view_report_package_sale"),
+    ...baseGuard, requireModule("packages"), viewReport("view_report_package_sale"),
     reportsController.getPackageSaleReport
 );
 
 router.post(
     "/package-sale/chart",
-    ...baseGuard, viewReport("view_report_package_sale"),
+    ...baseGuard, requireModule("packages"), viewReport("view_report_package_sale"),
     reportsController.getPackageSaleChart
 );
 
@@ -608,7 +610,7 @@ router.post(
 
 router.post(
     "/package-history",
-    ...baseGuard, viewReport("view_report_package_history"),
+    ...baseGuard, requireModule("packages"), viewReport("view_report_package_history"),
     reportsController.getPackageHistoryReport
 );
 
@@ -619,13 +621,13 @@ router.post(
 
 router.post(
     "/member-sale",
-    ...baseGuard, viewReport("view_report_member_sale"),
+    ...baseGuard, requireModule("memberships"), viewReport("view_report_member_sale"),
     reportsController.getMemberSaleReport
 );
 
 router.post(
     "/member-sale/chart",
-    ...baseGuard, viewReport("view_report_member_sale"),
+    ...baseGuard, requireModule("memberships"), viewReport("view_report_member_sale"),
     reportsController.getMemberSaleChart
 );
 
