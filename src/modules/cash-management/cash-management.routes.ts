@@ -27,6 +27,8 @@ router.use(authMiddleware);
 
 router.post("/open", ...guard, openCounter, cashManagementController.openCounter);
 router.get("/cashdashboard", ...guard, viewCash, cashManagementController.getDashboard);
+// Close Counter modal: its own small request (today's Cash/UPI/Card + expected closing) instead of the Home-page dashboard bundle.
+router.get("/close-summary", ...guard, closeCounter, cashManagementController.getCloseSummary);
 router.get("/", ...guard, viewCash, cashManagementController.listCounters);
 router.get("/income", ...guard, viewCash, cashManagementController.listCashIncomeEntries);
 router.get("/expenses", ...guard, viewCash, cashManagementController.listExpenses);
