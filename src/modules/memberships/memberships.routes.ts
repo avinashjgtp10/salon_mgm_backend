@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
+import { requireModule } from "../../middleware/moduleLock.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { requirePermission, requireAnyPermission } from "../../middleware/permission.middleware";
 import { membershipsController } from "./memberships.controller";
@@ -27,16 +28,16 @@ const exportMembershipsCsv = [requirePermission("download_membership_csv"), requ
 const exportMembershipsExcel = [requirePermission("download_membership_excel"), requirePermission("export_excel")];
 const exportMembershipsPdf = [requirePermission("download_membership_pdf"), requirePermission("export_pdf")];
 
-router.get("/",            ...guard, viewMemberships, validateMembershipsListQuery, membershipsController.list);
+router.get("/",            ...guard, requireModule("memberships"), viewMemberships, validateMembershipsListQuery, membershipsController.list);
 // Must precede "/:id" — otherwise these are swallowed as an id.
 router.get("/loyalty-eligibility", ...guard, viewMemberships, membershipsController.loyaltyEligibility);
-router.get("/filter-options",      ...guard, viewMemberships, membershipsController.filterOptions);
-router.get("/export/csv",   ...guard, viewMemberships, ...exportMembershipsCsv,   validateExportQuery, membershipsController.exportCsv);
-router.get("/export/excel", ...guard, viewMemberships, ...exportMembershipsExcel, validateExportQuery, membershipsController.exportExcel);
-router.get("/export/pdf",   ...guard, viewMemberships, ...exportMembershipsPdf,   validateExportQuery, membershipsController.exportPdf);
-router.post("/",           ...guard, createMemberships, validateCreateMembership,     membershipsController.create);
+router.get("/filter-options",      ...guard, requireModule("memberships"), viewMemberships, membershipsController.filterOptions);
+router.get("/export/csv",   ...guard, requireModule("memberships"), viewMemberships, ...exportMembershipsCsv,   validateExportQuery, membershipsController.exportCsv);
+router.get("/export/excel", ...guard, requireModule("memberships"), viewMemberships, ...exportMembershipsExcel, validateExportQuery, membershipsController.exportExcel);
+router.get("/export/pdf",   ...guard, requireModule("memberships"), viewMemberships, ...exportMembershipsPdf,   validateExportQuery, membershipsController.exportPdf);
+router.post("/",           ...guard, requireModule("memberships"), createMemberships, validateCreateMembership,     membershipsController.create);
 router.get("/:id",         ...guard, viewMemberships,                                 membershipsController.getById);
-router.patch("/:id",       ...guard, editMemberships, validateUpdateMembership,       membershipsController.update);
-router.delete("/:id",      ...guard, deleteMemberships,                               membershipsController.delete);
+router.patch("/:id",       ...guard, requireModule("memberships"), editMemberships, validateUpdateMembership,       membershipsController.update);
+router.delete("/:id",      ...guard, requireModule("memberships"), deleteMemberships,                               membershipsController.delete);
 
 export default router;

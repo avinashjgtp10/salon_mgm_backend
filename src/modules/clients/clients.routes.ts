@@ -1,6 +1,7 @@
 // src/modules/clients/clients.routes.ts
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
+import { requireModule } from "../../middleware/moduleLock.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { requirePermission, requireAnyPermission } from "../../middleware/permission.middleware";
 import { uploadMiddleware } from "../../middleware/upload.middleware";
@@ -39,7 +40,7 @@ const viewClients = requireAnyPermission(["view_clients", "create_sales", "creat
 const editClients = requireAnyPermission(["edit_clients", "quick_sale_edit_client"]);
 const viewClientHistory = requireAnyPermission(["view_client_history", "quick_sale_client_history"]);
 
-router.use(authMiddleware);
+router.use(authMiddleware, requireModule("clients"));
 
 // LIST + CREATE
 router.get("/", authMiddleware, ownerAdminStaff, viewClients, validateClientsListQuery, clientsController.list);

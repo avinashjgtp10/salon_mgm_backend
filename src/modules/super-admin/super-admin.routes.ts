@@ -5,6 +5,7 @@ import { superAdminController } from "./super-admin.controller";
 import { salonClientInvoicesController } from "../salon-client-invoices/salon-client-invoices.controller";
 import waConfigSuperAdminRoutes from "../marketing/whatsapp/config/config.super-admin.routes";
 import clientActivityRoutes from "../client-activity/client-activity.super-admin.routes";
+import salonModulesRoutes from "../salon-modules/salon-modules.routes";
 
 const router = Router();
 
@@ -19,6 +20,9 @@ router.use("/client-activity", clientActivityRoutes);
 
 // A salon's WhatsApp (Meta Cloud API) connection — managed here, by us, not by the salon.
 router.use("/salons/:salonId/wa-config", waConfigSuperAdminRoutes);
+
+// Salon Customization: lock/unlock whole modules for one salon.
+router.use("/salon-modules", salonModulesRoutes);
 
 // Salon-specific permissions
 router.get("/salon-permissions/search",       superAdminController.searchSalonsForPermissions);

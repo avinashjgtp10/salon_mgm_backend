@@ -2,6 +2,7 @@ import ExcelJS from "exceljs";
 import { randomUUID } from "crypto";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
+import { assertModuleUnlocked } from "../../middleware/moduleLock.middleware";
 import { appointmentsRepository } from "./appointments.repository";
 import { salesRepository } from "../sales/sales.repository";
 import type { SaleItem } from "../sales/sales.types";
@@ -327,6 +328,20 @@ function assignItemRowIds(items?: { id?: string }[]): void {
     }
 }
 
+// Salon Customization: a salon with Packages/Memberships locked can't add NEW
+// package/membership rows to a bill. Rows already on the appointment are left
+// alone so editing or paying an existing bill keeps working.
+async function assertNoNewLockedItems(
+    salonId: string | null | undefined,
+    incoming: { id?: string }[] | null | undefined,
+    existing: { id?: string }[] | null | undefined,
+    key: "packages" | "memberships"
+): Promise<void> {
+    if (!incoming || incoming.length === 0) return;
+    const known = new Set((existing ?? []).map((i) => i.id).filter(Boolean));
+    if (incoming.some((i) => !i.id || !known.has(i.id))) await assertModuleUnlocked(salonId, key);
+}
+
 // Looks up, once per flattenServiceConsumables() call, every distinct
 // product referenced by services[].consumables[]: its base unit
 // (products.measure_unit) and its configured packaging conversions
@@ -566,6 +581,8 @@ export const appointmentsService = {
         // this just peels the declared recipe/actual-qty data off the JSONB
         // services array and stages it for a relational write once the
         // appointment row (and therefore its id) exists.
+        await assertNoNewLockedItems(body.salon_id, body.package_items, null, "packages");
+        await assertNoNewLockedItems(body.salon_id, body.membership_items, null, "memberships");
         assignServiceRowIds(body.services);
         assignItemRowIds(body.package_items);
         assignItemRowIds(body.membership_items);
@@ -892,6 +909,8 @@ export const appointmentsService = {
         let patch = params.patch;
         const existing = await appointmentsRepository.findById(appointmentId);
         if (!existing) throw new AppError(404, "Appointment not found", "NOT_FOUND");
+        await assertNoNewLockedItems(existing.salon_id, patch.package_items, existing.package_items, "packages");
+        await assertNoNewLockedItems(existing.salon_id, patch.membership_items, existing.membership_items, "memberships");
 
         // "no-show" is the one non-terminal terminal state: a reschedule (time,
         // staff, or duration change) brings it back to "booked" instead of being

@@ -4,6 +4,7 @@ import { usersRepo } from "./users.repository";
 import { SafeUser, UpdateUserInput } from "./users.types";
 import logger from "../../config/logger";
 import { getEffectivePermissionsForUser } from "../../middleware/permission.middleware";
+import { loadLockedModules } from "../../middleware/moduleLock.middleware";
 import { rolesRepository } from "../roles/roles.repository";
 import { salonsService } from "../salons/salons.service";
 
@@ -95,7 +96,13 @@ export const usersService = {
       );
     }
 
-    const safeUser = toSafeUser(user, effectivePermissions);
+    // Salon Customization: which modules are locked for this salon. The session's
+    // salon wins (owner, staff and impersonation all carry it); a user with no
+    // salon yet (super admin, mid-onboarding) simply has none.
+    const lockSalonId = sessionSalonId ?? user.staff_salon_id ?? null;
+    const lockedModules = lockSalonId ? Array.from(await loadLockedModules(lockSalonId)) : [];
+
+    const safeUser = { ...toSafeUser(user, effectivePermissions), locked_modules: lockedModules };
     if (!opts?.includeSalon) {
       logger.info(`User profile fetched successfully`, { userId });
       return safeUser;

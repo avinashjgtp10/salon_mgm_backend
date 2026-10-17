@@ -1,6 +1,7 @@
 import multer from "multer";
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
+import { requireModule } from "../../middleware/moduleLock.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { requireSalon } from "../../middleware/salon.middleware";
 import { requirePermission } from "../../middleware/permission.middleware";
@@ -23,7 +24,7 @@ const addExpense = requirePermission("add_expense");
 const editExpense = requirePermission("edit_expense");
 const deleteExpense = requirePermission("delete_expense");
 
-router.use(authMiddleware);
+router.use(authMiddleware, requireModule("cash_management"));
 
 router.post("/open", ...guard, openCounter, cashManagementController.openCounter);
 router.get("/cashdashboard", ...guard, viewCash, cashManagementController.getDashboard);

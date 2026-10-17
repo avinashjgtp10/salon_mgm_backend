@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
+import { requireModule } from "../../middleware/moduleLock.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { requireSalon } from "../../middleware/salon.middleware";
 import { requireAnyPermission } from "../../middleware/permission.middleware";
@@ -30,10 +31,10 @@ const addPackageTemplate = requireAnyPermission(["add_package_template", "create
 const editPackageTemplate = requireAnyPermission(["edit_package_template", "edit_packages"]);
 const deletePackageTemplate = requireAnyPermission(["delete_package_template", "delete_packages"]);
 
-router.get("/",       ...auth, viewPackageTemplates, packageTemplatesController.list);
-router.post("/",      ...auth, addPackageTemplate, validateCreatePackageTemplate, packageTemplatesController.create);
-router.get("/:id",    ...auth, viewPackageTemplates, packageTemplatesController.getById);
-router.patch("/:id",  ...auth, editPackageTemplate, validateUpdatePackageTemplate, packageTemplatesController.update);
-router.delete("/:id", ...auth, deletePackageTemplate, packageTemplatesController.delete);
+router.get("/",       ...auth, requireModule("packages"), viewPackageTemplates, packageTemplatesController.list);
+router.post("/",      ...auth, requireModule("packages"), addPackageTemplate, validateCreatePackageTemplate, packageTemplatesController.create);
+router.get("/:id",    ...auth, requireModule("packages"), viewPackageTemplates, packageTemplatesController.getById);
+router.patch("/:id",  ...auth, requireModule("packages"), editPackageTemplate, validateUpdatePackageTemplate, packageTemplatesController.update);
+router.delete("/:id", ...auth, requireModule("packages"), deletePackageTemplate, packageTemplatesController.delete);
 
 export default router;

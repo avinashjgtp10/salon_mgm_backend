@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
+import { requireModule } from "../../middleware/moduleLock.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { requirePermission } from "../../middleware/permission.middleware";
 import { uploadMiddleware } from "../../middleware/upload.middleware";
@@ -23,7 +24,7 @@ const ownerAdminStaff = roleMiddleware("salon_owner", "admin", "staff");
 const viewMarketplace = requirePermission("view_marketplace");
 const manageMarketplace = requirePermission("manage_marketplace");
 
-router.use(authMiddleware);
+router.use(authMiddleware, requireModule("online_booking"));
 
 // ── Full profile ──────────────────────────────────────────────────────────────
 router.get("/profile",          auth, ownerAdminStaff, viewMarketplace, marketplaceController.getProfile);
