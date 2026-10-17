@@ -43,7 +43,9 @@ export const usersController = {
         throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
       }
 
-      const user = await usersService.me(userId, req.user?.salonId);
+      // ?include=salon adds the business fields the Settings profile page needs, in this same call.
+      const includeSalon = String(req.query.include ?? "").split(",").map((s) => s.trim()).includes("salon");
+      const user = await usersService.me(userId, req.user?.salonId, { includeSalon });
 
       logger.info("GET /users/profile success", {
         userId,

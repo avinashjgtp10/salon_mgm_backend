@@ -5,6 +5,8 @@ import { SafeUser, UpdateUserInput } from "./users.types";
 import logger from "../../config/logger";
 import { getEffectivePermissionsForUser } from "../../middleware/permission.middleware";
 import { rolesRepository } from "../roles/roles.repository";
+import { salonsService } from "../salons/salons.service";
+
 
 // A user's WhatsApp Alerts list: the primary users.phone plus up to this many numbers in total.
 const MAX_ALERT_NUMBERS = 5;
@@ -68,7 +70,7 @@ function toSafeUser(u: any, effectivePermissions: Record<string, boolean> | null
 
 export const usersService = {
 
-  async me(userId: string, sessionSalonId?: string | null) {
+  async me(userId: string, sessionSalonId?: string | null, opts?: { includeSalon?: boolean }) {
     logger.info(`Fetching current user profile`, { userId });
 
     const user = await usersRepo.findByIdWithStaffPermissions(userId, sessionSalonId);
@@ -93,8 +95,20 @@ export const usersService = {
       );
     }
 
-    logger.info(`User profile fetched successfully`, { userId });
-    return toSafeUser(user, effectivePermissions);
+    const safeUser = toSafeUser(user, effectivePermissions);
+    if (!opts?.includeSalon) {
+      logger.info(`User profile fetched successfully`, { userId });
+      return safeUser;
+    }
+
+    // Exactly what GET /salons/current returns (owner's own salon, else the session's salon, slug
+    // ensured), so the app can load the user and the salon in ONE request instead of two. A user with
+    // no salon yet (not onboarded, super admin) simply gets salon: null.
+    // Only requested with ?include=salon, so every other /users/profile caller is unaffected.
+    const salon = await salonsService.mySalon(userId, sessionSalonId).catch(() => null);
+
+    logger.info(`User profile (with salon) fetched successfully`, { userId });
+    return { ...safeUser, salon };
   },
 
   async list() {
