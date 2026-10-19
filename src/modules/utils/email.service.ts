@@ -1535,6 +1535,65 @@ export const emailService = {
   // developers can be assigned in the same Create Requirement form) —
   // separate from sendRequirementCreatedEmail's client-confirmation +
   // single internal-team-notification pair below.
+  // Sent when a subscription tax invoice is issued (a Razorpay payment, or a bill a super admin created): the salon
+  // owner gets the invoice as a PDF attachment. Best-effort: callers never await it.
+  async sendSubscriptionInvoiceEmail(params: {
+    to: string;
+    salonName: string;
+    invoiceNo: string;
+    planLabel: string;
+    amount: number;
+    pdfBuffer: Buffer;
+    pdfFilename: string;
+  }) {
+    const { to, salonName, invoiceNo, planLabel, amount, pdfBuffer, pdfFilename } = params;
+    const formattedAmount = `₹${(Number(amount) || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+    await transporter.sendMail({
+      from: config.smtp.from,
+      to,
+      subject: `Your SalonoX Subscription Invoice ${escapeHtml(invoiceNo)}`,
+      html: `
+        <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/></head>
+        <body style="margin:0;padding:0;background:#f4f4f7;font-family:'Segoe UI',Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:36px 0;">
+            <tr><td align="center">
+              <table width="560" cellpadding="0" cellspacing="0"
+                style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.07);max-width:560px;width:100%;">
+                <tr>
+                  <td style="background:#0f172a;padding:28px 36px;">
+                    <p style="margin:0;color:#fff;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;opacity:0.8;">SalonoX Billing</p>
+                    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">Subscription Invoice</h1>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:32px 36px;">
+                    <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
+                      Hi <strong>${escapeHtml(salonName)}</strong> team, thank you for your payment. Your GST tax invoice for the SalonoX ${escapeHtml(planLabel)} subscription is attached as a PDF.
+                    </p>
+                    <table width="100%" cellpadding="0" cellspacing="0" style="background:#eef2ff;border-radius:10px;border:1px solid #c7d2fe;">
+                      <tr>
+                        <td style="padding:20px 24px;">
+                          <p style="margin:0 0 8px;color:#4338ca;font-size:14px;"><strong>Invoice No.:</strong> ${escapeHtml(invoiceNo)}</p>
+                          <p style="margin:0;color:#4338ca;font-size:20px;font-weight:800;"><strong>Amount paid:</strong> ${formattedAmount}</p>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="background:#f9fafb;padding:16px 36px;border-top:1px solid #e5e7eb;">
+                    <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">© ${new Date().getFullYear()} SalonOx. Automated notification.</p>
+                  </td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
+        </body></html>`,
+      attachments: [{ filename: pdfFilename, content: pdfBuffer }],
+    });
+  },
+
   async sendRequirementAssignedEmail(params: {
     to: string;
     developerName: string;
