@@ -169,7 +169,11 @@ app.use(corsMiddleware);
 app.use("/iclock", admsRouter);
 
 // Body parsing middleware
-app.use(express.json({ limit: "10mb" }));
+// `verify` keeps the untouched bytes on req.rawBody — Razorpay signs the raw body, so the webhook needs it.
+app.use(express.json({
+  limit: "10mb",
+  verify: (req, _res, buf) => { (req as any).rawBody = buf; },
+}));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // Serve uploaded files as static assets

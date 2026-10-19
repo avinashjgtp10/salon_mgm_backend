@@ -1,3 +1,4 @@
+import { subscriptionCheckoutService } from "../subscriptions/subscription-checkout.service";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { salonsRepository } from "./salons.repository";
@@ -76,6 +77,11 @@ export const salonsService = {
                 address: body.address || registrant?.address || undefined,
                 country: body.country || registrant?.country || undefined,
             });
+
+            // Anything the owner subscribed to on the plan page before this salon existed now belongs to it.
+            await subscriptionCheckoutService.attachPendingToSalon(ownerId, salon.id).catch((err) =>
+                logger.error("attachPendingToSalon failed", { ownerId, salonId: salon.id, error: err?.message })
+            );
 
             // Fetch user so we can embed the correct role in the new token
             const user = await authRepository.findUserById(ownerId);
