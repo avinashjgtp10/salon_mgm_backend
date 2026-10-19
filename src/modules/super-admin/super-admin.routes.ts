@@ -6,6 +6,9 @@ import { salonClientInvoicesController } from "../salon-client-invoices/salon-cl
 import waConfigSuperAdminRoutes from "../marketing/whatsapp/config/config.super-admin.routes";
 import clientActivityRoutes from "../client-activity/client-activity.super-admin.routes";
 import salonModulesRoutes from "../salon-modules/salon-modules.routes";
+import modulePlansRoutes from "../module-plans/module-plans.routes";
+import salonSubscriptionRoutes from "../salon-subscription/salon-subscription.routes";
+import planPricingRoutes from "../plan-pricing/plan-pricing.routes";
 
 const router = Router();
 
@@ -23,6 +26,9 @@ router.use("/salons/:salonId/wa-config", waConfigSuperAdminRoutes);
 
 // Salon Customization: lock/unlock whole modules for one salon.
 router.use("/salon-modules", salonModulesRoutes);
+router.use("/module-plans", modulePlansRoutes);
+router.use("/salon-subscription", salonSubscriptionRoutes);
+router.use("/plan-pricing", planPricingRoutes);
 
 // Salon-specific permissions
 router.get("/salon-permissions/search",       superAdminController.searchSalonsForPermissions);
