@@ -9,6 +9,7 @@ import salonModulesRoutes from "../salon-modules/salon-modules.routes";
 import modulePlansRoutes from "../module-plans/module-plans.routes";
 import salonSubscriptionRoutes from "../salon-subscription/salon-subscription.routes";
 import planPricingRoutes from "../plan-pricing/plan-pricing.routes";
+import subscriptionInvoiceRoutes from "../subscription-invoices/subscription-invoices.routes";
 
 const router = Router();
 
@@ -29,6 +30,7 @@ router.use("/salon-modules", salonModulesRoutes);
 router.use("/module-plans", modulePlansRoutes);
 router.use("/salon-subscription", salonSubscriptionRoutes);
 router.use("/plan-pricing", planPricingRoutes);
+router.use("/subscription-invoices", subscriptionInvoiceRoutes);
 
 // Salon-specific permissions
 router.get("/salon-permissions/search",       superAdminController.searchSalonsForPermissions);

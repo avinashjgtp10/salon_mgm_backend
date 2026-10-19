@@ -4,6 +4,7 @@ import { authMiddleware } from "../../middleware/auth.middleware"
 import { validateStartTrial } from "./subscriptions.validator"
 import { planPricingService } from "../plan-pricing/plan-pricing.service"
 import { subscriptionCheckoutService } from "./subscription-checkout.service"
+import { subscriptionInvoicesService } from "../subscription-invoices/subscription-invoices.service"
 import { getSalonId } from "../utils/salon.util"
 import { AppError } from "../../middleware/error.middleware"
 import logger from "../../config/logger"
@@ -49,6 +50,27 @@ router.get("/my-status", authMiddleware, async (req, res, next) => {
         const user = (req as any).user as { userId: string } | undefined
         if (!user?.userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED")
         res.json({ success: true, data: await subscriptionCheckoutService.paymentStatus(user.userId) })
+    } catch (err) { next(err) }
+})
+
+// The salon's own subscription invoices (owner/admin only) and their PDFs. Always scoped to the caller's salon.
+const ownerOnly = (req: any) => {
+    const role = req.user?.role
+    if (role !== "salon_owner" && role !== "admin") throw new AppError(403, "Only the salon owner can view invoices", "FORBIDDEN")
+}
+router.get("/invoices", authMiddleware, async (req, res, next) => {
+    try {
+        ownerOnly(req)
+        res.json({ success: true, data: await subscriptionInvoicesService.listForSalon(await getSalonId(req)) })
+    } catch (err) { next(err) }
+})
+router.get("/invoices/:id/pdf", authMiddleware, async (req, res, next) => {
+    try {
+        ownerOnly(req)
+        const { pdf, filename } = await subscriptionInvoicesService.renderPdf(String(req.params.id), await getSalonId(req))
+        res.setHeader("Content-Type", "application/pdf")
+        res.setHeader("Content-Disposition", `inline; filename="${filename}"`)
+        res.send(pdf)
     } catch (err) { next(err) }
 })
 

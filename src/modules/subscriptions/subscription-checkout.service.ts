@@ -4,6 +4,7 @@ import pool from "../../config/database";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { getRazorpay } from "../../config/razorpay";
+import { subscriptionInvoicesService } from "../subscription-invoices/subscription-invoices.service";
 
 const TIERS = ["basic", "advance", "growth"] as const;
 const CYCLES = ["monthly", "quarterly", "yearly"] as const;
@@ -78,7 +79,13 @@ export const subscriptionCheckoutService = {
                 [salonId, userId]
             );
         }
-        if (rows.length) logger.info("Attached pre-onboarding subscriptions to salon", { userId, salonId, count: rows.length });
+        if (rows.length) {
+            logger.info("Attached pre-onboarding subscriptions to salon", { userId, salonId, count: rows.length });
+            // Payments made before the salon existed couldn't be billed then; they can now.
+            await subscriptionInvoicesService.billAllUnbilledForSalon(salonId).catch((err) =>
+                logger.error("Billing attached payments failed", { salonId, error: err?.message })
+            );
+        }
         return rows.length;
     },
 
@@ -158,13 +165,17 @@ export const subscriptionCheckoutService = {
                     if (pay?.id) {
                         const dup = await client.query(`SELECT 1 FROM subscription_payments WHERE transaction_id = $1`, [pay.id]);
                         if (dup.rowCount === 0) {
-                            await client.query(
+                            const inserted = await client.query(
                                 `INSERT INTO subscription_payments
                                     (subscription_id, amount, payment_status, payment_method, transaction_id,
                                      billing_period_start, billing_period_end, paid_at)
-                                 VALUES ($1, $2, 'paid', $3, $4, $5, $6, $7)`,
+                                 VALUES ($1, $2, 'paid', $3, $4, $5, $6, $7)
+                                 RETURNING id`,
                                 [row.id, Number(pay.amount) / 100, pay.method ?? null, pay.id, start, end, fromUnix(pay.created_at) ?? new Date()]
                             );
+                            // The tax invoice for this payment (skipped quietly if the salon doesn't exist yet: it is
+                            // billed when onboarding attaches the subscription).
+                            await subscriptionInvoicesService.generateForPaymentTx(client, inserted.rows[0].id);
                         }
                     }
                 }
@@ -198,6 +209,9 @@ export const subscriptionCheckoutService = {
             await client.query("BEGIN");
             const result = await this.processEvent(client, event);
             await client.query("COMMIT");
+            // After the commit, mail the invoice PDF to the owner (best effort, never blocks Razorpay's 200).
+            const paymentId = event?.payload?.payment?.entity?.id;
+            if (result === "charged" && paymentId) subscriptionInvoicesService.emailForTransaction(paymentId).catch(() => undefined);
             return result;
         } catch (err) {
             await client.query("ROLLBACK");
