@@ -111,7 +111,14 @@ export const salonModulesRepository = {
             }
 
             const changed = toAdd.length > 0 || toRemove.length > 0;
-            if (changed) {
+            // A salon's first-ever save is always recorded, even if it changes nothing (everything left
+            // on): the audit row is what marks the salon as customized, so the admin page stops treating
+            // it as a brand-new salon whose toggles all start Off.
+            const { rows: auditRows } = await client.query(
+                `SELECT 1 FROM salon_module_audit_log WHERE salon_id = $1 LIMIT 1`,
+                [salonId]
+            );
+            if (changed || auditRows.length === 0) {
                 await client.query(
                     `INSERT INTO salon_module_audit_log (salon_id, changed_by, previous, new)
                      VALUES ($1, $2, $3::jsonb, $4::jsonb)`,
