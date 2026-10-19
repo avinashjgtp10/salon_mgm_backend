@@ -1,21 +1,10 @@
 import { NextFunction, Request, Response } from "express";
 import { AppError } from "../../middleware/error.middleware";
-import { Amenity, Highlight, Value } from "./marketplace.types";
 
-// ─── Allowed values ───────────────────────────────────────────────────────────
+// ─── Limits ───────────────────────────────────────────────────────────────────
 
-const VALID_AMENITIES: Amenity[] = [
-  "parking_available","near_public_transport","showers",
-  "lockers","bath_towels","swimming_pool","sauna",
-];
-const VALID_HIGHLIGHTS: Highlight[] = [
-  "pet_friendly","adults_only","kid_friendly","wheelchair_accessible",
-];
-const VALID_VALUES: Value[] = [
-  "organic_products_only","vegan_products_only","environmentally_friendly",
-  "lgbtq_plus","black_owned","woman_owned","asian_owned",
-  "hispanic_owned","indigenous_owned",
-];
+const MAX_FEATURE_LEN = 60;
+const MAX_FEATURES_PER_LIST = 30;
 
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)(:[0-5]\d)?$/;
 const URL_RE  = /^https?:\/\/.+/;
@@ -26,8 +15,6 @@ const isNonEmpty      = (v: unknown) => typeof v === "string" && v.trim().length
 const isOptStr        = (v: unknown) => v === undefined || v === null || typeof v === "string";
 const isOptNum        = (v: unknown) => v === undefined || v === null || (typeof v === "number" && isFinite(v));
 const isValidTime     = (v: unknown) => typeof v === "string" && TIME_RE.test(v);
-const isOptEnumArr    = <T extends string>(v: unknown, allowed: T[]) =>
-  v === undefined || (Array.isArray(v) && v.every((x) => (allowed as string[]).includes(x)));
 
 // ─── Essentials ───────────────────────────────────────────────────────────────
 
@@ -299,14 +286,29 @@ export const validateUpsertFeatures = (req: Request, _res: Response, next: NextF
   try {
     const b = req.body;
 
-    if (!isOptEnumArr(b.amenities, VALID_AMENITIES))
-      throw new AppError(400, `amenities must be an array of: ${VALID_AMENITIES.join(", ")}`, "VALIDATION_ERROR");
-
-    if (!isOptEnumArr(b.highlights, VALID_HIGHLIGHTS))
-      throw new AppError(400, `highlights must be an array of: ${VALID_HIGHLIGHTS.join(", ")}`, "VALIDATION_ERROR");
-
-    if (!isOptEnumArr(b.values, VALID_VALUES))
-      throw new AppError(400, `values must be an array of: ${VALID_VALUES.join(", ")}`, "VALIDATION_ERROR");
+    // Owner-typed text, not a fixed list: trimmed, de-duplicated (case-insensitive),
+    // 1–60 characters each, at most 30 per list. Normalised in place so the
+    // repository stores exactly what was validated.
+    for (const field of ["amenities", "highlights", "values"] as const) {
+      const list = b[field];
+      if (list === undefined) continue;
+      if (!Array.isArray(list) || list.some((x: unknown) => typeof x !== "string"))
+        throw new AppError(400, `${field} must be an array of text items`, "VALIDATION_ERROR");
+      const seen = new Set<string>();
+      const clean: string[] = [];
+      for (const raw of list as string[]) {
+        const item = raw.trim();
+        if (!item) continue;
+        if (item.length > MAX_FEATURE_LEN)
+          throw new AppError(400, `Each item in ${field} must be ${MAX_FEATURE_LEN} characters or fewer`, "VALIDATION_ERROR");
+        if (seen.has(item.toLowerCase())) continue;
+        seen.add(item.toLowerCase());
+        clean.push(item);
+      }
+      if (clean.length > MAX_FEATURES_PER_LIST)
+        throw new AppError(400, `${field} can have at most ${MAX_FEATURES_PER_LIST} items`, "VALIDATION_ERROR");
+      b[field] = clean;
+    }
 
     return next();
   } catch (err) { return next(err); }

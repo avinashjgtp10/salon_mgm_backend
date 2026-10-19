@@ -186,10 +186,13 @@ export type MarketplaceFeature = {
   created_at: string;
 };
 
+// Free text typed by the salon owner (e.g. "Free Wi-Fi"). The Amenity/Highlight/Value
+// unions above are the legacy fixed keys still found on older rows; they're plain
+// strings too, so nothing stored before is rejected or needs migrating.
 export type UpsertFeaturesBody = {
-  amenities?: Amenity[];
-  highlights?: Highlight[];
-  values?: Value[];
+  amenities?: string[];
+  highlights?: string[];
+  values?: string[];
 };
 
 // ─── Full Profile (aggregated) ────────────────────────────────────────────────
