@@ -39,6 +39,47 @@ export const salonSubscriptionRepository = {
         return rows;
     },
 
+    // The salon's current subscription: the newest active/trialing row, whether or not its end date has passed
+    // (an expired one can be revived by moving its end date forward). Locked FOR UPDATE inside the caller's txn.
+    async adjustExpiry(salonId: string, newEnd: Date) {
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            const { rows } = await client.query(
+                `SELECT id, status, is_trial, current_period_start, current_period_end, trial_end
+                 FROM subscriptions
+                 WHERE salon_id = $1 AND status IN ('active', 'trialing')
+                 ORDER BY created_at DESC LIMIT 1
+                 FOR UPDATE`,
+                [salonId]
+            );
+            const row = rows[0];
+            if (!row) { await client.query("ROLLBACK"); return null; }
+            if (row.current_period_start && newEnd.getTime() <= new Date(row.current_period_start).getTime()) {
+                await client.query("ROLLBACK");
+                return "before_start" as const;
+            }
+            // A trial's end lives in trial_end, a paid plan's in current_period_end; keep both columns in step so
+            // every screen that reads either one shows the same date.
+            const upd = await client.query(
+                `UPDATE subscriptions
+                 SET current_period_end = $2,
+                     trial_end = CASE WHEN status = 'trialing' OR is_trial THEN $2 ELSE trial_end END,
+                     updated_at = NOW()
+                 WHERE id = $1
+                 RETURNING id, status, current_period_end, trial_end`,
+                [row.id, newEnd.toISOString()]
+            );
+            await client.query("COMMIT");
+            return { previous_end: row.status === "trialing" ? row.trial_end : row.current_period_end, updated: upd.rows[0] };
+        } catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        } finally {
+            client.release();
+        }
+    },
+
     // Gives the salon a paid plan for [start, end]. Any subscription still active for the salon is
     // cancelled in the same transaction so the new end date is the one that actually applies
     // (access is granted by ANY active, unexpired row — leaving an older one would override it).

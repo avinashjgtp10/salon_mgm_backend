@@ -17,6 +17,13 @@ router.get("/:salonId", async (req: Request, res: Response, next: NextFunction) 
     } catch (err) { return next(err); }
 });
 
+router.put("/:salonId/expiry", async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const data = await salonSubscriptionService.adjustExpiry(String(req.params.salonId), req.body ?? {});
+        return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+});
+
 router.post("/:salonId", async (req: Request, res: Response, next: NextFunction) => {
     try {
         const data = await salonSubscriptionService.grant(String(req.params.salonId), req.body ?? {});
