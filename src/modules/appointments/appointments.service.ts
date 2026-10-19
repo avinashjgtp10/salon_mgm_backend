@@ -1261,7 +1261,7 @@ export const appointmentsService = {
         // ── Live calendar update ───────────────────────────────────────────────
         // create()/cancel() already push a "notification" socket event that the
         // calendar listens to for a live refresh — update() (reschedule, staff
-        // reassignment, or LUNOX's modifyAppointmentServices changing what's
+        // reassignment, or a services edit changing what's
         // booked/its duration) never did, so any of these silently required a
         // manual page refresh to appear correctly.
         //

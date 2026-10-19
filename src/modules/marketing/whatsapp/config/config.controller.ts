@@ -30,16 +30,6 @@ export const configController = {
     } catch (e) { return next(e) }
   },
 
-  async setAiReceptionistEnabled(req: AuthRequest, res: Response, next: NextFunction) {
-    try {
-      const salonId = req.user?.salonId
-      if (!salonId) return res.status(400).json({ error: 'salonId missing from token' })
-      const enabled = req.body?.enabled === true
-      const data = await configService.setAiReceptionistEnabled(salonId, enabled)
-      return res.status(200).json({ success: true, data, message: enabled ? 'AI receptionist enabled' : 'AI receptionist disabled' })
-    } catch (e) { return next(e) }
-  },
-
   async deleteConfig(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = req.user?.salonId

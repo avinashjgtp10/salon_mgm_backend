@@ -110,6 +110,10 @@ export const appointmentsRepository = {
                 s.currency                                AS salon_currency,
                 COALESCE((SELECT SUM(paid_amount) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS paid_amount,
                 (SELECT payment_method FROM payments p WHERE p.appointment_id = a.id ORDER BY p.created_at DESC LIMIT 1) AS payment_method,
+                -- appointments.due_amount is never updated after a payment, so a.* returned
+                -- 0.00 for partially-paid bills. The latest payment row carries the
+                -- authoritative remaining balance (bill - all paid so far).
+                COALESCE((SELECT p.due_amount FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial') ORDER BY p.created_at DESC LIMIT 1), a.due_amount, 0) AS due_amount,
                 COALESCE((SELECT SUM(reward_points_value) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS reward_points_value,
                 COALESCE((SELECT SUM(membership_wallet_used) FROM payments p WHERE p.appointment_id = a.id AND p.status IN ('completed', 'partial')), 0) AS membership_wallet_used,
                 -- MAX, not SUM — every payment row for this appointment carries
@@ -260,6 +264,7 @@ export const appointmentsRepository = {
                TRIM(CONCAT(st.first_name, ' ', COALESCE(st.last_name, ''))) AS staff_name,
                COALESCE(pa.total_paid, 0)    AS paid_amount,
                pa.latest_method              AS payment_method,
+               COALESCE(pa.latest_due, a.due_amount, 0) AS due_amount,
                COALESCE(pa.total_reward_points_value, 0) AS reward_points_value,
                COALESCE(pa.total_membership_wallet_used, 0) AS membership_wallet_used,
                COALESCE(pa.latest_membership_discount_used, 0) AS membership_discount_used,

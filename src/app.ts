@@ -59,8 +59,6 @@ import reviewsRoutes from './modules/reviews/reviews.routes'
 import reviewsPublicRoutes from './modules/reviews/reviews.public.routes'
 import botRoutes from "./modules/bot/bot.routes";
 import botQuestionsRoutes from "./modules/bot/bot-questions.routes";
-import aiEngineRoutes from "./modules/ai-engine/ai-engine.routes";
-import { ensureTable as ensureAiEngineTables } from "./modules/ai-engine/ai-engine.repository";
 import waAutomationRoutes from "./modules/whatsapp-automation/whatsapp-automation.routes";
 import waScheduledMessagesRoutes from "./modules/whatsapp-automation/wa-scheduled-messages.routes";
 import waPurchaseTemplatesRoutes from "./modules/whatsapp-automation/wa-purchase-templates.routes";
@@ -155,11 +153,6 @@ ensureBranchOwnerTables().catch(err =>
 // Bootstrap tip_earned/tip_settlements tables (idempotent) — Tip Settle
 ensureTipTables().catch(err =>
   logger.warn("tip tables init warning:", err?.message ?? err),
-);
-
-// Bootstrap ai-engine (LUNOX) tables (idempotent)
-ensureAiEngineTables().catch(err =>
-  logger.warn("ai-engine table init warning:", err?.message ?? err),
 );
 
 // purchases/purchase_items/salons.next_purchase_seq: NOT auto-run here — see
@@ -325,7 +318,6 @@ app.use("/api/v1/assets", assetsRoutes);
 app.use("/api/v1/settings", settingsRoutes);
 app.use("/api/v1/bot", botRoutes);
 app.use("/api/v1/bot-questions", botQuestionsRoutes);
-app.use("/api/v1/ai-engine", aiEngineRoutes);
 app.use("/api/report", reportsRoutes);
 app.use("/api/v1/reports", legacyReportsRoutes);
 app.use("/api/v1/cash-management", cashManagementRoutes);

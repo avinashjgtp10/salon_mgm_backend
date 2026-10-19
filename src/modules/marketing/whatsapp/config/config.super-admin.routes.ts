@@ -46,7 +46,6 @@ router.post('/otp/verify', async (req, res, next) => {
 router.get('/',               configController.getConfig)
 router.put('/',               configOtpService.requireVerified, validateSaveConfig, configController.saveConfig)
 router.delete('/',            configOtpService.requireVerified, configController.deleteConfig)
-router.patch('/ai-receptionist', configController.setAiReceptionistEnabled)
 router.post('/test',          configController.testConnection)
 router.post('/sync-limits',   configController.syncLimits)
 router.post('/verify-phone',  configController.verifyPhone)
