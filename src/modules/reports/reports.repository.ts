@@ -4420,10 +4420,12 @@ _buildGstWhere(
     // Amount columns already break the invoice down by.
     item_types?: string[];
     payment_methods?: string[];
+    gst_mode?: "gst" | "non_gst";
   }
 ): { where: string; values: any[]; nextIndex: number } {
   const values: any[] = [salonId];
-  const where = ["s.salon_id = $1", "s.status <> 'draft'", "s.tax_amount::numeric > 0"];
+  // GST report = invoices that carry GST; Non-GST report = invoices with none.
+  const where = ["s.salon_id = $1", "s.status <> 'draft'", filters.gst_mode === "non_gst" ? "COALESCE(s.tax_amount::numeric, 0) = 0" : "s.tax_amount::numeric > 0"];
   let idx = 2;
 
   if (filters.start_date) {
@@ -4465,7 +4467,7 @@ async getGstReportStats(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; staff_ids?: string[]; search?: string;
-    item_types?: string[]; payment_methods?: string[];
+    item_types?: string[]; payment_methods?: string[]; gst_mode?: "gst" | "non_gst";
   }
 ): Promise<GstReportStats> {
   const { where, values } = this._buildGstWhere(salonId, filters);
@@ -4493,7 +4495,7 @@ async getGstReportRows(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; staff_ids?: string[]; search?: string;
-    item_types?: string[]; payment_methods?: string[];
+    item_types?: string[]; payment_methods?: string[]; gst_mode?: "gst" | "non_gst";
     page?: number; limit?: number; is_export?: boolean;
   }
 ): Promise<{
@@ -4522,7 +4524,7 @@ async getGstReportRows(
       COALESCE(items.package_amount, 0) AS package_amount,
       COALESCE(items.membership_amount, 0) AS membership_amount,
       GREATEST(s.subtotal::numeric - s.discount_amount::numeric, 0) AS taxable_amount,
-      s.tax_amount::numeric AS tax_amount,
+      COALESCE(s.tax_amount::numeric, 0) AS tax_amount,
       s.total_amount::numeric AS total,
       COUNT(*) OVER() AS total_count
     FROM sales s

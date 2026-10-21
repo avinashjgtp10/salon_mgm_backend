@@ -1285,6 +1285,8 @@ async getGstReport(
                 ? body.payment_methods.filter((s: unknown) => typeof s === "string" && s.trim() !== "")
                 : undefined,
             search: asString(body.search),
+            // 'non_gst' lists invoices with no GST; anything else (including absent) is the normal GST report.
+            gst_mode: body.gst_mode === "non_gst" ? ("non_gst" as const) : ("gst" as const),
             page: body.page !== undefined ? Number(body.page) : undefined,
             limit: body.limit !== undefined ? Number(body.limit) : undefined,
             is_export: body.is_export === true,
