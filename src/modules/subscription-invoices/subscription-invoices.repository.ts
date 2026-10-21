@@ -7,6 +7,7 @@ const SELECT_INVOICE = `
     SELECT i.id, i.invoice_no, i.salon_id, i.subscription_id, i.payment_id, i.plan_name, i.billing_cycle,
            i.period_start, i.period_end, i.subtotal, i.gst_percent, i.gst_amount, i.total,
            i.payment_mode, i.transaction_id, i.status, i.issued_at, i.emailed_at, i.created_at,
+           i.kind, i.credit_amount, i.upgrade_id, i.description,
            COALESCE(sa.business_name, sa.slug, 'Unnamed') AS salon_name,
            ou.email AS owner_email,
            TRIM(CONCAT(ou.first_name, ' ', COALESCE(ou.last_name, ''))) AS owner_name
@@ -195,6 +196,34 @@ export const subscriptionInvoicesRepository = {
              subtotal, input.gstPercent, gst, total, input.paymentMode, input.transactionId, input.issuedAt.toISOString(), input.createdBy]
         );
         return ins.rows[0].id as string;
+    },
+
+    // The invoice for a completed plan upgrade. Amounts are taken from the stored, already-agreed upgrade quote (not split back
+    // out of the payment), so the invoice states exactly the credit and tax the salon was shown. `paymentId` is null for a
+    // zero-payable upgrade (fully covered by credit): it still gets an auditable invoice, of value 0.
+    // Idempotent per upgrade: calling it again returns the same invoice and never takes another number.
+    async createForUpgrade(db: Db, u: {
+        upgradeId: string; salonId: string; subscriptionId: string; paymentId: string | null; planName: string; billingCycle: string;
+        periodStart: string; periodEnd: string; subtotal: number; gstPercent: number; gstAmount: number; total: number;
+        credit: number; description: string; paymentMode: string; transactionId: string | null; issuedAt: Date; createdBy: string | null;
+    }) {
+        await db.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`sub-invoice-upgrade:${u.upgradeId}`]);
+        const existing = await db.query(`SELECT id FROM subscription_invoices WHERE upgrade_id = $1`, [u.upgradeId]);
+        if (existing.rows[0]) return { id: existing.rows[0].id as string, created: false };
+
+        const invoiceNo = await nextInvoiceNo(db, u.issuedAt);
+        const ins = await db.query(
+            `INSERT INTO subscription_invoices
+                (invoice_no, salon_id, subscription_id, payment_id, plan_name, billing_cycle, period_start, period_end,
+                 subtotal, gst_percent, gst_amount, total, payment_mode, transaction_id, status, issued_at, created_by,
+                 kind, credit_amount, upgrade_id, description)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'paid',$15,$16,'upgrade',$17,$18,$19)
+             RETURNING id`,
+            [invoiceNo, u.salonId, u.subscriptionId, u.paymentId, u.planName, u.billingCycle, u.periodStart, u.periodEnd,
+             u.subtotal, u.gstPercent, u.gstAmount, u.total, u.paymentMode, u.transactionId, u.issuedAt.toISOString(), u.createdBy,
+             u.credit, u.upgradeId, u.description]
+        );
+        return { id: ins.rows[0].id as string, created: true };
     },
 
     // Hard delete. The invoice number is NOT reused (the sequence only moves forward), so deleting leaves a gap in the

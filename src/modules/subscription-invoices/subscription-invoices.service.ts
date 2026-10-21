@@ -129,6 +129,8 @@ export const subscriptionInvoicesService = {
                 total,
                 period_start: isoDate(inv.period_start),
                 period_end: isoDate(inv.period_end),
+                credit: num(inv.credit_amount),
+                description: inv.description ?? null,
             },
             customer: {
                 salon_name: inv.salon_name,
