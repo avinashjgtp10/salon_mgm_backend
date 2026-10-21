@@ -5,6 +5,9 @@ import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { getRazorpay } from "../../config/razorpay";
 import { subscriptionInvoicesService } from "../subscription-invoices/subscription-invoices.service";
+import { subscriptionUpgradeService } from "../subscription-upgrade/subscription-upgrade.service";
+import { salonModulesService } from "../salon-modules/salon-modules.service";
+import { tierOfPlan } from "../subscription-billing/plan-tier";
 
 const TIERS = ["basic", "advance", "growth"] as const;
 const CYCLES = ["monthly", "quarterly", "yearly"] as const;
@@ -123,11 +126,13 @@ export const subscriptionCheckoutService = {
         if (!sub?.id) return `ignored (${type || "no subscription"})`;
 
         const { rows } = await client.query(
-            `SELECT id, salon_id FROM subscriptions WHERE razorpay_subscription_id = $1 FOR UPDATE`,
+            `SELECT id, salon_id, status FROM subscriptions WHERE razorpay_subscription_id = $1 FOR UPDATE`,
             [sub.id]
         );
         const row = rows[0];
         if (!row) return `ignored (unknown subscription ${sub.id})`;
+        // Replaced by a plan upgrade: late events from the old Razorpay subscription must not bring it back to life.
+        if (row.status === "upgraded") return `ignored (${type}: superseded by an upgrade)`;
 
         const start = fromUnix(sub.current_start);
         const end = fromUnix(sub.current_end);
@@ -203,7 +208,22 @@ export const subscriptionCheckoutService = {
         }
     },
 
+    async applyPlanFeatures(razorpaySubscriptionId: string | undefined) {
+        if (!razorpaySubscriptionId) return;
+        const { rows } = await pool.query(
+            `SELECT s.salon_id, sp.tier, sp.name, sp.slug, sl.owner_id
+             FROM subscriptions s JOIN subscription_plans sp ON sp.id = s.plan_id LEFT JOIN salons sl ON sl.id = s.salon_id
+             WHERE s.razorpay_subscription_id = $1`, [razorpaySubscriptionId]);
+        const r = rows[0];
+        const tier = r ? tierOfPlan({ tier: r.tier, name: r.name, slug: r.slug }) : null;
+        if (r?.salon_id && r.owner_id && tier) await salonModulesService.applyPlanTier(r.salon_id, tier, r.owner_id);
+    },
+
     async handleWebhook(event: any): Promise<string> {
+        // Order / payment events that belong to a plan upgrade (no subscription attached) go to the upgrade service.
+        if (!event?.payload?.subscription?.entity?.id && /^(order|payment)./.test(event?.event ?? "")) {
+            return subscriptionUpgradeService.handleGatewayEvent(event);
+        }
         const client = await pool.connect();
         try {
             await client.query("BEGIN");
@@ -212,6 +232,9 @@ export const subscriptionCheckoutService = {
             // After the commit, mail the invoice PDF to the owner (best effort, never blocks Razorpay's 200).
             const paymentId = event?.payload?.payment?.entity?.id;
             if (result === "charged" && paymentId) subscriptionInvoicesService.emailForTransaction(paymentId).catch(() => undefined);
+            // First activation of a plan: the salon gets that plan's features (not on every renewal, so an admin's later
+            // manual customisation isn't undone each month).
+            if (result === "activated") await this.applyPlanFeatures(event?.payload?.subscription?.entity?.id).catch((e: any) => logger.error("Applying plan features failed", { error: e?.message }));
             return result;
         } catch (err) {
             await client.query("ROLLBACK");

@@ -8,6 +8,8 @@ import { subscriptionInvoicesService } from "../subscription-invoices/subscripti
 import { getSalonId } from "../utils/salon.util"
 import { AppError } from "../../middleware/error.middleware"
 import logger from "../../config/logger"
+import { subscriptionBillingService } from "../subscription-billing/subscription-billing.service"
+import { subscriptionUpgradeService } from "../subscription-upgrade/subscription-upgrade.service"
 
 const router = Router()
 
@@ -73,6 +75,21 @@ router.get("/invoices/:id/pdf", authMiddleware, async (req, res, next) => {
         res.send(pdf)
     } catch (err) { next(err) }
 })
+
+// Billing & Plans: the salon's real current subscription (from its own rows + verified payments), its history, and upgrades.
+// Every route is scoped to the caller's own salon; the salon id is never taken from the request.
+const billingRoute = (fn: (salonId: string, req: any) => Promise<unknown>) => async (req: any, res: any, next: any) => {
+    try {
+        ownerOnly(req)
+        res.json({ success: true, data: await fn(await getSalonId(req), req) })
+    } catch (err) { next(err) }
+}
+router.get("/current", authMiddleware, billingRoute((salonId) => subscriptionBillingService.getCurrent(salonId)))
+router.get("/billing-history", authMiddleware, billingRoute((salonId) => subscriptionBillingService.getHistory(salonId)))
+router.post("/upgrade/quote", authMiddleware, billingRoute((salonId, req) => subscriptionUpgradeService.quote(salonId, req.body?.tier, req.body?.cycle)))
+router.post("/upgrade/initiate", authMiddleware, billingRoute((salonId, req) => subscriptionUpgradeService.initiate(salonId, req.user.userId, req.body?.tier, req.body?.cycle)))
+router.post("/upgrade/:id/verify", authMiddleware, billingRoute((salonId, req) => subscriptionUpgradeService.verify(salonId, String(req.params.id), req.body ?? {}, req.user.userId)))
+router.post("/upgrade/:id/cancel", authMiddleware, billingRoute((salonId, req) => subscriptionUpgradeService.cancel(salonId, String(req.params.id))))
 
 // Razorpay -> us. Public (no auth); authenticity comes from the HMAC signature over the raw body.
 router.post("/webhook", async (req, res) => {
