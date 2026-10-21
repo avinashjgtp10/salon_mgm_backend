@@ -1116,6 +1116,8 @@ export interface GstReportFilters {
     page?: number;
     limit?: number;
     is_export?: boolean;
+    /** 'gst' (default): invoices that carry GST. 'non_gst': invoices with no GST on them. */
+    gst_mode?: "gst" | "non_gst";
 }
 
 export interface GstReportRow {
