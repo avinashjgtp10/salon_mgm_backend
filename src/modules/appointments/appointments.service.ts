@@ -2,6 +2,7 @@ import ExcelJS from "exceljs";
 import { randomUUID } from "crypto";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
+import { assertModuleUnlocked } from "../../middleware/moduleLock.middleware";
 import { appointmentsRepository } from "./appointments.repository";
 import { salesRepository } from "../sales/sales.repository";
 import type { SaleItem } from "../sales/sales.types";
@@ -274,6 +275,52 @@ function deriveDisplayStatus(appt: Appointment): Appointment {
     return { ...appt, status: "no-show" };
 }
 
+// ── Job card (staff handoff workflow) ─────────────────────────────────────────
+// Every staff-performed row of an appointment, in the order the client moves
+// through them: services, then packages, then memberships, each in booking order.
+type JobCardRow = AppointmentServiceItem & { status?: string };
+
+function jobCardRows(appt: Pick<Appointment, "services" | "package_items" | "membership_items">): JobCardRow[] {
+    return [...(appt.services ?? []), ...(appt.package_items ?? []), ...(appt.membership_items ?? [])] as JobCardRow[];
+}
+
+// The earliest unfinished row, owned by a different staff member, that comes
+// before rows[index] — or null when rows[index] is ready to start. Unassigned
+// rows never block, since nobody could finish them.
+function waitingOn(rows: JobCardRow[], index: number): JobCardRow | null {
+    const row = rows[index];
+    if (!row) return null;
+    return rows.slice(0, index).find((earlier) =>
+        earlier.staff_id && earlier.staff_id !== row.staff_id && earlier.status !== "completed") ?? null;
+}
+
+// After a row is completed, tell each staff member whose pending service has
+// just become ready that it's their turn — once per staff member.
+async function notifyNewlyReadyStaff(before: Appointment, after: Appointment, salonId: string): Promise<void> {
+    const beforeRows = jobCardRows(before);
+    const afterRows = jobCardRows(after);
+    const readyByStaff = new Map<string, string[]>();
+
+    afterRows.forEach((row, index) => {
+        if (!row.staff_id || (row.status ?? "pending") !== "pending") return;
+        if (waitingOn(afterRows, index) || !waitingOn(beforeRows, index)) return;
+        readyByStaff.set(row.staff_id, [...(readyByStaff.get(row.staff_id) ?? []), row.name]);
+    });
+
+    for (const [staffId, serviceNames] of readyByStaff) {
+        const staff = await staffService.getById(staffId, salonId).catch(() => null);
+        if (!staff?.is_active || !staff.user_id) continue;
+        await notificationsService.create({
+            salon_id: salonId,
+            type: "appointment",
+            reference_id: after.id,
+            target_staff_user_id: staff.user_id,
+            title: "It's your turn",
+            body: `${after.client_name ?? "Walk-in"} is ready for ${serviceNames.join(", ")}`,
+        });
+    }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 // DD-MM-YYYY — matches the frontend's app-wide standard date format (see
@@ -325,6 +372,20 @@ function assignItemRowIds(items?: { id?: string }[]): void {
     for (const item of items) {
         if (!item.id) item.id = randomUUID();
     }
+}
+
+// Salon Customization: a salon with Packages/Memberships locked can't add NEW
+// package/membership rows to a bill. Rows already on the appointment are left
+// alone so editing or paying an existing bill keeps working.
+async function assertNoNewLockedItems(
+    salonId: string | null | undefined,
+    incoming: { id?: string }[] | null | undefined,
+    existing: { id?: string }[] | null | undefined,
+    key: "packages" | "memberships"
+): Promise<void> {
+    if (!incoming || incoming.length === 0) return;
+    const known = new Set((existing ?? []).map((i) => i.id).filter(Boolean));
+    if (incoming.some((i) => !i.id || !known.has(i.id))) await assertModuleUnlocked(salonId, key);
 }
 
 // Looks up, once per flattenServiceConsumables() call, every distinct
@@ -566,6 +627,8 @@ export const appointmentsService = {
         // this just peels the declared recipe/actual-qty data off the JSONB
         // services array and stages it for a relational write once the
         // appointment row (and therefore its id) exists.
+        await assertNoNewLockedItems(body.salon_id, body.package_items, null, "packages");
+        await assertNoNewLockedItems(body.salon_id, body.membership_items, null, "memberships");
         assignServiceRowIds(body.services);
         assignItemRowIds(body.package_items);
         assignItemRowIds(body.membership_items);
@@ -736,8 +799,9 @@ export const appointmentsService = {
         itemId: string;
         salonId: string;
         status: "in_progress" | "completed";
+        requesterRole?: string;
     }): Promise<Appointment> {
-        const { appointmentId, itemId, salonId, status } = params;
+        const { appointmentId, itemId, salonId, status, requesterRole } = params;
         const existing = await appointmentsRepository.findById(appointmentId);
         if (!existing || existing.salon_id !== salonId) {
             throw new AppError(404, "Appointment not found", "NOT_FOUND");
@@ -747,6 +811,21 @@ export const appointmentsService = {
         const arrayKey = (["services", "package_items", "membership_items"] as const)
             .find((key) => (existing[key] as { id?: string }[] | undefined)?.some((row) => row.id === itemId));
         if (!arrayKey) throw new AppError(404, "Service/package/membership row not found", "NOT_FOUND");
+
+        // Job card: a staff member can only start their service once every
+        // earlier service owned by someone else is finished. Owners/admins
+        // can start any row; handoffItem() stays the explicit override.
+        if (status === "in_progress" && requesterRole !== "salon_owner" && requesterRole !== "admin") {
+            const rows = jobCardRows(existing);
+            const blocker = waitingOn(rows, rows.findIndex((row) => row.id === itemId));
+            if (blocker) {
+                throw new AppError(
+                    409,
+                    `Not ready yet: waiting for ${blocker.staff_name || "another staff member"} to finish ${blocker.name}.`,
+                    "NOT_READY"
+                );
+            }
+        }
 
         const now = new Date().toISOString();
         const items = (existing[arrayKey] as (AppointmentServiceItem & { status?: string })[]).map((row) => {
@@ -768,6 +847,15 @@ export const appointmentsService = {
         });
 
         await appointmentsRepository.update(appointmentId, { [arrayKey]: items } as UpdateAppointmentBody);
+
+        if (status === "completed") {
+            notifyNewlyReadyStaff(existing, { ...existing, [arrayKey]: items }, salonId).catch((err: any) => {
+                logger.error("Job card next-staff notification failed", {
+                    appointmentId, itemId, message: err?.message, stack: err?.stack, error: err,
+                });
+            });
+        }
+
         return appointmentsService.getById(appointmentId);
     },
 
@@ -892,6 +980,8 @@ export const appointmentsService = {
         let patch = params.patch;
         const existing = await appointmentsRepository.findById(appointmentId);
         if (!existing) throw new AppError(404, "Appointment not found", "NOT_FOUND");
+        await assertNoNewLockedItems(existing.salon_id, patch.package_items, existing.package_items, "packages");
+        await assertNoNewLockedItems(existing.salon_id, patch.membership_items, existing.membership_items, "memberships");
 
         // "no-show" is the one non-terminal terminal state: a reschedule (time,
         // staff, or duration change) brings it back to "booked" instead of being
@@ -1242,7 +1332,7 @@ export const appointmentsService = {
         // ── Live calendar update ───────────────────────────────────────────────
         // create()/cancel() already push a "notification" socket event that the
         // calendar listens to for a live refresh — update() (reschedule, staff
-        // reassignment, or LUNOX's modifyAppointmentServices changing what's
+        // reassignment, or a services edit changing what's
         // booked/its duration) never did, so any of these silently required a
         // manual page refresh to appear correctly.
         //

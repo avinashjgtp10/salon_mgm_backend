@@ -1530,24 +1530,24 @@ export const emailService = {
     });
   },
 
-  // Sent from salon-plans.service.ts's createInvoice, right after a super
-  // admin creates a SalonoX subscription-billing invoice — the salon owner
-  // gets the same tax invoice as a PDF attachment. Best-effort: the caller
-  // wraps this in a .catch() so a mail-server hiccup never fails invoice
-  // creation itself.
-  async sendSalonPlanInvoiceEmail(params: {
+  // ── Client Requirements (REQ-XXX tickets) ────────────────────────────────
+  // Sent to EACH developer assigned at requirement-creation time (multiple
+  // developers can be assigned in the same Create Requirement form) —
+  // separate from sendRequirementCreatedEmail's client-confirmation +
+  // single internal-team-notification pair below.
+  // Sent when a subscription tax invoice is issued (a Razorpay payment, or a bill a super admin created): the salon
+  // owner gets the invoice as a PDF attachment. Best-effort: callers never await it.
+  async sendSubscriptionInvoiceEmail(params: {
     to: string;
     salonName: string;
     invoiceNo: string;
     planLabel: string;
     amount: number;
-    dueDate: string | null;
     pdfBuffer: Buffer;
     pdfFilename: string;
   }) {
-    const { to, salonName, invoiceNo, planLabel, amount, dueDate, pdfBuffer, pdfFilename } = params;
+    const { to, salonName, invoiceNo, planLabel, amount, pdfBuffer, pdfFilename } = params;
     const formattedAmount = `₹${(Number(amount) || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    const dueDateLabel = dueDate ? new Date(dueDate).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : null;
 
     await transporter.sendMail({
       from: config.smtp.from,
@@ -1569,15 +1569,13 @@ export const emailService = {
                 <tr>
                   <td style="padding:32px 36px;">
                     <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
-                      Hi <strong>${escapeHtml(salonName)}</strong> team, your invoice for the SalonoX ${escapeHtml(planLabel)} subscription has been generated. The GST tax invoice is attached as a PDF.
+                      Hi <strong>${escapeHtml(salonName)}</strong> team, thank you for your payment. Your GST tax invoice for the SalonoX ${escapeHtml(planLabel)} subscription is attached as a PDF.
                     </p>
-                    <table width="100%" cellpadding="0" cellspacing="0"
-                      style="background:#eef2ff;border-radius:10px;border:1px solid #c7d2fe;">
+                    <table width="100%" cellpadding="0" cellspacing="0" style="background:#eef2ff;border-radius:10px;border:1px solid #c7d2fe;">
                       <tr>
                         <td style="padding:20px 24px;">
                           <p style="margin:0 0 8px;color:#4338ca;font-size:14px;"><strong>Invoice No.:</strong> ${escapeHtml(invoiceNo)}</p>
-                          <p style="margin:0 0 8px;color:#4338ca;font-size:20px;font-weight:800;"><strong>Amount:</strong> ${formattedAmount}</p>
-                          ${dueDateLabel ? `<p style="margin:0;color:#4338ca;font-size:13px;"><strong>Due:</strong> ${dueDateLabel}</p>` : ""}
+                          <p style="margin:0;color:#4338ca;font-size:20px;font-weight:800;"><strong>Amount paid:</strong> ${formattedAmount}</p>
                         </td>
                       </tr>
                     </table>
@@ -1596,11 +1594,6 @@ export const emailService = {
     });
   },
 
-  // ── Client Requirements (REQ-XXX tickets) ────────────────────────────────
-  // Sent to EACH developer assigned at requirement-creation time (multiple
-  // developers can be assigned in the same Create Requirement form) —
-  // separate from sendRequirementCreatedEmail's client-confirmation +
-  // single internal-team-notification pair below.
   async sendRequirementAssignedEmail(params: {
     to: string;
     developerName: string;

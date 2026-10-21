@@ -53,6 +53,8 @@ export function buildReceiptHtml(params: {
     rewardPointsValue?: number;
     referralCreditUsed?: number;
     packageCoveredAmount?: number;
+    /** "narrow" (default) = the 80mm receipt used for WhatsApp / downloaded PDFs; "a4" = the full A4 invoice. */
+    layout?: "narrow" | "a4";
 }): string {
     const {
         salon, salonAddress, client, sale, items, staffNames, appointment, paidAmount, dueAmount, couponCode,
@@ -125,6 +127,7 @@ export function buildReceiptHtml(params: {
         service: "Service",
         product: "Product",
         membership: "Membership",
+        package: "Package",
         gift_card: "Gift Card",
         quick: "Quick Sale",
     };
@@ -327,7 +330,7 @@ export function buildReceiptHtml(params: {
     const referralCode = client.referral_code || null;
     const referralEarnings = client.referral_earnings ?? null;
 
-    return `<!DOCTYPE html>
+    const a4Html = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -489,6 +492,138 @@ export function buildReceiptHtml(params: {
     </div>
   </div>
 </div>
+</body>
+</html>`;
+
+    if (params.layout === "a4") return a4Html;
+
+    // ── Narrow receipt (80mm) ─────────────────────────────────────────────────
+    // Same figures as the A4 invoice above (nothing is recomputed), laid out as a compact receipt: centered
+    // salon header, Invoice/Date/Client/Phone/Payment Method rows, ITEM / QTY / AMOUNT with the item type and
+    // its staff under each line, Subtotal and the other adjustments, a bold TOTAL between solid rules, what was
+    // paid, and Thank You. The page height is measured in the browser (fit script) so the PDF is exactly as long
+    // as the receipt — no blank A4 below it.
+    const esc = (v: unknown) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const receiptDate = new Date(appointment ? appointment.scheduledAt : now)
+        .toLocaleDateString("en-GB", { timeZone: IST, day: "2-digit", month: "2-digit", year: "numeric" })
+        .replace(/\//g, "-");
+    const methodLabel = splitLegs.length > 0
+        ? splitLegs.map((leg) => leg.label).join(" + ")
+        : (sale.payment_method ? prettyMethod(String(sale.payment_method)) : "");
+    const kvRow = (label: string, value: string) =>
+        value ? `<div class="kv"><span>${esc(label)}</span><span>${esc(value)}</span></div>` : "";
+
+    const itemRows = items.map((item) => {
+        const rawType = String(item.item_type ?? "");
+        const typeLabel = TYPE_LABEL[rawType] ?? rawType.replace(/_/g, " ").replace(/^w/, (c) => c.toUpperCase());
+        const staff = findStaffName(item.staff_id);
+        const lineAmount = isPackagePaid ? 0 : Number(item.total_price) || 0;
+        return `<tr>
+      <td class="nm">${esc(item.name)}<div class="mt"><span class="ty">${esc(typeLabel)}</span>${staff ? ` · <b>Staff: ${esc(staff)}</b>` : ""}</div></td>
+      <td class="qt">${esc(item.quantity)}</td>
+      <td class="am">${fmt(lineAmount)}</td>
+    </tr>`;
+    }).join("");
+
+    const lines: Array<{ label: string; value: string }> = [];
+    const addLine = (label: string, value: string) => lines.push({ label, value });
+    if (itemDiscountAmt > 0) addLine("Item Discount", `−${fmt(itemDiscountAmt)}`);
+    if (subtotalAmt > 0) addLine("Subtotal", fmt(subtotalAmt));
+    if (couponDisc > 0) addLine(resolvedCouponCode ? `Coupon (${resolvedCouponCode})` : "Coupon", `−${fmt(couponDisc)}`);
+    if (packageCoveredAmt > 0) addLine("Package Covered", `−${fmt(packageCoveredAmt)}`);
+    if (membershipDiscountAmt > 0) addLine("Membership Discount", `−${fmt(membershipDiscountAmt)}`);
+    if (taxBreakdown.length > 0) {
+        taxBreakdown.filter((t) => t.amount > 0).forEach((t) =>
+            addLine(`${t.name} ${t.rate}%${t.inclusive ? " (incl.)" : ""}`, `${t.inclusive ? "" : "+"}${fmt(t.amount)}`));
+    } else if (exclusiveTaxTotal > 0) {
+        addLine("Tax", `+${fmt(exclusiveTaxTotal)}`);
+    }
+    if (exCharges > 0) addLine("Extra Charges", `+${fmt(exCharges)}`);
+    if (manualDisc > 0) addLine("Bill Discount", `−${fmt(manualDisc)}`);
+    if (referralDisc > 0) addLine("Referral Discount", `−${fmt(referralDisc)}`);
+    if (rewardPointsValuePaid > 0) addLine("Reward Points Used", `−${fmt(rewardPointsValuePaid)}`);
+    if (membershipWalletUsedAmt > 0) addLine("Membership Wallet Used", `−${fmt(membershipWalletUsedAmt)}`);
+    if (ewalletUsedAmt > 0) addLine("eWallet Used", `−${fmt(ewalletUsedAmt)}`);
+    if (referralCreditUsedAmt > 0) addLine("Referral Credit Used", `−${fmt(referralCreditUsedAmt)}`);
+    if (!isPackagePaid && Math.abs(roundOff) >= 0.005) addLine("Round Off", `${roundOff >= 0 ? "+" : "−"}${fmt(Math.abs(roundOff))}`);
+    if (tipAmt > 0) addLine("Staff Tip (incl.)", fmt(tipAmt));
+
+    const paidLines: Array<{ label: string; value: string }> = [];
+    if (splitLegs.length > 1) splitLegs.forEach((leg) => paidLines.push({ label: `Paid via ${leg.label}`, value: fmt(leg.amount) }));
+    if (paidAmount > 0) paidLines.push({ label: splitLegs.length > 1 ? "Total Paid" : "Paid", value: fmt(paidAmount) });
+    if (dueAmount > 0) paidLines.push({ label: "Balance Due", value: fmt(dueAmount) });
+
+    const metaLines = [salonAddress, salonPhone ? `Ph: ${salonPhone}` : "", gst ? `GSTIN: ${gst}` : ""]
+        .filter(Boolean).map((l) => `<div>${esc(l)}</div>`).join("");
+    const rows2 = (rows: Array<{ label: string; value: string }>) =>
+        rows.map((r) => `<div class="kv"><span>${esc(r.label)}</span><span>${esc(r.value)}</span></div>`).join("");
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Receipt ${esc(invoiceNo)} — ${esc(salonName)}</title>
+<style id="page-style">@page{size:80mm 297mm;margin:4mm}</style>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Inter,'Segoe UI',Helvetica,Arial,sans-serif;font-size:11px;color:#000;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .page{width:72mm}
+  .c{text-align:center}
+  .logo{max-width:20mm;max-height:20mm;width:auto;height:auto;display:block;margin:0 auto 4px;object-fit:contain}
+  .salon{font-size:19px;font-weight:800;line-height:1.2;margin-bottom:3px}
+  .meta{font-size:10px;line-height:1.5}
+  .rule{border:0;border-top:1px dashed #000;margin:9px 0}
+  .kv{display:flex;justify-content:space-between;gap:8px;font-size:11.5px;line-height:1.75}
+  .kv span:last-child{text-align:right}
+  table.items{width:100%;border-collapse:collapse}
+  table.items th{text-align:left;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.3px;padding:0 0 4px;border-bottom:1.5px solid #000}
+  table.items th.qt,table.items td.qt{width:14%;text-align:center}
+  table.items th.am,table.items td.am{width:30%;text-align:right;white-space:nowrap}
+  table.items td{padding:7px 0 2px;vertical-align:top;font-size:12px;line-height:1.35}
+  table.items td.nm{word-break:break-word}
+  .mt{font-size:9.5px;color:#555;margin-top:1px}
+  .mt b{color:#222}
+  .total{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:19px;font-weight:800;border-top:2px solid #000;border-bottom:2px solid #000;padding:6px 0;margin:8px 0}
+  .thanks{font-size:11.5px;margin-top:2px}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="c">
+    ${logoUrl ? `<img class="logo" src="${esc(logoUrl)}" alt="">` : ""}
+    <div class="salon">${esc(salonName)}</div>
+    <div class="meta">${metaLines}</div>
+  </div>
+  <hr class="rule">
+  ${kvRow("Invoice", String(invoiceNo))}
+  ${kvRow("Date", receiptDate)}
+  ${kvRow("Client", client.name || "Walk-In")}
+  ${kvRow("Phone", client.phone || "")}
+  ${kvRow("Payment Method", methodLabel)}
+  <hr class="rule">
+  <table class="items">
+    <thead><tr><th>Item</th><th class="qt">Qty</th><th class="am">Amount</th></tr></thead>
+    <tbody>${itemRows || `<tr><td colspan="3" class="c">No items</td></tr>`}</tbody>
+  </table>
+  <hr class="rule">
+  ${rows2(lines)}
+  <div class="total"><span>TOTAL</span><span>${fmt(grandTotal)}</span></div>
+  ${rows2(paidLines)}
+  <hr class="rule">
+  <div class="c thanks">Thank You!</div>
+</div>
+<script>(function(){
+  function fit(){
+    var el=document.querySelector('.page'), st=document.getElementById('page-style');
+    if(!el||!st) return;
+    var h=el.offsetHeight; if(!h) return;
+    // CSS px are 1/96in, so this is exact; +8mm is the 4mm @page margin top and bottom, +1mm guards a hairline spill.
+    var mm=Math.ceil(h*25.4/96)+9;
+    st.textContent='@page{size:80mm '+mm+'mm;margin:4mm}';
+  }
+  fit();
+  window.addEventListener('load',fit);
+})();</script>
 </body>
 </html>`;
 }

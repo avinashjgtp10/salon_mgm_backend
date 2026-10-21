@@ -5,8 +5,6 @@ import { flowsService } from '../flows/flows.service'
 import { inboxRepository } from '../inbox/inbox.repository'
 import { whatsappAutomationService } from '../../../whatsapp-automation/whatsapp-automation.service'
 import { notificationsService } from '../../../notifications/notifications.service'
-import { aiEngineService } from '../../../ai-engine/ai-engine.service'
-import { aiEngineRepository } from '../../../ai-engine/ai-engine.repository'
 import pool from '../../../../config/database'
 import logger from '../../../../config/logger'
 
@@ -221,30 +219,11 @@ export const webhooksService = {
       })
     })
 
-    // ── LUNOX AI receptionist — opt-in per salon, off by default ────────────
-    // handleIncomingMessage never throws (it catches internally), so this is
-    // safe to await without risking the webhook response. Plain text only, as
-    // before - button taps and media must not be fed to it as if typed.
-    const aiEnabled = msg.type === 'text'
-      ? await aiEngineRepository.isAiReceptionistEnabled(salonId).catch(() => false)
-      : false
-    if (aiEnabled) {
-      await aiEngineService.handleIncomingMessage({
-        salonId,
-        phone: msg.from,
-        name:  senderName,
-        text:  messageBody,
-      })
-    } else {
-      // Auto-send the booking form on a window-reopening reply (if the salon
-      // enabled it). Skipped when the AI receptionist is on - it books itself.
-      const aiOn = await aiEngineRepository.isAiReceptionistEnabled(salonId).catch(() => false)
-      if (!aiOn) {
-        flowsService.autoSendOnReply(salonId, msg.from, prevInboundAt).catch((err: any) =>
-          logger.warn('Booking form auto-send failed', { salonId, message: err?.message })
-        )
-      }
-    }
+    // Auto-send the booking form on a window-reopening reply (if the salon
+    // enabled it).
+    flowsService.autoSendOnReply(salonId, msg.from, prevInboundAt).catch((err: any) =>
+      logger.warn('Booking form auto-send failed', { salonId, message: err?.message })
+    )
   },
 
   async processStatus(status: any) {

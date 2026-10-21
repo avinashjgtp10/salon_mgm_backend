@@ -85,6 +85,7 @@ export const branchOwnerRepository = {
       LEFT JOIN LATERAL (
         SELECT * FROM subscriptions
         WHERE salon_id = s.id
+          AND status NOT IN ('created', 'authenticated')   -- an unfinished Razorpay checkout (created/authenticated) is not a subscription; it must never hide the real one
         ORDER BY created_at DESC
         LIMIT 1
       ) sub ON true
@@ -285,6 +286,7 @@ export const branchOwnerRepository = {
         JOIN LATERAL (
           SELECT * FROM subscriptions
           WHERE salon_id = bos.salon_id
+            AND status NOT IN ('created', 'authenticated')   -- an unfinished Razorpay checkout (created/authenticated) is not a subscription; it must never hide the real one
           ORDER BY created_at DESC
           LIMIT 1
         ) sub ON true

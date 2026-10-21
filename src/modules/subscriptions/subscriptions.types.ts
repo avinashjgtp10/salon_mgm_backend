@@ -1,6 +1,6 @@
 // ─── Enums ────────────────────────────────────────────────────
 
-export type BillingCycle = "monthly" | "yearly" | "weekly" | "daily"
+export type BillingCycle = "monthly" | "quarterly" | "yearly" | "weekly" | "daily"
 
 export type SubscriptionStatus =
     | "created"

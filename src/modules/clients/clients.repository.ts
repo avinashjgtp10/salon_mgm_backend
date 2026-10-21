@@ -267,12 +267,24 @@ export const clientsRepository = {
         const selectCols = isListView
             ? `c.id, c.first_name, c.last_name, c.email, c.referral_code,
                c.phone_country_code, c.phone_number, c.gender, c.is_blocked,
-               c.reviews_avg, c.reviews_count, c.created_at`
+               c.created_at`
             : `c.*, COALESCE(rp.points_earned, 0) AS referral_points_earned`;
+        // clients.reviews_avg / reviews_count are never written by anything, so
+        // the real numbers are aggregated from the reviews table (the source
+        // the client's Feedback & Review tab reads).
+        const reviewsJoin = `
+      LEFT JOIN (
+        SELECT client_id, COUNT(*)::int AS cnt, ROUND(AVG(rating)::numeric, 1) AS avg
+        FROM reviews
+        WHERE salon_id = $1 AND client_id IS NOT NULL
+        GROUP BY client_id
+      ) rv ON rv.client_id = c.id`;
         const dataSql = `
-      SELECT ${selectCols}, COALESCE(ts.total_sales, 0) AS computed_total_sales
+      SELECT ${selectCols}, COALESCE(ts.total_sales, 0) AS computed_total_sales,
+             rv.avg AS computed_reviews_avg, COALESCE(rv.cnt, 0) AS computed_reviews_count
       FROM clients c
       ${tsJoin}
+      ${reviewsJoin}
       ${isListView ? "" : referralPointsJoin}
       ${whereSql}
       ORDER BY ${orderCol} ${so}
@@ -287,8 +299,13 @@ export const clientsRepository = {
 
         const total = countRes.rows[0]?.total ?? 0;
         const items = dataRes.rows.map((r: any) => {
-            const { computed_total_sales, ...rest } = r;
-            return { ...rest, total_sales: computed_total_sales };
+            const { computed_total_sales, computed_reviews_avg, computed_reviews_count, ...rest } = r;
+            return {
+                ...rest,
+                total_sales: computed_total_sales,
+                reviews_avg: computed_reviews_avg,
+                reviews_count: computed_reviews_count,
+            };
         });
         return {
             items,

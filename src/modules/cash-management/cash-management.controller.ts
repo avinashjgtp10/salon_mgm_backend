@@ -86,6 +86,21 @@ export const cashManagementController = {
     }
   },
 
+  // GET /api/v1/cash-management/close-summary — the Close Counter modal's own data (see service.getCloseSummary).
+  async getCloseSummary(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = getSalonId(req);
+      const cashManagementId =
+        req.query.cash_management_id !== undefined
+          ? String(req.query.cash_management_id || "").trim() || undefined
+          : undefined;
+      const data = await cashManagementService.getCloseSummary(salonId, cashManagementId);
+      return sendSuccess(res, 200, data, "Close counter summary fetched successfully");
+    } catch (error) {
+      return next(error);
+    }
+  },
+
   async listCashIncomeEntries(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = getSalonId(req);

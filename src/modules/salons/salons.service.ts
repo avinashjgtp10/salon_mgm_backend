@@ -1,10 +1,10 @@
+import { subscriptionCheckoutService } from "../subscriptions/subscription-checkout.service";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { salonsRepository } from "./salons.repository";
 import { CreateSalonBody, UpdateSalonBody, Salon } from "./salons.types";
 import { authRepository } from "../auth/auth.repository";
 import { issueSessionTokens } from "../auth/session.util";
-import { planPaymentsService } from "../plan-payments/plan-payments.service";
 
 const slugify = (text: string) =>
     text
@@ -78,15 +78,10 @@ export const salonsService = {
                 country: body.country || registrant?.country || undefined,
             });
 
-            // New accounts go from sign-up straight to the subscription page, so
-            // a plan may already be paid for. Apply it to this brand-new salon
-            // BEFORE the tokens below are issued and the app first checks the
-            // subscription status. Never allowed to fail onboarding.
-            try {
-                await planPaymentsService.applyPendingForNewSalon(ownerId, salon.id);
-            } catch (err) {
-                logger.error("salonsService.create — applying pre-paid plan failed", { ownerId, salonId: salon.id, err });
-            }
+            // Anything the owner subscribed to on the plan page before this salon existed now belongs to it.
+            await subscriptionCheckoutService.attachPendingToSalon(ownerId, salon.id).catch((err) =>
+                logger.error("attachPendingToSalon failed", { ownerId, salonId: salon.id, error: err?.message })
+            );
 
             // Fetch user so we can embed the correct role in the new token
             const user = await authRepository.findUserById(ownerId);

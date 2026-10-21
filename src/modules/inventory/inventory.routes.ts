@@ -2,9 +2,9 @@ import { rateLimit } from "express-rate-limit";
 import { recognizeAuditProduct, validateRecognition } from "./product-scanner.controller";
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
+import { requireModule } from "../../middleware/moduleLock.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { requirePermission, requireAnyPermission } from "../../middleware/permission.middleware";
-import { requirePlanFeature } from "../../middleware/planFeature.middleware";
 import { uploadMiddleware } from "../../middleware/upload.middleware";
 import {
     suppliersController,
@@ -150,15 +150,7 @@ const viewProductAudit = requirePermission("view_product_audit");
 const createProductAudit = requirePermission("create_product_audit");
 const approveProductAudit = requirePermission("approve_product_audit");
 
-// Every route below still calls authMiddleware itself (kept, rather than
-// hoisted into this router.use(), so each route's full middleware chain
-// stays readable in place) — but router.use() runs before route handlers
-// regardless of where authMiddleware sits inside them, so this needs its
-// own authMiddleware here too, ahead of the plan-feature check, or
-// req.user wouldn't exist yet when requirePlanFeature reads it. Running
-// authMiddleware twice per request (once here, once again inside the
-// matched route) is harmless — it just re-verifies the same JWT.
-router.use(authMiddleware, requirePlanFeature("inventory"));
+router.use(authMiddleware, requireModule("inventory"));
 
 // ─── Suppliers ────────────────────────────────────────────────────────────────
 

@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { AppError } from "../../middleware/error.middleware";
+import { isModuleLocked } from "../../middleware/moduleLock.middleware";
 import { bookingsRepository, SALON_TIMEZONE } from "./bookings.repository";
 import { clientsRepository } from "../clients/clients.repository";
 import { generateUniqueReferralCode } from "../clients/clients.service";
@@ -9,7 +10,6 @@ import { waScheduledMessagesService } from "../whatsapp-automation/wa-scheduled-
 import { appointmentsService } from "../appointments/appointments.service";
 import { appointmentsRepository } from "../appointments/appointments.repository";
 import { blockedTimesRepository } from "../blocked_times/blocked_times.repository";
-import { hasFeature } from "../../middleware/planFeature.middleware";
 import { PublicBookingRequest } from "./bookings.types";
 import { bookingEmailOtpService } from "./booking-email-otp.service";
 import { loadStaffPresence } from "../attendance/attendance.presence";
@@ -141,27 +141,6 @@ function resolveDateWindow(dateStr: string, policy: BookingPolicyInput): DateWin
     // out slots that have already gone by, even when notice is zero.
     const noticeMinutes = Math.max(0, Number(policy.min_notice_hours) || 0) * 60;
     return { bookable: true, earliestMinute: Math.max(0, today.minutes + noticeMinutes - daysOut * 1440) };
-}
-
-// BUG-OB-012 / DECISION-OB-002: the admin Marketplace screens sit behind
-// requirePlanFeature("online_booking"), but the public endpoints are
-// unauthenticated and so never went through that middleware — a salon whose
-// plan excludes online booking could still take bookings through its link,
-// which made the paywall fiction. Same entitlement source as the middleware
-// (hasFeature), just reached without a session.
-const ONLINE_BOOKING_FEATURE = "online_booking";
-
-async function assertSalonEntitled(salonId: string): Promise<void> {
-    const entitled = await hasFeature(salonId, ONLINE_BOOKING_FEATURE);
-    if (!entitled) {
-        // Deliberately the same shape of message an unpublished salon gets —
-        // a customer shouldn't be told about the salon's billing status.
-        throw new AppError(
-            404,
-            "This salon isn't accepting online bookings right now. Please contact the salon directly.",
-            "BOOKING_UNAVAILABLE"
-        );
-    }
 }
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
@@ -518,10 +497,26 @@ function assertManageToken(appointmentId: string, token: string | undefined | nu
     if (!valid) throw new AppError(403, "Invalid or expired management link", "FORBIDDEN");
 }
 
+// Salon Customization: the admin Marketplace screens are gated by requireModule
+// (marketplace.routes.ts), but the public endpoints are unauthenticated and
+// never pass through it — so a salon with Online Booking locked could still
+// take bookings through its link. Same lock source, reached without a session.
+// Deliberately the same message an unpublished salon gets: a customer
+// shouldn't be told about the salon's plan.
+async function assertSalonBookable(salonId: string): Promise<void> {
+    if (await isModuleLocked(salonId, "online_booking")) {
+        throw new AppError(
+            404,
+            "This salon isn't accepting online bookings right now. Please contact the salon directly.",
+            "BOOKING_UNAVAILABLE"
+        );
+    }
+}
+
 export const bookingsService = {
     async getSalonBySlug(slug: string) {
         const salon = await bookingsRepository.findSalonBySlug(slug);
-        if (salon) await assertSalonEntitled(salon.id);
+        if (salon) await assertSalonBookable(salon.id);
         if (!salon) {
             // "Salon not found" is wrong — and actively misleading — when the
             // link is correct and the salon has simply turned online booking
@@ -571,7 +566,7 @@ export const bookingsService = {
     }) {
         const salon = await bookingsRepository.findSalonById(params.salon_id);
         if (!salon) throw new AppError(404, "Salon not found", "NOT_FOUND");
-        await assertSalonEntitled(params.salon_id);
+        await assertSalonBookable(params.salon_id);
 
         if (params.serviceStaff && params.serviceStaff.length > 0) {
             const services = await Promise.all(
@@ -618,7 +613,7 @@ export const bookingsService = {
         // via a direct link (the marketplace Unpublish toggle must actually work).
         const salon = await bookingsRepository.findSalonById(body.salon_id);
         if (!salon) throw new AppError(404, "This salon is not accepting online bookings", "NOT_FOUND");
-        await assertSalonEntitled(body.salon_id);
+        await assertSalonBookable(body.salon_id);
 
         // Same-day switch / minimum notice / past-date, checked before anything
         // is written. The offered slot list already excludes these, but a tab

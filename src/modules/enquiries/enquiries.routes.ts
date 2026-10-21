@@ -1,15 +1,13 @@
 import { Router } from "express";
 import { authMiddleware } from "../../middleware/auth.middleware";
+import { requireModule } from "../../middleware/moduleLock.middleware";
 import { roleMiddleware } from "../../middleware/role.middleware";
 import { requirePermission } from "../../middleware/permission.middleware";
-import { requirePlanFeature } from "../../middleware/planFeature.middleware";
 import { enquiriesController } from "./enquiries.controller";
 
 const router = Router();
 
-// featureKey "enquiries" — Basic tier and up by default, revocable per salon
-// via feature_overrides.
-router.use(authMiddleware, requirePlanFeature("enquiries"));
+router.use(authMiddleware, requireModule("enquiries"));
 
 const ownerAdminStaff = roleMiddleware("salon_owner", "admin", "staff");
 // Split from one shared view_enquiries key, which previously gated all 5

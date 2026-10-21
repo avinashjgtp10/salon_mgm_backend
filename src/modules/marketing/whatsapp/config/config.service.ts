@@ -96,12 +96,6 @@ export const configService = {
     }
   },
 
-  async setAiReceptionistEnabled(salonId: string, enabled: boolean) {
-    const updated = await configRepository.setAiReceptionistEnabled(salonId, enabled)
-    if (!updated) throw new AppError(400, 'WhatsApp not configured for this salon', 'WA_NOT_CONFIGURED')
-    return { ai_receptionist_enabled: updated.ai_receptionist_enabled }
-  },
-
   async saveConfig(salonId: string, body: SaveConfigBody) {
 
     // Trim EVERY credential field before anything touches it. These are all
