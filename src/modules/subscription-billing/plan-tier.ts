@@ -53,7 +53,13 @@ export function addCycle(from: Date, cycle: Cycle): Date {
 export function dbDate(v: unknown): Date | null {
     if (v == null) return null;
     if (v instanceof Date) return v;
-    const s = String(v);
-    const d = new Date(/[zZ]|[+-]\d{2}(:?\d{2})?$/.test(s) ? s.replace(" ", "T") : `${s.replace(" ", "T")}Z`);
+    let s = String(v).trim().replace(" ", "T");
+    // Postgres writes zones as "+00" / "+05:30"; JS only accepts "+00:00" / "Z". No zone at all means UTC (session TZ).
+    if (!s.includes("T")) s += "T00:00:00";   // a bare date
+    const z = s.match(/([zZ]|[+-]\d{2}(?::?\d{2})?)$/);
+    if (!z) s += "Z";
+    else if (/^[+-]\d{2}$/.test(z[1])) s += ":00";
+    else if (/^[+-]\d{4}$/.test(z[1])) s = s.slice(0, -2) + ":" + s.slice(-2);
+    const d = new Date(s);
     return Number.isNaN(d.getTime()) ? null : d;
 }
