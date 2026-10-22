@@ -1732,6 +1732,7 @@ export interface AllClientsReportFilters {
 }
 
 export interface AllClientsReportRow {
+    client_code: string | null;
     client_id: string;
     client_name: string;
     contact: string;
