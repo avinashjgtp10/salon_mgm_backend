@@ -4,11 +4,18 @@ import { appointmentsRepository } from '../appointments/appointments.repository'
 import { appointmentsService } from '../appointments/appointments.service';
 import { paymentsService } from '../payments/payments.service';
 import { paymentSettingsRepository } from '../payment-settings/payment-settings.repository';
-import { posPaymentsRepository } from './pos-payments.repository';
+import { DuplicatePosRequestError, posPaymentsRepository } from './pos-payments.repository';
 import { providerFactory } from './providers/provider.factory';
-import { CreatePosPaymentBody, PosPaymentRequest, PosPaymentStatus, PosProviderId } from './pos-payments.types';
+import { buildTxnContext, toRequestedAt } from './pos-payments.txn-context';
+import { assertNoBlockingPosPayment } from './pos-payments.guard';
+import { assertPosAmountWithinOutstanding } from './pos-payments.balance';
+import { CreatePosPaymentBody, NON_TERMINAL_STATUSES, PosPaymentRequest, PosPaymentStatus, PosProviderId } from './pos-payments.types';
+import { PaymentProvider, ProviderCancelResult, ProviderStatusResult, ProviderTxnContext } from './providers/provider.types';
 
 const AMOUNT_TOLERANCE = 0.5; // rupees — guards against float/rounding noise, not real mismatches
+// Provider statuses that prove no money moved — the only basis for marking a
+// provider-backed request CANCELLED.
+const DEFINITIVE_NOT_PAID: PosPaymentStatus[] = ['FAILED', 'CANCELLED', 'EXPIRED'];
 
 export const posPaymentsService = {
 
@@ -50,17 +57,31 @@ export const posPaymentsService = {
       terminalProviderId = terminal.provider_terminal_id;
     }
 
-    const request = await posPaymentsRepository.create({
-      salon_id: salonId,
-      branch_id: params.branchId ?? appt.branch_id ?? undefined,
-      appointment_id: appointmentId,
-      client_id: params.clientId,
-      terminal_id: params.terminalId ?? null,
-      provider: params.provider,
-      amount: params.amount,
-      payload: params.payload,
-      created_by: requesterUserId,
-    });
+    let request: PosPaymentRequest;
+    try {
+      request = await posPaymentsRepository.create({
+        salon_id: salonId,
+        branch_id: params.branchId ?? appt.branch_id ?? undefined,
+        appointment_id: appointmentId,
+        client_id: params.clientId,
+        terminal_id: params.terminalId ?? null,
+        provider: params.provider,
+        amount: params.amount,
+        payload: params.payload,
+        created_by: requesterUserId,
+      }, async (client) => {
+        // Under the appointment payment lock, so no other payment can land
+        // between these checks and the request being created.
+        await assertNoBlockingPosPayment(appointmentId, salonId, { client });
+        await assertPosAmountWithinOutstanding(appointmentId, salonId, params.amount, params.payload);
+      });
+    } catch (err) {
+      // Lost a race with a concurrent create — same answer as the check above.
+      if (err instanceof DuplicatePosRequestError) {
+        throw new AppError(409, `A payment request (${err.existing.payment_reference}) is already in progress for this appointment`, 'DUPLICATE_REQUEST');
+      }
+      throw err;
+    }
     await posPaymentsRepository.addEvent(request.id, 'CREATED', null, 'PENDING', { provider: params.provider });
 
     try {
@@ -70,6 +91,7 @@ export const posPaymentsService = {
         amount: request.amount,
         currency: request.currency,
         terminalProviderId,
+        requestedAt: toRequestedAt(request.created_at),
       });
       const updated = await posPaymentsRepository.transitionStatus(request.id, {
         status: result.status,
@@ -89,6 +111,18 @@ export const posPaymentsService = {
     }
   },
 
+  /**
+   * The appointment's unresolved provider-backed POS request, refreshed
+   * through the normal poll-through (so it may come back resolved), or null.
+   * Lets a reopened appointment resume the existing transaction instead of
+   * starting another payment.
+   */
+  async getActiveForAppointment(appointmentId: string, salonId: string): Promise<PosPaymentRequest | null> {
+    const unresolved = await posPaymentsRepository.findUnresolvedForAppointment(appointmentId, salonId);
+    if (!unresolved) return null;
+    return posPaymentsService.getStatus(unresolved.id, salonId);
+  },
+
   async getStatus(id: string, salonId: string): Promise<PosPaymentRequest> {
     let request = await posPaymentsRepository.findById(id, salonId);
     if (!request) throw new AppError(404, 'Payment request not found', 'NOT_FOUND');
@@ -101,7 +135,7 @@ export const posPaymentsService = {
       // is polling from the frontend at all (closed tab).
       try {
         const provider = await providerFactory.getProvider(salonId, request.provider);
-        const live = await provider.getPaymentStatus(request.payment_reference, request.provider_transaction_id);
+        const live = await provider.getPaymentStatus(await buildTxnContext(request));
         request = await posPaymentsService.applyProviderStatus(request, live);
       } catch (err: any) {
         logger.warn('[pos-payments] poll-through status check failed', { requestId: id, message: err?.message });
@@ -177,7 +211,10 @@ export const posPaymentsService = {
     // payment-write path — every existing side effect (tax/wallet/commission/
     // receipts/package redemption) fires exactly as it does for Cash/Card/UPI.
     try {
-      const payment = await paymentsService.create(request.payload, request.created_by ?? undefined);
+      // Identifies this request to the payments guard, so its own review flag
+      // (e.g. it was deferred at expiry before confirming) doesn't block
+      // recording the payment it just confirmed.
+      const payment = await paymentsService.create(request.payload, request.created_by ?? undefined, { posPaymentRequestId: request.id });
       let saleId: string | null = null;
       if (Number(payment.due_amount) === 0 && request.appointment_id) {
         try {
@@ -216,20 +253,102 @@ export const posPaymentsService = {
       throw new AppError(400, `Cannot cancel a request in status ${request.status}`, 'BAD_REQUEST');
     }
 
-    if (request.provider !== 'manual') {
-      try {
-        const provider = await providerFactory.getProvider(salonId, request.provider);
-        await provider.cancelPayment(request.payment_reference, request.provider_transaction_id);
-      } catch (err: any) {
-        logger.warn('[pos-payments] provider cancelPayment failed — cancelling locally anyway', { requestId: id, message: err?.message });
-      }
+    if (request.provider === 'manual') {
+      return posPaymentsService.markCancelled(request, null);
     }
 
-    const updated = await posPaymentsRepository.transitionStatus(id, { status: 'CANCELLED' });
-    if (updated) await posPaymentsRepository.addEvent(id, 'CANCELLED', request.status, 'CANCELLED');
-    // If the transition lost a race (e.g. a webhook just confirmed SUCCESS),
+    // Provider-backed: an accepted abort, or a failed call, says nothing
+    // about whether the customer paid. Only the provider's status can.
+    //   1. status first — already paid → finalize instead of cancelling;
+    //   2. abort;
+    //   3. status again — CANCELLED only on a definitive "not paid".
+    // Anything still open stays open, flagged for reconciliation, which
+    // also keeps the duplicate-payment guard blocking a new request.
+    let provider: PaymentProvider;
+    let ctx: ProviderTxnContext;
+    try {
+      provider = await providerFactory.getProvider(salonId, request.provider);
+      ctx = await buildTxnContext(request);
+    } catch (err: any) {
+      logger.warn('[pos-payments] cancel: provider unavailable — not cancelled', { requestId: id, message: err?.message });
+      return posPaymentsService.deferCancel(request, null, null, `provider unavailable: ${err?.message ?? 'unknown error'}`);
+    }
+
+    const before = await posPaymentsService.tryProviderStatus(request, provider, ctx);
+    if (before?.status === 'SUCCESS') return posPaymentsService.applyProviderStatus(request, before);
+    if (before && DEFINITIVE_NOT_PAID.includes(before.status)) return posPaymentsService.markCancelled(request, { status: before.raw });
+
+    let abort: ProviderCancelResult;
+    try {
+      abort = await provider.cancelPayment(ctx);
+    } catch (err: any) {
+      abort = { outcome: 'UNKNOWN', raw: { error: err?.message ?? 'unknown error' } };
+    }
+
+    const after = await posPaymentsService.tryProviderStatus(request, provider, ctx);
+    if (after?.status === 'SUCCESS') return posPaymentsService.applyProviderStatus(request, after);
+    if (after && DEFINITIVE_NOT_PAID.includes(after.status)) {
+      return posPaymentsService.markCancelled(request, { abort: abort.raw, status: after.raw });
+    }
+    return posPaymentsService.deferCancel(request, abort, after ?? before, after ? null : 'status check failed');
+  },
+
+  /** Status enquiry for cancel(): null (logged) on any error instead of throwing. */
+  async tryProviderStatus(request: PosPaymentRequest, provider: PaymentProvider, ctx: ProviderTxnContext): Promise<ProviderStatusResult | null> {
+    try {
+      return await provider.getPaymentStatus(ctx);
+    } catch (err: any) {
+      logger.warn('[pos-payments] cancel: status check failed', { requestId: request.id, message: err?.message });
+      return null;
+    }
+  },
+
+  async markCancelled(request: PosPaymentRequest, providerResponse: unknown): Promise<PosPaymentRequest> {
+    const updated = await posPaymentsRepository.transitionStatus(request.id, {
+      status: 'CANCELLED',
+      provider_response: providerResponse ?? undefined,
+    });
+    if (updated) await posPaymentsRepository.addEvent(request.id, 'CANCELLED', request.status, 'CANCELLED', providerResponse ?? undefined);
+    // If the transition lost a race (e.g. a poll just confirmed SUCCESS),
     // return the current (now-SUCCESS) row rather than pretending it cancelled.
-    return updated ?? (await posPaymentsRepository.findById(id, salonId)) ?? request;
+    return updated ?? (await posPaymentsRepository.findById(request.id, request.salon_id)) ?? request;
+  },
+
+  /**
+   * Cancel requested but the outcome is unconfirmed: not cancelled, not
+   * failed. Stays non-terminal (still polled, still blocks a new request
+   * for the appointment) and is flagged for review. Conditional on still
+   * being open, so it can't overwrite a concurrent finalization.
+   */
+  async deferCancel(
+    request: PosPaymentRequest,
+    abort: ProviderCancelResult | null,
+    lastStatus: ProviderStatusResult | null,
+    note: string | null,
+  ): Promise<PosPaymentRequest> {
+    const details = [
+      `abort: ${abort?.outcome ?? 'not sent'}${abort?.retryable ? ' (retryable)' : ''}`,
+      `last status: ${lastStatus?.status ?? 'unknown'}`,
+      ...(note ? [note] : []),
+    ].join('; ');
+    const updated = await posPaymentsRepository.transitionStatus(request.id, {
+      status: request.status,
+      needs_review: true,
+      review_reason:
+        `Cancel requested but ${request.provider} has not confirmed the outcome (${details}) — not cancelled. ` +
+        'Verify on the terminal / provider dashboard; it stays open and is re-checked automatically.',
+      provider_response: { abort: abort?.raw ?? null, status: lastStatus?.raw ?? null },
+    });
+    if (updated) {
+      await posPaymentsRepository.addEvent(request.id, 'CANCEL_UNCONFIRMED', request.status, request.status, {
+        abortOutcome: abort?.outcome ?? null,
+        retryable: abort?.retryable ?? false,
+        lastStatus: lastStatus?.status ?? null,
+        note,
+      });
+      logger.warn('[pos-payments] cancel unconfirmed — left open for reconciliation', { requestId: request.id, details });
+    }
+    return updated ?? (await posPaymentsRepository.findById(request.id, request.salon_id)) ?? request;
   },
 
   /** Manual provider only — staff types in the machine's printed transaction id. */
@@ -239,6 +358,39 @@ export const posPaymentsService = {
     if (request.provider !== 'manual') throw new AppError(400, 'Only manual-provider requests can be confirmed this way', 'BAD_REQUEST');
     if (!providerTransactionId?.trim()) throw new AppError(400, 'A transaction id is required to confirm this payment', 'VALIDATION_ERROR');
     return posPaymentsService.finalizeSuccess(request, providerTransactionId.trim(), request.amount, { manuallyConfirmedBy: 'staff' });
+  },
+
+  /**
+   * Explicit manual reconciliation of a request flagged for review, once
+   * staff have verified it against the terminal / provider settlement (and,
+   * if needed, recorded the payment by hand). Only for requests that have
+   * reached a final status — an open one must be resolved via status/cancel
+   * first. Clears needs_review only; review_reason and the event history
+   * stay as the audit trail. Never invoked automatically.
+   */
+  async reconcileReview(id: string, salonId: string, userId: string, note: string): Promise<PosPaymentRequest> {
+    const trimmedNote = String(note ?? '').trim();
+    if (trimmedNote.length < 5) {
+      throw new AppError(400, 'A reconciliation note (at least 5 characters) is required', 'VALIDATION_ERROR');
+    }
+    const request = await posPaymentsRepository.findById(id, salonId);
+    if (!request) throw new AppError(404, 'Payment request not found', 'NOT_FOUND');
+    if (!request.needs_review) throw new AppError(400, 'This payment request is not flagged for review', 'NOT_FLAGGED');
+    if (NON_TERMINAL_STATUSES.includes(request.status)) {
+      throw new AppError(409, 'This transaction is still open — check its status or cancel it before reconciling', 'POS_PAYMENT_UNRESOLVED');
+    }
+
+    const reconciled = await posPaymentsRepository.clearReviewFlag(id, salonId);
+    if (!reconciled) {
+      // Lost a race (already reconciled, or reopened) — report the current row.
+      return (await posPaymentsRepository.findById(id, salonId)) ?? request;
+    }
+    await posPaymentsRepository.addEvent(id, 'REVIEW_RECONCILED', reconciled.status, reconciled.status, {
+      reconciledBy: userId,
+      note: trimmedNote,
+      previousReviewReason: request.review_reason,
+    });
+    return reconciled;
   },
 
   async listEvents(id: string, salonId: string) {

@@ -24,6 +24,8 @@ import { getIO, salonRoom, salonStaffRoom } from '../../config/socket';
 import { getActiveTaxes } from '../settings/tax.util';
 import { computeBillTotals, allocateMembershipDiscount } from '../pricing/pricing.engine';
 import pool from '../../config/database';
+import { assertNoBlockingPosPayment } from '../pos-payments/pos-payments.guard';
+import { posPaymentsRepository } from '../pos-payments/pos-payments.repository';
 
 interface DiscountEligibleItem {
   itemId?: string;
@@ -153,7 +155,33 @@ async function applyMembershipDiscountForBooking(
 
 export const paymentsService = {
 
-  async create(data: CreatePaymentBody, requesterUserId?: string): Promise<Payment> {
+  /**
+   * Records a payment. For an appointment payment, the appointment's payment
+   * lock is taken BEFORE anything is read or written and held until the
+   * payment row is committed, and a blocking Payment Machine transaction
+   * (still open, or flagged for review) is checked first under that lock —
+   * so a rejected payment leaves no side effects at all (referral ledger,
+   * membership-wallet deduction, …), and no POS request can start in
+   * between. `posPaymentRequestId` is passed only by pos-payments
+   * finalizeSuccess, so a request can record its own confirmed payment.
+   */
+  async create(data: CreatePaymentBody, requesterUserId?: string, options: { posPaymentRequestId?: string } = {}): Promise<Payment> {
+    if (!data.appointment_id) return paymentsService.recordPayment(data, requesterUserId, async () => {});
+    const lock = await posPaymentsRepository.acquireAppointmentPaymentLock(data.appointment_id);
+    try {
+      await assertNoBlockingPosPayment(data.appointment_id, data.salon_id, { excludeRequestId: options.posPaymentRequestId });
+      return await paymentsService.recordPayment(data, requesterUserId, lock.release);
+    } finally {
+      await lock.release(); // idempotent — normally already released right after the payment row
+    }
+  },
+
+  /**
+   * create()'s body — always go through create(). `releaseLock` is called as
+   * soon as the payment row is committed, so the post-payment work below
+   * (sales, notifications, …) doesn't hold up other payments.
+   */
+  async recordPayment(data: CreatePaymentBody, requesterUserId: string | undefined, releaseLock: () => Promise<void>): Promise<Payment> {
     // ── Recompute financial fields from real appointment data ─────────────────
     // This prevents bugs where the frontend sends a wrong gross_amount
     // (e.g., partial-payment amount instead of the full bill total).
@@ -911,6 +939,7 @@ export const paymentsService = {
       } finally {
         txClient.release();
       }
+      await releaseLock();
 
       // ── WhatsApp Automation: Reward Points Used ─────────────────────────
       // Fired outside the transaction — network I/O has no business holding
@@ -939,6 +968,7 @@ export const paymentsService = {
       }
     } else {
       payment = await paymentsRepository.create(data);
+      await releaseLock();
     }
 
     // ── eWallet: actually deduct the real balance now that the payment row exists ──
