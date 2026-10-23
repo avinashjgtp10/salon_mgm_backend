@@ -4,6 +4,8 @@ import {
   CreateProviderPaymentParams,
   ProviderCreateResult,
   ProviderStatusResult,
+  ProviderTxnContext,
+  ProviderCancelResult,
   NormalizedWebhookEvent,
 } from './provider.types';
 
@@ -20,14 +22,16 @@ export class ManualProvider implements PaymentProvider {
     return { providerTransactionId: null, status: 'PENDING', raw: { reference: params.reference } };
   }
 
-  async getPaymentStatus(): Promise<ProviderStatusResult> {
+  async getPaymentStatus(_ctx: ProviderTxnContext): Promise<ProviderStatusResult> {
     // Never polled — manual requests only change status via the staff-entered
     // confirm action (pos-payments.service.ts confirmManual()).
     return { status: 'PENDING', providerTransactionId: null, raw: null };
   }
 
-  async cancelPayment(): Promise<void> {
-    // No external system to notify.
+  async cancelPayment(_ctx: ProviderTxnContext): Promise<ProviderCancelResult> {
+    // No external system to notify — and never called: the service cancels
+    // manual requests locally.
+    return { outcome: 'UNKNOWN', raw: null };
   }
 
   verifyWebhook(_req: Request): boolean {

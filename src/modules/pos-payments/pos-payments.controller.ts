@@ -39,12 +39,41 @@ export const posPaymentsController = {
     } catch (err) { return next(err); }
   },
 
+  async reconcileReview(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = getSalonId(req);
+      const userId = req.user?.userId;
+      if (!userId) throw new AppError(401, 'Unauthorized', 'UNAUTHORIZED');
+      const id = String(req.params.id || '').trim();
+      const request = await posPaymentsService.reconcileReview(id, salonId, userId, req.body?.note);
+      return sendSuccess(res, 200, request, request.needs_review ? 'Payment request still flagged' : 'Payment request reconciled');
+    } catch (err) { return next(err); }
+  },
+
+  async getActiveForAppointment(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const salonId = getSalonId(req);
+      const appointmentId = String(req.params.appointmentId || '').trim();
+      if (!appointmentId) throw new AppError(400, 'appointmentId is required', 'VALIDATION_ERROR');
+      const request = await posPaymentsService.getActiveForAppointment(appointmentId, salonId);
+      return sendSuccess(res, 200, request, request ? 'Unresolved payment request found' : 'No unresolved payment request');
+    } catch (err) { return next(err); }
+  },
+
   async cancel(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = getSalonId(req);
       const id = String(req.params.id || '').trim();
       const request = await posPaymentsService.cancel(id, salonId);
-      return sendSuccess(res, 200, request, 'Payment request cancelled');
+      // cancel() may legitimately end in another state (already paid, or
+      // outcome unconfirmed) — never claim a cancellation that didn't happen.
+      const message =
+        request.status === 'CANCELLED' ? 'Payment request cancelled'
+          : request.status === 'SUCCESS' ? 'Payment had already completed — not cancelled'
+            : request.status === 'PENDING' || request.status === 'PROCESSING'
+              ? 'Cancellation not yet confirmed by the provider — payment left open for reconciliation'
+              : `Payment request is ${request.status}`;
+      return sendSuccess(res, 200, request, message);
     } catch (err) { return next(err); }
   },
 
