@@ -5,6 +5,7 @@ import { SafeUser, UpdateUserInput } from "./users.types";
 import logger from "../../config/logger";
 import { getEffectivePermissionsForUser } from "../../middleware/permission.middleware";
 import { loadLockedModules } from "../../middleware/moduleLock.middleware";
+import { isLunoxEnabled } from "../ai-credentials/ai-credentials.service";
 import { rolesRepository } from "../roles/roles.repository";
 import { salonsService } from "../salons/salons.service";
 
@@ -102,7 +103,10 @@ export const usersService = {
     const lockSalonId = sessionSalonId ?? user.staff_salon_id ?? null;
     const lockedModules = lockSalonId ? Array.from(await loadLockedModules(lockSalonId)) : [];
 
-    const safeUser = { ...toSafeUser(user, effectivePermissions), locked_modules: lockedModules };
+    // LUNOX (AI) is on only for salons Super Admin has saved a Cloudflare key for; the UI shows "Upgrade" otherwise.
+    const aiEnabled = lockSalonId ? await isLunoxEnabled(lockSalonId).catch(() => false) : false;
+
+    const safeUser = { ...toSafeUser(user, effectivePermissions), locked_modules: lockedModules, ai_enabled: aiEnabled };
     if (!opts?.includeSalon) {
       logger.info(`User profile fetched successfully`, { userId });
       return safeUser;

@@ -58,6 +58,7 @@ import assetsRoutes from "./modules/assets/assets.routes";
 import reviewsRoutes from './modules/reviews/reviews.routes'
 import reviewsPublicRoutes from './modules/reviews/reviews.public.routes'
 import botRoutes from "./modules/bot/bot.routes";
+import aiAssistantRoutes from "./modules/ai-assistant/ai-assistant.routes";
 import botQuestionsRoutes from "./modules/bot/bot-questions.routes";
 import waAutomationRoutes from "./modules/whatsapp-automation/whatsapp-automation.routes";
 import waScheduledMessagesRoutes from "./modules/whatsapp-automation/wa-scheduled-messages.routes";
@@ -321,6 +322,7 @@ app.use("/api/v1/blocked-times", blockedTimesRoutes);
 app.use("/api/v1/assets", assetsRoutes);
 app.use("/api/v1/settings", settingsRoutes);
 app.use("/api/v1/bot", botRoutes);
+app.use("/api/v1/ai-assistant", aiAssistantRoutes);
 app.use("/api/v1/bot-questions", botQuestionsRoutes);
 app.use("/api/report", reportsRoutes);
 app.use("/api/v1/reports", legacyReportsRoutes);

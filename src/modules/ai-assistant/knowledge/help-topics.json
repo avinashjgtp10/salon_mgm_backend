@@ -1,0 +1,67 @@
+[
+ {
+  "id": "clients",
+  "title": "Managing clients",
+  "text": "View, add, edit and delete your client's details from the Clients page. Each client profile tracks their booking history, contact info, and notes."
+ },
+ {
+  "id": "service-menu",
+  "title": "Service menu",
+  "text": "Add the services your business offers, set pricing and duration, and organize them into categories clients see when booking."
+ },
+ {
+  "id": "service-addons",
+  "title": "Service add-ons",
+  "text": "Add-ons let clients customize a booking with optional extras (e.g. a deep conditioning treatment) for an additional charge and time."
+ },
+ {
+  "id": "service-consumables",
+  "title": "Service consumables",
+  "text": "Track back-bar products a service uses (e.g. color, developer) so stock is automatically deducted when the appointment is completed."
+ },
+ {
+  "id": "staff-wages",
+  "title": "Staff member wages",
+  "text": "Set up how a staff member earns — hourly wage, salary, or a mix — so wages calculate correctly on their pay runs and timesheets."
+ },
+ {
+  "id": "staff-payruns-settings",
+  "title": "Pay run settings",
+  "text": "Choose how a staff member is paid (bank transfer, cash, etc.) and which fees or deductions are automatically applied during a pay run."
+ },
+ {
+  "id": "staff-commissions",
+  "title": "Staff member commissions",
+  "text": "Configure commission rates a staff member earns on services, products, memberships, and gift cards they sell, plus deductions applied to those calculations."
+ },
+ {
+  "id": "staff-list",
+  "title": "Managing your staff",
+  "text": "Add staff members, assign roles and access levels, and manage their availability from the Staff page."
+ },
+ {
+  "id": "payruns",
+  "title": "Pay runs",
+  "text": "Calculate and settle what you owe your staff — tips, commissions, and wages — for a given pay period, then mark the run as paid."
+ },
+ {
+  "id": "suppliers",
+  "title": "Suppliers",
+  "text": "Keep track of the suppliers you buy stock from, including contact details, so you can link them to stock orders."
+ },
+ {
+  "id": "stock-orders",
+  "title": "Stock orders",
+  "text": "Create and track orders placed with suppliers to replenish your product stock, and receive stock against an order once it arrives."
+ },
+ {
+  "id": "repeating-shifts",
+  "title": "Repeating shifts",
+  "text": "Set a weekly, biweekly, or custom shift pattern for a staff member. Changes you save apply to all upcoming shifts for the selected period."
+ },
+ {
+  "id": "products-landing",
+  "title": "Products",
+  "text": "Add retail products to sell at checkout, track stock on hand, and set supply/retail pricing and markup."
+ }
+]
