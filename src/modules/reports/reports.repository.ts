@@ -1557,6 +1557,7 @@ _buildSalesSummaryWhere(
     where.push(`(
       COALESCE(s.invoice_number, '') ILIKE $${idx}
       OR COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
     )`);
     values.push(`%${filters.search.trim()}%`);
@@ -1716,6 +1717,7 @@ _UNBILLED_APPOINTMENT_ROWS_CTE(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
     )`);
     values.push(`%${filters.search.trim()}%`);
@@ -2855,6 +2857,7 @@ _buildDailySheetWhere(
     where.push(`(
       COALESCE(s.invoice_number, '') ILIKE $${idx}
       OR COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
       OR COALESCE(si.name, '') ILIKE $${idx}
       OR COALESCE(TRIM(CONCAT(st.first_name, ' ', st.last_name)), '') ILIKE $${idx}
@@ -2942,6 +2945,7 @@ _UNBILLED_APPOINTMENT_DAILY_ROWS_CTE(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
       OR COALESCE(src.name, '') ILIKE $${idx}
       OR COALESCE(TRIM(CONCAT(st.first_name, ' ', st.last_name)), '') ILIKE $${idx}
@@ -3417,6 +3421,7 @@ _buildProductRetailWhere(
     where.push(`(
       COALESCE(s.invoice_number, '') ILIKE $${idx}
       OR COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
       OR COALESCE(si.name, '') ILIKE $${idx}
     )`);
@@ -4420,10 +4425,12 @@ _buildGstWhere(
     // Amount columns already break the invoice down by.
     item_types?: string[];
     payment_methods?: string[];
+    gst_mode?: "gst" | "non_gst";
   }
 ): { where: string; values: any[]; nextIndex: number } {
   const values: any[] = [salonId];
-  const where = ["s.salon_id = $1", "s.status <> 'draft'", "s.tax_amount::numeric > 0"];
+  // GST report = invoices that carry GST; Non-GST report = invoices with none.
+  const where = ["s.salon_id = $1", "s.status <> 'draft'", filters.gst_mode === "non_gst" ? "COALESCE(s.tax_amount::numeric, 0) = 0" : "s.tax_amount::numeric > 0"];
   let idx = 2;
 
   if (filters.start_date) {
@@ -4453,6 +4460,7 @@ _buildGstWhere(
     where.push(`(
       COALESCE(s.invoice_number, '') ILIKE $${idx}
       OR COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
     )`);
     values.push(`%${filters.search.trim()}%`);
     idx++;
@@ -4465,7 +4473,7 @@ async getGstReportStats(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; staff_ids?: string[]; search?: string;
-    item_types?: string[]; payment_methods?: string[];
+    item_types?: string[]; payment_methods?: string[]; gst_mode?: "gst" | "non_gst";
   }
 ): Promise<GstReportStats> {
   const { where, values } = this._buildGstWhere(salonId, filters);
@@ -4493,7 +4501,7 @@ async getGstReportRows(
   salonId: string,
   filters: {
     start_date?: string; end_date?: string; staff_ids?: string[]; search?: string;
-    item_types?: string[]; payment_methods?: string[];
+    item_types?: string[]; payment_methods?: string[]; gst_mode?: "gst" | "non_gst";
     page?: number; limit?: number; is_export?: boolean;
   }
 ): Promise<{
@@ -4522,7 +4530,7 @@ async getGstReportRows(
       COALESCE(items.package_amount, 0) AS package_amount,
       COALESCE(items.membership_amount, 0) AS membership_amount,
       GREATEST(s.subtotal::numeric - s.discount_amount::numeric, 0) AS taxable_amount,
-      s.tax_amount::numeric AS tax_amount,
+      COALESCE(s.tax_amount::numeric, 0) AS tax_amount,
       s.total_amount::numeric AS total,
       COUNT(*) OVER() AS total_count
     FROM sales s
@@ -4751,6 +4759,7 @@ _buildRewardPointsWhere(
   if (filters.search?.trim()) {
     clientWhere.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
     )`);
     values.push(`%${filters.search.trim()}%`);
@@ -4989,6 +4998,7 @@ _buildEwalletWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
       OR COALESCE(c.email, '') ILIKE $${idx}
     )`);
@@ -6227,6 +6237,7 @@ _buildClientRevenueWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
     )`);
     values.push(`%${filters.search.trim()}%`);
@@ -6356,6 +6367,7 @@ _buildCustomerSpendWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
     )`);
     values.push(`%${filters.search.trim()}%`);
@@ -6845,6 +6857,7 @@ _buildAllClientsWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
       OR COALESCE(c.email, '') ILIKE $${idx}
     )`);
@@ -7010,6 +7023,7 @@ async getAllClientsReportRows(
   const query = `
     SELECT
       c.id AS client_id,
+      NULLIF(TRIM(c.client_code), '') AS client_code,
       COALESCE(NULLIF(TRIM(c.full_name), ''), 'Unnamed Client') AS client_name,
       COALESCE(NULLIF(TRIM(CONCAT(COALESCE(c.phone_country_code, ''), ' ', COALESCE(c.phone_number, ''))), ''), '—') AS contact,
       NULLIF(TRIM(c.email), '') AS email,
@@ -7033,6 +7047,7 @@ async getAllClientsReportRows(
   const total = rows.length ? Number(rows[0].total_count) : 0;
   const items: AllClientsReportRow[] = rows.map((row: any) => ({
     client_id: row.client_id,
+    client_code: row.client_code ?? null,
     client_name: row.client_name,
     contact: row.contact,
     email: row.email,
@@ -7100,6 +7115,7 @@ _buildBirthdayWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
       OR COALESCE(c.email, '') ILIKE $${idx}
     )`);
@@ -7276,6 +7292,7 @@ _buildAnniversaryWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
       OR COALESCE(c.email, '') ILIKE $${idx}
     )`);
@@ -7440,6 +7457,7 @@ _buildNewClientFollowUpWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
     )`);
     values.push(`%${filters.search.trim()}%`);
@@ -7553,6 +7571,7 @@ _buildCancellationRecoveryWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
     )`);
     values.push(`%${filters.search.trim()}%`);
@@ -7717,6 +7736,7 @@ _buildMembershipOpportunityWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
     )`);
     values.push(`%${filters.search.trim()}%`);
@@ -7873,6 +7893,7 @@ _buildNoShowRecoveryWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
     )`);
     values.push(`%${filters.search.trim()}%`);
@@ -8329,6 +8350,7 @@ _buildCustomerFrequencyWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
     )`);
     values.push(`%${filters.search.trim()}%`);
@@ -8730,6 +8752,7 @@ _buildServiceFrequencyWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
       OR COALESCE(sv.name, si.name, '') ILIKE $${idx}
     )`);
@@ -9026,6 +9049,7 @@ _buildLostCustomersWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
     )`);
     values.push(`%${filters.search.trim()}%`);
@@ -9546,6 +9570,7 @@ _buildPaymentCollectionWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
       OR COALESCE(sl.invoice_number, '') ILIKE $${idx}
     )`);
@@ -22507,6 +22532,7 @@ _buildClientRatingWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
       OR COALESCE(TRIM(CONCAT(st.first_name, ' ', st.last_name)), '') ILIKE $${idx}
     )`);
@@ -22665,6 +22691,7 @@ _buildRebookingRateWhere(
   if (filters.search?.trim()) {
     where.push(`(
       COALESCE(c.full_name, '') ILIKE $${idx}
+      OR COALESCE(c.client_code, '') ILIKE $${idx}
       OR COALESCE(c.phone_number, '') ILIKE $${idx}
     )`);
     values.push(`%${filters.search.trim()}%`);

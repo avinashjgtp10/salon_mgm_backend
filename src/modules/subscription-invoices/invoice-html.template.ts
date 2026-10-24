@@ -16,6 +16,10 @@ export interface InvoicePrintPayload {
         total: number;
         period_start: string | null;
         period_end: string | null;
+        /** Unused value of the previous plan that was credited (upgrades). */
+        credit?: number;
+        /** One line describing what this invoice is for, e.g. an upgrade from Advance to Growth. */
+        description?: string | null;
     };
     customer: { salon_name: string; address: string | null; contact: string | null; email: string | null };
     seller: {
@@ -122,6 +126,7 @@ export function buildInvoiceHtml(p: InvoicePrintPayload): string {
           <td>
             <div class="item-desc">SalonOx Software Subscription${invoice.plan_name ? ` - ${esc(invoice.plan_name)}` : ""}</div>
             <div class="item-sub">${esc(invoice.plan_label)}${period ? ` (${esc(period)})` : ""}</div>
+            ${invoice.description ? `<div class="item-sub">${esc(invoice.description)}</div>` : ""}
           </td>
           <td class="right">${invoice.subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
         </tr>
@@ -129,6 +134,7 @@ export function buildInvoiceHtml(p: InvoicePrintPayload): string {
     </table>
 
     <div class="totals">
+      ${invoice.credit && invoice.credit > 0 ? `<div class="totals-row"><span>Credit for unused previous plan (already deducted)</span><span>- ${money(invoice.credit)}</span></div>` : ""}
       <div class="totals-row"><span>Subtotal</span><span>${money(invoice.subtotal)}</span></div>
       <div class="totals-row"><span>CGST (${half}%)</span><span>${money(cgst)}</span></div>
       <div class="totals-row"><span>SGST (${half}%)</span><span>${money(sgst)}</span></div>

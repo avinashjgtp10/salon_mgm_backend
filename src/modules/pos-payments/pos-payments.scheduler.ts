@@ -5,18 +5,25 @@
 // webhook — confirmation for it is polling-only. The frontend already polls
 // while a staff member is watching the waiting screen, but that stops the
 // moment a tab closes; this sweep is what keeps a real in-flight payment
-// from getting stranded when nobody's watching. It also expires anything
-// abandoned past its window, best-effort cancelling with the provider.
+// from getting stranded when nobody's watching. It also handles requests
+// that pass their expiry window: manual ones are expired, provider-backed
+// ones get one final status check first (see runExpirySweep).
 
 import logger from '../../config/logger';
 import { posPaymentsRepository } from './pos-payments.repository';
 import { posPaymentsService } from './pos-payments.service';
-import { providerFactory } from './providers/provider.factory';
+import { NON_TERMINAL_STATUSES, PosPaymentRequest } from './pos-payments.types';
 
 const POLL_SWEEP_MINUTES_OLD = 0.5; // only sweep requests that have had at least ~30s to be created
 const SWEEP_INTERVAL_MS = 45 * 1000;
 
 let sweepInterval: NodeJS.Timeout | null = null;
+// A sweep can outlast the interval (up to 200 requests × a 15s provider
+// timeout), so overlapping runs are skipped rather than stacked. This is a
+// per-process guard only — double finalization across processes, or against
+// the frontend's poll-through, is prevented by the atomic conditional UPDATE
+// in transitionStatus() that finalizeSuccess() must win first.
+let sweepInFlight = false;
 
 async function runConfirmationSweep(): Promise<void> {
   const stale = await posPaymentsRepository.listNonTerminalOlderThan(POLL_SWEEP_MINUTES_OLD);
@@ -30,36 +37,86 @@ async function runConfirmationSweep(): Promise<void> {
   }
 }
 
+/**
+ * A provider-backed request past its expiry may still have been paid — an
+ * earlier poll saying "pending" proves nothing about now. So before giving
+ * up, run one final status check through the normal poll path (same
+ * provider call, applyProviderStatus → finalizeSuccess, same atomic claims):
+ *   - SUCCESS → finalized there, exactly once.
+ *   - definitive FAILED/CANCELLED/EXPIRED → transitioned there.
+ *   - still open (pending, retryable, unknown, network error) → NOT expired.
+ *     Flagged for manual review and left non-terminal, so the confirmation
+ *     sweep keeps polling it and staff can still cancel it explicitly.
+ */
+async function finalCheckBeforeExpiry(request: PosPaymentRequest): Promise<void> {
+  const checked = await posPaymentsService.getStatus(request.id, request.salon_id);
+  if (!NON_TERMINAL_STATUSES.includes(checked.status)) {
+    logger.info(`[POS-PAYMENTS-SCHEDULER] ${request.payment_reference} resolved to ${checked.status} by final check at expiry`);
+    return;
+  }
+
+  // Conditional on still being non-terminal, so a concurrent poll that just
+  // finalized the request can't have a stale review flag written over it.
+  const flagged = await posPaymentsRepository.transitionStatus(request.id, {
+    status: checked.status,
+    needs_review: true,
+    review_reason:
+      `Expiry reached without a confirmed outcome from ${request.provider} (last status ${checked.status}) — ` +
+      'not expired automatically. Verify on the terminal / provider dashboard before cancelling or re-charging.',
+  });
+  if (flagged) {
+    await posPaymentsRepository.addEvent(request.id, 'EXPIRY_DEFERRED', checked.status, checked.status, {
+      reason: 'final status check inconclusive',
+    });
+    logger.warn(`[POS-PAYMENTS-SCHEDULER] ${request.payment_reference} unresolved at expiry — flagged for review, not expired`);
+  }
+}
+
 async function runExpirySweep(): Promise<void> {
   const expirable = await posPaymentsRepository.listExpirable();
   for (const request of expirable) {
-    if (request.provider !== 'manual') {
-      try {
-        const provider = await providerFactory.getProvider(request.salon_id, request.provider);
-        await provider.cancelPayment(request.payment_reference, request.provider_transaction_id);
-      } catch (err: any) {
-        logger.warn('[POS-PAYMENTS-SCHEDULER] best-effort provider cancel on expiry failed', { requestId: request.id, message: err?.message });
+    try {
+      if (request.provider !== 'manual') {
+        // Already flagged → already deferred; the confirmation sweep keeps
+        // polling it, so don't spend a second provider call every sweep.
+        if (request.needs_review) continue;
+        await finalCheckBeforeExpiry(request);
+        continue;
       }
-    }
-    const updated = await posPaymentsRepository.transitionStatus(request.id, { status: 'EXPIRED' });
-    if (updated) {
-      await posPaymentsRepository.addEvent(request.id, 'EXPIRED', request.status, 'EXPIRED');
-      logger.info(`[POS-PAYMENTS-SCHEDULER] Expired abandoned request ${request.payment_reference}`);
+      const updated = await posPaymentsRepository.transitionStatus(request.id, { status: 'EXPIRED' });
+      if (updated) {
+        await posPaymentsRepository.addEvent(request.id, 'EXPIRED', request.status, 'EXPIRED');
+        logger.info(`[POS-PAYMENTS-SCHEDULER] Expired abandoned request ${request.payment_reference}`);
+      }
+    } catch (err: any) {
+      // Never expire on an error — the request stays as it is for the next sweep.
+      logger.warn('[POS-PAYMENTS-SCHEDULER] expiry handling failed — left unchanged', { requestId: request.id, message: err?.message });
     }
   }
 }
 
-async function runSweep(): Promise<void> {
-  await runConfirmationSweep();
-  await runExpirySweep();
+/** One full sweep. Exported for tests; returns false when skipped because a sweep is already running. */
+export async function runPosPaymentsSweep(): Promise<boolean> {
+  if (sweepInFlight) {
+    logger.warn('[POS-PAYMENTS-SCHEDULER] previous sweep still running — skipping this tick');
+    return false;
+  }
+  sweepInFlight = true;
+  try {
+    await runConfirmationSweep();
+    await runExpirySweep();
+    return true;
+  } finally {
+    sweepInFlight = false;
+  }
 }
 
 export function startPosPaymentsScheduler(): void {
   if (sweepInterval) return;
   logger.info('[POS-PAYMENTS-SCHEDULER] ⏰ Started — running every 45 seconds');
-  runSweep().catch((err) => logger.error('[POS-PAYMENTS-SCHEDULER] Initial run error:', err?.message));
+  runPosPaymentsSweep().catch((err) => logger.error('[POS-PAYMENTS-SCHEDULER] Initial run error:', err?.message));
   sweepInterval = setInterval(() => {
-    runSweep().catch((err) => logger.error('[POS-PAYMENTS-SCHEDULER] Job error:', err?.message));
+    runPosPaymentsSweep().catch((err) => logger.error('[POS-PAYMENTS-SCHEDULER] Job error:', err?.message));
   }, SWEEP_INTERVAL_MS);
 }
 

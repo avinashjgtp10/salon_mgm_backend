@@ -9,6 +9,20 @@ export type CreateProviderPaymentParams = {
   currency: string;
   terminalProviderId?: string | null; // provider-issued device/terminal id, if the provider needs one
   merchantId?: string | null;
+  requestedAt: Date;      // pos_payment_requests.created_at — the original txn timestamp
+};
+
+/**
+ * Everything a follow-up call (status enquiry, cancel/abort) needs to
+ * identify the original transaction. Paytm requires the same TID and
+ * original txn timestamp that the create call used, so both are carried
+ * from the stored request rather than re-derived per call.
+ */
+export type ProviderTxnContext = {
+  reference: string;
+  providerTransactionId: string | null;
+  terminalProviderId: string | null;  // provider-issued id (Paytm TID), never our payment_terminals.id
+  requestedAt: Date;                  // pos_payment_requests.created_at
 };
 
 export type ProviderCreateResult = {
@@ -21,6 +35,17 @@ export type ProviderStatusResult = {
   status: PosPaymentStatus;
   providerTransactionId: string | null;
   amount?: number | null;
+  raw: unknown;
+};
+
+/**
+ * What the provider said about an abort/cancel request — never the payment's
+ * final state. Even ABORT_REQUESTED only means the provider will try; the
+ * caller must confirm the outcome with getPaymentStatus().
+ */
+export type ProviderCancelResult = {
+  outcome: 'ABORT_REQUESTED' | 'NOT_ABORTABLE' | 'NOT_FOUND' | 'UNKNOWN';
+  retryable?: boolean;
   raw: unknown;
 };
 
@@ -38,8 +63,8 @@ export type NormalizedWebhookEvent = {
  */
 export interface PaymentProvider {
   createPayment(params: CreateProviderPaymentParams): Promise<ProviderCreateResult>;
-  getPaymentStatus(reference: string, providerTransactionId?: string | null): Promise<ProviderStatusResult>;
-  cancelPayment(reference: string, providerTransactionId?: string | null): Promise<void>;
+  getPaymentStatus(ctx: ProviderTxnContext): Promise<ProviderStatusResult>;
+  cancelPayment(ctx: ProviderTxnContext): Promise<ProviderCancelResult>;
   /** No documented webhook for a provider (e.g. Paytm EDC today) just returns false. */
   verifyWebhook(req: Request): boolean;
   parseWebhook(req: Request): NormalizedWebhookEvent;

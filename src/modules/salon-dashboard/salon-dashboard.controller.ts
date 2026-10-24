@@ -84,6 +84,30 @@ function redactMonthlyProjection<T extends MonthlyProjection>(data: T): T {
   };
 }
 
+// The permission behind "See Revenue Amount in Number Form". Without it every revenue figure is removed from the response (not
+// just masked on screen), so it cannot be read from the network tab.
+const REVENUE_AMOUNT_PERMISSION = "view_dashboard_revenue_amount";
+const canSeeRevenueAmounts = (req: AuthRequest) => checkDashboardSubPermission(req, REVENUE_AMOUNT_PERMISSION);
+
+const redactMoneyList = <T extends { revenue?: number }>(rows: T[]): T[] => rows.map((r) => ({ ...r, revenue: 0 }));
+
+// Appointment rows carry prices, tax, totals and tips. Zeroed here so the Today's Appointments list cannot be used to
+// work out revenue; names, times, services and statuses are untouched.
+const APPOINTMENT_ITEM_ARRAYS = ["services", "package_items", "product_items", "membership_items"] as const;
+function redactAppointmentAmounts(rows: any[]): any[] {
+  return (rows ?? []).map((appt) => {
+    const out: any = { ...appt };
+    for (const key of Object.keys(out)) {
+      if (typeof out[key] === "number" && /(amount|total|paid|price|due|balance|tip|discount)/i.test(key)) out[key] = 0;
+    }
+    out.tax_breakdown = null;
+    for (const arr of APPOINTMENT_ITEM_ARRAYS) {
+      if (Array.isArray(out[arr])) out[arr] = out[arr].map((it: any) => ({ ...it, price: 0, ...(it?.tax_amount != null ? { tax_amount: 0 } : {}) }));
+    }
+    return out;
+  });
+}
+
 export const salonDashboardController = {
   async getRevenueChart(req: AuthRequest, res: Response, next: NextFunction) {
     try {
@@ -91,6 +115,7 @@ export const salonDashboardController = {
       const period = typeof req.query.period === "string" ? req.query.period : undefined;
       const gender = typeof req.query.gender === "string" ? req.query.gender : undefined;
       const data = await salonDashboardService.getRevenueChart(salonId, period, gender);
+      if (!(await canSeeRevenueAmounts(req))) return sendSuccess(res, 200, redactRevenueChart(data as any) as any, "Revenue chart data fetched successfully");
       return sendSuccess(res, 200, data, "Revenue chart data fetched successfully");
     } catch (err) {
       return next(err);
@@ -107,7 +132,7 @@ export const salonDashboardController = {
       const salonId = await getSalonId(req);
       const gender = typeof req.query.gender === "string" ? req.query.gender : undefined;
       const data = await salonDashboardService.getMonthlyProjection(salonId, gender);
-      const canFinancials = await checkDashboardSubPermission(req, "view_dashboard_financials");
+      const canFinancials = await canSeeRevenueAmounts(req);
       if (!canFinancials) {
         return sendSuccess(res, 200, redactMonthlyProjection(data), "Monthly projection fetched successfully");
       }
@@ -133,6 +158,7 @@ export const salonDashboardController = {
       const salonId = await getSalonId(req);
       const period = typeof req.query.period === "string" ? req.query.period : undefined;
       const data = await salonDashboardService.getPaymentModeBreakdown(salonId, period);
+      if (!(await canSeeRevenueAmounts(req))) return sendSuccess(res, 200, redactPaymentModeBreakdown(), "Payment mode breakdown fetched successfully");
       return sendSuccess(res, 200, data, "Payment mode breakdown fetched successfully");
     } catch (err) {
       return next(err);
@@ -143,6 +169,7 @@ export const salonDashboardController = {
     try {
       const salonId = await getSalonId(req);
       const data = await salonDashboardService.getTopStaff(salonId);
+      if (!(await canSeeRevenueAmounts(req))) return sendSuccess(res, 200, redactMoneyList(data as any), "Top staff fetched successfully");
       return sendSuccess(res, 200, data, "Top staff fetched successfully");
     } catch (err) {
       return next(err);
@@ -154,6 +181,7 @@ export const salonDashboardController = {
       const salonId = await getSalonId(req);
       const period = typeof req.query.period === "string" ? req.query.period : undefined;
       const data = await salonDashboardService.getStaffRevenue(salonId, period);
+      if (!(await canSeeRevenueAmounts(req))) return sendSuccess(res, 200, redactMoneyList(data as any), "Staff revenue fetched successfully");
       return sendSuccess(res, 200, data, "Staff revenue fetched successfully");
     } catch (err) {
       return next(err);
@@ -191,7 +219,7 @@ export const salonDashboardController = {
         canFinancials, canTotalRevenue, canTodayRevenue, canDueAmount, canAppointments,
         canBirthdays, canAnniversaries, canNewClients, canRevenueOverview, canOverallCollection,
       ] = await Promise.all([
-        checkDashboardSubPermission(req, "view_dashboard_financials"),
+        canSeeRevenueAmounts(req),
         checkDashboardSubPermission(req, "view_dashboard_card_total_revenue"),
         checkDashboardSubPermission(req, "view_dashboard_card_today_revenue"),
         checkDashboardSubPermission(req, "view_dashboard_card_due_amount"),
@@ -203,6 +231,16 @@ export const salonDashboardController = {
         checkDashboardSubPermission(req, "view_dashboard_card_overall_collection"),
       ]);
 
+      // No number-form permission: every revenue figure leaves the response, whatever the card permissions say.
+      if (!canFinancials) {
+        data.summary = redactFinancialSummaryFields(data.summary);
+        data.pendingPayments = redactPendingPayments(data.pendingPayments);
+        data.revenueChart = redactRevenueChart(data.revenueChart ?? []);
+        data.paymentModeBreakdown = redactPaymentModeBreakdown();
+        data.todayAppointments = redactAppointmentAmounts(data.todayAppointments);
+        if (data.topStaff) data.topStaff = redactMoneyList(data.topStaff);
+        if (data.staffRevenue) data.staffRevenue = redactMoneyList(data.staffRevenue);
+      }
       if (!canTotalRevenue) {
         data.summary = redactSummaryFields(data.summary, TOTAL_REVENUE_SUMMARY_FIELDS);
       }

@@ -2,6 +2,7 @@ import { AppError } from "../../middleware/error.middleware";
 import { invalidateModuleLockCache } from "../../middleware/moduleLock.middleware";
 import { isModuleKey, MODULE_KEYS } from "./module-keys";
 import { salonModulesRepository } from "./salon-modules.repository";
+import { modulePlansRepository } from "../module-plans/module-plans.repository";
 
 export const salonModulesService = {
     async searchSalons(query: string) {
@@ -16,7 +17,21 @@ export const salonModulesService = {
             salonModulesRepository.getLockedKeys(salonId),
             salonModulesRepository.getAuditLog(salonId),
         ]);
-        return { salon, locked, audit };
+        // Keys that are no longer lockable (e.g. the removed Product Retail / Product Margin report switches) can still be
+        // stored from before; never hand them to the page, or saving would send them back and be rejected.
+        return { salon, locked: locked.filter((k) => isModuleKey(k)), audit };
+    },
+
+    // Gives a salon the feature set of a plan (module_plans -> salon_module_locks). A plan whose features were never
+    // configured is left alone, so an upgrade can't accidentally lock or unlock everything.
+    async applyPlanTier(salonId: string, tier: string, changedByUserId: string): Promise<boolean> {
+        const plans = await modulePlansRepository.list();
+        const plan = plans.find((p: any) => p.slug === tier);
+        if (!plan || !plan.configured) return false;
+        const locked = (Array.isArray(plan.locked_modules) ? plan.locked_modules : []).filter((k: unknown) => isModuleKey(k));
+        await salonModulesRepository.setLockedKeys(salonId, locked as string[], changedByUserId);
+        invalidateModuleLockCache(salonId);
+        return true;
     },
 
     async setForSalon(salonId: string, locked: unknown, changedByUserId: string) {

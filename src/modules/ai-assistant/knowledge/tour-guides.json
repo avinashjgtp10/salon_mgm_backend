@@ -1,0 +1,1522 @@
+[
+ {
+  "id": "dashboard",
+  "label": "Home",
+  "path": "/dashboard",
+  "permission": "view_dashboard",
+  "steps": [
+   {
+    "title": "Your salon at a glance",
+    "description": "Home is your daily overview. The line under the title shows today’s date, and everything below is live data for your salon."
+   },
+   {
+    "title": "Quick actions",
+    "description": "Shortcuts for the things you do most: create an appointment, add a client, start a sale or open campaigns. Refresh reloads every figure on this page."
+   },
+   {
+    "title": "Refresh",
+    "description": "Reload the dashboard to pick up bookings and payments made since you opened the page. The icon spins while it loads."
+   },
+   {
+    "title": "Daily performance",
+    "description": "These cards summarise revenue, appointments and new clients. Only the cards your role is allowed to see are shown."
+   },
+   {
+    "title": "Compare periods",
+    "description": "Each card has two tabs. Switch between This Month and Last Month, or Today and Yesterday, to compare the figures. Nothing is changed by switching."
+   },
+   {
+    "title": "Up or down",
+    "description": "The arrow and percentage show how this figure moved compared with the previous period, green for up and red for down."
+   },
+   {
+    "title": "Monthly projection & growth",
+    "description": "Based on this month’s sales so far, this card projects where the month will end and how that compares with your target and with last month."
+   },
+   {
+    "title": "Filter by gender",
+    "description": "Limit the projection to one client gender, or keep it on all clients."
+   },
+   {
+    "title": "Sales, projection, target and growth",
+    "description": "MTD Sales is what you have sold so far this month. Projected Sales is where the month is heading at the current pace. Target is your monthly goal, with a progress bar, and Growth % compares with the same days last month."
+   },
+   {
+    "title": "Set your monthly target",
+    "description": "Choose the pencil to set or change this month’s sales target. It is saved when you choose Save, and Cancel leaves it unchanged."
+   },
+   {
+    "title": "Daily sales needed and averages",
+    "description": "Required Daily Sales is what you must sell each remaining day to reach the target. Day ABV and Month ABV are the average bill value today and this month, with the walk-in counts beside them."
+   },
+   {
+    "title": "Daily sales chart",
+    "description": "Each bar is a day’s sales and the line is the projected trend. Hover a day to see its exact figure."
+   },
+   {
+    "title": "Overall collection",
+    "description": "See the money received, split by payment method such as Cash, UPI and Card, with each method’s share of the total."
+   },
+   {
+    "title": "Choose the period",
+    "description": "Switch between Today, Yesterday, Week and Month to change the period the breakdown covers."
+   },
+   {
+    "title": "Resend the close-counter message",
+    "description": "Once a day’s cash counter is closed, Resend sends its WhatsApp summary again. It is available for yesterday, and for today after the counter is closed."
+   },
+   {
+    "title": "Total received",
+    "description": "The last row is the total payments received for the selected period, which is the sum of the methods above it."
+   },
+   {
+    "title": "Today’s appointments",
+    "description": "Review today’s bookings with their client, service, staff, time, amount and status. The count shows how many there are in total."
+   },
+   {
+    "title": "Filter by status",
+    "description": "Each chip shows how many appointments have that status, such as upcoming, completed or cancelled. Select one to show only those, and select it again, or Clear filter, to see them all."
+   },
+   {
+    "title": "Appointment columns",
+    "description": "Client, Service, Staff, Time, Amount and Status. Where a payment is part-paid, the amount shows what has been received out of the bill total."
+   },
+   {
+    "title": "Browse pages",
+    "description": "When there are many appointments, use the page numbers or the arrows to move between pages."
+   },
+   {
+    "title": "Birthdays and anniversaries",
+    "description": "Clients celebrating a birthday or anniversary today. Use the WhatsApp icon beside a name to send them a greeting, if they have a phone number on file."
+   }
+  ]
+ },
+ {
+  "id": "quick_sale",
+  "label": "Quick Sale",
+  "path": "/dashboard/sales/quick",
+  "permission": "create_sales",
+  "steps": [
+   {
+    "title": "Quick Sale",
+    "description": "Record a walk-in sale and take payment on one screen. Nothing is recorded until you choose Checkout on the right."
+   },
+   {
+    "title": "Client",
+    "description": "Choose the client for this sale. Quick Sale always sells to a real client, so there is no Walk-In shortcut here."
+   },
+   {
+    "title": "Search a client",
+    "description": "Type a name or mobile number and pick a match. Their packages, memberships, e-wallet, reward points and unpaid dues show once they are selected."
+   },
+   {
+    "title": "Add a new client",
+    "description": "If the client is new, choose Add Client to create them right here. Whatever you already typed is carried into the form."
+   },
+   {
+    "title": "Sale date",
+    "description": "The date picker sets the date of the sale."
+   },
+   {
+    "title": "Services & items",
+    "description": "Add everything being sold. Each line is billed on its own and can have its own staff member."
+   },
+   {
+    "title": "Item line columns",
+    "description": "For each service pick the Service, the Staff member, the Time, then check Price and Qty. Disc % takes a percentage off that line, and Total is the line amount after the discount."
+   },
+   {
+    "title": "Add more to the sale",
+    "description": "+ Service adds another service. + Product, + Package and + Membership sell those items on the same bill, and + Sell Package, + Topup eWallet and + Split Tip by Staff appear where they apply to the selected client."
+   },
+   {
+    "title": "Available benefits",
+    "description": "If the client has packages, memberships, e-wallet balance, reward points or referral credit, they are listed here so you can apply them to this sale."
+   },
+   {
+    "title": "Charges & discounts",
+    "description": "Adjust the whole bill here. The sale summary on the right updates as you type."
+   },
+   {
+    "title": "Extra charges",
+    "description": "Add an extra amount to the bill, for example a service fee."
+   },
+   {
+    "title": "Bill discount",
+    "description": "Enter a discount for the whole bill. A percentage cannot go above 100%, and a flat amount cannot go above the total it applies to."
+   },
+   {
+    "title": "Discount type",
+    "description": "Choose whether the bill discount is a percentage or a flat amount."
+   },
+   {
+    "title": "Apply discount to",
+    "description": "Choose which kinds of items the bill discount reduces. If nothing is selected the discount does not apply."
+   },
+   {
+    "title": "Staff alert & notes",
+    "description": "Staff Alert is a short warning the team sees, such as an allergy. Notes are for anything else worth remembering about this sale."
+   },
+   {
+    "title": "Sale summary",
+    "description": "A live breakdown of the sale: subtotal, discounts, taxes, extra charges, wallet and points used, the Grand Total and the Amount to Pay."
+   },
+   {
+    "title": "Coupon and referral code",
+    "description": "Enter a coupon code, or a referral code where it applies, and choose Apply to take the discount off the bill."
+   },
+   {
+    "title": "Take payment",
+    "description": "Choose how the client is paying: a single method, or a split across cash, card and UPI. You can also enter a smaller amount to take a partial payment and leave the rest due."
+   },
+   {
+    "title": "Include GST",
+    "description": "Where your salon has taxes set up, you can turn GST off for this client’s bill."
+   },
+   {
+    "title": "Checkout",
+    "description": "Checkout records the sale and the payment. Nothing is saved until you choose it."
+   }
+  ]
+ },
+ {
+  "id": "calendar",
+  "label": "Calendar",
+  "path": "/dashboard/calendar",
+  "permission": "view_calendar",
+  "steps": [
+   {
+    "title": "Plan your appointments",
+    "description": "This bar holds every control for the calendar: the view, the date, client search, the staff filter, the time interval and the buttons to add an appointment or block time."
+   },
+   {
+    "title": "Choose a view",
+    "description": "Switch between Day (one column per staff member), Week, Month and List Week. Pick the one that suits what you are planning."
+   },
+   {
+    "title": "Go to the previous period",
+    "description": "Move back by one day, week or month, depending on the view you are in."
+   },
+   {
+    "title": "Jump to a date",
+    "description": "Shows the date or range you are viewing. Select it to open a date picker and jump straight to any day."
+   },
+   {
+    "title": "Go to the next period",
+    "description": "Move forward by one day, week or month, depending on the view you are in."
+   },
+   {
+    "title": "Back to today",
+    "description": "Return to today’s date in one click. It is highlighted when you are already on today."
+   },
+   {
+    "title": "Search a client",
+    "description": "Type a name or a phone number to find a client. Choose a result to start a new appointment for them, or use View History to see their past visits without leaving the calendar. If nobody matches, you can add an appointment or a new client from here. Try it: click the box and the results open without covering this guide."
+   },
+   {
+    "title": "Filter by staff",
+    "description": "Show everyone, or tick one or more staff members to see only their columns. The button shows who is selected; choose All Staff to clear the filter. Try it: click the button and the list opens without covering this guide."
+   },
+   {
+    "title": "Reorder staff",
+    "description": "Change the order in which staff columns appear on the calendar. The order is saved for your salon."
+   },
+   {
+    "title": "Refresh",
+    "description": "Reload the calendar to pick up appointments booked elsewhere, for example online or by another team member."
+   },
+   {
+    "title": "Time slot size",
+    "description": "Choose how finely the day is divided: 15, 30 or 60 minute slots. Smaller slots make it easier to place short services."
+   },
+   {
+    "title": "Add an appointment",
+    "description": "Create a new appointment, where your role allows. You can also click an empty time slot in the schedule to start one for that staff member and time."
+   },
+   {
+    "title": "Block time",
+    "description": "Reserve time on a staff member’s column for a break, meeting or leave, so no appointment can be booked into it, where your role allows."
+   },
+   {
+    "title": "Your schedule",
+    "description": "Review appointments and staff availability here. Select an appointment to see its details, or an available time to start a booking."
+   },
+   {
+    "title": "Staff columns",
+    "description": "In Day view each column is one staff member. Select a staff name for more options, and drag an appointment between columns to reassign it."
+   },
+   {
+    "title": "Time grid and appointments",
+    "description": "Appointments appear as coloured blocks in the time they are booked for, showing the time, service and client. Click a block to view or edit it, or an empty space to book that slot. Drag a block to reschedule it, or its bottom edge to change the length."
+   },
+   {
+    "title": "Current time",
+    "description": "The line marks the current time on today’s date, so you can see at a glance what is coming up next."
+   }
+  ]
+ },
+ {
+  "id": "clients",
+  "label": "Clients",
+  "path": "/dashboard/clients/list",
+  "permission": "view_clients",
+  "steps": [
+   {
+    "title": "Your client directory",
+    "description": "This is your Clients list. The number next to the title is how many clients match your current search and filters."
+   },
+   {
+    "title": "Import, merge and export",
+    "description": "Open Options to import clients from a file, merge duplicate clients, or export the list to Excel, where your role allows."
+   },
+   {
+    "title": "Add a client",
+    "description": "Use Add to create a new client record, where your role allows."
+   },
+   {
+    "title": "Find a client",
+    "description": "Search by name or phone number, and narrow the list with the filters and the date range."
+   },
+   {
+    "title": "Sort the list",
+    "description": "Choose how the clients are ordered, for example by newest first or by total sales."
+   },
+   {
+    "title": "Client records",
+    "description": "Review each client here. Open a row to see or update the client’s details, and use the row menu for more actions."
+   }
+  ]
+ },
+ {
+  "id": "clients_loyalty",
+  "label": "Referral & rewards",
+  "path": "/dashboard/clients/loyalty",
+  "permission": "view_referral_rewards",
+  "steps": [
+   {
+    "title": "Referral & Reward Points",
+    "description": "See your clients’ wallet balances, referral codes and reward activity in one place."
+   },
+   {
+    "title": "At a glance",
+    "description": "These cards summarise total clients, wallet balance, referral code holders and completed referrals."
+   },
+   {
+    "title": "Find a client",
+    "description": "Search by name, phone or email to find a client’s loyalty details."
+   },
+   {
+    "title": "Client wallets and referrals",
+    "description": "Each row shows a client’s referral code, referral status, wallet balance and points. Open a row to see more detail."
+   }
+  ]
+ },
+ {
+  "id": "clients_history",
+  "label": "Client history",
+  "path": "/dashboard/clients/history",
+  "permission": "view_client_history",
+  "steps": [
+   {
+    "title": "Find a customer",
+    "description": "Search for a customer by name or phone, or open Filters to narrow the list by last visit, service, staff or gender."
+   },
+   {
+    "title": "Customer list",
+    "description": "Select a customer to load their full history on the right."
+   },
+   {
+    "title": "Visit and spend history",
+    "description": "Review the selected customer’s past visits, purchases and payments here."
+   }
+  ]
+ },
+ {
+  "id": "catalog_services",
+  "label": "Service menu",
+  "path": "/dashboard/catalog/services",
+  "permission": "view_services",
+  "steps": [
+   {
+    "title": "Service menu",
+    "description": "These are the services your business offers, with their pricing and availability."
+   },
+   {
+    "title": "Add and manage services",
+    "description": "Use Options and the add button here to create services and manage the menu, where your role allows."
+   },
+   {
+    "title": "Find a service",
+    "description": "Search the service menu to locate an item quickly."
+   },
+   {
+    "title": "Your services",
+    "description": "Review each service and use its actions to edit or manage it."
+   }
+  ]
+ },
+ {
+  "id": "catalog_products",
+  "label": "Products",
+  "path": "/dashboard/catalog/products",
+  "permission": "view_products",
+  "steps": [
+   {
+    "title": "Products",
+    "description": "These are the products your salon sells and keeps in stock."
+   },
+   {
+    "title": "Options and new products",
+    "description": "Use Options to import or export products, and the add button to create one, where your role allows."
+   },
+   {
+    "title": "Find products",
+    "description": "Search and filter products before opening a record."
+   },
+   {
+    "title": "Your products",
+    "description": "Review each product here and use its actions to view, edit or delete it."
+   }
+  ]
+ },
+ {
+  "id": "catalog_packages",
+  "label": "Client packages",
+  "path": "/dashboard/catalog/packages/client-packages",
+  "permission": "view_client_packages",
+  "steps": [
+   {
+    "title": "Two different things",
+    "description": "This page has two tabs, and they do different jobs. Client Packages are the packages you have actually sold to clients. Templates are ready-made package designs that you reuse over and over. A template is never sold on its own: it only saves you typing when you create a client package."
+   },
+   {
+    "title": "Client Packages",
+    "description": "A package that a specific client has bought: a bundle of sessions of one or more services, such as 6 facials for one price. Each one belongs to a client, and shows how many sessions they have used and how many are left, plus its status. Use this tab to sell a package and to track what each client still has to redeem."
+   },
+   {
+    "title": "Templates",
+    "description": "A blueprint for a package you sell often. It holds the package name, the services and sessions in it and the price, but it is not tied to any client and nothing has been sold. When you sell a package, pick a template and the whole form fills in for you, then you only choose the client. Change a template later and packages already sold are not affected."
+   },
+   {
+    "title": "Sell and track client packages",
+    "description": "This is the Client Packages list. Use Create Package to sell a package to a client, where your role allows. You can start from a template to fill in the details, or build one from scratch."
+   },
+   {
+    "title": "At a glance",
+    "description": "These cards summarise your packages and their status."
+   },
+   {
+    "title": "Find a package",
+    "description": "Search by client or package name, and filter or sort the list."
+   }
+  ]
+ },
+ {
+  "id": "catalog_package_templates",
+  "label": "Package templates",
+  "path": "/dashboard/catalog/packages/templates",
+  "permission": "view_package_templates",
+  "steps": [
+   {
+    "title": "Two different things",
+    "description": "This page has two tabs, and they do different jobs. Client Packages are the packages you have actually sold to clients. Templates are ready-made package designs that you reuse over and over. A template is never sold on its own: it only saves you typing when you create a client package."
+   },
+   {
+    "title": "Client Packages",
+    "description": "A package that a specific client has bought: a bundle of sessions of one or more services, such as 6 facials for one price. Each one belongs to a client, and shows how many sessions they have used and how many are left, plus its status. Use this tab to sell a package and to track what each client still has to redeem."
+   },
+   {
+    "title": "Templates",
+    "description": "A blueprint for a package you sell often. It holds the package name, the services and sessions in it and the price, but it is not tied to any client and nothing has been sold. When you sell a package, pick a template and the whole form fills in for you, then you only choose the client. Change a template later and packages already sold are not affected."
+   },
+   {
+    "title": "Your package templates",
+    "description": "Design a reusable package here once, with its services, sessions and price. Then load it whenever you sell that package to a client. Use New Template to add one, where your role allows. Creating a template does not sell anything."
+   }
+  ]
+ },
+ {
+  "id": "catalog_memberships",
+  "label": "Memberships",
+  "path": "/dashboard/catalog/memberships",
+  "permission": "view_memberships",
+  "steps": [
+   {
+    "title": "Memberships",
+    "description": "Create and manage the membership plans you offer your clients."
+   },
+   {
+    "title": "Options and new plans",
+    "description": "Use Options for extra actions and the create button to add a membership plan, where your role allows."
+   },
+   {
+    "title": "Find a membership",
+    "description": "Search the available membership plans here."
+   },
+   {
+    "title": "Your membership plans",
+    "description": "Review each plan and open one to see or update its benefits and members."
+   }
+  ]
+ },
+ {
+  "id": "catalog_tool_tracking",
+  "label": "Tool tracking",
+  "path": "/dashboard/catalog/tool-tracking",
+  "permission": "view_assets",
+  "steps": [
+   {
+    "title": "Tool tracking",
+    "description": "Register tools and equipment, hand them to staff, and keep a permanent record of who had what."
+   },
+   {
+    "title": "Assets and incidents",
+    "description": "Assets lists your tools and equipment. Damage & missing shows reported problems that still need attention."
+   },
+   {
+    "title": "Find an asset",
+    "description": "Search and filter your tools by status, condition, category or brand."
+   },
+   {
+    "title": "Your assets",
+    "description": "Review each tool, who currently has it, and use its actions to assign, return or report it."
+   }
+  ]
+ },
+ {
+  "id": "catalog",
+  "label": "Catalog",
+  "path": "/dashboard/catalog/services",
+  "permission": "view_catalog",
+  "steps": [
+   {
+    "title": "Your salon catalog",
+    "description": "Maintain the services you sell, including their pricing and availability."
+   },
+   {
+    "title": "Find a service",
+    "description": "Search your service menu to locate an item quickly."
+   },
+   {
+    "title": "Service menu",
+    "description": "Review services and use the available actions to manage them."
+   },
+   {
+    "title": "Your product catalog",
+    "description": "Manage the products your salon sells from this page."
+   },
+   {
+    "title": "Find products",
+    "description": "Search and filter products before opening a record."
+   },
+   {
+    "title": "Client packages",
+    "description": "Manage packages sold to clients and review their remaining services."
+   },
+   {
+    "title": "Package templates",
+    "description": "Create reusable package offers for your clients."
+   },
+   {
+    "title": "Memberships",
+    "description": "Manage membership plans and benefits for your clients."
+   },
+   {
+    "title": "Find a membership",
+    "description": "Search the available membership plans here."
+   }
+  ]
+ },
+ {
+  "id": "inventory_suppliers",
+  "label": "Suppliers",
+  "path": "/dashboard/inventory/suppliers",
+  "permission": "view_suppliers",
+  "steps": [
+   {
+    "title": "Suppliers",
+    "description": "These are the suppliers you buy stock from. The number next to the title is how many suppliers match your search and filters."
+   },
+   {
+    "title": "Options, payouts and new suppliers",
+    "description": "Use Options to export the supplier list, Create Payout to record a payment to a supplier, and the add button to create a supplier, where your role allows."
+   },
+   {
+    "title": "Find a supplier",
+    "description": "Search by name and use Filters to narrow the list."
+   },
+   {
+    "title": "Your suppliers",
+    "description": "Review each supplier here and open one to see its orders, payments and catalog."
+   }
+  ]
+ },
+ {
+  "id": "inventory_orders",
+  "label": "Orders",
+  "path": "/dashboard/inventory/orders",
+  "permission": "view_orders",
+  "steps": [
+   {
+    "title": "Order stages",
+    "description": "A purchase order moves through these stages: Create Order, Draft, Ordered, Verify Order, Received, or Cancelled. Click a stage to see the orders in it, or Create Order to start a new purchase order."
+   },
+   {
+    "title": "Purchase orders",
+    "description": "The list below shows the orders in the stage you selected."
+   },
+   {
+    "title": "Your orders",
+    "description": "Open an order to review its items and supplier, and to move it to the next stage."
+   }
+  ]
+ },
+ {
+  "id": "inventory_products",
+  "label": "Product inventory",
+  "path": "/dashboard/inventory/products",
+  "permission": "view_product_inventory",
+  "steps": [
+   {
+    "title": "Product inventory",
+    "description": "This is the stock of the retail products you sell. The number next to the title is how many products match your search and filters. Consumables are managed on their own page."
+   },
+   {
+    "title": "Receive stock and options",
+    "description": "Use Receive Stock to record a new delivery. Options has the stock history and downloads, where your role allows."
+   },
+   {
+    "title": "Find a product",
+    "description": "Search by name, SKU or barcode and use Filters to narrow the list."
+   },
+   {
+    "title": "Your stock",
+    "description": "Review stock levels here and use each row’s menu to see its history, edit or delete a product."
+   }
+  ]
+ },
+ {
+  "id": "inventory_consumables",
+  "label": "Consumable inventory",
+  "path": "/dashboard/inventory/consumables",
+  "permission": "view_consumable_inventory",
+  "steps": [
+   {
+    "title": "Consumable inventory",
+    "description": "These are the supplies used up while delivering services — for example colour, developer or wax. Track their stock, unit conversion and which services use them."
+   },
+   {
+    "title": "Add, usage and export",
+    "description": "Use Add to create a consumable, Usage to see how much has been used, and Export to download the list, where your role allows."
+   },
+   {
+    "title": "Find a consumable",
+    "description": "Search and filter by status to see what is low or out of stock."
+   },
+   {
+    "title": "Your consumables",
+    "description": "Review stock and status here and use each row’s menu for more actions."
+   }
+  ]
+ },
+ {
+  "id": "inventory_audit",
+  "label": "Product audit",
+  "path": "/dashboard/inventory/audit",
+  "permission": "view_product_audit",
+  "steps": [
+   {
+    "title": "Product audit",
+    "description": "An audit counts your physical stock and compares it with the quantities in the system, so you can reconcile any differences."
+   },
+   {
+    "title": "Start and export audits",
+    "description": "Use New Audit to start a stock count, and Export to Excel to download the audit list, where your role allows."
+   },
+   {
+    "title": "Find an audit",
+    "description": "Search and filter past and open audits."
+   },
+   {
+    "title": "Your audits",
+    "description": "Open an audit to enter counts, review differences and approve or reject it."
+   }
+  ]
+ },
+ {
+  "id": "inventory_ledger",
+  "label": "Stock ledger",
+  "path": "/dashboard/inventory/ledger",
+  "permission": "view_stock_ledger",
+  "steps": [
+   {
+    "title": "Stock ledger",
+    "description": "Every stock movement in one place — purchases, usage, sales, adjustments and transfers — so you can see exactly why a quantity changed."
+   },
+   {
+    "title": "Export and adjust",
+    "description": "Use Export Excel to download the ledger and Stock Adjustment to correct a quantity, where your role allows. Adjustments are recorded here too."
+   },
+   {
+    "title": "Find movements",
+    "description": "Search by product and use Filters to narrow by staff, transaction type, branch or date range."
+   },
+   {
+    "title": "Your movements",
+    "description": "Each row is one movement with its quantity in or out and the balance after it. Open a row for its details."
+   }
+  ]
+ },
+ {
+  "id": "inventory",
+  "label": "Warehouse",
+  "path": "/dashboard/inventory/suppliers",
+  "permission": "access_warehouse",
+  "steps": [
+   {
+    "title": "Your warehouse",
+    "description": "Manage supplier relationships and purchasing for your salon."
+   },
+   {
+    "title": "Find a supplier",
+    "description": "Search and filter suppliers before opening their records."
+   },
+   {
+    "title": "Product inventory",
+    "description": "Review stock levels and find products that need attention."
+   },
+   {
+    "title": "Review records",
+    "description": "Use this section to locate and review the records you need."
+   },
+   {
+    "title": "Consumable inventory",
+    "description": "Track the supplies used to deliver salon services."
+   },
+   {
+    "title": "Purchase orders",
+    "description": "Review orders and their progress from this list."
+   },
+   {
+    "title": "Product audits",
+    "description": "Review inventory audit records and narrow the results with the controls."
+   },
+   {
+    "title": "Stock ledger",
+    "description": "Review stock movements and their effect on your inventory."
+   }
+  ]
+ },
+ {
+  "id": "staff",
+  "label": "Staff",
+  "path": "/dashboard/team/members",
+  "permission": "access_staff",
+  "steps": [
+   {
+    "title": "Your salon team",
+    "description": "Manage team members and their staff details here."
+   },
+   {
+    "title": "Find team members",
+    "description": "Search, sort and filter the staff list using these controls."
+   },
+   {
+    "title": "Scheduled shifts",
+    "description": "Review working hours and availability for your staff."
+   },
+   {
+    "title": "Review your team",
+    "description": "Use these controls and summaries to review the relevant staff records."
+   },
+   {
+    "title": "Tips and commissions",
+    "description": "Review earnings and settlement information for your team."
+   },
+   {
+    "title": "Attendance",
+    "description": "Track staff attendance and review the daily summary."
+   },
+   {
+    "title": "Staff history",
+    "description": "Find a staff member to review their recorded history."
+   },
+   {
+    "title": "Payroll",
+    "description": "Review payroll records and narrow the results with the available filters."
+   }
+  ]
+ },
+ {
+  "id": "staff_members",
+  "label": "Staff members",
+  "path": "/dashboard/team/members",
+  "permission": "view_team",
+  "steps": [
+   {
+    "title": "Your salon team",
+    "description": "See how many team members you have and add new ones from here. Open a member to edit their details, role and login."
+   },
+   {
+    "title": "Find team members",
+    "description": "Search, sort and filter the staff list using these controls."
+   }
+  ]
+ },
+ {
+  "id": "staff_payroll",
+  "label": "Payroll",
+  "path": "/dashboard/team/payroll",
+  "permission": "view_payroll",
+  "steps": [
+   {
+    "title": "Payroll",
+    "description": "Review payroll records for your team."
+   },
+   {
+    "title": "Narrow the records",
+    "description": "Search by staff name, filter by payroll status and pick a date range. Use the export button to download what you see."
+   }
+  ]
+ },
+ {
+  "id": "staff_shifts",
+  "label": "Scheduled shifts",
+  "path": "/dashboard/team/shifts",
+  "permission": "view_scheduled_shifts",
+  "steps": [
+   {
+    "title": "Staff schedule",
+    "description": "Move between weeks with Today and the arrows, or pick a date to jump to its week. Choose Add Shift to schedule a working day or a day off."
+   },
+   {
+    "title": "Review the schedule",
+    "description": "Use these controls to find staff and review each person's working hours and availability for the week."
+   }
+  ]
+ },
+ {
+  "id": "staff_commissions",
+  "label": "Tip & Commission",
+  "path": "/dashboard/team/commissions",
+  "permission": "view_team_commissions",
+  "steps": [
+   {
+    "title": "Commission and Tip",
+    "description": "Switch between Commission, where you create rules and settle payouts, and Tip, where you track and settle staff tips."
+   },
+   {
+    "title": "Review earnings",
+    "description": "Create commission rules for your staff, or review and settle what they have earned."
+   }
+  ]
+ },
+ {
+  "id": "staff_attendance",
+  "label": "Attendance",
+  "path": "/dashboard/team/attendance",
+  "permission": "view_attendance_list",
+  "steps": [
+   {
+    "title": "Attendance",
+    "description": "Track staff attendance for any date."
+   },
+   {
+    "title": "Daily summary",
+    "description": "These cards summarise the day's attendance. Review the staff list below them for each person's record."
+   }
+  ]
+ },
+ {
+  "id": "staff_history",
+  "label": "Staff history",
+  "path": "/dashboard/team/history",
+  "permission": "view_staff_history",
+  "steps": [
+   {
+    "title": "Staff history",
+    "description": "Pick a staff member to view their full profile, performance and history."
+   },
+   {
+    "title": "Find a staff member",
+    "description": "Search and filter the list to find the person you want to review."
+   }
+  ]
+ },
+ {
+  "id": "cash_management",
+  "label": "Cash Management",
+  "path": "/dashboard/cash-management",
+  "permission": "view_cash_management",
+  "steps": [
+   {
+    "title": "Manage your cash counter",
+    "description": "Review your counter and use the available actions to manage the salon’s cash activity."
+   },
+   {
+    "title": "Counter actions",
+    "description": "Refresh reloads the figures. Open Counter starts today’s counter with an opening balance — once a day. Close Counter ends it when you have counted the drawer."
+   },
+   {
+    "title": "Counter summary",
+    "description": "See today’s revenue, cash expense and closing balance together before reviewing individual records."
+   },
+   {
+    "title": "Choose the period",
+    "description": "Use the date filter to review cash flow for the period you need."
+   },
+   {
+    "title": "Transactions and expenses",
+    "description": "Switch tabs to inspect the different types of cash activity."
+   }
+  ]
+ },
+ {
+  "id": "marketing",
+  "label": "Marketing",
+  "path": "/dashboard/marketing",
+  "permission": "view_marketing",
+  "steps": [
+   {
+    "title": "Marketing overview",
+    "description": "Review your salon’s WhatsApp marketing activity and results."
+   },
+   {
+    "title": "Marketing results",
+    "description": "Use these summaries to understand delivery and engagement."
+   },
+   {
+    "title": "Campaigns",
+    "description": "Review campaign history and use the filters to find a campaign."
+   },
+   {
+    "title": "Find the activity you need",
+    "description": "Use this section to locate and review the relevant marketing activity."
+   },
+   {
+    "title": "Message templates",
+    "description": "Manage the templates available for your campaigns."
+   },
+   {
+    "title": "WhatsApp inbox",
+    "description": "Find a conversation and review client messages here."
+   },
+   {
+    "title": "Marketing insights",
+    "description": "Review messaging insights for your chosen period."
+   },
+   {
+    "title": "Scheduled messages",
+    "description": "Review scheduled template messages and their status."
+   }
+  ]
+ },
+ {
+  "id": "marketing_dashboard",
+  "label": "Marketing dashboard",
+  "path": "/dashboard/marketing",
+  "permission": "view_marketing_dashboard",
+  "steps": [
+   {
+    "title": "WhatsApp Marketing",
+    "description": "Your marketing overview: how your WhatsApp connection is doing and how your campaigns and templates are performing."
+   },
+   {
+    "title": "Choose the period",
+    "description": "Pick the dates the numbers, chart and tables below cover."
+   },
+   {
+    "title": "Create a template",
+    "description": "Start a new message template. Templates are sent to Meta for approval before you can use them in a campaign."
+   },
+   {
+    "title": "Create a campaign",
+    "description": "Start a new WhatsApp campaign: choose a template, pick who receives it, and send it now or schedule it."
+   },
+   {
+    "title": "Notices",
+    "description": "Important alerts appear here, such as reaching your daily messaging limit, getting close to it, or templates still waiting for Meta’s approval."
+   },
+   {
+    "title": "WhatsApp connection",
+    "description": "Shows whether your WhatsApp Business number is connected, the number itself and its quality rating."
+   },
+   {
+    "title": "Daily limit",
+    "description": "How many messages you have sent today against the daily limit for your business tier. Campaigns pause when it is reached and resume the next day."
+   },
+   {
+    "title": "Campaign performance",
+    "description": "Review delivery and engagement for your campaigns. Use the tabs to switch the view, and View All to open the full campaign list."
+   },
+   {
+    "title": "Switch the view",
+    "description": "Show all campaigns, or only the active, completed or scheduled ones."
+   },
+   {
+    "title": "Campaign table",
+    "description": "Each campaign with its status, how many messages were sent and how many failed, and when it was created."
+   },
+   {
+    "title": "Campaigns overview",
+    "description": "The total number of campaigns and how your messages performed overall."
+   },
+   {
+    "title": "Message status",
+    "description": "The overall delivery breakdown for the period: how many messages were sent, delivered, read, failed or blocked."
+   },
+   {
+    "title": "Top performing templates",
+    "description": "Your most-used templates ranked by usage and engagement. Use View All to open the full template list."
+   },
+   {
+    "title": "Most engaged contacts",
+    "description": "Contacts who consistently read your messages, so you know who responds best."
+   }
+  ]
+ },
+ {
+  "id": "marketing_meta_insights",
+  "label": "Meta Insights",
+  "path": "/dashboard/marketing/meta-insights",
+  "permission": "view_marketing_analytics",
+  "steps": [
+   {
+    "title": "Meta Insights",
+    "description": "What WhatsApp actually billed you and how each message type performed, taken directly from Meta."
+   },
+   {
+    "title": "Choose the period",
+    "description": "Show the last 7, 30 or 90 days. Meta keeps up to 90 days of history."
+   },
+   {
+    "title": "About the figures",
+    "description": "Figures can lag by a few hours, so very recent messages may not be counted yet."
+   },
+   {
+    "title": "Billing summary",
+    "description": "Billed by Meta is what you were charged before GST. Billed messages, Free messages and All messages show the volumes behind it, with the share that was free."
+   },
+   {
+    "title": "Spend by message type",
+    "description": "Your spend split by Marketing, Utility, Authentication and Service messages, with how many were free and what each type cost."
+   },
+   {
+    "title": "Daily spend",
+    "description": "A bar for each day’s spend. Hover a bar to see that day’s exact figure."
+   },
+   {
+    "title": "Template performance",
+    "description": "How each template performed over the period, so you can see which ones are worth the cost."
+   }
+  ]
+ },
+ {
+  "id": "marketing_campaigns",
+  "label": "Campaigns",
+  "path": "/dashboard/marketing/campaigns/history",
+  "permission": "view_campaigns",
+  "steps": [
+   {
+    "title": "Campaigns",
+    "description": "Every WhatsApp campaign you have created, with its status and results."
+   },
+   {
+    "title": "Template Gallery",
+    "description": "Open your message templates to review or prepare the message a campaign will send."
+   },
+   {
+    "title": "Create a campaign",
+    "description": "Start a new campaign: choose a template, pick the contacts and send now or schedule it, where your role allows."
+   },
+   {
+    "title": "Filter by status",
+    "description": "Show all campaigns, or only those in one status such as running, scheduled, paused or completed. The number on each tab is how many there are."
+   },
+   {
+    "title": "Search and filter",
+    "description": "Search by campaign or template name, narrow by date range, choose the sort order, and use Clear to reset everything."
+   },
+   {
+    "title": "Bulk actions",
+    "description": "Tick campaigns to act on several at once. Start resumes paused ones, Pause pauses running ones and Resend sends again to completed or failed ones. Buttons stay disabled until your selection fits."
+   },
+   {
+    "title": "A campaign",
+    "description": "Each row shows the campaign name, its status, schedule and progress."
+   },
+   {
+    "title": "Row actions",
+    "description": "Pause or resume a campaign, resend it, open its details for delivery statistics and the reasons messages failed, or export the contacts to CSV."
+   }
+  ]
+ },
+ {
+  "id": "marketing_templates",
+  "label": "Templates",
+  "path": "/dashboard/marketing/templates",
+  "permission": "view_templates",
+  "steps": [
+   {
+    "title": "Templates",
+    "description": "Reusable WhatsApp messages. They are sent to a list of contacts through a campaign, once Meta has approved them."
+   },
+   {
+    "title": "New template",
+    "description": "Create a new template. You choose the type first, such as a standard or a carousel template, where your role allows."
+   },
+   {
+    "title": "Approval check",
+    "description": "While a template is waiting for Meta, this page checks its approval status automatically and counts down to the next check."
+   },
+   {
+    "title": "Filter by status",
+    "description": "Show all templates, your favourites, or only Approved, Pending or Rejected ones. The number is how many are in each group."
+   },
+   {
+    "title": "Search and select",
+    "description": "Search templates by name. Select All ticks every template shown, and once some are ticked you can delete them together."
+   },
+   {
+    "title": "Your templates",
+    "description": "Each card previews a template and its status. Open one to view it, and use its actions to favourite, edit or delete it."
+   }
+  ]
+ },
+ {
+  "id": "marketing_scheduled",
+  "label": "Scheduled Templates",
+  "path": "/dashboard/marketing/scheduled-templates",
+  "permission": "view_scheduled_templates",
+  "steps": [
+   {
+    "title": "Scheduled Messages",
+    "description": "Automated WhatsApp messages that are lined up to go out, such as birthday and anniversary wishes, with their delivery status."
+   },
+   {
+    "title": "At a glance",
+    "description": "How many messages are scheduled for today, how many are upcoming and how many have already been sent today."
+   },
+   {
+    "title": "Find messages",
+    "description": "Filter by birthday date or anniversary date, or search by name or phone number. Use Clear to remove the filters."
+   },
+   {
+    "title": "Select and sort",
+    "description": "Tick messages to select them, and choose whether the soonest or the latest send time comes first. Bulk cancel and reschedule are not available yet."
+   },
+   {
+    "title": "Scheduled list",
+    "description": "Messages are grouped by day. Each row shows the send time, status, client, the event it is for and a preview of the message."
+   },
+   {
+    "title": "Send or retry now",
+    "description": "Send a scheduled message straight away, retry one that failed or resend one that was sent, where the message allows it."
+   },
+   {
+    "title": "More actions",
+    "description": "Open a message’s menu to view its details, send it now, edit or reschedule it, or cancel or delete it, where your role allows."
+   }
+  ]
+ },
+ {
+  "id": "marketing_inbox",
+  "label": "Inbox",
+  "path": "/dashboard/marketing/inbox",
+  "permission": "view_inbox",
+  "steps": [
+   {
+    "title": "WhatsApp inbox",
+    "description": "Your customers’ WhatsApp conversations. The badge is how many unread messages you have, and the dot shows whether the inbox is live."
+   },
+   {
+    "title": "Light or dark",
+    "description": "Switch the inbox between light and dark mode."
+   },
+   {
+    "title": "Search conversations",
+    "description": "Find a conversation by customer name or phone number."
+   },
+   {
+    "title": "Filter, select and sort",
+    "description": "Show all chats or only unread ones. Select lets you tick chats to delete them together, and the sort menu puts the latest or the unread chats first."
+   },
+   {
+    "title": "Conversations",
+    "description": "Each row shows the customer, their last message, when it arrived and how many messages are unread. Select one to open it."
+   },
+   {
+    "title": "The open chat",
+    "description": "The customer you are talking to. Use the buttons to see their customer info, refresh the messages or delete the chat."
+   },
+   {
+    "title": "24-hour window",
+    "description": "WhatsApp lets you reply freely for 24 hours after the customer’s last message. This banner shows whether the window is open, about to close or closed."
+   },
+   {
+    "title": "Send a template",
+    "description": "Once the 24-hour window has closed you can only send an approved template. Use this to pick one, or to send the booking form so the customer can request an appointment inside WhatsApp."
+   }
+  ]
+ },
+ {
+  "id": "marketing_message_settings",
+  "label": "Message Settings",
+  "path": "/dashboard/marketing/message-settings",
+  "permission": "view_templates",
+  "steps": [
+   {
+    "title": "Message Settings",
+    "description": "Control the messages your salon sends automatically when something happens, such as a sale, a booking or a birthday."
+   },
+   {
+    "title": "Booking form",
+    "description": "Let customers request an appointment right inside WhatsApp. Choose whether the form is sent automatically when a customer replies, and create the invitation template for customers outside the 24-hour window."
+   },
+   {
+    "title": "Find a message",
+    "description": "Search the automatic messages and filter them by their approval status with Meta."
+   },
+   {
+    "title": "Categories",
+    "description": "Group the messages by type. The number beside each is how many are in it."
+   },
+   {
+    "title": "Automatic messages",
+    "description": "Each row is one event. It shows the message wording, and the switch turns that message on or off. Select a row to read and edit it."
+   },
+   {
+    "title": "Message content",
+    "description": "Edit the wording of the selected message here. Changes to approved wording are sent back to Meta for approval before they take effect."
+   }
+  ]
+ },
+ {
+  "id": "marketing_pricing_policy",
+  "label": "Price & Policy",
+  "path": "/dashboard/marketing/pricing-policy",
+  "permission": "view_templates",
+  "steps": [
+   {
+    "title": "Price and sending policy",
+    "description": "Read this before you create a template or launch a campaign. It explains what you will be charged and which rules Meta checks."
+   },
+   {
+    "title": "On this page",
+    "description": "Jump straight to any section of the guide."
+   },
+   {
+    "title": "Before you start",
+    "description": "This is SalonOx’s plain-language summary, not Meta’s official text. Prices are India rates, and Meta can change them at any time, so confirm important figures on Meta’s pricing page."
+   },
+   {
+    "title": "What messages cost",
+    "description": "The price of each message type: Marketing, Utility, Authentication and Service replies, with an approximate price including GST."
+   },
+   {
+    "title": "Worked example",
+    "description": "A sample showing how the cost adds up, for example a marketing offer sent to 1,000 customers compared with the same number of booking reminders."
+   },
+   {
+    "title": "Choosing a category",
+    "description": "Which category your template belongs to. Adding an offer or a “book again” push turns a Utility message into a Marketing one, which costs more."
+   },
+   {
+    "title": "Quick checklist",
+    "description": "Run through this list before you submit a template to Meta to avoid a rejection."
+   }
+  ]
+ },
+ {
+  "id": "online_booking",
+  "label": "Online booking",
+  "path": "/dashboard/online-booking/marketplace",
+  "permission": "view_booking",
+  "steps": [
+   {
+    "title": "Online booking",
+    "description": "Manage how clients discover your salon and book online."
+   },
+   {
+    "title": "Your public salon profile",
+    "description": "Review the profile details that help clients understand your business."
+   },
+   {
+    "title": "Digital menu",
+    "description": "Manage the QR-code menus clients use to browse your salon services."
+   },
+   {
+    "title": "Your menus",
+    "description": "Review your menus and use the available actions to create or manage them."
+   }
+  ]
+ },
+ {
+  "id": "online_booking_marketplace",
+  "label": "Marketplace profile",
+  "path": "/dashboard/online-booking/marketplace",
+  "permission": "view_marketplace",
+  "steps": [
+   {
+    "title": "Marketplace profile",
+    "description": "How your salon appears on the online booking marketplace and on your public booking page. Changes here are not live until you save."
+   },
+   {
+    "title": "Save changes",
+    "description": "Publish every change you made on this page. The button turns green and says Saved once it is done."
+   },
+   {
+    "title": "Online booking status",
+    "description": "Shows whether online booking is Active or Inactive for your salon."
+   },
+   {
+    "title": "Enable online booking",
+    "description": "Turn this on to let clients discover your salon and book your services online. Turn it off to stop taking online bookings."
+   },
+   {
+    "title": "Business information",
+    "description": "The details clients see on your public booking page."
+   },
+   {
+    "title": "Contact details",
+    "description": "Your phone number, and optionally your website. Instagram and Facebook links are added the same way, so clients can find you on social media."
+   },
+   {
+    "title": "Facilities & amenities",
+    "description": "Tick the facilities your salon offers, such as parking or air conditioning. Specialities work the same way, so clients know what you are known for."
+   },
+   {
+    "title": "Salon work gallery",
+    "description": "Upload photos of your work. Drag and drop photos or click to browse, and use Add more to keep building the gallery."
+   },
+   {
+    "title": "Staff visibility",
+    "description": "Choose which active staff members clients can pick on your booking page. Turning someone off here does not affect your Calendar or anything else."
+   },
+   {
+    "title": "Theme colour",
+    "description": "Choose the accent colour of your public booking page from the presets, or enter your own colour."
+   },
+   {
+    "title": "Page heading",
+    "description": "The heading and subtitle at the top of your booking page. Write a short welcome that suits your salon."
+   },
+   {
+    "title": "Booking settings",
+    "description": "Control when and how far ahead clients can book."
+   },
+   {
+    "title": "Advance, notice, cancellation and slots",
+    "description": "Maximum advance booking is how far ahead a client can book, and Minimum booking notice is how soon before the time. Cancellation notice and Slot interval set the cancellation window and the spacing of times offered."
+   },
+   {
+    "title": "Same-day and multiple services",
+    "description": "Choose whether clients can book for today, and whether they can book several services in one appointment, with the duration and price adding up."
+   },
+   {
+    "title": "Your booking link",
+    "description": "The link to your booking page. Choose Copy and share it with clients so they can book directly."
+   }
+  ]
+ },
+ {
+  "id": "online_booking_google",
+  "label": "Google",
+  "path": "/dashboard/online-booking/google",
+  "permission": "view_reserve_with_google",
+  "steps": [
+   {
+    "title": "Google",
+    "description": "Add a Book button to your Google listing and collect Google reviews."
+   },
+   {
+    "title": "Your booking link for Google",
+    "description": "This is your online booking link. Choose Copy, then paste it into your Google Business Profile as the appointment link."
+   },
+   {
+    "title": "How to add it to Google",
+    "description": "The steps to follow on Google. You need a verified Google Business Profile for your salon, and Google decides whether the booking-link field is available for your business."
+   },
+   {
+    "title": "Google review link",
+    "description": "After a client rates their visit 4 or 5 stars in our feedback form, we show them a button that opens this link so they can review you on Google. Change the link in Settings."
+   }
+  ]
+ },
+ {
+  "id": "online_booking_social",
+  "label": "Facebook & Instagram",
+  "path": "/dashboard/online-booking/social",
+  "permission": "view_social_bookings",
+  "steps": [
+   {
+    "title": "Facebook & Instagram",
+    "description": "Turn your followers into bookings by putting your booking link on your Facebook Page and Instagram profile."
+   },
+   {
+    "title": "Your booking link",
+    "description": "Choose Copy to get your online booking link. You will paste it into Facebook and Instagram."
+   },
+   {
+    "title": "Where to put it",
+    "description": "Steps for adding a Book Now button on your Facebook Page, and for sharing the link in your Instagram bio and Stories."
+   },
+   {
+    "title": "QR code",
+    "description": "Download a QR code for your booking page to print or add to a post. Anyone who scans it can book."
+   },
+   {
+    "title": "Ready-made captions",
+    "description": "Copy a caption with your booking link already in it and paste it into a post or message."
+   }
+  ]
+ },
+ {
+  "id": "online_booking_digital_menu",
+  "label": "Digital Menu",
+  "path": "/dashboard/online-booking/digital-menu",
+  "permission": "view_digital_menu",
+  "steps": [
+   {
+    "title": "Digital menu",
+    "description": "Turn your services into a customer-facing menu that clients open by scanning a QR code, handy for walk-ins."
+   },
+   {
+    "title": "Create your menu",
+    "description": "You have no menu yet. Choose Create Menu to build one from your existing services and generate a QR code customers can scan."
+   },
+   {
+    "title": "Your menu",
+    "description": "Your menu’s name and whether it is Active or Inactive, with how many services and categories it holds."
+   },
+   {
+    "title": "Last updated",
+    "description": "When the menu was last changed."
+   },
+   {
+    "title": "Menu actions",
+    "description": "View Menu shows what customers see. QR Code lets you show or download the code to print. Edit changes the menu, and the status button switches it Active or Inactive."
+   }
+  ]
+ },
+ {
+  "id": "enquiries",
+  "label": "Client enquiries",
+  "path": "/dashboard/clients/enquiries",
+  "permission": "view_enquiries",
+  "steps": [
+   {
+    "title": "Follow up with potential clients",
+    "description": "Track every client enquiry here and follow it up until it becomes a booking."
+   },
+   {
+    "title": "Create an enquiry",
+    "description": "Use Create Enquiry to log a new enquiry, where your role allows."
+   },
+   {
+    "title": "Find an enquiry",
+    "description": "Search by name or phone, and filter by date range and status to plan your follow-ups."
+   },
+   {
+    "title": "Enquiry records",
+    "description": "Review the details and use each row’s actions to contact clients or update an enquiry."
+   }
+  ]
+ },
+ {
+  "id": "reports",
+  "label": "Reports",
+  "path": "/reports",
+  "permission": "view_reports",
+  "steps": [
+   {
+    "title": "Understand your business",
+    "description": "Find salon reports covering the areas available to your role."
+   },
+   {
+    "title": "Find a report",
+    "description": "Search for a report by name instead of browsing every category."
+   },
+   {
+    "title": "Browse report categories",
+    "description": "Expand a category to open a report. Star useful reports so they are easier to find again."
+   }
+  ]
+ },
+ {
+  "id": "settings_billing",
+  "label": "Billing & Plans",
+  "path": "/dashboard/settings/billing",
+  "permission": "view_settings_billing",
+  "steps": [
+   {
+    "title": "Billing & Plans",
+    "description": "View and download your past invoices from one page."
+   },
+   {
+    "title": "Billing history",
+    "description": "Your past invoices. Open the columns menu to choose what to show, and use the download button on a row to get its invoice."
+   },
+   {
+    "title": "Need a custom plan?",
+    "description": "For volume pricing or a custom integration, contact our sales team from here."
+   }
+  ]
+ },
+ {
+  "id": "settings",
+  "label": "Settings",
+  "path": "/dashboard/settings",
+  "permission": "access_settings",
+  "steps": [
+   {
+    "title": "Salon settings",
+    "description": "Configure your business and account from this area."
+   },
+   {
+    "title": "Choose a settings area",
+    "description": "Open a card to manage account details, permissions, billing, business rules or data. Available options depend on your permissions."
+   }
+  ]
+ },
+ {
+  "id": "spotlight",
+  "label": "Spotlight",
+  "path": "/dashboard/spotlight",
+  "permission": null,
+  "steps": [
+   {
+    "title": "Discover what’s new",
+    "description": "Find new and updated SalonOX features and learn how they can help your salon."
+   },
+   {
+    "title": "Choose what to explore",
+    "description": "Switch between new, recently updated and all features."
+   },
+   {
+    "title": "Find a feature",
+    "description": "Search the feature collection to locate something specific."
+   }
+  ]
+ },
+ {
+  "id": "help",
+  "label": "Help",
+  "path": "/dashboard/help",
+  "permission": null,
+  "steps": [
+   {
+    "title": "Help and support",
+    "description": "Find help and keep track of your conversations with the support team."
+   },
+   {
+    "title": "Choose a support area",
+    "description": "Switch between the available support views using these tabs."
+   },
+   {
+    "title": "Get support",
+    "description": "Use this area to review support information or create and follow up on a request."
+   }
+  ]
+ }
+]
