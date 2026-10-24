@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import { aiCredentialsService } from "./ai-credentials.service";
 
 // Mounted inside super-admin.routes.ts, which is already behind authMiddleware + superAdminMiddleware.
-// The token is write-only: no route ever returns it.
+// The token is returned ONLY by GET /:salonId/token (super admin, to show and copy it); no other route returns it.
 const router = Router();
 
 type AuthedRequest = Request & { user?: { userId: string } };
@@ -10,6 +10,13 @@ type AuthedRequest = Request & { user?: { userId: string } };
 router.get("/:salonId", async (req: Request, res: Response, next: NextFunction) => {
     try {
         return res.json({ success: true, data: await aiCredentialsService.getStatus(String(req.params.salonId)) });
+    } catch (err) { return next(err); }
+});
+
+// The only place the full token is ever returned, and only to a super admin.
+router.get("/:salonId/token", async (req: AuthedRequest, res: Response, next: NextFunction) => {
+    try {
+        return res.json({ success: true, data: await aiCredentialsService.reveal(String(req.params.salonId), req.user?.userId ?? "") });
     } catch (err) { return next(err); }
 });
 

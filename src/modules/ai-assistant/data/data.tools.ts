@@ -1,6 +1,7 @@
 import pool from "../../../config/database";
 import { assertModuleUnlocked } from "../../../middleware/moduleLock.middleware";
 import { reportsRepository } from "../../reports/reports.repository";
+import { reportsService } from "../../reports/reports.service";
 import { salonsRepository } from "../../salons/salons.repository";
 import { AssistantUser, Tool } from "../ai-assistant.types";
 import { moneyFormatter } from "./money";
@@ -236,5 +237,60 @@ const getNewClientsTool: Tool = {
     },
 };
 
-export const dataTools: Tool[] = [getSalesReportTool, getProductSalesTool, getAppointmentCountsTool, getNewClientsTool];
+// ─── Win-back audience (Lost Customers report) ──────────────────────────────────
+const getLostClientsTool: Tool = {
+    name: "getLostClients",
+    description: "How many clients have NOT visited for a number of days (default 90), how much they spent while active, and how many are regulars (3+ visits) or one-time clients. Use it to size a win-back campaign. Counts only — never names.",
+    permission: "view_report_lost_customers",
+    parameters: { type: "object", properties: { days_away: { type: "number", description: "Not seen for at least this many days (30–365). Default 90." } } },
+    async execute(args, user: AssistantUser) {
+        await assertModuleUnlocked(user.salonId, "reports");
+        const { fmt } = await getSalonContext(user.salonId);
+        const lostDays = Math.min(365, Math.max(30, Math.round(Number(args.days_away)) || 90));
+        const res = await reportsService.getLostCustomersReport(user.salonId, { lost_days: lostDays, page: 1, limit: 200 } as any);
+        const rows = res.rows ?? [];
+        const total = Number(res.stats.total_lost_clients) || 0;
+        const regulars = rows.filter((r: any) => Number(r.visits) >= 3).length;
+        const oneTime = rows.filter((r: any) => Number(r.visits) <= 1).length;
+        const away = (a: number, b: number) => rows.filter((r: any) => Number(r.days_since_last_visit) > a && Number(r.days_since_last_visit) <= b).length;
+        return {
+            not_seen_for_at_least_days: lostDays,
+            lost_clients: total,
+            spent_while_they_were_active: fmt(Number(res.stats.total_spend_when_active) || 0),
+            ...(total > rows.length ? { note: `The split below is based on the first ${rows.length} of ${total} clients.` } : {}),
+            regulars_with_3plus_visits: regulars,
+            one_time_clients: oneTime,
+            away_up_to_6_months: away(0, 180),
+            away_6_to_12_months: away(180, 365),
+            away_over_a_year: away(365, 100000),
+        };
+    },
+};
+
+// ─── Rebooking (Rebooking Rate report) ──────────────────────────────────────────
+const getRebookingRateTool: Tool = {
+    name: "getRebookingRate",
+    description: "Share of visits followed by another booking within a window (default 45 days) for a period: visits, rebooked, rate. Use it to judge whether a rebooking reminder or offer campaign is worth sending. Overall figures only.",
+    permission: "view_report_rebooking_rate",
+    parameters: { type: "object", properties: { ...periodParams, window_days: { type: "number", description: "Rebooked within this many days (7–365). Default 45." } }, required: ["period"] },
+    async execute(args, user: AssistantUser) {
+        await assertModuleUnlocked(user.salonId, "reports");
+        const { tz } = await getSalonContext(user.salonId);
+        const per = resolvePeriod(args.period, tz, args.start_date, args.end_date);
+        const windowDays = Math.min(365, Math.max(7, Math.round(Number(args.window_days)) || 45));
+        const res = await reportsService.getRebookingRateReport(user.salonId, { start_date: per.start_date, end_date: per.end_date, rebooking_days: windowDays, page: 1, limit: 1 } as any);
+        const visits = Number(res.stats.total_visits) || 0;
+        const rebooked = Number(res.stats.rebooked_visits) || 0;
+        return {
+            period: periodOut(per),
+            rebooked_within_days: windowDays,
+            visits,
+            rebooked_visits: rebooked,
+            not_rebooked_visits: Math.max(0, visits - rebooked),
+            rebooking_rate: `${Math.round((Number(res.stats.overall_rebooking_rate) || 0) * 10) / 10}%`,
+        };
+    },
+};
+
+export const dataTools: Tool[] = [getSalesReportTool, getProductSalesTool, getAppointmentCountsTool, getNewClientsTool, getLostClientsTool, getRebookingRateTool];
 export const findDataTool = (name: string) => dataTools.find((t) => t.name === name);

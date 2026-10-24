@@ -94,6 +94,21 @@ export const aiCredentialsService = {
         };
     },
 
+    // Super Admin only (the route sits behind superAdminMiddleware): the saved token in clear text, so it can be shown
+    // and copied in the salon page. Kept out of getStatus so the normal status response never carries it.
+    async reveal(salonId: string, requestedBy: string): Promise<{ api_token: string | null }> {
+        const { rows } = await pool
+            .query(`SELECT cf_api_token_enc FROM salon_ai_credentials WHERE salon_id = $1`, [salonId])
+            .catch((err: any) => { if (err?.code === "42P01") return { rows: [] as any[] }; throw err; });
+        if (!rows[0]) return { api_token: null };
+        logger.info("[ai-credentials] LUNOX token viewed by super admin", { salonId, requestedBy });
+        try {
+            return { api_token: decryptSecret(rows[0].cf_api_token_enc) };
+        } catch {
+            throw new AppError(409, "The saved token can't be read any more (the server's JWT_SECRET changed). Paste the token again and save.", "AI_TOKEN_UNREADABLE");
+        }
+    },
+
     async set(salonId: string, body: { account_id?: unknown; api_token?: unknown }, changedBy: string) {
         if (!secretBoxConfigured()) throw new AppError(503, "The server has no JWT_SECRET to encrypt keys with, so they can't be stored safely yet.", "AI_NOT_CONFIGURED");
         const accountId = String(body.account_id ?? "").trim();
