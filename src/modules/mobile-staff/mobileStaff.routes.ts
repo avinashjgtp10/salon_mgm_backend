@@ -24,6 +24,8 @@ router.get("/appointments/:id", mobileStaffController.appointmentById);
 
 router.get("/schedule", mobileStaffController.schedule);
 
+router.get("/revenue", mobileStaffController.revenue);
+
 router.get("/attendance", mobileStaffController.attendance);
 router.post("/attendance/check-in", mobileStaffController.checkIn);
 router.post("/attendance/break", mobileStaffController.startBreak);

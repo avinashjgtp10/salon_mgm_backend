@@ -13,6 +13,7 @@ import type { Staff } from "../staff/staff.types";
 import type { MobileStaffContext, MobileStaffRequest } from "./mobileStaff.middleware";
 import { getStaffMobileCalendarAccess } from "./mobileCalendarAccess";
 import { getStaffMobileProductAuditAccess } from "./mobileProductAuditAccess";
+import { reportsRepository } from "../reports/reports.repository";
 
 // Every handler reads identity ONLY from req.staff (set by requireMobileStaff
 // from the verified JWT + server-side staff row). No handler reads a staff,
@@ -163,6 +164,26 @@ export const mobileStaffController = {
         throw new AppError(404, "Appointment not found", "NOT_FOUND");
       }
       return sendSuccess(res, 200, appointment, "Appointment fetched successfully");
+    } catch (err) { return next(err); }
+  },
+
+  // ── Revenue (the caller's own row of the web Staff Performance report) ─────
+  // Same query the owner's report runs (non-draft sales by sale date, per line
+  // staff), always WITHOUT GST — staff revenue excludes tax on the web; only
+  // the Staff Performance report itself offers GST.
+
+  async revenue(req: MobileStaffRequest, res: Response, next: NextFunction) {
+    try {
+      const { id, salonId } = getStaff(req);
+      const startDate = optionalDate(req.query.start_date, "start_date");
+      const endDate = optionalDate(req.query.end_date, "end_date");
+      if (!startDate || !endDate) throw new AppError(400, "start_date and end_date are required", "VALIDATION_ERROR");
+      if (startDate > endDate) throw new AppError(400, "start_date must be on or before end_date", "VALIDATION_ERROR");
+      const { items } = await reportsRepository.getStaffPerformanceReport(salonId, {
+        start_date: startDate, end_date: endDate, staff_ids: [id], include_gst: false, page: 1, limit: 1,
+      });
+      const row = items.find(item => item.staff_id === id) ?? null;
+      return sendSuccess(res, 200, { start_date: startDate, end_date: endDate, revenue: row }, "Revenue fetched successfully");
     } catch (err) { return next(err); }
   },
 
