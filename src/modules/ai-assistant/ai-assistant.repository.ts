@@ -43,7 +43,7 @@ export const aiAssistantRepository = {
         return rows[0].id;
     },
 
-    async listAssets(salonId: string, limit = 12) {
+    async listAssets(salonId: string, limit = 10) {
         const { rows } = await pool.query(
             `SELECT id, brief, format, image_url, copy, created_at FROM ai_generated_assets
              WHERE salon_id = $1 ORDER BY created_at DESC LIMIT $2`,
