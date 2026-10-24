@@ -17,7 +17,9 @@ export const salonModulesService = {
             salonModulesRepository.getLockedKeys(salonId),
             salonModulesRepository.getAuditLog(salonId),
         ]);
-        return { salon, locked, audit };
+        // Keys that are no longer lockable (e.g. the removed Product Retail / Product Margin report switches) can still be
+        // stored from before; never hand them to the page, or saving would send them back and be rejected.
+        return { salon, locked: locked.filter((k) => isModuleKey(k)), audit };
     },
 
     // Gives a salon the feature set of a plan (module_plans -> salon_module_locks). A plan whose features were never
