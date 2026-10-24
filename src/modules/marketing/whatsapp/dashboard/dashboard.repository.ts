@@ -15,7 +15,7 @@ export const dashboardRepository = {
     // READ implies DELIVERED, so delivered count includes READ
     const { rows: [kpi] } = await pool.query(`
   SELECT
-    COUNT(*)                                                           AS total_sent,
+    COUNT(CASE WHEN cc.status IN ('SENT','DELIVERED','READ','FAILED','BLOCKED') THEN 1 END) AS total_sent,
     COUNT(CASE WHEN cc.status IN ('DELIVERED','READ') THEN 1 END)     AS total_delivered,
     COUNT(CASE WHEN cc.status = 'READ'               THEN 1 END)      AS total_read,
     COUNT(CASE WHEN cc.status = 'FAILED'             THEN 1 END)      AS total_failed,
@@ -95,36 +95,28 @@ export const dashboardRepository = {
     }
   },
 
-  // Every outbound WhatsApp message counts against Meta's per-number daily
-  // cap, not just campaign blasts — automation triggers (bill_receipt,
-  // appointment_confirmation, reminders...) and inbox replies send too. Summed here
-  // across all three send paths so the dashboard's usage bar reflects real
-  // usage against the limit instead of just campaign volume.
+  // Meta's messaging limit counts UNIQUE recipients of business-initiated
+  // (template) conversations over a rolling 24h — not messages, not calendar
+  // days, and not free-form inbox replies inside a customer's service window.
+  // So: distinct normalised phones across campaign + automation template
+  // sends that actually went out (sent_at set) in the last 24 hours. Still an
+  // estimate; Meta's own counter is the source of truth.
   async getSentToday(salonId: string): Promise<number> {
     const { rows: [row] } = await pool.query(`
-      SELECT
-        (
-          SELECT COUNT(*) FROM wa_campaign_contacts cc
-          JOIN wa_campaigns c ON c.id = cc.campaign_id
-          WHERE c.salon_id = $1
-            AND cc.status IN ('SENT','DELIVERED','READ','FAILED','BLOCKED')
-            AND cc.created_at::date = CURRENT_DATE
-        )
-        +
-        (
-          SELECT COUNT(*) FROM wa_automation_logs
-          WHERE salon_id = $1
-            AND status IN ('SENT','DELIVERED','READ','FAILED')
-            AND created_at::date = CURRENT_DATE
-        )
-        +
-        (
-          SELECT COUNT(*) FROM wa_messages
-          WHERE salon_id = $1
-            AND direction = 'OUTBOUND'
-            AND sent_at::date = CURRENT_DATE
-        )
-        AS sent_today
+      SELECT COUNT(DISTINCT phone) AS sent_today FROM (
+        SELECT REGEXP_REPLACE(cc.phone, '[^0-9]', '', 'g') AS phone
+        FROM wa_campaign_contacts cc
+        JOIN wa_campaigns c ON c.id = cc.campaign_id
+        WHERE c.salon_id = $1
+          AND cc.status IN ('SENT','DELIVERED','READ')
+          AND cc.sent_at > NOW() - INTERVAL '24 hours'
+        UNION ALL
+        SELECT REGEXP_REPLACE(phone_number, '[^0-9]', '', 'g') AS phone
+        FROM wa_automation_logs
+        WHERE salon_id = $1
+          AND status IN ('SENT','DELIVERED','READ')
+          AND sent_at > NOW() - INTERVAL '24 hours'
+      ) t
     `, [salonId])
     return parseInt(row.sent_today) || 0
   },
