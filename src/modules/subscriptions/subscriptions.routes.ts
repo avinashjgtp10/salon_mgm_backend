@@ -7,6 +7,7 @@ import { subscriptionCheckoutService } from "./subscription-checkout.service"
 import { subscriptionInvoicesService } from "../subscription-invoices/subscription-invoices.service"
 import { getSalonId } from "../utils/salon.util"
 import { AppError } from "../../middleware/error.middleware"
+import { requireModule } from "../../middleware/moduleLock.middleware"
 import logger from "../../config/logger"
 import { subscriptionBillingService } from "../subscription-billing/subscription-billing.service"
 import { subscriptionUpgradeService } from "../subscription-upgrade/subscription-upgrade.service"
@@ -60,13 +61,13 @@ const ownerOnly = (req: any) => {
     const role = req.user?.role
     if (role !== "salon_owner" && role !== "admin") throw new AppError(403, "Only the salon owner can view invoices", "FORBIDDEN")
 }
-router.get("/invoices", authMiddleware, async (req, res, next) => {
+router.get("/invoices", authMiddleware, requireModule("billing_history"), async (req, res, next) => {
     try {
         ownerOnly(req)
         res.json({ success: true, data: await subscriptionInvoicesService.listForSalon(await getSalonId(req)) })
     } catch (err) { next(err) }
 })
-router.get("/invoices/:id/pdf", authMiddleware, async (req, res, next) => {
+router.get("/invoices/:id/pdf", authMiddleware, requireModule("billing_history"), async (req, res, next) => {
     try {
         ownerOnly(req)
         const { pdf, filename } = await subscriptionInvoicesService.renderPdf(String(req.params.id), await getSalonId(req))
@@ -84,8 +85,8 @@ const billingRoute = (fn: (salonId: string, req: any) => Promise<unknown>) => as
         res.json({ success: true, data: await fn(await getSalonId(req), req) })
     } catch (err) { next(err) }
 }
-router.get("/current", authMiddleware, billingRoute((salonId) => subscriptionBillingService.getCurrent(salonId)))
-router.get("/billing-history", authMiddleware, billingRoute((salonId) => subscriptionBillingService.getHistory(salonId)))
+router.get("/current", authMiddleware, requireModule("billing_plans"), billingRoute((salonId) => subscriptionBillingService.getCurrent(salonId)))
+router.get("/billing-history", authMiddleware, requireModule("billing_history"), billingRoute((salonId) => subscriptionBillingService.getHistory(salonId)))
 router.post("/upgrade/quote", authMiddleware, billingRoute((salonId, req) => subscriptionUpgradeService.quote(salonId, req.body?.tier, req.body?.cycle)))
 router.post("/upgrade/initiate", authMiddleware, billingRoute((salonId, req) => subscriptionUpgradeService.initiate(salonId, req.user.userId, req.body?.tier, req.body?.cycle)))
 router.post("/upgrade/:id/verify", authMiddleware, billingRoute((salonId, req) => subscriptionUpgradeService.verify(salonId, String(req.params.id), req.body ?? {}, req.user.userId)))

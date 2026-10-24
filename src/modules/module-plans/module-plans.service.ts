@@ -12,7 +12,7 @@ export const modulePlansService = {
             slug: r.slug as PlanSlug,
             name: r.name as string,
             configured: Boolean(r.configured),
-            locked: r.configured ? (r.locked_modules as string[]) : [...MODULE_KEYS],
+            locked: r.configured ? (r.locked_modules as string[]).filter((k) => isModuleKey(k)) : [...MODULE_KEYS],
             updated_at: r.updated_at as string,
             updated_by_name: (r.updated_by_name as string | null) || null,
         }));
