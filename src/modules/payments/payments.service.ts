@@ -24,6 +24,7 @@ import { getIO, salonRoom, salonStaffRoom } from '../../config/socket';
 import { getActiveTaxes } from '../settings/tax.util';
 import { computeBillTotals, allocateMembershipDiscount } from '../pricing/pricing.engine';
 import pool from '../../config/database';
+import { AppError } from '../../middleware/error.middleware';
 import { assertNoBlockingPosPayment } from '../pos-payments/pos-payments.guard';
 import { posPaymentsRepository } from '../pos-payments/pos-payments.repository';
 
@@ -162,15 +163,42 @@ export const paymentsService = {
    * (still open, or flagged for review) is checked first under that lock —
    * so a rejected payment leaves no side effects at all (referral ledger,
    * membership-wallet deduction, …), and no POS request can start in
-   * between. `posPaymentRequestId` is passed only by pos-payments
-   * finalizeSuccess, so a request can record its own confirmed payment.
+   * between. `posPaymentRequestId` is passed only by pos-payments when it
+   * records a confirmed machine payment: the request may record its own
+   * payment, and does so exactly once — if a payment row for it already
+   * exists (a retry after a crash, or a concurrent recorder that got the
+   * lock first) that row is returned and nothing is written again.
    */
   async create(data: CreatePaymentBody, requesterUserId?: string, options: { posPaymentRequestId?: string } = {}): Promise<Payment> {
-    if (!data.appointment_id) return paymentsService.recordPayment(data, requesterUserId, async () => {});
-    const lock = await posPaymentsRepository.acquireAppointmentPaymentLock(data.appointment_id);
+    // Server-set only — never accept the machine-payment link from a request body.
+    const { pos_payment_request_id: _untrusted, ...clean } = data;
+    const posPaymentRequestId = options.posPaymentRequestId;
+    if (posPaymentRequestId && !clean.appointment_id) {
+      throw new AppError(400, 'A Payment Machine payment must belong to an appointment', 'VALIDATION_ERROR');
+    }
+    const body: CreatePaymentBody = posPaymentRequestId ? { ...clean, pos_payment_request_id: posPaymentRequestId } : clean;
+
+    if (!body.appointment_id) return paymentsService.recordPayment(body, requesterUserId, async () => {});
+    const lock = await posPaymentsRepository.acquireAppointmentPaymentLock(body.appointment_id);
     try {
-      await assertNoBlockingPosPayment(data.appointment_id, data.salon_id, { excludeRequestId: options.posPaymentRequestId });
-      return await paymentsService.recordPayment(data, requesterUserId, lock.release);
+      if (posPaymentRequestId) {
+        // Under the lock, which is held until the payment row commits — so a
+        // second recorder always sees the first one's row here.
+        const already = await paymentsRepository.findByPosPaymentRequestId(posPaymentRequestId);
+        if (already) return already;
+      }
+      await assertNoBlockingPosPayment(body.appointment_id, body.salon_id, { excludeRequestId: posPaymentRequestId });
+      try {
+        return await paymentsService.recordPayment(body, requesterUserId, lock.release);
+      } catch (err: any) {
+        // Belt-and-braces: the unique index refused a second row for the same
+        // machine transaction (e.g. another server process) — return the one that exists.
+        if (posPaymentRequestId && err?.code === '23505' && err?.constraint === 'payments_pos_payment_request_id_key') {
+          const existing = await paymentsRepository.findByPosPaymentRequestId(posPaymentRequestId);
+          if (existing) return existing;
+        }
+        throw err;
+      }
     } finally {
       await lock.release(); // idempotent — normally already released right after the payment row
     }

@@ -1,13 +1,16 @@
 // ============================================================
-// SalonOx — POS Payment Confirmation & Expiry Scheduler
+// SalonOx — POS Payment Confirmation, Recovery & Expiry Scheduler
 // ============================================================
 // Paytm EDC (this repo's only wired live provider) has no documented
 // webhook — confirmation for it is polling-only. The frontend already polls
 // while a staff member is watching the waiting screen, but that stops the
 // moment a tab closes; this sweep is what keeps a real in-flight payment
-// from getting stranded when nobody's watching. It also handles requests
-// that pass their expiry window: manual ones are expired, provider-backed
-// ones get one final status check first (see runExpirySweep).
+// from getting stranded when nobody's watching. It also:
+//   - recovers payments the provider confirmed that were never saved (the
+//     server restarted, or the database failed, in between) and checkouts
+//     that never ran — runs on boot too, so a restart recovers them at once;
+//   - handles requests that pass their expiry window: manual ones are
+//     expired, provider-backed ones get one final status check first.
 
 import logger from '../../config/logger';
 import { posPaymentsRepository } from './pos-payments.repository';
@@ -22,7 +25,8 @@ let sweepInterval: NodeJS.Timeout | null = null;
 // timeout), so overlapping runs are skipped rather than stacked. This is a
 // per-process guard only — double finalization across processes, or against
 // the frontend's poll-through, is prevented by the atomic conditional UPDATE
-// in transitionStatus() that finalizeSuccess() must win first.
+// in transitionStatus() that finalizeSuccess() must win first, and double
+// recording by the unique payments.pos_payment_request_id.
 let sweepInFlight = false;
 
 async function runConfirmationSweep(): Promise<void> {
@@ -33,6 +37,31 @@ async function runConfirmationSweep(): Promise<void> {
       await posPaymentsService.getStatus(request.id, request.salon_id);
     } catch (err: any) {
       logger.warn('[POS-PAYMENTS-SCHEDULER] confirmation poll failed', { requestId: request.id, message: err?.message });
+    }
+  }
+}
+
+/** Confirmed by the provider but never saved — save them now (exactly once). */
+async function runRecordingSweep(): Promise<void> {
+  const unrecorded = await posPaymentsRepository.listUnrecordedSuccess();
+  for (const request of unrecorded) {
+    try {
+      const after = await posPaymentsService.recordConfirmedPayment(request);
+      if (after.payment_id) logger.info(`[POS-PAYMENTS-SCHEDULER] recovered unsaved payment ${request.payment_reference}`);
+    } catch (err: any) {
+      logger.warn('[POS-PAYMENTS-SCHEDULER] recovering an unsaved payment failed', { requestId: request.id, message: err?.message });
+    }
+  }
+}
+
+/** Saved, but the post-payment checkout never finished — finish it. */
+async function runCheckoutSweep(): Promise<void> {
+  const pending = await posPaymentsRepository.listCheckoutPending();
+  for (const request of pending) {
+    try {
+      await posPaymentsService.settleCheckout(request);
+    } catch (err: any) {
+      logger.warn('[POS-PAYMENTS-SCHEDULER] post-payment checkout retry failed', { requestId: request.id, message: err?.message });
     }
   }
 }
@@ -95,7 +124,11 @@ async function runExpirySweep(): Promise<void> {
   }
 }
 
-/** One full sweep. Exported for tests; returns false when skipped because a sweep is already running. */
+/**
+ * One full sweep. Exported for tests; returns false when skipped because a
+ * sweep is already running. Each stage is isolated, so one failing (e.g. a
+ * missing migration column) never stops the others.
+ */
 export async function runPosPaymentsSweep(): Promise<boolean> {
   if (sweepInFlight) {
     logger.warn('[POS-PAYMENTS-SCHEDULER] previous sweep still running — skipping this tick');
@@ -103,8 +136,19 @@ export async function runPosPaymentsSweep(): Promise<boolean> {
   }
   sweepInFlight = true;
   try {
-    await runConfirmationSweep();
-    await runExpirySweep();
+    const stages: [string, () => Promise<void>][] = [
+      ['confirmation', runConfirmationSweep],
+      ['recording', runRecordingSweep],
+      ['checkout', runCheckoutSweep],
+      ['expiry', runExpirySweep],
+    ];
+    for (const [name, stage] of stages) {
+      try {
+        await stage();
+      } catch (err: any) {
+        logger.error(`[POS-PAYMENTS-SCHEDULER] ${name} sweep failed`, { message: err?.message });
+      }
+    }
     return true;
   } finally {
     sweepInFlight = false;

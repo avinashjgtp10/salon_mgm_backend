@@ -75,8 +75,23 @@ export const paymentsRepository = {
     return parseFloat(rows[0]?.total ?? '0');
   },
 
+  /** The payment row that records a Payment Machine transaction, if it was saved. */
+  async findByPosPaymentRequestId(posPaymentRequestId: string, client?: import("pg").PoolClient): Promise<Payment | null> {
+    const { rows } = await (client ?? pool).query(
+      `SELECT * FROM payments WHERE pos_payment_request_id = $1 LIMIT 1`,
+      [posPaymentRequestId]
+    );
+    return rows[0] ?? null;
+  },
+
   async create(data: CreatePaymentBody, client?: import("pg").PoolClient): Promise<Payment> {
     const db = client ?? pool;
+    // Only Payment Machine payments carry pos_payment_request_id (unique —
+    // the exactly-once guarantee). Left out of every other insert so a
+    // database without the column still takes Cash/Card/UPI payments.
+    const posLink = data.pos_payment_request_id
+      ? { column: ', pos_payment_request_id', value: ', $24::uuid', params: [data.pos_payment_request_id] }
+      : { column: '', value: '', params: [] as string[] };
     const { rows } = await db.query(
       `INSERT INTO payments (
         payment_id, amount,
@@ -86,13 +101,13 @@ export const paymentsRepository = {
         coupon_code, payment_method, split_details,
         status, paid_at, notes, membership_wallet_used, reward_points_value, tax_breakdown,
         referral_discount_applied, reward_points_used, referral_credit_used,
-        membership_discount_used, package_used
+        membership_discount_used, package_used${posLink.column}
       ) VALUES (
         gen_random_uuid()::text, $13,
         $1,$2,$3,$4,$5,$6,$7,
         $14,$15,
         $8,$9,$10::jsonb,$11,NOW(),$12,$16,$17,$18::jsonb,
-        $19,$20,$21,$22,$23
+        $19,$20,$21,$22,$23${posLink.value}
       )
       RETURNING *`,
       [
@@ -119,6 +134,7 @@ export const paymentsRepository = {
         data.referral_credit_used ?? 0,      // $21
         data.membership_discount_used ?? 0,  // $22
         data.package_used ?? 0,              // $23
+        ...posLink.params,                   // $24 — Payment Machine only
       ]
     );
     return rows[0];

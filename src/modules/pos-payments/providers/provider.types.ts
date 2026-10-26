@@ -1,5 +1,5 @@
 import { Request } from 'express';
-import { PosPaymentStatus } from '../pos-payments.types';
+import { PosPaymentMode, PosPaymentStatus } from '../pos-payments.types';
 
 export type ProviderCredentials = Record<string, string>;
 
@@ -10,6 +10,8 @@ export type CreateProviderPaymentParams = {
   terminalProviderId?: string | null; // provider-issued device/terminal id, if the provider needs one
   merchantId?: string | null;
   requestedAt: Date;      // pos_payment_requests.created_at — the original txn timestamp
+  // What the machine should accept: CARD (Card) or QR (UPI). Null = the machine's default.
+  paymentMode?: PosPaymentMode | null;
 };
 
 /**
@@ -28,6 +30,8 @@ export type ProviderTxnContext = {
 export type ProviderCreateResult = {
   providerTransactionId: string | null;
   status: PosPaymentStatus;
+  // Provider's own explanation of a FAILED result, shown to staff.
+  failureReason?: string | null;
   raw: unknown;
 };
 
@@ -35,6 +39,8 @@ export type ProviderStatusResult = {
   status: PosPaymentStatus;
   providerTransactionId: string | null;
   amount?: number | null;
+  // Provider's own explanation of a FAILED result, shown to staff.
+  failureReason?: string | null;
   raw: unknown;
 };
 
@@ -68,6 +74,10 @@ export interface PaymentProvider {
   /** No documented webhook for a provider (e.g. Paytm EDC today) just returns false. */
   verifyWebhook(req: Request): boolean;
   parseWebhook(req: Request): NormalizedWebhookEvent;
-  /** Best-effort auth/reachability check for the Settings "Test Connection" button. */
-  testConnection(): Promise<{ ok: boolean; message: string }>;
+  /**
+   * Settings "Test connection". `terminalProviderIds` are the salon's active
+   * terminals' ids (Paytm TIDs) — Paytm can only be tested against a real TID.
+   * ok=true must mean the provider positively accepted the configuration.
+   */
+  testConnection(options?: { terminalProviderIds?: string[] }): Promise<{ ok: boolean; message: string }>;
 }

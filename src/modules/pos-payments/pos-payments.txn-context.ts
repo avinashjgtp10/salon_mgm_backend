@@ -34,13 +34,15 @@ export function toRequestedAt(createdAt: string | Date): Date {
 
 /**
  * Builds the follow-up context (status/cancel) for a stored request. The TID
- * comes from payment_terminals.provider_terminal_id — never our own terminal
- * UUID. No is_active check here: a terminal deactivated mid-payment still
- * owns the in-flight transaction and must still be queryable.
+ * is the one the Sale was actually sent to — the request's own snapshot, so
+ * editing the terminal's TID in Settings mid-payment can't redirect status
+ * checks to another machine. Only requests created before the snapshot
+ * column existed fall back to the terminal's current TID. No is_active
+ * check: a terminal deactivated mid-payment still owns the transaction.
  */
 export async function buildTxnContext(request: PosPaymentRequest): Promise<ProviderTxnContext> {
-  let terminalProviderId: string | null = null;
-  if (request.terminal_id) {
+  let terminalProviderId: string | null = request.provider_terminal_id?.trim() || null;
+  if (!terminalProviderId && request.terminal_id) {
     const terminal = await paymentSettingsRepository.findTerminalById(request.terminal_id, request.salon_id);
     terminalProviderId = terminal?.provider_terminal_id ?? null;
   }

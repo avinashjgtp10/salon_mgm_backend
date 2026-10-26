@@ -88,11 +88,25 @@ export const paymentSettingsRepository = {
     return rows[0];
   },
 
+  /**
+   * Checkout uses the salon's one enabled provider — with two enabled it
+   * would pick by row order (e.g. 'manual' before 'paytm'), so enabling one
+   * turns every other one off.
+   */
+  async disableOtherProviders(salonId: string, keepProvider: string): Promise<void> {
+    await pool.query(
+      `UPDATE payment_provider_configs SET is_enabled = false, updated_at = NOW()
+       WHERE salon_id = $1 AND provider <> $2 AND is_enabled`,
+      [salonId, keepProvider],
+    );
+  },
+
   async recordTestResult(salonId: string, provider: string, ok: boolean, message: string): Promise<void> {
     await pool.query(
       `UPDATE payment_provider_configs SET last_tested_at = NOW(), last_test_result = $3
        WHERE salon_id = $1 AND provider = $2`,
-      [salonId, provider, `${ok ? 'OK' : 'FAILED'}: ${message}`],
+      // last_test_result is VARCHAR(255).
+      [salonId, provider, `${ok ? 'OK' : 'FAILED'}: ${message}`.slice(0, 255)],
     );
   },
 };
