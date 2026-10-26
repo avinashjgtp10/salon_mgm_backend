@@ -6,6 +6,7 @@ import compression from "compression";
 import config from "./config/env";
 import logger from "./config/logger";
 import { errorHandler } from "./middleware/error.middleware";
+import { requestLogger } from "./middleware/request-logger.middleware";
 import usersRoutes from "./modules/users/users.routes";
 import authRoutes from "./modules/auth/auth.routes";
 import categoriesRoutes from "./modules/categories/categories.routes";
@@ -191,14 +192,9 @@ app.use("/uploads", express.static(path.join(__dirname, "../uploads"), {
 app.use(compression());
 
 // Logging
+app.use(requestLogger);
 if (config.env === "development") {
   app.use(morgan("dev"));
-} else {
-  app.use(
-    morgan("combined", {
-      stream: { write: (message) => logger.info(message.trim()) },
-    }),
-  );
 }
 
 // Health check

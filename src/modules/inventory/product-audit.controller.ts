@@ -29,7 +29,7 @@ export const productAuditController = {
         try {
             const salonId = getSalonId(req);
             const userId = getUserId(req);
-            logger.info("POST /inventory/product-audits called", { userId, salonId, path: req.originalUrl });
+            logger.debug("POST /inventory/product-audits called", { userId, salonId, path: req.originalUrl });
 
             const audit = await productAuditService.create({
                 salonId, auditorId: userId, body: req.body as CreateProductAuditBody,

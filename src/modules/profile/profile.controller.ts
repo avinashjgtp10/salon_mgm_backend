@@ -19,7 +19,7 @@ export const profileController = {
       const requesterId = req.user?.userId;
       const requesterRole = req.user?.role;
 
-      logger.info("GET /profile/:id called", { id, requesterId });
+      logger.debug("GET /profile/:id called", { id, requesterId });
 
       if (!requesterId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
 
@@ -29,7 +29,7 @@ export const profileController = {
 
       const user = await usersService.getById(id);
 
-      logger.info("GET /profile/:id success", { id });
+      logger.debug("GET /profile/:id success", { id });
       return sendSuccess(res, 200, user, "Profile fetched successfully");
     } catch (error) {
       logger.error("GET /profile/:id error", { error });
@@ -48,7 +48,7 @@ export const profileController = {
       const requesterId = req.user?.userId;
       const requesterRole = req.user?.role;
 
-      logger.info("PUT /profile/:id called", { id, requesterId });
+      logger.debug("PUT /profile/:id called", { id, requesterId });
 
       if (!requesterId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
 

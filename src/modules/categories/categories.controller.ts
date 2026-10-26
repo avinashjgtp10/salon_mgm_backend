@@ -15,7 +15,7 @@ export const categoriesController = {
     try {
       const salonId = req.user?.salonId;
 
-      logger.info("POST /categories called", { salonId });
+      logger.debug("POST /categories called", { salonId });
 
       if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
 
@@ -38,7 +38,7 @@ export const categoriesController = {
     try {
       const salonId = req.user?.salonId;
 
-      logger.info("GET /categories called", { salonId });
+      logger.debug("GET /categories called", { salonId });
 
       if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
 
@@ -59,7 +59,7 @@ export const categoriesController = {
       const salonId = req.user?.salonId;
       const id = String(req.params.id || "").trim();
 
-      logger.info("GET /categories/:id called", { salonId, id });
+      logger.debug("GET /categories/:id called", { salonId, id });
 
       if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
       if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
@@ -82,7 +82,7 @@ export const categoriesController = {
       const salonId = req.user?.salonId;
       const id = String(req.params.id || "").trim();
 
-      logger.info("PATCH /categories/:id called", { salonId, id });
+      logger.debug("PATCH /categories/:id called", { salonId, id });
 
       if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
       if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
@@ -108,7 +108,7 @@ export const categoriesController = {
       const salonId = req.user?.salonId;
       const id = String(req.params.id || "").trim();
 
-      logger.info("DELETE /categories/:id called", { salonId, id });
+      logger.debug("DELETE /categories/:id called", { salonId, id });
 
       if (!salonId) throw new AppError(403, "Salon context required", "NO_SALON_CONTEXT");
       if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");

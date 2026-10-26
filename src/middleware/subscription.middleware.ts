@@ -1,3 +1,4 @@
+import logger from '../config/logger';
 import { Request, Response, NextFunction } from "express";
 import pool from "../config/database";
 import { getSalonId } from "../modules/utils/salon.util";
@@ -90,7 +91,7 @@ export async function subscriptionMiddleware(
                      SET status = 'inactive', updated_at = NOW()
                      WHERE salon_id = $1 AND status = 'trialing' AND trial_ends_at < NOW()`,
                     [salonId]
-                ).catch((err) => console.error("[subscriptionMiddleware] expire trial error:", err));
+                ).catch((err) => logger.error("[subscriptionMiddleware] expire trial error:", err));
 
                 res.status(403).json(BLOCKED);
                 return;
@@ -99,7 +100,7 @@ export async function subscriptionMiddleware(
 
         next();
     } catch (err) {
-        console.error("[subscriptionMiddleware] DB error:", err);
+        logger.error("[subscriptionMiddleware] DB error:", err);
         res.status(503).json({
             success: false,
             error: {

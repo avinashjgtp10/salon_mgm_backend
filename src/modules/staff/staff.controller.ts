@@ -40,7 +40,7 @@ export const staffController = {
     try {
       const salonId = req.user?.salonId ?? req.body?.salon_id;
       if (!salonId) throw new AppError(400, "salon_id is required", "VALIDATION_ERROR");
-      logger.info("GET /staff", { salonId });
+      logger.debug("GET /staff", { salonId });
 
       // Authenticated mobile staff can resolve only their own active profile.
       // Caller-supplied staff, user and branch filters never expand this scope.
@@ -124,7 +124,6 @@ export const staffController = {
   async create(req: AuthRequest, res: Response, _next: NextFunction) {
     try {
       const salonId = getSalonId(req);
-      console.log("[DEBUG] Controller: POST /staff - salonId:", salonId);
       const result = await staffService.create({
         salonId,
         requesterUserId: req.user?.userId || (req as any).user?.id,
@@ -133,7 +132,7 @@ export const staffController = {
       });
       return sendSuccess(res, 201, publicStaff(result as any), "Staff member created successfully");
     } catch (error: any) {
-      console.error("[DEBUG] Controller: POST /staff FAILED", {
+      logger.error("POST /staff failed", {
         message: error.message, code: error.code, stack: error.stack,
       });
       if (!(error instanceof AppError)) {
@@ -173,7 +172,7 @@ export const staffController = {
     try {
       const salonId = getSalonId(req);
       const id = String(req.params.id);
-      logger.info("GET /staff/:id", { id, salonId });
+      logger.debug("GET /staff/:id", { id, salonId });
       const staff = await staffService.getById(id, salonId);
       return sendSuccess(res, 200, publicStaff(staff as any), "Staff fetched successfully");
     } catch (err) { return next(err); }
@@ -376,7 +375,7 @@ export const staffController = {
   async exportExcel(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = getSalonId(req);
-      logger.info("GET /staff/export/excel", { salonId });
+      logger.debug("GET /staff/export/excel", { salonId });
       const rows = await staffService.exportStaff(salonId, staffController._buildExportQuery(req));
       const headers = staffController._exportFields.map(f => f.label);
       const data = rows.map(row =>
@@ -408,7 +407,7 @@ export const staffController = {
   async exportCsv(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const salonId = getSalonId(req);
-      logger.info("GET /staff/export/csv", { salonId });
+      logger.debug("GET /staff/export/csv", { salonId });
       const rows = await staffService.exportStaff(salonId, staffController._buildExportQuery(req));
       const flatRows = rows.map(row => {
         const r: Record<string, unknown> = { ...(row as any) };

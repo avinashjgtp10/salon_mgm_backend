@@ -1,3 +1,4 @@
+import logger from '../../config/logger';
 import { botQuestionsRepository } from "./bot-questions.repository";
 import { LogBotQuestionInput, BotQuestionListFilters, SaveAnswerInput } from "./bot-questions.types";
 
@@ -10,7 +11,7 @@ export const botQuestionsService = {
     try {
       await botQuestionsRepository.logQuestion(input);
     } catch (err: any) {
-      console.warn("[BOT-QUESTIONS] Failed to log question:", err?.message);
+      logger.warn("[BOT-QUESTIONS] Failed to log question:", err?.message);
     }
   },
 

@@ -75,6 +75,17 @@ httpServer.listen(PORT, () => {
   startSalonDeactivationReminderScheduler()
 })
 
+// Crash logging. Node already exits on these; the handlers only make sure the
+// cause (with stack) is logged before the process goes down, then exit as before.
+const logFatalAndExit = (message: string, reason: unknown) => {
+  const err = reason instanceof Error ? reason : new Error(String(reason))
+  logger.error(message, { error: err.message, stack: err.stack })
+  // Give the log transports a moment to flush before exiting.
+  setTimeout(() => process.exit(1), 2000)
+}
+process.on('uncaughtException', (err) => logFatalAndExit('Uncaught exception', err))
+process.on('unhandledRejection', (reason) => logFatalAndExit('Unhandled promise rejection', reason))
+
 // Graceful shutdown
 process.on('SIGTERM', () => {
   logger.info('SIGTERM signal received: closing HTTP server')

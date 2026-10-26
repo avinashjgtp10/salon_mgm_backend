@@ -96,6 +96,11 @@ router.post("/upgrade/:id/cancel", authMiddleware, billingRoute((salonId, req) =
 router.post("/webhook", async (req, res) => {
     const raw = (req as any).rawBody as Buffer | undefined
     if (!subscriptionCheckoutService.verifySignature(raw, req.get("x-razorpay-signature"))) {
+        logger.warn("Razorpay webhook rejected: invalid or missing signature", {
+            requestId: (req as any).requestId,
+            hasSignature: Boolean(req.get("x-razorpay-signature")),
+            hasRawBody: Boolean(raw),
+        })
         res.status(400).json({ success: false, error: { message: "Invalid signature" } })
         return
     }

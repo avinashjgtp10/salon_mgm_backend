@@ -73,7 +73,7 @@ function toSafeUser(u: any, effectivePermissions: Record<string, boolean> | null
 export const usersService = {
 
   async me(userId: string, sessionSalonId?: string | null, opts?: { includeSalon?: boolean }) {
-    logger.info(`Fetching current user profile`, { userId });
+    logger.debug(`Fetching current user profile`, { userId });
 
     const user = await usersRepo.findByIdWithStaffPermissions(userId, sessionSalonId);
 
@@ -108,7 +108,7 @@ export const usersService = {
 
     const safeUser = { ...toSafeUser(user, effectivePermissions), locked_modules: lockedModules, ai_enabled: aiEnabled };
     if (!opts?.includeSalon) {
-      logger.info(`User profile fetched successfully`, { userId });
+      logger.debug(`User profile fetched successfully`, { userId });
       return safeUser;
     }
 
@@ -118,7 +118,7 @@ export const usersService = {
     // Only requested with ?include=salon, so every other /users/profile caller is unaffected.
     const salon = await salonsService.mySalon(userId, sessionSalonId).catch(() => null);
 
-    logger.info(`User profile (with salon) fetched successfully`, { userId });
+    logger.debug(`User profile (with salon) fetched successfully`, { userId });
     return { ...safeUser, salon };
   },
 

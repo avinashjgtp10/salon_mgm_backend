@@ -28,7 +28,7 @@ export const supplierPaymentsController = {
             if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
             if (!supplierId) throw new AppError(400, "id is required", "VALIDATION_ERROR");
 
-            logger.info("POST /inventory/suppliers/:id/payments called", { supplierId, userId, salonId });
+            logger.debug("POST /inventory/suppliers/:id/payments called", { supplierId, userId, salonId });
 
             const payment = await supplierPaymentsService.create({
                 supplierId,

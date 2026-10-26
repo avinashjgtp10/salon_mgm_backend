@@ -137,7 +137,7 @@ export const authService = {
   },
 
   async login(body: LoginBody) {
-    logger.info("[authService.login] Start", { email: body?.email });
+    logger.debug("[authService.login] Start", { email: body?.email });
     assertEnv();
 
     const email = String(body.email || "").trim().toLowerCase();
@@ -191,17 +191,13 @@ export const authService = {
 
     // ── Email: Staff Login alert (to salon owner) ─────────────────────────────
     const STAFF_ROLES = ["staff", "manager", "receptionist", "stylist", "therapist", "technician"];
-    console.log("[EMAIL DEBUG] staffLogin CHECK: role=", user.role, "salonId=", salonId, "inList=", STAFF_ROLES.includes(user.role));
     if (salonId && STAFF_ROLES.includes(user.role)) {
       ;(async () => {
         try {
-          console.log("[EMAIL DEBUG] staffLogin: starting for", email, "role=", user.role);
           const ownerEmail = await salonsRepository.findOwnerEmailById(salonId);
-          console.log("[EMAIL DEBUG] staffLogin: ownerEmail=", ownerEmail);
-          if (!ownerEmail) { console.log("[EMAIL DEBUG] staffLogin: no owner email, skipping"); return; }
+          if (!ownerEmail) { return; }
           const allowed = await canSendEmail(salonId, "staffLogin");
-          console.log("[EMAIL DEBUG] staffLogin: allowed=", allowed);
-          if (!allowed) { console.log("[EMAIL DEBUG] staffLogin: skipped by preference"); return; }
+          if (!allowed) { return; }
           const salon = await salonsRepository.findById(salonId);
           const staffName = [user.first_name, user.last_name].filter(Boolean).join(" ") || email;
           const loginTime = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" });
@@ -212,7 +208,6 @@ export const authService = {
             staffEmail: email,
             loginTime,
           });
-          console.log("[EMAIL DEBUG] staffLogin: SENT to", ownerEmail);
         } catch (err: any) { console.error("[EMAIL DEBUG] staffLogin FAILED:", err?.message, err); }
       })();
     }
@@ -240,7 +235,7 @@ export const authService = {
   },
 
   async refresh(refreshToken: string) {
-    logger.info("[authService.refresh] Token refresh requested");
+    logger.debug("[authService.refresh] Token refresh requested");
     assertEnv();
 
     const saved = await authRepository.findRefreshToken(refreshToken);
@@ -296,7 +291,7 @@ export const authService = {
     // ends this session) — including impersonation sessions, which have their
     // own row.
     const newAccessToken = signAccessToken({ userId: user.id, role: user.role, salonId, sid: String(saved.id) });
-    logger.info("[authService.refresh] New access token issued", { userId, salonId });
+    logger.debug("[authService.refresh] New access token issued", { userId, salonId });
     return { accessToken: newAccessToken };
   },
 
@@ -308,7 +303,7 @@ export const authService = {
     if (session?.user_id) {
       void clientActivityTracker.recordLogout({ userId: String(session.user_id), platform: session.client_type === "mobile" ? "app" : "web" });
     }
-    logger.info("[authService.logout] Refresh token deleted");
+    logger.debug("[authService.logout] Refresh token deleted");
     return { message: "Logged out" };
   },
 
@@ -690,15 +685,12 @@ export const authService = {
     const full: GoogleStatePayload = { ...payload, createdAt: Date.now() };
     const key = `${STATE_PREFIX}${state}`;
     await redis.set(key, JSON.stringify(full), "EX", STATE_TTL_SECONDS);
-    console.log(`[OAuth DEBUG] State STORED: ${key}`);
     return state;
   },
 
   async googleConsumeState(state: string) {
     const key = `${STATE_PREFIX}${state}`;
-    console.log(`[OAuth DEBUG] State LOOKUP: ${key}`);
     const raw = await redis.get(key);
-    console.log(`[OAuth DEBUG] State FOUND: ${!!raw}`);
     if (!raw) return null;
     await redis.del(key);
     return JSON.parse(raw) as GoogleStatePayload;

@@ -1,3 +1,4 @@
+import { maskPhone } from '../utils/mask.util';
 import logger from "../../config/logger";
 import { whatsappMetaApi } from "../marketing/whatsapp/shared/whatsapp.api";
 import { configRepository } from "../marketing/whatsapp/config/config.repository";
@@ -48,12 +49,12 @@ export async function sendReceiptDocument(params: {
     caption?: string;
 }): Promise<{ sent: boolean; reason?: string }> {
     const to = formatPhone(params.phone, params.countryCode);
-    logger.info(`[WA-TRACE] PDF-BILL START — sale=${params.sale.id} salon=${params.salonId} to=${to}`);
+    logger.debug(`[WA-TRACE] PDF-BILL START — sale=${params.sale.id} salon=${params.salonId} to=${maskPhone(to)}`);
     try {
         const salonConfig = await configRepository.findBySalonId(params.salonId);
         if (!salonConfig?.phone_number_id || !salonConfig?.access_token) {
             const reason = "WhatsApp isn't connected for this salon";
-            logger.info(`[WA-TRACE] PDF-BILL SKIP — salon ${params.salonId} has no WhatsApp config`);
+            logger.debug(`[WA-TRACE] PDF-BILL SKIP — salon ${params.salonId} has no WhatsApp config`);
             return { sent: false, reason };
         }
 
@@ -91,14 +92,14 @@ export async function sendReceiptDocument(params: {
             filename,
             caption: params.caption,
         });
-        logger.info(`[WA-TRACE] PDF-BILL ✅ SENT — sale=${params.sale.id} to=${to}`);
+        logger.info(`[WA-TRACE] PDF-BILL ✅ SENT — sale=${params.sale.id} to=${maskPhone(to)}`);
         return { sent: true };
     } catch (err: any) {
         const code = err?.response?.data?.error?.code ?? "—";
         const msg = err?.response?.data?.error?.message ?? err?.message ?? "Unknown error";
         // A failure here is often expected (document messages only deliver within
         // Meta's 24h service window) — logged as a warning, never fatal.
-        logger.warn(`[WA-TRACE] PDF-BILL ❌ FAILED — sale=${params.sale.id} to=${to} — Meta [${code}] ${msg} (note: document messages only deliver within 24h of the customer's last message)`);
+        logger.warn(`[WA-TRACE] PDF-BILL ❌ FAILED — sale=${params.sale.id} to=${maskPhone(to)} — Meta [${code}] ${msg} (note: document messages only deliver within 24h of the customer's last message)`);
         // Meta's own error message is too technical to show a salon owner —
         // the 24h-window rejection is by far the most common real-world cause.
         const reason = code === 131047 || /24.?hour/i.test(msg)
