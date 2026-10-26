@@ -15,6 +15,7 @@ import {
 } from './provider.types';
 import { ProviderCredentials } from './provider.types';
 import { formatPaytmDateTime, fromPaise, toPaise, toPaytmMerchantTxnId } from './paytm.helpers';
+import { PosPaymentMode } from '../pos-payments.types';
 
 export type PaytmCredentials = {
   mid: string;
@@ -67,13 +68,15 @@ const ECR_ABORT_SERVER_ERROR_CODE = '0012'; // safe to retry the abort later
 // leaves the outcome unknown.
 const NOT_SENT_ERROR_CODES = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ERR_INVALID_URL']);
 
-// LEGACY — Paytm "Payment Request" (CPay) hosts, now only used by the
-// testConnection probe until a confirmed ECR probe replaces it. The
-// production host was inferred, never confirmed.
-const HOSTS = {
-  sandbox: 'https://securestage.paytmpayments.com',
-  production: 'https://securegw.paytmpayments.com', // UNCONFIRMED — verify before go-live
-};
+// Status Enquiry answers for "Test connection" (Paytm Status Enquiry API docs):
+//   0330 = Invalid checksum → the Merchant Key is wrong;
+//   0404 = merchantTransactionId doesn't exist → the request was signed
+//          correctly and processed for this MID/TID, our probe id just isn't a
+//          real sale — the expected answer for a working setup.
+const ECR_INVALID_CHECKSUM_CODE = '0330';
+const ECR_TXN_NOT_FOUND_CODE = '0404';
+// Paytm documents result statuses both as letters and as words.
+const ECR_FAILED_STATUSES = new Set(['F', 'FAIL', 'FAILED']);
 
 /** Deep copy with every checksum field removed — for logs and stored responses. */
 function stripChecksums(value: unknown): unknown {
@@ -88,6 +91,14 @@ function stripChecksums(value: unknown): unknown {
   return value;
 }
 
+/** Paytm's resultMsg (with its code) for staff, e.g. "Invalid TID (code 0001)". */
+function paytmResultMessage(info: any): string | null {
+  const message = typeof info?.resultMsg === 'string' ? info.resultMsg.trim() : '';
+  const code = String(info?.resultCodeId ?? info?.resultCode ?? '').trim();
+  if (!message) return code ? `Paytm result code ${code}` : null;
+  return code ? `${message} (code ${code})` : message;
+}
+
 /**
  * Sale responses only ever acknowledge the request — confirmation comes
  * from Status Enquiry — so this returns PROCESSING or FAILED, never SUCCESS.
@@ -98,7 +109,7 @@ function stripChecksums(value: unknown): unknown {
 function interpretSaleResponse(data: any, merchantTransactionId: string): ProviderCreateResult {
   const info = data?.body?.resultInfo ?? {};
   const accepted = String(info.resultCodeId ?? '') === ECR_ACCEPTED_CODE || String(info.resultCode ?? '') === ECR_ACCEPTED_CODE;
-  const failed = String(info.resultStatus ?? '').toUpperCase() === 'F';
+  const failed = ECR_FAILED_STATUSES.has(String(info.resultStatus ?? '').toUpperCase());
   const response = stripChecksums(data);
 
   if (accepted && !failed) {
@@ -108,7 +119,7 @@ function interpretSaleResponse(data: any, merchantTransactionId: string): Provid
     logger.warn('[pos-payments/paytm] sale rejected', {
       merchantTransactionId, resultCode: info.resultCode, resultCodeId: info.resultCodeId, resultMsg: info.resultMsg,
     });
-    return { providerTransactionId: null, status: 'FAILED', raw: { merchantTransactionId, response } };
+    return { providerTransactionId: null, status: 'FAILED', failureReason: paytmResultMessage(info), raw: { merchantTransactionId, response } };
   }
   logger.warn('[pos-payments/paytm] unrecognised sale response — outcome unknown, left PROCESSING', { merchantTransactionId, response });
   return { providerTransactionId: null, status: 'PROCESSING', raw: { merchantTransactionId, outcomeUnknown: true, response } };
@@ -143,7 +154,7 @@ function interpretStatusResponse(data: any, merchantTransactionId: string): Prov
   }
 
   if (code === ECR_STATUS_SUCCESS_CODE) {
-    if (resultStatus !== 'S') return unknown(`code ${code} without resultStatus S`);
+    if (resultStatus !== 'S' && resultStatus !== 'SUCCESS') return unknown(`code ${code} without resultStatus S`);
     if (amount == null) return unknown('success without a valid transactionAmount');
     return { status: 'SUCCESS', providerTransactionId: acquirementId, amount, raw };
   }
@@ -154,8 +165,8 @@ function interpretStatusResponse(data: any, merchantTransactionId: string): Prov
     return { status: 'PROCESSING', providerTransactionId: acquirementId, amount, raw: { ...raw, retryable: true } };
   }
   if (code === ECR_STATUS_FAILED_CODE) {
-    if (resultStatus !== 'F') return unknown(`code ${code} without resultStatus F`);
-    return { status: 'FAILED', providerTransactionId: acquirementId, amount, raw };
+    if (!ECR_FAILED_STATUSES.has(resultStatus)) return unknown(`code ${code} without resultStatus F`);
+    return { status: 'FAILED', providerTransactionId: acquirementId, amount, failureReason: paytmResultMessage(info), raw };
   }
   return unknown(`unrecognised result code "${code}"`);
 }
@@ -189,26 +200,41 @@ function interpretAbortResponse(data: any, merchantTransactionId: string): Provi
   return { outcome: 'UNKNOWN', raw: { ...raw, reason: 'unrecognised response' } };
 }
 
-function mapPaytmStatus(raw: string | undefined): ProviderStatusResult['status'] {
-  switch ((raw || '').toUpperCase()) {
-    case 'IN_QUEUE':
-    case 'PENDING':
-      return 'PROCESSING';
-    case 'COMPLETED':
-      return 'SUCCESS';
-    case 'FAILED':
-      return 'FAILED';
-    case 'EXPIRED':
-      return 'EXPIRED';
-    case 'CANCELLED':
-      return 'CANCELLED';
-    default:
-      return 'PROCESSING';
+/**
+ * Sale body extension asking the machine for one payment mode. Paytm's Sale
+ * API lists merchantExtendedInfo.paymentMode = ALL / CARD / QR; its sample
+ * request sends merchantExtendedInfo as a JSON object, so that shape is used.
+ * UNVERIFIED on a live terminal — confirm Card mode and QR mode each open the
+ * right screen before go-live.
+ */
+export function buildMerchantExtendedInfo(paymentMode: PosPaymentMode | null | undefined): { paymentMode: PosPaymentMode } | undefined {
+  return paymentMode ? { paymentMode } : undefined;
+}
+
+/**
+ * Status Enquiry for a probe id that was never sold → what it says about the
+ * setup. Only Paytm's documented "transaction doesn't exist" (0404) proves
+ * the request was signed with the right Merchant Key and processed for this
+ * MID/TID; every other answer is reported as not confirmed, never as OK.
+ */
+export function interpretConnectionProbe(data: any, tid: string): { ok: boolean; message: string } {
+  const info = data?.body?.resultInfo;
+  const code = String(info?.resultCodeId ?? info?.resultCode ?? '').trim();
+  if (code === ECR_TXN_NOT_FOUND_CODE) {
+    return { ok: true, message: `TID ${tid}: Paytm accepted the MID, Merchant Key and TID.` };
   }
+  if (code === ECR_INVALID_CHECKSUM_CODE) {
+    return { ok: false, message: `TID ${tid}: Paytm rejected the Merchant Key (invalid checksum). Re-enter the key Paytm issued.` };
+  }
+  const said = paytmResultMessage(info);
+  return {
+    ok: false,
+    message: `TID ${tid}: could not confirm the setup — Paytm answered ${said ? `"${said}"` : 'without a result code'}. Check the MID and TID.`,
+  };
 }
 
 export class PaytmProvider implements PaymentProvider {
-  private readonly baseUrl: string;
+  private readonly environment: 'sandbox' | 'production';
   private readonly ecrUrls: { sale: string; status: string; abort: string };
   private readonly creds: PaytmCredentials;
 
@@ -228,13 +254,9 @@ export class PaytmProvider implements PaymentProvider {
       throw new Error('Paytm merchantKey must be exactly 16 characters');
     }
     this.creds = { mid, merchantKey };
-    this.baseUrl = HOSTS[environment] ?? HOSTS.sandbox;
-    const ecrEnv = environment === 'production' ? 'production' : 'sandbox';
+    this.environment = environment === 'production' ? 'production' : 'sandbox';
+    const ecrEnv = this.environment;
     this.ecrUrls = { sale: ECR_ENDPOINTS.sale[ecrEnv], status: ECR_ENDPOINTS.status[ecrEnv], abort: ECR_ENDPOINTS.abort[ecrEnv] };
-  }
-
-  private async sign(params: Record<string, unknown>): Promise<string> {
-    return PaytmChecksum.generateSignature(params, this.creds.merchantKey);
   }
 
   /**
@@ -242,7 +264,7 @@ export class PaytmProvider implements PaymentProvider {
    * over the serialized body only, and that exact string is embedded in the
    * payload so the bytes Paytm verifies are the bytes that were signed.
    */
-  private async signedEcrPayload(body: Record<string, string>): Promise<string> {
+  private async signedEcrPayload(body: Record<string, unknown>): Promise<string> {
     const bodyJson = JSON.stringify(body);
     const checksum = await PaytmChecksum.generateSignature(bodyJson, this.creds.merchantKey);
     const head = {
@@ -290,6 +312,7 @@ export class PaytmProvider implements PaymentProvider {
       throw new Error(`Paytm EDC only supports INR (got ${params.currency})`);
     }
     const merchantTransactionId = toPaytmMerchantTxnId(params.reference);
+    const merchantExtendedInfo = buildMerchantExtendedInfo(params.paymentMode);
     const body = {
       paytmMid: this.creds.mid,
       paytmTid,
@@ -297,6 +320,8 @@ export class PaytmProvider implements PaymentProvider {
       merchantTransactionId,
       merchantReferenceNo: merchantTransactionId,
       transactionAmount: toPaise(params.amount),
+      // Card → CARD (tap/insert/swipe), UPI → QR (customer scans).
+      ...(merchantExtendedInfo ? { merchantExtendedInfo } : {}),
     };
     const payload = await this.signedEcrPayload(body);
 
@@ -325,7 +350,8 @@ export class PaytmProvider implements PaymentProvider {
       if (String(response.data?.body?.resultInfo?.resultStatus ?? '').toUpperCase() === 'F') {
         return interpretSaleResponse(response.data, merchantTransactionId);
       }
-      if (response.status >= 500) {
+      // 5xx, or 408 (timed out upstream): may have been processed — unknown.
+      if (response.status >= 500 || response.status === 408) {
         logger.warn('[pos-payments/paytm] sale got a server error — outcome unknown, left PROCESSING', logContext);
         return { providerTransactionId: null, status: 'PROCESSING', raw: { merchantTransactionId, outcomeUnknown: true, httpStatus: response.status } };
       }
@@ -381,28 +407,6 @@ export class PaytmProvider implements PaymentProvider {
     return interpretStatusResponse(data, merchantTransactionId);
   }
 
-  // LEGACY CPay status call — now only used as the testConnection probe.
-  private async legacyStatusProbe(reference: string): Promise<ProviderStatusResult> {
-    const params: Record<string, unknown> = { mid: this.creds.mid, merchantTransactionId: reference };
-    const checksum = await this.sign(params);
-
-    try {
-      const { data } = await axios.get(`${this.baseUrl}/edc-integration-service/txn/status`, {
-        params: { ...params, checksum },
-        timeout: 15_000,
-      });
-      return {
-        status: mapPaytmStatus(data?.status),
-        providerTransactionId: data?.cpayId ?? null,
-        amount: data?.txnAmount != null ? Number(data.txnAmount) : null,
-        raw: data,
-      };
-    } catch (err: any) {
-      logger.error('[pos-payments/paytm] getPaymentStatus failed', { message: err?.message, response: stripChecksums(err?.response?.data) });
-      throw err;
-    }
-  }
-
   /**
    * ECR Abort — asks Paytm to stop an in-flight sale, identified by exactly
    * the MID, TID, merchantTransactionId and transactionDateTime the Sale
@@ -454,24 +458,51 @@ export class PaytmProvider implements PaymentProvider {
     throw new Error('Paytm EDC has no documented webhook — this should never be called');
   }
 
-  async testConnection(): Promise<{ ok: boolean; message: string }> {
-    try {
-      // Still the legacy CPay probe: an ECR Status probe needs a real TID
-      // and Paytm hasn't confirmed what a probe response looks like.
-      await this.legacyStatusProbe('CONNECTION_TEST_PROBE');
-      return { ok: true, message: 'Reached Paytm and received a structured response.' };
-    } catch (err: any) {
-      const httpStatus = err?.response?.status;
-      if (httpStatus === 401 || httpStatus === 403) {
-        return { ok: false, message: 'Paytm rejected the credentials (401/403).' };
-      }
-      // Any other structured HTTP error (e.g. a "transaction not found" style
-      // business error for the probe reference) still proves the mid/checksum
-      // were accepted — only a network-level failure counts as not connected.
-      if (err?.response) {
-        return { ok: true, message: 'Reached Paytm; credentials were accepted.' };
-      }
-      return { ok: false, message: err?.message || 'Could not reach Paytm.' };
+  /**
+   * One ECR Status Enquiry per TID (up to 5) for a probe id that was never
+   * sold, on the same server real payments use. Passes only if Paytm answers
+   * every TID with its documented "transaction doesn't exist" — see
+   * interpretConnectionProbe. Never sends a Sale, so nothing is ever charged
+   * and the machine itself isn't contacted: a pass doesn't prove the machine
+   * is online, and the message says so.
+   */
+  async testConnection(options: { terminalProviderIds?: string[] } = {}): Promise<{ ok: boolean; message: string }> {
+    const mode = this.environment === 'production' ? 'Live' : 'Test (sandbox)';
+    const tids = [...new Set((options.terminalProviderIds ?? []).map((t) => t.trim()).filter(Boolean))].slice(0, 5);
+    if (tids.length === 0) {
+      return { ok: false, message: 'Add an active terminal with its TID first — Paytm can only be tested against a real TID.' };
     }
+
+    const results: { ok: boolean; message: string }[] = [];
+    for (const tid of tids) {
+      const requestedAt = new Date();
+      const merchantTransactionId = `SXTEST${requestedAt.getTime()}`;
+      const payload = await this.signedEcrPayload({
+        paytmMid: this.creds.mid,
+        paytmTid: tid,
+        transactionDateTime: formatPaytmDateTime(requestedAt),
+        merchantTransactionId,
+      });
+      try {
+        const { data } = await this.postEcr(this.ecrUrls.status, payload);
+        results.push(interpretConnectionProbe(data, tid));
+      } catch (err: any) {
+        if (err?.response?.data?.body?.resultInfo) {
+          results.push(interpretConnectionProbe(err.response.data, tid));
+        } else {
+          const detail = err?.response?.status ? `HTTP ${err.response.status}` : (err?.code ?? err?.message ?? 'network error');
+          results.push({ ok: false, message: `TID ${tid}: could not reach Paytm (${detail}).` });
+        }
+      }
+    }
+
+    const ok = results.every((r) => r.ok);
+    const summary = results.map((r) => r.message).join(' ');
+    return {
+      ok,
+      message: ok
+        ? `${mode}: ${summary} This doesn't check that the machine is switched on — do a ₹1 test payment to confirm.`
+        : `${mode}: ${summary}`,
+    };
   }
 }

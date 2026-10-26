@@ -16,15 +16,16 @@ export const posPaymentsController = {
       const userId = req.user?.userId;
       if (!userId) throw new AppError(401, 'Unauthorized', 'UNAUTHORIZED');
 
-      const { appointment_id, branch_id, client_id, terminal_id, provider, amount, payload } = req.body;
+      const { appointment_id, branch_id, client_id, terminal_id, provider, payment_mode, amount, payload } = req.body;
       if (!appointment_id) throw new AppError(400, 'appointment_id is required', 'VALIDATION_ERROR');
       if (!provider) throw new AppError(400, 'provider is required', 'VALIDATION_ERROR');
-      if (typeof amount !== 'number' || amount <= 0) throw new AppError(400, 'amount must be a positive number', 'VALIDATION_ERROR');
+      if (provider !== 'paytm' && provider !== 'manual') throw new AppError(400, `Unknown provider: ${provider}`, 'UNKNOWN_PROVIDER');
+      if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) throw new AppError(400, 'amount must be a positive number', 'VALIDATION_ERROR');
       if (!payload || typeof payload !== 'object') throw new AppError(400, 'payload is required', 'VALIDATION_ERROR');
 
       const request = await posPaymentsService.create({
         salonId, branchId: branch_id, appointmentId: appointment_id, clientId: client_id,
-        terminalId: terminal_id, provider, amount, payload, requesterUserId: userId,
+        terminalId: terminal_id, provider, paymentMode: payment_mode ?? null, amount, payload, requesterUserId: userId,
       });
       return sendSuccess(res, 201, request, 'Payment request created');
     } catch (err) { return next(err); }

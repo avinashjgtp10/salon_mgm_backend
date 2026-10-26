@@ -31,6 +31,16 @@ function blockingError(request: PosPaymentRequest): AppError {
       details,
     );
   }
+  if (request.status === 'SUCCESS' && !request.payment_id && !request.needs_review) {
+    // Paid on the machine, saving still in progress / being retried.
+    return new AppError(
+      409,
+      `The customer already paid ${request.payment_reference} on the payment machine — it is still being saved. ` +
+        "Don't take another payment; open the appointment to see its status.",
+      POS_PAYMENT_UNRESOLVED,
+      details,
+    );
+  }
   return new AppError(
     409,
     `Payment Machine transaction ${request.payment_reference} (${request.status}) is flagged for review — money may ` +
