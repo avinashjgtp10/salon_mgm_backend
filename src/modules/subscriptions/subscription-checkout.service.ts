@@ -231,7 +231,7 @@ export const subscriptionCheckoutService = {
             await client.query("COMMIT");
             // After the commit, mail the invoice PDF to the owner (best effort, never blocks Razorpay's 200).
             const paymentId = event?.payload?.payment?.entity?.id;
-            if (result === "charged" && paymentId) subscriptionInvoicesService.emailForTransaction(paymentId).catch(() => undefined);
+            if (result === "charged" && paymentId) subscriptionInvoicesService.emailForTransaction(paymentId).catch((err) => logger.warn("Subscription invoice email failed", { paymentId, error: err?.message }));
             // First activation of a plan: the salon gets that plan's features (not on every renewal, so an admin's later
             // manual customisation isn't undone each month).
             if (result === "activated") await this.applyPlanFeatures(event?.payload?.subscription?.entity?.id).catch((e: any) => logger.error("Applying plan features failed", { error: e?.message }));

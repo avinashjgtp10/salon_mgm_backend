@@ -58,7 +58,7 @@ pool.on('connect', (client) => {
   client.query("SET TIME ZONE 'UTC'").catch((err) =>
     console.warn('⚠️  Could not set session timezone:', err.message)
   );
-  console.log('✅ Database connected (session TZ = UTC)');
+  // Fires for every pooled connection, so not worth logging individually.
 });
 
 pool.on('error', (err) => {

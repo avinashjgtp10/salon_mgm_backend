@@ -154,7 +154,7 @@ export const authController = {
     try {
       const refreshToken = String(req.body?.refreshToken || "");
 
-      logger.info("Token refresh request", { ip: req.ip });
+      logger.debug("Token refresh request");
 
       if (!refreshToken) {
         throw new AppError(
@@ -166,7 +166,7 @@ export const authController = {
 
       const data = await authService.refresh(refreshToken);
 
-      logger.info("Token refreshed successfully");
+      logger.debug("Token refreshed successfully");
 
       return sendSuccess(
         res,
@@ -175,7 +175,7 @@ export const authController = {
         "Token refreshed successfully"
       );
     } catch (error) {
-      logger.error("Refresh token error", { error });
+      // Logged once, with requestId, by the error handler.
       return next(error);
     }
   },
@@ -329,7 +329,7 @@ export const authController = {
       // Redirect to frontend with tokens + onboarding flag in query string
       return redirectToFrontend(res, accessToken, refreshToken, isOnboardingComplete, st.returnTo);
     } catch (err: any) {
-      console.error("GOOGLE CALLBACK ERROR:", err?.response?.data || err?.message || err);
+      logger.error("GOOGLE CALLBACK ERROR:", err?.response?.data || err?.message || err);
       // Send JSON so the browser shows exactly what went wrong
       return res.status(500).json({
         message: "Google callback failed",

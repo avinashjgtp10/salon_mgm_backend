@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express'
 import { webhooksService } from './webhooks.service'
 import logger from '../../../../config/logger'
+import { summarizeWebhook } from './webhooks.log'
 
 export const webhooksController = {
 
@@ -27,7 +28,7 @@ export const webhooksController = {
     // logs on specific branches (FAILED status, capability updates), so a
     // silent delivery mystery with zero webhook log lines is otherwise
     // indistinguishable from "Meta never called us".
-    logger.info('📩 [WEBHOOK] Incoming payload', { body: req.body })
+    logger.info('📩 [WEBHOOK] Incoming payload', summarizeWebhook(req.body))
     void webhooksService.handleWebhook(req.body).catch(err =>
       logger.error('handleGlobal: webhook processing failed', { err })
     )
@@ -48,7 +49,7 @@ export const webhooksController = {
   // ── Per-salon handle — backward compat ───────────────────────────────────
   handle(req: Request, res: Response) {
     res.status(200).json({ success: true })
-    logger.info('📩 [WEBHOOK] Incoming payload (per-salon)', { salonId: req.params.salonId, body: req.body })
+    logger.info('📩 [WEBHOOK] Incoming payload (per-salon)', { salonId: req.params.salonId, ...summarizeWebhook(req.body) })
     const body = { ...req.body, _salonId: req.params.salonId }
     void webhooksService.handleWebhook(body).catch(err =>
       logger.error('handle: webhook processing failed', { err })

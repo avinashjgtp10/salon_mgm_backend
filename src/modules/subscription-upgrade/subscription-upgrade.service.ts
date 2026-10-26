@@ -261,7 +261,7 @@ async function afterCompletion(c: Completion, actingUserId: string | null) {
             logger.warn("Upgrade: could not cancel the old Razorpay subscription", { sub: c.razorpaySubscriptionToCancel, error: err?.error?.description ?? err?.message });
         }
     }
-    if (c.invoiceCreated && c.invoiceId) subscriptionInvoicesService.emailInvoice(c.invoiceId).catch(() => undefined);
+    if (c.invoiceCreated && c.invoiceId) subscriptionInvoicesService.emailInvoice(c.invoiceId).catch((err) => logger.warn("Subscription invoice email failed", { invoiceId: c.invoiceId, error: err?.message }));
 }
 
 // ── gateway verification ────────────────────────────────────────────────────────────────────────────────────────────

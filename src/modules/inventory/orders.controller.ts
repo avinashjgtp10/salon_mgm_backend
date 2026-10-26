@@ -41,7 +41,7 @@ export const ordersController = {
             if (!userId) throw new AppError(401, "Authentication required", "NO_USER");
 
             const body = req.body as CreateOrderDTO;
-            logger.info("POST /inventory/orders called", { salonId, userId, supplierId: body.supplier_id });
+            logger.debug("POST /inventory/orders called", { salonId, userId, supplierId: body.supplier_id });
 
             const order = await ordersRepository.create(body, salonId, userId);
             sendSuccess(res, 201, order, "Order created successfully");
@@ -92,7 +92,7 @@ export const ordersController = {
             if (!userId) throw new AppError(401, "Authentication required", "NO_USER");
 
             const body = req.body as ReceiveOrderDTO;
-            logger.info("POST /inventory/orders/:id/receive called", { salonId, userId, orderId: req.params.id });
+            logger.debug("POST /inventory/orders/:id/receive called", { salonId, userId, orderId: req.params.id });
 
             const order = await ordersRepository.receive(String(req.params.id), body, salonId, userId);
             sendSuccess(res, 200, order, "Order received successfully");
@@ -105,7 +105,7 @@ export const ordersController = {
         try {
             const salonId = getSalonId(req);
             const body = req.body as ReceiveOrderDTO;
-            logger.info("POST /inventory/orders/:id/verify called", { salonId, orderId: req.params.id });
+            logger.debug("POST /inventory/orders/:id/verify called", { salonId, orderId: req.params.id });
 
             const order = await ordersRepository.verify(String(req.params.id), body, salonId);
             sendSuccess(res, 200, order, "Order verified successfully");

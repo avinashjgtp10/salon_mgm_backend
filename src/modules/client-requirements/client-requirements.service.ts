@@ -1,3 +1,4 @@
+import logger from '../../config/logger';
 import { AppError } from "../../middleware/error.middleware";
 import { emailService } from "../utils/email.service";
 import { superAdminRepository } from "../super-admin/super-admin.repository";
@@ -85,7 +86,7 @@ export const clientRequirementsService = {
       salonName,
       submitterName,
       submitterEmail,
-    }).catch((err) => console.error("Failed to send requirement created email:", err?.message ?? err));
+    }).catch((err) => logger.error("Failed to send requirement created email:", err?.message ?? err));
 
     // Every assigned developer gets their own "you've been assigned" email
     // — separate from the client-confirmation / internal-team-notification
@@ -99,7 +100,7 @@ export const clientRequirementsService = {
         salonName,
         priority: requirement.priority,
         targetDate: requirement.target_date,
-      }).catch((err) => console.error(`Failed to send assignment email to ${assignee.developer_email}:`, err?.message ?? err));
+      }).catch((err) => logger.error(`Failed to send assignment email to ${assignee.developer_email}:`, err?.message ?? err));
     }
 
     return { ...requirement, submitter_name: submitterName, submitter_email: submitterEmail };
@@ -186,7 +187,7 @@ export const clientRequirementsService = {
           reqNumber: formatReqNumber(existing.req_number),
           title: existing.title,
           submitterEmail: existing.submitter_email,
-        }).catch((err) => console.error("Failed to send requirement completed email:", err?.message ?? err));
+        }).catch((err) => logger.error("Failed to send requirement completed email:", err?.message ?? err));
       } else {
         emailService.sendRequirementStatusChangedEmail({
           reqNumber: formatReqNumber(existing.req_number),
@@ -195,7 +196,7 @@ export const clientRequirementsService = {
           submitterEmail: existing.submitter_email,
           newStatus,
           newStatusLabel: STATUS_LABEL[newStatus],
-        }).catch((err) => console.error("Failed to send requirement status email:", err?.message ?? err));
+        }).catch((err) => logger.error("Failed to send requirement status email:", err?.message ?? err));
       }
     }
 
@@ -230,7 +231,7 @@ export const clientRequirementsService = {
         submitterEmail: requirement.submitter_email,
         authorName: requirement.assignee_name ?? null,
         message: message.trim(),
-      }).catch((err) => console.error("Failed to send requirement update email:", err?.message ?? err));
+      }).catch((err) => logger.error("Failed to send requirement update email:", err?.message ?? err));
     }
 
     return saved;

@@ -1,3 +1,4 @@
+import logger from '../../config/logger';
 import { NextFunction, Request, Response } from "express";
 import { AppError } from "../../middleware/error.middleware";
 
@@ -95,7 +96,7 @@ function validateCommissionOverride(b: Record<string, unknown>): void {
 function warnUnknownKeys(body: Record<string, unknown>, route: string): void {
   const unknown = Object.keys(body ?? {}).filter((k) => !KNOWN_SERVICE_KEYS.has(k));
   if (unknown.length > 0) {
-    console.warn(
+    logger.warn(
       `[services] ${route}: ignoring unknown field(s) that no column exists for: ${unknown.join(", ")}`,
     );
   }

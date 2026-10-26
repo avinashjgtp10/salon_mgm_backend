@@ -62,7 +62,7 @@ export const productsController = {
     // GET /api/v1/products
     async list(req: AuthRequest, res: Response, next: NextFunction) {
         try {
-            logger.info("GET /products called", {
+            logger.debug("GET /products called", {
                 requesterUserId: req.user?.userId, requesterRole: req.user?.role,
                 path: req.originalUrl, method: req.method,
             });
@@ -91,7 +91,7 @@ export const productsController = {
     // POST /api/v1/products/search
     async search(req: AuthRequest, res: Response, next: NextFunction) {
         try {
-            logger.info("POST /products/search called", {
+            logger.debug("POST /products/search called", {
                 requesterUserId: req.user?.userId, requesterRole: req.user?.role,
                 path: req.originalUrl, method: req.method,
             });
@@ -121,7 +121,7 @@ export const productsController = {
     async getById(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const id = String(req.params.id || "").trim();
-            logger.info("GET /products/:id called", { productId: id, path: req.originalUrl, method: req.method });
+            logger.debug("GET /products/:id called", { productId: id, path: req.originalUrl, method: req.method });
             if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
             const salonId = await getSalonId(req);
             const product = await productsService.getById(id, salonId);
@@ -137,7 +137,7 @@ export const productsController = {
         try {
             const userId = req.user?.userId;
             const role = req.user?.role;
-            logger.info("POST /products called", { userId, role, path: req.originalUrl, method: req.method });
+            logger.debug("POST /products called", { userId, role, path: req.originalUrl, method: req.method });
             if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
             const salonId = await getSalonId(req);
             const files = (req.files as Express.Multer.File[]) ?? [];
@@ -162,7 +162,7 @@ export const productsController = {
             const userId = req.user?.userId;
             const role = req.user?.role;
             const id = String(req.params.id || "").trim();
-            logger.info("PATCH /products/:id called", {
+            logger.debug("PATCH /products/:id called", {
                 productId: id, requesterUserId: userId, requesterRole: role,
                 path: req.originalUrl, method: req.method,
             });
@@ -186,7 +186,7 @@ export const productsController = {
             const userId = req.user?.userId;
             const role = req.user?.role;
             const id = String(req.params.id || "").trim();
-            logger.info("DELETE /products/:id called", {
+            logger.debug("DELETE /products/:id called", {
                 productId: id, requesterUserId: userId, requesterRole: role,
                 path: req.originalUrl, method: req.method,
             });
@@ -206,7 +206,7 @@ export const productsController = {
         try {
             const userId = req.user?.userId;
             const id = String(req.params.id || "").trim();
-            logger.info("POST /products/:id/photos called", {
+            logger.debug("POST /products/:id/photos called", {
                 productId: id, requesterUserId: userId, path: req.originalUrl, method: req.method,
             });
             if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
@@ -232,7 +232,7 @@ export const productsController = {
         try {
             const userId = req.user?.userId;
             const id = String(req.params.id || "").trim();
-            logger.info("PUT /products/:id/photos/reorder called", {
+            logger.debug("PUT /products/:id/photos/reorder called", {
                 productId: id, requesterUserId: userId, path: req.originalUrl, method: req.method,
             });
             if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
@@ -254,7 +254,7 @@ export const productsController = {
             const userId = req.user?.userId;
             const id = String(req.params.id || "").trim();
             const photoId = String(req.params.photoId || "").trim();
-            logger.info("DELETE /products/:id/photos/:photoId called", {
+            logger.debug("DELETE /products/:id/photos/:photoId called", {
                 productId: id, photoId, requesterUserId: userId, path: req.originalUrl, method: req.method,
             });
             if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
@@ -271,7 +271,7 @@ export const productsController = {
 
     async exportCSV(req: any, res: any, next: any) {
         try {
-            logger.info("GET /products/export/csv called", { path: req.originalUrl, query: req.query });
+            logger.debug("GET /products/export/csv called", { path: req.originalUrl, query: req.query });
             const salonId = await getSalonId(req);
             const { stream, filename } = await productsService.exportCSV({
                 requesterUserId: req.user?.userId ?? "anonymous",
@@ -287,7 +287,7 @@ export const productsController = {
 
     async exportExcel(req: any, res: any, next: any) {
         try {
-            logger.info("GET /products/export/excel called", { path: req.originalUrl, query: req.query });
+            logger.debug("GET /products/export/excel called", { path: req.originalUrl, query: req.query });
             const salonId = await getSalonId(req);
             const { buffer, filename } = await productsService.exportExcel({
                 requesterUserId: req.user?.userId ?? "anonymous",
@@ -303,7 +303,7 @@ export const productsController = {
 
     async exportPDF(req: any, res: any, next: any) {
         try {
-            logger.info("GET /products/export/pdf called", { path: req.originalUrl, query: req.query });
+            logger.debug("GET /products/export/pdf called", { path: req.originalUrl, query: req.query });
             const salonId = await getSalonId(req);
             const { stream, filename } = await productsService.exportPDF({
                 requesterUserId: req.user?.userId ?? "anonymous",
@@ -322,7 +322,7 @@ export const productsController = {
         try {
             const userId = req.user?.userId;
             const role = req.user?.role;
-            logger.info("POST /products/import called", {
+            logger.debug("POST /products/import called", {
                 userId, role, path: req.originalUrl, method: req.method,
             });
             if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
@@ -352,7 +352,7 @@ export const brandsController = {
     // GET /api/v1/products/brands
     async list(req: AuthRequest, res: Response, next: NextFunction) {
         try {
-            logger.info("GET /products/brands called", { path: req.originalUrl, method: req.method });
+            logger.debug("GET /products/brands called", { path: req.originalUrl, method: req.method });
             const salonId = await getSalonId(req);
             const brands = await brandsService.list(salonId);
             return sendSuccess(res, 200, brands, "Brands fetched successfully");
@@ -366,7 +366,7 @@ export const brandsController = {
     async getById(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const id = String(req.params.id || "").trim();
-            logger.info("GET /products/brands/:id called", { brandId: id, path: req.originalUrl, method: req.method });
+            logger.debug("GET /products/brands/:id called", { brandId: id, path: req.originalUrl, method: req.method });
             if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
             const salonId = await getSalonId(req);
             const brand = await brandsService.getById(id, salonId);
@@ -382,7 +382,7 @@ export const brandsController = {
         try {
             const userId = req.user?.userId;
             const role = req.user?.role;
-            logger.info("POST /products/brands called", { userId, role, path: req.originalUrl, method: req.method });
+            logger.debug("POST /products/brands called", { userId, role, path: req.originalUrl, method: req.method });
             if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
             const salonId = await getSalonId(req);
             const brand = await brandsService.create({
@@ -401,7 +401,7 @@ export const brandsController = {
             const userId = req.user?.userId;
             const role = req.user?.role;
             const id = String(req.params.id || "").trim();
-            logger.info("PATCH /products/brands/:id called", {
+            logger.debug("PATCH /products/brands/:id called", {
                 brandId: id, requesterUserId: userId, requesterRole: role,
                 path: req.originalUrl, method: req.method,
             });
@@ -425,7 +425,7 @@ export const brandsController = {
             const userId = req.user?.userId;
             const role = req.user?.role;
             const id = String(req.params.id || "").trim();
-            logger.info("DELETE /products/brands/:id called", {
+            logger.debug("DELETE /products/brands/:id called", {
                 brandId: id, requesterUserId: userId, requesterRole: role,
                 path: req.originalUrl, method: req.method,
             });

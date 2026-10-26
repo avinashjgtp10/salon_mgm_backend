@@ -1,3 +1,4 @@
+import logger from '../../config/logger';
 import { supportRepo } from "./support.repository";
 import { emailService } from "../utils/email.service";
 
@@ -25,7 +26,7 @@ export const supportService = {
       submitterEmail: notificationTicket.submitter_email,
       createdAt: notificationTicket.created_at,
     }).catch((err: any) => {
-      console.error("Failed to send support ticket notification:", err?.message ?? err);
+      logger.error("Failed to send support ticket notification:", err?.message ?? err);
     });
 
     return notificationTicket;

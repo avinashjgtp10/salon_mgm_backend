@@ -17,7 +17,7 @@ export const billingController = {
     // GET /api/v1/billing/plans
     async listPlans(_req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
         try {
-            logger.info("GET /billing/plans");
+            logger.debug("GET /billing/plans");
             const plans = await billingService.listPlans();
             sendSuccess(res, 200, plans, "Billing plans fetched successfully");
         } catch (err) { next(err); }

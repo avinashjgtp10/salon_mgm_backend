@@ -182,11 +182,9 @@ async function gatherReceiptContext(params: ReceiptContextParams) {
 // only within Meta's 24h customer-session window), same as before bill_receipt
 // existed as a trigger — so a salon still mid-approval isn't left with nothing.
 export async function sendPurchaseReceipt(params: ReceiptContextParams): Promise<{ sent: boolean; reason?: string }> {
-    console.log(`[BILL_RECEIPT] sendPurchaseReceipt CALLED — salonId=${params.salonId} saleId=${params.sale?.id} phone=${params.phone}`);
     try {
         const ctx = await gatherReceiptContext(params);
         const billTemplate = await whatsappAutomationRepository.findTemplate("bill_receipt", params.salonId);
-        console.log(`[BILL_RECEIPT] findTemplate result — found=${!!billTemplate} status=${billTemplate?.status} template_name=${billTemplate?.template_name} meta_template_id=${billTemplate?.meta_template_id}`);
 
         const appointmentId = params.appointment?.id ?? null;
         const feedbackLine = appointmentId
@@ -199,8 +197,6 @@ export async function sendPurchaseReceipt(params: ReceiptContextParams): Promise
 
         if (billTemplate) {
             const pdfBuffer = await renderReceiptPdf(ctx);
-            console.log(`[BILL_RECEIPT] renderReceiptPdf result — bytes=${pdfBuffer.length}`);
-            console.log(`[BILL_RECEIPT] feedbackLine=${feedbackLine}`);
 
             result = await sendBillReceiptTemplateMessage({
                 salonId:      params.salonId,
@@ -217,7 +213,6 @@ export async function sendPurchaseReceipt(params: ReceiptContextParams): Promise
                     "4": feedbackLine,
                 },
             });
-            console.log(`[BILL_RECEIPT] sendBillReceiptTemplateMessage result:`, result);
 
             // SMS/Email fan-out — independent of WhatsApp's own template
             // approval status, so it always fires once the PDF is rendered.
@@ -235,10 +230,8 @@ export async function sendPurchaseReceipt(params: ReceiptContextParams): Promise
                 emailAttachment: { buffer: pdfBuffer, filename: `Receipt-${invoiceLabel}.pdf` },
             }).catch(() => {});
         } else {
-            console.log(`[BILL_RECEIPT] no APPROVED bill_receipt template — falling back to plain PDF (sendReceiptDocument)`);
-            logger.info(`[WA-TRACE] bill_receipt not yet APPROVED for salon=${params.salonId} — falling back to plain PDF`);
+            logger.debug(`[WA-TRACE] bill_receipt not yet APPROVED for salon=${params.salonId} — falling back to plain PDF`);
             result = await sendReceiptDocument(ctx);
-            console.log(`[BILL_RECEIPT] sendReceiptDocument (fallback) result:`, result);
 
             // SMS/Email don't depend on Meta template approval at all — still
             // fan out here, rendering the PDF once for the email attachment
@@ -262,7 +255,6 @@ export async function sendPurchaseReceipt(params: ReceiptContextParams): Promise
 
         return result;
     } catch (err: any) {
-        console.log(`[BILL_RECEIPT] EXCEPTION:`, err?.response?.data ?? err?.message ?? err);
         // Best-effort — sendReceiptDocument already swallows its own errors;
         // this catches failures in the gathering step above (e.g. a bad salonId).
         logger.warn(`[WA-TRACE] PDF-BILL prep FAILED — sale=${params.sale?.id} salon=${params.salonId} — ${err?.message ?? err}`);

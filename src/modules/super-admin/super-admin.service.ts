@@ -265,7 +265,7 @@ export const superAdminService = {
       email: data.email,
       password: data.password,
       role: data.role,
-    }).catch((err: any) => console.error("⚠️  Failed to send account-created email:", err?.message));
+    }).catch((err: any) => logger.error("⚠️  Failed to send account-created email:", err?.message));
 
     return { ...user, plainPassword: data.password };
   },

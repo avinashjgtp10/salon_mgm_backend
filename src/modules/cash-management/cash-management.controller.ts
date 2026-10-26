@@ -1,3 +1,4 @@
+import logger from '../../config/logger';
 import { NextFunction, Request, Response } from "express";
 import { AppError } from "../../middleware/error.middleware";
 import { sendSuccess } from "../utils/response.util";
@@ -310,7 +311,7 @@ export const cashManagementController = {
 
       return sendSuccess(res, 200, { sent: true }, "Daily summary email sent successfully");
     } catch (error) {
-      console.error("[cash-management-controller] Error sending summary email:", error);
+      logger.error("[cash-management-controller] Error sending summary email:", error);
       return next(error);
     }
   },

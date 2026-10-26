@@ -18,11 +18,11 @@ const corsOptions: CorsOptionsDelegate<Request> = (req, callback) => {
     .filter((o) => o);
 
   // Log incoming request origin
-  logger.info(`CORS check - Incoming Origin: ${origin || "No Origin (Postman/Mobile)"}`);
+  logger.debug(`CORS check - Incoming Origin: ${origin || "No Origin (Postman/Mobile)"}`);
 
   // Postman / mobile apps (no origin header)
   if (!origin) {
-    logger.info("CORS allowed: No origin detected (Postman or mobile request)");
+    logger.debug("CORS allowed: No origin detected (Postman or mobile request)");
     return callback(null, {
       origin: true,
       credentials: true,
@@ -31,7 +31,7 @@ const corsOptions: CorsOptionsDelegate<Request> = (req, callback) => {
 
   // Allow all origins when flag is set
   if (allowAll) {
-    logger.info(`CORS allowed for all origins (CORS_ALLOW_ALL_ORIGINS=true): ${origin}`);
+    logger.debug(`CORS allowed for all origins (CORS_ALLOW_ALL_ORIGINS=true): ${origin}`);
     return callback(null, {
       origin: true,
       credentials: true,
@@ -42,7 +42,7 @@ const corsOptions: CorsOptionsDelegate<Request> = (req, callback) => {
   }
 
   if (allowedOrigins.includes(origin)) {
-    logger.info(`CORS allowed for origin: ${origin}`);
+    logger.debug(`CORS allowed for origin: ${origin}`);
 
     callback(null, {
       origin: true,

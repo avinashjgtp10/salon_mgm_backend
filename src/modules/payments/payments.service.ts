@@ -1418,7 +1418,6 @@ export const paymentsService = {
             // instead of both firing and the client getting two PDFs.
             (async () => {
               const won = await whatsappAutomationRepository.guardInsertIfNotExists(`receipt-pdf-auto:${enrichedSale.id}`);
-              console.log(`[BILL_RECEIPT] payments.service.ts guard won=${won} saleId=${enrichedSale.id}`);
               if (!won) return;
 
               const clientRecord = data.client_id ? await clientsRepository.findById(data.client_id, data.salon_id) : null;
@@ -1548,7 +1547,7 @@ export const paymentsService = {
       (appt?.membership_items?.length ? appt.membership_items : null) ??
       (data.membership_items?.length   ? data.membership_items   : null) ??
       [];
-    logger.info(`[payments/create] status=${data.status} client_id=${data.client_id} membership_items_src_count=${membershipItemsSrc.length} (db=${appt?.membership_items?.length ?? 0} body=${data.membership_items?.length ?? 0})`);
+    logger.debug(`[payments/create] status=${data.status} client_id=${data.client_id} membership_items_src_count=${membershipItemsSrc.length} (db=${appt?.membership_items?.length ?? 0} body=${data.membership_items?.length ?? 0})`);
     if (data.status === 'completed' && data.client_id && membershipItemsSrc.length > 0) {
       for (const item of membershipItemsSrc) {
         const pricePaid = Number(item.price ?? 0) * Number(item.quantity ?? 1);
