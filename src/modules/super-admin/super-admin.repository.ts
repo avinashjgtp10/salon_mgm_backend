@@ -216,7 +216,44 @@ export const superAdminRepository = {
       ${dummyFilter}
       ORDER BY s.created_at DESC
     `, [param]);
-    return rows;
+
+    // Developers assigned to each salon (via its client requirements). Kept as a separate, guarded query so the
+    // salons list still loads if the requirements tables are not migrated yet.
+    // Direct assignments (Actions > Assign Developer) plus developers on the salon's requirements.
+    const devsBySalon = new Map<string, Set<string>>();
+    const directIdsBySalon = new Map<string, string[]>();
+    const addName = (salonId: string, name: string) => {
+      const set = devsBySalon.get(salonId) ?? new Set<string>();
+      set.add(name);
+      devsBySalon.set(salonId, set);
+    };
+    try {
+      const { rows: reqRows } = await pool.query(`
+        SELECT DISTINCT r.salon_id, d.name
+        FROM client_requirements r
+        JOIN client_requirement_assignees cra ON cra.requirement_id = r.id
+        JOIN developers d ON d.id = cra.developer_id
+      `);
+      for (const d of reqRows) addName(d.salon_id, d.name);
+    } catch {
+      /* requirements tables missing: no developer info */
+    }
+    try {
+      const { rows: directRows } = await pool.query(`
+        SELECT sd.salon_id, d.id, d.name FROM salon_developers sd JOIN developers d ON d.id = sd.developer_id
+      `);
+      for (const d of directRows) {
+        addName(d.salon_id, d.name);
+        directIdsBySalon.set(d.salon_id, [...(directIdsBySalon.get(d.salon_id) ?? []), d.id]);
+      }
+    } catch {
+      /* salon_developers not created yet: nothing assigned directly */
+    }
+    return rows.map((r) => ({
+      ...r,
+      developers: [...(devsBySalon.get(r.id) ?? [])].sort((a, b) => a.localeCompare(b)),
+      assigned_developer_ids: directIdsBySalon.get(r.id) ?? [],
+    }));
   },
 
   // Owner (from salons.owner_id/users) plus every row in `staff` for this
