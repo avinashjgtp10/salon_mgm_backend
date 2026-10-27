@@ -55,6 +55,20 @@ export const clientRequirementsController = {
     } catch (err) { return next(err); }
   },
 
+  async setSalonDevelopers(req: Request, res: Response, next: NextFunction) {
+    try {
+      const data = await clientRequirementsService.setSalonDevelopers(String(req.params.salonId), req.body?.developer_ids);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
+  async deleteDeveloper(req: Request, res: Response, next: NextFunction) {
+    try {
+      await clientRequirementsService.deleteDeveloper(String(req.params.id));
+      return res.json({ success: true, data: { id: String(req.params.id) } });
+    } catch (err) { return next(err); }
+  },
+
   async setDeveloperStatus(req: Request, res: Response, next: NextFunction) {
     try {
       const { is_active } = req.body;
@@ -94,10 +108,32 @@ export const clientRequirementsController = {
     } catch (err) { return next(err); }
   },
 
+  // DELETE /api/v1/requirements/:id
+  async remove(req: Request, res: Response, next: NextFunction) {
+    try {
+      await clientRequirementsService.deleteRequirement(String(req.params.id));
+      return res.json({ success: true, data: { id: String(req.params.id) } });
+    } catch (err) { return next(err); }
+  },
+
+  // PATCH /api/v1/requirements/:id — edit title / description / priority / target date
+  async updateDetails(req: AuthedRequest, res: Response, next: NextFunction) {
+    try {
+      const actorId = req.user?.userId ?? req.user?.id ?? null;
+      const { title, description, priority, target_date } = req.body ?? {};
+      const updated = await clientRequirementsService.updateDetails(String(req.params.id), actorId, { title, description, priority, target_date });
+      return res.json({ success: true, data: { ...updated, req_number_label: formatReqNumber(updated.req_number) } });
+    } catch (err) { return next(err); }
+  },
+
   // PATCH /api/v1/requirements/:id/assign
   async assign(req: Request, res: Response, next: NextFunction) {
     try {
-      const { assigned_to, target_date } = req.body;
+      const { assigned_to, target_date, developer_ids } = req.body;
+      if (Array.isArray(developer_ids)) {
+        const updated = await clientRequirementsService.setAssignees(String(req.params.id), developer_ids);
+        return res.json({ success: true, data: updated });
+      }
       const updated = await clientRequirementsService.assign(String(req.params.id), assigned_to || null, target_date || null);
       return res.json({ success: true, data: updated });
     } catch (err) { return next(err); }
