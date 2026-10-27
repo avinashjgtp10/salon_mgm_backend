@@ -36,6 +36,19 @@ export const payrollController = {
         } catch (err) { return next(err); }
     },
 
+    async resetPeriod(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const salonId = getSalonId(req);
+            const summary = await payrollService.resetPayroll(
+                salonId,
+                String(req.params.staffId),
+                String(req.query.period_start),
+                String(req.query.period_end)
+            );
+            return sendSuccess(res, 200, summary ?? null, "Payroll record deleted successfully");
+        } catch (err) { return next(err); }
+    },
+
     async pay(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const salonId = getSalonId(req);

@@ -219,6 +219,20 @@ export const payrollService = {
         return summary;
     },
 
+    // "Delete" on a Payroll row: drops this staff member's unpaid payroll record for the period, including every
+    // adjustment made to it, so the row goes back to the calculated figures. A paid period can't be deleted.
+    async resetPayroll(salonId: string, staffId: string, periodStart: string, periodEnd: string): Promise<StaffPayrollSummary | undefined> {
+        const entry = await payrollEntryRepository.findForPeriod(salonId, staffId, periodStart, periodEnd);
+        if (entry) {
+            if (entry.status === "paid" || entry.locked_at) {
+                throw new AppError(409, "This payroll period has already been paid and is locked", "PAYROLL_LOCKED");
+            }
+            await payrollEntryRepository.deleteUnpaid(entry.id, salonId);
+        }
+        const rows = await this.getStaffSummary(salonId, periodStart, periodEnd);
+        return rows.find((r) => r.staff_id === staffId);
+    },
+
     async payStaff(salonId: string, staffId: string, body: PayPayrollBody, paidBy?: string | null): Promise<{
         summary: StaffPayrollSummary; receiptSent: boolean;
     }> {
