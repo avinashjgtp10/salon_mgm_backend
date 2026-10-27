@@ -32,13 +32,15 @@ const ownerAdminStaff = roleMiddleware("salon_owner", "admin", "staff");
 // scoped to just "Create Booking Appointment" (Calendar permissions rename
 // ticket) hit a real 403 searching for a client while building a brand-new
 // booking, since it has neither view_clients nor create_sales.
-const viewClients = requireAnyPermission(["view_clients", "create_sales", "create_appointment", "manage_calendar"]);
+const viewClients = requireAnyPermission(["view_clients", "create_sales", "create_appointment", "manage_calendar", "calendar_view_client"]);
 
 // Quick Sale's client panel has its own independent Edit / History keys (quick_sale_edit_client,
 // quick_sale_client_history). They are NOT the Clients module's edit_clients / view_client_history:
 // either key grants the action, and neither one switches the other on.
-const editClients = requireAnyPermission(["edit_clients", "quick_sale_edit_client"]);
-const viewClientHistory = requireAnyPermission(["view_client_history", "quick_sale_client_history"]);
+// The Calendar booking flow has the same three independent keys (calendar_view_client / calendar_edit_client /
+// calendar_client_history).
+const editClients = requireAnyPermission(["edit_clients", "quick_sale_edit_client", "calendar_edit_client"]);
+const viewClientHistory = requireAnyPermission(["view_client_history", "quick_sale_client_history", "calendar_client_history"]);
 
 router.use(authMiddleware, requireModule("clients"));
 
