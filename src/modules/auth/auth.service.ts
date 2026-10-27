@@ -3,7 +3,7 @@ import bcrypt from "bcrypt";
 import jwt, { Secret, SignOptions } from "jsonwebtoken";
 import { AppError } from "../../middleware/error.middleware";
 import { authRepository } from "./auth.repository";
-import { issueSessionTokens } from "./session.util";
+import { issueSessionTokens, refreshExpiryDate } from "./session.util";
 import { clientActivityTracker } from "../client-activity/client-activity.tracker";
 import type { RegisterBody, LoginBody } from "./auth.types";
 import { generateOtp, hashOtp, compareOtp, otpExpiry } from "../utils/otp.util";
@@ -290,6 +290,10 @@ export const authService = {
     // the refreshed token stays tied to it (and dies with it if a newer login
     // ends this session) — including impersonation sessions, which have their
     // own row.
+    // Sliding window: using the app keeps the session alive; only a stretch
+    // of SESSION_IDLE_DAYS with no refresh ends it.
+    await authRepository.extendRefreshToken(String(saved.id), refreshExpiryDate());
+
     const newAccessToken = signAccessToken({ userId: user.id, role: user.role, salonId, sid: String(saved.id) });
     logger.debug("[authService.refresh] New access token issued", { userId, salonId });
     return { accessToken: newAccessToken };
