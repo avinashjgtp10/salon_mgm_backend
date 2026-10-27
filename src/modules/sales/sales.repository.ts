@@ -1,6 +1,7 @@
 import pool, { safeQuery } from "../../config/database";
 import { Sale, SaleItem, CreateSaleBody, UpdateSaleBody } from "./sales.types";
 import { getTaxModuleConfig } from "../settings/tax.util";
+import { reverseBillLoyalty } from "../payments/bill-loyalty-reversal";
 
 // Accepts either a plain calendar date ("2026-08-14", no time component —
 // treated as midnight UTC) or a full timestamp. Timestamps can arrive in two
@@ -262,6 +263,9 @@ export const salesRepository = {
             await client.query(`DELETE FROM client_memberships WHERE sale_id = $1`, [id]);
 
             await client.query(`DELETE FROM commission_earned WHERE sale_id = $1`, [id]);
+            // Reward points / referral credit this bill earned or spent — must
+            // run while the payments rows still exist (the ledger links to them).
+            await reverseBillLoyalty(client, { appointmentId: null, saleId: id });
             await client.query(`DELETE FROM payments WHERE appointment_id IN (SELECT appointment_id FROM sales WHERE id = $1 AND appointment_id IS NOT NULL)`, [id]);
             await client.query(`DELETE FROM sale_items WHERE sale_id = $1`, [id]);
             const { rows } = await client.query(`DELETE FROM sales WHERE id = $1 RETURNING *`, [id]);
