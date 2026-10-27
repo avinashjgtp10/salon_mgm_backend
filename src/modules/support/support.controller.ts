@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import { supportService } from "./support.service";
 import { botQuestionsService } from "../bot/bot-questions.service";
+import pool from "../../config/database";
 
 export const supportController = {
   // POST /api/v1/support — salon user submits a ticket
@@ -75,9 +76,16 @@ export const supportController = {
         botQuestionsService.stats(),
         botQuestionsService.list({ answered: "unanswered", page: 1, limit: 5 }),
       ]);
+      // Open Client Requirements (Issue Tracker) for the sidebar badge; optional table, so never fail the call.
+      let openIssues = 0;
+      try {
+        const { rows } = await pool.query(`SELECT COUNT(*)::int AS n FROM client_requirements WHERE status <> 'completed'`);
+        openIssues = rows[0]?.n ?? 0;
+      } catch { /* requirements tables not migrated */ }
       return res.json({
         success: true,
         data: {
+          open_issues: openIssues,
           support_stats: supportStats,
           chatbot_stats: botStats,
           recent_chatbot: unanswered.rows,

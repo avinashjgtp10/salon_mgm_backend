@@ -50,6 +50,8 @@ router.get("/stats",    superAdminController.getStats);
 
 // Dashboard (Overview page) — one POST returns stats, salons, payments, logins, support stats
 router.post("/dashboard", superAdminController.getDashboard);
+// Redesigned Overview page: everything it shows (KPIs, alerts, charts, activity, issue snapshot) in one GET.
+router.get("/overview", superAdminController.getOverview);
 
 // Salons
 router.get("/salons",                       superAdminController.getAllSalons);

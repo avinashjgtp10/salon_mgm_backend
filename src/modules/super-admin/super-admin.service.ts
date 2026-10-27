@@ -1,4 +1,5 @@
 import { superAdminRepository } from "./super-admin.repository";
+import { getSuperAdminOverview } from "./super-admin.overview";
 import { getAllTimeRevenueBySalon } from "../salon-dashboard/salon-revenue";
 import { supportRepo } from "../support/support.repository";
 import { authRepository } from "../auth/auth.repository";
@@ -81,6 +82,11 @@ export const superAdminService = {
     const revenue = await getAllTimeRevenueBySalon(ids);
     const total = ids.reduce((sum, id) => sum + (revenue.get(id) ?? 0), 0);
     return { ...stats, total_revenue: revenue.size > 0 ? total : stats.total_revenue };
+  },
+
+  // The redesigned Overview page: KPIs, alerts, charts, activity and issue snapshot in one response.
+  async getOverview(from?: string, to?: string, activeDays?: number) {
+    return getSuperAdminOverview(from, to, activeDays);
   },
 
   // Everything the super-admin Overview page renders, in one round trip.
