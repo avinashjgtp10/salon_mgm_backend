@@ -348,7 +348,6 @@ export const staffRepository = {
             return staff!;
         } catch (error) {
             await client.query('ROLLBACK');
-            console.error("[DB DEBUG] staffRepository.create - DATABASE ERROR:", error);
             throw error;
         } finally {
             client.release();

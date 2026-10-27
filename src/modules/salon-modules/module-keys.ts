@@ -69,6 +69,7 @@ export const MODULE_KEYS = [
     "cash_management",
     "marketing",
     "online_booking",
+    "lunox",
     "reports",
     ...REPORT_CATEGORY_KEYS,
     ...REPORT_KEYS,

@@ -55,6 +55,15 @@ export const superAdminController = {
 
   // ── DASHBOARD ─────────────────────────────────────────────────────────────────
 
+  // GET /api/v1/super-admin/overview?from=YYYY-MM-DD&to=YYYY-MM-DD — the one call behind the Overview page.
+  async getOverview(req: Request, res: Response, next: NextFunction) {
+    try {
+      const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+      const data = await superAdminService.getOverview(str(req.query.from), str(req.query.to), Number(req.query.active_days) || undefined);
+      return res.json({ success: true, data });
+    } catch (err) { return next(err); }
+  },
+
   // POST /api/v1/super-admin/dashboard — single call for the whole Overview page.
   async getDashboard(req: Request, res: Response, next: NextFunction) {
     try {

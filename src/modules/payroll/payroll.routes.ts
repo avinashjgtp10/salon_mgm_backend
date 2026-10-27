@@ -20,6 +20,7 @@ router.delete("/salary-advances/:advanceId", auth, requireModule("payroll"), req
 
 router.get("/staff-summary", auth, requireModule("payroll"), requirePermission("view_payroll"), validateStaffSummaryQuery, payrollController.staffSummary);
 router.post("/:staffId/adjust", auth, requireModule("payroll"), requirePermission("edit_payroll"), validateAdjustPayroll, payrollController.adjust);
+router.delete("/:staffId/period", auth, requireModule("payroll"), requirePermission("edit_payroll"), validateStaffSummaryQuery, payrollController.resetPeriod);
 router.post("/:staffId/pay", auth, requireModule("payroll"), requirePermission("pay_salary"), validatePayPayroll, payrollController.pay);
 // Salary Slip — calculation breakdown, viewable whether or not the period is
 // paid yet. Payment Receipt — proof of payment, 404s until payStaff has run

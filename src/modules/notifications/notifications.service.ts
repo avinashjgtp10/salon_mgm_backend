@@ -39,7 +39,7 @@ type CreateNotificationOptions = {
 
 export const notificationsService = {
   async create(data: CreateNotificationData, options: CreateNotificationOptions = {}) {
-    logger.info("Notification create started", {
+    logger.debug("Notification create started", {
       salonId: data.salon_id,
       type: data.type,
       eventKey: data.event_key,
@@ -81,7 +81,7 @@ export const notificationsService = {
       ? await notificationsRepository.createOnce(createData)
       : await notificationsRepository.create(createData);
     if (!notification) return null;
-    logger.info("Notification DB row created", {
+    logger.debug("Notification DB row created", {
       notificationId: notification.id,
       salonId: notification.salon_id,
       type: notification.type,
@@ -101,7 +101,7 @@ export const notificationsService = {
           ...(data.scheduled_at ? { scheduled_at: data.scheduled_at } : {}),
         });
       }
-      logger.info("Socket notification emitted", {
+      logger.debug("Socket notification emitted", {
         notificationId: notification.id,
         salonId: notification.salon_id,
       });
@@ -117,7 +117,7 @@ export const notificationsService = {
 
     let pushStage = "device_token_lookup";
     try {
-      logger.info("Device-token lookup started", {
+      logger.debug("Device-token lookup started", {
         notificationId: notification.id,
         salonId: notification.salon_id,
       });
@@ -127,7 +127,7 @@ export const notificationsService = {
         new Set(devices.map((device) => device.expo_push_token).filter(Boolean))
       );
 
-      logger.info("Device-token lookup completed", {
+      logger.debug("Device-token lookup completed", {
         notificationId: notification.id,
         salonId: data.salon_id,
         deviceRows: devices.length,
@@ -190,13 +190,13 @@ export const notificationsService = {
           });
         }
       } else {
-        logger.info("Expo send skipped because no device tokens were selected", {
+        logger.debug("Expo send skipped because no device tokens were selected", {
           notificationId: notification.id,
           salonId: notification.salon_id,
         });
       }
 
-      logger.info("Notification push flow completed", {
+      logger.debug("Notification push flow completed", {
         notificationId: notification.id,
         salonId: notification.salon_id,
       });

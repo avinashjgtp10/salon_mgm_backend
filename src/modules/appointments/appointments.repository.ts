@@ -1,4 +1,5 @@
 import pool from "../../config/database";
+import { reverseBillLoyalty } from "../payments/bill-loyalty-reversal";
 import {
     Appointment,
     AppointmentServiceConsumableRecord,
@@ -623,6 +624,9 @@ export const appointmentsRepository = {
                 `DELETE FROM commission_earned WHERE appointment_id = $1 OR ($2::uuid IS NOT NULL AND sale_id = $2)`,
                 [id, saleId]
             );
+            // Reward points / referral credit this bill earned or spent — must
+            // run while the payments rows still exist (the ledger links to them).
+            await reverseBillLoyalty(client, { appointmentId: id, saleId });
             await client.query(`DELETE FROM payments WHERE appointment_id = $1`, [id]);
             if (saleId) {
                 await client.query(`DELETE FROM sale_items WHERE sale_id = $1`, [saleId]);

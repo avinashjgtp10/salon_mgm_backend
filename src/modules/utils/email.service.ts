@@ -1546,8 +1546,7 @@ export const emailService = {
     pdfBuffer: Buffer;
     pdfFilename: string;
   }) {
-    const { to, salonName, invoiceNo, planLabel, amount, pdfBuffer, pdfFilename } = params;
-    const formattedAmount = `₹${(Number(amount) || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const { to, salonName, invoiceNo, planLabel, pdfBuffer, pdfFilename } = params;
 
     await transporter.sendMail({
       from: config.smtp.from,
@@ -1569,16 +1568,8 @@ export const emailService = {
                 <tr>
                   <td style="padding:32px 36px;">
                     <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
-                      Hi <strong>${escapeHtml(salonName)}</strong> team, thank you for your payment. Your GST tax invoice for the SalonoX ${escapeHtml(planLabel)} subscription is attached as a PDF.
+                      Hi <strong>${escapeHtml(salonName)}</strong> team, thank you for your payment. Your invoice for the SalonoX ${escapeHtml(planLabel)} subscription is attached as a PDF.
                     </p>
-                    <table width="100%" cellpadding="0" cellspacing="0" style="background:#eef2ff;border-radius:10px;border:1px solid #c7d2fe;">
-                      <tr>
-                        <td style="padding:20px 24px;">
-                          <p style="margin:0 0 8px;color:#4338ca;font-size:14px;"><strong>Invoice No.:</strong> ${escapeHtml(invoiceNo)}</p>
-                          <p style="margin:0;color:#4338ca;font-size:20px;font-weight:800;"><strong>Amount paid:</strong> ${formattedAmount}</p>
-                        </td>
-                      </tr>
-                    </table>
                   </td>
                 </tr>
                 <tr>
@@ -1707,28 +1698,14 @@ export const emailService = {
     reqNumber: string;
     title: string;
     salonName: string;
-    submitterEmail: string;
+    /** Assigned developers only — the salon owner is never emailed. */
+    to: string[];
     newStatus: string;
     newStatusLabel: string;
   }) {
-    const { reqNumber, title, salonName, submitterEmail, newStatusLabel } = params;
-    const teamEmail = process.env.SUPPORT_NOTIFICATION_EMAIL || config.smtp.user || config.smtp.from;
+    const { reqNumber, title, salonName, to, newStatusLabel } = params;
+    if (to.length === 0) return;
     const statusBadge = `<span style="display:inline-block;padding:3px 10px;border-radius:999px;background:#eff6ff;color:#2563eb;font-size:11px;font-weight:700;">${escapeHtml(newStatusLabel)}</span>`;
-
-    const clientBody = `
-      <p style="margin:0 0 22px;color:#374151;font-size:14.5px;line-height:1.65;">
-        Your requirement's status has been updated.
-      </p>
-      ${infoCardHtml([
-        ["Requirement", `${escapeHtml(reqNumber)} — ${escapeHtml(title)}`],
-        ["New Status", statusBadge],
-      ])}`;
-    await transporter.sendMail({
-      from: config.smtp.from,
-      to: submitterEmail,
-      subject: `Status Update — ${escapeHtml(reqNumber)} is now ${escapeHtml(newStatusLabel)}`,
-      html: requirementEmailShell({ eyebrow: reqNumber, heading: "Requirement Status Updated", accentColor: "#0f172a", bodyHtml: clientBody }),
-    });
 
     const teamBody = `
       <p style="margin:0 0 22px;color:#374151;font-size:14.5px;line-height:1.65;">
@@ -1740,7 +1717,7 @@ export const emailService = {
       ])}`;
     await transporter.sendMail({
       from: config.smtp.from,
-      to: teamEmail,
+      to,
       subject: `Status Updated — ${escapeHtml(reqNumber)}`,
       html: requirementEmailShell({ eyebrow: "Client Requirements", heading: "Requirement Status Updated", accentColor: "#0f172a", bodyHtml: teamBody }),
     });
@@ -1750,12 +1727,13 @@ export const emailService = {
     reqNumber: string;
     title: string;
     salonName: string;
-    submitterEmail: string;
+    /** Assigned developers only — the salon owner is never emailed. */
+    to: string[];
     authorName: string | null;
     message: string;
   }) {
-    const { reqNumber, title, salonName, submitterEmail, authorName, message } = params;
-    const teamEmail = process.env.SUPPORT_NOTIFICATION_EMAIL || config.smtp.user || config.smtp.from;
+    const { reqNumber, title, salonName, to, authorName, message } = params;
+    if (to.length === 0) return;
 
     const bodyHtml = `
       <p style="margin:0 0 20px;color:#374151;font-size:14.5px;line-height:1.65;">
@@ -1765,21 +1743,22 @@ export const emailService = {
         <p style="margin:0 0 8px;color:#1e40af;font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;">${escapeHtml(authorName || "SalonoX Team")}</p>
         <p style="margin:0;color:#1e3a8a;font-size:14px;line-height:1.65;white-space:pre-wrap;">${escapeHtml(message)}</p>
       </div>`;
-    const html = requirementEmailShell({ eyebrow: reqNumber, heading: "New Update on Your Requirement", accentColor: "#3b82f6", bodyHtml });
+    const html = requirementEmailShell({ eyebrow: reqNumber, heading: "New Update on a Requirement", accentColor: "#3b82f6", bodyHtml });
 
-    await transporter.sendMail({ from: config.smtp.from, to: submitterEmail, subject: `Update — ${escapeHtml(reqNumber)}: ${escapeHtml(title)}`, html });
-    await transporter.sendMail({ from: config.smtp.from, to: teamEmail, subject: `Update Sent — ${escapeHtml(reqNumber)}`, html });
+    await transporter.sendMail({ from: config.smtp.from, to, subject: `Update — ${escapeHtml(reqNumber)}: ${escapeHtml(title)}`, html });
   },
 
   async sendRequirementCompletedEmail(params: {
     reqNumber: string;
     title: string;
-    submitterEmail: string;
+    /** Assigned developers only — the salon owner is never emailed. */
+    to: string[];
   }) {
-    const { reqNumber, title, submitterEmail } = params;
+    const { reqNumber, title, to } = params;
+    if (to.length === 0) return;
     const bodyHtml = `
       <p style="margin:0 0 22px;color:#374151;font-size:14.5px;line-height:1.65;">
-        Great news — your requirement has been completed and the requested functionality is now available.
+        This requirement has been marked as completed.
       </p>
       ${infoCardHtml([
         ["Requirement", escapeHtml(title)],
@@ -1787,13 +1766,12 @@ export const emailService = {
         ["Status", `<span style="display:inline-block;padding:3px 10px;border-radius:999px;background:#f0fdf4;color:#16a34a;font-size:11px;font-weight:700;">Completed</span>`],
       ], "#f0fdf4", "#bbf7d0")}
       <p style="margin:22px 0 0;color:#64748b;font-size:13px;line-height:1.6;">
-        If you have any questions or run into anything unexpected, just reply to your original requirement thread and our team will follow up.
       </p>`;
     await transporter.sendMail({
       from: config.smtp.from,
-      to: submitterEmail,
+      to,
       subject: `Completed — ${escapeHtml(reqNumber)}: ${escapeHtml(title)}`,
-      html: requirementEmailShell({ eyebrow: reqNumber, heading: "Your Requirement Has Been Completed 🎉", accentColor: "#16a34a", bodyHtml }),
+      html: requirementEmailShell({ eyebrow: reqNumber, heading: "Requirement Completed", accentColor: "#16a34a", bodyHtml }),
     });
   },
 };

@@ -56,7 +56,7 @@ export const staffService = {
     },
 
     async list(salonId: string, query: StaffListQuery) {
-        logger.info("staffService.list", { salonId });
+        logger.debug("staffService.list", { salonId });
         return staffRepository.list(salonId, query);
     },
 
@@ -112,10 +112,9 @@ export const staffService = {
     async create(params: {
         salonId: string; requesterUserId: string; requesterRole?: string; body: CreateStaffBody;
     }): Promise<{ staffId: string }> {
-        const { salonId, requesterUserId, requesterRole } = params;
+        const { salonId } = params;
         // Login looks accounts up by lowercase email, so store it that way.
         const body = { ...params.body, ...(params.body.email ? { email: normalizeEmail(params.body.email) } : {}) };
-        console.log("[DEBUG] staffService.create - params:", { salonId, requesterUserId, requesterRole, email: body.email });
 
         try {
             if (String(body.permission_level ?? "").toLowerCase() === "manager") {
@@ -128,10 +127,8 @@ export const staffService = {
             // against `undefined`.
             const existingUser = body.email ? await authRepository.findUserByEmail(body.email) : null;
             if (body.email) {
-                console.log("[DEBUG] staffService.create - Step 1: Checking existing email...");
                 const existing = await staffRepository.findByEmail(salonId, body.email);
                 if (existing) {
-                    console.log("[DEBUG] staffService.create - Email already exists:", body.email);
                     throw new AppError(409, "A staff member with this email already exists", "DUPLICATE_EMAIL");
                 }
             }
@@ -153,11 +150,9 @@ export const staffService = {
             // the role — a staff-creation form has no business surfacing that an
             // email belongs to a platform superadmin account.
             if (existingUser?.role === "super_admin") {
-                console.log("[DEBUG] staffService.create - Email belongs to an existing super_admin:", body.email);
                 throw new AppError(409, "A staff member with this email already exists", "DUPLICATE_EMAIL");
             }
             if (existingUser && (existingUser.role === "salon_owner" || existingUser.role === "admin")) {
-                console.log("[DEBUG] staffService.create - Email belongs to an existing", existingUser.role, ":", body.email);
                 throw new AppError(
                     409,
                     `This email already exists as the ${existingUser.role === "salon_owner" ? "salon owner" : "admin"} and cannot be added as a staff member.`,
@@ -170,17 +165,15 @@ export const staffService = {
                 passwordHash = await bcrypt.hash(body.password, 10);
             }
 
-            console.log("[DEBUG] staffService.create - Step 2: Creating staff in DB...");
             // Admin-set password activates immediately regardless of email verification
             // (the password path bypasses invitation/OTP entirely). Otherwise, activation
             // follows whether the frontend confirmed the staff member's email OTP.
             const activateImmediately = body.password ? true : body.email_verified === true;
             const staff = await staffRepository.create(salonId, body, passwordHash, activateImmediately);
             if (!staff) {
-                console.error("[DEBUG] staffService.create - DB returned null staff object");
+                logger.error("staffService.create: DB returned no staff row", { salonId });
                 throw new AppError(500, "Database failed to create staff record", "DB_ERROR");
             }
-            console.log("[DEBUG] staffService.create - staff created with ID:", staff.id);
 
             if (body.password && passwordHash) {
                 // Belt-and-suspenders: validateCreateStaff already rejects a
@@ -190,7 +183,6 @@ export const staffService = {
                 if (!body.email) {
                     throw new AppError(400, "email is required to set a password (Staff Login)", "VALIDATION_ERROR");
                 }
-                console.log("[DEBUG] staffService.create - Step 3: Admin-set password, creating user account directly...");
                 let user = await authRepository.findUserByEmail(body.email);
                 if (!user) {
                     user = await authRepository.createUser({
@@ -210,9 +202,7 @@ export const staffService = {
                 await authRepository.markUserVerified(user.id);
                 await authRepository.markOnboardingComplete(user.id);
                 await staffRepository.activateDirectly(staff.id);
-                console.log("[DEBUG] staffService.create - user account created and staff activated:", user.id);
             } else if (body.email) {
-                console.log("[DEBUG] staffService.create - Step 3: Linking a user account up front...");
                 // staff.user_id is populated immediately, even before the invite is
                 // accepted — otherwise anything keyed on user_id (e.g. the audit
                 // auditor picker) sits empty for any staff who hasn't opened their
@@ -234,35 +224,28 @@ export const staffService = {
                 }
                 await staffRepository.linkUserToStaff(staff.id, inviteUser.id, body.first_name, body.last_name);
 
-                console.log("[DEBUG] staffService.create - Step 4: Creating invitation...");
                 const invitation = await staffInvitationRepository.create(staff.id, staff.email);
-                console.log("[DEBUG] staffService.create - invitation created:", invitation?.id);
 
-                console.log("[DEBUG] staffService.create - Step 5: Resolving salon name...");
                 const salon = await salonsRepository.findById(salonId);
                 const salonName = salon?.business_name ?? "Our Salon";
 
-                console.log("[DEBUG] staffService.create - Step 6: Sending invitation email...");
                 emailService.sendStaffInvitation({
                     to: staff.email,
                     token: invitation.token,
                     staffFirstName: body.first_name,
                     salonName,
                 }).then(() => {
-                    console.log("[DEBUG] staffService.create - invitation email sent successfully");
                 }).catch((err) => {
-                    console.error("[DEBUG] staffService.create - invitation email failed:", err);
+                    logger.warn("staffService.create: invitation email failed", { salonId, error: err?.message });
                 });
             } else {
                 // Staff Login off, no email at all — nothing to invite, no
                 // account to link. staff.user_id stays null until an email
                 // is added later (e.g. via Edit) and Staff Login turned on.
-                console.log("[DEBUG] staffService.create - Step 3: No email — Staff Login disabled, skipping user account/invitation");
             }
 
             return { staffId: staff.id };
         } catch (error) {
-            console.error("[DEBUG] staffService.create - WORKFLOW CRASHED:", error);
             throw error;
         }
     },

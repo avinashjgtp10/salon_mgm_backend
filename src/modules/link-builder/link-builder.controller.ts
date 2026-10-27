@@ -17,7 +17,7 @@ export const linkBuilderController = {
             const body = req.body as GenerateLinkBody;
             if (!body?.type) throw new AppError(400, "type is required", "VALIDATION_ERROR");
 
-            logger.info("POST /link-builder/generate called", { salonId, type: body.type });
+            logger.debug("POST /link-builder/generate called", { salonId, type: body.type });
 
             const result = await linkBuilderService.generate(salonId, body);
 

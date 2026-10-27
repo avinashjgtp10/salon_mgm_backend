@@ -628,7 +628,7 @@ async function tryNewEngineRule(params: {
                 rule_id: rule.id,
             })
         );
-        logger.info("commissionCalculationService: new-engine commission earned", {
+        logger.debug("commissionCalculationService: new-engine commission earned", {
             staff_id, saleId, category, ruleId: rule.id, type: rule.type, commissionAmount,
         });
     }

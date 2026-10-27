@@ -3,6 +3,7 @@ import pool from "../../config/database";
 import config from "../../config/env";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
+import { isModuleLocked } from "../../middleware/moduleLock.middleware";
 import { decryptSecret, encryptSecret, secretBoxConfigured } from "./secret-box";
 
 // Per-salon Cloudflare Workers AI credentials for LUNOX. A salon WITH a row has LUNOX; a salon without one doesn't
@@ -48,12 +49,14 @@ const invalidate = (salonId: string) => cache.delete(salonId);
 
 /** The salon's credentials, or throws the standard "Upgrade your plan" error. */
 export async function requireSalonAiCredentials(salonId: string | null | undefined): Promise<SalonAiCredentials> {
-    const creds = salonId ? await load(salonId) : null;
+    const creds = salonId && !(await isModuleLocked(salonId, "lunox")) ? await load(salonId) : null;
     if (!creds) throw lunoxLockedError();
     return creds;
 }
 
-export const isLunoxEnabled = async (salonId: string | null | undefined): Promise<boolean> => !!salonId && !!(await load(salonId));
+// On only when the plan's "lunox" module is unlocked AND the salon has its credentials saved.
+export const isLunoxEnabled = async (salonId: string | null | undefined): Promise<boolean> =>
+    !!salonId && !(await isModuleLocked(salonId, "lunox")) && !!(await load(salonId));
 
 // One tiny real call, so a typo'd account id or a token without Workers AI access is caught when it is saved.
 async function verifyCredentials(accountId: string, apiToken: string): Promise<void> {

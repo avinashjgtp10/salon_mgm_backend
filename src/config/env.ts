@@ -141,7 +141,8 @@ const config: Config = {
   publicBaseUrl: (process.env.PUBLIC_BASE_URL || process.env.APP_BASE_URL || '').replace(/\/$/, ''),
 
   logging: {
-    level: process.env.LOG_LEVEL || 'info',
+    // Production defaults to info (debug off); override with LOG_LEVEL.
+    level: process.env.LOG_LEVEL || (process.env.NODE_ENV === 'production' ? 'info' : 'debug'),
   },
 
   smtp: {

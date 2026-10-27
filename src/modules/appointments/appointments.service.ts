@@ -963,7 +963,7 @@ export const appointmentsService = {
             const totals = computeAppointmentTotals(merged, activeTaxes);
             const newGrandTotal = totals.grandTotal;
             const existingPaid = await paymentsRepository.getTotalPaidForAppointment(appointmentId);
-            logger.info("[DEBUG update() reprice]", {
+            logger.debug("[update() reprice]", {
                 appointmentId, existingStatus: existing.status, isContentEdit,
                 newGrandTotal, existingPaid, activeTaxesCount: activeTaxes.length,
                 patchKeys: Object.keys(patch),
@@ -1465,9 +1465,9 @@ export const appointmentsService = {
             try {
                 const ownerEmail = await salonsRepository.findOwnerEmailById(existing.salon_id);
                 if (!ownerEmail) { logger.warn("[email] appointmentCancelled (owner): no owner email, skipping"); return; }
-                logger.info(`[email] appointmentCancelled (owner) → to=${ownerEmail}`);
+                logger.debug(`[email] appointmentCancelled (owner) → to=${ownerEmail}`);
                 const allowed = await canSendEmail(existing.salon_id, "appointmentCancelled");
-                if (!allowed) { logger.info("[email] appointmentCancelled (owner): skipped (preference off)"); return; }
+                if (!allowed) { logger.debug("[email] appointmentCancelled (owner): skipped (preference off)"); return; }
                 await emailService.sendAppointmentCancelledOwnerEmail({
                     to:            ownerEmail,
                     salonName:     (existing as any).salon_name ?? "your salon",
@@ -1476,7 +1476,7 @@ export const appointmentsService = {
                     time:          formatTime(existing.scheduled_at),
                     appointmentId: existing.id,
                 });
-                logger.info(`[email] appointmentCancelled (owner) sent to ${ownerEmail}`);
+                logger.debug(`[email] appointmentCancelled (owner) sent to ${ownerEmail}`);
             } catch (err: any) { logger.error("[email] appointmentCancelled (owner) failed:", err?.message ?? err); }
         })();
 
@@ -1569,7 +1569,7 @@ export const appointmentsService = {
         // In that case: use the existing sale, fire commission on it, mark appointment paid.
         const preExistingSale = await salesRepository.findByAppointmentId(appointmentId);
         if (preExistingSale) {
-            logger.info("appointmentsService.checkout: using pre-existing sale from payments", {
+            logger.debug("appointmentsService.checkout: using pre-existing sale from payments", {
                 appointmentId, saleId: preExistingSale.id,
             });
 
@@ -1666,7 +1666,6 @@ export const appointmentsService = {
                 (async () => {
                     try {
                         const won = await whatsappAutomationRepository.guardInsertIfNotExists(`receipt-pdf-auto:${preExistingSale.id}`);
-                        console.log(`[BILL_RECEIPT] appointments.service.ts checkout() preExistingSale branch — guard won=${won} saleId=${preExistingSale.id}`);
                         if (!won) return;
 
                         // Same redemption/tax figures resolveReceiptContext()
@@ -1986,9 +1985,9 @@ export const appointmentsService = {
             try {
                 const ownerEmail = await salonsRepository.findOwnerEmailById(existing.salon_id);
                 if (!ownerEmail) { logger.warn("[email] newPayment (checkout): owner has no email, skipping"); return; }
-                logger.info(`[email] newPayment (checkout) → to=${ownerEmail}`);
+                logger.debug(`[email] newPayment (checkout) → to=${ownerEmail}`);
                 const allowed = await canSendEmail(existing.salon_id, "newPayment");
-                if (!allowed) { logger.info("[email] newPayment: skipped (preference off)"); return; }
+                if (!allowed) { logger.debug("[email] newPayment: skipped (preference off)"); return; }
                 await emailService.sendNewPaymentEmail({
                     to:            ownerEmail,
                     salonName:     (existing as any).salon_name ?? "your salon",
@@ -1997,7 +1996,7 @@ export const appointmentsService = {
                     paymentMethod: params.payment_method        ?? "N/A",
                     invoiceId:     sale.invoice_number ?? "",
                 });
-                logger.info(`[email] newPayment sent to ${ownerEmail}`);
+                logger.debug(`[email] newPayment sent to ${ownerEmail}`);
             } catch (err: any) { logger.error("[email] newPayment (checkout) failed:", err?.message ?? err); }
         })();
 

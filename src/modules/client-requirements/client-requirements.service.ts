@@ -1,3 +1,4 @@
+import logger from '../../config/logger';
 import { AppError } from "../../middleware/error.middleware";
 import { emailService } from "../utils/email.service";
 import { superAdminRepository } from "../super-admin/super-admin.repository";
@@ -18,6 +19,10 @@ const STATUS_LABEL: Record<RequirementStatus, string> = {
 export function formatReqNumber(n: number): string {
   return `REQ-${String(n).padStart(3, "0")}`;
 }
+
+// Unique, non-empty emails of the developers assigned to a requirement.
+const developerEmails = (r: { assignees?: { developer_email: string }[] | null }): string[] =>
+  [...new Set((r.assignees ?? []).map((a) => a.developer_email?.trim()).filter((e): e is string => !!e))];
 
 export const clientRequirementsService = {
   // Super Admin raises this on the salon's behalf — there's no salon-facing
@@ -42,9 +47,6 @@ export const clientRequirementsService = {
     }
 
     const owner = await superAdminRepository.getSalonOwnerContact(data.salon_id);
-    if (!owner?.owner_email) {
-      throw new AppError(400, "This salon has no owner email on file — cannot notify a client for this requirement", "NO_OWNER_EMAIL");
-    }
 
     // Every developer row needs a real email to notify — dedupe by
     // developer_id (the UI's "+ Add Developer" doesn't prevent picking the
@@ -72,21 +74,12 @@ export const clientRequirementsService = {
     // creation path — submitter_name/email are always sourced via
     // getSalonOwnerContact here, never from a users row this requirement
     // is FK'd to.
-    const submitterName = owner.owner_name;
-    const submitterEmail = owner.owner_email;
-    const salonName = requirement.salon_name ?? owner.name ?? "Unknown";
+    const submitterName = owner?.owner_name ?? null;
+    const submitterEmail = owner?.owner_email ?? "";
+    const salonName = requirement.salon_name ?? owner?.name ?? "Unknown";
     const reqNumber = formatReqNumber(requirement.req_number);
 
-    emailService.sendRequirementCreatedEmail({
-      reqNumber,
-      title: requirement.title,
-      description: requirement.description,
-      priority: requirement.priority,
-      salonName,
-      submitterName,
-      submitterEmail,
-    }).catch((err) => console.error("Failed to send requirement created email:", err?.message ?? err));
-
+    // Emails go to the assigned developers only — the salon owner is never emailed.
     // Every assigned developer gets their own "you've been assigned" email
     // — separate from the client-confirmation / internal-team-notification
     // pair sendRequirementCreatedEmail already sends.
@@ -99,7 +92,7 @@ export const clientRequirementsService = {
         salonName,
         priority: requirement.priority,
         targetDate: requirement.target_date,
-      }).catch((err) => console.error(`Failed to send assignment email to ${assignee.developer_email}:`, err?.message ?? err));
+      }).catch((err) => logger.error(`Failed to send assignment email to ${assignee.developer_email}:`, err?.message ?? err));
     }
 
     return { ...requirement, submitter_name: submitterName, submitter_email: submitterEmail };
@@ -128,8 +121,21 @@ export const clientRequirementsService = {
     });
   },
 
+  // Real Salons > Actions > Assign Developer: saves which developers look after a salon.
+  async setSalonDevelopers(salonId: string, developerIds: unknown) {
+    if (!Array.isArray(developerIds)) throw new AppError(400, "developer_ids (array) required", "VALIDATION_ERROR");
+    const ids = [...new Set(developerIds.map(String).filter(Boolean))];
+    await clientRequirementsRepository.setSalonDevelopers(salonId, ids);
+    return { salon_id: salonId, developer_ids: ids };
+  },
+
   async listAllDevelopers() {
     return clientRequirementsRepository.listAllDevelopers();
+  },
+
+  async deleteDeveloper(id: string) {
+    const ok = await clientRequirementsRepository.deleteDeveloper(id);
+    if (!ok) throw new AppError(404, "Developer not found", "NOT_FOUND");
   },
 
   async setDeveloperStatus(id: string, isActive: boolean) {
@@ -147,6 +153,62 @@ export const clientRequirementsService = {
 
   async getStats() {
     return clientRequirementsRepository.getStats();
+  },
+
+  // Row-level "Assigned Developer" picker: the requirement's developers become exactly `developerIds`; developers
+  // newly added get the usual "you've been assigned" email (nobody else is emailed).
+  async setAssignees(id: string, developerIds: unknown) {
+    if (!Array.isArray(developerIds)) throw new AppError(400, "developer_ids (array) required", "VALIDATION_ERROR");
+    const ids = [...new Set(developerIds.map(String).filter(Boolean))];
+    const { updated, added } = await clientRequirementsRepository.setAssignees(id, ids);
+    if (!updated) throw new AppError(404, "Requirement not found", "NOT_FOUND");
+
+    const full = await clientRequirementsRepository.findById(id);
+    if (full) {
+      for (const a of (full.assignees ?? []).filter((x) => added.includes(x.developer_id))) {
+        emailService.sendRequirementAssignedEmail({
+          to: a.developer_email,
+          developerName: a.developer_name,
+          reqNumber: formatReqNumber(full.req_number),
+          title: full.title,
+          salonName: full.salon_name ?? "Unknown",
+          priority: full.priority,
+          targetDate: full.target_date,
+        }).catch((err) => logger.error(`Failed to send assignment email to ${a.developer_email}:`, err?.message ?? err));
+      }
+    }
+    return full ?? updated;
+  },
+
+  async updateDetails(id: string, actorId: string | null, data: { title?: string; description?: string; priority?: RequirementPriority; target_date?: string | null }) {
+    const existing = await clientRequirementsRepository.findById(id);
+    if (!existing) throw new AppError(404, "Requirement not found", "NOT_FOUND");
+
+    const title = (data.title ?? existing.title)?.trim();
+    const description = (data.description ?? existing.description)?.trim();
+    const priority = data.priority ?? existing.priority;
+    if (!title) throw new AppError(400, "Title is required", "VALIDATION_ERROR");
+    if (!description) throw new AppError(400, "Description is required", "VALIDATION_ERROR");
+    if (!["low", "medium", "high"].includes(priority)) throw new AppError(400, "Invalid priority", "VALIDATION_ERROR");
+    const targetDate = data.target_date === undefined ? existing.target_date : (data.target_date || null);
+
+    const updated = await clientRequirementsRepository.updateDetails(id, { title, description, priority, target_date: targetDate });
+    if (!updated) throw new AppError(404, "Requirement not found", "NOT_FOUND");
+
+    // Team-only timeline note (no email) so the change is traceable.
+    await clientRequirementsRepository.addUpdate({
+      requirement_id: id,
+      author_id: actorId,
+      update_type: "internal_note",
+      message: "Issue details were edited",
+      emailed: false,
+    });
+    return (await clientRequirementsRepository.findById(id)) ?? updated;
+  },
+
+  async deleteRequirement(id: string) {
+    const ok = await clientRequirementsRepository.deleteById(id);
+    if (!ok) throw new AppError(404, "Requirement not found", "NOT_FOUND");
   },
 
   async assign(id: string, assigneeId: string | null, targetDate: string | null) {
@@ -180,22 +242,23 @@ export const clientRequirementsService = {
       emailed: notify,
     });
 
-    if (notify && existing.submitter_email) {
+    const to = developerEmails(existing);
+    if (notify && to.length > 0) {
       if (newStatus === "completed") {
         emailService.sendRequirementCompletedEmail({
           reqNumber: formatReqNumber(existing.req_number),
           title: existing.title,
-          submitterEmail: existing.submitter_email,
-        }).catch((err) => console.error("Failed to send requirement completed email:", err?.message ?? err));
+          to,
+        }).catch((err) => logger.error("Failed to send requirement completed email:", err?.message ?? err));
       } else {
         emailService.sendRequirementStatusChangedEmail({
           reqNumber: formatReqNumber(existing.req_number),
           title: existing.title,
           salonName: existing.salon_name ?? "Unknown",
-          submitterEmail: existing.submitter_email,
+          to,
           newStatus,
           newStatusLabel: STATUS_LABEL[newStatus],
-        }).catch((err) => console.error("Failed to send requirement status email:", err?.message ?? err));
+        }).catch((err) => logger.error("Failed to send requirement status email:", err?.message ?? err));
       }
     }
 
@@ -222,15 +285,16 @@ export const clientRequirementsService = {
       emailed: shouldEmail,
     });
 
-    if (shouldEmail && requirement.submitter_email) {
+    const to = developerEmails(requirement);
+    if (shouldEmail && to.length > 0) {
       emailService.sendRequirementUpdateEmail({
         reqNumber: formatReqNumber(requirement.req_number),
         title: requirement.title,
         salonName: requirement.salon_name ?? "Unknown",
-        submitterEmail: requirement.submitter_email,
+        to,
         authorName: requirement.assignee_name ?? null,
         message: message.trim(),
-      }).catch((err) => console.error("Failed to send requirement update email:", err?.message ?? err));
+      }).catch((err) => logger.error("Failed to send requirement update email:", err?.message ?? err));
     }
 
     return saved;

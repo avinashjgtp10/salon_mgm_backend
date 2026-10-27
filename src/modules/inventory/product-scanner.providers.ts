@@ -1,3 +1,4 @@
+import logger from '../../config/logger';
 import axios from "axios";
 import sharp from "sharp";
 import config from "../../config/env";
@@ -61,7 +62,7 @@ export function scannerFailure(error: unknown, operation: string): string {
   // Never log Axios errors: they contain credentials and the camera payload.
   const status = axios.isAxiosError(error) ? error.response?.status : undefined;
   const code = axios.isAxiosError(error) ? error.code : undefined;
-  console.warn("[Product scanner] Provider failure", { operation, status, code });
+  logger.warn("[Product scanner] Provider failure", { operation, status, code });
   if (error instanceof Error && error.message === "Vision recognition is not configured") return "Packaging recognition is not configured on the backend. Ask your administrator to configure the scanner AI provider.";
   if (status === 401 || status === 403) return `${operation}: AI credentials or model access were rejected. Ask your administrator to check the backend provider configuration.`;
   if (status === 429) return `${operation}: provider quota exceeded. Try again later or enter details manually.`;

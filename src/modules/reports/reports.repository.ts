@@ -10805,9 +10805,12 @@ async getStaffSalesReport(
   const offset = limit ? (page - 1) * limit : 0;
   const limitClause = limit ? `LIMIT $${idx++} OFFSET $${idx++}` : "";
   const limitValues = limit ? [limit, offset] : [];
-  const orderClause = filters.sort === "sales_desc" ? "ORDER BY price DESC, created_at DESC"
-    : filters.sort === "sales_asc" ? "ORDER BY price ASC, created_at DESC"
-    : "ORDER BY created_at DESC";
+  // Newest first by default. A bill's line items share one created_at (and so do rows booked in the same minute), so
+  // every order ends in id / line_item_id tie-breakers: without them equal rows came back in an arbitrary order that
+  // could change between requests, and page 2 could repeat or skip rows from page 1.
+  const orderClause = filters.sort === "sales_desc" ? "ORDER BY price DESC, created_at DESC, id DESC, line_item_id DESC NULLS LAST"
+    : filters.sort === "sales_asc" ? "ORDER BY price ASC, created_at DESC, id DESC, line_item_id DESC NULLS LAST"
+    : "ORDER BY created_at DESC, id DESC, line_item_id DESC NULLS LAST";
 
   const query = `
     WITH sales_side AS (

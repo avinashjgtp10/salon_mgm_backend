@@ -88,7 +88,7 @@ export function initSocket(httpServer: HttpServer): SocketIOServer {
 
   io.on('connection', (socket: Socket) => {
     const user = socket.data.user as SocketUser | null
-    logger.info(`🔌 Socket connected: ${socket.id}`, { userId: user?.userId, role: user?.role })
+    logger.debug(`🔌 Socket connected: ${socket.id}`, { userId: user?.userId, role: user?.role })
     if (user) socket.join(userRoom(user.userId))
     if (user?.mobileStaff) socket.join(mobileStaffUserRoom(user.userId))
 
@@ -98,7 +98,7 @@ export function initSocket(httpServer: HttpServer): SocketIOServer {
       if (typeof salonId !== 'string' || !salonId) return reply(false)
       if (!user) {
         socket.join(salonRoom(salonId))
-        logger.info(`📥 Socket ${socket.id} joined salon:${salonId} (no token)`)
+        logger.debug(`📥 Socket ${socket.id} joined salon:${salonId} (no token)`)
         return reply(true)
       }
       let allowed = false
@@ -113,7 +113,7 @@ export function initSocket(httpServer: HttpServer): SocketIOServer {
       for (const room of socket.rooms) if (room.startsWith('salon:')) socket.leave(room)
       const room = user.mobileStaff ? salonStaffRoom(salonId) : salonRoom(salonId)
       socket.join(room)
-      logger.info(`📥 Socket ${socket.id} joined ${room}`)
+      logger.debug(`📥 Socket ${socket.id} joined ${room}`)
       reply(true)
     })
 
@@ -122,7 +122,7 @@ export function initSocket(httpServer: HttpServer): SocketIOServer {
     })
 
     socket.on('disconnect', () => {
-      logger.info(`🔌 Socket disconnected: ${socket.id}`)
+      logger.debug(`🔌 Socket disconnected: ${socket.id}`)
     })
   })
 

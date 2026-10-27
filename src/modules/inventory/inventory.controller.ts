@@ -40,7 +40,7 @@ export const suppliersController = {
             const role = req.user?.role;
             const salonId = await getSalonId(req);
 
-            logger.info("POST /inventory/suppliers called", { userId, role, salonId, path: req.originalUrl });
+            logger.debug("POST /inventory/suppliers called", { userId, role, salonId, path: req.originalUrl });
             if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
 
             const supplier = await suppliersService.create({
@@ -57,7 +57,7 @@ export const suppliersController = {
     async list(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             const salonId = await getSalonId(req);
-            logger.info("GET /inventory/suppliers called", { requesterUserId: req.user?.userId, salonId, path: req.originalUrl });
+            logger.debug("GET /inventory/suppliers called", { requesterUserId: req.user?.userId, salonId, path: req.originalUrl });
 
             const suppliers = await suppliersService.listAll(salonId);
             sendSuccess(res, 200, suppliers, "Suppliers fetched successfully");
@@ -79,7 +79,7 @@ export const suppliersController = {
             const search = typeof req.body?.search === "string" ? req.body.search.trim() || undefined : undefined;
             const city = typeof req.body?.city === "string" ? req.body.city.trim() || undefined : undefined;
             const state = typeof req.body?.state === "string" ? req.body.state.trim() || undefined : undefined;
-            logger.info("POST /inventory/suppliers/list called", { requesterUserId: req.user?.userId, salonId, page, limit });
+            logger.debug("POST /inventory/suppliers/list called", { requesterUserId: req.user?.userId, salonId, page, limit });
 
             const result = await suppliersService.listPaginated(salonId, page, limit, { search, city, state });
             sendSuccess(res, 200, result, "Suppliers fetched successfully");
@@ -98,7 +98,7 @@ export const suppliersController = {
         try {
             const id = String(req.params.id || "").trim();
             const salonId = await getSalonId(req);
-            logger.info("GET /inventory/suppliers/:id called", { supplierId: id, salonId, path: req.originalUrl });
+            logger.debug("GET /inventory/suppliers/:id called", { supplierId: id, salonId, path: req.originalUrl });
 
             if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
 
@@ -114,7 +114,7 @@ export const suppliersController = {
             const salonId = await getSalonId(req);
             const id = String(req.params.id || "").trim();
 
-            logger.info("PATCH /inventory/suppliers/:id called", { supplierId: id, requesterUserId: userId, requesterRole: role, salonId, path: req.originalUrl });
+            logger.debug("PATCH /inventory/suppliers/:id called", { supplierId: id, requesterUserId: userId, requesterRole: role, salonId, path: req.originalUrl });
 
             if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
             if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
@@ -138,7 +138,7 @@ export const suppliersController = {
             const salonId = await getSalonId(req);
             const id = String(req.params.id || "").trim();
 
-            logger.info("DELETE /inventory/suppliers/:id called", { supplierId: id, requesterUserId: userId, salonId, path: req.originalUrl });
+            logger.debug("DELETE /inventory/suppliers/:id called", { supplierId: id, requesterUserId: userId, salonId, path: req.originalUrl });
 
             if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
             if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
@@ -158,7 +158,7 @@ export const stockMovementsController = {
             const role = req.user?.role;
             const salonId = await getSalonId(req);
 
-            logger.info("POST /inventory/stock-movements called", { userId, salonId, path: req.originalUrl });
+            logger.debug("POST /inventory/stock-movements called", { userId, salonId, path: req.originalUrl });
             if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
 
             const movement = await stockMovementsService.create({
@@ -175,7 +175,7 @@ export const stockMovementsController = {
     async list(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
         try {
             const salonId = await getSalonId(req);
-            logger.info("GET /inventory/stock-movements called", { requesterUserId: req.user?.userId, salonId, query: req.query, path: req.originalUrl });
+            logger.debug("GET /inventory/stock-movements called", { requesterUserId: req.user?.userId, salonId, query: req.query, path: req.originalUrl });
 
             const filters: ListStockMovementsFilters = {
                 product_id: req.query.product_id as string | undefined,
@@ -197,7 +197,7 @@ export const stockMovementsController = {
         try {
             const id = String(req.params.id || "").trim();
             const salonId = await getSalonId(req);
-            logger.info("GET /inventory/stock-movements/:id called", { movementId: id, salonId, path: req.originalUrl });
+            logger.debug("GET /inventory/stock-movements/:id called", { movementId: id, salonId, path: req.originalUrl });
 
             if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
 
@@ -215,7 +215,7 @@ export const stocktakesController = {
             const userId = req.user?.userId;
             const role = req.user?.role;
             const salonId = await getSalonId(req);
-            logger.info("POST /inventory/stock-takes called", { userId, role, salonId, path: req.originalUrl });
+            logger.debug("POST /inventory/stock-takes called", { userId, role, salonId, path: req.originalUrl });
             if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
 
             const stocktake = await stocktakesService.create({
@@ -235,7 +235,7 @@ export const stocktakesController = {
             const branchId = String(req.query.branch_id || "");
             if (!branchId) throw new AppError(400, "branch_id is required", "VALIDATION_ERROR");
 
-            logger.info("GET /inventory/stock-takes called", { branchId, salonId, path: req.originalUrl });
+            logger.debug("GET /inventory/stock-takes called", { branchId, salonId, path: req.originalUrl });
 
             const stocktakes = await stocktakesService.list(branchId, salonId);
             sendSuccess(res, 200, stocktakes, "Stocktakes fetched successfully");
@@ -246,7 +246,7 @@ export const stocktakesController = {
         try {
             const salonId = await getSalonId(req);
             const id = String(req.params.id || "");
-            logger.info("GET /inventory/stock-takes/:id called", { id, salonId, path: req.originalUrl });
+            logger.debug("GET /inventory/stock-takes/:id called", { id, salonId, path: req.originalUrl });
 
             const stocktake = await stocktakesService.getById(id, salonId);
             sendSuccess(res, 200, stocktake, "Stocktake fetched successfully");
@@ -259,7 +259,7 @@ export const stocktakesController = {
             const id = String(req.params.id || "");
             const userId = req.user?.userId;
 
-            logger.info("DELETE /inventory/stock-takes/:id called", { id, userId, salonId, path: req.originalUrl });
+            logger.debug("DELETE /inventory/stock-takes/:id called", { id, userId, salonId, path: req.originalUrl });
 
             if (!id) throw new AppError(400, "id is required", "VALIDATION_ERROR");
             if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
@@ -279,7 +279,7 @@ export const stockTakeController = {
             const role = req.user?.role;
             const salonId = await getSalonId(req);
 
-            logger.info("POST /inventory/stock-take called", { userId, salonId, path: req.originalUrl });
+            logger.debug("POST /inventory/stock-take called", { userId, salonId, path: req.originalUrl });
 
             if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
 
@@ -308,7 +308,7 @@ export const stockReconciliationController = {
 
             if (!branchId) throw new AppError(400, "branch_id is required", "VALIDATION_ERROR");
 
-            logger.info("GET /inventory/stock-reconciliation called", { branchId, salonId });
+            logger.debug("GET /inventory/stock-reconciliation called", { branchId, salonId });
 
             const rows = await stockReconciliationService.list({ branchId, salonId, search, categoryId });
             sendSuccess(res, 200, rows, "Stock reconciliation fetched successfully");
@@ -327,7 +327,7 @@ export const consumableUsageController = {
 
             if (!userId) throw new AppError(401, "Unauthorized", "UNAUTHORIZED");
 
-            logger.info("POST /inventory/consumable-usage called", { userId, salonId });
+            logger.debug("POST /inventory/consumable-usage called", { userId, salonId });
 
             const result = await consumableUsageService.save({
                 requesterUserId: userId,

@@ -1,3 +1,4 @@
+import logger from '../../config/logger';
 import axios, { AxiosError } from "axios";
 
 function assertExotelEnv() {
@@ -42,10 +43,7 @@ export async function exotelSendSmsOtp(phoneE164: string) {
         return resp.data;
     } catch (err) {
         const axiosErr = err as AxiosError<any>;
-        // ⬇️ This prints the FULL Exotel error response body — check your terminal!
-        console.error("[Exotel sendOtp] URL:", url);
-        console.error("[Exotel sendOtp] Response status:", axiosErr.response?.status);
-        console.error("[Exotel sendOtp] Response body:", JSON.stringify(axiosErr.response?.data, null, 2));
+        logger.error("[Exotel sendOtp] request failed", { status: axiosErr.response?.status, reason: axiosErr.response?.data?.response?.reason ?? axiosErr.response?.data?.message ?? axiosErr.message });
         const msg =
             axiosErr.response?.data?.response?.reason ||
             axiosErr.response?.data?.message ||
@@ -81,10 +79,7 @@ export async function exotelVerifySmsOtp(verificationId: string, otp: string) {
         return resp.data;
     } catch (err) {
         const axiosErr = err as AxiosError<any>;
-        // ⬇️ This prints the FULL Exotel error response body — check your terminal!
-        console.error("[Exotel verifyOtp] URL:", url);
-        console.error("[Exotel verifyOtp] Response status:", axiosErr.response?.status);
-        console.error("[Exotel verifyOtp] Response body:", JSON.stringify(axiosErr.response?.data, null, 2));
+        logger.error("[Exotel verifyOtp] request failed", { status: axiosErr.response?.status, reason: axiosErr.response?.data?.response?.reason ?? axiosErr.response?.data?.message ?? axiosErr.message });
         const msg =
             axiosErr.response?.data?.response?.reason ||
             axiosErr.response?.data?.message ||

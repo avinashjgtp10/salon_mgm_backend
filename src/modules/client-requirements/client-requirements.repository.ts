@@ -69,6 +69,12 @@ export const clientRequirementsRepository = {
     return rows;
   },
 
+  // Assignments on issues / salons go with the developer (ON DELETE CASCADE; assigned_to is set to NULL).
+  async deleteDeveloper(id: string): Promise<boolean> {
+    const { rowCount } = await safeQuery(() => pool.query(`DELETE FROM developers WHERE id = $1`, [id]));
+    return (rowCount ?? 0) > 0;
+  },
+
   async setDeveloperStatus(id: string, isActive: boolean) {
     const { rows } = await safeQuery(() =>
       pool.query(
@@ -118,6 +124,31 @@ export const clientRequirementsRepository = {
 
       await client.query("COMMIT");
       return requirement;
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  },
+
+  // Direct salon -> developer assignment (Real Salons > Actions > Assign Developer). Replaces the salon's full set.
+  async setSalonDevelopers(salonId: string, developerIds: string[]): Promise<void> {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS salon_developers (
+        salon_id UUID NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+        developer_id UUID NOT NULL REFERENCES developers(id) ON DELETE CASCADE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (salon_id, developer_id)
+      )`);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(`DELETE FROM salon_developers WHERE salon_id = $1`, [salonId]);
+      for (const id of developerIds) {
+        await client.query(`INSERT INTO salon_developers (salon_id, developer_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [salonId, id]);
+      }
+      await client.query("COMMIT");
     } catch (err) {
       await client.query("ROLLBACK");
       throw err;
@@ -208,6 +239,55 @@ export const clientRequirementsRepository = {
       )
     );
     return rows[0] ?? null;
+  },
+
+  // Replaces the requirement's developers with exactly `developerIds` (existing role labels are kept for developers
+  // that stay) and points the legacy assigned_to column at the first one. Returns the developer ids that were added.
+  async setAssignees(id: string, developerIds: string[]): Promise<{ updated: ClientRequirementRow | null; added: string[] }> {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const { rows: existing } = await client.query(
+        `SELECT developer_id FROM client_requirement_assignees WHERE requirement_id = $1`, [id]);
+      const before = new Set<string>(existing.map((r) => String(r.developer_id)));
+      await client.query(
+        `DELETE FROM client_requirement_assignees WHERE requirement_id = $1 AND NOT (developer_id = ANY($2::uuid[]))`,
+        [id, developerIds]);
+      for (const devId of developerIds) {
+        await client.query(
+          `INSERT INTO client_requirement_assignees (requirement_id, developer_id) VALUES ($1, $2)
+           ON CONFLICT (requirement_id, developer_id) DO NOTHING`, [id, devId]);
+      }
+      const { rows } = await client.query(
+        `UPDATE client_requirements SET assigned_to = $2, updated_at = NOW() WHERE id = $1 RETURNING *`,
+        [id, developerIds[0] ?? null]);
+      await client.query("COMMIT");
+      return { updated: rows[0] ?? null, added: developerIds.filter((d) => !before.has(d)) };
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  },
+
+  // Edits the issue's own details. Status and developers have their own endpoints.
+  async updateDetails(id: string, data: { title: string; description: string; priority: string; target_date: string | null }): Promise<ClientRequirementRow | null> {
+    const { rows } = await safeQuery(() =>
+      pool.query(
+        `UPDATE client_requirements
+            SET title = $2, description = $3, priority = $4, target_date = $5, updated_at = NOW()
+          WHERE id = $1 RETURNING *`,
+        [id, data.title, data.description, data.priority, data.target_date]
+      )
+    );
+    return rows[0] ?? null;
+  },
+
+  // Assignees and updates go with it (ON DELETE CASCADE).
+  async deleteById(id: string): Promise<boolean> {
+    const { rowCount } = await safeQuery(() => pool.query(`DELETE FROM client_requirements WHERE id = $1`, [id]));
+    return (rowCount ?? 0) > 0;
   },
 
   async assign(id: string, assigneeId: string | null, targetDate: string | null): Promise<ClientRequirementRow | null> {

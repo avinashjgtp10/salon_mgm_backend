@@ -79,6 +79,9 @@ export type CreatePaymentBody = {
   split_details?: Record<string, number>;
   status?: PaymentStatus;
   notes?: string;
+  // Server-set only — by payments.service create() for a Payment Machine
+  // payment (options.posPaymentRequestId), never trusted from a request body.
+  pos_payment_request_id?: string;
   membership_items?: Array<{ membership_id?: string; name: string; price: number; quantity: number }>;
   membership_wallet_used?: number;
   apply_membership_wallet?: boolean;
