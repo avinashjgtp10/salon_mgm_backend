@@ -36,6 +36,8 @@ const esc = (s: string | null | undefined) => (s ?? "").replace(/&/g, "&amp;").r
 
 export function buildInvoiceHtml(p: InvoicePrintPayload): string {
     const { invoice, customer, seller, amount_in_words } = p;
+    // An invoice without GST (0%) is a plain invoice: no tax lines, and the seller's GST number isn't printed.
+    const withGst = invoice.gst_percent > 0;
     const half = invoice.gst_percent / 2;
     const cgst = invoice.gst_amount / 2;
     const sgst = invoice.gst_amount - cgst;
@@ -84,7 +86,7 @@ export function buildInvoiceHtml(p: InvoicePrintPayload): string {
   <div class="doc">
     <div class="top-row">
       <div>
-        <div class="tax-invoice-label">TAX INVOICE</div>
+        <div class="tax-invoice-label">${withGst ? "TAX INVOICE" : "INVOICE"}</div>
         <div class="tax-invoice-sub">Original for Recipient</div>
         <div class="paid-stamp ${invoice.status === "void" ? "void-stamp" : ""}">${invoice.status === "void" ? "VOID" : "PAID"}</div>
       </div>
@@ -95,7 +97,7 @@ export function buildInvoiceHtml(p: InvoicePrintPayload): string {
       ${esc(seller.address)}<br/>
       Contact: ${esc(seller.contact)}<br/>
       Email: ${esc(seller.email)}<br/>
-      GST No.: ${esc(seller.gst_number)}<br/>
+      ${withGst ? `GST No.: ${esc(seller.gst_number)}<br/>` : ""}
       PAN: ${esc(seller.pan)}
     </div>
 
@@ -136,9 +138,9 @@ export function buildInvoiceHtml(p: InvoicePrintPayload): string {
     <div class="totals">
       ${invoice.credit && invoice.credit > 0 ? `<div class="totals-row"><span>Credit for unused previous plan (already deducted)</span><span>- ${money(invoice.credit)}</span></div>` : ""}
       <div class="totals-row"><span>Subtotal</span><span>${money(invoice.subtotal)}</span></div>
-      <div class="totals-row"><span>CGST (${half}%)</span><span>${money(cgst)}</span></div>
-      <div class="totals-row"><span>SGST (${half}%)</span><span>${money(sgst)}</span></div>
-      <div class="totals-final"><span>Total Invoice Value (Incl. GST)</span><span>${money(invoice.total)}</span></div>
+      ${withGst ? `<div class="totals-row"><span>CGST (${half}%)</span><span>${money(cgst)}</span></div>
+      <div class="totals-row"><span>SGST (${half}%)</span><span>${money(sgst)}</span></div>` : `<div class="totals-row"><span>GST</span><span>Not applicable</span></div>`}
+      <div class="totals-final"><span>${withGst ? "Total Invoice Value (Incl. GST)" : "Total Invoice Value"}</span><span>${money(invoice.total)}</span></div>
     </div>
 
     <div class="words-label">Amount in Words</div>

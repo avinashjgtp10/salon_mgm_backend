@@ -1546,8 +1546,7 @@ export const emailService = {
     pdfBuffer: Buffer;
     pdfFilename: string;
   }) {
-    const { to, salonName, invoiceNo, planLabel, amount, pdfBuffer, pdfFilename } = params;
-    const formattedAmount = `₹${(Number(amount) || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const { to, salonName, invoiceNo, planLabel, pdfBuffer, pdfFilename } = params;
 
     await transporter.sendMail({
       from: config.smtp.from,
@@ -1569,16 +1568,8 @@ export const emailService = {
                 <tr>
                   <td style="padding:32px 36px;">
                     <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
-                      Hi <strong>${escapeHtml(salonName)}</strong> team, thank you for your payment. Your GST tax invoice for the SalonoX ${escapeHtml(planLabel)} subscription is attached as a PDF.
+                      Hi <strong>${escapeHtml(salonName)}</strong> team, thank you for your payment. Your invoice for the SalonoX ${escapeHtml(planLabel)} subscription is attached as a PDF.
                     </p>
-                    <table width="100%" cellpadding="0" cellspacing="0" style="background:#eef2ff;border-radius:10px;border:1px solid #c7d2fe;">
-                      <tr>
-                        <td style="padding:20px 24px;">
-                          <p style="margin:0 0 8px;color:#4338ca;font-size:14px;"><strong>Invoice No.:</strong> ${escapeHtml(invoiceNo)}</p>
-                          <p style="margin:0;color:#4338ca;font-size:20px;font-weight:800;"><strong>Amount paid:</strong> ${formattedAmount}</p>
-                        </td>
-                      </tr>
-                    </table>
                   </td>
                 </tr>
                 <tr>
