@@ -24,12 +24,19 @@ const MULTI_SESSION_ROLES = new Set(["super_admin", "client"]);
 const accessOptions = (): SignOptions => ({
   expiresIn: (process.env.JWT_ACCESS_EXPIRES_IN || "15m") as any,
 });
+// The session's real lifetime is the refresh_tokens.expires_at row (a sliding
+// window, extended on every token refresh), so the JWT's own `exp` is only a
+// far-off ceiling. Deliberately NOT read from env: a short env value used to
+// kill sessions at 7 days regardless of the row.
 const refreshOptions = (): SignOptions => ({
-  expiresIn: (process.env.JWT_REFRESH_EXPIRES_IN || "30d") as any,
+  expiresIn: "365d",
 });
 
+/** How long a session survives without being used. */
+export const SESSION_IDLE_DAYS = 7;
+
 export function refreshExpiryDate(): Date {
-  return new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  return new Date(Date.now() + SESSION_IDLE_DAYS * 24 * 60 * 60 * 1000);
 }
 
 /**
