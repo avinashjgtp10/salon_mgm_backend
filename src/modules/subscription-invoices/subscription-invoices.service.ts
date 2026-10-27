@@ -66,12 +66,14 @@ export const subscriptionInvoicesService = {
         return ids.length;
     },
 
-    // A bill for money received outside Razorpay (bank transfer / cash).
+    // A bill for money received outside Razorpay (bank transfer / cash). `with_gst: false` makes an invoice without GST:
+    // 0% / ₹0 tax and the total equals the amount. Anything else (including leaving it out) is a GST invoice.
     async createManual(body: any, createdBy: string | null) {
+        const withGst = body?.with_gst !== false && body?.with_gst !== "false";
         const subtotal = Number(body?.subtotal);
         if (!body?.salon_id || typeof body.salon_id !== "string") throw new AppError(400, "salon_id is required", "VALIDATION_ERROR");
         if (!Number.isFinite(subtotal) || subtotal <= 0 || subtotal > 100_000_000) {
-            throw new AppError(400, "subtotal (the price before GST) must be a number greater than 0", "VALIDATION_ERROR");
+            throw new AppError(400, "subtotal (the amount, before GST when GST is charged) must be a number greater than 0", "VALIDATION_ERROR");
         }
         const planName = String(body.plan_name ?? "").trim();
         if (!planName) throw new AppError(400, "plan_name is required", "VALIDATION_ERROR");
@@ -92,7 +94,7 @@ export const subscriptionInvoicesService = {
         if (!(await repo.salonExists(body.salon_id))) throw new AppError(404, "Salon not found", "NOT_FOUND");
 
         const id = await inTransaction((db) => repo.createManual(db, {
-            salonId: body.salon_id, planName, billingCycle: cycle, periodStart, periodEnd, subtotal, gstPercent: GST_PERCENT,
+            salonId: body.salon_id, planName, billingCycle: cycle, periodStart, periodEnd, subtotal, gstPercent: withGst ? GST_PERCENT : 0,
             paymentMode: String(body.payment_mode ?? "Bank Transfer").slice(0, 40),
             transactionId: body.transaction_id ? String(body.transaction_id).slice(0, 80) : null,
             issuedAt, createdBy,

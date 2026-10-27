@@ -48,7 +48,7 @@ export const deploymentAnnouncementsRepository = {
     return rows[0] || null;
   },
 
-  async listRecent(limit = 20): Promise<DeploymentAnnouncement[]> {
+  async listRecent(limit = 200): Promise<DeploymentAnnouncement[]> {
     const { rows } = await pool.query(
       `SELECT * FROM deployment_announcements ORDER BY created_at DESC LIMIT $1`,
       [limit],
