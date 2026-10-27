@@ -2,6 +2,8 @@ import { AppError } from "../../middleware/error.middleware";
 import { clientsRepository } from "../clients/clients.repository";
 import { ewalletRepository } from "./ewallet.repository";
 import { EwalletLedgerEntry, WalletBreakdown } from "./ewallet.types";
+import { referralRepository } from "../referral/referral.repository";
+import { rewardPointsRepository } from "../reward-points/reward-points.repository";
 
 export const ewalletService = {
   async topUp(
@@ -101,14 +103,21 @@ export const ewalletService = {
     const client = await clientsRepository.findById(clientId, salonId);
     if (!client) throw new AppError(404, "Client not found", "NOT_FOUND");
 
-    const [ledgerAgg, balance] = await Promise.all([
+    // Referral credit and reward points have their own ledgers now — the old
+    // ewallet_ledger source_type filters for them always sum to 0. These two
+    // are read from the same sources as the Client Loyalty table so the modal
+    // matches the row that was clicked: lifetime referral ₹ earned, and the
+    // reward-points balance (a point count, not ₹).
+    const [ledgerAgg, balance, referralEarned, rewardPoints] = await Promise.all([
       ewalletRepository.getLedgerAggregate(clientId),
       ewalletRepository.getBalance(clientId),
+      referralRepository.getLifetimeEarned(clientId),
+      rewardPointsRepository.getBalance(clientId),
     ]);
 
     return {
-      referral_rewards: ledgerAgg.referral_rewards,
-      reward_credits: ledgerAgg.reward_credits,
+      referral_rewards: referralEarned,
+      reward_credits: rewardPoints,
       other_credits: ledgerAgg.other_credits,
       wallet_debits: ledgerAgg.wallet_debits,
       balance,
