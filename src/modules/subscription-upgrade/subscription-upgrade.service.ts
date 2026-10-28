@@ -283,7 +283,7 @@ async function fetchVerifiedPayment(paymentId: string, expected: { orderId: stri
     try {
         p = (await ((await getRazorpay()).payments as any).fetch(paymentId)) as GatewayPayment;
     } catch (err: any) {
-        throw new AppError(502, `Could not confirm the payment with Razorpay: ${err?.error?.description ?? err?.message ?? "unknown error"}`, "RAZORPAY_ERROR");
+        throw new AppError(424, `Could not confirm the payment with Razorpay: ${err?.error?.description ?? err?.message ?? "unknown error"}`, "RAZORPAY_ERROR");
     }
     if (p.order_id !== expected.orderId) return { state: "failed", payment: p, reason: "Payment does not belong to this upgrade" };
     if (p.currency !== "INR" || Number(p.amount) !== expected.amountPaise) return { state: "failed", payment: p, reason: "Payment amount does not match the upgrade amount" };
@@ -376,7 +376,7 @@ export const subscriptionUpgradeService = {
         } catch (err: any) {
             await pool.query(`UPDATE subscription_upgrades SET status = 'failed', failure_reason = $2 WHERE id = $1 AND status = 'pending'`, [upgradeId, "Could not create the payment order"]);
             if (err instanceof AppError) throw err;
-            throw new AppError(502, `Razorpay could not start the payment: ${err?.error?.description ?? err?.message ?? "unknown error"}`, "RAZORPAY_ERROR");
+            throw new AppError(424, `Razorpay could not start the payment: ${err?.error?.description ?? err?.message ?? "unknown error"}`, "RAZORPAY_ERROR");
         }
     },
 

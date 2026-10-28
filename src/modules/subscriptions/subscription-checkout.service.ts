@@ -54,7 +54,7 @@ export const subscriptionCheckoutService = {
             if (err instanceof AppError) throw err;
             const detail = err?.error?.description ?? err?.message ?? "unknown error";
             logger.error("Razorpay subscription create failed", { salonId, slug, detail });
-            throw new AppError(502, `Razorpay could not start the payment: ${detail}`, "RAZORPAY_ERROR");
+            throw new AppError(424, `Razorpay could not start the payment: ${detail}`, "RAZORPAY_ERROR");
         }
 
         await pool.query(
