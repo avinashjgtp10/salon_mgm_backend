@@ -17,6 +17,7 @@ import {
 } from "../subscription-billing/subscription-billing.service";
 import { calculateUpgradeQuote, fromPaise, toPaise, UpgradeError, type UpgradeQuote } from "./upgrade-quote";
 import { loadUpgradePolicy } from "./upgrade-policy";
+import { billingSchemaReady } from "../subscription-pricing/billing-schema";
 
 // Plan upgrade flow (Advance -> Growth etc). The salon never sends an amount: the backend prices the upgrade
 // (upgrade-quote.ts / upgrade-policy.ts), stores that quote with the pending upgrade, creates the Razorpay order for exactly
@@ -54,6 +55,23 @@ interface BuiltQuote {
     target: { id: string; name: string; tier: Tier; cycle: Cycle; price: number };
 }
 
+// The upgrade flow prices a prorated difference in INR and settles it with a one-off INR payment. A subscription billed in another
+// currency would mix currencies (credit, tax, payment), so it is refused here; the plan change for those is scheduled for the end of
+// the current period instead (subscription-plan-change.service.ts).
+export async function assertInrSubscription(db: Db, subscriptionId: string, periodEnd: Date | string | null | undefined) {
+    if (!(await billingSchemaReady())) return;
+    const { rows } = await db.query(`SELECT charged_currency FROM subscriptions WHERE id = $1`, [subscriptionId]);
+    const currency: string | null = rows[0]?.charged_currency ?? null;
+    if (currency && currency !== "INR") {
+        throw new AppError(
+            409,
+            `Your plan is billed in ${currency}, so it can't be upgraded in place. You can schedule the change to start when your current period ends; your current plan stays active until then.`,
+            "CURRENCY_UPGRADE_UNSUPPORTED",
+            { current_currency: currency, current_period_end: periodEnd ?? null, alternatives: [{ type: "schedule_plan_change" }, { type: "contact_support" }] },
+        );
+    }
+}
+
 export async function buildQuote(db: Db, salonId: string, tier: Tier, cycle: Cycle, now: Date = new Date()): Promise<BuiltQuote> {
     const rows = await loadSalonSubscriptions(db as never, salonId);
     const { rows: salonRows } = await db.query(`SELECT is_active FROM salons WHERE id = $1`, [salonId]);
@@ -67,6 +85,8 @@ export async function buildQuote(db: Db, salonId: string, tier: Tier, cycle: Cyc
             ? "Your current plan payment is still pending."
             : "Your subscription is not active. Renew it to continue.", "SUBSCRIPTION_NOT_ACTIVE");
     }
+
+    await assertInrSubscription(db, current.id, end);
 
     const currentCycle = normalizeCycle(current.plan_cycle);
     if (!currentCycle || !end) {

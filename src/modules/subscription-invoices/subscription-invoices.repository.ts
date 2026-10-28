@@ -1,10 +1,12 @@
 import type { PoolClient } from "pg";
 import pool from "../../config/database";
 import { financialYearCode, round2 } from "./invoice-format";
+import { billingSchemaReady } from "../subscription-pricing/billing-schema";
 
 // Rows always reach callers with the salon's name/owner joined in (the list and the PDF both need them).
-const SELECT_INVOICE = `
-    SELECT i.id, i.invoice_no, i.salon_id, i.subscription_id, i.payment_id, i.plan_name, i.billing_cycle,
+// `currency` comes from the invoice once the country-billing columns exist, and is 'INR' before that (every older invoice is INR).
+const selectInvoice = async () => `
+    SELECT ${(await billingSchemaReady()) ? "i.currency" : "'INR'::text"} AS currency, i.id, i.invoice_no, i.salon_id, i.subscription_id, i.payment_id, i.plan_name, i.billing_cycle,
            i.period_start, i.period_end, i.subtotal, i.gst_percent, i.gst_amount, i.total,
            i.payment_mode, i.transaction_id, i.status, i.issued_at, i.emailed_at, i.created_at,
            i.kind, i.credit_amount, i.upgrade_id, i.description,
@@ -53,7 +55,7 @@ export const subscriptionInvoicesRepository = {
         const limit = Math.min(Math.max(f.limit ?? 50, 1), 200);
         const offset = Math.max(f.offset ?? 0, 0);
         const { rows } = await pool.query(
-            `${SELECT_INVOICE} ${clause} ORDER BY i.issued_at DESC, i.created_at DESC LIMIT ${limit} OFFSET ${offset}`,
+            `${await selectInvoice()} ${clause} ORDER BY i.issued_at DESC, i.created_at DESC LIMIT ${limit} OFFSET ${offset}`,
             params
         );
         return rows;
@@ -61,12 +63,14 @@ export const subscriptionInvoicesRepository = {
 
     async summary(f: InvoiceFilters) {
         const { clause, params } = filterSql(f);
+        const inrOnly = (await billingSchemaReady()) ? " AND i.currency = 'INR'" : "";
         const { rows } = await pool.query(
             `SELECT COUNT(*)::int                                              AS total_invoices,
                     COUNT(*) FILTER (WHERE i.status = 'paid')::int             AS paid_count,
                     COUNT(*) FILTER (WHERE i.status = 'void')::int             AS void_count,
-                    COALESCE(SUM(i.total)      FILTER (WHERE i.status = 'paid'), 0)::float8 AS revenue,
-                    COALESCE(SUM(i.gst_amount) FILTER (WHERE i.status = 'paid'), 0)::float8 AS gst_collected
+                    COALESCE(SUM(i.total)      FILTER (WHERE i.status = 'paid'${inrOnly}), 0)::float8 AS revenue,
+                    COALESCE(SUM(i.gst_amount) FILTER (WHERE i.status = 'paid'${inrOnly}), 0)::float8 AS gst_collected,
+                    ${(await billingSchemaReady()) ? "COUNT(*) FILTER (WHERE i.currency <> 'INR')::int" : "0"} AS other_currency_count
              FROM subscription_invoices i
              JOIN salons sa ON sa.id = i.salon_id
              LEFT JOIN users ou ON ou.id = sa.owner_id
@@ -78,19 +82,19 @@ export const subscriptionInvoicesRepository = {
 
     async findById(id: string, salonId?: string) {
         const { rows } = await pool.query(
-            `${SELECT_INVOICE} WHERE i.id = $1 ${salonId ? "AND i.salon_id = $2" : ""}`,
+            `${await selectInvoice()} WHERE i.id = $1 ${salonId ? "AND i.salon_id = $2" : ""}`,
             salonId ? [id, salonId] : [id]
         );
         return rows[0] ?? null;
     },
 
     async findByPaymentId(paymentId: string) {
-        const { rows } = await pool.query(`${SELECT_INVOICE} WHERE i.payment_id = $1`, [paymentId]);
+        const { rows } = await pool.query(`${await selectInvoice()} WHERE i.payment_id = $1`, [paymentId]);
         return rows[0] ?? null;
     },
 
     async findByTransactionId(transactionId: string) {
-        const { rows } = await pool.query(`${SELECT_INVOICE} WHERE i.transaction_id = $1 LIMIT 1`, [transactionId]);
+        const { rows } = await pool.query(`${await selectInvoice()} WHERE i.transaction_id = $1 LIMIT 1`, [transactionId]);
         return rows[0] ?? null;
     },
 
@@ -106,7 +110,7 @@ export const subscriptionInvoicesRepository = {
     // Paid payments that have no invoice yet (salon exists) - the "awaiting bill" list.
     async listUnbilled() {
         const { rows } = await pool.query(
-            `SELECT p.id AS payment_id, p.amount::float8 AS amount, p.payment_method, p.transaction_id, p.paid_at,
+            `SELECT ${(await billingSchemaReady()) ? "p.currency" : "'INR'::text"} AS currency, p.id AS payment_id, p.amount::float8 AS amount, p.payment_method, p.transaction_id, p.paid_at,
                     s.salon_id, COALESCE(sa.business_name, sa.slug, 'Unnamed') AS salon_name,
                     sp.name AS plan_name, sp.billing_cycle
              FROM subscription_payments p
@@ -141,7 +145,7 @@ export const subscriptionInvoicesRepository = {
         if (existing.rows[0]) return { id: existing.rows[0].id as string, created: false };
 
         const { rows } = await db.query(
-            `SELECT p.amount::float8 AS amount, p.payment_method, p.transaction_id, p.paid_at,
+            `SELECT ${(await billingSchemaReady()) ? "p.currency" : "'INR'::text"} AS currency, p.amount::float8 AS amount, p.payment_method, p.transaction_id, p.paid_at,
                     p.billing_period_start, p.billing_period_end,
                     s.id AS subscription_id, s.salon_id, s.current_period_start, s.current_period_end,
                     sp.name AS plan_name, sp.billing_cycle
@@ -154,24 +158,29 @@ export const subscriptionInvoicesRepository = {
         const p = rows[0];
         if (!p || !p.salon_id) return null;   // not paid, or the salon doesn't exist yet (billed once it is attached)
 
-        // The payment is what the salon actually paid, GST included: split it back into price + GST.
+        // The payment is what the salon actually paid. In INR that includes GST, so it is split back into price + GST. A payment in
+        // another currency is a plain invoice in that currency: no Indian GST is carved out of it.
+        const currency: string = p.currency ?? "INR";
+        const taxPercent = currency === "INR" ? gstPercent : 0;
         const total = round2(Number(p.amount));
-        const subtotal = round2((total * 100) / (100 + gstPercent));
+        const subtotal = taxPercent > 0 ? round2((total * 100) / (100 + taxPercent)) : total;
         const gst = round2(total - subtotal);
         const issued = p.paid_at ? new Date(p.paid_at) : new Date();
         const invoiceNo = await nextInvoiceNo(db, issued);
 
+        // INR keeps the column default; another currency is written explicitly.
+        const withCurrency = currency !== "INR" && (await billingSchemaReady());
         const ins = await db.query(
             `INSERT INTO subscription_invoices
                 (invoice_no, salon_id, subscription_id, payment_id, plan_name, billing_cycle, period_start, period_end,
-                 subtotal, gst_percent, gst_amount, total, payment_mode, transaction_id, status, issued_at, created_by)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'paid',$15,$16)
+                 subtotal, gst_percent, gst_amount, total, payment_mode, transaction_id, status, issued_at, created_by${withCurrency ? ", currency" : ""})
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'paid',$15,$16${withCurrency ? ", $17" : ""})
              RETURNING id`,
             [
                 invoiceNo, p.salon_id, p.subscription_id, paymentId, p.plan_name, p.billing_cycle,
                 p.billing_period_start ?? p.current_period_start ?? null, p.billing_period_end ?? p.current_period_end ?? null,
-                subtotal, gstPercent, gst, total, p.payment_method ? String(p.payment_method).toUpperCase() : "RAZORPAY",
-                p.transaction_id ?? null, issued.toISOString(), createdBy,
+                subtotal, taxPercent, gst, total, p.payment_method ? String(p.payment_method).toUpperCase() : "RAZORPAY",
+                p.transaction_id ?? null, issued.toISOString(), createdBy, ...(withCurrency ? [currency] : []),
             ]
         );
         return { id: ins.rows[0].id as string, created: true };

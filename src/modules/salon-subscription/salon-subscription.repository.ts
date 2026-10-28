@@ -1,4 +1,5 @@
 import pool from "../../config/database";
+import { billingSchemaReady } from "../subscription-pricing/billing-schema";
 
 export const salonSubscriptionRepository = {
     async listActivePlans() {
@@ -26,8 +27,13 @@ export const salonSubscriptionRepository = {
 
     // Newest first; includes the plan name/price so the admin page can show what the salon is on.
     async history(salonId: string, limit = 6) {
+        // The price and currency the subscription was bought at (kept with it, so later exchange-rate moves never rewrite it).
+        const purchase = (await billingSchemaReady())
+            ? "s.country_code, s.pricing_currency, s.display_amount, s.charged_currency, s.charged_amount, s.fx_rate,"
+            : "NULL::text AS country_code, NULL::text AS pricing_currency, NULL::numeric AS display_amount, NULL::text AS charged_currency, NULL::numeric AS charged_amount, NULL::numeric AS fx_rate,";
         const { rows } = await pool.query(
             `SELECT s.id, s.status, s.is_trial, s.current_period_start, s.current_period_end,
+                    ${purchase}
                     s.trial_end, s.created_at, sp.name AS plan_name, sp.price, sp.billing_cycle
              FROM subscriptions s
              LEFT JOIN subscription_plans sp ON sp.id = s.plan_id
