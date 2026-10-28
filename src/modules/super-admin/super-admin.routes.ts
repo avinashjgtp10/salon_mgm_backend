@@ -10,6 +10,7 @@ import aiCredentialsRoutes from "../ai-credentials/ai-credentials.routes";
 import modulePlansRoutes from "../module-plans/module-plans.routes";
 import salonSubscriptionRoutes from "../salon-subscription/salon-subscription.routes";
 import planPricingRoutes from "../plan-pricing/plan-pricing.routes";
+import paymentGatewayRoutes from "../payment-gateway/payment-gateway.routes";
 import subscriptionInvoiceRoutes from "../subscription-invoices/subscription-invoices.routes";
 
 const router = Router();
@@ -33,6 +34,8 @@ router.use("/ai-credentials", aiCredentialsRoutes);
 router.use("/module-plans", modulePlansRoutes);
 router.use("/salon-subscription", salonSubscriptionRoutes);
 router.use("/plan-pricing", planPricingRoutes);
+// Platform-wide Razorpay keys (one set for all salons), stored encrypted.
+router.use("/payment-gateway", paymentGatewayRoutes);
 router.use("/subscription-invoices", subscriptionInvoiceRoutes);
 
 // Salon-specific permissions

@@ -3,7 +3,7 @@ import type { PoolClient } from "pg";
 import pool from "../../config/database";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
-import { getRazorpay } from "../../config/razorpay";
+import { getRazorpay, getRazorpayCredentials } from "../../config/razorpay";
 import { GST_PERCENT } from "../plan-pricing/plan-pricing.service";
 import { subscriptionInvoicesRepository as invoiceRepo } from "../subscription-invoices/subscription-invoices.repository";
 import { subscriptionInvoicesService } from "../subscription-invoices/subscription-invoices.service";
@@ -256,7 +256,7 @@ async function afterCompletion(c: Completion, actingUserId: string | null) {
     if (c.razorpaySubscriptionToCancel) {
         try {
             // Stop the old plan's automatic renewal at the end of the period it already covered.
-            await (getRazorpay().subscriptions as any).cancel(c.razorpaySubscriptionToCancel, true);
+            await ((await getRazorpay()).subscriptions as any).cancel(c.razorpaySubscriptionToCancel, true);
         } catch (err: any) {
             logger.warn("Upgrade: could not cancel the old Razorpay subscription", { sub: c.razorpaySubscriptionToCancel, error: err?.error?.description ?? err?.message });
         }
@@ -266,8 +266,8 @@ async function afterCompletion(c: Completion, actingUserId: string | null) {
 
 // ── gateway verification ────────────────────────────────────────────────────────────────────────────────────────────
 
-function signatureMatches(orderId: string, paymentId: string, signature: string): boolean {
-    const secret = process.env.RAZORPAY_KEY_SECRET;
+async function signatureMatches(orderId: string, paymentId: string, signature: string): Promise<boolean> {
+    const secret = (await getRazorpayCredentials()).keySecret;
     if (!secret) return false;
     const expected = crypto.createHmac("sha256", secret).update(`${orderId}|${paymentId}`).digest("hex");
     const a = Buffer.from(expected);
@@ -281,7 +281,7 @@ type GatewayPayment = { id: string; status: string; amount: number; currency: st
 async function fetchVerifiedPayment(paymentId: string, expected: { orderId: string; amountPaise: number }): Promise<{ state: "captured" | "pending" | "failed"; payment: GatewayPayment; reason?: string }> {
     let p: GatewayPayment;
     try {
-        p = (await (getRazorpay().payments as any).fetch(paymentId)) as GatewayPayment;
+        p = (await ((await getRazorpay()).payments as any).fetch(paymentId)) as GatewayPayment;
     } catch (err: any) {
         throw new AppError(502, `Could not confirm the payment with Razorpay: ${err?.error?.description ?? err?.message ?? "unknown error"}`, "RAZORPAY_ERROR");
     }
@@ -290,7 +290,7 @@ async function fetchVerifiedPayment(paymentId: string, expected: { orderId: stri
     if (p.status === "captured") return { state: "captured", payment: p };
     if (p.status === "authorized") {
         try {
-            await (getRazorpay().payments as any).capture(paymentId, expected.amountPaise, "INR");
+            await ((await getRazorpay()).payments as any).capture(paymentId, expected.amountPaise, "INR");
             return { state: "captured", payment: { ...p, status: "captured" } };
         } catch (err: any) {
             return { state: "pending", payment: p, reason: err?.error?.description ?? "Payment is authorized but not captured yet" };
@@ -311,8 +311,8 @@ async function expireStalePending(db: Db, salonId: string) {
     );
 }
 
-const gatewayPayload = (u: any) => ({
-    key_id: process.env.RAZORPAY_KEY_ID ?? "",
+const gatewayPayload = async (u: any) => ({
+    key_id: (await getRazorpayCredentials()).keyId ?? "",
     order_id: u.razorpay_order_id as string,
     amount: toPaise(Number(u.total)),
     currency: "INR",
@@ -337,7 +337,7 @@ export const subscriptionUpgradeService = {
         if (pending[0]) {
             const p = pending[0];
             if (p.to_plan_id === built.target.id && toPaise(Number(p.total)) === q.totalPaise && p.from_subscription_id === built.current.id && p.razorpay_order_id) {
-                return { upgrade_id: p.id as string, status: "pending" as const, quote: quoteView(built), payment: gatewayPayload(p) };
+                return { upgrade_id: p.id as string, status: "pending" as const, quote: quoteView(built), payment: await gatewayPayload(p) };
             }
             await pool.query(`UPDATE subscription_upgrades SET status = 'cancelled', failure_reason = 'Replaced by a newer upgrade attempt' WHERE id = $1 AND status = 'pending'`, [p.id]);
         }
@@ -367,12 +367,12 @@ export const subscriptionUpgradeService = {
         }
 
         try {
-            const order = await (getRazorpay().orders as any).create({
+            const order = await ((await getRazorpay()).orders as any).create({
                 amount: q.totalPaise, currency: "INR", receipt: `upg_${upgradeId.slice(0, 30)}`, payment_capture: 1,
                 notes: { upgrade_id: upgradeId, salon_id: salonId, to: `${t.tier}-${t.cycle}` },
             });
             await pool.query(`UPDATE subscription_upgrades SET razorpay_order_id = $2 WHERE id = $1`, [upgradeId, order.id]);
-            return { upgrade_id: upgradeId, status: "pending" as const, quote: quoteView(built), payment: { key_id: process.env.RAZORPAY_KEY_ID ?? "", order_id: order.id as string, amount: q.totalPaise, currency: "INR" } };
+            return { upgrade_id: upgradeId, status: "pending" as const, quote: quoteView(built), payment: { key_id: (await getRazorpayCredentials()).keyId ?? "", order_id: order.id as string, amount: q.totalPaise, currency: "INR" } };
         } catch (err: any) {
             await pool.query(`UPDATE subscription_upgrades SET status = 'failed', failure_reason = $2 WHERE id = $1 AND status = 'pending'`, [upgradeId, "Could not create the payment order"]);
             if (err instanceof AppError) throw err;
@@ -393,7 +393,7 @@ export const subscriptionUpgradeService = {
         if (u.status === "completed") return { status: "completed" as const, already: true };
         if (u.status !== "pending") throw new AppError(409, `This upgrade is ${u.status} and can't be completed.`, "UPGRADE_NOT_PENDING");
         if (!u.razorpay_order_id || u.razorpay_order_id !== orderId) throw new AppError(400, "That payment is for a different order", "ORDER_MISMATCH");
-        if (!signatureMatches(orderId, paymentId, signature)) throw new AppError(400, "Payment signature could not be verified", "INVALID_SIGNATURE");
+        if (!(await signatureMatches(orderId, paymentId, signature))) throw new AppError(400, "Payment signature could not be verified", "INVALID_SIGNATURE");
 
         const verified = await fetchVerifiedPayment(paymentId, { orderId, amountPaise: toPaise(Number(u.total)) });
         if (verified.state === "failed") {

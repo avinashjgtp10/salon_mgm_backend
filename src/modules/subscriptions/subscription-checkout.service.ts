@@ -3,7 +3,7 @@ import type { PoolClient } from "pg";
 import pool from "../../config/database";
 import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
-import { getRazorpay } from "../../config/razorpay";
+import { getRazorpay, getRazorpayCredentials } from "../../config/razorpay";
 import { subscriptionInvoicesService } from "../subscription-invoices/subscription-invoices.service";
 import { subscriptionUpgradeService } from "../subscription-upgrade/subscription-upgrade.service";
 import { salonModulesService } from "../salon-modules/salon-modules.service";
@@ -43,7 +43,7 @@ export const subscriptionCheckoutService = {
 
         let created: any;
         try {
-            created = await getRazorpay().subscriptions.create({
+            created = await (await getRazorpay()).subscriptions.create({
                 plan_id: plan.razorpay_plan_id,
                 total_count: TOTAL_COUNT[cycle],
                 quantity: 1,
@@ -109,8 +109,8 @@ export const subscriptionCheckoutService = {
     },
 
     // Razorpay signs the exact raw body with the webhook secret (HMAC-SHA256, hex).
-    verifySignature(rawBody: Buffer | undefined, signature: string | undefined): boolean {
-        const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
+    async verifySignature(rawBody: Buffer | undefined, signature: string | undefined): Promise<boolean> {
+        const secret = (await getRazorpayCredentials()).webhookSecret;
         if (!secret || !rawBody || !signature) return false;
         const expected = crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
         const a = Buffer.from(expected);
