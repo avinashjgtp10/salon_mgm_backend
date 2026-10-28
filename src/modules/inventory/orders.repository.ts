@@ -17,8 +17,8 @@ export const ordersRepository = {
      *
      * Per-line math (see NewOrderPage): discount_percent is a percentage,
      * cost_price is entered tax-exclusive so cost_wo_tax === cost_price,
-     * total_cost_wo_tax = cost_wo_tax * qty, and total_tax is that same base
-     * multiplied by the order's flat tax_rate (Tax Group's rate, not a
+     * total_cost_wo_tax = cost_wo_tax * qty after the discount, and total_tax
+     * is that discounted base multiplied by the order's flat tax_rate (Tax Group's rate, not a
      * per-line rate — see CreateOrderDTO.tax_rate).
      */
     /**
@@ -95,12 +95,13 @@ export const ordersRepository = {
             for (const item of data.items) {
                 const discountPercent = item.discount_percent ?? 0;
                 const costWoTax = item.cost_price;
-                const totalCostWoTax = costWoTax * item.qty;
+                // Discount comes off the cost first; tax is charged on what is
+                // left. total_cost_wo_tax is therefore the discounted, pre-tax amount.
+                const totalCostWoTax = costWoTax * item.qty * (1 - discountPercent / 100);
                 const totalTax = totalCostWoTax * (taxRate / 100);
-                const lineSellingTotal = item.selling_price * item.qty * (1 - discountPercent / 100);
 
                 totalQuantity += item.qty;
-                totalPrice += lineSellingTotal;
+                totalPrice += totalCostWoTax;
 
                 const { rows: itemRows } = await client.query(
                     `INSERT INTO order_items (
@@ -223,12 +224,13 @@ export const ordersRepository = {
             for (const item of data.items) {
                 const discountPercent = item.discount_percent ?? 0;
                 const costWoTax = item.cost_price;
-                const totalCostWoTax = costWoTax * item.qty;
+                // Discount comes off the cost first; tax is charged on what is
+                // left. total_cost_wo_tax is therefore the discounted, pre-tax amount.
+                const totalCostWoTax = costWoTax * item.qty * (1 - discountPercent / 100);
                 const totalTax = totalCostWoTax * (taxRate / 100);
-                const lineSellingTotal = item.selling_price * item.qty * (1 - discountPercent / 100);
 
                 totalQuantity += item.qty;
-                totalPrice += lineSellingTotal;
+                totalPrice += totalCostWoTax;
 
                 const { rows: itemRows } = await client.query(
                     `INSERT INTO order_items (
