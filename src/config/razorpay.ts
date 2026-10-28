@@ -110,6 +110,7 @@ export async function createRazorpayPlan(opts: {
     } catch (err: any) {
         if (err instanceof AppError) throw err;
         const detail = err?.error?.description ?? err?.message ?? "unknown error";
-        throw new AppError(502, `Razorpay could not create the plan: ${detail}`, "RAZORPAY_ERROR");
+        // 424, not 502: a 502 from the origin is replaced by Cloudflare's own error page, hiding Razorpay's reason.
+        throw new AppError(424, `Razorpay could not create the plan: ${detail}`, "RAZORPAY_ERROR");
     }
 }

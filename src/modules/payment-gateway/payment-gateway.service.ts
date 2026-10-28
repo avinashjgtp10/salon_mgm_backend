@@ -40,7 +40,7 @@ async function verifyKeys(keyId: string, keySecret: string): Promise<void> {
         const status = err?.statusCode ?? err?.error?.statusCode;
         logger.warn("[payment-gateway] key verification failed", { status });
         if (status === 401 || status === 403) throw new AppError(400, "Razorpay rejected these keys. Check the Key ID and Key Secret belong together.", "VALIDATION_ERROR");
-        throw new AppError(502, `Could not reach Razorpay to check the keys: ${err?.error?.description ?? err?.message ?? "unknown error"}`, "UPSTREAM_ERROR");
+        throw new AppError(424, `Could not reach Razorpay to check the keys: ${err?.error?.description ?? err?.message ?? "unknown error"}`, "UPSTREAM_ERROR");
     }
 }
 
