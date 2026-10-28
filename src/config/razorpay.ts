@@ -12,7 +12,9 @@ export type RazorpayCredentials = {
     keyId: string | null;
     keySecret: string | null;
     webhookSecret: string | null;
-    sources: { keyId: RazorpaySource; keySecret: RazorpaySource; webhookSecret: RazorpaySource };
+    /** Currencies subscriptions may be charged in ("USD,AED" or "auto"), as saved by Super Admin or from the environment. */
+    subscriptionCurrencies: string | null;
+    sources: { keyId: RazorpaySource; keySecret: RazorpaySource; webhookSecret: RazorpaySource; subscriptionCurrencies: RazorpaySource };
 };
 
 const CACHE_TTL_MS = 30_000;
@@ -42,7 +44,11 @@ export async function getRazorpayCredentials(): Promise<RazorpayCredentials> {
 
     let row: any = null;
     try {
-        row = (await pool.query(`SELECT key_id, key_secret_enc, webhook_secret_enc FROM platform_razorpay_settings WHERE id = TRUE`)).rows[0] ?? null;
+        // to_jsonb keeps this working before the subscription_currencies migration has been run (the column may not exist yet).
+        row = (await pool.query(
+            `SELECT key_id, key_secret_enc, webhook_secret_enc, to_jsonb(p)->>'subscription_currencies' AS subscription_currencies
+             FROM platform_razorpay_settings p WHERE id = TRUE`
+        )).rows[0] ?? null;
     } catch (err: any) {
         if (err?.code !== "42P01") throw err;
         if (!warnedMissingTable) {
@@ -58,9 +64,11 @@ export async function getRazorpayCredentials(): Promise<RazorpayCredentials> {
     const [keySecret, keySecretSrc] = pick(safeDecrypt("key_secret", row?.key_secret_enc), process.env.RAZORPAY_KEY_SECRET);
     const [webhookSecret, webhookSrc] = pick(safeDecrypt("webhook_secret", row?.webhook_secret_enc), process.env.RAZORPAY_WEBHOOK_SECRET);
 
+    const [subscriptionCurrencies, currenciesSrc] = pick(row?.subscription_currencies?.trim(), process.env.RAZORPAY_SUBSCRIPTION_CURRENCIES?.trim());
+
     const creds: RazorpayCredentials = {
-        keyId, keySecret, webhookSecret,
-        sources: { keyId: keyIdSrc, keySecret: keySecretSrc, webhookSecret: webhookSrc },
+        keyId, keySecret, webhookSecret, subscriptionCurrencies,
+        sources: { keyId: keyIdSrc, keySecret: keySecretSrc, webhookSecret: webhookSrc, subscriptionCurrencies: currenciesSrc },
     };
     cache = { creds, expiresAt: Date.now() + CACHE_TTL_MS };
     return creds;

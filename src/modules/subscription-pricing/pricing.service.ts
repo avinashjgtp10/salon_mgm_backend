@@ -5,6 +5,7 @@ import { currencyForCountry } from "./country-currency";
 import { getInrRates, type RatesResult } from "./fx-rates";
 import { billingSchemaReady } from "./billing-schema";
 import { currentRazorpayAccount, getActiveRazorpayAccount, type RazorpayMode } from "./razorpay-account";
+import { getRazorpayCredentials } from "../../config/razorpay";
 
 // THE server-side price calculation for subscription plans. Every screen (landing page, registration, Billing & Plans, the plan
 // step, Super Admin) and Razorpay checkout read prices from here, and checkout never trusts an amount sent by the browser.
@@ -36,7 +37,8 @@ export const exponentOf = (currency: string) => (ZERO_DECIMAL.has(currency) ? 0 
 //   RAZORPAY_SUBSCRIPTION_CURRENCIES=USD,AED  -> exactly those (plus INR). The safe choice for LIVE once Razorpay has confirmed them.
 //   RAZORPAY_SUBSCRIPTION_CURRENCIES=auto     -> every customer's own currency is tried; Razorpay itself accepts or refuses it when the plan is
 //                                                created, and a refusal turns into the INR offer (explicit consent), never a dead end.
-//   not set                                   -> INR only on LIVE; on TEST keys it behaves like "auto", so testing needs no configuration.
+//   not set                                   -> behaves like "auto" on TEST and LIVE (a Razorpay refusal becomes the INR offer).
+//   RAZORPAY_SUBSCRIPTION_CURRENCIES=INR      -> INR only (switches country currencies off).
 // A currency Razorpay has just refused is skipped for an hour so we don't ask again for every checkout.
 const REFUSED_TTL_MS = 60 * 60 * 1000;
 const refused = new Map<string, number>();
@@ -49,7 +51,13 @@ function isRefused(currency: string) {
     return true;
 }
 
-export function enabledChargeCurrencies(env: NodeJS.ProcessEnv = process.env, mode: RazorpayMode = currentRazorpayAccount(env).mode): Set<string> {
+/** The currencies chargeable right now: Super Admin's saved list (Plans > Payment Gateway) first, else the environment variable, for the active account. */
+export async function enabledChargeCurrenciesNow(): Promise<Set<string>> {
+    const [creds, account] = await Promise.all([getRazorpayCredentials(), getActiveRazorpayAccount()]);
+    return enabledChargeCurrencies({ ...process.env, RAZORPAY_SUBSCRIPTION_CURRENCIES: creds.subscriptionCurrencies ?? "" }, account.mode);
+}
+
+export function enabledChargeCurrencies(env: NodeJS.ProcessEnv = process.env, _mode: RazorpayMode = currentRazorpayAccount(env).mode): Set<string> {
     const out = new Set<string>(["INR"]);
     const raw = (env.RAZORPAY_SUBSCRIPTION_CURRENCIES ?? "").trim();
     for (const part of raw.split(",")) {
@@ -57,7 +65,9 @@ export function enabledChargeCurrencies(env: NodeJS.ProcessEnv = process.env, mo
         if (c === "AUTO" || c === "*") out.add("*");
         else if (/^[A-Z]{3}$/.test(c)) out.add(c);
     }
-    if (!raw && mode === "test") out.add("*");
+    // Nothing configured: try the customer's own currency on TEST and LIVE alike. If Razorpay refuses it when the plan is created, the
+    // customer is offered INR with explicit consent (markCurrencyRefused), so no per-currency setup is needed.
+    if (!raw) out.add("*");
     return out;
 }
 
@@ -210,8 +220,8 @@ export async function findLockedPrice(planId: string, currency: string): Promise
 }
 
 async function quoteFor(base: BasePlan, country: string | null | undefined, rates: RatesResult | null): Promise<Quote> {
-    const enabled = enabledChargeCurrencies(process.env, (await getActiveRazorpayAccount()).mode);
-    const cur = currencyForCountry(country)?.currency;
+    const enabled = await enabledChargeCurrenciesNow();
+    const cur =currencyForCountry(country)?.currency;
     const locked = cur && cur !== "INR" && isChargeable(enabled, cur) ? await findLockedPrice(base.id, cur) : null;
     return buildQuote(base, country, rates, enabled, locked);
 }
@@ -227,7 +237,7 @@ export const subscriptionPricingService = {
             country_currency: found.currency,
             display_currency: quotes[0]?.display.currency ?? "INR",
             rate_as_of: rates?.fetchedAt.toISOString() ?? null,
-            enabled_charge_currencies: [...enabledChargeCurrencies(process.env, (await getActiveRazorpayAccount()).mode)],
+            enabled_charge_currencies: [...(await enabledChargeCurrenciesNow())],
             plans: quotes,
         };
     },

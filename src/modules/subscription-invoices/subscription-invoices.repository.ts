@@ -215,22 +215,25 @@ export const subscriptionInvoicesRepository = {
         upgradeId: string; salonId: string; subscriptionId: string; paymentId: string | null; planName: string; billingCycle: string;
         periodStart: string; periodEnd: string; subtotal: number; gstPercent: number; gstAmount: number; total: number;
         credit: number; description: string; paymentMode: string; transactionId: string | null; issuedAt: Date; createdBy: string | null;
+        /** INR (the column default) unless the upgrade was charged in the customer's own currency. */
+        currency?: string;
     }) {
         await db.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`sub-invoice-upgrade:${u.upgradeId}`]);
         const existing = await db.query(`SELECT id FROM subscription_invoices WHERE upgrade_id = $1`, [u.upgradeId]);
         if (existing.rows[0]) return { id: existing.rows[0].id as string, created: false };
 
         const invoiceNo = await nextInvoiceNo(db, u.issuedAt);
+        const overseas = !!u.currency && u.currency !== "INR";
         const ins = await db.query(
             `INSERT INTO subscription_invoices
                 (invoice_no, salon_id, subscription_id, payment_id, plan_name, billing_cycle, period_start, period_end,
                  subtotal, gst_percent, gst_amount, total, payment_mode, transaction_id, status, issued_at, created_by,
-                 kind, credit_amount, upgrade_id, description)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'paid',$15,$16,'upgrade',$17,$18,$19)
+                 kind, credit_amount, upgrade_id, description${overseas ? ", currency" : ""})
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'paid',$15,$16,'upgrade',$17,$18,$19${overseas ? ", $20" : ""})
              RETURNING id`,
             [invoiceNo, u.salonId, u.subscriptionId, u.paymentId, u.planName, u.billingCycle, u.periodStart, u.periodEnd,
              u.subtotal, u.gstPercent, u.gstAmount, u.total, u.paymentMode, u.transactionId, u.issuedAt.toISOString(), u.createdBy,
-             u.credit, u.upgradeId, u.description]
+             u.credit, u.upgradeId, u.description, ...(overseas ? [u.currency] : [])]
         );
         return { id: ins.rows[0].id as string, created: true };
     },

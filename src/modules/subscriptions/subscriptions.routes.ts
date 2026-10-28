@@ -109,8 +109,8 @@ const billingRoute = (fn: (salonId: string, req: any) => Promise<unknown>) => as
 }
 router.get("/current", authMiddleware, requireModule("billing_plans"), billingRoute((salonId) => subscriptionBillingService.getCurrent(salonId)))
 router.get("/billing-history", authMiddleware, requireModule("billing_history"), billingRoute((salonId) => subscriptionBillingService.getHistory(salonId)))
-router.post("/upgrade/quote", authMiddleware, billingRoute((salonId, req) => subscriptionUpgradeService.quote(salonId, req.body?.tier, req.body?.cycle)))
-router.post("/upgrade/initiate", authMiddleware, billingRoute((salonId, req) => subscriptionUpgradeService.initiate(salonId, req.user.userId, req.body?.tier, req.body?.cycle)))
+router.post("/upgrade/quote", authMiddleware, billingRoute((salonId, req) => subscriptionUpgradeService.quote(salonId, req.user.userId, req.body?.tier, req.body?.cycle, req.body?.country)))
+router.post("/upgrade/initiate", authMiddleware, billingRoute((salonId, req) => subscriptionUpgradeService.initiate(salonId, req.user.userId, req.body?.tier, req.body?.cycle, req.body?.country, req.body?.expected_currency)))
 router.post("/upgrade/:id/verify", authMiddleware, billingRoute((salonId, req) => subscriptionUpgradeService.verify(salonId, String(req.params.id), req.body ?? {}, req.user.userId)))
 router.post("/upgrade/:id/cancel", authMiddleware, billingRoute((salonId, req) => subscriptionUpgradeService.cancel(salonId, String(req.params.id))))
 

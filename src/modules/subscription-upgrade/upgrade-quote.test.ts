@@ -1,7 +1,7 @@
 // The upgrade price rules (see upgrade-policy.ts). Every expected figure below is worked out by hand in whole paise,
 // independently of the code under test.
 
-import { calculateUpgradeQuote, relationOf, UpgradeError, toPaise } from "./upgrade-quote";
+import { calculateUpgradeQuote, convertUpgradeQuote, relationOf, UpgradeError, toPaise } from "./upgrade-quote";
 import { loadUpgradePolicy } from "./upgrade-policy";
 import { addCycle, normalizeCycle, tierOfPlan } from "../subscription-billing/plan-tier";
 import { deriveSubscriptionState, daysRemaining } from "../subscription-billing/subscription-status";
@@ -187,5 +187,38 @@ describe("deriveSubscriptionState", () => {
         expect(daysRemaining(days(5), now)).toBe(5);
         expect(daysRemaining(new Date(now.getTime() + 60_000), now)).toBe(1);
         expect(daysRemaining(null, now)).toBeNull();
+    });
+});
+
+describe("convertUpgradeQuote (overseas customer: same quote in another currency, no Indian GST)", () => {
+    // Same figures as the Advance -> Growth example above, but calculated with no GST: new charge 13333, credit 6667, subtotal 6666.
+    const inr = () => calculateUpgradeQuote({
+        now: NOW, gstPercent: 0, policy: POLICY,
+        current: advanceMonthlyPaid200,
+        target: { tier: "growth", cycle: "monthly", pricePaise: 40_000 },
+    });
+
+    it("converts each line at the rate and rebuilds the subtotal from the converted lines", () => {
+        const q = convertUpgradeQuote(inr(), 0.01);   // 1 INR = 0.01 USD
+        // 13333 * 0.01 = 133.33 -> 133; 6667 * 0.01 = 66.67 -> 67; subtotal = 133 - 67 = 66; no tax
+        expect(q.newPlanChargePaise).toBe(133);
+        expect(q.creditAppliedPaise).toBe(67);
+        expect(q.subtotalPaise).toBe(66);
+        expect(q.gstPaise).toBe(0);
+        expect(q.totalPaise).toBe(66);
+        expect(q.newPlanChargePaise - q.creditAppliedPaise).toBe(q.subtotalPaise);
+        expect(q.zeroPayable).toBe(false);
+        expect(q.remainingDays).toBe(10);
+    });
+
+    it("never lets the credit exceed the converted charge, and flags a zero payable result", () => {
+        const q = convertUpgradeQuote({ ...inr(), newPlanChargePaise: 1000, creditAppliedPaise: 1000, unusedCreditPaise: 0, subtotalPaise: 0, totalPaise: 0, zeroPayable: true }, 0.0123);
+        expect(q.creditAppliedPaise).toBeLessThanOrEqual(q.newPlanChargePaise);
+        expect(q.totalPaise).toBe(0);
+        expect(q.zeroPayable).toBe(true);
+    });
+
+    it("refuses a missing or non-positive rate", () => {
+        expect(() => convertUpgradeQuote(inr(), 0)).toThrow(UpgradeError);
     });
 });

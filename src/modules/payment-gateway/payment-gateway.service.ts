@@ -4,6 +4,7 @@ import logger from "../../config/logger";
 import { AppError } from "../../middleware/error.middleware";
 import { getRazorpayCredentials, invalidateRazorpayCredentials, type RazorpaySource } from "../../config/razorpay";
 import { encryptSecret, secretBoxConfigured } from "../ai-credentials/secret-box";
+import { clearRefusedCurrencies } from "../subscription-pricing/pricing.service";
 
 // Super Admin's global Razorpay settings (one set for the whole platform). Secrets are stored encrypted and never returned:
 // the status only says whether each one is set, where it comes from, and (for DB-stored ones) its last 4 characters.
@@ -46,6 +47,19 @@ async function verifyKeys(keyId: string, keySecret: string): Promise<void> {
 
 const last4 = (s: string) => s.slice(-4);
 
+// Currencies subscriptions may be charged in. Blank = leave unchanged (undefined); "default" = clear the saved value (null) so the
+// environment variable / built-in rule applies again; otherwise "auto" or a list of 3-letter codes, e.g. "USD, AED" -> "USD,AED".
+function parseCurrencies(raw: unknown): string | null | undefined {
+    const text = String(raw ?? "").trim();
+    if (!text) return undefined;
+    if (text.toLowerCase() === "default") return null;
+    const parts = text.toUpperCase().split(/[\s,;]+/).filter(Boolean);
+    if (!parts.length || parts.some((p) => p !== "AUTO" && !/^[A-Z]{3}$/.test(p))) {
+        throw new AppError(400, 'Currencies should be 3-letter codes such as "USD, AED", or "auto".', "VALIDATION_ERROR");
+    }
+    return parts.includes("AUTO") ? "auto" : [...new Set(parts)].join(",");
+}
+
 export const paymentGatewayService = {
     async getStatus() {
         const [row, creds] = await Promise.all([loadRow(), getRazorpayCredentials()]);
@@ -56,6 +70,7 @@ export const paymentGatewayService = {
             key_secret: { set: !!creds.keySecret, source: src(creds.sources.keySecret), last4: creds.sources.keySecret === "database" ? row?.key_secret_last4 ?? null : null },
             webhook_secret: { set: !!creds.webhookSecret, source: src(creds.sources.webhookSecret), last4: creds.sources.webhookSecret === "database" ? row?.webhook_secret_last4 ?? null : null },
             key_id_source: creds.sources.keyId,
+            subscription_currencies: { value: creds.subscriptionCurrencies, source: creds.sources.subscriptionCurrencies },
             ready: !!(creds.keyId && creds.keySecret),
             webhook_ready: !!creds.webhookSecret,
             webhook_path: WEBHOOK_PATH,
@@ -67,13 +82,14 @@ export const paymentGatewayService = {
     },
 
     // Partial update: a blank field keeps what is already saved (secrets are never sent back to the page to re-submit).
-    async set(body: { key_id?: unknown; key_secret?: unknown; webhook_secret?: unknown }, changedBy: string) {
+    async set(body: { key_id?: unknown; key_secret?: unknown; webhook_secret?: unknown; subscription_currencies?: unknown }, changedBy: string) {
         if (!secretBoxConfigured()) throw new AppError(503, "The server has no JWT_SECRET to encrypt keys with, so they can't be stored safely yet.", "PAYMENT_GATEWAY_NOT_CONFIGURED");
 
         const keyId = String(body.key_id ?? "").trim();
         const keySecret = String(body.key_secret ?? "").trim();
         const webhookSecret = String(body.webhook_secret ?? "").trim();
-        if (!keyId && !keySecret && !webhookSecret) throw new AppError(400, "Enter at least one value to save.", "VALIDATION_ERROR");
+        const currencies = parseCurrencies(body.subscription_currencies);
+        if (!keyId && !keySecret && !webhookSecret && currencies === undefined) throw new AppError(400, "Enter at least one value to save.", "VALIDATION_ERROR");
 
         if (keyId && !/^rzp_(test|live)_[A-Za-z0-9]{6,}$/.test(keyId)) {
             throw new AppError(400, "Key ID should look like rzp_test_xxxxxxxx or rzp_live_xxxxxxxx.", "VALIDATION_ERROR");
@@ -111,8 +127,18 @@ export const paymentGatewayService = {
                 changedBy,
             ]
         );
+        if (currencies !== undefined) {
+            try {
+                await pool.query(`UPDATE platform_razorpay_settings SET subscription_currencies = $1 WHERE id = TRUE`, [currencies]);
+            } catch (err: any) {
+                if (err?.code === "42703") throw new AppError(409, "Run Migration/add_subscription_currencies_to_razorpay_settings.sql on this database first, then save the currencies again.", "MIGRATION_MISSING");
+                throw err;
+            }
+            // A currency Razorpay refused earlier is remembered for an hour; a changed list should be tried afresh.
+            clearRefusedCurrencies();
+        }
         invalidateRazorpayCredentials();
-        logger.info("[payment-gateway] Razorpay settings saved", { changedBy, keyId: !!keyId, keySecret: !!keySecret, webhookSecret: !!webhookSecret });
+        logger.info("[payment-gateway] Razorpay settings saved", { changedBy, keyId: !!keyId, keySecret: !!keySecret, webhookSecret: !!webhookSecret, currencies: currencies === undefined ? undefined : currencies ?? "default" });
         return this.getStatus();
     },
 
