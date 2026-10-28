@@ -13,6 +13,7 @@ import { assertPosAmountMatchesPayload, assertPosAmountWithinOutstanding, resolv
 import { paymentsRepository } from '../payments/payments.repository';
 import {
   CreatePosPaymentBody, MAX_RECORD_ATTEMPTS, NON_TERMINAL_STATUSES, PosPaymentRequest, PosPaymentStatus, PosProviderId,
+  REVIEW_CANCEL_UNCONFIRMED, REVIEW_EXPIRY_DEFERRED,
 } from './pos-payments.types';
 import {
   PaymentProvider, ProviderCancelResult, ProviderCreateResult, ProviderStatusResult, ProviderTxnContext,
@@ -42,6 +43,21 @@ function followUpProvider(request: PosPaymentRequest): Promise<PaymentProvider> 
 /** Confirmed by the provider and still to be saved automatically. */
 function needsRecording(request: PosPaymentRequest): boolean {
   return request.status === 'SUCCESS' && !request.payment_id && (request.record_attempts ?? 0) < MAX_RECORD_ATTEMPTS;
+}
+
+/**
+ * Patch for a request settling as definitively not paid. A review flag that
+ * only meant "outcome unknown" (unconfirmed cancel, inconclusive expiry check)
+ * is answered by that, so it's cleared — otherwise it would keep blocking every
+ * payment for the appointment forever. Any other flag is left for reconcile.
+ */
+function resolvedUnknownOutcomePatch(request: PosPaymentRequest, status: PosPaymentStatus): { needs_review?: boolean; review_reason?: string } {
+  const reason = request.review_reason ?? '';
+  if (!request.needs_review || !(reason.startsWith(REVIEW_CANCEL_UNCONFIRMED) || reason.startsWith(REVIEW_EXPIRY_DEFERRED))) return {};
+  return {
+    needs_review: false,
+    review_reason: `${request.provider} later confirmed the payment was not taken (${status}) — no money was collected for this attempt.`,
+  };
 }
 
 export const posPaymentsService = {
@@ -194,8 +210,11 @@ export const posPaymentsService = {
    */
   async getActiveForAppointment(appointmentId: string, salonId: string): Promise<PosPaymentRequest | null> {
     const unresolved = await posPaymentsRepository.findUnresolvedForAppointment(appointmentId, salonId);
-    if (!unresolved) return null;
-    return posPaymentsService.getStatus(unresolved.id, salonId);
+    if (unresolved) return posPaymentsService.getStatus(unresolved.id, salonId);
+    // A settled request still flagged for review blocks every payment too
+    // (POS_PAYMENT_NEEDS_REVIEW) — return it so the frontend can show why and
+    // offer reconcile, instead of the appointment silently refusing payments.
+    return posPaymentsRepository.findBlockingForAppointment(appointmentId, salonId);
   },
 
   async getStatus(id: string, salonId: string): Promise<PosPaymentRequest> {
@@ -230,12 +249,16 @@ export const posPaymentsService = {
     }
     if (live.status === request.status) return request; // no change
     if (['FAILED', 'CANCELLED', 'EXPIRED'].includes(live.status)) {
+      const resolved = resolvedUnknownOutcomePatch(request, live.status);
       const updated = await posPaymentsRepository.transitionStatus(request.id, {
         status: live.status,
         provider_transaction_id: live.providerTransactionId,
         provider_response: live.raw,
+        ...resolved,
         // e.g. card declined / timed out on the machine — shown to staff.
-        review_reason: live.status === 'FAILED' && live.failureReason ? `Payment failed on the machine: ${live.failureReason}` : null,
+        review_reason: live.status === 'FAILED' && live.failureReason
+          ? `Payment failed on the machine: ${live.failureReason}`
+          : resolved.review_reason ?? null,
       });
       if (updated) await posPaymentsRepository.addEvent(request.id, 'STATUS_CHANGED', request.status, live.status, live.raw);
       return updated ?? request;
@@ -464,6 +487,7 @@ export const posPaymentsService = {
     const updated = await posPaymentsRepository.transitionStatus(request.id, {
       status: 'CANCELLED',
       provider_response: providerResponse ?? undefined,
+      ...resolvedUnknownOutcomePatch(request, 'CANCELLED'),
     });
     if (updated) await posPaymentsRepository.addEvent(request.id, 'CANCELLED', request.status, 'CANCELLED', providerResponse ?? undefined);
     // If the transition lost a race (e.g. a poll just confirmed SUCCESS),
@@ -492,7 +516,7 @@ export const posPaymentsService = {
       status: request.status,
       needs_review: true,
       review_reason:
-        `Cancel requested but ${request.provider} has not confirmed the outcome (${details}) — not cancelled. ` +
+        `${REVIEW_CANCEL_UNCONFIRMED} ${request.provider} has not confirmed the outcome (${details}) — not cancelled. ` +
         'Verify on the terminal / provider dashboard; it stays open and is re-checked automatically.',
       provider_response: { abort: abort?.raw ?? null, status: lastStatus?.raw ?? null },
     });
