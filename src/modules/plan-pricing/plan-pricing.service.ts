@@ -1,6 +1,9 @@
 import pool from "../../config/database";
 import { AppError } from "../../middleware/error.middleware";
 import { createRazorpayPlan, razorpayBilling } from "../../config/razorpay";
+import { billingSchemaReady } from "../subscription-pricing/billing-schema";
+import { getActiveRazorpayAccount } from "../subscription-pricing/razorpay-account";
+import { registerPlanId } from "../subscription-pricing/razorpay-plans";
 
 // The three fixed tiers (same slugs as module_plans, which holds each tier's features) and the billing
 // cycles a super admin can price each at.
@@ -37,12 +40,26 @@ export const planPricingService = {
             `SELECT id, slug, price, is_active, razorpay_plan_id FROM subscription_plans WHERE slug LIKE 'salonox-%'`
         );
         const bySlug = new Map(rows.map((r) => [r.slug as string, r]));
+        // The Razorpay plan ID shown is the one registered for the account the server is using now. The original column is shown
+        // only in LIVE mode (it is the LIVE mapping); TEST never shows or touches it.
+        const account = await getActiveRazorpayAccount();
+        const registered = new Map<string, string>();
+        if (await billingSchemaReady()) {
+            const reg = await pool.query(
+                `SELECT DISTINCT ON (plan_id) plan_id, razorpay_plan_id FROM razorpay_plan_registry
+                 WHERE account_key = $1 AND currency = 'INR' ORDER BY plan_id, created_at DESC`,
+                [account.key]
+            );
+            for (const r of reg.rows) registered.set(r.plan_id as string, r.razorpay_plan_id as string);
+        }
+        const shownPlanId = (r: { id: string; razorpay_plan_id: string | null }) =>
+            registered.get(r.id) ?? (account.mode === "live" ? r.razorpay_plan_id ?? null : null);
         return TIERS.map((t) => {
             const prices = {} as Record<Cycle, CyclePrice>;
             for (const c of CYCLES) {
                 const r = bySlug.get(planSlug(t.slug, c));
                 prices[c] = r
-                    ? { id: r.id, price: r.is_active ? Number(r.price) : null, is_active: Boolean(r.is_active), razorpay_plan_id: r.razorpay_plan_id ?? null }
+                    ? { id: r.id, price: r.is_active ? Number(r.price) : null, is_active: Boolean(r.is_active), razorpay_plan_id: shownPlanId(r) }
                     : { id: null, price: null, is_active: false, razorpay_plan_id: null };
             }
             return { slug: t.slug, name: t.name, gst_percent: GST_PERCENT, prices };
@@ -97,19 +114,33 @@ export const planPricingService = {
         }
 
         const { rows: existingRows } = await pool.query(
-            `SELECT slug, price, is_active, razorpay_plan_id, razorpay_amount FROM subscription_plans WHERE slug = ANY($1)`,
+            `SELECT id, slug, price, is_active, razorpay_plan_id, razorpay_amount FROM subscription_plans WHERE slug = ANY($1)`,
             [CYCLES.map((c) => planSlug(tier, c))]
         );
         const existing = new Map(existingRows.map((r) => [r.slug as string, r]));
+        const account = await getActiveRazorpayAccount();
+        const isLive = account.mode === "live";
+        // INR plans this account already has, by plan and amount (price + GST).
+        const registeredAmounts = new Set<string>();
+        if (await billingSchemaReady() && existingRows.length) {
+            const reg = await pool.query(
+                `SELECT plan_id, amount FROM razorpay_plan_registry WHERE account_key = $1 AND currency = 'INR' AND plan_id = ANY($2)`,
+                [account.key, existingRows.map((r) => r.id)]
+            );
+            for (const r of reg.rows) registeredAmounts.add(`${r.plan_id}:${Number(r.amount).toFixed(2)}`);
+        }
 
         // 1) Razorpay first.
         const razorpayIds = new Map<Cycle, string>();
         for (const [cycle, amount] of wanted) {
             if (amount === null) continue;
             const row = existing.get(planSlug(tier, cycle));
-            // Unchanged only if the stored Razorpay plan already charges exactly price + GST.
-            const unchanged = row && row.is_active && row.razorpay_plan_id && Number(row.price) === amount
-                && row.razorpay_amount != null && Number(row.razorpay_amount) === withGst(amount);
+            // Unchanged only if this account already has a plan charging exactly price + GST (in LIVE, the original column counts too, so
+            // existing LIVE plans are not duplicated).
+            const unchanged = row && row.is_active && Number(row.price) === amount && (
+                registeredAmounts.has(`${row.id}:${withGst(amount).toFixed(2)}`)
+                || (isLive && row.razorpay_plan_id && row.razorpay_amount != null && Number(row.razorpay_amount) === withGst(amount))
+            );
             if (unchanged) continue;
             razorpayIds.set(cycle, await createRazorpayPlan({
                 name: `${meta.name} (${cycleLabel[cycle]})`,
@@ -129,8 +160,9 @@ export const planPricingService = {
                     await client.query(`UPDATE subscription_plans SET is_active = FALSE WHERE slug = $1`, [slug]);
                     continue;
                 }
-                const rzpId = razorpayIds.get(cycle) ?? existing.get(slug)?.razorpay_plan_id ?? null;
-                const rzpAmount = razorpayIds.has(cycle) ? withGst(amount) : existing.get(slug)?.razorpay_amount ?? null;
+                // The original columns are only ever updated in LIVE; in TEST they keep the LIVE values untouched.
+                const rzpId = (isLive ? razorpayIds.get(cycle) : undefined) ?? existing.get(slug)?.razorpay_plan_id ?? null;
+                const rzpAmount = isLive && razorpayIds.has(cycle) ? withGst(amount) : existing.get(slug)?.razorpay_amount ?? null;
                 const upd = await client.query(
                     `UPDATE subscription_plans
                      SET price = $2, is_active = TRUE, name = $3, tier = $4, razorpay_plan_id = $5, razorpay_amount = $6
@@ -151,6 +183,13 @@ export const planPricingService = {
             throw err;
         } finally {
             client.release();
+        }
+        // Register the plans just created for THIS account (the plan rows exist now, including any that were just inserted).
+        for (const [cycle, amount] of wanted) {
+            const rzpId = razorpayIds.get(cycle);
+            if (amount === null || !rzpId) continue;
+            const { rows: planRow } = await pool.query(`SELECT id FROM subscription_plans WHERE slug = $1`, [planSlug(tier, cycle)]);
+            if (planRow[0]) await registerPlanId(planRow[0].id, cycle, "INR", withGst(amount), amount, 1, rzpId);
         }
         return (await this.list()).find((p) => p.slug === tier);
     },

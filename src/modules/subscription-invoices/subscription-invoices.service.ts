@@ -125,6 +125,7 @@ export const subscriptionInvoicesService = {
                 payment_mode: inv.payment_mode,
                 transaction_id: inv.transaction_id,
                 status: inv.status,
+                currency: inv.currency ?? "INR",
                 subtotal: num(inv.subtotal),
                 gst_percent: num(inv.gst_percent),
                 gst_amount: num(inv.gst_amount),
@@ -141,7 +142,8 @@ export const subscriptionInvoicesService = {
                 email: salon?.email ?? inv.owner_email ?? null,
             },
             seller: { ...SELLER },
-            amount_in_words: amountInWords(total),
+            // The words are in rupees, so they are only printed for INR invoices.
+            amount_in_words: (inv.currency ?? "INR") === "INR" ? amountInWords(total) : "",
         };
     },
 

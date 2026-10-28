@@ -90,7 +90,10 @@ export async function createRazorpayPlan(opts: {
     description: string;
     period: RazorpayPeriod;
     interval: number;
+    /** Amount in the plan's currency (rupees for INR), already including any tax that is to be charged. */
     amountRupees: number;
+    /** ISO currency of the plan; defaults to INR. A non-INR plan only works if the merchant account is enabled for it. */
+    currency?: string;
 }): Promise<string> {
     try {
         const plan = await (await getRazorpay()).plans.create({
@@ -100,7 +103,7 @@ export async function createRazorpayPlan(opts: {
                 name: opts.name,
                 description: opts.description,
                 amount: Math.round(opts.amountRupees * 100),
-                currency: "INR",
+                currency: opts.currency ?? "INR",
             },
         });
         return plan.id;

@@ -10,6 +10,8 @@ export interface InvoicePrintPayload {
         payment_mode: string | null;
         transaction_id: string | null;
         status: string;
+        /** ISO currency of the amounts; INR when left out (every older invoice). */
+        currency?: string;
         subtotal: number;
         gst_percent: number;
         gst_amount: number;
@@ -29,13 +31,17 @@ export interface InvoicePrintPayload {
     amount_in_words: string;
 }
 
-const money = (n: number) => `Rs. ${n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const moneyIn = (n: number, currency: string) => currency === "INR"
+    ? `Rs. ${n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    : `${currency} ${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const dShort = (iso: string) => new Date(iso).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 const dLong = (iso: string) => new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" });
 const esc = (s: string | null | undefined) => (s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 export function buildInvoiceHtml(p: InvoicePrintPayload): string {
     const { invoice, customer, seller, amount_in_words } = p;
+    const currency = invoice.currency ?? "INR";
+    const money = (n: number) => moneyIn(n, currency);
     // An invoice without GST (0%) is a plain invoice: no tax lines, and the seller's GST number isn't printed.
     const withGst = invoice.gst_percent > 0;
     const half = invoice.gst_percent / 2;
@@ -120,7 +126,7 @@ export function buildInvoiceHtml(p: InvoicePrintPayload): string {
 
     <table class="items">
       <thead>
-        <tr><th>#</th><th>Description</th><th class="right">Amount (Rs.)</th></tr>
+        <tr><th>#</th><th>Description</th><th class="right">Amount (${currency === "INR" ? "Rs." : currency})</th></tr>
       </thead>
       <tbody>
         <tr>
@@ -143,8 +149,8 @@ export function buildInvoiceHtml(p: InvoicePrintPayload): string {
       <div class="totals-final"><span>${withGst ? "Total Invoice Value (Incl. GST)" : "Total Invoice Value"}</span><span>${money(invoice.total)}</span></div>
     </div>
 
-    <div class="words-label">Amount in Words</div>
-    <div class="words-value">${esc(amount_in_words)}</div>
+    ${amount_in_words ? `<div class="words-label">Amount in Words</div>
+    <div class="words-value">${esc(amount_in_words)}</div>` : ""}
 
     <div class="bank-box">
       <div class="bank-title">Bank Details (for NEFT/RTGS)</div>
