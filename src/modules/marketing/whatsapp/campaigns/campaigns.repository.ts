@@ -194,6 +194,18 @@ export const campaignsRepository = {
     return rows[0]
   },
 
+  // Moves a campaign to `to` only if it is currently in one of `from`. Returns
+  // null when it was not (someone else already paused/resumed/finished it), so a
+  // double-click or two admins acting at once cannot both "win".
+  async updateStatusIf(id: string, from: string[], to: string): Promise<WACampaign | null> {
+    const { rows } = await pool.query(
+      `UPDATE wa_campaigns SET status=$3, updated_at=NOW()
+       WHERE id=$1 AND status = ANY($2::text[]) RETURNING *`,
+      [id, from, to]
+    )
+    return rows[0] ?? null
+  },
+
   // ── Per-contact manual Resend (FAILED/BLOCKED only) ───────────────────────
   async findContactById(contactId: string, campaignId: string): Promise<WACampaignContact | null> {
     const { rows } = await pool.query(
