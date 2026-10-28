@@ -15,7 +15,7 @@
 import logger from '../../config/logger';
 import { posPaymentsRepository } from './pos-payments.repository';
 import { posPaymentsService } from './pos-payments.service';
-import { NON_TERMINAL_STATUSES, PosPaymentRequest } from './pos-payments.types';
+import { NON_TERMINAL_STATUSES, PosPaymentRequest, REVIEW_EXPIRY_DEFERRED } from './pos-payments.types';
 
 const POLL_SWEEP_MINUTES_OLD = 0.5; // only sweep requests that have had at least ~30s to be created
 const SWEEP_INTERVAL_MS = 45 * 1000;
@@ -90,7 +90,7 @@ async function finalCheckBeforeExpiry(request: PosPaymentRequest): Promise<void>
     status: checked.status,
     needs_review: true,
     review_reason:
-      `Expiry reached without a confirmed outcome from ${request.provider} (last status ${checked.status}) — ` +
+      `${REVIEW_EXPIRY_DEFERRED} from ${request.provider} (last status ${checked.status}) — ` +
       'not expired automatically. Verify on the terminal / provider dashboard before cancelling or re-charging.',
   });
   if (flagged) {
