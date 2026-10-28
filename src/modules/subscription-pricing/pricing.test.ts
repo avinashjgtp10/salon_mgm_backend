@@ -81,7 +81,7 @@ describe("international customers", () => {
 
 describe("configuration", () => {
   it("INR is always enabled; the list comes from RAZORPAY_SUBSCRIPTION_CURRENCIES", () => {
-    expect([...enabledChargeCurrencies({} as any)]).toEqual(["INR"]);
+    expect([...enabledChargeCurrencies({ RAZORPAY_SUBSCRIPTION_CURRENCIES: "INR" } as any)]).toEqual(["INR"]);
     expect([...enabledChargeCurrencies({ RAZORPAY_SUBSCRIPTION_CURRENCIES: "usd, aed ,bd,JPYY" } as any)].sort()).toEqual(["AED", "INR", "USD"]);
   });
   it("parses exchange rates with the landing page's rules", () => {
@@ -102,10 +102,10 @@ describe("which currencies may be charged (no per-country setting needed)", () =
     expect([...listed].sort()).toEqual(["INR", "USD"]);                // explicit list wins even on TEST keys
   });
 
-  it("with nothing configured: TEST keys try the customer's own currency, LIVE keys stay INR-only", () => {
+  it("with nothing configured: the customer's own currency is tried on TEST and LIVE keys; an explicit INR switches it off", () => {
     expect(enabledChargeCurrencies({ RAZORPAY_KEY_ID: "rzp_test_x" } as any).has("*")).toBe(true);
-    expect([...enabledChargeCurrencies({ RAZORPAY_KEY_ID: "rzp_live_x" } as any)]).toEqual(["INR"]);
-    expect([...enabledChargeCurrencies({} as any)]).toEqual(["INR"]);
+    expect(enabledChargeCurrencies({ RAZORPAY_KEY_ID: "rzp_live_x" } as any).has("*")).toBe(true);
+    expect([...enabledChargeCurrencies({ RAZORPAY_SUBSCRIPTION_CURRENCIES: "INR", RAZORPAY_KEY_ID: "rzp_live_x" } as any)]).toEqual(["INR"]);
   });
 
   it("in auto mode each customer is quoted in their own country's currency, with no configuration per country", () => {
