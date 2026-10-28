@@ -95,7 +95,7 @@ router.post("/upgrade/:id/cancel", authMiddleware, billingRoute((salonId, req) =
 // Razorpay -> us. Public (no auth); authenticity comes from the HMAC signature over the raw body.
 router.post("/webhook", async (req, res) => {
     const raw = (req as any).rawBody as Buffer | undefined
-    if (!subscriptionCheckoutService.verifySignature(raw, req.get("x-razorpay-signature"))) {
+    if (!(await subscriptionCheckoutService.verifySignature(raw, req.get("x-razorpay-signature")))) {
         logger.warn("Razorpay webhook rejected: invalid or missing signature", {
             requestId: (req as any).requestId,
             hasSignature: Boolean(req.get("x-razorpay-signature")),
